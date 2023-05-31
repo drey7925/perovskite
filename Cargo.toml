@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "cuberef_server",
+    "cuberef_client",
+    "cuberef_core",
+    "cuberef_game_api"
+]

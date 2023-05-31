@@ -1,0 +1,10 @@
+[package]
+name = "cuberef_game_api"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+description = "Multiplayer voxel game written in Rust - API for game content"
+
+[dependencies]
+
+cuberef_server = { path = "../cuberef_server", version = "0.0.1" }

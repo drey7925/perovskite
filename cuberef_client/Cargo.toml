@@ -1,0 +1,31 @@
+[package]
+name = "cuberef_client"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+description = "Multiplayer voxel game written in Rust - Game client"
+
+[dependencies]
+anyhow = "1.0.71"
+cgmath = "0.18.0"
+cuberef_core = { path = "../cuberef_core", version = "0.0.1" }
+env_logger = "0.10.0"
+image = "0.24.6"
+log = "0.4.17"
+microbench = "0.5.0"
+parking_lot = "0.12.1"
+texture_packer = { version = "0.25.0", features = ["bmp", "gif", "jpeg", "png", "tga", "webp", "common"] }
+tonic = { version = "0.9.2", features = ["gzip", "tls"] }
+tokio = { version = "1.28.0", features = ["full"] }
+vulkano = "0.33.0"
+vulkano-shaders = { version = "0.33.0", features = ["shaderc-build-from-source"] }
+vulkano-win = "0.33.0"
+winit = "0.28.3"
+tokio-stream = "0.1.14"
+tokio-util = "0.7.8"
+line_drawing = "1.0.0"
+tokio-scoped = "0.2.0"
+hex = "0.4.3"
+rustc-hash = "1.1.0"
+clap = { version = "4.3.0", features = ["derive"] }
+
