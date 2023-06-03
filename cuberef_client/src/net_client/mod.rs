@@ -424,6 +424,7 @@ impl InboundContext {
     }
 
     async fn handle_unsubscribe(&mut self, unsub: &rpc::MapChunkUnsubscribe) -> Result<()> {
+        // TODO hold more old chunks (possibly LRU) to provide a higher render distance
         let mut bad_coords = vec![];
         for coord in unsub.chunk_coord.iter() {
             match self.client_state.chunks.lock().remove(&coord.into()) {

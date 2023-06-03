@@ -67,11 +67,11 @@ pub struct Item {
 
 #[derive(Debug, Clone)]
 pub struct ItemStack {
-    proto: proto::ItemStack,
+    pub proto: proto::ItemStack,
 }
 impl ItemStack {
     /// Creates an ItemStack of the given item
-    pub(crate) fn new(item: &Item, quantity: u32) -> ItemStack {
+    pub fn new(item: &Item, quantity: u32) -> ItemStack {
         ItemStack {
             proto: proto::ItemStack {
                 item_name: item.proto.short_name.clone(),
@@ -94,7 +94,7 @@ impl ItemStack {
         }
     }
 
-    pub(crate) fn proto(&self) -> &proto::ItemStack {
+    pub fn proto(&self) -> &proto::ItemStack {
         &self.proto
     }
 
@@ -133,7 +133,7 @@ impl ItemStack {
         }
     }
 
-    pub(crate) fn decrement(&self) -> Option<ItemStack> {
+    pub fn decrement(&self) -> Option<ItemStack> {
         match self.proto.quantity {
             0 | 1 => None,
             x => Some(ItemStack {

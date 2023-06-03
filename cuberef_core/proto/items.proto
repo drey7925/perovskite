@@ -52,7 +52,8 @@ message ItemDef {
 
 message InteractionRule {
   // The block groups (see the `group` field in BlockTypeDef) that the rule
-  // applies to.
+  // applies to. If *all* groups for the block match any of the groups listed here,
+  // the block can be dug
   repeated string block_group = 1;
   // If None, not even selectable.
   oneof dig_behavior {

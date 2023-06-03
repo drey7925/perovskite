@@ -14,6 +14,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
+
+use cuberef_game_api::{default_game::DefaultGameBuilder};
+
+
 fn main() {
-    println!("Hello, world!");
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    let game = DefaultGameBuilder::new_from_commandline().unwrap();
+    game.build_and_run().unwrap();
 }

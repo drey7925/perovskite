@@ -19,7 +19,7 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Context;
 use cuberef_core::{
     constants::{
-        block_groups::{DEFAULT_SOLID, GRANULAR},
+        block_groups::{DEFAULT_SOLID},
         items::default_item_interaction_rules,
     },
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
@@ -203,7 +203,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
                 })),
                 physics_info: Some(PhysicsInfo::Solid(EMPTY)),
                 base_dig_time: 1.0,
-                groups: vec![String::from(DEFAULT_SOLID), String::from(GRANULAR)],
+                groups: vec![String::from(DEFAULT_SOLID), String::from("granular")],
             },
             extended_data_handling: crate::game_state::blocks::ExtDataHandling::NoExtData,
             deserialize_extended_data_handler: None,
@@ -246,7 +246,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
                 })),
                 physics_info: Some(PhysicsInfo::Solid(EMPTY)),
                 base_dig_time: 1.0,
-                groups: vec![String::from(DEFAULT_SOLID), String::from(GRANULAR)],
+                groups: vec![String::from(DEFAULT_SOLID), String::from("granular")],
             },
             extended_data_handling: crate::game_state::blocks::ExtDataHandling::NoExtData,
             deserialize_extended_data_handler: None,

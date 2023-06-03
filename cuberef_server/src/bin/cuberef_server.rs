@@ -29,7 +29,7 @@ fn main() {
     let args = ServerArgs::parse();
     let mut builder = ServerBuilder::from_args(&args).unwrap();
     register_test_blocks_and_items(&mut builder);
-    builder.set_mapgen(|blocks| {
+    builder.set_mapgen(|blocks, _| {
         Arc::new(FakeMapgen {
             block_type_manager: blocks,
         })

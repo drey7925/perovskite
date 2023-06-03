@@ -21,16 +21,12 @@ pub mod block_groups {
     pub const DEFAULT_SOLID: &str = "default:solid";
     /// Block group for all liquid/fluid blocks, e.g. water, lava
     pub const DEFAULT_LIQUID: &str = "default:liquid";
-    /// Brittle, stone-like blocks that are best removed with a pickaxe.
-    /// e.g. stone, cobble, bricks
-    pub const BRITTLE: &str = "default:brittle";
-    /// Granular blocks that are best removed with a shovel, e.g. dirt
-    pub const GRANULAR: &str = "default:granular";
-    /// Woody blocks that are best removed with an axe, e.g. wood
-    pub const FIBROUS: &str = "default:fibrous";
 
     /// Blocks that cannot be dug by hand or using a generic non-tool item
     pub const TOOL_REQUIRED: &str = "default:tool_required";
+    /// Blocks that cannot be dug under any circumstances (other than admon intervention)
+    /// Tools available to normal users should specify a dig_behavior of None for this block.
+    pub const NOT_DIGGABLE: &str = "default:not_diggable";
 }
 
 pub mod blocks {
@@ -46,6 +42,10 @@ pub mod items {
     pub fn default_item_interaction_rules() -> Vec<InteractionRule> {
         vec![
             InteractionRule {
+                block_group: vec![NOT_DIGGABLE.to_string()],
+                dig_behavior: None,
+            },
+            InteractionRule {
                 block_group: vec![TOOL_REQUIRED.to_string()],
                 dig_behavior: None,
             },
@@ -55,4 +55,9 @@ pub mod items {
             },
         ]
     }
+}
+
+pub mod textures {
+    /// A simple fallback texture.
+    pub const FALLBACK_UNKNOWN_TEXTURE: &str = "builtin:unknown";
 }

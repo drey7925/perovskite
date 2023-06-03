@@ -305,7 +305,7 @@ impl PhysicsState {
         collisions: bool,
         client_state: &ClientState,
     ) {
-        let distance = delta.as_secs_f64() * WALK_SPEED;
+        let distance = delta.as_secs_f64() * WALK_SPEED * 5.0;
 
         let mut new_pos = self.pos;
 

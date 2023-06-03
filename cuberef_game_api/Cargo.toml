@@ -8,3 +8,16 @@ description = "Multiplayer voxel game written in Rust - API for game content"
 [dependencies]
 
 cuberef_server = { path = "../cuberef_server", version = "0.0.1" }
+cuberef_core = { path = "../cuberef_core", version = "0.0.1" }
+anyhow = "1.0.70"
+env_logger = "0.10.0"
+noise = "0.8.2"
+
+[features]
+default = ["default_game"]
+# When enabled, re-exports selected from cuberef_server. These are subject to change
+# in the current version.
+unstable_api = []
+# Provides a simple default game, centered around exploration, small-scale resource
+# collection, mining, building, etc. This game may expand over time.
+default_game = []

@@ -29,11 +29,11 @@ use tonic::codegen::CompressionEncoding;
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
-        blocks::BlockTypeManager, items::ItemManager, mapgen::MapgenInterface,
-        testutils::FakeAuth, GameState,
+        blocks::BlockTypeManager, items::ItemManager, mapgen::MapgenInterface, testutils::FakeAuth,
+        GameState,
     },
+    media::MediaManager,
     network_server::{auth::AuthService, grpc_service::CuberefGameServerImpl},
-    resources::MediaManager,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -124,12 +124,15 @@ pub struct ServerBuilder {
     db: Arc<dyn GameDatabase>,
     blocks: BlockTypeManager,
     items: ItemManager,
-    mapgen: Option<Box<dyn FnOnce(Arc<BlockTypeManager>) -> Arc<dyn MapgenInterface>>>,
+    mapgen: Option<Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>>,
     media: MediaManager,
     auth: Arc<dyn AuthService>,
     args: ServerArgs,
 }
 impl ServerBuilder {
+    pub fn from_cmdline() -> Result<ServerBuilder> {
+        Self::from_args(&ServerArgs::parse())
+    }
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
         if args.create {
             if !Path::exists(&args.data_dir) {
@@ -172,9 +175,11 @@ impl ServerBuilder {
     pub fn media(&mut self) -> &mut MediaManager {
         &mut self.media
     }
+    /// Sets the mapgen for this game.
+    /// Stability note: The mapgen API is a WIP, and has not been stabilized yet.
     pub fn set_mapgen<F>(&mut self, mapgen: F)
     where
-        F: (FnOnce(Arc<BlockTypeManager>) -> Arc<dyn MapgenInterface>) + 'static,
+        F: (FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>) + 'static,
     {
         self.mapgen = Some(Box::new(mapgen))
     }
@@ -191,11 +196,16 @@ impl ServerBuilder {
 
         let blocks = Arc::new(self.blocks);
         blocks.save_to(self.db.as_ref())?;
-        let mapgen = (self.mapgen.with_context(|| "Mapgen must be provided")?)(blocks.clone());
         let _rt_guard = self.runtime.enter();
         Server::new(
             self.runtime,
-            GameState::new(self.db, blocks, self.items, self.media, mapgen)?,
+            GameState::new(
+                self.db,
+                blocks,
+                self.items,
+                self.media,
+                self.mapgen.with_context(|| "Mapgen not specified")?,
+            )?,
             self.auth,
             addr,
         )

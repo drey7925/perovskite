@@ -51,7 +51,7 @@ pub(crate) struct ToolController {
     place_button_just_pressed: bool,
     current_item: ItemDef,
     current_slot: u32,
-    current_item_interacting_groups: FxHashSet<String>,
+    current_item_interacting_groups: Vec<Vec<String>>,
 }
 impl ToolController {
     pub(crate) fn new() -> ToolController {
@@ -195,7 +195,7 @@ impl ToolController {
     fn compute_dig_behavior(item: &ItemDef, block_def: &BlockTypeDef) -> Option<DigBehavior> {
         let block_groups = block_def.groups.iter().collect::<FxHashSet<_>>();
         for rule in item.interaction_rules.iter() {
-            if rule.block_group.iter().any(|x| block_groups.contains(x)) {
+            if rule.block_group.iter().all(|x| block_groups.contains(x)) {
                 return rule.dig_behavior.clone();
             }
         }
@@ -231,8 +231,8 @@ impl ToolController {
             if let Some(chunk) = chunk {
                 let id = chunk.get(coord.offset());
                 if let Some(def) = client_state.block_types.get_blockdef(id) {
-                    for group in &def.groups {
-                        if self.current_item_interacting_groups.contains(group) {
+                    for rule in self.current_item_interacting_groups.iter(){
+                        if rule.iter().all(|x| def.groups.contains(x)) {
                             return Some((coord, prev, def));
                         }
                     }
@@ -244,15 +244,14 @@ impl ToolController {
     }
 }
 
-fn get_dig_interacting_groups(item: &ItemDef) -> FxHashSet<String> {
-    let mut result = FxHashSet::default();
+fn get_dig_interacting_groups(item: &ItemDef) -> Vec<Vec<String>> {
+    let mut result = vec![];
     for rule in &item.interaction_rules {
         if rule.dig_behavior.is_some() {
-            for group in &rule.block_group {
-                result.insert(group.clone());
-            }
+            result.push(rule.block_group.clone())
         }
     }
+    println!("{result:?}");
     result
 }
 

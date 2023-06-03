@@ -82,8 +82,9 @@ impl MediaManager {
             }
         }
     }
-    pub fn register_from_file<P: AsRef<Path>>(&mut self, key: String, path: P) -> Result<()> {
+    pub fn register_from_file<P: AsRef<Path>>(&mut self, key: &str, path: P) -> Result<()> {
         let path_buf = PathBuf::from(path.as_ref());
+        let key = key.to_string();
         match self.resources.entry(key.clone()) {
             std::collections::hash_map::Entry::Occupied(_) => {
                 bail!(ResourceError::ResourceAlreadyExists(key))

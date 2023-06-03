@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 
+use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
 use cuberef_core::protocol::blocks::block_type_def::RenderInfo;
 use cuberef_core::protocol::blocks::{self as blocks_proto, BlockTypeDef, CubeRenderInfo};
@@ -41,7 +42,6 @@ use crate::game_state::chunk::ClientChunk;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
-const FALLBACK_UNKNOWN_TEXTURE: &str = "builtin:unknown";
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
 
 // Given in game world coordinates (Y is up)

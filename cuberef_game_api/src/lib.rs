@@ -14,4 +14,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//! This crate contains APIs for defining game behaviors/content in Cuberef
+//!
+//! Some APIs are re-exported directly from cuberef_server and are subject to change;
+//! they are available with the `unstable_api` crate feature.
+
+/// Contains utilities for defining types of blocks in the world, as well as
+/// items that simply correspond to a block stored in inventory.
 pub mod blocks;
+/// Common constant values useful to game content.
+pub use cuberef_core::constants as constants;
+/// Provides functionality to build and start a game and server.
+pub mod game_builder;
+
+/// Provides a default set of game content centered around exploring a natural
+/// procedurally-generated world, collecting resources through mining, converting
+/// resources to useful materials, building structures out of them, etc.
+/// 
+/// The set of blocks and game features in the default game will grow as cuberef is
+/// developed.
+/// 
+/// The default game will provide a map generator (WIP).
+#[cfg(feature = "default_game")]
+pub mod default_game;

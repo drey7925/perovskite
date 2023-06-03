@@ -14,4 +14,250 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-pub use cuberef_server::game_state::blocks::*;
+use std::collections::HashSet;
+
+use anyhow::Result;
+use cuberef_core::{
+    constants::{items::default_item_interaction_rules, textures::FALLBACK_UNKNOWN_TEXTURE, block_groups::DEFAULT_SOLID},
+    protocol::{
+        self,
+        blocks::{
+            block_type_def::{PhysicsInfo, RenderInfo},
+            BlockTypeDef, CubeRenderInfo, Empty,
+        },
+        items::{item_def::QuantityType, ItemDef},
+        render::TextureReference,
+    },
+};
+/// Unstable re-export of the raw blocks API. This API is subject to
+/// breaking changes that do not follow semver, before 1.0
+#[cfg(feature = "unstable_api")]
+pub use cuberef_server::game_state::blocks as server_api;
+
+use cuberef_server::{
+    game_state::{
+        blocks::{BlockType, InlineHandler},
+        game_map::CasOutcome,
+        items::{Item, ItemStack},
+    },
+};
+
+use crate::game_builder::{GameBuilder, Block};
+
+/// The item obtained when the block is dug.
+enum DroppedItem {
+    None,
+    Fixed(String, u32),
+    Dynamic(Box<dyn Fn() -> (String, u32) + Sync + Send>),
+}
+impl DroppedItem {
+    fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
+        let air_block = game_builder.air_block;
+        match self {
+            DroppedItem::None => Box::new(move |_, target_block, _, _| {
+                *target_block = air_block;
+                Ok(vec![])
+            }),
+            DroppedItem::Fixed(item, count) => Box::new(move |_, target_block, _, _| {
+                *target_block = air_block;
+                Ok(vec![ItemStack {
+                    proto: protocol::items::ItemStack {
+                        item_name: item.clone(),
+                        quantity: count,
+                        max_stack: 256,
+                    },
+                }])
+            }),
+            DroppedItem::Dynamic(closure) => Box::new(move |_, target_block, _, _| {
+                let (item, count) = closure();
+                *target_block = air_block;
+                Ok(vec![ItemStack {
+                    proto: protocol::items::ItemStack {
+                        item_name: item.clone(),
+                        quantity: count,
+                        max_stack: 256,
+                    },
+                }])
+            }),
+        }
+    }
+}
+
+/// Builder for simple blocks.
+/// Note that there are behaviors that this builder cannot express, but
+/// [server_api::BlockType] (when used directly) can.
+pub struct BlockBuilder {
+    block_name: String,
+    block_groups: HashSet<String>,
+    item: Item,
+    block_render_info: CubeRenderInfo,
+    dropped_item: DroppedItem,
+}
+impl BlockBuilder {
+    /// Create a new block builder that will build a block and a corresponding inventory
+    /// item for it.
+    pub fn new(name: Block) -> BlockBuilder {
+        let name = name.0;
+        let item = Item {
+            proto: ItemDef {
+                short_name: name.into(),
+                display_name: name.into(),
+                inventory_texture: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                groups: vec![],
+                interaction_rules: default_item_interaction_rules(),
+                quantity_type: Some(QuantityType::Stack(256)),
+            },
+            dig_handler: None,
+            tap_handler: None,
+            place_handler: Some(Box::new(|_, _, _, _| {
+                panic!("Incomplete place_handler");
+            })),
+        };
+
+        BlockBuilder {
+            block_name: name.into(),
+            block_groups: HashSet::from_iter([DEFAULT_SOLID.to_string()].into_iter()),
+            item,
+            block_render_info: CubeRenderInfo {
+                tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_top: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_bottom: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_front: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+            },
+            dropped_item: DroppedItem::Fixed(name.into(), 1),
+        }
+    }
+    /// Sets the item which will be given to a player that digs this block.
+    ///
+    /// By default, the block will drop the corresponding item with the same name
+    /// (e.g. block `foo:dirt` will drop item `foo:dirt`).
+    ///
+    /// Note that even if a block (e.g. `foo:iron_ore`) drops a different material
+    /// (`foo:iron_ore_chunk`), an item `foo:iron_ore` will be registered. That item
+    /// may be unobtainable without special game admin abilities, but if obtained
+    /// it will still place the indicated block.
+    pub fn set_dropped_item(mut self, item_name: &str, count: u32) -> Self {
+        self.dropped_item = DroppedItem::Fixed(item_name.into(), count);
+        self
+    }
+    /// Sets a closure that indicates what item a player will get when digging this
+    /// block. Examples may include randomized drop rates.
+    ///
+    /// This closure takes no arguments. In the future, additional setters may be
+    /// added that take closures with parameters to provide more details about the
+    /// block being dug; this will be done in a non-API-breaking way.
+    pub fn set_dropped_item_closure(
+        mut self,
+        closure: impl Fn() -> (String, u32) + Send + Sync + 'static,
+    ) -> Self {
+        self.dropped_item = DroppedItem::Dynamic(Box::new(closure));
+        self
+    }
+    ///
+    pub fn set_no_drops(mut self) -> Self {
+        self.dropped_item = DroppedItem::None;
+        self
+    }
+    /// Sets the texture for all six faces of this block as well as the item, all to the same value
+    pub fn set_texture_all<T>(mut self, texture: T) -> Self
+    where
+        T: Into<TextureReference>,
+    {
+        let tex = Some(texture.into());
+        self.block_render_info.tex_left = tex.clone();
+        self.block_render_info.tex_right = tex.clone();
+        self.block_render_info.tex_top = tex.clone();
+        self.block_render_info.tex_bottom = tex.clone();
+        self.block_render_info.tex_front = tex.clone();
+        self.block_render_info.tex_back = tex.clone();
+        self.item.proto.inventory_texture = tex;
+        self
+    }
+    /// Sets the texture for all six faces of this block as well as the inventory item, one by one
+    pub fn set_individual_textures<T>(
+        mut self,
+        left: T,
+        right: T,
+        top: T,
+        bottom: T,
+        front: T,
+        back: T,
+        inventory: T,
+    ) -> Self
+    where
+        T: Into<TextureReference>,
+    {
+        self.block_render_info.tex_left = Some(left.into());
+        self.block_render_info.tex_right = Some(right.into());
+        self.block_render_info.tex_top = Some(top.into());
+        self.block_render_info.tex_bottom = Some(bottom.into());
+        self.block_render_info.tex_front = Some(front.into());
+        self.block_render_info.tex_back = Some(back.into());
+        self.item.proto.inventory_texture = Some(inventory.into());
+        self
+    }
+    /// Adds a group to the list of groups for this block.
+    /// These can affect diggability, dig speed, and other behavior in
+    /// the map.
+    ///
+    /// See [crate::constants::block_groups] for useful values.
+    pub fn add_block_group(mut self, group: &str) -> Self {
+        self.block_groups.insert(group.into());
+        self
+    }
+
+    /// Adds a group to the list of groups for the item corresponding to this block.
+    /// These can affect crafting with this block (crafting API is TBD)
+    ///
+    /// See [crate::constants::block_groups] for useful values.
+    pub fn add_item_group(mut self, group: &str) -> Self {
+        self.item.proto.groups.push(group.into());
+        self
+    }
+
+    pub fn set_inventory_display_name(mut self, display_name: &str) -> Self {
+        self.item.proto.display_name = display_name.into();
+        self
+    }
+
+    pub(crate) fn build_and_deploy_into(self, game_builder: &mut GameBuilder) -> Result<()> {
+        let mut block = BlockType::default();
+        block.client_info = BlockTypeDef {
+            id: 0,
+            short_name: self.block_name.clone(),
+            base_dig_time: 1.0,
+            groups: self.block_groups.into_iter().collect(),
+            render_info: Some(RenderInfo::Cube(self.block_render_info)),
+            physics_info: Some(PhysicsInfo::Solid(Empty {})),
+        };
+        block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
+
+        let block_handle = game_builder.inner.blocks().register_block(block)?;
+
+        let mut item = self.item;
+        let air_block = game_builder.air_block;
+        item.place_handler = Some(Box::new(move |ctx, coord, _, stack| {
+            if stack.proto().quantity == 0 {
+                return Ok(None);
+            }
+            match ctx
+                .game_map()
+                .compare_and_set_block(coord, air_block, block_handle, None, false)?
+                .0
+            {
+                CasOutcome::Match => Ok(stack.decrement()),
+                CasOutcome::Mismatch => Ok(Some(stack.clone())),
+            }
+        }));
+        game_builder.inner.items().register_item(item)?;
+        Ok(())
+    }
+}
+
+fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
+    Some(TextureReference {
+        texture_name: tex_name,
+    })
+}

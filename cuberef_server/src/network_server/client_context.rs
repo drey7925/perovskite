@@ -572,6 +572,8 @@ impl ClientInboundContext {
                 );
             }
             Some(proto::stream_to_server::ClientMessage::Dig(dig_message)) => {
+                // TODO check whether the current item can dig this block, and whether
+                // it's been long enough since the last dig
                 let coord: BlockCoordinate = dig_message
                     .block_coord
                     .as_ref()

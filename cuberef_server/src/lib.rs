@@ -19,5 +19,5 @@
 mod database;
 pub mod network_server;
 pub mod game_state;
-pub mod resources;
+pub mod media;
 pub mod server;

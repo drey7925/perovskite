@@ -40,8 +40,8 @@ pub mod cuberef {
         pub const DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("cuberef_descriptor");
     }
 }
-pub use cuberef::protocol as protocol;
+pub use cuberef::protocol;
 
-pub mod coordinates;
 pub mod block_id;
 pub mod constants;
+pub mod coordinates;

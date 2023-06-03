@@ -28,14 +28,19 @@ pub mod tests;
 
 pub mod testutils;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+use integer_encoding::VarInt;
+use log::{info, warn};
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
+use std::fmt::Debug;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-use crate::database::database_engine::GameDatabase;
+use crate::database::database_engine::{GameDatabase, KeySpace};
 
 use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
-use crate::resources::MediaManager;
+use crate::media::MediaManager;
 
 use self::blocks::BlockTypeManager;
 use self::inventory::InventoryManager;
@@ -51,6 +56,7 @@ pub struct GameState {
     player_manager: Arc<PlayerManager>,
     media_resources: Arc<MediaManager>,
     early_shutdown: CancellationToken,
+    mapgen_seed: u32,
 }
 
 impl GameState {
@@ -59,9 +65,11 @@ impl GameState {
         blocks: Arc<BlockTypeManager>,
         items: ItemManager,
         media: MediaManager,
-        mapgen: Arc<dyn MapgenInterface>,
+        mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
     ) -> Result<Arc<Self>> {
         // TODO figure out a way to replace unwrap with error propagation
+        let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
+        let mapgen = mapgen_provider(blocks.clone(), mapgen_seed);
         Ok(Arc::new_cyclic(|weak| Self {
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
             mapgen,
@@ -71,6 +79,7 @@ impl GameState {
             player_manager: PlayerManager::new(weak.clone(), db),
             media_resources: Arc::new(media),
             early_shutdown: CancellationToken::new(),
+            mapgen_seed,
         }))
     }
 
@@ -93,6 +102,7 @@ impl GameState {
             player_manager,
             media_resources,
             early_shutdown: shutdown,
+            mapgen_seed: 0,
         }
     }
 
@@ -148,5 +158,51 @@ impl GameState {
 
     pub fn item_manager(&self) -> &ItemManager {
         self.item_manager.as_ref()
+    }
+}
+
+fn get_or_create_seed<T: VarInt + Debug + Copy>(db: &dyn GameDatabase, name: &[u8]) -> Result<T>
+where
+    Standard: Distribution<T>,
+{
+    let mut key = b"seed_".to_vec();
+    key.append(&mut name.to_vec());
+    let key = KeySpace::Metadata.make_key(&key);
+    match db.get(&key)? {
+        Some(x) => match T::decode_var(&x) {
+            Some((val, read)) => {
+                if read != x.len() {
+                    warn!(
+                        "Saved seed for {} was {} bytes but only {} bytes were decoded (to {:?})",
+                        String::from_utf8_lossy(name),
+                        x.len(),
+                        read,
+                        val
+                    )
+                }
+                info!(
+                    "Loaded seed {:?} for {}",
+                    val,
+                    String::from_utf8_lossy(name)
+                );
+                Ok(val)
+            }
+            None => {
+                bail!(
+                    "Decoding varint for {} seed failed",
+                    String::from_utf8_lossy(name)
+                );
+            }
+        },
+        None => {
+            let seed: T = rand::random();
+            db.put(&key, &seed.encode_var_vec())?;
+            info!(
+                "Generated seed {:?} for {}",
+                seed,
+                String::from_utf8_lossy(name)
+            );
+            Ok(seed)
+        }
     }
 }

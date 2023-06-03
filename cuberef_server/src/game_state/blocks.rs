@@ -20,9 +20,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt::Debug,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -36,8 +34,9 @@ use super::{
 };
 use cuberef_core::{
     block_id::{BlockError, BlockId, BLOCK_VARIANT_MASK},
+    constants::blocks::AIR,
     coordinates::BlockCoordinate,
-    protocol::blocks as blocks_proto, constants::blocks::AIR,
+    protocol::blocks as blocks_proto,
 };
 use prost::Message;
 
@@ -58,28 +57,6 @@ pub type InlineHandler = dyn Fn(
     + Send
     + Sync;
 
-/// The way a block should be rendered by a client
-pub enum RenderInfo {
-    /// This object does not display anything
-    Empty,
-    /// This object shows up as a solid cube
-    Cube(blocks_proto::CubeRenderInfo),
-    /// This object shows up as a solid cube with extended parameters
-    /// (e.g. transparency, borders).
-    CubeEx(blocks_proto::CubeExRendererInfo),
-}
-
-/// The physical behavior of a block when a player collides or interacts with it
-pub enum PhysicsInfo {
-    /// No physical interaction
-    Air,
-    /// Rigid filling the entire volume.
-    Solid,
-    /// Basic fluid physics
-    Fluid(blocks_proto::FluidPhysicsInfo),
-    // todo other physics types (e.g. ladders) if they cannot be
-    // expressed with fluid
-}
 
 // How extended data for this block type ought to be handled.
 #[derive(PartialEq, Eq)]
@@ -132,7 +109,7 @@ pub enum ExtDataHandling {
 #[allow(clippy::type_complexity)] // Hard to factor types while trait aliases are unstable
 pub struct BlockType {
     /// All block details that are common between the client and the server
-    pub(crate) client_info: blocks_proto::BlockTypeDef,
+    pub client_info: blocks_proto::BlockTypeDef,
     /// How extended data ought to be handled for this block.
     pub extended_data_handling: ExtDataHandling,
 
@@ -189,7 +166,7 @@ pub struct BlockType {
     /// TBD way (for now, just a log message on the client, but eventually a popup or similar)
     ///
     /// Note that if the handler performs changes, they will not be rolled back if the handler subsequently returns Err.
-    /// 
+    ///
     /// Also note that if the item has its own dig handler, that item's dig handler is responsible for calling the
     /// dig_block on the map. The item does not need to dig the same block that was originally dug, e.g. it may dig no block,
     /// a different block than the originally dug one, or multiple blocks.
@@ -245,6 +222,26 @@ impl BlockType {
             bail!(BlockError::BlockNotRegistered(
                 self.client_info.short_name.clone()
             ))
+        }
+    }
+}
+
+impl Default for BlockType {
+    fn default() -> Self {
+        Self {
+            client_info: Default::default(),
+            extended_data_handling: ExtDataHandling::NoExtData,
+            deserialize_extended_data_handler: None,
+            serialize_extended_data_handler: None,
+            extended_data_to_client_side: None,
+            dig_handler_full: None,
+            dig_handler_inline: None,
+            tap_handler_full: None,
+            tap_handler_inline: None,
+            place_upon_handler: None,
+            interact_key_handlers: vec![],
+            is_unknown_block: false,
+            block_type_manager_id: None,
         }
     }
 }
@@ -500,7 +497,8 @@ impl BlockTypeManager {
         match db.get(&KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY))? {
             Some(x) => {
                 let result = BlockTypeManager::from_proto(
-                    blocks_proto::ServerBlockTypeAssignments::decode(x.borrow())?)?;
+                    blocks_proto::ServerBlockTypeAssignments::decode(x.borrow())?,
+                )?;
                 info!(
                     "Loaded block type manager from database with {} definitions",
                     result.block_types.len()
@@ -618,8 +616,9 @@ fn make_unknown_block_server(
     }
 }
 
+/// Traits for types that can be interpreted as a block type.
 pub trait TryAsHandle {
-    // Use the given manager to transform this into a handle.
+    /// Use the given manager to transform this into a handle.
     fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle>;
 }
 

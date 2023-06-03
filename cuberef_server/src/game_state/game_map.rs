@@ -68,7 +68,7 @@ pub enum CasOutcome {
     /// The block compared equal to the expected and was set accordingly.
     Match,
     /// The block did not match the desired one, and no change was made to the map.
-    Mismatch
+    Mismatch,
 }
 
 impl AsDbKey for BlockCoordinate {
@@ -258,6 +258,18 @@ impl MapChunk {
             }
             None => bail!("Missing chunk_data or unrecognized format"),
         }
+    }
+    /// Sets the block at th given coordinate within the chunk.
+    /// This function is intended to be used from map generators, and may
+    /// lead to data loss or inconsistency when used elsewhere
+    pub fn set_block(
+        &mut self,
+        coordinate: ChunkOffset,
+        block: BlockTypeHandle,
+        extended_data: Option<ExtendedData>,
+    ) {
+        self.block_ids[coordinate.as_index()] = block.id().into();
+        self.extended_data[coordinate.as_index()] = extended_data;
     }
 }
 
