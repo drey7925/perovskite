@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::num;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,9 +46,12 @@ use cuberef_core::protocol::game_rpc as proto;
 use cuberef_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use cuberef_core::protocol::game_rpc::PositionUpdate;
 use cuberef_core::protocol::game_rpc::StreamToClient;
+use itertools::iproduct;
+use itertools::Itertools;
 use log::error;
 use log::info;
 use log::warn;
+use rocksdb::properties::NUM_SNAPSHOTS;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -117,7 +121,7 @@ pub(crate) async fn make_client_contexts(
     // TODO add other inventories from the inventory UI layer
     let mut interested_inventories = HashSet::new();
     interested_inventories.insert(player_context.main_inventory());
-    
+
     let player_context = Arc::new(player_context);
 
     let inbound = ClientInboundContext {
@@ -466,27 +470,31 @@ impl ClientOutboundContext {
             )),
         };
 
-        for &dx in LOAD_LAZY_ZIGZAG_VEC.iter() {
-            for &dy in LOAD_LAZY_ZIGZAG_VEC.iter() {
-                for &dz in LOAD_LAZY_ZIGZAG_VEC.iter() {
-                    let chunk = ChunkCoordinate {
-                        x: player_chunk.x.saturating_add(dx),
-                        y: player_chunk.y.saturating_add(dy),
-                        z: player_chunk.z.saturating_add(dz),
-                    };
-                    if !chunk.is_in_bounds() {
-                        continue;
-                    }
+        let mut candidate_chunks = vec![];
+        for &(dx, dy, dz) in LOAD_LAZY_SORTED_COORDS.iter() {
+            let chunk = ChunkCoordinate {
+                x: player_chunk.x.saturating_add(dx),
+                y: player_chunk.y.saturating_add(dy),
+                z: player_chunk.z.saturating_add(dz),
+            };
+            if !chunk.is_in_bounds() {
+                continue;
+            }
+            candidate_chunks.push(chunk);
+        }
+        let mut num_added = 0;
+        for chunk in candidate_chunks {
+            // TODO: consider whether we want an L(infinity) metric (i.e. max) rather than L1 (manhattan distance)
+            let load_if_missing =
+                chunk.manhattan_distance(player_chunk) <= LOAD_EAGER_DISTANCE as u32;
 
-                    // TODO: consider whether we want an L(infinity) metric (i.e. max) rather than L1 (manhattan distance)
-                    let load_if_missing =
-                        chunk.manhattan_distance(player_chunk) <= LOAD_EAGER_DISTANCE as u32;
-
-                    if chunk.manhattan_distance(player_chunk) <= LOAD_LAZY_DISTANCE as u32 {
-                        self.game_state.map().bump_access_time(chunk);
-                        if !self.chunks_known_to_client.contains(&chunk) {
-                            self.subscribe_to_chunk(chunk, load_if_missing).await?;
-                        }
+            if chunk.manhattan_distance(player_chunk) <= LOAD_LAZY_DISTANCE as u32 {
+                self.game_state.map().bump_access_time(chunk);
+                if !self.chunks_known_to_client.contains(&chunk) {
+                    self.subscribe_to_chunk(chunk, load_if_missing).await?;
+                    num_added += 1;
+                    if num_added >= MAX_CHUNKS_PER_UPDATE {
+                        break;
                     }
                 }
             }
@@ -813,10 +821,11 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 5;
-const LOAD_LAZY_DISTANCE: i32 = 10;
-const UNLOAD_DISTANCE: i32 = 15;
+const LOAD_EAGER_DISTANCE: i32 = 15;
+const LOAD_LAZY_DISTANCE: i32 = 20;
+const UNLOAD_DISTANCE: i32 = 25;
 const MAX_UPDATE_BATCH_SIZE: usize = 32;
+const MAX_CHUNKS_PER_UPDATE: usize = 32;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {
@@ -825,6 +834,16 @@ lazy_static::lazy_static! {
             v.push(i);
             v.push(-i);
         }
+        v
+    };
+}
+lazy_static::lazy_static! {
+    static ref LOAD_LAZY_SORTED_COORDS: Vec<(i32, i32, i32)> = {
+        let mut v = vec![];
+        for (&x, &y, &z) in iproduct!(LOAD_LAZY_ZIGZAG_VEC.iter(), LOAD_LAZY_ZIGZAG_VEC.iter(), LOAD_LAZY_ZIGZAG_VEC.iter()) {
+            v.push((x, y, z));
+        }
+        v.sort_by_key(|(x, y, z)| x.abs() + y.abs() + z.abs());
         v
     };
 }

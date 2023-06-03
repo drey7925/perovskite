@@ -251,7 +251,6 @@ fn get_dig_interacting_groups(item: &ItemDef) -> Vec<Vec<String>> {
             result.push(rule.block_group.clone())
         }
     }
-    println!("{result:?}");
     result
 }
 

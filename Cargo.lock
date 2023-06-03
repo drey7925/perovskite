@@ -731,6 +731,7 @@ dependencies = [
  "env_logger",
  "hex",
  "integer-encoding",
+ "itertools",
  "lazy_static",
  "log",
  "microbench",

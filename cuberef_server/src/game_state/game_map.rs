@@ -874,7 +874,8 @@ enum WritebackReq {
 // TODO expose as flags or configs
 const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(15);
 const CACHE_CLEAN_INTERVAL: Duration = Duration::from_secs(3);
-const CACCHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 128;
+const CACHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 128;
+const CACHE_CLEANUP_RELOCK_EVERY_N: usize = 32;
 
 struct MapCacheCleanup {
     map: Arc<ServerGameMap>,
@@ -899,25 +900,37 @@ impl MapCacheCleanup {
         Ok(())
     }
     fn do_cleanup(&self) -> Result<()> {
-        let now = Instant::now();
-        let mut lock = self.map.live_chunks.lock();
-        if lock.len() <= CACCHE_CLEANUP_KEEP_N_RECENTLY_USED {
-            return Ok(());
+        loop {
+            let now = Instant::now();
+            let mut lock = self.map.live_chunks.lock();
+            if lock.len() <= CACHE_CLEANUP_KEEP_N_RECENTLY_USED {
+                return Ok(());
+            }
+            let mut entries: Vec<_> = lock
+                .iter()
+                .map(|(k, v)| (v.last_accessed, *k, v.dirty))
+                .filter(|&entry| (now - entry.0) >= CACHE_CLEAN_MIN_AGE)
+                .collect();
+            entries.sort_unstable_by_key(|entry| entry.0);
+            entries.reverse();
+            let num_entries = entries.len();
+            for entry in entries
+                .into_iter()
+                .skip(CACHE_CLEANUP_KEEP_N_RECENTLY_USED)
+                .take(CACHE_CLEANUP_RELOCK_EVERY_N)
+            {
+                self.map.unload_chunk_locked(&mut lock, entry.1)?;
+            }
+            if num_entries > (CACHE_CLEANUP_RELOCK_EVERY_N + CACHE_CLEANUP_KEEP_N_RECENTLY_USED) {
+                log::info!(
+                    "Cache cleanup thread still has {} to clean, looping.",
+                    num_entries - (CACHE_CLEANUP_RELOCK_EVERY_N + CACHE_CLEANUP_KEEP_N_RECENTLY_USED)
+                );
+                continue;
+            } else {
+                return Ok(());
+            }
         }
-        let mut entries: Vec<_> = lock
-            .iter()
-            .map(|(k, v)| (v.last_accessed, *k, v.dirty))
-            .filter(|&entry| (now - entry.0) >= CACHE_CLEAN_MIN_AGE)
-            .collect();
-        entries.sort_unstable_by_key(|entry| entry.0);
-        entries.reverse();
-        for entry in entries
-            .into_iter()
-            .skip(CACCHE_CLEANUP_KEEP_N_RECENTLY_USED)
-        {
-            self.map.unload_chunk_locked(&mut lock, entry.1)?;
-        }
-        Ok(())
     }
 }
 
