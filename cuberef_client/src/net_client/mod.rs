@@ -38,12 +38,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tonic::{async_trait, transport::Channel, Request, codegen::CompressionEncoding};
+use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request};
 
 use crate::{
     cube_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
     game_state::{
-        chunk::{mesh_chunk, ClientChunk, maybe_mesh_chunk},
+        chunk::{maybe_mesh_chunk, mesh_chunk, ClientChunk},
         items::{ClientInventory, ClientItemManager, InventoryManager},
         physics::PhysicsState,
         tool_controller::ToolController,
@@ -358,30 +358,60 @@ impl InboundContext {
     }
 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
+        // TODO offload meshing to another thread
         match &chunk.chunk_coord {
             Some(coord) => {
-                let coord = coord.into();
-                let mut lock = self.client_state.chunks.lock();
-                lock.insert(coord, ClientChunk::from_proto(chunk.clone())?);
-                mesh_chunk(coord, &mut lock, &self.client_state.cube_renderer)?;
-                if let Some(neighbor) = coord.try_delta(-1, 0, 0) {
-                    maybe_mesh_chunk(neighbor, &mut lock, &self.client_state.cube_renderer)?;
-                }
-                if let Some(neighbor) = coord.try_delta(1, 0, 0) {
-                    maybe_mesh_chunk(neighbor, &mut lock, &self.client_state.cube_renderer)?;
-                }
-                if let Some(neighbor) = coord.try_delta(0, -1, 0) {
-                    maybe_mesh_chunk(neighbor, &mut lock, &self.client_state.cube_renderer)?;
-                }
-                if let Some(neighbor) = coord.try_delta(0, 1, 0) {
-                    maybe_mesh_chunk(neighbor, &mut lock, &self.client_state.cube_renderer)?;
-                }
-                if let Some(neighbor) = coord.try_delta(0, 0, -1) {
-                    maybe_mesh_chunk(neighbor, &mut lock, &self.client_state.cube_renderer)?;
-                }
-                if let Some(neighbor) = coord.try_delta(0, 0, 1) {
-                    maybe_mesh_chunk(neighbor, &mut lock, &self.client_state.cube_renderer)?;
-                }
+                tokio::task::block_in_place(|| {
+                    let coord = coord.into();
+                    let mut lock = self.client_state.chunks.lock();
+                    lock.insert(coord, ClientChunk::from_proto(chunk.clone())?);
+                    mesh_chunk(coord, &mut lock, &self.client_state.cube_renderer)?;
+                    drop(lock);
+
+                    if let Some(neighbor) = coord.try_delta(-1, 0, 0) {
+                        maybe_mesh_chunk(
+                            neighbor,
+                            &mut self.client_state.chunks.lock(),
+                            &self.client_state.cube_renderer,
+                        )?;
+                    }
+                    if let Some(neighbor) = coord.try_delta(1, 0, 0) {
+                        maybe_mesh_chunk(
+                            neighbor,
+                            &mut self.client_state.chunks.lock(),
+                            &self.client_state.cube_renderer,
+                        )?;
+                    }
+                    if let Some(neighbor) = coord.try_delta(0, -1, 0) {
+                        maybe_mesh_chunk(
+                            neighbor,
+                            &mut self.client_state.chunks.lock(),
+                            &self.client_state.cube_renderer,
+                        )?;
+                    }
+                    if let Some(neighbor) = coord.try_delta(0, 1, 0) {
+                        maybe_mesh_chunk(
+                            neighbor,
+                            &mut self.client_state.chunks.lock(),
+                            &self.client_state.cube_renderer,
+                        )?;
+                    }
+                    if let Some(neighbor) = coord.try_delta(0, 0, -1) {
+                        maybe_mesh_chunk(
+                            neighbor,
+                            &mut self.client_state.chunks.lock(),
+                            &self.client_state.cube_renderer,
+                        )?;
+                    }
+                    if let Some(neighbor) = coord.try_delta(0, 0, 1) {
+                        maybe_mesh_chunk(
+                            neighbor,
+                            &mut self.client_state.chunks.lock(),
+                            &self.client_state.cube_renderer,
+                        )?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                })?;
             }
             None => {
                 self.send_bugcheck("Got chunk without a coordinate".to_string())

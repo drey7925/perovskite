@@ -23,7 +23,9 @@ use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
 use cuberef_core::protocol::blocks::block_type_def::RenderInfo;
-use cuberef_core::protocol::blocks::{self as blocks_proto, BlockTypeDef, CubeRenderInfo};
+use cuberef_core::protocol::blocks::{
+    self as blocks_proto, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
+};
 use cuberef_core::protocol::render::TextureReference;
 use cuberef_core::{block_id::BlockId, coordinates::ChunkOffset};
 
@@ -33,9 +35,10 @@ use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 use tonic::async_trait;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{
     AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryUsage,
+    StandardMemoryAllocator,
 };
 
 use crate::game_state::chunk::ClientChunk;
@@ -110,6 +113,66 @@ pub(crate) struct CubeExtents {
     z: (f32, f32),
 }
 
+#[derive(Clone)]
+pub(crate) struct VkChunkPass {
+    pub(crate) vtx: Subbuffer<[CubeGeometryVertex]>,
+    pub(crate) idx: Subbuffer<[u32]>,
+}
+impl VkChunkPass {
+    pub(crate) fn from_buffers(
+        vtx: Vec<CubeGeometryVertex>,
+        idx: Vec<u32>,
+        allocator: &StandardMemoryAllocator,
+    ) -> Result<Option<VkChunkPass>> {
+        if vtx.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(VkChunkPass {
+                vtx: Buffer::from_iter(
+                    allocator,
+                    BufferCreateInfo {
+                        usage: BufferUsage::VERTEX_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        usage: MemoryUsage::Upload,
+                        ..Default::default()
+                    },
+                    vtx.into_iter(),
+                )?,
+                idx: Buffer::from_iter(
+                    allocator,
+                    BufferCreateInfo {
+                        usage: BufferUsage::INDEX_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        usage: MemoryUsage::Upload,
+                        ..Default::default()
+                    },
+                    idx.into_iter(),
+                )?,
+            }))
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct VkChunkVertexData {
+    pub(crate) solid_opaque: Option<VkChunkPass>,
+    pub(crate) transparent: Option<VkChunkPass>,
+    pub(crate) translucent: Option<VkChunkPass>,
+}
+impl VkChunkVertexData {
+    pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
+        if self.solid_opaque.is_some() || self.transparent.is_some() || self.translucent.is_some() {
+            Some(self.clone())
+        } else {
+            None
+        }
+    }
+}
+
 /// Manages the block type definitions, and their underlying textures,
 /// for the game.
 pub(crate) struct BlockRenderer {
@@ -119,11 +182,11 @@ pub(crate) struct BlockRenderer {
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
-    fn get_texture(&self, id: &str) -> Result<Rect> {
+    fn get_texture(&self, id: &str) -> Rect {
         self.texture_coords
             .get(&id.to_string())
             .copied()
-            .with_context(|| "Texture not in atlas")
+            .unwrap_or_else(|| *self.texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap())
     }
     pub(crate) async fn new<T>(
         block_defs: Arc<ClientBlockTypeManager>,
@@ -152,41 +215,117 @@ impl BlockRenderer {
         &self.allocator
     }
 
-    pub(crate) fn emit_cube_vk(
+    pub(crate) fn mesh_chunk(
         &self,
         chunk_data: &FxHashMap<ChunkCoordinate, ClientChunk>,
         current_chunk: &ClientChunk,
-        block_coord: BlockCoordinate,
-        vtx: &mut Vec<CubeGeometryVertex>,
-        idx: &mut Vec<u32>,
-    ) {
-        let block = self.get_block(current_chunk.block_ids(), block_coord.offset());
-        match &block.render_info {
-            Some(RenderInfo::Empty(_)) => {}
-            Some(RenderInfo::Cube(cube)) => self.emit_solid_cube(
+    ) -> Result<VkChunkVertexData> {
+        Ok(VkChunkVertexData {
+            solid_opaque: self.mesh_chunk_subpass(
                 chunk_data,
-                block_coord,
-                current_chunk.block_ids(),
-                vtx,
-                idx,
-                cube,
-            ),
-            Some(RenderInfo::CubeEx(_)) => {
-                log::warn!("Meshing a CubeEx which we can't mesh yet");
-            }
-            None => {}
-        }
+                current_chunk,
+                |block| match block.render_info {
+                    Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
+                        x == CubeRenderMode::SolidOpaque.into()
+                    }
+                    Some(_) | None => false,
+                },
+                |_block, neighbor| {
+                    neighbor.is_some_and(|neighbor| match neighbor.render_info {
+                        Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
+                            x == CubeRenderMode::SolidOpaque.into()
+                        }
+                        Some(_) | None => false,
+                    })
+                },
+            )?,
+            transparent: self.mesh_chunk_subpass(
+                chunk_data,
+                current_chunk,
+                |block| match block.render_info {
+                    Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
+                        x == CubeRenderMode::Transparent.into()
+                    }
+                    Some(_) | None => false,
+                },
+                |block, neighbor| {
+                    neighbor.is_some_and(|neighbor| {
+                        BlockId(block.id).equals_ignore_variant(BlockId(neighbor.id))
+                    })
+                },
+            )?,
+            translucent: self.mesh_chunk_subpass(
+                chunk_data,
+                current_chunk,
+                |block| match block.render_info {
+                    Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
+                        x == CubeRenderMode::Translucent.into()
+                    }
+                    Some(_) | None => false,
+                },
+                |block, neighbor| {
+                    neighbor.is_some_and(|neighbor| {
+                        BlockId(block.id).equals_ignore_variant(BlockId(neighbor.id))
+                    })
+                },
+            )?,
+        })
     }
 
-    fn emit_solid_cube(
+    pub(crate) fn mesh_chunk_subpass<F, G>(
         &self,
+        chunk_data: &FxHashMap<ChunkCoordinate, ClientChunk>,
+        current_chunk: &ClientChunk,
+        // closure taking a block and returning whether this subpass should render it
+        include_block_when: F,
+        // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
+        suppress_face_when: G,
+    ) -> Result<Option<VkChunkPass>>
+    where
+        F: Fn(&BlockTypeDef) -> bool,
+        G: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+    {
+        let mut vtx = Vec::new();
+        let mut idx = Vec::new();
+        for x in 0..16 {
+            for y in 0..16 {
+                for z in 0..16 {
+                    let offset = ChunkOffset { x, y, z };
+
+                    let block = self.get_block(current_chunk.block_ids(), offset);
+                    if let Some(RenderInfo::Cube(cube_render_info)) = &block.render_info {
+                        if include_block_when(block) {
+                            self.emit_full_cube(
+                                block,
+                                chunk_data,
+                                current_chunk.coord().with_offset(offset),
+                                current_chunk.block_ids(),
+                                &mut vtx,
+                                &mut idx,
+                                &cube_render_info,
+                                &suppress_face_when,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        VkChunkPass::from_buffers(vtx, idx, self.allocator())
+    }
+
+    fn emit_full_cube<F>(
+        &self,
+        block: &BlockTypeDef,
         chunk_data: &FxHashMap<ChunkCoordinate, ClientChunk>,
         coord: BlockCoordinate,
         own_ids: &[BlockId; 4096],
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         render_info: &CubeRenderInfo,
-    ) {
+        suppress_face_when: F,
+    ) where
+        F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+    {
         const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents {
             x: (-0.5, 0.5),
             y: (-0.5, 0.5),
@@ -198,10 +337,13 @@ impl BlockRenderer {
         let offset = coord.offset();
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
-        if !coord.try_delta(-1, 0, 0).map_or(false, |x| {
-            is_cube(self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, x))
-        }) {
-            let frame = self.get_texture(render_info.tex_left.tex_name()).unwrap();
+        if !suppress_face_when(
+            block,
+            coord.try_delta(-1, 0, 0).and_then(|neighbor| {
+                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+            }),
+        ) {
+            let frame = self.get_texture(render_info.tex_left.tex_name());
             emit_cube_face_vk(
                 pos,
                 frame,
@@ -213,10 +355,13 @@ impl BlockRenderer {
             );
         }
 
-        if !coord.try_delta(1, 0, 0).map_or(false, |x| {
-            is_cube(self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, x))
-        }) {
-            let frame = self.get_texture(render_info.tex_left.tex_name()).unwrap();
+        if !suppress_face_when(
+            block,
+            coord.try_delta(1, 0, 0).and_then(|neighbor| {
+                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+            }),
+        ) {
+            let frame = self.get_texture(render_info.tex_left.tex_name());
             emit_cube_face_vk(
                 pos,
                 frame,
@@ -227,10 +372,13 @@ impl BlockRenderer {
                 e,
             );
         }
-        if !coord.try_delta(0, -1, 0).map_or(false, |x| {
-            is_cube(self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, x))
-        }) {
-            let frame = self.get_texture(render_info.tex_bottom.tex_name()).unwrap();
+        if !suppress_face_when(
+            block,
+            coord.try_delta(0, -1, 0).and_then(|neighbor| {
+                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+            }),
+        ) {
+            let frame = self.get_texture(render_info.tex_bottom.tex_name());
             emit_cube_face_vk(
                 pos,
                 frame,
@@ -241,10 +389,13 @@ impl BlockRenderer {
                 e,
             );
         }
-        if !coord.try_delta(0, 1, 0).map_or(false, |x| {
-            is_cube(self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, x))
-        }) {
-            let frame = self.get_texture(render_info.tex_top.tex_name()).unwrap();
+        if !suppress_face_when(
+            block,
+            coord.try_delta(0, 1, 0).and_then(|neighbor| {
+                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+            }),
+        ) {
+            let frame = self.get_texture(render_info.tex_top.tex_name());
             emit_cube_face_vk(
                 pos,
                 frame,
@@ -255,10 +406,13 @@ impl BlockRenderer {
                 e,
             );
         }
-        if !coord.try_delta(0, 0, -1).map_or(false, |x| {
-            is_cube(self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, x))
-        }) {
-            let frame = self.get_texture(render_info.tex_front.tex_name()).unwrap();
+        if !suppress_face_when(
+            block,
+            coord.try_delta(0, 0, -1).and_then(|neighbor| {
+                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+            }),
+        ) {
+            let frame = self.get_texture(render_info.tex_front.tex_name());
             emit_cube_face_vk(
                 pos,
                 frame,
@@ -269,10 +423,13 @@ impl BlockRenderer {
                 e,
             );
         }
-        if !coord.try_delta(0, 0, 1).map_or(false, |x| {
-            is_cube(self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, x))
-        }) {
-            let frame = self.get_texture(render_info.tex_back.tex_name()).unwrap();
+        if !suppress_face_when(
+            block,
+            coord.try_delta(0, 0, 1).and_then(|neighbor| {
+                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+            }),
+        ) {
+            let frame = self.get_texture(render_info.tex_back.tex_name());
             emit_cube_face_vk(
                 pos,
                 frame,
@@ -319,7 +476,7 @@ impl BlockRenderer {
     ) -> Result<CubeGeometryDrawCall> {
         let mut vtx = vec![];
         let mut idx = vec![];
-        let frame = self.get_texture(SELECTION_RECTANGLE).unwrap();
+        let frame = *self.texture_coords.get(SELECTION_RECTANGLE).unwrap();
         const POINTEE_SELECTION_EXTENTS: CubeExtents = CubeExtents {
             x: (-0.51, 0.51),
             y: (-0.51, 0.51),
@@ -426,9 +583,12 @@ impl BlockRenderer {
         let offset = (vec3(pointee.x as f64, pointee.y as f64, pointee.z as f64) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         Ok(CubeGeometryDrawCall {
-            vertex: vtx,
-            index: idx,
             model_matrix: Matrix4::from_translation(offset.cast().unwrap()),
+            models: VkChunkVertexData {
+                solid_opaque: None,
+                transparent: Some(VkChunkPass { vtx, idx }),
+                translucent: None,
+            },
         })
     }
 }
@@ -549,6 +709,7 @@ fn make_fallback() -> blocks_proto::BlockTypeDef {
                 tex_bottom: fallback_texture(),
                 tex_front: fallback_texture(),
                 tex_back: fallback_texture(),
+                render_mode: CubeRenderMode::SolidOpaque.into(),
             },
         )),
 

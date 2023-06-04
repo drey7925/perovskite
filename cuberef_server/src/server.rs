@@ -134,22 +134,21 @@ impl ServerBuilder {
         Self::from_args(&ServerArgs::parse())
     }
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
-        if args.create {
-            if !Path::exists(&args.data_dir) {
-                std::fs::create_dir(&args.data_dir)?;
-                log::info!("Created new data directory at {:?}", args.data_dir);
-            } else {
-                panic!("Data directory already exists");
+        if !Path::exists(&args.data_dir) {
+            std::fs::create_dir(&args.data_dir)?;
+            log::info!("Created new data directory at {:?}", args.data_dir);
+        } else {
+            if !Path::is_dir(&args.data_dir) {
+                bail!("Specified data directory is not a directory.");
             }
+            log::info!("Loaded existing data directory at {:?}", args.data_dir);
         }
-        if !Path::is_dir(&args.data_dir) {
-            bail!("Data directory does not exist.");
-        }
+        
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
         let db = Arc::new(RocksDbBackend::new(db_dir)?);
 
-        let blocks = BlockTypeManager::create_or_load(db.as_ref(), args.create)?;
+        let blocks = BlockTypeManager::create_or_load(db.as_ref(), true)?;
         let items = ItemManager::new();
         let media = MediaManager::new();
         Ok(ServerBuilder {

@@ -39,6 +39,7 @@ message BlockTypeDef {
     oneof render_info {
         Empty empty = 10;
         CubeRenderInfo cube = 11;
+        // This is still TBD and may be renamed/never used
         CubeExRendererInfo cube_ex = 12;
     };
     // How the client should handle physics when interacting with the block
@@ -51,6 +52,20 @@ message BlockTypeDef {
 
 message Empty {}
 
+// Describes the way a cube-shaped block should be rendered.
+enum CubeRenderMode {
+    // Behavior is unspecified
+    CUBE_RENDER_MODE_UNSPECIFIED = 0;
+    // The textures are opaque everywhere. 
+    // Behavior is unspecified (graphical glitches may occur) if the texture contains transparent or translucent pixels.
+    CUBE_RENDER_MODE_SOLID_OPAQUE = 1;
+    // The textures contain both pixels with alpha=1 and pixels with alpha=0.
+    // This mode takes care of properly dealing with transparent pixels but not translucent pixels.
+    CUBE_RENDER_MODE_TRANSPARENT = 2;
+    // The textures contain translucent pixels.
+    // This mode's behavior is still TBD, and is subject to change.
+    CUBE_RENDER_MODE_TRANSLUCENT = 3;
+}
 
 message CubeRenderInfo {
     cuberef.protocol.render.TextureReference tex_left = 1;
@@ -59,11 +74,12 @@ message CubeRenderInfo {
     cuberef.protocol.render.TextureReference tex_bottom = 4;
     cuberef.protocol.render.TextureReference tex_front = 5;
     cuberef.protocol.render.TextureReference tex_back = 6;
+
+    CubeRenderMode render_mode = 7;
 }
 
 message CubeExRendererInfo {
-    // todo define what CubeEx will include, probably translucency, block merging, etc
-    // with expanding definitions as time goes on
+    // todo define what CubeEx will include, if we ever need it
 }
 
 message FluidPhysicsInfo {

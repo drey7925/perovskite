@@ -91,9 +91,8 @@ pub(crate) mod frag_lighting {
     }
 }
 // Fragment shader(s) that use lighting data and does a discard based on alpha
-// This only supports alpha=0 and alpha=1 properly
-// TODO put this into a proper pipeline; this is currently unused
-pub(crate) mod frag_lighting_translucent {
+// Alpha=0 and alpha=1 are supported, behavior is undefined for other values.
+pub(crate) mod frag_lighting_sparse {
     vulkano_shaders::shader! {
     ty: "fragment",
     src: r"
@@ -110,6 +109,8 @@ pub(crate) mod frag_lighting_translucent {
         f_color = texture(tex, uv_texcoord);
         if (f_color.a < 0.5) {
             discard;
+        } else {
+            f_color.a = 1.0;
         }
     }
     "
@@ -167,13 +168,13 @@ pub(crate) mod frag_simple {
 }
 
 pub(crate) trait PipelineWrapper<T, U> {
-    fn pipeline(&self) -> &GraphicsPipeline;
-    fn pipeline_arc(&self) -> Arc<GraphicsPipeline>;
-    /// Actually draw. The pipeline must havebeen bound using bind.
+    type PassIdentifier;
+    /// Actually draw. The pipeline must have been bound using bind.
     fn draw(
         &self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[T],
+        pass: Self::PassIdentifier
     ) -> Result<()>;
     /// Bind the pipeline. Must be called each frame before draw
     fn bind(
@@ -181,6 +182,7 @@ pub(crate) trait PipelineWrapper<T, U> {
         ctx: &VulkanContext,
         per_frame_config: U,
         command_buf_builder: &mut CommandBufferBuilder,
+        pass: Self::PassIdentifier
     ) -> Result<()>;
 }
 
@@ -192,7 +194,6 @@ where
     type PerPipelineConfig;
     type PerFrameConfig;
     type PipelineWrapperImpl: PipelineWrapper<Self::DrawCall, Self::PerFrameConfig>;
-    fn new(device: Arc<Device>) -> Result<Self>;
     fn make_pipeline(
         &self,
         ctx: &VulkanContext,

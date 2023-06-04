@@ -45,6 +45,7 @@ pub enum BlockError {
 pub const BLOCK_VARIANT_MASK: u32 = 0xfff;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct BlockId(pub u32);
 impl BlockId {
     pub fn base_id(&self) -> u32 {
@@ -67,6 +68,7 @@ impl BlockId {
         );
         Ok(BlockId(base | (variant as u32)))
     }
+    #[inline]
     pub fn equals_ignore_variant(&self, other: BlockId) -> bool {
         self.base_id() == other.base_id()
     }

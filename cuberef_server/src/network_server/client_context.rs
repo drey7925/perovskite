@@ -821,9 +821,9 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 15;
-const LOAD_LAZY_DISTANCE: i32 = 20;
-const UNLOAD_DISTANCE: i32 = 25;
+const LOAD_EAGER_DISTANCE: i32 = 20;
+const LOAD_LAZY_DISTANCE: i32 = 25;
+const UNLOAD_DISTANCE: i32 = 30;
 const MAX_UPDATE_BATCH_SIZE: usize = 32;
 const MAX_CHUNKS_PER_UPDATE: usize = 32;
 

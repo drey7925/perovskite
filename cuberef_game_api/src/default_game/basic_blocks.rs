@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::{AtomicBool, AtomicU32};
+
 use crate::{
     blocks::BlockBuilder,
     game_builder::{include_texture_bytes, Block, GameBuilder, Tex},
@@ -26,6 +28,8 @@ pub const DIRT: Block = Block("default:dirt");
 pub const DIRT_WITH_GRASS: Block = Block("default:dirt_with_grass");
 /// Solid grey stone.
 pub const STONE: Block = Block("default:stone");
+/// Transparent glass.
+pub const GLASS: Block = Block("default:glass");
 
 
 
@@ -37,14 +41,15 @@ const DIRT_TEXTURE: Tex = Tex("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: Tex = Tex("default:dirt_grass_side");
 const GRASS_TOP_TEXTURE: Tex = Tex("default:grass_top");
 const STONE_TEXTURE: Tex = Tex("default:stone");
-
-
+const GLASS_TEXTURE: Tex = Tex("default:glass");
 const WATER_TEXTURE: Tex = Tex("default:water");
 
 pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     register_core_blocks(game_builder)?;
     Ok(())
 }
+
+static TESTONLY_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, DIRT_TEXTURE, "textures/dirt.png")?;
@@ -53,8 +58,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         DIRT_GRASS_SIDE_TEXTURE,
         "textures/dirt_grass_side.png"
     )?;
-    include_texture_bytes!(game_builder, STONE_TEXTURE, "textures/stone.png")?;
     include_texture_bytes!(game_builder, GRASS_TOP_TEXTURE, "textures/grass_top.png")?;
+    include_texture_bytes!(game_builder, STONE_TEXTURE, "textures/stone.png")?;
+    include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
+
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
     game_builder.add_block(
         BlockBuilder::new(DIRT)
@@ -74,22 +81,39 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_TEXTURE,
             )
-            .set_dropped_item(DIRT.0, 1),
+            .set_dropped_item(DIRT.0, 1)
+            // testonly
+            .set_dropped_item_closure(|| {
+                // Test only: There is no way to get glass yet (no sand, no crafting)
+                // We need glass to test renderer changes
+                if TESTONLY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 2 == 0 {
+                    ("default:dirt".into(), 1)
+                } else {
+                    ("default:glass".into(), 5)
+                }
+            })
     )?;
     game_builder.add_block(
         BlockBuilder::new(STONE)
         // TODO: make not-diggable-by-hand after tools are implemented
             .add_block_group(BRITTLE)
             .set_texture_all(STONE_TEXTURE)
-            .set_inventory_display_name("Dirt block"),
+            .set_inventory_display_name("Stone block"),
+    )?;
+    game_builder.add_block(
+        BlockBuilder::new(GLASS)
+            .add_block_group(BRITTLE)
+            .set_texture_all(GLASS_TEXTURE)
+            .set_needs_transparency()
+            .set_inventory_display_name("Glass block"),
     )?;
     // TODO: implement actual water
     game_builder.add_block(
         BlockBuilder::new(WATER)
-       
             .add_block_group(BRITTLE)
             .set_texture_all(WATER_TEXTURE)
-            .set_inventory_display_name("Dirt block"),
+            .set_inventory_display_name("Water block")
+            .set_needs_translucency(),
     )?;
     Ok(())
 }

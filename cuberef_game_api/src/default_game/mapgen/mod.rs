@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use cuberef_core::{
     constants::blocks::AIR,
@@ -9,7 +9,7 @@ use cuberef_server::game_state::{
     game_map::MapChunk,
     mapgen::MapgenInterface,
 };
-use noise::{NoiseFn};
+use noise::NoiseFn;
 
 use super::basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE, WATER};
 
@@ -34,13 +34,16 @@ impl ElevationNoise {
             y as f64 * ELEVATION_COARSE_INPUT_SCALE,
         ];
         let coarse_height = self.coarse.get(coarse_pos) * ELEVATION_COARSE_OUTPUT_SCALE;
-        
+
         let fine_pos = [
             x as f64 * ELEVATION_FINE_INPUT_SCALE,
             y as f64 * ELEVATION_FINE_INPUT_SCALE,
         ];
         let fine_height = self.fine.get(fine_pos) * ELEVATION_FINE_OUTPUT_SCALE;
-        (coarse_height + fine_height) as i32
+        let raw_height = coarse_height + fine_height;
+        // Create more flat ground near water level
+        let adjusted_height = (raw_height - 1.) - 2. * ((raw_height - 1.) / 2.1).tanh();
+        adjusted_height as i32
     }
 }
 

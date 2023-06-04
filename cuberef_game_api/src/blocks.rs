@@ -23,7 +23,7 @@ use cuberef_core::{
         self,
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
-            BlockTypeDef, CubeRenderInfo, Empty,
+            BlockTypeDef, CubeRenderInfo, Empty, CubeRenderMode,
         },
         items::{item_def::QuantityType, ItemDef},
         render::TextureReference,
@@ -125,6 +125,8 @@ impl BlockBuilder {
                 tex_bottom: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                 tex_front: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                 tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                // todo autodetect this
+                render_mode: CubeRenderMode::SolidOpaque.into()
             },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
         }
@@ -155,7 +157,7 @@ impl BlockBuilder {
         self.dropped_item = DroppedItem::Dynamic(Box::new(closure));
         self
     }
-    ///
+    /// Sets that this block should drop nothing when dug
     pub fn set_no_drops(mut self) -> Self {
         self.dropped_item = DroppedItem::None;
         self
@@ -198,6 +200,24 @@ impl BlockBuilder {
         self.item.proto.inventory_texture = Some(inventory.into());
         self
     }
+    /// Indicates that the textures may have transparent pixels. This does not support translucency.
+    /// 
+    /// Stability note: It's possible that we may start autodetecting transparent pixels in texture files.
+    /// If that happens, this method will become a deprecated no-op.
+    pub fn set_needs_transparency(mut self) -> Self {
+        self.block_render_info.set_render_mode(CubeRenderMode::Transparent);
+        self
+    }
+
+    /// Indicates that the textures may have translucent pixels. The behavior of this is still TBD.
+    /// 
+    /// Stability note: The signature of this method will likely remain the same, but the render behavior may change.
+    /// Additional controls might be added in the future (as separate methods)
+    pub fn set_needs_translucency(mut self) -> Self {
+        self.block_render_info.set_render_mode(CubeRenderMode::Translucent);
+        self
+    }
+
     /// Adds a group to the list of groups for this block.
     /// These can affect diggability, dig speed, and other behavior in
     /// the map.

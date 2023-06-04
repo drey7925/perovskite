@@ -23,7 +23,7 @@ use cuberef_core::{
         items::default_item_interaction_rules,
     },
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
-    protocol::render::TextureReference,
+    protocol::{render::TextureReference, blocks::CubeRenderMode},
     protocol::{
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
@@ -200,6 +200,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
                     tex_bottom: testonly_make_tex("dirt.png"),
                     tex_front: testonly_make_tex("dirt.png"),
                     tex_back: testonly_make_tex("dirt.png"),
+                    render_mode: CubeRenderMode::SolidOpaque.into()
                 })),
                 physics_info: Some(PhysicsInfo::Solid(EMPTY)),
                 base_dig_time: 1.0,
@@ -243,6 +244,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
                     tex_bottom: testonly_make_tex("dirt.png"),
                     tex_front: testonly_make_tex("dirt_grass.png"),
                     tex_back: testonly_make_tex("dirt_grass.png"),
+                    render_mode: CubeRenderMode::SolidOpaque.into()
                 })),
                 physics_info: Some(PhysicsInfo::Solid(EMPTY)),
                 base_dig_time: 1.0,

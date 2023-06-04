@@ -145,17 +145,12 @@ pub(crate) struct FlatTexPipelineWrapper {
     texture_descriptor_set: Arc<PersistentDescriptorSet>,
 }
 impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
-    fn pipeline(&self) -> &GraphicsPipeline {
-        self.pipeline.as_ref()
-    }
-    fn pipeline_arc(&self) -> Arc<GraphicsPipeline> {
-        self.pipeline.clone()
-    }
-
+    type PassIdentifier = ();
     fn draw(
         &self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[FlatTextureDrawCall],
+        _pass: ()
     ) -> anyhow::Result<()> {
         builder.bind_pipeline_graphics(self.pipeline.clone());
         for call in draw_calls.iter() {
@@ -171,6 +166,7 @@ impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
         ctx: &crate::vulkan::VulkanContext,
         _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder,
+        _pass: ()
     ) -> anyhow::Result<()> {
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout
@@ -197,17 +193,18 @@ pub(crate) struct FlatTexPipelineProvider {
     vs: Arc<ShaderModule>,
     fs: Arc<ShaderModule>,
 }
+impl FlatTexPipelineProvider {
+    pub(crate) fn new(device: Arc<Device>) -> Result<Self> {
+        let vs = vert_2d::load_flat_tex(device.clone())?;
+        let fs = frag_lighting::load(device.clone())?;
+        Ok(FlatTexPipelineProvider { device, vs, fs })
+    }
+}
 impl PipelineProvider for FlatTexPipelineProvider {
     type DrawCall = FlatTextureDrawCall;
     type PerFrameConfig = ();
     type PipelineWrapperImpl = FlatTexPipelineWrapper;
     type PerPipelineConfig = Arc<Texture2DHolder>;
-
-    fn new(device: Arc<Device>) -> Result<Self> {
-        let vs = vert_2d::load_flat_tex(device.clone())?;
-        let fs = frag_lighting::load(device.clone())?;
-        Ok(FlatTexPipelineProvider { device, vs, fs })
-    }
 
     fn make_pipeline(
         &self,

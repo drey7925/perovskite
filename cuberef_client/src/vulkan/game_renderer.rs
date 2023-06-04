@@ -38,7 +38,10 @@ use crate::{
 };
 
 use super::{
-    shaders::{cube_geometry, flat_texture, PipelineProvider, PipelineWrapper},
+    shaders::{
+        cube_geometry::{self, BlockRenderPass},
+        flat_texture, PipelineProvider, PipelineWrapper,
+    },
     CommandBufferBuilder, VulkanContext,
 };
 
@@ -169,68 +172,17 @@ impl CuberefRenderer {
                     };
                     let window_size = self.ctx.window.inner_size();
 
-                    let FrameState {
-                        view_proj_matrix,
-                        player_position,
-                        tool_state
-                    } = self
-                        .client_state
-                        .next_frame((window_size.width as f64) / (window_size.height as f64));
                     // From https://vulkano.rs/compute_pipeline/descriptor_sets.html:
                     // Once you have created a descriptor set, you may also use it with other pipelines,
                     // as long as the bindings' types match those the pipelines' shaders expect.
                     // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
                     // you cannot create one independently of any particular pipeline.
-                    let mut command_buf_builder = self
+                    let command_buf_builder = self
                         .ctx
                         .start_command_buffer(self.ctx.framebuffers[image_i as usize].clone())
                         .unwrap();
 
-                    self.cube_pipeline
-                        .bind(&self.ctx, view_proj_matrix, &mut command_buf_builder)
-                        .unwrap();
-
-                    let mut cube_draw_calls: Vec<_> = self
-                        .client_state
-                        .chunks
-                        .lock()
-                        .iter()
-                        .filter_map(|(_, chunk)| chunk.make_draw_call(player_position))
-                        .collect();
-
-                    // todo consider having separate passes for transparent vs solid blocks
-                    // Proper transparency requires us to discard fragments, but that messes with early depth
-                    // test on some graphics hardware.
-                    if let Some(pointee) = tool_state.pointee {
-                        cube_draw_calls.push(self.client_state.cube_renderer.make_pointee_cube(player_position, pointee).unwrap());
-                    }
-                    // test only
-                    if let Some(neighbor) = tool_state.neighbor {
-                        cube_draw_calls.push(self.client_state.cube_renderer.make_pointee_cube(player_position, neighbor).unwrap());
-                    }
-
-                    if !cube_draw_calls.is_empty() {
-                        self.cube_pipeline
-                            .draw(&mut command_buf_builder, &cube_draw_calls)
-                            .unwrap();
-                    }
-
-                    self.flat_pipeline
-                        .bind(&self.ctx, (), &mut command_buf_builder)
-                        .unwrap();
-                    self.flat_pipeline
-                        .draw(
-                            &mut command_buf_builder,
-                            &self
-                                .client_state
-                                .game_ui
-                                .lock()
-                                .render(&self.ctx, &self.client_state)
-                                .unwrap(),
-                        )
-                        .unwrap();
-
-                    let command_buffers = self.finish_command_buffer(command_buf_builder).unwrap();
+                    let command_buffers = self.render_game(window_size, command_buf_builder);
 
                     let future = previous_future
                         .join(acquire_future)
@@ -262,6 +214,115 @@ impl CuberefRenderer {
                 _ => {}
             }
         })
+    }
+
+    fn render_game(
+        &mut self,
+        window_size: PhysicalSize<u32>,
+        mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
+            PrimaryAutoCommandBuffer,
+            Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
+        >,
+    ) -> PrimaryAutoCommandBuffer {
+        let FrameState {
+            view_proj_matrix,
+            player_position,
+            tool_state,
+        } = self
+            .client_state
+            .next_frame((window_size.width as f64) / (window_size.height as f64));
+        let mut cube_draw_calls = vec![];
+        if let Some(pointee) = tool_state.pointee {
+            cube_draw_calls.push(
+                self.client_state
+                    .cube_renderer
+                    .make_pointee_cube(player_position, pointee)
+                    .unwrap(),
+            );
+        }
+        // test only
+        if let Some(neighbor) = tool_state.neighbor {
+            cube_draw_calls.push(
+                self.client_state
+                    .cube_renderer
+                    .make_pointee_cube(player_position, neighbor)
+                    .unwrap(),
+            );
+        }
+        cube_draw_calls.extend(
+            self.client_state
+                .chunks
+                .lock()
+                .iter()
+                .filter_map(|(_, chunk)| chunk.make_draw_call(player_position)),
+        );
+
+        if !cube_draw_calls.is_empty() {
+            self.cube_pipeline
+                .bind(
+                    &self.ctx,
+                    view_proj_matrix,
+                    &mut command_buf_builder,
+                    BlockRenderPass::Opaque,
+                )
+                .unwrap();
+            self.cube_pipeline
+                .draw(
+                    &mut command_buf_builder,
+                    &cube_draw_calls,
+                    BlockRenderPass::Opaque,
+                )
+                .unwrap();
+            self.cube_pipeline
+                .bind(
+                    &self.ctx,
+                    view_proj_matrix,
+                    &mut command_buf_builder,
+                    BlockRenderPass::Transparent,
+                )
+                .unwrap();
+            self.cube_pipeline
+                .draw(
+                    &mut command_buf_builder,
+                    &cube_draw_calls,
+                    BlockRenderPass::Transparent,
+                )
+                .unwrap();
+            self.cube_pipeline
+                .bind(
+                    &self.ctx,
+                    view_proj_matrix,
+                    &mut command_buf_builder,
+                    BlockRenderPass::Translucent,
+                )
+                .unwrap();
+            self.cube_pipeline
+                .draw(
+                    &mut command_buf_builder,
+                    &cube_draw_calls,
+                    BlockRenderPass::Translucent,
+                )
+                .unwrap();
+        }
+
+        self.flat_pipeline
+            .bind(&self.ctx, (), &mut command_buf_builder, ())
+            .unwrap();
+        self.flat_pipeline
+            .draw(
+                &mut command_buf_builder,
+                &self
+                    .client_state
+                    .game_ui
+                    .lock()
+                    .render(&self.ctx, &self.client_state)
+                    .unwrap(),
+                (),
+            )
+            .unwrap();
+
+        let command_buffers = self.finish_command_buffer(command_buf_builder).unwrap();
+        command_buffers
     }
 
     fn handle_resize(&mut self, size: PhysicalSize<u32>) -> Result<()> {

@@ -33,6 +33,8 @@ use crate::cube_renderer::ClientBlockTypeManager;
 
 use super::{chunk::ClientChunk, ClientState};
 
+const MOUSE_SENSITIVITY: f64 = 0.5;
+
 const PLAYER_WIDTH: f64 = 0.75;
 const EYE_TO_TOP: f64 = 0.2;
 const EYE_TO_BTM: f64 = 1.5;
@@ -52,11 +54,11 @@ const PLAYER_COLLISIONBOX_CORNERS: [Vector3<f64>; 8] = [
     vec3(-PLAYER_WIDTH / 2., -EYE_TO_BTM, -PLAYER_WIDTH / 2.),
 ];
 const TRAVERSABLE_BUMP_HEIGHT_LANDED: f64 = 0.501;
-const TRAVERSABLE_BUMP_HEIGHT_MIDAIR: f64 = 0.15;
+const TRAVERSABLE_BUMP_HEIGHT_MIDAIR: f64 = 0.2;
 const WALK_SPEED: f64 = 3.0;
-const JUMP_VELOCITY: f64 = 5.0;
+const JUMP_VELOCITY: f64 = 6.0;
 // Not quite earth gravity; tuned for a natural feeling
-const GRAVITY_ACCEL: f64 = 12.;
+const GRAVITY_ACCEL: f64 = 16.;
 const TERMINAL_VELOCITY: f64 = 90.;
 const DAMPING: f64 = GRAVITY_ACCEL / (TERMINAL_VELOCITY * TERMINAL_VELOCITY);
 
@@ -135,8 +137,8 @@ impl PhysicsState {
     }
     pub(crate) fn mouse_delta(&mut self, x: f64, y: f64) {
         if self.should_capture {
-            self.target_az = Deg((self.target_az.0 + x).rem_euclid(360.0));
-            self.target_el = Deg((self.target_el.0 - y).clamp(-90.0, 90.0));
+            self.target_az = Deg((self.target_az.0 + (x * MOUSE_SENSITIVITY)).rem_euclid(360.0));
+            self.target_el = Deg((self.target_el.0 - (y * MOUSE_SENSITIVITY)).clamp(-90.0, 90.0));
         }
     }
     pub(crate) fn keyboard_input(&mut self, scancode: u32, state: ElementState) {

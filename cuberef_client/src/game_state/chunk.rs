@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::Deref;
-
+use std::time::Instant;
 
 use cgmath::{ElementWise, Matrix4, Vector3};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
@@ -24,16 +24,9 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
 use rustc_hash::FxHashMap;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
 
-use crate::cube_renderer::BlockRenderer;
+use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
-
-pub(crate) struct VkChunkVertexData {
-    vtx: Subbuffer<[CubeGeometryVertex]>,
-    idx: Subbuffer<[u32]>,
-}
 
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
@@ -110,18 +103,22 @@ impl ClientChunk {
             .mul_element_wise(Vector3::new(1., -1., 1.));
         self.cached_vertex_data
             .as_ref()
-            .map(|x| CubeGeometryDrawCall {
-                vertex: x.vtx.clone(),
-                index: x.idx.clone(),
-                model_matrix: Matrix4::from_translation(relative_origin.cast().unwrap()),
+            .and_then(|x| {
+                Some(CubeGeometryDrawCall {
+                    models: x.clone_if_nonempty()?,
+                    model_matrix: Matrix4::from_translation(relative_origin.cast().unwrap()),
+                })
             })
     }
 
     pub(crate) fn get(&self, offset: ChunkOffset) -> BlockId {
         self.block_ids[offset.as_index()]
     }
-}
 
+    pub(crate) fn coord(&self) -> ChunkCoordinate {
+        self.coord
+    }
+}
 
 pub(crate) fn maybe_mesh_chunk(
     chunk_coord: ChunkCoordinate,
@@ -133,69 +130,21 @@ pub(crate) fn maybe_mesh_chunk(
     } else {
         Ok(())
     }
-    
 }
-
 
 pub(crate) fn mesh_chunk(
     chunk_coord: ChunkCoordinate,
     chunk_data: &mut FxHashMap<ChunkCoordinate, ClientChunk>,
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
-    let mut vtx = Vec::new();
-    let mut idx = Vec::new();
     let current_chunk = chunk_data
         .get(&chunk_coord)
         .with_context(|| "The chunk being meshed is not loaded")?;
-    for x in 0..16 {
-        for y in 0..16 {
-            for z in 0..16 {
-                let offset = ChunkOffset { x, y, z };
-                cube_renderer.emit_cube_vk(
-                    chunk_data,
-                    current_chunk,
-                    chunk_coord.with_offset(offset),
-                    &mut vtx,
-                    &mut idx,
-                );
-            }
-        }
-    }
-    if vtx.is_empty() || idx.is_empty() {
-        chunk_data
-            .get_mut(&chunk_coord)
-            .with_context(|| "The chunk being meshed is not loaded")?
-            .cached_vertex_data = None;
-    } else {
-        chunk_data
-            .get_mut(&chunk_coord)
-            .with_context(|| "The chunk being meshed is not loaded")?
-            .cached_vertex_data = Some(VkChunkVertexData {
-            vtx: Buffer::from_iter(
-                cube_renderer.allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::VERTEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
-                vtx.into_iter(),
-            )?,
-            idx: Buffer::from_iter(
-                cube_renderer.allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::INDEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
-                idx.into_iter(),
-            )?,
-        });
-    }
+    let vertex_data = cube_renderer.mesh_chunk(chunk_data, current_chunk)?;
+    chunk_data
+        .get_mut(&chunk_coord)
+        .with_context(|| "The chunk being meshed is not loaded")?
+        .cached_vertex_data = Some(vertex_data);
+
     Ok(())
 }

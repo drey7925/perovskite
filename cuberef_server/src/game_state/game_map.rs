@@ -922,10 +922,6 @@ impl MapCacheCleanup {
                 self.map.unload_chunk_locked(&mut lock, entry.1)?;
             }
             if num_entries > (CACHE_CLEANUP_RELOCK_EVERY_N + CACHE_CLEANUP_KEEP_N_RECENTLY_USED) {
-                log::info!(
-                    "Cache cleanup thread still has {} to clean, looping.",
-                    num_entries - (CACHE_CLEANUP_RELOCK_EVERY_N + CACHE_CLEANUP_KEEP_N_RECENTLY_USED)
-                );
                 continue;
             } else {
                 return Ok(());
