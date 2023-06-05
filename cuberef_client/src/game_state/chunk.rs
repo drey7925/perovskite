@@ -29,6 +29,8 @@ use tracy_client::span;
 use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 
+use super::ChunkManagerView;
+
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
     block_ids: Vec<BlockId>,
@@ -125,7 +127,7 @@ impl ClientChunk {
 
 pub(crate) fn maybe_mesh_chunk(
     chunk_coord: ChunkCoordinate,
-    chunk_data: &mut FxHashMap<ChunkCoordinate, ClientChunk>,
+    chunk_data: &ChunkManagerView,
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
     if chunk_data.contains_key(&chunk_coord) {
@@ -137,18 +139,15 @@ pub(crate) fn maybe_mesh_chunk(
 
 pub(crate) fn mesh_chunk(
     chunk_coord: ChunkCoordinate,
-    chunk_data: &mut FxHashMap<ChunkCoordinate, ClientChunk>,
+    chunk_data: &ChunkManagerView,
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
     let _span = span!("meshing");
-    let current_chunk = chunk_data
-        .get(&chunk_coord)
-        .with_context(|| "The chunk being meshed is not loaded")?;
-    let vertex_data = cube_renderer.mesh_chunk(chunk_data, current_chunk)?;
-    chunk_data
+    let mut current_chunk = chunk_data
         .get_mut(&chunk_coord)
-        .with_context(|| "The chunk being meshed is not loaded")?
-        .cached_vertex_data = Some(vertex_data);
+        .with_context(|| "The chunk being meshed is not loaded")?;
+    let vertex_data = cube_renderer.mesh_chunk(chunk_data, current_chunk.deref())?;
+    current_chunk.cached_vertex_data = Some(vertex_data);
 
     Ok(())
 }

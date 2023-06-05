@@ -42,6 +42,7 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
+use crate::game_state::ChunkManagerView;
 use crate::game_state::chunk::ClientChunk;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
@@ -218,7 +219,7 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk(
         &self,
-        chunk_data: &FxHashMap<ChunkCoordinate, ClientChunk>,
+        chunk_data: &ChunkManagerView,
         current_chunk: &ClientChunk,
     ) -> Result<VkChunkVertexData> {
         Ok(VkChunkVertexData {
@@ -284,7 +285,7 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk_subpass<F, G>(
         &self,
-        chunk_data: &FxHashMap<ChunkCoordinate, ClientChunk>,
+        chunk_data: &ChunkManagerView,
         current_chunk: &ClientChunk,
         // closure taking a block and returning whether this subpass should render it
         include_block_when: F,
@@ -327,7 +328,7 @@ impl BlockRenderer {
     fn emit_full_cube<F>(
         &self,
         block: &BlockTypeDef,
-        chunk_data: &FxHashMap<ChunkCoordinate, ClientChunk>,
+        chunk_data: &ChunkManagerView,
         coord: BlockCoordinate,
         own_ids: &[BlockId; 4096],
         vtx: &mut Vec<CubeGeometryVertex>,
@@ -465,7 +466,7 @@ impl BlockRenderer {
 
     fn get_block_maybe_neighbor(
         &self,
-        all_chunks: &FxHashMap<ChunkCoordinate, ClientChunk>,
+        all_chunks: &ChunkManagerView,
         own_ids: &[BlockId; 4096],
         own_chunk: ChunkCoordinate,
         target: BlockCoordinate,

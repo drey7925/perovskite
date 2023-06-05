@@ -218,7 +218,7 @@ impl ToolController {
                 POINTEE_DISTANCE * sin_el,
                 POINTEE_DISTANCE * cos_el * cos_az,
             ));
-        let chunks = client_state.chunks.lock();
+        let chunks = client_state.chunks.read_lock();
         let mut prev = None;
         for (x, y, z) in WalkVoxels::<f64, i64>::new(
             (pos + RAYCAST_FUDGE_VEC).into(),

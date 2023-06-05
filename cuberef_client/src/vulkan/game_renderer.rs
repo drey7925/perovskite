@@ -34,7 +34,7 @@ use winit::{
 };
 
 use crate::{
-    game_state::{ClientState, FrameState, chunk},
+    game_state::{ClientState, FrameState},
     net_client,
 };
 
@@ -268,13 +268,13 @@ impl CuberefRenderer {
             let _span = span!("Waiting for chunk_lock");
             self.client_state
                 .chunks
-                .lock()
+                .cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
         cube_draw_calls.extend(
                 chunk_lock
                 .values()
-                .filter_map(|chunk| chunk.make_draw_call(player_position)),
+                .filter_map(|chunk| chunk.lock().make_draw_call(player_position)),
         );
         plot!("chunk_rate", cube_draw_calls.len() as f64 / chunk_lock.len() as f64);
 

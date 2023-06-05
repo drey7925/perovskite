@@ -14,16 +14,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-use std::time::{Instant};
-use std::{sync::Arc};
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
+use std::time::Instant;
 
 use cgmath::{Deg, Zero};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
-
 use log::warn;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLockReadGuard};
 use rustc_hash::FxHashMap;
 use tokio::sync::mpsc;
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
@@ -62,13 +61,84 @@ pub(crate) enum GameAction {
     Place(PlaceAction),
 }
 
+pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<Mutex<ClientChunk>>>;
+pub(crate) struct ChunkManager {
+    chunks: parking_lot::RwLock<ChunkMap>,
+}
+impl ChunkManager {
+    pub(crate) fn new() -> ChunkManager {
+        ChunkManager {
+            chunks: parking_lot::RwLock::new(FxHashMap::default()),
+        }
+    }
+    /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
+    /// but CANNOT be used to insert or remove chunks.
+    pub(crate) fn read_lock<'a>(&'a self) -> ChunkManagerView<'a> {
+        ChunkManagerView {
+            guard: self.chunks.read(),
+        }
+    }
+    /// Clones the chunk manager and returns a clone with the following properties:
+    /// * The clone does not hold any locks on the data in this chunk manager (i.e. insertions and deletions)
+    ///   are possible while the cloned view is live.
+    /// * The clone does not track any insertions/deletions of this chunk manager.
+    ///    * it will not show chunks inserted after cloned_view returned
+    ///    * if chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
+    ///      memory will not be released until the cloned view is dropped.
+    pub(crate) fn cloned_view(&self) -> ChunkManagerClonedView {
+        ChunkManagerClonedView {
+            data: self.chunks.read().clone(),
+        }
+    }
+    pub(crate) fn insert(
+        &self,
+        coord: ChunkCoordinate,
+        chunk: ClientChunk,
+    ) -> Option<Arc<Mutex<ClientChunk>>> {
+        self.chunks.write().insert(coord, Arc::new(Mutex::new(chunk)))
+    }
+    pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<Mutex<ClientChunk>>> {
+        self.chunks.write().remove(coord)
+    }
+}
+pub(crate) struct ChunkManagerView<'a> {
+    guard: RwLockReadGuard<'a, ChunkMap>,
+}
+impl<'a> ChunkManagerView<'a> {
+    pub(crate) fn get_mut(&'a self, coord: &ChunkCoordinate) -> Option<impl Deref<Target = ClientChunk> + DerefMut + 'a> {
+        self.guard.get(coord).map(|x| x.as_ref().lock())
+    }
+    pub(crate) fn get(&'a self, coord: &ChunkCoordinate) -> Option<impl Deref<Target = ClientChunk> + 'a> {
+        self.get_mut(coord)
+    }
+    pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
+        self.guard.contains_key(coord)
+    }
+}
+
+pub(crate) struct ChunkManagerClonedView {
+    data: ChunkMap,
+}
+impl ChunkManagerClonedView {
+    fn get<'a>(&'a self, coord: &ChunkCoordinate) -> Option<impl Deref<Target = ClientChunk> + 'a> {
+        self.data.get(coord).map(|x| x.as_ref().lock())
+    }
+}
+impl Deref for ChunkManagerClonedView {
+    type Target = ChunkMap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
 // todo clean up, make private
 pub(crate) struct ClientState {
     pub(crate) block_types: Arc<ClientBlockTypeManager>,
     pub(crate) items: Arc<ClientItemManager>,
     pub(crate) last_update: parking_lot::Mutex<Instant>,
     pub(crate) physics_state: parking_lot::Mutex<physics::PhysicsState>,
-    pub(crate) chunks: parking_lot::Mutex<FxHashMap<ChunkCoordinate, ClientChunk>>,
+    pub(crate) chunks: ChunkManager,
     pub(crate) inventories: parking_lot::Mutex<InventoryManager>,
     pub(crate) tool_controller: parking_lot::Mutex<ToolController>,
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
@@ -162,9 +232,7 @@ impl ClientState {
         let rotation = cgmath::Matrix4::from_angle_x(Deg(el))
             * cgmath::Matrix4::from_angle_y(Deg(az) + Deg(180.));
         let projection = cgmath::perspective(Deg(45.0), aspect_ratio, 0.01, 1000.);
-        let view_proj_matrix = (projection * rotation)
-            .cast()
-            .unwrap();
+        let view_proj_matrix = (projection * rotation).cast().unwrap();
 
         let mut tool_state = self.tool_controller.lock().update(self, delta);
         if let Some(action) = tool_state.action.take() {

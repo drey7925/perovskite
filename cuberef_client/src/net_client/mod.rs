@@ -51,7 +51,7 @@ use crate::{
         items::{ClientInventory, ClientItemManager, InventoryManager},
         physics::PhysicsState,
         tool_controller::ToolController,
-        ClientState, GameAction,
+        ClientState, GameAction, ChunkManager,
     },
     game_ui::GameUi,
     vulkan::VulkanContext,
@@ -119,7 +119,7 @@ pub(crate) async fn connect_game(
         last_update: Mutex::new(Instant::now()),
         physics_state: Mutex::new(PhysicsState::new()),
         tool_controller: Mutex::new(ToolController::new()),
-        chunks: Mutex::new(FxHashMap::default()),
+        chunks: ChunkManager::new(),
         inventories: Mutex::new(InventoryManager {
             inventories: FxHashMap::default(),
             main_inv_key: vec![],
@@ -437,8 +437,7 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
-                    let mut lock = self.client_state.chunks.lock();
-                    lock.insert(coord, ClientChunk::from_proto(chunk.clone())?);
+                    let mut lock = self.client_state.chunks.insert(coord, ClientChunk::from_proto(chunk.clone())?);
                     drop(lock);
                     self.enqueue_for_meshing(coord);
 
@@ -508,7 +507,7 @@ impl InboundContext {
         // TODO hold more old chunks (possibly LRU) to provide a higher render distance
         let mut bad_coords = vec![];
         for coord in unsub.chunk_coord.iter() {
-            match self.client_state.chunks.lock().remove(&coord.into()) {
+            match self.client_state.chunks.remove(&coord.into()) {
                 Some(_x) => {}
                 None => {
                     bad_coords.push(coord.clone());
@@ -526,7 +525,7 @@ impl InboundContext {
     }
 
     async fn handle_delta_update(&mut self, batch: &rpc::MapDeltaUpdateBatch) -> Result<()> {
-        let mut lock = self.client_state.chunks.lock();
+        let mut chunk_manager_read_lock = self.client_state.chunks.read_lock();
 
         let mut missing_coord = false;
         let mut unknown_coords = Vec::new();
@@ -539,8 +538,8 @@ impl InboundContext {
                     continue;
                 }
             };
-            let chunk = lock.get_mut(&block_coord.chunk());
-            let chunk = match chunk {
+            let chunk = chunk_manager_read_lock.get_mut(&block_coord.chunk());
+            let mut chunk = match chunk {
                 Some(x) => x,
                 None => {
                     unknown_coords.push(block_coord);
@@ -582,13 +581,13 @@ impl InboundContext {
                 }
             }
         }
-        drop(lock);
+        drop(chunk_manager_read_lock);
         {
             let _span = span!("remesh for delta");
             for chunk in needs_remesh {
                 mesh_chunk(
                     chunk,
-                    self.client_state.chunks.lock().deref_mut(),
+                    &self.client_state.chunks.read_lock(),
                     &self.client_state.cube_renderer,
                 )?;
             }
@@ -703,6 +702,8 @@ impl MeshWorker {
                 let pos = self.client_state.last_position().position;
                 let mut lock = self.queue.lock();
                 if lock.is_empty() {
+                    
+                    plot!("mesh_queue_length", 0.);
                     self.cond.wait(&mut lock);
                 }
 
@@ -728,7 +729,7 @@ impl MeshWorker {
             {
                 let _span = span!("mesh_worker work");
                 for coord in chunks {
-                    maybe_mesh_chunk(coord, &mut self.client_state.chunks.lock(), &self.client_state.cube_renderer)?;
+                    maybe_mesh_chunk(coord, &self.client_state.chunks.read_lock(), &self.client_state.cube_renderer)?;
                 }
             }
         }

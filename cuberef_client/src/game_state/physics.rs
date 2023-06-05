@@ -29,12 +29,13 @@ use cuberef_core::{
     },
 };
 use log::info;
+use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use winit::event::ElementState;
 
 use crate::cube_renderer::ClientBlockTypeManager;
 
-use super::{chunk::ClientChunk, ClientState};
+use super::{chunk::ClientChunk, ClientState, ChunkManagerView};
 
 const MOUSE_SENSITIVITY: f64 = 0.5;
 
@@ -210,10 +211,10 @@ impl PhysicsState {
     }
 
     fn update_standard(&mut self, delta: std::time::Duration, client_state: &ClientState) {
+        // todo handle long deltas without falling through the ground
         let delta_secs = delta.as_secs_f64();
 
-        let chunks = client_state.chunks.lock();
-        let chunks = chunks.deref();
+        let chunks = client_state.chunks.read_lock();
         let block_types = &client_state.block_types;
 
         // The block that the player's foot is in
@@ -223,7 +224,7 @@ impl PhysicsState {
                 y: (self.pos.y - EYE_TO_BTM).round() as i32,
                 z: self.pos.z.round() as i32,
             },
-            chunks,
+            &chunks,
             block_types,
         );
 
@@ -237,7 +238,7 @@ impl PhysicsState {
                         y: (self.pos.y - EYE_TO_BTM + fluid_data.surface_thickness).round() as i32,
                         z: self.pos.z.round() as i32,
                     },
-                    chunks,
+                    &chunks,
                     block_types,
                 );
                 let is_surface = matches!(
@@ -254,7 +255,7 @@ impl PhysicsState {
             log::info!("debug breakpoint {}", new_yv);
         }
 
-        let mut new_pos = clamp_collisions_loop(self.pos, target, chunks, block_types);
+        let mut new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
         // If we hit a floor or ceiling
         if (new_pos.y - target.y) > COLLISION_EPS {
             self.landed_last_frame = true;
@@ -284,11 +285,11 @@ impl PhysicsState {
             // We hit something in the horizontal direction. Try to bump up by some distance no larger than TRAVERSABLE_BUMP_HEIGHT...
             let bump_target = vec3(new_pos.x, new_pos.y + bump_height, new_pos.z);
             // This is where we end up as we try to go up the bump
-            let bump_outcome = clamp_collisions_loop(new_pos, bump_target, chunks, block_types);
+            let bump_outcome = clamp_collisions_loop(new_pos, bump_target, &chunks, block_types);
             // and this is where we want to end up after the bump
             let post_bump_target = vec3(target.x, bump_outcome.y, target.z);
             let post_bump_outcome =
-                clamp_collisions(bump_outcome, post_bump_target, chunks, block_types);
+                clamp_collisions(bump_outcome, post_bump_target, &chunks, block_types);
             // did we end up making it anywhere horizontally?
             if (post_bump_outcome.x - bump_target.x).abs() > COLLISION_EPS
                 || (post_bump_outcome.z - bump_target.z).abs() > COLLISION_EPS
@@ -300,7 +301,7 @@ impl PhysicsState {
                     post_bump_outcome.z,
                 );
                 new_pos =
-                    clamp_collisions(post_bump_outcome, down_bump_target, chunks, block_types);
+                    clamp_collisions(post_bump_outcome, down_bump_target, &chunks, block_types);
                 println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
             }
         }
@@ -430,10 +431,9 @@ impl PhysicsState {
         }
 
         if collisions {
-            let chunks = client_state.chunks.lock();
-            let chunks = chunks.deref();
+            let chunks = client_state.chunks.read_lock();
             let block_types = &client_state.block_types;
-            new_pos = clamp_collisions_loop(self.pos, new_pos, chunks, block_types);
+            new_pos = clamp_collisions_loop(self.pos, new_pos, &chunks, block_types);
         }
 
         self.pos = new_pos
@@ -474,7 +474,7 @@ const ANGLE_SMOOTHING_REFERENCE_DELTA: f64 = 1.0 / 165.0;
 fn clamp_collisions_loop(
     old_pos: Vector3<f64>,
     target: Vector3<f64>,
-    chunks: &FxHashMap<ChunkCoordinate, ClientChunk>,
+    chunks: &ChunkManagerView,
     block_types: &ClientBlockTypeManager,
 ) -> Vector3<f64> {
     if (target - old_pos).magnitude2() < (COLLISION_EPS * COLLISION_EPS) {
@@ -511,7 +511,7 @@ fn clamp_collisions_loop(
 fn clamp_collisions(
     old_pos: Vector3<f64>,
     mut new_pos: Vector3<f64>,
-    chunks: &FxHashMap<ChunkCoordinate, ClientChunk>,
+    chunks: &ChunkManagerView,
     block_types: &ClientBlockTypeManager,
 ) -> Vector3<f64> {
     // Determine all the interacting blocks for old_pos and new_pos (i.e. those blocks that the player intersects with)
@@ -611,7 +611,7 @@ fn is_collision(block: Option<&BlockTypeDef>) -> bool {
 
 fn get_block<'a>(
     coord: BlockCoordinate,
-    chunks: &FxHashMap<ChunkCoordinate, ClientChunk>,
+    chunks: &ChunkManagerView,
     block_types: &'a ClientBlockTypeManager,
 ) -> Option<&'a BlockTypeDef> {
     chunks
