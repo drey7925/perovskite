@@ -947,7 +947,7 @@ impl GameMapWriteback {
             let writebacks = self.gather().await.unwrap();
             info!("Writing back {} chunks", writebacks.len());
             if writebacks.len() >= (WRITEBACK_COALESCE_MAX_SIZE) * 4 {
-                warn!("Writeback backlog of {} chunks is unusually high; is the writeback thread backlogged?", writebacks.len());
+                warn!("Writeback backlog of {} chunks is unusually high; is the writeback thread falling behind?", writebacks.len());
             }
             tokio::task::block_in_place(|| self.do_writebacks(writebacks))?;
         }

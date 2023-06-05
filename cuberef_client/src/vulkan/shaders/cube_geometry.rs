@@ -17,6 +17,7 @@
 use anyhow::{Context, Result};
 use cgmath::{Matrix4, Zero};
 use std::sync::Arc;
+use tracy_client::{plot, plot_name, span, PlotName};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
@@ -80,6 +81,11 @@ pub(crate) struct CubePipelineWrapper {
     translucent_descriptor: Arc<PersistentDescriptorSet>,
     bound_projection: Matrix4<f32>,
 }
+impl CubePipelineWrapper {
+    fn check_frustum(&self, pass_data: &crate::cube_renderer::VkChunkPass) -> bool {
+        true
+    }
+}
 
 /// Which render step we are rendering in this renderer.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +103,11 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
         draw_calls: &[CubeGeometryDrawCall],
         pass: BlockRenderPass,
     ) -> Result<()> {
+        let _span = match pass {
+            BlockRenderPass::Opaque => span!("draw opaque"),
+            BlockRenderPass::Transparent => span!("draw transparent"),
+            BlockRenderPass::Translucent => span!("draw translucent"),
+        };
         let pipeline = match pass {
             BlockRenderPass::Opaque => self.solid_pipeline.clone(),
             BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
@@ -104,7 +115,8 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
         };
         let layout = pipeline.layout().clone();
         builder.bind_pipeline_graphics(pipeline);
-
+        let mut actual_calls = 0;
+        let mut passed_frustum_cull = 0;
         for call in draw_calls.iter() {
             let pass_data = match pass {
                 BlockRenderPass::Opaque => &call.models.solid_opaque,
@@ -112,15 +124,32 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
                 BlockRenderPass::Translucent => &call.models.translucent,
             };
             if let Some(pass_data) = pass_data {
-                let push_data: ModelMatrix = call.model_matrix.into();
-                builder
-                    .push_constants(layout.clone(), 0, push_data)
-                    .bind_vertex_buffers(0, pass_data.vtx.clone())
-                    .bind_index_buffer(pass_data.idx.clone())
-                    .draw_indexed(pass_data.idx.len().try_into().unwrap(), 1, 0, 0, 0)?;
+                actual_calls += 1;
+                if self.check_frustum(pass_data) {
+                    passed_frustum_cull += 1;
+                    
+                    let push_data: ModelMatrix = call.model_matrix.into();
+                    builder
+                        .push_constants(layout.clone(), 0, push_data)
+                        .bind_vertex_buffers(0, pass_data.vtx.clone())
+                        .bind_index_buffer(pass_data.idx.clone())
+                        .draw_indexed(pass_data.idx.len().try_into().unwrap(), 1, 0, 0, 0)?;
+                }
             }
         }
-
+        plot!("total_calls", draw_calls.len() as f64);
+        let draw_rate = actual_calls as f64 / (draw_calls.len() as f64);
+        match pass {
+            BlockRenderPass::Opaque => {
+                plot!("opaque_rate", draw_rate);
+            }
+            BlockRenderPass::Transparent => {
+                plot!("transparent_rate", draw_rate);
+            }
+            BlockRenderPass::Translucent => {
+                plot!("translucent_rate", draw_rate);
+            }
+        };
         Ok(())
     }
 
@@ -131,6 +160,11 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
         command_buf_builder: &mut CommandBufferBuilder,
         pass: BlockRenderPass,
     ) -> Result<()> {
+        let _span = match pass {
+            BlockRenderPass::Opaque => span!("bind opaque"),
+            BlockRenderPass::Transparent => span!("bind transparent"),
+            BlockRenderPass::Translucent => span!("bind translucent"),
+        };
         self.bound_projection = per_frame_config;
         let layout = match pass {
             BlockRenderPass::Opaque => self.solid_pipeline.layout().clone(),

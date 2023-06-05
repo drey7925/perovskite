@@ -24,6 +24,7 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
 use rustc_hash::FxHashMap;
+use tracy_client::span;
 
 use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
@@ -32,6 +33,7 @@ pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
     block_ids: Vec<BlockId>,
     cached_vertex_data: Option<VkChunkVertexData>,
+    dirty: bool
 }
 impl ClientChunk {
     pub(crate) fn from_proto(proto: rpc_proto::MapChunk) -> Result<ClientChunk> {
@@ -58,6 +60,7 @@ impl ClientChunk {
             coord,
             block_ids,
             cached_vertex_data: None,
+            dirty: true
         })
     }
 
@@ -137,6 +140,7 @@ pub(crate) fn mesh_chunk(
     chunk_data: &mut FxHashMap<ChunkCoordinate, ClientChunk>,
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
+    let _span = span!("meshing");
     let current_chunk = chunk_data
         .get(&chunk_coord)
         .with_context(|| "The chunk being meshed is not loaded")?;

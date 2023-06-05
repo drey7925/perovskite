@@ -31,9 +31,9 @@ use anyhow::Result;
 /// Type-safe newtype wrapper for a texture name
 pub struct Tex(pub &'static str);
 
-impl Into<TextureReference> for Tex {
-    fn into(self) -> TextureReference {
-        TextureReference { texture_name: self.0.to_string() }
+impl From<Tex> for TextureReference {
+    fn from(value: Tex) -> Self {
+        TextureReference { texture_name: value.0.to_string() }
     }
 }
 

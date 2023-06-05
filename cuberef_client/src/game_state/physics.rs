@@ -15,15 +15,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::{HashSet},
+    collections::HashSet,
     ops::{Deref, RangeInclusive},
-    time::{Instant, Duration},
+    time::{Duration, Instant},
 };
 
 use cgmath::{vec3, Angle, Deg, InnerSpace, Vector3};
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate},
-    protocol::blocks::{block_type_def, BlockTypeDef},
+    protocol::blocks::{
+        block_type_def::{self, PhysicsInfo},
+        BlockTypeDef,
+    },
 };
 use log::info;
 use rustc_hash::FxHashMap;
@@ -207,40 +210,45 @@ impl PhysicsState {
     }
 
     fn update_standard(&mut self, delta: std::time::Duration, client_state: &ClientState) {
-        let distance = delta.as_secs_f64() * 3.0;
+        let delta_secs = delta.as_secs_f64();
 
         let chunks = client_state.chunks.lock();
         let chunks = chunks.deref();
         let block_types = &client_state.block_types;
 
-        let mut target = self.pos;
+        // The block that the player's foot is in
+        let surrounding_block = get_block(
+            BlockCoordinate {
+                x: self.pos.x.round() as i32,
+                y: (self.pos.y - EYE_TO_BTM).round() as i32,
+                z: self.pos.z.round() as i32,
+            },
+            chunks,
+            block_types,
+        );
 
-        // TODO stop using raw scancodes here
-        // TODO make these configurable by the user
-        if self.pressed(0x11) {
-            target.z += self.az.cos() * distance;
-            target.x -= self.az.sin() * distance;
-        } else if self.pressed(0x1f) {
-            target.z -= self.az.cos() * distance;
-            target.x += self.az.sin() * distance;
-        }
-
-        if self.pressed(0x1e) {
-            target.z += self.az.sin() * distance;
-            target.x += self.az.cos() * distance;
-        } else if self.pressed(0x20) {
-            target.z -= self.az.sin() * distance;
-            target.x -= self.az.cos() * distance;
-        }
-        // velocity if unperturbed
-        let mut new_yv = self.y_velocity - (delta.as_secs_f64() * GRAVITY_ACCEL)
-            + (DAMPING * self.y_velocity.min(0.).powi(2) * delta.as_secs_f64());
-        // Jump key
-        if self.pressed(0x39) && self.landed_last_frame {
-            self.landed_last_frame = false;
-            new_yv = JUMP_VELOCITY;
-        }
-        target.y += new_yv * delta.as_secs_f64();
+        let block_physics = surrounding_block.and_then(|x| x.physics_info.as_ref());
+        let (mut new_yv, target) = match block_physics {
+            Some(PhysicsInfo::Air(_)) => self.update_target_air(self.pos, delta_secs * 3.0, delta),
+            Some(PhysicsInfo::Fluid(fluid_data)) => {
+                let surface_test_block = get_block(
+                    BlockCoordinate {
+                        x: self.pos.x.round() as i32,
+                        y: (self.pos.y - EYE_TO_BTM + fluid_data.surface_thickness).round() as i32,
+                        z: self.pos.z.round() as i32,
+                    },
+                    chunks,
+                    block_types,
+                );
+                let is_surface = matches!(
+                    surface_test_block.and_then(|x| x.physics_info.as_ref()),
+                    Some(PhysicsInfo::Air(_))
+                );
+                self.update_target_fluid(self.pos, fluid_data, delta, is_surface)
+            }
+            Some(PhysicsInfo::Solid(_)) => (0., self.pos),
+            None => self.update_target_air(self.pos, delta_secs * 3.0, delta),
+        };
 
         if self.pressed(0x30) {
             log::info!("debug breakpoint {}", new_yv);
@@ -299,6 +307,92 @@ impl PhysicsState {
 
         self.pos = new_pos;
         self.y_velocity = new_yv;
+    }
+
+    fn update_target_air(
+        &mut self,
+        pos: Vector3<f64>,
+        distance: f64,
+        time_delta: Duration,
+    ) -> (f64, Vector3<f64>) {
+        // TODO stop using raw scancodes here
+        // TODO make these configurable by the user
+        let mut target = pos;
+        if self.pressed(0x11) {
+            target.z += self.az.cos() * distance;
+            target.x -= self.az.sin() * distance;
+        } else if self.pressed(0x1f) {
+            target.z -= self.az.cos() * distance;
+            target.x += self.az.sin() * distance;
+        }
+
+        if self.pressed(0x1e) {
+            target.z += self.az.sin() * distance;
+            target.x += self.az.cos() * distance;
+        } else if self.pressed(0x20) {
+            target.z -= self.az.sin() * distance;
+            target.x -= self.az.cos() * distance;
+        }
+        // velocity if unperturbed
+        let mut new_yv = self.y_velocity - (time_delta.as_secs_f64() * GRAVITY_ACCEL)
+            + (DAMPING * self.y_velocity.min(0.).powi(2) * time_delta.as_secs_f64());
+        // Jump key
+        if self.pressed(0x39) && self.landed_last_frame {
+            self.landed_last_frame = false;
+            new_yv = JUMP_VELOCITY;
+        }
+        target.y += new_yv * time_delta.as_secs_f64();
+        (new_yv, target)
+    }
+
+    fn update_target_fluid(
+        &self,
+        pos: Vector3<f64>,
+        fluid_data: &cuberef_core::protocol::blocks::FluidPhysicsInfo,
+        delta: Duration,
+        is_surface: bool,
+    ) -> (f64, Vector3<f64>) {
+        let delta = delta.as_secs_f64();
+        let (horizontal_speed, vertical_velocity, jump_velocity, sink_velocity) = if is_surface {
+            (
+                fluid_data.surf_horizontal_speed,
+                fluid_data.surf_vertical_speed,
+                fluid_data.surf_jump_speed,
+                fluid_data.surf_sink_speed,
+            )
+        } else {
+            (
+                fluid_data.horizontal_speed,
+                fluid_data.vertical_speed,
+                fluid_data.jump_speed,
+                fluid_data.sink_speed,
+            )
+        };
+        let mut target = pos;
+        if self.pressed(0x11) {
+            target.z += self.az.cos() * horizontal_speed * delta;
+            target.x -= self.az.sin() * horizontal_speed * delta;
+        } else if self.pressed(0x1f) {
+            target.z -= self.az.cos() * horizontal_speed * delta;
+            target.x += self.az.sin() * horizontal_speed * delta;
+        }
+
+        if self.pressed(0x1e) {
+            target.z += self.az.sin() * horizontal_speed * delta;
+            target.x += self.az.cos() * horizontal_speed * delta;
+        } else if self.pressed(0x20) {
+            target.z -= self.az.sin() * horizontal_speed * delta;
+            target.x -= self.az.cos() * horizontal_speed * delta;
+        }
+        let vy = if self.pressed(0x39) {
+            jump_velocity
+        } else if self.pressed(0x2a) {
+            sink_velocity
+        } else {
+            vertical_velocity
+        };
+        target.y += vy * delta;
+        (vy, target)
     }
 
     fn update_flying(
@@ -364,7 +458,8 @@ impl PhysicsState {
     }
 
     fn update_angles(&mut self, delta: std::time::Duration) {
-        let factor = ANGLE_SMOOTHING_FACTOR.powf(delta.as_secs_f64() / ANGLE_SMOOTHING_REFERENCE_DELTA);
+        let factor =
+            ANGLE_SMOOTHING_FACTOR.powf(delta.as_secs_f64() / ANGLE_SMOOTHING_REFERENCE_DELTA);
         self.el = (self.el * factor) + (self.target_el * (1.0 - factor));
 
         let az_x = (self.az.cos() * factor) + (self.target_az.cos() * (1.0 - factor));
@@ -374,7 +469,7 @@ impl PhysicsState {
 }
 
 const ANGLE_SMOOTHING_FACTOR: f64 = 0.8;
-const ANGLE_SMOOTHING_REFERENCE_DELTA: f64 = 1.0/165.0;
+const ANGLE_SMOOTHING_REFERENCE_DELTA: f64 = 1.0 / 165.0;
 
 fn clamp_collisions_loop(
     old_pos: Vector3<f64>,

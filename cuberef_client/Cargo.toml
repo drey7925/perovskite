@@ -28,4 +28,10 @@ tokio-scoped = "0.2.0"
 hex = "0.4.3"
 rustc-hash = "1.1.0"
 clap = { version = "4.3.0", features = ["derive"] }
+fps_counter = "2.0.0"
+tracy-client = "0.15.2"
 
+[features]
+default = []
+# Performance tracing
+tracy = ["tracy-client/enable"]

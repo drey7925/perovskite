@@ -73,7 +73,7 @@ impl DroppedItem {
                 *target_block = air_block;
                 Ok(vec![ItemStack {
                     proto: protocol::items::ItemStack {
-                        item_name: item.clone(),
+                        item_name: item,
                         quantity: count,
                         max_stack: 256,
                     },
@@ -92,6 +92,8 @@ pub struct BlockBuilder {
     item: Item,
     block_render_info: CubeRenderInfo,
     dropped_item: DroppedItem,
+    // Temporarily exposed for water until the API is stabilized.
+    pub(crate) physics_info: PhysicsInfo
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -129,6 +131,7 @@ impl BlockBuilder {
                 render_mode: CubeRenderMode::SolidOpaque.into()
             },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
+            physics_info: PhysicsInfo::Solid(Empty {})
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -250,7 +253,7 @@ impl BlockBuilder {
             base_dig_time: 1.0,
             groups: self.block_groups.into_iter().collect(),
             render_info: Some(RenderInfo::Cube(self.block_render_info)),
-            physics_info: Some(PhysicsInfo::Solid(Empty {})),
+            physics_info: Some(self.physics_info),
         };
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
 

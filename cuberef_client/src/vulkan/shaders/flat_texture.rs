@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use texture_packer::Rect;
+use tracy_client::span;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
@@ -152,6 +153,7 @@ impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
         draw_calls: &[FlatTextureDrawCall],
         _pass: ()
     ) -> anyhow::Result<()> {
+        let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone());
         for call in draw_calls.iter() {
             builder

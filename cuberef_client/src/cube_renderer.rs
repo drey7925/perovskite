@@ -35,6 +35,7 @@ use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 use tonic::async_trait;
+use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{
     AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryUsage,
@@ -265,7 +266,16 @@ impl BlockRenderer {
                 },
                 |block, neighbor| {
                     neighbor.is_some_and(|neighbor| {
-                        BlockId(block.id).equals_ignore_variant(BlockId(neighbor.id))
+                        if BlockId(block.id).equals_ignore_variant(BlockId(neighbor.id)) {
+                            return true;
+                        }
+                        match &neighbor.render_info {
+                            Some(RenderInfo::Cube(x)) => {
+                                x.render_mode() == CubeRenderMode::SolidOpaque
+                            },
+                            Some(_) => false,
+                            None => false,
+                        }
                     })
                 },
             )?,
@@ -285,6 +295,7 @@ impl BlockRenderer {
         F: Fn(&BlockTypeDef) -> bool,
         G: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
     {
+        let _span = span!("mesh subpass");
         let mut vtx = Vec::new();
         let mut idx = Vec::new();
         for x in 0..16 {
@@ -680,17 +691,6 @@ async fn build_texture_atlas<T: AsyncTextureLoader>(
         .map(|(k, v)| (k.clone(), v.frame))
         .collect();
     Ok((texture_atlas, texture_coords))
-}
-
-fn is_cube(def: Option<&BlockTypeDef>) -> bool {
-    if let Some(def) = def {
-        match def.render_info {
-            Some(blocks_proto::block_type_def::RenderInfo::Cube(..)) => true,
-            _ => false,
-        }
-    } else {
-        false
-    }
 }
 
 fn fallback_texture() -> Option<TextureReference> {

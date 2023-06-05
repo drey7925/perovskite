@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicU32;
 
 use crate::{
     blocks::BlockBuilder,
     game_builder::{include_texture_bytes, Block, GameBuilder, Tex},
 };
 use anyhow::Result;
+use cuberef_core::protocol::blocks::{FluidPhysicsInfo, block_type_def::PhysicsInfo};
 
-use super::block_groups::{GRANULAR, BRITTLE};
+use super::block_groups::{BRITTLE, GRANULAR};
 
 /// Dirt without grass on it.
 pub const DIRT: Block = Block("default:dirt");
@@ -30,8 +31,6 @@ pub const DIRT_WITH_GRASS: Block = Block("default:dirt_with_grass");
 pub const STONE: Block = Block("default:stone");
 /// Transparent glass.
 pub const GLASS: Block = Block("default:glass");
-
-
 
 /// Water
 /// Stability note: not stable (liquids are TBD)
@@ -91,11 +90,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 } else {
                     ("default:glass".into(), 5)
                 }
-            })
+            }),
     )?;
     game_builder.add_block(
         BlockBuilder::new(STONE)
-        // TODO: make not-diggable-by-hand after tools are implemented
+            // TODO: make not-diggable-by-hand after tools are implemented
             .add_block_group(BRITTLE)
             .set_texture_all(STONE_TEXTURE)
             .set_inventory_display_name("Stone block"),
@@ -108,12 +107,22 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_inventory_display_name("Glass block"),
     )?;
     // TODO: implement actual water
-    game_builder.add_block(
-        BlockBuilder::new(WATER)
-            .add_block_group(BRITTLE)
-            .set_texture_all(WATER_TEXTURE)
-            .set_inventory_display_name("Water block")
-            .set_needs_translucency(),
-    )?;
+    let mut water_builder = BlockBuilder::new(WATER)
+        .add_block_group(BRITTLE)
+        .set_texture_all(WATER_TEXTURE)
+        .set_inventory_display_name("Water block")
+        .set_needs_translucency();
+    water_builder.physics_info = PhysicsInfo::Fluid(FluidPhysicsInfo {
+        horizontal_speed: 1.5,
+        vertical_speed: -0.5,
+        jump_speed: 1.0,
+        sink_speed: -1.0,
+        surface_thickness: 0.1,
+        surf_horizontal_speed: 2.,
+        surf_vertical_speed: -0.5,
+        surf_jump_speed: 1.0,
+        surf_sink_speed: -0.5,
+    });
+    game_builder.add_block(water_builder)?;
     Ok(())
 }

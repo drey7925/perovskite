@@ -184,6 +184,10 @@ impl ClientState {
     pub(crate) fn should_capture(&self) -> bool {
         self.physics_state.lock().should_capture()
     }
+
+    pub(crate) fn cancel_requested(&self) -> bool {
+        self.shutdown.is_cancelled()
+    }
 }
 
 pub(crate) struct FrameState {

@@ -16,14 +16,17 @@
 
 use std::{
     backtrace,
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
+    ops::DerefMut,
     sync::Arc,
+    task,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
+use cgmath::{InnerSpace, MetricSpace};
 use cuberef_core::{
-    coordinates::{BlockCoordinate, PlayerPositionUpdate},
+    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset, PlayerPositionUpdate},
     protocol::{
         coordinates::Angles,
         game_rpc::{
@@ -33,12 +36,13 @@ use cuberef_core::{
     },
 };
 use image::DynamicImage;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::spawn_blocking};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request};
+use tracy_client::{plot, span};
 
 use crate::{
     cube_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
@@ -130,8 +134,20 @@ pub(crate) async fn connect_game(
         make_contexts(client_state.clone(), connection, action_receiver).await?;
     // todo track exit status and catch errors?
     // Right now we just print a panic message, but don't actually exit because of it
-    tokio::spawn(async move { inbound.run_inbound_loop().await.unwrap() });
-    tokio::spawn(async move { outbound.run_outbound_loop().await.unwrap() });
+    tokio::spawn(async move {
+        match inbound.run_inbound_loop().await {
+            Ok(_) => log::info!("Inbound loop shut down normally"),
+            Err(e) => log::info!("Inbound loop crashed: {e:?}"),
+        }
+        inbound.cancellation.cancel();
+    });
+    tokio::spawn(async move {
+        match outbound.run_outbound_loop().await {
+            Ok(_) => log::info!("Inbound loop shut down normally"),
+            Err(e) => log::info!("Inbound loop crashed: {e:?}"),
+        }
+        outbound.cancellation.cancel();
+    });
 
     Ok(client_state)
 }
@@ -160,6 +176,12 @@ async fn make_contexts(
         client_state: client_state.clone(),
         cancellation: cancellation.clone(),
         ack_map: ack_map.clone(),
+        mesh_worker: Arc::new(MeshWorker {
+            client_state: client_state.clone(),
+            queue: Mutex::new(HashSet::new()),
+            cond: Condvar::new(),
+            shutdown: cancellation.clone(),
+        }),
     };
 
     let outbound = OutboundContext {
@@ -169,6 +191,7 @@ async fn make_contexts(
         cancellation,
         ack_map,
         action_receiver,
+        last_pos_update_seq: None,
     };
 
     Ok((inbound, outbound))
@@ -183,13 +206,15 @@ struct OutboundContext {
     ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
 
     action_receiver: mpsc::Receiver<GameAction>,
+    last_pos_update_seq: Option<u64>,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
         &mut self,
         message: rpc::stream_to_server::ClientMessage,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         // todo tick
+        let start_time = Instant::now();
         self.sequence += 1;
         self.ack_map.lock().insert(self.sequence, Instant::now());
         self.tx_send
@@ -199,22 +224,43 @@ impl OutboundContext {
                 client_message: Some(message),
             })
             .await?;
-        Ok(())
+        let now = Instant::now();
+        plot!("send_sequnced wait time", (now - start_time).as_secs_f64());
+        Ok(self.sequence)
     }
 
     /// Send a position update to the server
     async fn send_position_update(&mut self, pos: PlayerPositionUpdate) -> Result<()> {
-        self.send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
-            rpc::PositionUpdate {
-                position: Some(pos.position.try_into()?),
-                velocity: Some(pos.velocity.try_into()?),
-                face_direction: Some(Angles {
-                    deg_azimuth: pos.face_direction.0,
-                    deg_elevation: pos.face_direction.1,
-                }),
-            },
-        ))
-        .await
+        if let Some(last_pos_send) = self
+            .last_pos_update_seq
+            .map(|x| self.ack_map.lock().get(&x).copied())
+            .flatten()
+        {
+            // We haven't gotten an ack for the last pos update; withhold the current one
+            let delay = Instant::now() - last_pos_send;
+            if delay > Duration::from_secs_f64(0.25) {
+                log::warn!("Waiting {delay:?} for a position update");
+            }
+            plot!("pos_update_wait", delay.as_secs_f64());
+            return Ok(());
+        } else {
+            plot!("pos_update_wait", 0.);
+        }
+
+        let sequence = self
+            .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
+                rpc::PositionUpdate {
+                    position: Some(pos.position.try_into()?),
+                    velocity: Some(pos.velocity.try_into()?),
+                    face_direction: Some(Angles {
+                        deg_azimuth: pos.face_direction.0,
+                        deg_elevation: pos.face_direction.1,
+                    }),
+                },
+            ))
+            .await?;
+        self.last_pos_update_seq = Some(sequence);
+        Ok(())
     }
 
     async fn handle_game_action(&mut self, action: GameAction) -> Result<()> {
@@ -227,7 +273,7 @@ impl OutboundContext {
                         item_slot: action.item_slot,
                     },
                 ))
-                .await
+                .await?;
             }
             GameAction::Tap(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Tap(
@@ -237,7 +283,7 @@ impl OutboundContext {
                         item_slot: action.item_slot,
                     },
                 ))
-                .await
+                .await?;
             }
             GameAction::Place(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Place(
@@ -247,9 +293,10 @@ impl OutboundContext {
                         item_slot: action.item_slot,
                     },
                 ))
-                .await
+                .await?;
             }
         }
+        Ok(())
     }
 
     async fn run_outbound_loop(&mut self) -> Result<()> {
@@ -292,9 +339,13 @@ struct InboundContext {
     cancellation: CancellationToken,
 
     ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
+    mesh_worker: Arc<MeshWorker>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
+        let mesh_worker_clone = self.mesh_worker.clone();
+        let mut mesh_worker_handle =
+            spawn_blocking(move || mesh_worker_clone.run_mesh_worker());
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -321,10 +372,26 @@ impl InboundContext {
                 _ = self.cancellation.cancelled() => {
                     log::info!("Inbound stream context detected cancellation and shutting down")
                     // pass
+                },
+                result = &mut mesh_worker_handle => {
+                    match &result {
+                        Err(e) => {
+                            log::error!("Error awaiting mesh worker: {e:?}");
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Mesh worker crashed: {e:?}");
+                        }
+                        Ok(_) => {
+                            log::info!("Mesh worker exiting");
+                        }
+                    }
+                    return result?;
                 }
             };
         }
         log::warn!("Exiting inbound loop");
+        // Notify the mesh worker so it can exit soon
+        self.mesh_worker.cond.notify_all();
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
@@ -357,58 +424,41 @@ impl InboundContext {
         Ok(())
     }
 
+    fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
+        let mut lock = self.mesh_worker.queue.lock();
+        lock.insert(coord);
+        self.mesh_worker.cond.notify_one();
+    }
+
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
         // TODO offload meshing to another thread
         match &chunk.chunk_coord {
             Some(coord) => {
                 tokio::task::block_in_place(|| {
+                    let _span = span!("handle_mapchunk");
                     let coord = coord.into();
                     let mut lock = self.client_state.chunks.lock();
                     lock.insert(coord, ClientChunk::from_proto(chunk.clone())?);
-                    mesh_chunk(coord, &mut lock, &self.client_state.cube_renderer)?;
                     drop(lock);
+                    self.enqueue_for_meshing(coord);
 
                     if let Some(neighbor) = coord.try_delta(-1, 0, 0) {
-                        maybe_mesh_chunk(
-                            neighbor,
-                            &mut self.client_state.chunks.lock(),
-                            &self.client_state.cube_renderer,
-                        )?;
+                        self.enqueue_for_meshing(neighbor);
                     }
                     if let Some(neighbor) = coord.try_delta(1, 0, 0) {
-                        maybe_mesh_chunk(
-                            neighbor,
-                            &mut self.client_state.chunks.lock(),
-                            &self.client_state.cube_renderer,
-                        )?;
+                        self.enqueue_for_meshing(neighbor);
                     }
                     if let Some(neighbor) = coord.try_delta(0, -1, 0) {
-                        maybe_mesh_chunk(
-                            neighbor,
-                            &mut self.client_state.chunks.lock(),
-                            &self.client_state.cube_renderer,
-                        )?;
+                        self.enqueue_for_meshing(neighbor);
                     }
                     if let Some(neighbor) = coord.try_delta(0, 1, 0) {
-                        maybe_mesh_chunk(
-                            neighbor,
-                            &mut self.client_state.chunks.lock(),
-                            &self.client_state.cube_renderer,
-                        )?;
+                        self.enqueue_for_meshing(neighbor);
                     }
                     if let Some(neighbor) = coord.try_delta(0, 0, -1) {
-                        maybe_mesh_chunk(
-                            neighbor,
-                            &mut self.client_state.chunks.lock(),
-                            &self.client_state.cube_renderer,
-                        )?;
+                        self.enqueue_for_meshing(neighbor);
                     }
                     if let Some(neighbor) = coord.try_delta(0, 0, 1) {
-                        maybe_mesh_chunk(
-                            neighbor,
-                            &mut self.client_state.chunks.lock(),
-                            &self.client_state.cube_renderer,
-                        )?;
+                        self.enqueue_for_meshing(neighbor);
                     }
                     Ok::<(), anyhow::Error>(())
                 })?;
@@ -424,9 +474,10 @@ impl InboundContext {
     async fn handle_ack(&mut self, seq: u64) -> Result<()> {
         let send_time = self.ack_map.lock().remove(&seq);
         match send_time {
-            Some(_time) => {
+            Some(time) => {
                 // todo track in a histogram
-                // log::info!("Seq {} took {:?}", seq, Instant::now() - time)
+                //log::info!("Seq {} took {:?}", seq, Instant::now() - time)
+                plot!("ack_rtt", (Instant::now() - time).as_secs_f64());
             }
             None => {
                 let desc = format!("got ack for seq {} which we didn't send", seq);
@@ -531,11 +582,17 @@ impl InboundContext {
                 }
             }
         }
-        for chunk in needs_remesh {
-            mesh_chunk(chunk, &mut lock, &self.client_state.cube_renderer)?;
-        }
-
         drop(lock);
+        {
+            let _span = span!("remesh for delta");
+            for chunk in needs_remesh {
+                mesh_chunk(
+                    chunk,
+                    self.client_state.chunks.lock().deref_mut(),
+                    &self.client_state.cube_renderer,
+                )?;
+            }
+        }
         if missing_coord {
             self.send_bugcheck("Missing block_coord in delta update".to_string())
                 .await?;
@@ -625,3 +682,57 @@ impl AsyncTextureLoader for GrpcTextureLoader {
             .with_context(|| "Image was fetched, but parsing failed")
     }
 }
+
+struct MeshWorker {
+    client_state: Arc<ClientState>,
+    queue: Mutex<HashSet<ChunkCoordinate>>,
+    cond: Condvar,
+    shutdown: CancellationToken,
+}
+impl MeshWorker {
+    fn run_mesh_worker(self: Arc<Self>) -> Result<()> {
+        while !self.shutdown.is_cancelled() {
+            let chunks = {
+                // This is really ugly and deadlock-prone. Figure out whether we need this or not.
+                // The big deadlock risk is if this line happens under the queue lock:
+                //   our thread waits for physics_state to unlock
+                //   physics_state waits for mapchunks to unlock
+                //   network thread is holding chunks and waiting for queue to unlock
+                //
+                // At the moment, the deadlocks are removed, but this still seems brittle.
+                let pos = self.client_state.last_position().position;
+                let mut lock = self.queue.lock();
+                if lock.is_empty() {
+                    self.cond.wait(&mut lock);
+                }
+
+                let _span = span!("mesh_worker sort");
+                let mut chunks: Vec<_> = lock.iter().copied().collect();
+
+                plot!("mesh_queue_length", chunks.len() as f64);
+
+                // Prioritize the closest chunks
+                chunks.sort_by_key(|x| {
+                    let center = x.with_offset(ChunkOffset { x: 8, y: 8, z: 8 });
+                    let distance =
+                        cgmath::vec3(center.x as f64, center.y as f64, center.z as f64) - pos;
+                    distance.magnitude2() as i64
+                });
+                chunks.shrink_to(MESH_BATCH_SIZE);
+                for coord in chunks.iter() {
+                    assert!(lock.remove(coord), "Task should have been in the queue");
+                }
+                drop(lock);
+                chunks
+            };
+            {
+                let _span = span!("mesh_worker work");
+                for coord in chunks {
+                    maybe_mesh_chunk(coord, &mut self.client_state.chunks.lock(), &self.client_state.cube_renderer)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+const MESH_BATCH_SIZE: usize = 16;

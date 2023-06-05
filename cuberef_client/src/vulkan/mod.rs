@@ -337,7 +337,7 @@ impl Texture2DHolder {
             &ctx.memory_allocator,
             img_rgba,
             dimensions,
-            vulkano::image::MipmapsCount::One,
+            vulkano::image::MipmapsCount::Log2,
             Format::R8G8B8A8_SRGB,
             &mut builder,
         )?;

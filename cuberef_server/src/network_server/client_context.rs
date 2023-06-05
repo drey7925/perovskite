@@ -68,7 +68,7 @@ pub(crate) async fn make_client_contexts(
 )> {
     let id = CLIENT_CONTEXT_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-    let (tx_send, tx_recv) = mpsc::channel(128);
+    let (tx_send, tx_recv) = mpsc::channel(4);
 
     let initial_position = PlayerPositionUpdate {
         tick: game_state.tick(),

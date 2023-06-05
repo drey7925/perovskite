@@ -83,7 +83,25 @@ message CubeExRendererInfo {
 }
 
 message FluidPhysicsInfo {
+    // Speed of movement when in the fluid, blocks/sec
+    double horizontal_speed = 1;
+    // Speed when not pressing jump or lower keys, blocks/sec. Positive means upward
+    double vertical_speed = 2;
+    // Speed when pressing jump. Positive means upward
+    double jump_speed = 3;
+    // Speed when pressing the lower key. Positive means upward.
+    double sink_speed = 4;
 
+    // How deep surface effects extend for, in blocks.
+    double surface_thickness = 5;
+    // Speed of movement when in the fluid, blocks/sec
+    double surf_horizontal_speed = 6;
+    // Speed when not pressing jump or lower keys, blocks/sec. Positive means upward
+    double surf_vertical_speed = 7;
+    // Speed when pressing jump. Positive means upward
+    double surf_jump_speed = 8;
+    // Speed when pressing the lower key. Positive means upward.
+    double surf_sink_speed = 9;
 }
 
 // Options available for the interact key when facing a block

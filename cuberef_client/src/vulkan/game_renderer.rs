@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 
 use log::info;
 
+use tracy_client::{Client, span, plot};
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
     swapchain::{self, AcquireError, SwapchainPresentInfo},
@@ -33,7 +34,7 @@ use winit::{
 };
 
 use crate::{
-    game_state::{ClientState, FrameState},
+    game_state::{ClientState, FrameState, chunk},
     net_client,
 };
 
@@ -54,7 +55,7 @@ pub struct CuberefRenderer {
     flat_pipeline: flat_texture::FlatTexPipelineWrapper,
 
     client_state: Arc<ClientState>,
-    async_runtime: tokio::runtime::Runtime,
+    _async_runtime: tokio::runtime::Runtime,
 }
 impl CuberefRenderer {
     pub(crate) fn create(event_loop: &EventLoop<()>, server_addr: &str) -> Result<CuberefRenderer> {
@@ -88,7 +89,7 @@ impl CuberefRenderer {
             flat_provider,
             flat_pipeline,
             client_state,
-            async_runtime: rt,
+            _async_runtime: rt,
         })
     }
 
@@ -98,14 +99,20 @@ impl CuberefRenderer {
         let frames_in_flight = self.ctx.swapchain_images.len();
         let mut fences: Vec<Option<Arc<FenceSignalFuture<_>>>> = vec![None; frames_in_flight];
         let mut previous_fence_i = 0;
-
         event_loop.run(move |event, _, control_flow| {
-            self.client_state.window_event(&event);
+            {
+                let _span = span!("client_state handling window event");
+                if self.client_state.cancel_requested() {
+                    *control_flow = ControlFlow::Exit;
+                }
+                self.client_state.window_event(&event);
+            }
             match event {
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
                     ..
                 } => {
+                    self.client_state.shutdown.cancel();
                     *control_flow = ControlFlow::Exit;
                 }
                 Event::WindowEvent {
@@ -115,6 +122,7 @@ impl CuberefRenderer {
                     resized = true;
                 }
                 Event::MainEventsCleared => {
+                    let _span = span!("MainEventsCleared");
                     if self.ctx.window.has_focus() && self.client_state.should_capture() {
                         let size = self.ctx.window.inner_size();
                         self.ctx
@@ -136,6 +144,7 @@ impl CuberefRenderer {
                             .unwrap();
                     }
                     if resized || recreate_swapchain {
+                        let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
                         recreate_swapchain = false;
                         self.ctx.recreate_swapchain(size).unwrap();
@@ -144,6 +153,8 @@ impl CuberefRenderer {
                             self.handle_resize(size).unwrap();
                         }
                     }
+                    
+                    let _swapchain_span = span!("Acquire swapchain image");
                     let (image_i, suboptimal, acquire_future) =
                         match swapchain::acquire_next_image(self.ctx.swapchain.clone(), None) {
                             Ok(r) => r,
@@ -154,6 +165,7 @@ impl CuberefRenderer {
                             }
                             Err(e) => panic!("failed to acquire next image: {e}"),
                         };
+                    Client::running().expect("tracy client must be running").frame_mark();
                     if suboptimal {
                         recreate_swapchain = true;
                     }
@@ -170,6 +182,7 @@ impl CuberefRenderer {
                         // Use the existing FenceSignalFuture
                         Some(fence) => fence.boxed(),
                     };
+                    drop(_swapchain_span);
                     let window_size = self.ctx.window.inner_size();
 
                     // From https://vulkano.rs/compute_pipeline/descriptor_sets.html:
@@ -182,33 +195,33 @@ impl CuberefRenderer {
                         .start_command_buffer(self.ctx.framebuffers[image_i as usize].clone())
                         .unwrap();
 
-                    let command_buffers = self.render_game(window_size, command_buf_builder);
-
-                    let future = previous_future
-                        .join(acquire_future)
-                        .then_execute(self.ctx.queue.clone(), command_buffers)
-                        .unwrap()
-                        .then_swapchain_present(
-                            self.ctx.queue.clone(),
-                            SwapchainPresentInfo::swapchain_image_index(
-                                self.ctx.swapchain.clone(),
-                                image_i,
-                            ),
-                        )
-                        .then_signal_fence_and_flush();
-
-                    fences[image_i as usize] = match future {
-                        Ok(value) => Some(Arc::new(value)),
-                        Err(FlushError::OutOfDate) => {
-                            recreate_swapchain = true;
-                            None
-                        }
-                        Err(e) => {
-                            println!("failed to flush future: {e}");
-                            None
-                        }
-                    };
-
+                    let command_buffers = self.build_command_buffers(window_size, command_buf_builder);
+                    {
+                        let _span = span!("submit to Vulkan");
+                        let future = previous_future
+                            .join(acquire_future)
+                            .then_execute(self.ctx.queue.clone(), command_buffers)
+                            .unwrap()
+                            .then_swapchain_present(
+                                self.ctx.queue.clone(),
+                                SwapchainPresentInfo::swapchain_image_index(
+                                    self.ctx.swapchain.clone(),
+                                    image_i,
+                                ),
+                            )
+                            .then_signal_fence_and_flush();
+                        fences[image_i as usize] = match future {
+                            Ok(value) => Some(Arc::new(value)),
+                            Err(FlushError::OutOfDate) => {
+                                recreate_swapchain = true;
+                                None
+                            }
+                            Err(e) => {
+                                println!("failed to flush future: {e}");
+                                None
+                            }
+                        };
+                    }
                     previous_fence_i = image_i;
                 }
                 _ => {}
@@ -216,7 +229,7 @@ impl CuberefRenderer {
         })
     }
 
-    fn render_game(
+    fn build_command_buffers(
         &mut self,
         window_size: PhysicalSize<u32>,
         mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
@@ -224,6 +237,7 @@ impl CuberefRenderer {
             Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
         >,
     ) -> PrimaryAutoCommandBuffer {
+        let _span = span!("build renderer buffers");
         let FrameState {
             view_proj_matrix,
             player_position,
@@ -249,13 +263,20 @@ impl CuberefRenderer {
                     .unwrap(),
             );
         }
-        cube_draw_calls.extend(
+
+        let chunk_lock = {
+            let _span = span!("Waiting for chunk_lock");
             self.client_state
                 .chunks
                 .lock()
-                .iter()
-                .filter_map(|(_, chunk)| chunk.make_draw_call(player_position)),
+        };
+        plot!("total_chunks", chunk_lock.len() as f64);
+        cube_draw_calls.extend(
+                chunk_lock
+                .values()
+                .filter_map(|chunk| chunk.make_draw_call(player_position)),
         );
+        plot!("chunk_rate", cube_draw_calls.len() as f64 / chunk_lock.len() as f64);
 
         if !cube_draw_calls.is_empty() {
             self.cube_pipeline
@@ -341,8 +362,8 @@ impl CuberefRenderer {
         &self,
         mut builder: CommandBufferBuilder,
     ) -> Result<PrimaryAutoCommandBuffer> {
+        let _span = span!();
         builder.end_render_pass()?;
-
         builder
             .build()
             .with_context(|| "Command buffer build failed")

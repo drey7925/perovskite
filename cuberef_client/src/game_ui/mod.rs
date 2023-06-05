@@ -47,6 +47,8 @@ pub(crate) struct GameUi {
     crosshair_draw_call: Option<FlatTextureDrawCall>,
     hotbar_draw_call: Option<FlatTextureDrawCall>,
     pixel_scroll_pos: i32,
+
+    fps_counter: fps_counter::FPSCounter
 }
 impl GameUi {
     pub(crate) async fn new<T>(
@@ -69,6 +71,7 @@ impl GameUi {
             crosshair_draw_call: None,
             hotbar_draw_call: None,
             pixel_scroll_pos: 0,
+            fps_counter: fps_counter::FPSCounter::new()
         })
     }
 
@@ -147,6 +150,12 @@ impl GameUi {
         if let Some(x) = self.hotbar_draw_call.as_ref() {
             outputs.push(x.clone());
         }
+
+        let mut fps_builder = FlatTextureDrawBuilder::new();
+        let fps = self.fps_counter.tick() as u32;
+        self.render_number((128, 0), fps, &mut fps_builder);
+        outputs.push(fps_builder.build(ctx)?);
+
         Ok(outputs)
     }
 
