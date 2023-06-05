@@ -51,7 +51,7 @@ use crate::{
         items::{ClientInventory, ClientItemManager, InventoryManager},
         physics::PhysicsState,
         tool_controller::ToolController,
-        ClientState, GameAction, ChunkManager,
+        ChunkManager, ClientState, GameAction,
     },
     game_ui::GameUi,
     vulkan::VulkanContext,
@@ -169,19 +169,19 @@ async fn make_contexts(
     let cancellation = client_state.shutdown.clone();
 
     let ack_map = Arc::new(Mutex::new(HashMap::new()));
-
+    let mesh_worker = Arc::new(MeshWorker {
+        client_state: client_state.clone(),
+        queue: Mutex::new(HashSet::new()),
+        cond: Condvar::new(),
+        shutdown: cancellation.clone(),
+    });
     let inbound = InboundContext {
         tx_send: tx_send.clone(),
         inbound_rx: stream,
         client_state: client_state.clone(),
         cancellation: cancellation.clone(),
         ack_map: ack_map.clone(),
-        mesh_worker: Arc::new(MeshWorker {
-            client_state: client_state.clone(),
-            queue: Mutex::new(HashSet::new()),
-            cond: Condvar::new(),
-            shutdown: cancellation.clone(),
-        }),
+        mesh_worker: mesh_worker.clone(),
     };
 
     let outbound = OutboundContext {
@@ -192,6 +192,7 @@ async fn make_contexts(
         ack_map,
         action_receiver,
         last_pos_update_seq: None,
+        mesh_worker: mesh_worker,
     };
 
     Ok((inbound, outbound))
@@ -207,6 +208,9 @@ struct OutboundContext {
 
     action_receiver: mpsc::Receiver<GameAction>,
     last_pos_update_seq: Option<u64>,
+
+    // Used only for pacing
+    mesh_worker: Arc<MeshWorker>,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
@@ -242,20 +246,26 @@ impl OutboundContext {
                 log::warn!("Waiting {delay:?} for a position update");
             }
             plot!("pos_update_wait", delay.as_secs_f64());
+            // todo send an update but signal that we don't want chunks
             return Ok(());
         } else {
             plot!("pos_update_wait", 0.);
         }
 
+        // If this overflows, the client is severely behind (by 4 billion chunks!) and may as well crash
+        let pending_chunks = self.mesh_worker.queue.lock().len().try_into().unwrap();
         let sequence = self
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
-                rpc::PositionUpdate {
-                    position: Some(pos.position.try_into()?),
-                    velocity: Some(pos.velocity.try_into()?),
-                    face_direction: Some(Angles {
-                        deg_azimuth: pos.face_direction.0,
-                        deg_elevation: pos.face_direction.1,
+                rpc::ClientUpdate {
+                    position: Some(rpc::PositionUpdate {
+                        position: Some(pos.position.try_into()?),
+                        velocity: Some(pos.velocity.try_into()?),
+                        face_direction: Some(Angles {
+                            deg_azimuth: pos.face_direction.0,
+                            deg_elevation: pos.face_direction.1,
+                        }),
                     }),
+                    pacing: Some(rpc::ClientPacing { pending_chunks }),
                 },
             ))
             .await?;
@@ -344,8 +354,7 @@ struct InboundContext {
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
         let mesh_worker_clone = self.mesh_worker.clone();
-        let mut mesh_worker_handle =
-            spawn_blocking(move || mesh_worker_clone.run_mesh_worker());
+        let mut mesh_worker_handle = spawn_blocking(move || mesh_worker_clone.run_mesh_worker());
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -437,7 +446,10 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
-                    let mut lock = self.client_state.chunks.insert(coord, ClientChunk::from_proto(chunk.clone())?);
+                    let mut lock = self
+                        .client_state
+                        .chunks
+                        .insert(coord, ClientChunk::from_proto(chunk.clone())?);
                     drop(lock);
                     self.enqueue_for_meshing(coord);
 
@@ -513,6 +525,7 @@ impl InboundContext {
                     bad_coords.push(coord.clone());
                 }
             }
+            self.mesh_worker.queue.lock().remove(&coord.into());
         }
         if !bad_coords.is_empty() {
             self.send_bugcheck(format!(
@@ -702,7 +715,6 @@ impl MeshWorker {
                 let pos = self.client_state.last_position().position;
                 let mut lock = self.queue.lock();
                 if lock.is_empty() {
-                    
                     plot!("mesh_queue_length", 0.);
                     self.cond.wait(&mut lock);
                 }
@@ -729,7 +741,11 @@ impl MeshWorker {
             {
                 let _span = span!("mesh_worker work");
                 for coord in chunks {
-                    maybe_mesh_chunk(coord, &self.client_state.chunks.read_lock(), &self.client_state.cube_renderer)?;
+                    maybe_mesh_chunk(
+                        coord,
+                        &self.client_state.chunks.read_lock(),
+                        &self.client_state.cube_renderer,
+                    )?;
                 }
             }
         }

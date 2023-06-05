@@ -15,7 +15,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
-use std::num;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
@@ -76,7 +75,10 @@ pub(crate) async fn make_client_contexts(
         velocity: cgmath::Vector3::zero(),
         face_direction: (0., 0.),
     };
-    let (pos_send, pos_recv) = watch::channel(initial_position);
+    let (pos_send, pos_recv) = watch::channel(PositionAndPacing {
+        position: initial_position,
+        chunks_to_send: 16,
+    });
 
     let message = StreamToClient {
         tick: game_state.tick(),
@@ -133,6 +135,13 @@ pub(crate) async fn make_client_contexts(
         own_positions: pos_send,
         outbound_tx: tx_send.clone(),
         next_pos_writeback: Instant::now(),
+        chunk_pacing: Aimd {
+            val: INITIAL_CHUNKS_PER_UPDATE as f64,
+            floor: 0.,
+            ceiling: MAX_CHUNKS_PER_UPDATE as f64,
+            additive_increase: 16.,
+            multiplicative_decrease: 0.5,
+        },
     };
     let block_events = game_state.map().subscribe();
     let inventory_events = game_state.inventory_manager().subscribe();
@@ -175,7 +184,7 @@ pub(crate) struct ClientOutboundContext {
     // and to elsewhere)
     // In the future, anticheat might check for shenanigans involving these, probably not as part of ClientOutboundContext
     // coroutines
-    own_positions: watch::Receiver<PlayerPositionUpdate>,
+    own_positions: watch::Receiver<PositionAndPacing>,
 
     // Server-side state per-client state
     // Chunks that are close enough to the player to be of interest.
@@ -420,15 +429,16 @@ impl ClientOutboundContext {
             .with_context(|| "Could not send outbound message (initial state)")
     }
 
-    async fn handle_position_update(&mut self, update: PlayerPositionUpdate) -> Result<()> {
+    async fn handle_position_update(&mut self, update: PositionAndPacing) -> Result<()> {
+        let position = update.position;
         // TODO anticheat/safety checks
         // TODO consider caching more in the player's movement direction as a form of prefetch???
-        let player_block_coord: BlockCoordinate = match update.position.try_into() {
+        let player_block_coord: BlockCoordinate = match position.position.try_into() {
             Ok(x) => x,
             Err(e) => {
                 log::warn!(
                     "Player had invalid position: {:?}, error {:?}",
-                    update.position,
+                    position.position,
                     e
                 );
                 self.teleport_player(Vector3::zero()).await?;
@@ -493,7 +503,7 @@ impl ClientOutboundContext {
                 if !self.chunks_known_to_client.contains(&chunk) {
                     self.subscribe_to_chunk(chunk, load_if_missing).await?;
                     num_added += 1;
-                    if num_added >= MAX_CHUNKS_PER_UPDATE {
+                    if num_added >= update.chunks_to_send {
                         break;
                     }
                 }
@@ -531,8 +541,10 @@ pub(crate) struct ClientInboundContext {
     // in-game effects for them. If this poses an issue, refactor later.
     outbound_tx: mpsc::Sender<tonic::Result<proto::StreamToClient>>,
     // The client's self-reported position
-    own_positions: watch::Sender<PlayerPositionUpdate>,
+    own_positions: watch::Sender<PositionAndPacing>,
     next_pos_writeback: Instant,
+
+    chunk_pacing: Aimd,
 }
 impl ClientInboundContext {
     // Poll for world events and send them through outbound_tx
@@ -733,34 +745,49 @@ impl ClientInboundContext {
         Ok(())
     }
 
-    async fn handle_pos_update(
-        &mut self,
-        tick: u64,
-        pos_update: &proto::PositionUpdate,
-    ) -> Result<()> {
-        let (az, el) = match &pos_update.face_direction {
-            Some(x) => (x.deg_azimuth, x.deg_elevation),
-            None => {
-                log::warn!("No angles in update from client");
-                (0., 0.)
+    async fn handle_pos_update(&mut self, tick: u64, update: &proto::ClientUpdate) -> Result<()> {
+        match &update.position {
+            Some(pos_update) => {
+                let (az, el) = match &pos_update.face_direction {
+                    Some(x) => (x.deg_azimuth, x.deg_elevation),
+                    None => {
+                        log::warn!("No angles in update from client");
+                        (0., 0.)
+                    }
+                };
+                let pos = PlayerPositionUpdate {
+                    tick,
+                    position: pos_update
+                        .position
+                        .as_ref()
+                        .with_context(|| "Missing position")?
+                        .try_into()?,
+                    velocity: pos_update
+                        .velocity
+                        .as_ref()
+                        .with_context(|| "Missing velocity")?
+                        .try_into()?,
+                    face_direction: (az, el),
+                };
+
+                if let Some(pacing) = &update.pacing {
+                    if pacing.pending_chunks < 16 {
+                        self.chunk_pacing.increase();
+                    } else if pacing.pending_chunks > 64 {
+                        self.chunk_pacing.decrease();
+                    }
+                }
+
+                self.own_positions.send_replace(PositionAndPacing {
+                    position: pos,
+                    chunks_to_send: self.chunk_pacing.get(),
+                });
+                self.player_context.update_position(pos);
             }
-        };
-        let pos = PlayerPositionUpdate {
-            tick,
-            position: pos_update
-                .position
-                .as_ref()
-                .with_context(|| "Missing position")?
-                .try_into()?,
-            velocity: pos_update
-                .velocity
-                .as_ref()
-                .with_context(|| "Missing velocity")?
-                .try_into()?,
-            face_direction: (az, el),
-        };
-        self.own_positions.send_replace(pos);
-        self.player_context.update_position(pos);
+            None => {
+                warn!("No position in update message from client");
+            }
+        }
         Ok(())
     }
 
@@ -821,11 +848,13 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 20;
-const LOAD_LAZY_DISTANCE: i32 = 25;
-const UNLOAD_DISTANCE: i32 = 30;
+const LOAD_EAGER_DISTANCE: i32 = 16;
+const LOAD_LAZY_DISTANCE: i32 = 17;
+const UNLOAD_DISTANCE: i32 = 18;
 const MAX_UPDATE_BATCH_SIZE: usize = 32;
-const MAX_CHUNKS_PER_UPDATE: usize = 32;
+
+const INITIAL_CHUNKS_PER_UPDATE: usize = 16;
+const MAX_CHUNKS_PER_UPDATE: usize = 256;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {
@@ -846,4 +875,30 @@ lazy_static::lazy_static! {
         v.sort_by_key(|(x, y, z)| x.abs() + y.abs() + z.abs());
         v
     };
+}
+
+#[derive(Copy, Clone, Debug)]
+struct PositionAndPacing {
+    position: PlayerPositionUpdate,
+    chunks_to_send: usize,
+}
+
+struct Aimd {
+    val: f64,
+    floor: f64,
+    ceiling: f64,
+    additive_increase: f64,
+    multiplicative_decrease: f64,
+}
+impl Aimd {
+    fn increase(&mut self) {
+        self.val = (self.val + self.additive_increase).clamp(self.floor, self.ceiling);
+    }
+    fn decrease(&mut self) {
+        debug_assert!(self.multiplicative_decrease < 1.);
+        self.val = (self.val * self.multiplicative_decrease).clamp(self.floor, self.ceiling);
+    }
+    fn get(&self) -> usize {
+        self.val as usize
+    }
 }

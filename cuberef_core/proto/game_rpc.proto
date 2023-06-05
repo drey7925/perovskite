@@ -89,7 +89,7 @@ message StreamToServer {
         // Client wants to dig
         DigAction dig = 82;
         // Client is updating realtime position (and also animation state, in the future)
-        PositionUpdate position_update = 83;
+        ClientUpdate position_update = 83;
         // Client wants to tap an item without digging it
         TapAction tap = 84;
         // Client is placing a block
@@ -183,6 +183,17 @@ message MapChunkUnsubscribe {
 message ClientBugCheck {
     string description = 1;
     string backtrace = 2;
+}
+
+message ClientPacing {
+    // How many chunks the client has not processed yet.
+    // Affects whether the server sends chunks.
+    uint32 pending_chunks = 1;
+}
+
+message ClientUpdate {
+    PositionUpdate position = 1;
+    ClientPacing pacing = 2;
 }
 
 message PositionUpdate {
