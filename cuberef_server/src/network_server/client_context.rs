@@ -46,11 +46,9 @@ use cuberef_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use cuberef_core::protocol::game_rpc::PositionUpdate;
 use cuberef_core::protocol::game_rpc::StreamToClient;
 use itertools::iproduct;
-use itertools::Itertools;
 use log::error;
 use log::info;
 use log::warn;
-use rocksdb::properties::NUM_SNAPSHOTS;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -848,9 +846,9 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 16;
-const LOAD_LAZY_DISTANCE: i32 = 17;
-const UNLOAD_DISTANCE: i32 = 18;
+const LOAD_EAGER_DISTANCE: i32 = 25;
+const LOAD_LAZY_DISTANCE: i32 = 26;
+const UNLOAD_DISTANCE: i32 = 27;
 const MAX_UPDATE_BATCH_SIZE: usize = 32;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 16;

@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::Deref;
-use std::time::Instant;
+
 
 use cgmath::{ElementWise, Matrix4, Vector3};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
@@ -23,11 +23,11 @@ use cuberef_core::protocol::game_rpc as rpc_proto;
 use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
-use rustc_hash::FxHashMap;
+
 use tracy_client::span;
 
 use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
-use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall};
 
 use super::ChunkManagerView;
 
@@ -35,7 +35,6 @@ pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
     block_ids: Vec<BlockId>,
     cached_vertex_data: Option<VkChunkVertexData>,
-    dirty: bool
 }
 impl ClientChunk {
     pub(crate) fn from_proto(proto: rpc_proto::MapChunk) -> Result<ClientChunk> {
@@ -62,7 +61,6 @@ impl ClientChunk {
             coord,
             block_ids,
             cached_vertex_data: None,
-            dirty: true
         })
     }
 

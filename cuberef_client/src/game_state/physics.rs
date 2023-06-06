@@ -16,26 +16,26 @@
 
 use std::{
     collections::HashSet,
-    ops::{Deref, RangeInclusive},
-    time::{Duration, Instant},
+    ops::{RangeInclusive},
+    time::{Duration},
 };
 
 use cgmath::{vec3, Angle, Deg, InnerSpace, Vector3};
 use cuberef_core::{
-    coordinates::{BlockCoordinate, ChunkCoordinate},
+    coordinates::{BlockCoordinate},
     protocol::blocks::{
         block_type_def::{self, PhysicsInfo},
         BlockTypeDef,
     },
 };
 use log::info;
-use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
+
+
 use winit::event::ElementState;
 
 use crate::cube_renderer::ClientBlockTypeManager;
 
-use super::{chunk::ClientChunk, ClientState, ChunkManagerView};
+use super::{ClientState, ChunkManagerView};
 
 const MOUSE_SENSITIVITY: f64 = 0.5;
 

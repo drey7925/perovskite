@@ -25,6 +25,7 @@ use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
 use rustc_hash::FxHashMap;
 use tokio::sync::mpsc;
+use tracy_client::span;
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
 
 use crate::cube_renderer::{BlockRenderer, ClientBlockTypeManager};
@@ -73,9 +74,11 @@ impl ChunkManager {
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
     /// but CANNOT be used to insert or remove chunks.
-    pub(crate) fn read_lock<'a>(&'a self) -> ChunkManagerView<'a> {
+    pub(crate) fn read_lock(&self) -> ChunkManagerView {
+        let _span = span!("Acquire chunk read lock");
+        let guard = self.chunks.read();
         ChunkManagerView {
-            guard: self.chunks.read(),
+            guard,
         }
     }
     /// Clones the chunk manager and returns a clone with the following properties:
@@ -95,10 +98,18 @@ impl ChunkManager {
         coord: ChunkCoordinate,
         chunk: ClientChunk,
     ) -> Option<Arc<Mutex<ClientChunk>>> {
-        self.chunks.write().insert(coord, Arc::new(Mutex::new(chunk)))
+        let mut lock = {
+            let _span = span!("Acquire global chunk lock");
+            self.chunks.write()
+        };
+        lock.insert(coord, Arc::new(Mutex::new(chunk)))
     }
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<Mutex<ClientChunk>>> {
-        self.chunks.write().remove(coord)
+        let mut lock = {
+            let _span = span!("Acquire global chunk lock");
+            self.chunks.write()
+        };
+        lock.remove(coord)
     }
 }
 pub(crate) struct ChunkManagerView<'a> {

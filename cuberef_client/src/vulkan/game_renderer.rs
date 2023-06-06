@@ -342,8 +342,7 @@ impl CuberefRenderer {
             )
             .unwrap();
 
-        let command_buffers = self.finish_command_buffer(command_buf_builder).unwrap();
-        command_buffers
+        self.finish_command_buffer(command_buf_builder).unwrap()
     }
 
     fn handle_resize(&mut self, size: PhysicalSize<u32>) -> Result<()> {

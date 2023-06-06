@@ -31,7 +31,7 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkOffset};
 
 use anyhow::{ensure, Context, Error, Result};
 use image::DynamicImage;
-use rustc_hash::FxHashMap;
+
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 use tonic::async_trait;
@@ -314,7 +314,7 @@ impl BlockRenderer {
                                 current_chunk.block_ids(),
                                 &mut vtx,
                                 &mut idx,
-                                &cube_render_info,
+                                cube_render_info,
                                 &suppress_face_when,
                             );
                         }

@@ -16,15 +16,13 @@
 
 use std::{
     backtrace,
-    collections::{HashMap, HashSet, VecDeque},
-    ops::DerefMut,
+    collections::{HashMap, HashSet},
     sync::Arc,
-    task,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
-use cgmath::{InnerSpace, MetricSpace};
+use cgmath::{InnerSpace};
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset, PlayerPositionUpdate},
     protocol::{
@@ -192,7 +190,7 @@ async fn make_contexts(
         ack_map,
         action_receiver,
         last_pos_update_seq: None,
-        mesh_worker: mesh_worker,
+        mesh_worker,
     };
 
     Ok((inbound, outbound))
@@ -237,8 +235,7 @@ impl OutboundContext {
     async fn send_position_update(&mut self, pos: PlayerPositionUpdate) -> Result<()> {
         if let Some(last_pos_send) = self
             .last_pos_update_seq
-            .map(|x| self.ack_map.lock().get(&x).copied())
-            .flatten()
+            .and_then(|x| self.ack_map.lock().get(&x).copied())
         {
             // We haven't gotten an ack for the last pos update; withhold the current one
             let delay = Instant::now() - last_pos_send;
@@ -446,11 +443,11 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
-                    let mut lock = self
+                    self
                         .client_state
                         .chunks
                         .insert(coord, ClientChunk::from_proto(chunk.clone())?);
-                    drop(lock);
+
                     self.enqueue_for_meshing(coord);
 
                     if let Some(neighbor) = coord.try_delta(-1, 0, 0) {
@@ -538,7 +535,7 @@ impl InboundContext {
     }
 
     async fn handle_delta_update(&mut self, batch: &rpc::MapDeltaUpdateBatch) -> Result<()> {
-        let mut chunk_manager_read_lock = self.client_state.chunks.read_lock();
+        let chunk_manager_read_lock = self.client_state.chunks.read_lock();
 
         let mut missing_coord = false;
         let mut unknown_coords = Vec::new();
