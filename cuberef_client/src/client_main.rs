@@ -32,7 +32,7 @@ pub fn run_client(args: &ClientArgs) -> Result<()> {
     let event_loop = EventLoop::new();
 
     let window =
-        CuberefRenderer::create(&event_loop, &args.server)?;
+        CuberefRenderer::create(&event_loop, &args.server).unwrap();
     window.run_loop(event_loop);
     Ok(())
 }

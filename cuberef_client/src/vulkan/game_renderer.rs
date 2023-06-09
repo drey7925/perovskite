@@ -75,15 +75,15 @@ impl CuberefRenderer {
 
         let client_state = rt.block_on(cs_handle).unwrap().unwrap();
 
-        let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
+        let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone()).unwrap();
         let cube_pipeline =
-            cube_provider.make_pipeline(&ctx, client_state.cube_renderer.texture())?;
+            cube_provider.make_pipeline(&ctx, client_state.cube_renderer.texture()).unwrap();
 
-        let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
+        let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone()).unwrap();
         let flat_pipeline =
-            flat_provider.make_pipeline(&ctx, client_state.game_ui.lock().texture())?;
+            flat_provider.make_pipeline(&ctx, client_state.game_ui.lock().texture()).unwrap();
 
-        let egui_adapter = EguiAdapter::new(&ctx, event_loop)?;
+        let egui_adapter = EguiAdapter::new(&ctx, event_loop).unwrap();
 
         Ok(CuberefRenderer {
             ctx,

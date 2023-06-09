@@ -27,12 +27,12 @@ use vulkano::{
     pipeline::{
         graphics::{
             depth_stencil::DepthStencilState, input_assembly::InputAssemblyState,
-            rasterization::RasterizationState, vertex_input::Vertex, viewport::ViewportState,
+            rasterization::RasterizationState, vertex_input::Vertex, viewport::ViewportState, multisample::MultisampleState,
         },
         GraphicsPipeline, Pipeline,
     },
     render_pass::Subpass,
-    shader::ShaderModule,
+    shader::ShaderModule, image::SampleCount,
 };
 
 use crate::vulkan::{
@@ -213,6 +213,9 @@ impl PipelineProvider for FlatTexPipelineProvider {
         ctx: &VulkanContext,
         config: Arc<Texture2DHolder>,
     ) -> Result<Self::PipelineWrapperImpl> {
+        let mut multisample_state = MultisampleState::new();
+        multisample_state.rasterization_samples = SampleCount::Sample4;
+
         let pipeline = GraphicsPipeline::start()
             .vertex_input_state(FlatTextureVertex::per_vertex())
             .vertex_shader(self.vs.entry_point("main").unwrap(), ())
@@ -229,6 +232,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
                     )
                     .cull_mode(vulkano::pipeline::graphics::rasterization::CullMode::None),
             )
+            .multisample_state(multisample_state)
             .color_blend_state(
                 vulkano::pipeline::graphics::color_blend::ColorBlendState::default().blend_alpha(),
             )

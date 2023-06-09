@@ -34,7 +34,8 @@ use vulkano::{
     device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo},
     format::Format,
     image::{
-        view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
+        view::{ImageView, ImageViewCreateInfo}, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SampleCount,
+        SwapchainImage,
     },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{FreeListAllocator, GenericMemoryAllocator, StandardMemoryAllocator},
@@ -43,7 +44,7 @@ use vulkano::{
     sampler::{Filter, Sampler, SamplerCreateInfo},
     swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
     sync::GpuFuture,
-    Version,
+    Version, buffer::view,
 };
 use vulkano_win::VkSurfaceBuild;
 use winit::{
@@ -162,8 +163,14 @@ impl VulkanContext {
         let render_pass = vulkano::ordered_passes_renderpass!(
             vk_device.clone(),
             attachments: {
-                color: {
+                intermediary: {
                     load: Clear,
+                    store: DontCare,
+                    format: swapchain.image_format(),
+                    samples: 4,
+                },
+                color: {
+                    load: DontCare,
                     store: Store,
                     format: swapchain.image_format(),
                     samples: 1,
@@ -172,16 +179,17 @@ impl VulkanContext {
                     load: Clear,
                     store: DontCare,
                     format: Format::D32_SFLOAT,
-                    samples: 1,
+                    samples: 4,
                 },
             },
             passes: [
-                {   
-                    color: [color],
+                {
+                    color: [intermediary],
                     depth_stencil: {depth},
                     input: [],
+                    resolve: [color]
                 },
-                {   
+                {
                     color: [color],
                     depth_stencil: {},
                     input: []
@@ -250,7 +258,7 @@ impl VulkanContext {
         )?;
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some(1f32.into())],
+                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), None, Some(1f32.into())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassContents::Inline,
@@ -289,32 +297,34 @@ pub(crate) fn get_framebuffers_with_depth(
     images
         .iter()
         .map(|image| {
-            let view = ImageView::new_default(image.clone()).unwrap();
-            let depth_buffer = ImageView::new_default(
-                AttachmentImage::transient(
-                    allocator,
-                    image.dimensions().width_height(),
-                    Format::D32_SFLOAT,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-            let intermediate = ImageView::new_default(
+            let mut view_info = ImageViewCreateInfo::from_image(&image);
+            view_info.usage |= ImageUsage::TRANSFER_DST;
+            view_info.usage |= ImageUsage::COLOR_ATTACHMENT;
+            let view = ImageView::new(image.clone(), view_info).unwrap();
+            let intermediary = ImageView::new_default(
                 AttachmentImage::transient_multisampled(
                     allocator,
                     image.dimensions().width_height(),
-                    vulkano::image::SampleCount::Sample4,
+                    SampleCount::Sample4,
+                    image.format(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let depth_buffer = ImageView::new_default(
+                AttachmentImage::transient_multisampled(
+                    allocator,
+                    image.dimensions().width_height(),
+                    SampleCount::Sample4,
                     Format::D32_SFLOAT,
                 )
                 .unwrap(),
             )
             .unwrap();
-
             Framebuffer::new(
                 render_pass.clone(),
                 FramebufferCreateInfo {
-                    attachments: vec![view, depth_buffer],
+                    attachments: vec![intermediary, view, depth_buffer],
                     ..Default::default()
                 },
             )
