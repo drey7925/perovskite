@@ -846,13 +846,13 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 25;
-const LOAD_LAZY_DISTANCE: i32 = 26;
-const UNLOAD_DISTANCE: i32 = 27;
+const LOAD_EAGER_DISTANCE: i32 = 16;
+const LOAD_LAZY_DISTANCE: i32 = 18;
+const UNLOAD_DISTANCE: i32 = 20;
 const MAX_UPDATE_BATCH_SIZE: usize = 32;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 16;
-const MAX_CHUNKS_PER_UPDATE: usize = 256;
+const MAX_CHUNKS_PER_UPDATE: usize = 512;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {

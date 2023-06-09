@@ -23,6 +23,7 @@ use super::{VulkanContext, CommandBufferBuilder};
 
 pub(crate) mod cube_geometry;
 pub(crate) mod flat_texture;
+pub(crate) mod egui_adapter;
 
 /// Shaders that render 3D
 /// If we need more advanced texturing, this might be subdivided later on
@@ -168,7 +169,7 @@ pub(crate) trait PipelineWrapper<T, U> {
     type PassIdentifier;
     /// Actually draw. The pipeline must have been bound using bind.
     fn draw(
-        &self,
+        &mut self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[T],
         pass: Self::PassIdentifier

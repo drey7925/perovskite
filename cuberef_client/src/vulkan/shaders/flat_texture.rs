@@ -148,7 +148,7 @@ pub(crate) struct FlatTexPipelineWrapper {
 impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
     type PassIdentifier = ();
     fn draw(
-        &self,
+        &mut self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[FlatTextureDrawCall],
         _pass: ()

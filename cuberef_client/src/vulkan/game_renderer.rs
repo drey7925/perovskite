@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 
 use log::info;
 
-use tracy_client::{Client, span, plot};
+use tracy_client::{plot, span, Client};
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
     swapchain::{self, AcquireError, SwapchainPresentInfo},
@@ -41,6 +41,7 @@ use crate::{
 use super::{
     shaders::{
         cube_geometry::{self, BlockRenderPass},
+        egui_adapter::{self, EguiAdapter},
         flat_texture, PipelineProvider, PipelineWrapper,
     },
     CommandBufferBuilder, VulkanContext,
@@ -53,6 +54,8 @@ pub struct CuberefRenderer {
 
     flat_provider: flat_texture::FlatTexPipelineProvider,
     flat_pipeline: flat_texture::FlatTexPipelineWrapper,
+
+    egui_adapter: egui_adapter::EguiAdapter,
 
     client_state: Arc<ClientState>,
     _async_runtime: tokio::runtime::Runtime,
@@ -73,14 +76,14 @@ impl CuberefRenderer {
         let client_state = rt.block_on(cs_handle).unwrap().unwrap();
 
         let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
-        let cube_pipeline = cube_provider
-            .make_pipeline(&ctx, client_state.cube_renderer.texture())
-            .unwrap();
+        let cube_pipeline =
+            cube_provider.make_pipeline(&ctx, client_state.cube_renderer.texture())?;
 
         let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
-        let flat_pipeline = flat_provider
-            .make_pipeline(&ctx, client_state.game_ui.lock().texture())
-            .unwrap();
+        let flat_pipeline =
+            flat_provider.make_pipeline(&ctx, client_state.game_ui.lock().texture())?;
+
+        let egui_adapter = EguiAdapter::new(&ctx, event_loop)?;
 
         Ok(CuberefRenderer {
             ctx,
@@ -89,6 +92,7 @@ impl CuberefRenderer {
             flat_provider,
             flat_pipeline,
             client_state,
+            egui_adapter,
             _async_runtime: rt,
         })
     }
@@ -102,10 +106,23 @@ impl CuberefRenderer {
         event_loop.run(move |event, _, control_flow| {
             {
                 let _span = span!("client_state handling window event");
+
+                let consumed = if let Event::WindowEvent {
+                    window_id: _,
+                    event,
+                } = &event
+                {
+                    self.egui_adapter.window_event(event)
+                } else {
+                    false
+                };
+
                 if self.client_state.cancel_requested() {
                     *control_flow = ControlFlow::Exit;
                 }
-                self.client_state.window_event(&event);
+                if !consumed {
+                    self.client_state.window_event(&event);
+                }
             }
             match event {
                 Event::WindowEvent {
@@ -153,7 +170,7 @@ impl CuberefRenderer {
                             self.handle_resize(size).unwrap();
                         }
                     }
-                    
+
                     let _swapchain_span = span!("Acquire swapchain image");
                     let (image_i, suboptimal, acquire_future) =
                         match swapchain::acquire_next_image(self.ctx.swapchain.clone(), None) {
@@ -165,7 +182,9 @@ impl CuberefRenderer {
                             }
                             Err(e) => panic!("failed to acquire next image: {e}"),
                         };
-                    Client::running().expect("tracy client must be running").frame_mark();
+                    Client::running()
+                        .expect("tracy client must be running")
+                        .frame_mark();
                     if suboptimal {
                         recreate_swapchain = true;
                     }
@@ -195,7 +214,8 @@ impl CuberefRenderer {
                         .start_command_buffer(self.ctx.framebuffers[image_i as usize].clone())
                         .unwrap();
 
-                    let command_buffers = self.build_command_buffers(window_size, command_buf_builder);
+                    let command_buffers =
+                        self.build_command_buffers(window_size, command_buf_builder);
                     {
                         let _span = span!("submit to Vulkan");
                         let future = previous_future
@@ -266,17 +286,18 @@ impl CuberefRenderer {
 
         let chunk_lock = {
             let _span = span!("Waiting for chunk_lock");
-            self.client_state
-                .chunks
-                .cloned_view()
+            self.client_state.chunks.cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
         cube_draw_calls.extend(
-                chunk_lock
+            chunk_lock
                 .values()
                 .filter_map(|chunk| chunk.lock().make_draw_call(player_position)),
         );
-        plot!("chunk_rate", cube_draw_calls.len() as f64 / chunk_lock.len() as f64);
+        plot!(
+            "chunk_rate",
+            cube_draw_calls.len() as f64 / chunk_lock.len() as f64
+        );
 
         if !cube_draw_calls.is_empty() {
             self.cube_pipeline
@@ -341,6 +362,12 @@ impl CuberefRenderer {
                 (),
             )
             .unwrap();
+        self.egui_adapter.bind(&self.ctx, (), &mut command_buf_builder, ()).unwrap();
+        self.egui_adapter.draw(
+            &mut command_buf_builder,
+            &[&self.client_state.game_ui],
+            (),
+        ).unwrap();
 
         self.finish_command_buffer(command_buf_builder).unwrap()
     }

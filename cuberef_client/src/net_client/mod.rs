@@ -362,7 +362,6 @@ impl InboundContext {
                         Ok(None) => {
                             log::info!("Server disconnected cleanly");
                             self.cancellation.cancel();
-                            return Ok(());
                         }
                         Ok(Some(message)) => {
                             match self.handle_message(&message).await {
@@ -700,6 +699,7 @@ struct MeshWorker {
 }
 impl MeshWorker {
     fn run_mesh_worker(self: Arc<Self>) -> Result<()> {
+        tracy_client::set_thread_name!("async_mesh_worker");
         while !self.shutdown.is_cancelled() {
             let chunks = {
                 // This is really ugly and deadlock-prone. Figure out whether we need this or not.
@@ -713,7 +713,7 @@ impl MeshWorker {
                 let mut lock = self.queue.lock();
                 if lock.is_empty() {
                     plot!("mesh_queue_length", 0.);
-                    self.cond.wait(&mut lock);
+                    self.cond.wait_for(&mut lock, Duration::from_secs(1));
                 }
 
                 let _span = span!("mesh_worker sort");

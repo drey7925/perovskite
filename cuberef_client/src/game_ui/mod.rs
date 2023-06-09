@@ -21,6 +21,8 @@ use std::{
 
 use anyhow::{Context, Error, Result};
 
+use egui_demo_lib::DemoWindows;
+use parking_lot::Mutex;
 use texture_packer::{importer::ImageImporter, Rect};
 use winit::{
     dpi::PhysicalPosition,
@@ -48,7 +50,7 @@ pub(crate) struct GameUi {
     hotbar_draw_call: Option<FlatTextureDrawCall>,
     pixel_scroll_pos: i32,
 
-    fps_counter: fps_counter::FPSCounter
+    fps_counter: fps_counter::FPSCounter,
 }
 impl GameUi {
     pub(crate) async fn new<T>(
@@ -71,7 +73,7 @@ impl GameUi {
             crosshair_draw_call: None,
             hotbar_draw_call: None,
             pixel_scroll_pos: 0,
-            fps_counter: fps_counter::FPSCounter::new()
+            fps_counter: fps_counter::FPSCounter::new(),
         })
     }
 
@@ -85,6 +87,8 @@ impl GameUi {
         client_state: &ClientState,
         tool_controller: &mut ToolController,
     ) {
+
+
         match *event {
             Event::DeviceEvent {
                 event:
@@ -304,6 +308,20 @@ impl GameUi {
             .cloned();
         tool_controller.update_item(client_state, slot, item);
         self.hotbar_draw_call = None;
+    }
+
+    pub(crate) fn draw_egui(&mut self, ctx: &egui::Context) {
+        // test only
+        egui::Window::new("test window").show(ctx, |ui| {
+            ui.heading("test app");
+            ui.horizontal(|ui| {
+                let name_label = ui.label("test label: ");
+                ui.text_edit_singleline( &mut "foo").labelled_by(name_label.id)
+            });
+            if ui.button("test button").clicked() {
+                self.hotbar_slot += 1;
+            }
+        });
     }
 }
 

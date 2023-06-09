@@ -29,20 +29,18 @@ use vulkano::{
         SubpassContents,
     },
     descriptor_set::{
-        allocator::{StandardDescriptorSetAllocator},
-        PersistentDescriptorSet, WriteDescriptorSet,
+        allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
     },
-    device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, Features},
+    device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo},
     format::Format,
     image::{
-        view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage,
-        SwapchainImage,
+        view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{FreeListAllocator, GenericMemoryAllocator, StandardMemoryAllocator},
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
-    sampler::{Sampler, SamplerCreateInfo, Filter},
+    sampler::{Filter, Sampler, SamplerCreateInfo},
     swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
     sync::GpuFuture,
     Version,
@@ -116,7 +114,6 @@ impl VulkanContext {
             ..Features::empty()
         };
 
-
         let (physical_device, queue_family_index) =
             select_physical_device(&instance, &surface, &device_extensions)?;
 
@@ -162,13 +159,13 @@ impl VulkanContext {
             )?
         };
 
-        let render_pass = vulkano::single_pass_renderpass!(
+        let render_pass = vulkano::ordered_passes_renderpass!(
             vk_device.clone(),
             attachments: {
                 color: {
                     load: Clear,
                     store: Store,
-                    format: swapchain.image_format(), // set the format the same as the swapchain
+                    format: swapchain.image_format(),
                     samples: 1,
                 },
                 depth: {
@@ -178,10 +175,18 @@ impl VulkanContext {
                     samples: 1,
                 },
             },
-            pass: {
-                color: [color],
-                depth_stencil: {depth},
-            },
+            passes: [
+                {   
+                    color: [color],
+                    depth_stencil: {depth},
+                    input: [],
+                },
+                {   
+                    color: [color],
+                    depth_stencil: {},
+                    input: []
+                },
+            ]
         )?;
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(vk_device.clone()));
@@ -294,6 +299,18 @@ pub(crate) fn get_framebuffers_with_depth(
                 .unwrap(),
             )
             .unwrap();
+
+            let intermediate = ImageView::new_default(
+                AttachmentImage::transient_multisampled(
+                    allocator,
+                    image.dimensions().width_height(),
+                    vulkano::image::SampleCount::Sample4,
+                    Format::D32_SFLOAT,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
             Framebuffer::new(
                 render_pass.clone(),
                 FramebufferCreateInfo {

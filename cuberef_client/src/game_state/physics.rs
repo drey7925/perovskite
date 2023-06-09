@@ -14,15 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    collections::HashSet,
-    ops::{RangeInclusive},
-    time::{Duration},
-};
+use std::{collections::HashSet, ops::RangeInclusive, time::Duration};
 
 use cgmath::{vec3, Angle, Deg, InnerSpace, Vector3};
 use cuberef_core::{
-    coordinates::{BlockCoordinate},
+    coordinates::BlockCoordinate,
     protocol::blocks::{
         block_type_def::{self, PhysicsInfo},
         BlockTypeDef,
@@ -30,12 +26,11 @@ use cuberef_core::{
 };
 use log::info;
 
-
 use winit::event::ElementState;
 
 use crate::cube_renderer::ClientBlockTypeManager;
 
-use super::{ClientState, ChunkManagerView};
+use super::{ChunkManagerView, ClientState};
 
 const MOUSE_SENSITIVITY: f64 = 0.5;
 
@@ -247,7 +242,12 @@ impl PhysicsState {
                 );
                 self.update_target_fluid(self.pos, fluid_data, delta, is_surface)
             }
-            Some(PhysicsInfo::Solid(_)) => (0., self.pos),
+            Some(PhysicsInfo::Solid(_)) => {
+                // We're in a block, possibly one we just placed. This shouldn't happen, so allow
+                // the user to jump or walk out of it (unless they would run into other solid blocks
+                // in the process)
+                self.update_target_air(self.pos, delta_secs * 3.0, delta)
+            }
             None => self.update_target_air(self.pos, delta_secs * 3.0, delta),
         };
 

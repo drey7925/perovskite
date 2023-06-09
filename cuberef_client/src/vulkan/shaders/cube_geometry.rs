@@ -122,7 +122,7 @@ pub(crate) enum BlockRenderPass {
 impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper {
     type PassIdentifier = BlockRenderPass;
     fn draw(
-        &self,
+        &mut self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[CubeGeometryDrawCall],
         pass: BlockRenderPass,
@@ -157,7 +157,7 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
                         .push_constants(layout.clone(), 0, push_data)
                         .bind_vertex_buffers(0, pass_data.vtx.clone())
                         .bind_index_buffer(pass_data.idx.clone())
-                        .draw_indexed(pass_data.idx.len().try_into().unwrap(), 1, 0, 0, 0)?;
+                        .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
                 }
             }
         }
@@ -265,10 +265,9 @@ impl PipelineProvider for CubePipelineProvider {
         ctx: &VulkanContext,
         config: Arc<Texture2DHolder>,
     ) -> Result<CubePipelineWrapper> {
-        let default_pipeline = || {
-            GraphicsPipeline::start()
+        let default_pipeline = GraphicsPipeline::start()
                 .vertex_input_state(CubeGeometryVertex::per_vertex())
-                .vertex_shader(self.vs_cube.entry_point("main").unwrap(), ())
+                .vertex_shader(self.vs_cube.entry_point("main").context("Could not find vertex shader entry point")?, ())
                 .input_assembly_state(InputAssemblyState::new())
                 .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
                     .viewport
@@ -282,29 +281,27 @@ impl PipelineProvider for CubePipelineProvider {
                 )
                 .color_blend_state(ColorBlendState::default().blend_alpha())
                 .depth_stencil_state(DepthStencilState::simple_depth_test())
-        };
+                .render_pass(Subpass::from(ctx.render_pass.clone(), 0).context("Could not find subpass 0")?);
 
-        let solid_pipeline = default_pipeline()
+        let solid_pipeline = default_pipeline.clone()
             .fragment_shader(
                 self.fs_solid
                     .entry_point("main")
                     .with_context(|| "Couldn't find dense fragment shader entry point")?,
                 (),
             )
-            .render_pass(Subpass::from(ctx.render_pass.clone(), 0).unwrap())
             .build(self.device.clone())?;
 
-        let sparse_pipeline = default_pipeline()
+        let sparse_pipeline = default_pipeline.clone()
             .fragment_shader(
                 self.fs_sparse
                     .entry_point("main")
                     .with_context(|| "Couldn't find sparse fragment shader entry point")?,
                 (),
             )
-            .render_pass(Subpass::from(ctx.render_pass.clone(), 0).unwrap())
             .build(self.device.clone())?;
 
-        let translucent_pipeline = default_pipeline()
+        let translucent_pipeline = default_pipeline.clone()
             .fragment_shader(
                 self.fs_solid
                     .entry_point("main")
@@ -320,7 +317,6 @@ impl PipelineProvider for CubePipelineProvider {
                 depth_bounds: Default::default(),
                 stencil: Default::default(),
             })
-            .render_pass(Subpass::from(ctx.render_pass.clone(), 0).unwrap())
             .build(self.device.clone())?;
 
         let solid_descriptor = config.descriptor_set(&solid_pipeline, 0, 0)?;
