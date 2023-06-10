@@ -145,11 +145,18 @@ impl VulkanContext {
                     .0,
             );
 
+            let mut image_count = caps.min_image_count;
+            if let Some(max_image_count) = caps.max_image_count {
+                if max_image_count >= 3 {
+                    image_count = 3;
+                }
+            }
+
             Swapchain::new(
                 vk_device.clone(),
                 surface,
                 SwapchainCreateInfo {
-                    min_image_count: caps.min_image_count,
+                    min_image_count: image_count,
                     image_format,
                     image_extent: window.inner_size().into(),
                     image_usage: ImageUsage::COLOR_ATTACHMENT,
@@ -171,7 +178,7 @@ impl VulkanContext {
                 depth: {
                     load: Clear,
                     store: DontCare,
-                    format: Format::D32_SFLOAT,
+                    format: Format::D24_UNORM_S8_UINT,
                     samples: 1,
                 },
             },
@@ -250,7 +257,7 @@ impl VulkanContext {
         )?;
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some(1f32.into())],
+                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some(((1.0, 0)).into())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassContents::Inline,
@@ -294,18 +301,7 @@ pub(crate) fn get_framebuffers_with_depth(
                 AttachmentImage::transient(
                     allocator,
                     image.dimensions().width_height(),
-                    Format::D32_SFLOAT,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-            let intermediate = ImageView::new_default(
-                AttachmentImage::transient_multisampled(
-                    allocator,
-                    image.dimensions().width_height(),
-                    vulkano::image::SampleCount::Sample4,
-                    Format::D32_SFLOAT,
+                    Format::D24_UNORM_S8_UINT,
                 )
                 .unwrap(),
             )
@@ -365,7 +361,7 @@ impl Texture2DHolder {
             ctx.vk_device.clone(),
             SamplerCreateInfo {
                 mag_filter: Filter::Nearest,
-                min_filter: Filter::Nearest,
+                min_filter: Filter::Linear,
                 ..Default::default()
             },
         )?;

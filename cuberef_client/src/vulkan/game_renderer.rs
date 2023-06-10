@@ -362,12 +362,13 @@ impl CuberefRenderer {
                 (),
             )
             .unwrap();
-        self.egui_adapter.bind(&self.ctx, (), &mut command_buf_builder, ()).unwrap();
-        self.egui_adapter.draw(
-            &mut command_buf_builder,
-            &[&self.client_state.game_ui],
-            (),
-        ).unwrap();
+        self.egui_adapter
+            .draw(
+                &self.ctx,
+                &mut command_buf_builder,
+                &mut self.client_state.game_ui.lock(),
+            )
+            .unwrap();
 
         self.finish_command_buffer(command_buf_builder).unwrap()
     }

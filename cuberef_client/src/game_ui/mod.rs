@@ -20,9 +20,6 @@ use std::{
 };
 
 use anyhow::{Context, Error, Result};
-
-use egui_demo_lib::DemoWindows;
-use parking_lot::Mutex;
 use texture_packer::{importer::ImageImporter, Rect};
 use winit::{
     dpi::PhysicalPosition,
@@ -37,6 +34,8 @@ use crate::{
         Texture2DHolder, VulkanContext,
     },
 };
+
+mod egui_ui;
 
 pub(crate) struct GameUi {
     texture_coords: HashMap<String, Rect>,
@@ -322,6 +321,10 @@ impl GameUi {
                 self.hotbar_slot += 1;
             }
         });
+    }
+
+    pub(crate) fn egui_active(&self) -> bool {
+        true
     }
 }
 
