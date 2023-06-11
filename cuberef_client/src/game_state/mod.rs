@@ -30,7 +30,8 @@ use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton,
 
 use crate::cube_renderer::{BlockRenderer, ClientBlockTypeManager};
 use crate::game_state::chunk::ClientChunk;
-use crate::game_ui::GameUi;
+use crate::game_ui::egui_ui::EguiUi;
+use crate::game_ui::hud::GameHud;
 
 use self::items::{ClientItemManager, InventoryManager};
 use self::tool_controller::{ToolController, ToolState};
@@ -39,7 +40,6 @@ pub(crate) mod chunk;
 pub(crate) mod items;
 pub(crate) mod physics;
 pub(crate) mod tool_controller;
-mod utils;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DigTapAction {
@@ -158,8 +158,9 @@ pub(crate) struct ClientState {
     // cube_renderer doesn't currently need a mutex because it's stateless
     // and keeps its cached geometry data in the chunks themselves
     pub(crate) cube_renderer: Arc<BlockRenderer>,
-    // GameUi manages its own state.
-    pub(crate) game_ui: Arc<Mutex<GameUi>>,
+    // GameHud manages its own state.
+    pub(crate) hud: Arc<Mutex<GameHud>>,
+    pub(crate) egui: Arc<Mutex<EguiUi>>
 }
 impl ClientState {
     pub(crate) fn window_event(&self, event: &Event<()>) {
@@ -212,7 +213,7 @@ impl ClientState {
 
             _ => {}
         }
-        self.game_ui
+        self.hud
             .lock()
             .window_event(event, self, &mut self.tool_controller.lock());
     }

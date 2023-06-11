@@ -1,36 +1,49 @@
+use std::sync::Arc;
+
+use egui::TextureId;
 use egui_winit_vulkano::{Gui, GuiConfig};
+use parking_lot::Mutex;
 use vulkano::{command_buffer::SubpassContents, image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
-use crate::{game_ui::GameUi, vulkan::VulkanContext};
+use crate::{game_state::ClientState, game_ui::egui_ui::EguiUi, vulkan::VulkanContext};
 
 use anyhow::{Context, Result};
 
+// Main thread components of egui rendering (e.g. the Gui which contains a non-Send event loop)
 pub(crate) struct EguiAdapter {
-    gui: Gui,
+    gui_adapter: Gui,
+    egui_ui: Arc<Mutex<EguiUi>>,
+    atlas_texture_id: TextureId,
 }
 impl EguiAdapter {
     pub(crate) fn window_event(&mut self, event: &WindowEvent) -> bool {
-        self.gui.update(event)
+        self.gui_adapter.update(event)
     }
 
     pub(crate) fn new(
         ctx: &crate::vulkan::VulkanContext,
         event_loop: &EventLoop<()>,
+        egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {
-        let mut config = GuiConfig::default();
-        config.preferred_format = dbg!(Some(ctx.swapchain.image_format()));
-        config.is_overlay = true;
-        config.samples = SampleCount::Sample4;
-        let gui = Gui::new_with_subpass(
+        let mut config = GuiConfig {
+            preferred_format: Some(ctx.swapchain.image_format()),
+            is_overlay: true,
+            samples: SampleCount::Sample1,
+        };
+        let mut gui_adapter = Gui::new_with_subpass(
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.queue.clone(),
             Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
             config,
         );
+        let atlas_texture_id =
+            gui_adapter.register_user_image_view(egui_ui.lock().texture_atlas().clone_image_view());
         Ok(EguiAdapter {
-            gui,
+            gui_adapter,
+            egui_ui,
+            atlas_texture_id,
         })
     }
 
@@ -38,13 +51,18 @@ impl EguiAdapter {
         &mut self,
         ctx: &VulkanContext,
         builder: &mut crate::vulkan::CommandBufferBuilder,
-        game_ui: &mut GameUi,
+        client_state: &ClientState,
     ) -> Result<()> {
-        if game_ui.egui_active() {
-            self.gui.begin_frame();
-            game_ui.draw_egui(&self.gui.egui_ctx);
+        let egui = self.egui_ui.lock();
+        if egui.wants_draw() {
+            self.gui_adapter.begin_frame();
+            egui.draw_ui(
+                &self.gui_adapter.egui_ctx,
+                self.atlas_texture_id,
+                client_state,
+            );
             let cmdbuf = self
-                .gui
+                .gui_adapter
                 .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
             builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
             builder.execute_commands(cmdbuf)?;

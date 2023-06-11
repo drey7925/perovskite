@@ -205,6 +205,8 @@ impl VulkanContext {
             Arc::new(StandardDescriptorSetAllocator::new(vk_device.clone()));
         let framebuffers =
             get_framebuffers_with_depth(&swapchain_images, &memory_allocator, render_pass.clone());
+        
+        
         Ok(VulkanContext {
             vk_device,
             queue,
@@ -257,7 +259,7 @@ impl VulkanContext {
         )?;
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some(((1.0, 0)).into())],
+                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some((1.0, 0).into())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassContents::Inline,
@@ -400,5 +402,8 @@ impl Texture2DHolder {
 
     pub(crate) fn dimensions(&self) -> (u32, u32) {
         (self.dimensions.width(), self.dimensions.height())
+    }
+    pub(crate) fn clone_image_view(&self) -> Arc<ImageView<ImmutableImage>> {
+        self.image_view.clone()
     }
 }

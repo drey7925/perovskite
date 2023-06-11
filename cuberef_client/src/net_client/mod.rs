@@ -51,7 +51,6 @@ use crate::{
         tool_controller::ToolController,
         ChunkManager, ClientState, GameAction,
     },
-    game_ui::GameUi,
     vulkan::VulkanContext,
 };
 
@@ -101,9 +100,9 @@ pub(crate) async fn connect_game(
         item_defs_proto.into_inner().item_defs,
     )?);
 
-    let game_ui = Arc::new(Mutex::new(
-        GameUi::new(items.clone(), texture_loader, &cloned_context).await?,
-    ));
+    let (hud, egui) = crate::game_ui::make_uis(items.clone(), texture_loader, &cloned_context).await?;
+
+
     // TODO clean up this hacky cloning of the context.
     // We need to clone it to start up the game ui without running into borrow checker issues,
     // since it provides access to the allocators. We then drop it early to ensure that it's not
@@ -125,7 +124,8 @@ pub(crate) async fn connect_game(
         shutdown: CancellationToken::new(),
         actions: action_sender,
         cube_renderer,
-        game_ui,
+        hud: Arc::new(Mutex::new(hud)),
+        egui: Arc::new(Mutex::new(egui))
     });
 
     let (mut inbound, mut outbound) =
@@ -629,7 +629,7 @@ impl InboundContext {
         // TODO remove inventories from the tracked set somehow
         // needs changes on the server as well
         if inv_proto.inventory_key == lock.main_inv_key {
-            let mut ui_lock = self.client_state.game_ui.lock();
+            let mut ui_lock = self.client_state.hud.lock();
             ui_lock.invalidate_hotbar();
             let slot = ui_lock.hotbar_slot();
             drop(ui_lock);
@@ -665,7 +665,7 @@ impl InboundContext {
             .set_position(pos_vector.try_into()?);
         let mut lock = self.client_state.inventories.lock();
         lock.main_inv_key = state_update.main_inventory_id.clone();
-        self.client_state.game_ui.lock().invalidate_hotbar();
+        self.client_state.hud.lock().invalidate_hotbar();
         Ok(())
     }
 }

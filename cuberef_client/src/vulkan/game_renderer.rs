@@ -81,9 +81,9 @@ impl CuberefRenderer {
 
         let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_pipeline =
-            flat_provider.make_pipeline(&ctx, client_state.game_ui.lock().texture())?;
+            flat_provider.make_pipeline(&ctx, client_state.hud.lock().clone_texture())?;
 
-        let egui_adapter = EguiAdapter::new(&ctx, event_loop)?;
+        let egui_adapter = EguiAdapter::new(&ctx, event_loop, client_state.egui.clone())?;
 
         Ok(CuberefRenderer {
             ctx,
@@ -153,6 +153,7 @@ impl CuberefRenderer {
                             .window
                             .set_cursor_grab(winit::window::CursorGrabMode::Confined)
                             .unwrap();
+                        self.ctx.window.set_cursor_visible(false);
                     } else {
                         self.ctx.window.set_cursor_visible(true);
                         self.ctx
@@ -355,7 +356,7 @@ impl CuberefRenderer {
                 &mut command_buf_builder,
                 &self
                     .client_state
-                    .game_ui
+                    .hud
                     .lock()
                     .render(&self.ctx, &self.client_state)
                     .unwrap(),
@@ -366,7 +367,7 @@ impl CuberefRenderer {
             .draw(
                 &self.ctx,
                 &mut command_buf_builder,
-                &mut self.client_state.game_ui.lock(),
+                &self.client_state,
             )
             .unwrap();
 
@@ -381,7 +382,7 @@ impl CuberefRenderer {
             .unwrap();
         self.flat_pipeline = self
             .flat_provider
-            .make_pipeline(&self.ctx, self.client_state.game_ui.lock().texture())?;
+            .make_pipeline(&self.ctx, self.client_state.hud.lock().clone_texture())?;
         Ok(())
     }
 

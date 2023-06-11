@@ -21,8 +21,6 @@ use cuberef_core::protocol::items as items_proto;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
-use crate::vulkan::shaders::flat_texture::FlatTextureDrawCall;
-
 pub(crate) struct ClientItemManager {
     item_defs: HashMap<String, items_proto::ItemDef>,
 }
@@ -53,7 +51,6 @@ pub(crate) struct ClientInventory {
     id: Vec<u8>,
     pub(crate) dimensions: (u32, u32),
     stacks: Vec<Option<items_proto::ItemStack>>,
-    cached_draw_call: Option<FlatTextureDrawCall>,
 }
 impl ClientInventory {
     pub(crate) fn from_proto(proto: items_proto::Inventory) -> ClientInventory {
@@ -67,7 +64,6 @@ impl ClientInventory {
                     Some(x)
                 }
             }).collect(),
-            cached_draw_call: None,
         }
     }
     pub(crate) fn contents(&self) -> &[Option<items_proto::ItemStack>] {
@@ -75,6 +71,10 @@ impl ClientInventory {
     }
     pub(crate) fn contents_mut(&mut self) -> &mut [Option<items_proto::ItemStack>] {
         &mut self.stacks
+    }
+
+    pub(crate) fn id(&self) -> &[u8] {
+        self.id.as_ref()
     }
 }
 
