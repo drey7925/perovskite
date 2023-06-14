@@ -18,12 +18,15 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use cuberef_core::{
-    constants::{items::default_item_interaction_rules, textures::FALLBACK_UNKNOWN_TEXTURE, block_groups::DEFAULT_SOLID},
+    constants::{
+        block_groups::DEFAULT_SOLID, items::default_item_interaction_rules,
+        textures::FALLBACK_UNKNOWN_TEXTURE,
+    },
     protocol::{
         self,
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
-            BlockTypeDef, CubeRenderInfo, Empty, CubeRenderMode,
+            BlockTypeDef, CubeRenderInfo, CubeRenderMode, Empty,
         },
         items::{item_def::QuantityType, ItemDef},
         render::TextureReference,
@@ -34,15 +37,13 @@ use cuberef_core::{
 #[cfg(feature = "unstable_api")]
 pub use cuberef_server::game_state::blocks as server_api;
 
-use cuberef_server::{
-    game_state::{
-        blocks::{BlockType, InlineHandler},
-        game_map::CasOutcome,
-        items::{Item, ItemStack},
-    },
+use cuberef_server::game_state::{
+    blocks::{BlockType, InlineHandler},
+    game_map::CasOutcome,
+    items::{Item, ItemStack},
 };
 
-use crate::game_builder::{GameBuilder, Block};
+use crate::game_builder::{Block, GameBuilder};
 
 /// The item obtained when the block is dug.
 enum DroppedItem {
@@ -65,6 +66,7 @@ impl DroppedItem {
                         item_name: item.clone(),
                         quantity: count,
                         max_stack: 256,
+                        splittable: true,
                     },
                 }])
             }),
@@ -76,6 +78,7 @@ impl DroppedItem {
                         item_name: item,
                         quantity: count,
                         max_stack: 256,
+                        splittable: true,
                     },
                 }])
             }),
@@ -93,7 +96,7 @@ pub struct BlockBuilder {
     block_render_info: CubeRenderInfo,
     dropped_item: DroppedItem,
     // Temporarily exposed for water until the API is stabilized.
-    pub(crate) physics_info: PhysicsInfo
+    pub(crate) physics_info: PhysicsInfo,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -128,10 +131,10 @@ impl BlockBuilder {
                 tex_front: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                 tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                 // todo autodetect this
-                render_mode: CubeRenderMode::SolidOpaque.into()
+                render_mode: CubeRenderMode::SolidOpaque.into(),
             },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
-            physics_info: PhysicsInfo::Solid(Empty {})
+            physics_info: PhysicsInfo::Solid(Empty {}),
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -204,20 +207,22 @@ impl BlockBuilder {
         self
     }
     /// Indicates that the textures may have transparent pixels. This does not support translucency.
-    /// 
+    ///
     /// Stability note: It's possible that we may start autodetecting transparent pixels in texture files.
     /// If that happens, this method will become a deprecated no-op.
     pub fn set_needs_transparency(mut self) -> Self {
-        self.block_render_info.set_render_mode(CubeRenderMode::Transparent);
+        self.block_render_info
+            .set_render_mode(CubeRenderMode::Transparent);
         self
     }
 
     /// Indicates that the textures may have translucent pixels. The behavior of this is still TBD.
-    /// 
+    ///
     /// Stability note: The signature of this method will likely remain the same, but the render behavior may change.
     /// Additional controls might be added in the future (as separate methods)
     pub fn set_needs_translucency(mut self) -> Self {
-        self.block_render_info.set_render_mode(CubeRenderMode::Translucent);
+        self.block_render_info
+            .set_render_mode(CubeRenderMode::Translucent);
         self
     }
 

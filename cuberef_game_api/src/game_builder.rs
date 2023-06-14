@@ -15,11 +15,14 @@
 use std::path::Path;
 
 use cuberef_core::{
-    constants::{textures::FALLBACK_UNKNOWN_TEXTURE, blocks::AIR},
-    protocol::{blocks::{
-        block_type_def::{PhysicsInfo, RenderInfo},
-        BlockTypeDef, Empty,
-    }, render::TextureReference},
+    constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE},
+    protocol::{
+        blocks::{
+            block_type_def::{PhysicsInfo, RenderInfo},
+            BlockTypeDef, Empty,
+        },
+        render::TextureReference,
+    },
 };
 use cuberef_server::{
     game_state::blocks::{BlockType, BlockTypeHandle},
@@ -33,7 +36,9 @@ pub struct Tex(pub &'static str);
 
 impl From<Tex> for TextureReference {
     fn from(value: Tex) -> Self {
-        TextureReference { texture_name: value.0.to_string() }
+        TextureReference {
+            texture_name: value.0.to_string(),
+        }
     }
 }
 
@@ -111,7 +116,7 @@ impl GameBuilder {
     }
 
     /// Adds a texture to the game by reading from a file.
-    /// 
+    ///
     /// tex_name must be unique across all textures; an error will be returned
     /// if it is a duplicate
     pub fn register_texture_file(
@@ -125,19 +130,15 @@ impl GameBuilder {
     /// Adds a texture to the game with data passed as bytes.
     /// tex_name must be unique across all textures; an error will be returned
     /// if it is a duplicate
-    pub fn register_texture_bytes(
-        &mut self,
-        tex_name: Tex,
-        data: &[u8],
-    ) -> Result<()> {
+    pub fn register_texture_bytes(&mut self, tex_name: Tex, data: &[u8]) -> Result<()> {
         self.inner.media().register_from_memory(tex_name.0, data)
     }
 }
 
 /// Convenience helper for including a texture in the source tree into the game.
-/// 
+///
 /// file_name is looked up relative to the current file (see [std::include_bytes]).
-/// 
+///
 /// This macro takes the following parameters:
 /// * Mutable reference to [GameBuilder]
 /// * Texture name ([Tex] object)

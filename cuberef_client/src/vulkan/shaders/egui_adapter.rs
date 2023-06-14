@@ -26,7 +26,7 @@ impl EguiAdapter {
         event_loop: &EventLoop<()>,
         egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {
-        let mut config = GuiConfig {
+        let config = GuiConfig {
             preferred_format: Some(ctx.swapchain.image_format()),
             is_overlay: true,
             samples: SampleCount::Sample1,
@@ -68,6 +68,8 @@ impl EguiAdapter {
             builder.execute_commands(cmdbuf)?;
             Ok(())
         } else {
+            // We still need to advance to the next subpass, even if we aren't drawing anything
+            builder.next_subpass(SubpassContents::Inline)?;
             Ok(())
         }
     }

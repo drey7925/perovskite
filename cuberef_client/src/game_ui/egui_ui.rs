@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, usize};
 
 use cuberef_core::protocol::items::item_def::QuantityType;
-use egui::{vec2, Color32, Label, RichText, Sense, Stroke, TextEdit, TextStyle, TextureId};
+use egui::{vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use log::warn;
 
 use crate::{
@@ -32,7 +32,7 @@ impl EguiUi {
         }
     }
     pub(crate) fn wants_draw(&self) -> bool {
-        true
+        false
     }
     pub(crate) fn draw_ui(
         &self,
@@ -48,11 +48,19 @@ impl EguiUi {
                     .labelled_by(name_label.id)
             });
             if ui.button("test button").clicked() {};
-            self.draw_inventory(
-                ui,
-                client_state.inventories.lock().main_inv(),
-                atlas_texture_id,
-            );
+            if let Some(main_inv) = client_state.hud.lock().hotbar_view_id {
+                self.draw_inventory(
+                    ui,
+                    // testonly
+                    client_state
+                        .inventories
+                        .lock()
+                        .inventory_views
+                        .get(&main_inv)
+                        .unwrap(),
+                    atlas_texture_id,
+                );
+            }
         });
     }
 

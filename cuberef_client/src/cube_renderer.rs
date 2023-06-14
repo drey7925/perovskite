@@ -42,8 +42,8 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
-use crate::game_state::ChunkManagerView;
 use crate::game_state::chunk::ClientChunk;
+use crate::game_state::ChunkManagerView;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
@@ -273,7 +273,7 @@ impl BlockRenderer {
                         match &neighbor.render_info {
                             Some(RenderInfo::Cube(x)) => {
                                 x.render_mode() == CubeRenderMode::SolidOpaque
-                            },
+                            }
                             Some(_) => false,
                             None => false,
                         }

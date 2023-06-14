@@ -16,7 +16,6 @@
 
 use std::ops::Deref;
 
-
 use cgmath::{ElementWise, Matrix4, Vector3};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
 use cuberef_core::protocol::game_rpc as rpc_proto;
@@ -27,7 +26,7 @@ use anyhow::{ensure, Context, Result};
 use tracy_client::span;
 
 use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
-use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall};
+use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
 use super::ChunkManagerView;
 
@@ -104,14 +103,12 @@ impl ClientChunk {
             16. * self.coord.z as f64,
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
-        self.cached_vertex_data
-            .as_ref()
-            .and_then(|x| {
-                Some(CubeGeometryDrawCall {
-                    models: x.clone_if_nonempty()?,
-                    model_matrix: Matrix4::from_translation(relative_origin.cast().unwrap()),
-                })
+        self.cached_vertex_data.as_ref().and_then(|x| {
+            Some(CubeGeometryDrawCall {
+                models: x.clone_if_nonempty()?,
+                model_matrix: Matrix4::from_translation(relative_origin.cast().unwrap()),
             })
+        })
     }
 
     pub(crate) fn get(&self, offset: ChunkOffset) -> BlockId {

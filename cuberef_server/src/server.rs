@@ -143,7 +143,7 @@ impl ServerBuilder {
             }
             log::info!("Loaded existing data directory at {:?}", args.data_dir);
         }
-        
+
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
         let db = Arc::new(RocksDbBackend::new(db_dir)?);

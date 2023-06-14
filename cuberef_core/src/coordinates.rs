@@ -189,8 +189,10 @@ impl ChunkCoordinate {
             .max(self.z.abs_diff(other.z))
     }
     pub fn is_in_bounds(&self) -> bool {
-        const BOUNDS_RANGE: RangeInclusive<i32> = (i32::MIN / 16) ..= (i32::MAX / 16);
-        BOUNDS_RANGE.contains(&self.x) && BOUNDS_RANGE.contains(&self.y) && BOUNDS_RANGE.contains(&self.z)
+        const BOUNDS_RANGE: RangeInclusive<i32> = (i32::MIN / 16)..=(i32::MAX / 16);
+        BOUNDS_RANGE.contains(&self.x)
+            && BOUNDS_RANGE.contains(&self.y)
+            && BOUNDS_RANGE.contains(&self.z)
     }
     pub fn try_delta(&self, x: i32, y: i32, z: i32) -> Option<ChunkCoordinate> {
         let x = self.x.checked_add(x)?;

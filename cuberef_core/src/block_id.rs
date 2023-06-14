@@ -15,8 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{ensure, Result};
-use thiserror::Error;
 use std::fmt::Debug;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 #[allow(unused)]

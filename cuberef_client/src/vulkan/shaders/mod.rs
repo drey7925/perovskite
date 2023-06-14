@@ -14,16 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-
 use anyhow::Result;
 
-
-use super::{VulkanContext, CommandBufferBuilder};
+use super::{CommandBufferBuilder, VulkanContext};
 
 pub(crate) mod cube_geometry;
-pub(crate) mod flat_texture;
 pub(crate) mod egui_adapter;
+pub(crate) mod flat_texture;
 
 /// Shaders that render 3D
 /// If we need more advanced texturing, this might be subdivided later on
@@ -172,7 +169,7 @@ pub(crate) trait PipelineWrapper<T, U> {
         &mut self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[T],
-        pass: Self::PassIdentifier
+        pass: Self::PassIdentifier,
     ) -> Result<()>;
     /// Bind the pipeline. Must be called each frame before draw
     fn bind(
@@ -180,7 +177,7 @@ pub(crate) trait PipelineWrapper<T, U> {
         ctx: &VulkanContext,
         per_frame_config: U,
         command_buf_builder: &mut CommandBufferBuilder,
-        pass: Self::PassIdentifier
+        pass: Self::PassIdentifier,
     ) -> Result<()>;
 }
 
@@ -195,6 +192,6 @@ where
     fn make_pipeline(
         &self,
         ctx: &VulkanContext,
-        config: Self::PerPipelineConfig
+        config: Self::PerPipelineConfig,
     ) -> Result<Self::PipelineWrapperImpl>;
 }

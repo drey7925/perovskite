@@ -183,12 +183,12 @@ impl VulkanContext {
                 },
             },
             passes: [
-                {   
+                {
                     color: [color],
                     depth_stencil: {depth},
                     input: [],
                 },
-                {   
+                {
                     color: [color],
                     depth_stencil: {},
                     input: []
@@ -205,8 +205,7 @@ impl VulkanContext {
             Arc::new(StandardDescriptorSetAllocator::new(vk_device.clone()));
         let framebuffers =
             get_framebuffers_with_depth(&swapchain_images, &memory_allocator, render_pass.clone());
-        
-        
+
         Ok(VulkanContext {
             vk_device,
             queue,

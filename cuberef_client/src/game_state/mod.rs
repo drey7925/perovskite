@@ -33,7 +33,7 @@ use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
-use self::items::{ClientItemManager, InventoryManager};
+use self::items::{ClientItemManager, InventoryViewManager};
 use self::tool_controller::{ToolController, ToolState};
 
 pub(crate) mod chunk;
@@ -77,9 +77,7 @@ impl ChunkManager {
     pub(crate) fn read_lock(&self) -> ChunkManagerView {
         let _span = span!("Acquire chunk read lock");
         let guard = self.chunks.read();
-        ChunkManagerView {
-            guard,
-        }
+        ChunkManagerView { guard }
     }
     /// Clones the chunk manager and returns a clone with the following properties:
     /// * The clone does not hold any locks on the data in this chunk manager (i.e. insertions and deletions)
@@ -116,10 +114,16 @@ pub(crate) struct ChunkManagerView<'a> {
     guard: RwLockReadGuard<'a, ChunkMap>,
 }
 impl<'a> ChunkManagerView<'a> {
-    pub(crate) fn get_mut(&'a self, coord: &ChunkCoordinate) -> Option<impl Deref<Target = ClientChunk> + DerefMut + 'a> {
+    pub(crate) fn get_mut(
+        &'a self,
+        coord: &ChunkCoordinate,
+    ) -> Option<impl Deref<Target = ClientChunk> + DerefMut + 'a> {
         self.guard.get(coord).map(|x| x.as_ref().lock())
     }
-    pub(crate) fn get(&'a self, coord: &ChunkCoordinate) -> Option<impl Deref<Target = ClientChunk> + 'a> {
+    pub(crate) fn get(
+        &'a self,
+        coord: &ChunkCoordinate,
+    ) -> Option<impl Deref<Target = ClientChunk> + 'a> {
         self.get_mut(coord)
     }
     pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
@@ -150,7 +154,7 @@ pub(crate) struct ClientState {
     pub(crate) last_update: parking_lot::Mutex<Instant>,
     pub(crate) physics_state: parking_lot::Mutex<physics::PhysicsState>,
     pub(crate) chunks: ChunkManager,
-    pub(crate) inventories: parking_lot::Mutex<InventoryManager>,
+    pub(crate) inventories: parking_lot::Mutex<InventoryViewManager>,
     pub(crate) tool_controller: parking_lot::Mutex<ToolController>,
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) actions: mpsc::Sender<GameAction>,
@@ -160,7 +164,7 @@ pub(crate) struct ClientState {
     pub(crate) cube_renderer: Arc<BlockRenderer>,
     // GameHud manages its own state.
     pub(crate) hud: Arc<Mutex<GameHud>>,
-    pub(crate) egui: Arc<Mutex<EguiUi>>
+    pub(crate) egui: Arc<Mutex<EguiUi>>,
 }
 impl ClientState {
     pub(crate) fn window_event(&self, event: &Event<()>) {

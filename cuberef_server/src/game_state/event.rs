@@ -14,9 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{num::NonZeroU64};
+use std::num::NonZeroU64;
 
-use super::{game_map::ServerGameMap, GameState, items::ItemManager, player::Player};
+use super::{game_map::ServerGameMap, items::ItemManager, player::Player, GameState};
 
 // Private, lightweight representation of who initiated an event.
 // This is used to reconcile responses in the game stream to the requests
@@ -24,7 +24,7 @@ use super::{game_map::ServerGameMap, GameState, items::ItemManager, player::Play
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub(crate) struct ClientEventContext {
     client_id: NonZeroU64,
-    seq: u64
+    seq: u64,
 }
 
 /// Who initiated an event
@@ -34,7 +34,6 @@ pub enum EventInitiator<'a> {
     Engine,
     /// Event was initiated by a player, and a reference to that player is provided
     Player(&'a Player),
-
 }
 
 /// Common details for all events that are passed to event handlers.
@@ -45,7 +44,7 @@ pub struct HandlerContext<'a> {
     /// The character
     pub(crate) initiator: EventInitiator<'a>,
     /// Access to the map
-    pub(crate) game_state: &'a GameState
+    pub(crate) game_state: &'a GameState,
 }
 
 impl<'a> HandlerContext<'a> {

@@ -14,6 +14,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod grpc_service;
-mod client_context;
 pub(crate) mod auth;
+mod client_context;
+pub mod grpc_service;

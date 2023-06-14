@@ -16,7 +16,7 @@
 
 use anyhow::Result;
 use parking_lot::Mutex;
-use std::{collections::HashMap};
+use std::collections::HashMap;
 pub(crate) enum KeySpace {
     /// Core metadata for the game state, e.g. the block type list.
     /// Should generally contain only hardcoded keys.

@@ -22,7 +22,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use cgmath::{InnerSpace};
+use cgmath::InnerSpace;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset, PlayerPositionUpdate},
     protocol::{
@@ -46,7 +46,7 @@ use crate::{
     cube_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
     game_state::{
         chunk::{maybe_mesh_chunk, mesh_chunk, ClientChunk},
-        items::{ClientInventory, ClientItemManager, InventoryManager},
+        items::{ClientInventory, ClientItemManager, InventoryViewManager},
         physics::PhysicsState,
         tool_controller::ToolController,
         ChunkManager, ClientState, GameAction,
@@ -100,8 +100,8 @@ pub(crate) async fn connect_game(
         item_defs_proto.into_inner().item_defs,
     )?);
 
-    let (hud, egui) = crate::game_ui::make_uis(items.clone(), texture_loader, &cloned_context).await?;
-
+    let (hud, egui) =
+        crate::game_ui::make_uis(items.clone(), texture_loader, &cloned_context).await?;
 
     // TODO clean up this hacky cloning of the context.
     // We need to clone it to start up the game ui without running into borrow checker issues,
@@ -117,15 +117,14 @@ pub(crate) async fn connect_game(
         physics_state: Mutex::new(PhysicsState::new()),
         tool_controller: Mutex::new(ToolController::new()),
         chunks: ChunkManager::new(),
-        inventories: Mutex::new(InventoryManager {
-            inventories: FxHashMap::default(),
-            main_inv_key: vec![],
+        inventories: Mutex::new(InventoryViewManager {
+            inventory_views: FxHashMap::default(),
         }),
         shutdown: CancellationToken::new(),
         actions: action_sender,
         cube_renderer,
         hud: Arc::new(Mutex::new(hud)),
-        egui: Arc::new(Mutex::new(egui))
+        egui: Arc::new(Mutex::new(egui)),
     });
 
     let (mut inbound, mut outbound) =
@@ -442,8 +441,7 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
-                    self
-                        .client_state
+                    self.client_state
                         .chunks
                         .insert(coord, ClientChunk::from_proto(chunk.clone())?);
 
@@ -623,16 +621,12 @@ impl InboundContext {
         let Some(inv_proto) = &inventory_update.inventory else {
             return self.send_bugcheck("Missing inventory in InventoryUpdate".to_string()).await;
         };
-        let mut lock = self.client_state.inventories.lock();
         let inv = ClientInventory::from_proto(inv_proto.clone());
-
-        // TODO remove inventories from the tracked set somehow
-        // needs changes on the server as well
-        if inv_proto.inventory_key == lock.main_inv_key {
-            let mut ui_lock = self.client_state.hud.lock();
-            ui_lock.invalidate_hotbar();
-            let slot = ui_lock.hotbar_slot();
-            drop(ui_lock);
+        let mut hud_lock = self.client_state.hud.lock();
+        if Some(inventory_update.view_id) == hud_lock.hotbar_view_id {
+            hud_lock.invalidate_hotbar();
+            let slot = hud_lock.hotbar_slot();
+            drop(hud_lock);
             self.client_state.tool_controller.lock().update_item(
                 &self.client_state,
                 slot,
@@ -643,8 +637,11 @@ impl InboundContext {
             )
         }
 
-        lock.inventories
-            .insert(inv_proto.inventory_key.clone(), inv);
+        self.client_state
+            .inventories
+            .lock()
+            .inventory_views
+            .insert(inventory_update.view_id, inv);
         Ok(())
     }
 
@@ -663,9 +660,10 @@ impl InboundContext {
             .physics_state
             .lock()
             .set_position(pos_vector.try_into()?);
-        let mut lock = self.client_state.inventories.lock();
-        lock.main_inv_key = state_update.main_inventory_id.clone();
-        self.client_state.hud.lock().invalidate_hotbar();
+
+        let mut hud_lock = self.client_state.hud.lock();
+        hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);
+        hud_lock.invalidate_hotbar();
         Ok(())
     }
 }

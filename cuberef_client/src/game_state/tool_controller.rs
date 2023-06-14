@@ -17,14 +17,14 @@
 use std::time::Duration;
 
 use cgmath::{Angle, Deg};
-use cuberef_core::block_id::{BlockId};
+use cuberef_core::block_id::BlockId;
 
 use cuberef_core::constants::items::default_item_interaction_rules;
 use cuberef_core::coordinates::BlockCoordinate;
 
 use cuberef_core::protocol::blocks::BlockTypeDef;
 use cuberef_core::protocol::items::interaction_rule::DigBehavior;
-use cuberef_core::protocol::items::{ItemDef};
+use cuberef_core::protocol::items::ItemDef;
 use line_drawing::WalkVoxels;
 use rustc_hash::FxHashSet;
 
@@ -84,7 +84,12 @@ impl ToolController {
     }
 
     // Update the current item
-    pub(crate) fn update_item(&mut self, client_state: &ClientState, slot: u32, item: Option<ItemDef>) {
+    pub(crate) fn update_item(
+        &mut self,
+        client_state: &ClientState,
+        slot: u32,
+        item: Option<ItemDef>,
+    ) {
         let item = item.unwrap_or(default_item());
         self.current_slot = slot;
         self.current_item_interacting_groups = get_dig_interacting_groups(&item);
@@ -225,13 +230,16 @@ impl ToolController {
             (end + RAYCAST_FUDGE_VEC).into(),
             &line_drawing::VoxelOrigin::Corner,
         ) {
-
-            let coord = BlockCoordinate { x: x.try_into().ok()?, y: y.try_into().ok()?, z: z.try_into().ok()? };
+            let coord = BlockCoordinate {
+                x: x.try_into().ok()?,
+                y: y.try_into().ok()?,
+                z: z.try_into().ok()?,
+            };
             let chunk = chunks.get(&coord.chunk());
             if let Some(chunk) = chunk {
                 let id = chunk.get(coord.offset());
                 if let Some(def) = client_state.block_types.get_blockdef(id) {
-                    for rule in self.current_item_interacting_groups.iter(){
+                    for rule in self.current_item_interacting_groups.iter() {
                         if rule.iter().all(|x| def.groups.contains(x)) {
                             return Some((coord, prev, def));
                         }

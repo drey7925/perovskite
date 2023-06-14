@@ -19,7 +19,7 @@ use crate::{
     game_builder::{include_texture_bytes, Block, GameBuilder, Tex},
 };
 use anyhow::Result;
-use cuberef_core::protocol::blocks::{FluidPhysicsInfo, block_type_def::PhysicsInfo};
+use cuberef_core::protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo};
 
 use super::block_groups::{BRITTLE, GRANULAR};
 

@@ -94,6 +94,10 @@ message StreamToServer {
         TapAction tap = 84;
         // Client is placing a block
         PlaceAction place = 85;
+
+        // Client is moving a stack from one inventory slot to another
+        InventoryAction inventory = 86;
+
         // Something went wrong in the client/server state machine and the client detected an inconsistency
         // Send a backtrace and other useful info to the server.
         //
@@ -160,6 +164,14 @@ message PlaceAction {
     uint32 item_slot = 3;
 }
 
+message InventoryAction {
+    // ID for the source inventory view
+    uint64 source_view = 1;
+    uint32 source_slot = 2;
+    uint64 destination_view = 3;
+    uint32 destnation_slot = 4;
+}
+
 message MapDeltaUpdateBatch {
     repeated MapDeltaUpdate updates = 1;
 }
@@ -203,10 +215,11 @@ message PositionUpdate {
 }
 
 message InventoryUpdate {
-    cuberef.protocol.items.Inventory inventory = 1;
+    uint64 view_id = 1;
+    cuberef.protocol.items.Inventory inventory = 2;
 }
 
 message SetClientState {
     PositionUpdate position = 1;
-    bytes main_inventory_id = 2;
+    uint64 hotbar_inventory_view = 2;
 }

@@ -81,18 +81,19 @@ message ItemStack {
   // not the item itself - if the item definition changes after the stack is created,
   // old stacks will carry the old stacking behavior.
   uint32 max_stack = 3;
+
+  bool splittable = 4;
+
   // TODO future expansion: extended data, in a way that prevents client tampering
 }
 
 message Inventory {
-  // Unique ID for this inventory. Assigned by the server; no guaranteed structure
-  bytes inventory_key = 1;
   // Dimensions for the inventory
-  uint32 height = 2;
-  uint32 width = 3;
+  uint32 height = 1;
+  uint32 width = 2;
 
   // Entries in the inventory. An empty slot will have a blank item_name and a zero quantity.
   // Note that zero quantity on its own does NOT imply empty slot.
   // Must have cardinality length*width; represented in row-major order
-  repeated ItemStack contents = 4;
+  repeated ItemStack contents = 3;
 }

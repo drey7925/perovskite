@@ -1,15 +1,22 @@
-use std::{sync::Arc, collections::{HashMap, HashSet}};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use texture_packer::{Rect, importer::ImageImporter};
+use texture_packer::{importer::ImageImporter, Rect};
 
-use anyhow::{Result, Error};
+use anyhow::{Error, Result};
 
-use crate::{cube_renderer::AsyncTextureLoader, game_state::items::ClientItemManager, vulkan::{VulkanContext, Texture2DHolder}};
+use crate::{
+    cube_renderer::AsyncTextureLoader,
+    game_state::items::ClientItemManager,
+    vulkan::{Texture2DHolder, VulkanContext},
+};
 
 use self::{egui_ui::EguiUi, hud::GameHud};
 
-pub(crate) mod hud;
 pub(crate) mod egui_ui;
+pub(crate) mod hud;
 
 pub(crate) async fn make_uis<T>(
     item_defs: Arc<ClientItemManager>,
@@ -30,6 +37,7 @@ where
         hotbar_slot: 0,
         crosshair_draw_call: None,
         hotbar_draw_call: None,
+        hotbar_view_id: None,
         pixel_scroll_pos: 0,
         fps_counter: fps_counter::FPSCounter::new(),
     };

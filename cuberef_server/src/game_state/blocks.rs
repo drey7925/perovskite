@@ -57,7 +57,6 @@ pub type InlineHandler = dyn Fn(
     + Send
     + Sync;
 
-
 // How extended data for this block type ought to be handled.
 #[derive(PartialEq, Eq)]
 pub enum ExtDataHandling {

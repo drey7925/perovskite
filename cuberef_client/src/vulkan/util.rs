@@ -10,8 +10,6 @@ use vulkano::{
     swapchain::Surface,
 };
 
-
-
 // Returns the names of Vulkan physical devices
 // Copyright for this function:
 // Copyright (c) 2017 The vulkano developers

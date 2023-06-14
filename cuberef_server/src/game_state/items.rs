@@ -21,8 +21,9 @@ use std::collections::HashMap;
 
 use super::blocks::BlockTypeHandle;
 use super::event::HandlerContext;
-use cuberef_core::protocol::items as proto;
+
 use cuberef_core::coordinates::BlockCoordinate;
+use cuberef_core::protocol::items as proto;
 
 /// Result of the dig_handler of an Item.
 pub struct DigResult {
@@ -34,10 +35,12 @@ pub struct DigResult {
     pub obtained_items: Vec<ItemStack>,
 }
 
-pub type BlockInteractionHandler =
-    dyn Fn(HandlerContext, BlockCoordinate, BlockTypeHandle, &ItemStack) -> Result<DigResult> + Send + Sync;
-pub type PlaceHandler =
-    dyn Fn(HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>> + Send + Sync;
+pub type BlockInteractionHandler = dyn Fn(HandlerContext, BlockCoordinate, BlockTypeHandle, &ItemStack) -> Result<DigResult>
+    + Send
+    + Sync;
+pub type PlaceHandler = dyn Fn(HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>>
+    + Send
+    + Sync;
 
 pub struct Item {
     pub proto: cuberef_core::protocol::items::ItemDef,
@@ -59,7 +62,7 @@ pub struct Item {
     /// If this handler is None, nothing happens.
     /// If this handler is Some, it should call a suitable function of ctx.game_map() if it
     /// wishes to place a block, and then return an updated ItemStack (or None to delete the itemstack)
-    /// 
+    ///
     /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
     /// The anchor block is the existing block that the player was pointing to when they clicked the place button.
     pub place_handler: Option<Box<PlaceHandler>>,
@@ -81,6 +84,7 @@ impl ItemStack {
                     Some(QuantityType::Wear(_)) => 0,
                     None => 0,
                 },
+                splittable: matches!(item.proto.quantity_type, Some(QuantityType::Stack(_))),
             },
         }
     }
@@ -142,6 +146,58 @@ impl ItemStack {
                     ..self.proto.clone()
                 },
             }),
+        }
+    }
+}
+
+pub trait MaybeStack {
+    /// Try to merge the provided stack into this one. Returns leftovers.
+    fn try_merge(&mut self, other: Self) -> Self;
+    /// Try to take some subset of items (or the entire stack if count is None).
+    /// Returns what could be taken.
+    fn take_items(&mut self, count: Option<u32>) -> Self;
+}
+impl MaybeStack for Option<ItemStack> {
+    fn try_merge(&mut self, other: Option<ItemStack>) -> Option<ItemStack> {
+        match other {
+            Some(other) => match self {
+                Some(self_inner) => ItemStack::try_merge(self_inner, other),
+                None => {
+                    *self = Some(other);
+                    None
+                }
+            },
+            None => None,
+        }
+    }
+
+    fn take_items(&mut self, count: Option<u32>) -> Option<ItemStack> {
+        match count {
+            Some(count) => {
+                if self.is_some() {
+                    if self.as_ref().unwrap().proto.splittable {
+                        let self_count = self.as_mut().unwrap().proto.quantity;
+                        let taken = self_count.min(count);
+                        let remaining = self_count.saturating_sub(count);
+                        if remaining == 0 {
+                            self.take()
+                        } else {
+                            self.as_mut().unwrap().proto.quantity = remaining;
+                            Some(ItemStack {
+                                proto: proto::ItemStack {
+                                    quantity: taken,
+                                    ..self.as_ref().unwrap().proto.clone()
+                                },
+                            })
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            None => self.take(),
         }
     }
 }

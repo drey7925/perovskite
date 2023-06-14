@@ -15,9 +15,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 mod database;
-pub mod network_server;
 pub mod game_state;
 pub mod media;
+pub mod network_server;
 pub mod server;

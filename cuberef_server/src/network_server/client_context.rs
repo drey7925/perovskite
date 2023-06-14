@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::iter::once;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,6 +28,7 @@ use crate::game_state::event::HandlerContext;
 use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::handlers;
 use crate::game_state::inventory::InventoryKey;
+use crate::game_state::inventory::InventoryViewId;
 use crate::game_state::items;
 use crate::game_state::items::DigResult;
 use crate::game_state::items::Item;
@@ -42,6 +44,7 @@ use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosition
 
 use cuberef_core::protocol::coordinates::Angles;
 use cuberef_core::protocol::game_rpc as proto;
+use cuberef_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use cuberef_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use cuberef_core::protocol::game_rpc::PositionUpdate;
 use cuberef_core::protocol::game_rpc::StreamToClient;
@@ -89,6 +92,7 @@ pub(crate) async fn make_client_contexts(
                         .with_context(|| "Player main inventory not found")?
                         .to_proto(),
                 ),
+                view_id: player_context.hotbar_inventory_view().0,
             },
         )),
     };
@@ -110,7 +114,7 @@ pub(crate) async fn make_client_contexts(
                             deg_elevation: 0.,
                         }),
                     }),
-                    main_inventory_id: player_context.main_inventory().as_bytes().to_vec(),
+                    hotbar_inventory_view: player_context.hotbar_inventory_view().0,
                 },
             )),
         }))
@@ -240,23 +244,31 @@ impl ClientOutboundContext {
             Err(broadcast::error::RecvError::Closed) => return self.shut_down_connected_client(),
             Ok(x) => x,
         };
-        if self.interested_inventories.contains(&key) {
-            let message = StreamToClient {
-                tick: self.game_state.tick(),
-                server_message: Some(proto::stream_to_client::ServerMessage::InventoryUpdate(
-                    proto::InventoryUpdate {
-                        inventory: Some(
-                            self.game_state
-                                .inventory_manager()
-                                .get(&key)?
-                                .with_context(|| "Inventory not found")?
-                                .to_proto(),
-                        ),
-                    },
-                )),
-            };
+
+        let player_state = self.player_context.state.lock();
+        let mut updates = vec![];
+        if player_state.hotbar_inventory_view.wants_update_for(&key) {
+            updates.push(self.make_inventory_update(key, player_state.hotbar_inventory_view.id)?);
+        }
+
+        for popup in player_state
+            .active_popups
+            .iter()
+            .chain(once(&player_state.inventory_popup))
+        {
+            for view in popup.inventory_views() {
+                if view.wants_update_for(&key) {
+                    updates.push(self.make_inventory_update(key, view.id)?);
+                }
+            }
+        }
+
+        // Drop lock before async calls
+        drop(player_state);
+
+        for update in updates {
             self.outbound_tx
-                .send(Ok(message))
+                .send(Ok(update))
                 .await
                 .with_context(|| "Could not send outbound message (inventory update)")?;
         }
@@ -419,7 +431,7 @@ impl ClientOutboundContext {
                                 deg_elevation: 0.,
                             }),
                         }),
-                        main_inventory_id: self.player_context.main_inventory().as_bytes().to_vec(),
+                        hotbar_inventory_view: self.player_context.hotbar_inventory_view().0,
                     },
                 )),
             }))
@@ -514,6 +526,26 @@ impl ClientOutboundContext {
                 .with_context(|| "Could not send outbound message (chunk unsubscribe)")?;
         }
         Ok(())
+    }
+
+    fn make_inventory_update(
+        &self,
+        key: InventoryKey,
+        view_id: InventoryViewId,
+    ) -> Result<StreamToClient> {
+        Ok(StreamToClient {
+            tick: self.game_state.tick(),
+            server_message: Some(ServerMessage::InventoryUpdate(proto::InventoryUpdate {
+                inventory: Some(
+                    self.game_state
+                        .inventory_manager()
+                        .get(&key)?
+                        .with_context(|| "Inventory not found")?
+                        .to_proto(),
+                ),
+                view_id: view_id.0,
+            })),
+        })
     }
 }
 impl Drop for ClientOutboundContext {

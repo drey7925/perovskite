@@ -48,22 +48,24 @@ impl ClientItemManager {
 }
 
 pub(crate) struct ClientInventory {
-    id: Vec<u8>,
     pub(crate) dimensions: (u32, u32),
     stacks: Vec<Option<items_proto::ItemStack>>,
 }
 impl ClientInventory {
     pub(crate) fn from_proto(proto: items_proto::Inventory) -> ClientInventory {
         ClientInventory {
-            id: proto.inventory_key,
             dimensions: (proto.height, proto.width),
-            stacks: proto.contents.into_iter().map(|x| {
-                if x.item_name.is_empty() {
-                    None
-                } else {
-                    Some(x)
-                }
-            }).collect(),
+            stacks: proto
+                .contents
+                .into_iter()
+                .map(|x| {
+                    if x.item_name.is_empty() {
+                        None
+                    } else {
+                        Some(x)
+                    }
+                })
+                .collect(),
         }
     }
     pub(crate) fn contents(&self) -> &[Option<items_proto::ItemStack>] {
@@ -72,22 +74,10 @@ impl ClientInventory {
     pub(crate) fn contents_mut(&mut self) -> &mut [Option<items_proto::ItemStack>] {
         &mut self.stacks
     }
-
-    pub(crate) fn id(&self) -> &[u8] {
-        self.id.as_ref()
-    }
 }
 
-pub(crate) struct InventoryManager {
+pub(crate) struct InventoryViewManager {
     // TODO encapsulate these better
-    pub(crate) inventories: FxHashMap<Vec<u8>, ClientInventory>,
-    pub(crate) main_inv_key: Vec<u8>,
+    pub(crate) inventory_views: FxHashMap<u64, ClientInventory>,
 }
-impl InventoryManager {
-    pub(crate) fn main_inv(&self) -> &ClientInventory {
-        self.inventories.get(&self.main_inv_key).unwrap()
-    }
-    pub(crate) fn main_inv_mut(&mut self) -> &ClientInventory {
-        self.inventories.get_mut(&self.main_inv_key).unwrap()
-    }
-}
+impl InventoryViewManager {}

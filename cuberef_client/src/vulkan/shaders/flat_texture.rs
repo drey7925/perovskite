@@ -37,7 +37,7 @@ use vulkano::{
 
 use crate::vulkan::{
     shaders::{frag_lighting, vert_2d, PipelineProvider, PipelineWrapper},
-    Texture2DHolder, VulkanContext, CommandBufferBuilder,
+    CommandBufferBuilder, Texture2DHolder, VulkanContext,
 };
 
 use super::vert_2d::UniformData;
@@ -106,7 +106,7 @@ impl FlatTextureDrawBuilder {
         pos: (u32, u32),
         tex_coord: Rect,
         tex_dimension: (u32, u32),
-        scale: u32
+        scale: u32,
     ) {
         let w = tex_coord.w * scale;
         let h = tex_coord.h * scale;
@@ -118,7 +118,7 @@ impl FlatTextureDrawBuilder {
                 h,
             },
             tex_coord,
-            tex_dimension
+            tex_dimension,
         );
     }
 
@@ -151,7 +151,7 @@ impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
         &mut self,
         builder: &mut CommandBufferBuilder,
         draw_calls: &[FlatTextureDrawCall],
-        _pass: ()
+        _pass: (),
     ) -> anyhow::Result<()> {
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone());
@@ -168,7 +168,7 @@ impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
         ctx: &crate::vulkan::VulkanContext,
         _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder,
-        _pass: ()
+        _pass: (),
     ) -> anyhow::Result<()> {
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout

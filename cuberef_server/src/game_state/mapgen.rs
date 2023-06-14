@@ -22,4 +22,3 @@ pub trait MapgenInterface: Send + Sync {
     // todo figure this interface out and document it
     fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk);
 }
-

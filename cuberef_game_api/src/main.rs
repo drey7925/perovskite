@@ -14,10 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-
-use cuberef_game_api::{default_game::DefaultGameBuilder};
-
+use cuberef_game_api::default_game::DefaultGameBuilder;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

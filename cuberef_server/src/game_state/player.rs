@@ -16,8 +16,10 @@
 
 use std::{
     collections::{hash_map::Entry, HashMap},
+    mem::swap,
+    ops::{Deref, DerefMut},
     sync::{Arc, Weak},
-    ops::{Deref, DerefMut}, time::{Duration, Instant}, mem::swap,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -26,22 +28,25 @@ use cuberef_core::{coordinates::PlayerPositionUpdate, protocol::players::StoredP
 
 use parking_lot::Mutex;
 use prost::Message;
-use tokio::{task::JoinHandle, select};
+use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    database::database_engine::{GameDatabase, KeySpace}
-};
+use crate::database::database_engine::{GameDatabase, KeySpace};
 
-use super::{inventory::InventoryKey, GameState};
+use super::{
+    client_ui::Popup,
+    inventory::{InventoryKey, InventoryView, InventoryViewId},
+    GameState,
+};
 
 pub struct Player {
     // Player's in-game name
-    name: String,
+    pub(crate) name: String,
     // Player's inventory (immutable key that can be used to access mutable inventory)
-    main_inventory: InventoryKey,
+    // The main inventory is a bit special - it's drawn in the HUD and used for interactions
+    pub(crate) main_inventory_key: InventoryKey,
     // Mutable state of the player
-    state: Mutex<PlayerState>,
+    pub(crate) state: Mutex<PlayerState>,
 }
 
 impl Player {
@@ -52,7 +57,10 @@ impl Player {
     /// This can be used with InventoryManager to view or modify the
     /// player's inventory
     pub fn main_inventory(&self) -> InventoryKey {
-        self.main_inventory
+        self.main_inventory_key
+    }
+    pub fn hotbar_inventory_view(&self) -> InventoryViewId {
+        self.state.lock().hotbar_inventory_view.id
     }
     pub fn last_position(&self) -> PlayerPositionUpdate {
         self.state.lock().last_position
@@ -61,13 +69,15 @@ impl Player {
         StoredPlayer {
             name: self.name.clone(),
             last_position: Some(self.last_position().position.try_into().unwrap()),
-            main_inventory: self.main_inventory.as_bytes().to_vec(),
+            main_inventory: self.main_inventory_key.as_bytes().to_vec(),
         }
     }
-    fn from_server_proto(game_state: &GameState, proto: &StoredPlayer) -> Result<Player> {
+    fn from_server_proto(game_state: Arc<GameState>, proto: &StoredPlayer) -> Result<Player> {
+        let main_inventory_key = InventoryKey::parse_bytes(&proto.main_inventory)?;
+
         Ok(Player {
             name: proto.name.clone(),
-            main_inventory: InventoryKey::parse_bytes(&proto.main_inventory)?,
+            main_inventory_key,
             state: Mutex::new(PlayerState {
                 last_position: PlayerPositionUpdate {
                     tick: game_state.tick(),
@@ -79,20 +89,74 @@ impl Player {
                     velocity: vec3(0., 0., 0.),
                     face_direction: (0., 0.),
                 },
+                active_popups: vec![],
+                inventory_popup: make_inventory_popup(game_state.clone(), main_inventory_key)?,
+                hotbar_inventory_view: InventoryView::new_stored(
+                    main_inventory_key,
+                    game_state,
+                    false,
+                    false,
+                )?,
             }),
         })
     }
+
+    fn new_player(name: &str, game_state: Arc<GameState>) -> Result<Player> {
+        let main_inventory_key = game_state.inventory_manager().make_inventory(4, 8)?;
+        // TODO provide hooks here
+        // TODO custom spawn location
+        let player = Player {
+            name: name.to_string(),
+            main_inventory_key,
+            state: PlayerState {
+                last_position: PlayerPositionUpdate {
+                    tick: game_state.tick(),
+                    position: vec3(5., 10., 5.),
+                    velocity: Vector3::zero(),
+                    face_direction: (0., 0.),
+                },
+                active_popups: vec![],
+                inventory_popup: make_inventory_popup(game_state.clone(), main_inventory_key)?,
+                hotbar_inventory_view: InventoryView::new_stored(
+                    main_inventory_key,
+                    game_state,
+                    false,
+                    false,
+                )?,
+            }
+            .into(),
+        };
+
+        Ok(player)
+    }
 }
 
-struct PlayerState {
-    last_position: PlayerPositionUpdate,
+fn make_inventory_popup(
+    game_state: Arc<GameState>,
+    main_inventory_key: InventoryKey,
+) -> Result<Popup<'static>> {
+    Ok(Popup::new(game_state)
+        .inventory_view_stored("main".to_string(), main_inventory_key, true, true)?
+        .set_inventory_action_callback(|ctx| {
+            println!("testonly {:?}", ctx.keys().collect::<Vec<_>>());
+        }))
+}
+
+pub(crate) struct PlayerState {
+    pub(crate) last_position: PlayerPositionUpdate,
+    // The inventory popup is always loaded, even when it's not shown
+    pub(crate) inventory_popup: Popup<'static>,
+    // Other active popups for the player. These get deleted when closed.
+    pub(crate) active_popups: Vec<Popup<'static>>,
+    // The player's main inventory, which is shown in the user hotbar
+    pub(crate) hotbar_inventory_view: InventoryView<()>,
 }
 
 // Struct held by the client contexts for this player. When dropped, the
 // PlayerManager is notified of this via the Drop impl
 // TODO make this cleaner and more sensible, this is fine for an initial impl
 pub(crate) struct PlayerContext {
-    player: Arc<Player>,
+    pub(crate) player: Arc<Player>,
     manager: Arc<PlayerManager>,
 }
 impl PlayerContext {
@@ -125,7 +189,7 @@ pub struct PlayerManager {
     active_players: Mutex<HashMap<String, Arc<Player>>>,
 
     shutdown: CancellationToken,
-    writeback: Mutex<Option<JoinHandle<Result<()>>>>
+    writeback: Mutex<Option<JoinHandle<Result<()>>>>,
 }
 impl PlayerManager {
     fn db_key(player: &str) -> Vec<u8> {
@@ -141,26 +205,12 @@ impl PlayerManager {
         }
         let player = match self.db.get(&Self::db_key(name))? {
             Some(player_proto) => Player::from_server_proto(
-                &self.game_state(),
+                self.game_state().clone(),
                 &StoredPlayer::decode(player_proto.as_slice())?,
             )?,
             None => {
                 log::info!("New player {name} joining");
-                // TODO provide hooks here
-                // TODO custom spawn location
-                let player = Player {
-                    name: name.to_string(),
-                    main_inventory: self.game_state().inventory_manager().make_inventory(4, 8)?,
-                    state: PlayerState {
-                        last_position: PlayerPositionUpdate {
-                            tick: self.game_state().tick(),
-                            position: vec3(5., 10., 5.),
-                            velocity: Vector3::zero(),
-                            face_direction: (0., 0.),
-                        },
-                    }
-                    .into(),
-                };
+                let player = Player::new_player(name, self.game_state().clone())?;
                 self.write_back(&player)?;
                 player
             }
@@ -177,12 +227,9 @@ impl PlayerManager {
         match self.active_players.lock().entry(name.to_string()) {
             Entry::Occupied(entry) => {
                 let count = Arc::strong_count(entry.get());
-                // We expect 2 - one in the map, and one that we're borrowing from
-                // at this time.
+                // We expect 2 - one in the map, and one that we're holding while calling drop_disconnect
                 if count != 2 {
-                    log::error!(
-                        "Arc<Player> seems to be leaking; {count} remaining references"
-                    );
+                    log::error!("Arc<Player> seems to be leaking; {count} remaining references");
                 }
                 match self.write_back(entry.get()) {
                     Ok(_) => {
@@ -209,13 +256,16 @@ impl PlayerManager {
         )
     }
 
-    pub(crate) fn new(game_state: Weak<GameState>, db: Arc<dyn GameDatabase>) -> Arc<PlayerManager> {
+    pub(crate) fn new(
+        game_state: Weak<GameState>,
+        db: Arc<dyn GameDatabase>,
+    ) -> Arc<PlayerManager> {
         let result = Arc::new(PlayerManager {
             game_state,
             db,
             active_players: Mutex::new(HashMap::new()),
             shutdown: CancellationToken::new(),
-            writeback: Mutex::new(None)
+            writeback: Mutex::new(None),
         });
         result.start_writeback();
         result
@@ -236,11 +286,9 @@ impl PlayerManager {
         Ok(())
     }
 
-    fn start_writeback(self: &Arc<Self>){
+    fn start_writeback(self: &Arc<Self>) {
         let clone = self.clone();
-        *(self.writeback.lock()) = Some(tokio::spawn(async {
-            clone.writeback_loop().await
-        }));
+        *(self.writeback.lock()) = Some(tokio::spawn(async { clone.writeback_loop().await }));
     }
 
     pub(crate) fn request_shutdown(&self) {

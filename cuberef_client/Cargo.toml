@@ -32,8 +32,6 @@ fps_counter = "2.0.0"
 tracy-client = "0.15.2"
 egui_winit_vulkano = "0.24.0"
 egui = "0.21"
-# TODO remove once testing complete
-egui_demo_lib = "0.21"
 
 [features]
 default = []

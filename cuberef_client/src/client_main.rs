@@ -31,8 +31,7 @@ pub fn run_client(args: &ClientArgs) -> Result<()> {
     let _tracy_client = tracy_client::Client::start();
     let event_loop = EventLoop::new();
 
-    let window =
-        CuberefRenderer::create(&event_loop, &args.server)?;
+    let window = CuberefRenderer::create(&event_loop, &args.server)?;
     window.run_loop(event_loop);
     Ok(())
 }

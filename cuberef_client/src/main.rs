@@ -15,9 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use clap::Parser;
-use cuberef_client::client_main::{ClientArgs, self};
-
-
+use cuberef_client::client_main::{self, ClientArgs};
 
 fn main() {
     //console_subscriber::init();

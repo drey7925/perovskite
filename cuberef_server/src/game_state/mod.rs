@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod blocks;
+pub mod client_ui;
 pub mod event;
 pub mod game_map;
 pub mod handlers;

@@ -50,10 +50,7 @@ pub struct CuberefGameServerImpl {
 }
 
 impl CuberefGameServerImpl {
-    pub fn new(
-        game_state: Arc<GameState>,
-        auth_service: Arc<dyn AuthService>,
-    ) -> Self {
+    pub fn new(game_state: Arc<GameState>, auth_service: Arc<dyn AuthService>) -> Self {
         Self {
             game_state,
             auth_service,
@@ -111,7 +108,7 @@ impl CuberefGame for CuberefGameServerImpl {
                     error!("Error setting up client context: {:?}", e);
                     return Result::Err(Status::internal(
                         "Failed to establish client context on server",
-                    ))
+                    ));
                 }
             };
 

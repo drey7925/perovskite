@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::{Matrix4, Zero, vec3, vec4, Vector4};
+use cgmath::{vec3, vec4, Matrix4, Vector4, Zero};
 use std::sync::Arc;
 use tracy_client::{plot, span};
 use vulkano::{
@@ -99,16 +99,29 @@ impl CubePipelineWrapper {
         for corner in CORNERS {
             let mut ndc = transformation * corner;
             ndc /= ndc.w;
-            ndc_min = vec3(ndc_min.x.min(ndc.x), ndc_min.y.min(ndc.y), ndc_min.z.min(ndc.z));
-            ndc_max = vec3(ndc_max.x.max(ndc.x), ndc_max.y.max(ndc.y), ndc_max.z.max(ndc.z));
+            ndc_min = vec3(
+                ndc_min.x.min(ndc.x),
+                ndc_min.y.min(ndc.y),
+                ndc_min.z.min(ndc.z),
+            );
+            ndc_max = vec3(
+                ndc_max.x.max(ndc.x),
+                ndc_max.y.max(ndc.y),
+                ndc_max.z.max(ndc.z),
+            );
         }
-        overlaps(ndc_min.x, ndc_max.x, -1., 1.) && overlaps(ndc_min.y, ndc_max.y, -1., 1.) && overlaps(ndc_min.z, ndc_max.z, 0., 1.)
+        overlaps(ndc_min.x, ndc_max.x, -1., 1.)
+            && overlaps(ndc_min.y, ndc_max.y, -1., 1.)
+            && overlaps(ndc_min.z, ndc_max.z, 0., 1.)
     }
 }
 
 #[inline]
 fn overlaps(min1: f32, max1: f32, min2: f32, max2: f32) -> bool {
-    (min1 <= min2 && max1 >= max2) || (min2 <= min1 && max2 >= max1) || (min1 <= max2 && min1 >= min2) || (min2 <= max1 && min2 >= min1)
+    (min1 <= min2 && max1 >= max2)
+        || (min2 <= min1 && max2 >= max1)
+        || (min1 <= max2 && min1 >= min2)
+        || (min2 <= max1 && min2 >= min1)
 }
 
 /// Which render step we are rendering in this renderer.
@@ -266,24 +279,32 @@ impl PipelineProvider for CubePipelineProvider {
         config: Arc<Texture2DHolder>,
     ) -> Result<CubePipelineWrapper> {
         let default_pipeline = GraphicsPipeline::start()
-                .vertex_input_state(CubeGeometryVertex::per_vertex())
-                .vertex_shader(self.vs_cube.entry_point("main").context("Could not find vertex shader entry point")?, ())
-                .input_assembly_state(InputAssemblyState::new())
-                .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
-                    .viewport
-                    .clone()]))
-                .rasterization_state(
-                    RasterizationState::default()
-                        .front_face(
-                            vulkano::pipeline::graphics::rasterization::FrontFace::CounterClockwise,
-                        )
-                        .cull_mode(vulkano::pipeline::graphics::rasterization::CullMode::Back),
-                )
-                .color_blend_state(ColorBlendState::default().blend_alpha())
-                .depth_stencil_state(DepthStencilState::simple_depth_test())
-                .render_pass(Subpass::from(ctx.render_pass.clone(), 0).context("Could not find subpass 0")?);
+            .vertex_input_state(CubeGeometryVertex::per_vertex())
+            .vertex_shader(
+                self.vs_cube
+                    .entry_point("main")
+                    .context("Could not find vertex shader entry point")?,
+                (),
+            )
+            .input_assembly_state(InputAssemblyState::new())
+            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
+                .viewport
+                .clone()]))
+            .rasterization_state(
+                RasterizationState::default()
+                    .front_face(
+                        vulkano::pipeline::graphics::rasterization::FrontFace::CounterClockwise,
+                    )
+                    .cull_mode(vulkano::pipeline::graphics::rasterization::CullMode::Back),
+            )
+            .color_blend_state(ColorBlendState::default().blend_alpha())
+            .depth_stencil_state(DepthStencilState::simple_depth_test())
+            .render_pass(
+                Subpass::from(ctx.render_pass.clone(), 0).context("Could not find subpass 0")?,
+            );
 
-        let solid_pipeline = default_pipeline.clone()
+        let solid_pipeline = default_pipeline
+            .clone()
             .fragment_shader(
                 self.fs_solid
                     .entry_point("main")
@@ -292,7 +313,8 @@ impl PipelineProvider for CubePipelineProvider {
             )
             .build(self.device.clone())?;
 
-        let sparse_pipeline = default_pipeline.clone()
+        let sparse_pipeline = default_pipeline
+            .clone()
             .fragment_shader(
                 self.fs_sparse
                     .entry_point("main")
@@ -301,7 +323,8 @@ impl PipelineProvider for CubePipelineProvider {
             )
             .build(self.device.clone())?;
 
-        let translucent_pipeline = default_pipeline.clone()
+        let translucent_pipeline = default_pipeline
+            .clone()
             .fragment_shader(
                 self.fs_solid
                     .entry_point("main")
@@ -338,4 +361,3 @@ impl PipelineProvider for CubePipelineProvider {
     type PipelineWrapperImpl = CubePipelineWrapper;
     type PerPipelineConfig = Arc<Texture2DHolder>;
 }
-

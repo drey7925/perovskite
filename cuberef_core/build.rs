@@ -17,7 +17,8 @@
 use std::{env, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let descriptor_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("cuberef_descriptor.bin");
+    let descriptor_path =
+        PathBuf::from(env::var("OUT_DIR").unwrap()).join("cuberef_descriptor.bin");
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
@@ -31,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/mapchunk.proto",
                 "proto/players.proto",
                 "proto/render.proto",
+                "proto/ui.proto",
             ],
             &["proto"],
         )?;

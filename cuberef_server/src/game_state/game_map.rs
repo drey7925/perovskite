@@ -574,7 +574,6 @@ impl ServerGameMap {
     /// None, or to an extended data object that the new block type can handle.
     /// * If the mutator returns a non-Ok status, any changes it made will still be applied.
     ///
-    ///
     /// It is not safe to call other GameMap functions (e.g. get/set blocks) from the handler - they may deadlock.
     pub fn mutate_block_atomically<F, T>(&self, coord: BlockCoordinate, mutator: F) -> Result<T>
     where

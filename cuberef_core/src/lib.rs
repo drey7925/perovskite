@@ -37,6 +37,9 @@ pub mod cuberef {
         pub mod players {
             tonic::include_proto!("cuberef.protocol.players");
         }
+        pub mod ui {
+            tonic::include_proto!("cuberef.protocol.ui");
+        }
         pub const DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("cuberef_descriptor");
     }
 }
