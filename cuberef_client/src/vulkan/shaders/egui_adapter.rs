@@ -18,7 +18,12 @@ pub(crate) struct EguiAdapter {
 }
 impl EguiAdapter {
     pub(crate) fn window_event(&mut self, event: &WindowEvent) -> bool {
-        self.gui_adapter.update(event)
+        if self.egui_ui.lock().wants_draw() {
+            self.gui_adapter.update(event)
+        } else {
+            // egui isn't drawing; don't try to interact with it
+            false
+        }
     }
 
     pub(crate) fn new(
@@ -53,10 +58,10 @@ impl EguiAdapter {
         builder: &mut crate::vulkan::CommandBufferBuilder,
         client_state: &ClientState,
     ) -> Result<()> {
-        let egui = self.egui_ui.lock();
+        let mut egui = self.egui_ui.lock();
         if egui.wants_draw() {
             self.gui_adapter.begin_frame();
-            egui.draw_ui(
+            egui.draw_all_uis(
                 &self.gui_adapter.egui_ctx,
                 self.atlas_texture_id,
                 client_state,

@@ -393,7 +393,7 @@ impl<T> InventoryView<T> {
         can_place: bool,
         can_take: bool,
     ) -> Result<InventoryView<T>> {
-        if initial_contents.len() == 0 {
+        if initial_contents.is_empty() {
             initial_contents.resize_with(dimensions.0 as usize * dimensions.1 as usize, || None);
         }
         ensure!(dimensions.0 as usize * dimensions.1 as usize == initial_contents.len());
@@ -425,7 +425,12 @@ impl<T> InventoryView<T> {
 }
 
 /// A representation of an inventory view that's independent of the actual callback type involved.
-pub trait TypeErasedInventoryView {
+pub trait TypeErasedInventoryView: Send + Sync + 'static {
+    /// Get the ID of this view
+    fn id(&self) -> InventoryViewId;
+
+    fn dimensions(&self) -> (u32, u32);
+
     /// See the items in this view (e.g. to display the inventory).
     fn peek(&self) -> Result<Vec<Option<ItemStack>>>;
     /// Takes a stack from one of the slots in this view (e.g. when clicked with a cursor).
@@ -440,7 +445,7 @@ pub trait TypeErasedInventoryView {
     /// peek should be called immediate after to see what the view should display.
     fn put(&mut self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>>;
 }
-impl<T> TypeErasedInventoryView for InventoryView<T> {
+impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
     fn peek(&self) -> Result<Vec<Option<ItemStack>>> {
         match &self.backing {
             ViewBacking::Transient(contents) => Ok(contents
@@ -452,7 +457,7 @@ impl<T> TypeErasedInventoryView for InventoryView<T> {
             ViewBacking::Stored(key) => Ok(self
                 .game_state
                 .inventory_manager()
-                .get(&key)?
+                .get(key)?
                 .with_context(|| format!("Inventory {key:?} in view {:?} not found", self.id))?
                 .contents()
                 .to_vec()),
@@ -475,11 +480,9 @@ impl<T> TypeErasedInventoryView for InventoryView<T> {
                     } else {
                         *slot_contents = None;
                     }
-                    Ok(obtained.and_then(|obtained| {
-                        Some(BorrowedStack {
-                            borrows_from,
-                            borrowed_stack: obtained,
-                        })
+                    Ok(obtained.map(|obtained| BorrowedStack {
+                        borrows_from,
+                        borrowed_stack: obtained,
                     }))
                 } else {
                     Ok(None)
@@ -490,14 +493,14 @@ impl<T> TypeErasedInventoryView for InventoryView<T> {
             ViewBacking::Stored(key) => Ok(self
                 .game_state
                 .inventory_manager()
-                .mutate_inventory_atomically(&key, |inv| {
+                .mutate_inventory_atomically(key, |inv| {
                     Ok(inv.contents_mut().get_mut(slot).unwrap().take_items(count))
                 })?
-                .and_then(|obtained| {
-                    Some(BorrowedStack {
+                .map(|obtained| {
+                    BorrowedStack {
                         borrows_from: Some((*key, slot)),
                         borrowed_stack: obtained,
-                    })
+                    }
                 })),
         }
     }
@@ -514,11 +517,11 @@ impl<T> TypeErasedInventoryView for InventoryView<T> {
                     let mut inner = slot_contents.as_mut().unwrap().borrowed_stack.clone();
                     let leftover = inner.try_merge(stack.borrowed_stack);
 
-                    Ok(leftover.and_then(|leftover| {
-                        Some(BorrowedStack {
+                    Ok(leftover.map(|leftover| {
+                        BorrowedStack {
                             borrows_from: stack.borrows_from,
                             borrowed_stack: leftover,
-                        })
+                        }
                     }))
                 }
             }
@@ -527,20 +530,26 @@ impl<T> TypeErasedInventoryView for InventoryView<T> {
             ViewBacking::Stored(key) => Ok(self
                 .game_state
                 .inventory_manager()
-                .mutate_inventory_atomically(&key, |inv| {
+                .mutate_inventory_atomically(key, |inv| {
                     Ok(inv
                         .contents_mut()
                         .get_mut(slot)
                         .unwrap()
                         .try_merge(Some(stack.borrowed_stack)))
                 })?
-                .and_then(|leftover| {
-                    Some(BorrowedStack {
-                        borrows_from: stack.borrows_from,
-                        borrowed_stack: leftover,
-                    })
+                .map(|leftover| BorrowedStack {
+                    borrows_from: stack.borrows_from,
+                    borrowed_stack: leftover,
                 })),
         }
+    }
+
+    fn id(&self) -> InventoryViewId {
+        self.id
+    }
+
+    fn dimensions(&self) -> (u32, u32) {
+        self.dimensions
     }
 }
 

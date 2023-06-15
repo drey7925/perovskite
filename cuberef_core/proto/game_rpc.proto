@@ -22,6 +22,7 @@ import "coordinates.proto";
 import "blocks.proto";
 import "mapchunk.proto";
 import "items.proto";
+import "ui.proto";
 
 service CuberefGame {
     // Represents a stream carrying game events.
@@ -222,4 +223,5 @@ message InventoryUpdate {
 message SetClientState {
     PositionUpdate position = 1;
     uint64 hotbar_inventory_view = 2;
+    cuberef.protocol.ui.PopupDescription inventory_popup = 3;
 }

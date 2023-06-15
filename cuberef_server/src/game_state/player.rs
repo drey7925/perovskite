@@ -134,8 +134,9 @@ impl Player {
 fn make_inventory_popup(
     game_state: Arc<GameState>,
     main_inventory_key: InventoryKey,
-) -> Result<Popup<'static>> {
+) -> Result<Popup> {
     Ok(Popup::new(game_state)
+        .title("Inventory")
         .inventory_view_stored("main".to_string(), main_inventory_key, true, true)?
         .set_inventory_action_callback(|ctx| {
             println!("testonly {:?}", ctx.keys().collect::<Vec<_>>());
@@ -145,9 +146,9 @@ fn make_inventory_popup(
 pub(crate) struct PlayerState {
     pub(crate) last_position: PlayerPositionUpdate,
     // The inventory popup is always loaded, even when it's not shown
-    pub(crate) inventory_popup: Popup<'static>,
+    pub(crate) inventory_popup: Popup,
     // Other active popups for the player. These get deleted when closed.
-    pub(crate) active_popups: Vec<Popup<'static>>,
+    pub(crate) active_popups: Vec<Popup>,
     // The player's main inventory, which is shown in the user hotbar
     pub(crate) hotbar_inventory_view: InventoryView<()>,
 }
@@ -205,12 +206,12 @@ impl PlayerManager {
         }
         let player = match self.db.get(&Self::db_key(name))? {
             Some(player_proto) => Player::from_server_proto(
-                self.game_state().clone(),
+                self.game_state(),
                 &StoredPlayer::decode(player_proto.as_slice())?,
             )?,
             None => {
                 log::info!("New player {name} joining");
-                let player = Player::new_player(name, self.game_state().clone())?;
+                let player = Player::new_player(name, self.game_state())?;
                 self.write_back(&player)?;
                 player
             }

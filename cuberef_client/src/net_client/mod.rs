@@ -399,6 +399,7 @@ impl InboundContext {
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
+        // todo (microoptimization) take the message by value
         match &message.server_message {
             None => {
                 log::warn!("Got empty message from server");
@@ -660,6 +661,8 @@ impl InboundContext {
             .physics_state
             .lock()
             .set_position(pos_vector.try_into()?);
+
+        self.client_state.egui.lock().inventory_view = state_update.inventory_popup.clone();
 
         let mut hud_lock = self.client_state.hud.lock();
         hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);

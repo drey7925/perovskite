@@ -47,6 +47,7 @@ impl ClientItemManager {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct ClientInventory {
     pub(crate) dimensions: (u32, u32),
     stacks: Vec<Option<items_proto::ItemStack>>,

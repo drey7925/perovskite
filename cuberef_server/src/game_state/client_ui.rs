@@ -32,28 +32,54 @@ pub enum UiElement {
     InventoryView(String, InventoryViewId),
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub enum PopupAction {
+    /// The popup was closed
+    PopupClosed,
+    /// A button (added to the UI programmatically) was clicked; its key is given here
+    ButtonClicked(String)
+}
+
+/// Passed when a callback is invoked
+/// Contents TBD
+pub struct PopupResponse {
+    /// The key of the button that was clicked
+    user_action: PopupAction,
+    /// The values of all textfields
+    textfield_values: HashMap<String, String>
+}
+
 /// A server-side representation of a custom UI drawn on the client's screen.
 /// The client and server network code will serialize popups and display them on
 /// the client's screen. Clicking buttons will lead to events firing at the server.
-pub struct Popup<'a> {
+pub struct Popup {
     id: u64,
+    title: String,
     game_state: Arc<GameState>,
     widgets: Vec<UiElement>,
-    inventory_views: HashMap<String, InventoryView<CallbackContext<'a>>>,
+    inventory_views: HashMap<String, InventoryView<CallbackContext<'static>>>,
     interested_stored_inventories: HashSet<InventoryKey>,
     inventory_update_callback: Option<Box<dyn Fn(CallbackContext) + Send + Sync>>,
+    button_callback: Option<Box<dyn Fn(PopupResponse) + Send + Sync>>,
 }
-impl<'a> Popup<'a> {
+impl Popup {
     /// Creates a new popup. Until it's sent to a player, it is inert and has no effects
     pub fn new(game_state: Arc<GameState>) -> Self {
         Popup {
             id: NEXT_POPUP_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            title: String::new(),
             game_state,
             widgets: vec![],
             inventory_views: HashMap::new(),
             interested_stored_inventories: HashSet::new(),
             inventory_update_callback: None,
+            button_callback: None,
         }
+    }
+    /// Sets the popup title.
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
     }
     /// Adds a new label to this popup. At the moment, the layout is still TBD.
     pub fn label(mut self, label: String) -> Self {
@@ -156,6 +182,19 @@ impl<'a> Popup<'a> {
         self
     }
 
+    /// Sets a function that will be called when a button is clicked
+    /// 
+    /// Exact parameters are still tbd
+    /// 
+    /// This replaces any previously set function
+    pub fn set_button_callback<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(PopupResponse) + Send + Sync + 'static,
+    {
+        self.button_callback = Some(Box::new(callback));
+        self
+    }
+
     pub(crate) fn invoke_inventory_action_callback(&mut self) {
         if let Some(callback) = &self.inventory_update_callback {
             let context = self
@@ -164,6 +203,12 @@ impl<'a> Popup<'a> {
                 .map(|(k, v)| (k.clone(), v as &mut dyn TypeErasedInventoryView))
                 .collect();
             callback(context);
+        }
+    }
+
+    pub(crate) fn invoke_button_callback(&self, response: PopupResponse) {
+        if let Some(callback) = &self.button_callback {
+            callback(response)
         }
     }
 
@@ -198,13 +243,14 @@ impl<'a> Popup<'a> {
             .collect();
         proto::PopupDescription {
             popup_id: self.id,
+            title: self.title.clone(),
             element: elements,
         }
     }
 
     pub(crate) fn inventory_views(
         &self,
-    ) -> impl Iterator<Item = &InventoryView<CallbackContext<'a>>> {
+    ) -> impl Iterator<Item = &InventoryView<CallbackContext<'static>>> {
         self.inventory_views.values()
     }
 }

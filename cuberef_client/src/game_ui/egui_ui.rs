@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::Arc, usize};
+use std::{collections::HashMap, fmt::format, sync::Arc, usize};
 
-use cuberef_core::protocol::items::item_def::QuantityType;
+use cuberef_core::protocol::ui as proto;
+use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use log::warn;
 
@@ -18,6 +19,9 @@ pub(crate) struct EguiUi {
     texture_atlas: Arc<Texture2DHolder>,
     atlas_coords: HashMap<String, texture_packer::Rect>,
     item_defs: Arc<ClientItemManager>,
+
+    inventory_open: bool,
+    pub(crate) inventory_view: Option<PopupDescription>,
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -29,42 +33,99 @@ impl EguiUi {
             texture_atlas,
             atlas_coords,
             item_defs,
+            inventory_open: false,
+            inventory_view: None,
         }
     }
     pub(crate) fn wants_draw(&self) -> bool {
-        false
+        self.inventory_open
+        // todo other popups
     }
-    pub(crate) fn draw_ui(
-        &self,
+    pub(crate) fn open_inventory(&mut self) {
+        self.inventory_open = true;
+    }
+    pub(crate) fn draw_all_uis(
+        &mut self,
         ctx: &egui::Context,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
     ) {
-        egui::Window::new("test window").show(ctx, |ui| {
-            ui.heading("test app");
-            ui.horizontal(|ui| {
-                let name_label = ui.label("test label: ");
-                ui.text_edit_singleline(&mut "foo")
-                    .labelled_by(name_label.id)
-            });
-            if ui.button("test button").clicked() {};
-            if let Some(main_inv) = client_state.hud.lock().hotbar_view_id {
-                self.draw_inventory(
-                    ui,
-                    // testonly
-                    client_state
-                        .inventories
-                        .lock()
-                        .inventory_views
-                        .get(&main_inv)
-                        .unwrap(),
-                    atlas_texture_id,
-                );
+        if self.inventory_open {
+            self.draw_popup(
+                &self.inventory_view.clone().unwrap_or_else(|| {
+                    PopupDescription {
+                        popup_id: u64::MAX,
+                        title: "Error".to_string(),
+                        element: vec![proto::UiElement {
+                            element: Some(proto::ui_element::Element::Label(
+                                "The server hasn't sent a definition for the inventory popup".to_string(),
+                            )),
+                        }],
+                    }
+                }),
+                ctx,
+                atlas_texture_id,
+                client_state,
+            )
+        }
+    }
+
+    pub(crate) fn draw_popup(
+        &mut self,
+        popup: &proto::PopupDescription,
+        ctx: &egui::Context,
+        atlas_texture_id: TextureId,
+        client_state: &ClientState,
+    ) {
+        // todo send a response
+        let mut text_field_contents = HashMap::new();
+        egui::Window::new(popup.title.clone()).show(ctx, |ui| {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                // todo close the correct view, send events back
+                self.inventory_open = false;
+            }
+            for element in &popup.element {
+                match &element.element {
+                    Some(proto::ui_element::Element::Label(label)) => {
+                        ui.label(label);
+                    }
+                    Some(proto::ui_element::Element::TextField(text_field)) => {
+                        let mut value = text_field.initial.clone();
+                        // todo support multiline, other styling
+                        let editor = egui::TextEdit::singleline(&mut value);
+                        ui.add_enabled(text_field.enabled, editor);
+                        text_field_contents.insert(text_field.key.clone(), value);
+                    }
+                    Some(proto::ui_element::Element::Button(button_def)) => {
+                        let button = egui::Button::new(button_def.label.clone());
+                        if ui.add_enabled(button_def.enabled, button).clicked() {
+                            log::info!("todo handle button click");
+                        }
+                    }
+                    Some(proto::ui_element::Element::Inventory(inventory)) => {
+                        let inventory_manager = client_state.inventories.lock();
+                        let view = inventory_manager
+                            .inventory_views
+                            .get(&inventory.inventory_key);
+                        match view {
+                            Some(x) => {
+                                self.draw_inventory_view(ui, x, atlas_texture_id);
+                            }
+                            None => {
+                                ui.label(format!(
+                                    "Error: Inventory view {} not loaded",
+                                    inventory.inventory_key
+                                ));
+                            }
+                        }
+                    }
+                    None => todo!(),
+                }
             }
         });
     }
 
-    fn draw_inventory(
+    fn draw_inventory_view(
         &self,
         ui: &mut egui::Ui,
         inventory: &ClientInventory,
@@ -72,6 +133,12 @@ impl EguiUi {
     ) {
         let dims = inventory.dimensions;
         let contents = inventory.contents();
+
+        if contents.len() != dims.0 as usize * dims.1 as usize {
+            ui.label(format!("Error: inventory is {}*{} but server only sent {} stacks", dims.0, dims.1, contents.len()));
+            return;
+        }
+
         let frame_pixels = *self.atlas_coords.get(FRAME_UNSELECTED).unwrap();
         let frame_uv = self.pixel_rect_to_uv(frame_pixels);
 

@@ -232,6 +232,10 @@ impl GameHud {
         if main_inv.dimensions.0 == 0 {
             return Ok(None);
         }
+        if (main_inv.dimensions.0 as usize) > main_inv.contents().len() {
+            log::warn!("Hotbar contents vec is too small for the hotbar dimension");
+            return Ok(None);
+        }
         let hotbar_slots = main_inv.dimensions.1;
         let left_offset = 0.5 * (hotbar_slots as f64) * (w as f64);
 

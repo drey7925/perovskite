@@ -188,6 +188,10 @@ impl ClientState {
                         scancode, state, ..
                     }),
             } => {
+                
+                if scancode == 0x17 && state == ElementState::Pressed {
+                    self.egui.lock().open_inventory()
+                }
                 self.physics_state.lock().keyboard_input(scancode, state);
             }
             Event::WindowEvent {

@@ -170,7 +170,7 @@ impl PhysicsState {
                 self.pos = vec3(3., 12.0, 3.);
                 info!("Testonly teleported near origin");
             }
-            0x17 => {
+            0x15 => {
                 self.pos = vec3(256., 12.0, 2147483640.);
                 info!("Testonly teleported near edge");
             }

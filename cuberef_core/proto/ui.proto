@@ -53,5 +53,13 @@ message UiElement {
 
 message PopupDescription {
   uint64 popup_id = 1;
-  repeated UiElement element = 2;
+  string title = 2;
+  repeated UiElement element = 3;
+}
+
+message PopupResponse {
+  uint64 popup_id = 1;
+  bool closed = 2;
+  string clicked_button = 3;
+  map<string, string> text_fields = 4;
 }
