@@ -134,6 +134,19 @@ where
     Ok((texture_atlas, texture_coords))
 }
 
+fn get_texture(
+    item: &cuberef_core::protocol::items::ItemStack,
+    atlas_coords: &HashMap<String, Rect>,
+    item_defs: &ClientItemManager,
+) -> Rect {
+    item_defs
+        .get(&item.item_name)
+        .and_then(|x| x.inventory_texture.as_ref())
+        .map(|x| x.texture_name.as_ref())
+        .and_then(|x: &str| atlas_coords.get(x).copied())
+        .unwrap_or(*atlas_coords.get(UNKNOWN_TEXTURE).unwrap())
+}
+
 const CROSSHAIR: &str = "builtin:crosshair";
 const DIGIT_ATLAS: &str = "builtin:digit_atlas";
 const FRAME_SELECTED: &str = "builtin:frame_selected";

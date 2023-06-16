@@ -134,9 +134,9 @@ pub(crate) enum BlockRenderPass {
 
 impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper {
     type PassIdentifier = BlockRenderPass;
-    fn draw(
+    fn draw<L>(
         &mut self,
-        builder: &mut CommandBufferBuilder,
+        builder: &mut CommandBufferBuilder<L>,
         draw_calls: &[CubeGeometryDrawCall],
         pass: BlockRenderPass,
     ) -> Result<()> {
@@ -192,11 +192,11 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
         Ok(())
     }
 
-    fn bind(
+    fn bind<L>(
         &mut self,
         ctx: &VulkanContext,
         per_frame_config: Matrix4<f32>,
-        command_buf_builder: &mut CommandBufferBuilder,
+        command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: BlockRenderPass,
     ) -> Result<()> {
         let _span = match pass {
@@ -276,7 +276,7 @@ impl PipelineProvider for CubePipelineProvider {
     fn make_pipeline(
         &self,
         ctx: &VulkanContext,
-        config: Arc<Texture2DHolder>,
+        config: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
         let default_pipeline = GraphicsPipeline::start()
             .vertex_input_state(CubeGeometryVertex::per_vertex())
@@ -359,5 +359,5 @@ impl PipelineProvider for CubePipelineProvider {
     type DrawCall = CubeGeometryDrawCall;
     type PerFrameConfig = Matrix4<f32>;
     type PipelineWrapperImpl = CubePipelineWrapper;
-    type PerPipelineConfig = Arc<Texture2DHolder>;
+    type PerPipelineConfig<'a> = &'a Texture2DHolder;
 }

@@ -1,10 +1,13 @@
-use std::{collections::HashMap, fmt::format, sync::Arc, usize};
-
+use std::{collections::HashMap, sync::Arc, usize};
+use anyhow::Result;
+use cuberef_core::protocol::items::ItemStack;
 use cuberef_core::protocol::ui as proto;
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use log::warn;
 
+use crate::vulkan::VulkanContext;
+use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};
 use crate::{
     game_state::{
         items::{ClientInventory, ClientItemManager},
@@ -13,7 +16,7 @@ use crate::{
     vulkan::Texture2DHolder,
 };
 
-use super::{FRAME_UNSELECTED, UNKNOWN_TEXTURE};
+use super::{get_texture, FRAME_UNSELECTED};
 
 pub(crate) struct EguiUi {
     texture_atlas: Arc<Texture2DHolder>,
@@ -22,6 +25,10 @@ pub(crate) struct EguiUi {
 
     inventory_open: bool,
     pub(crate) inventory_view: Option<PopupDescription>,
+
+    stack_carried_by_mouse: Option<ItemStack>,
+    last_mouse_position: egui::Pos2,
+    stack_carried_by_mouse_offset: (f32, f32),
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -35,6 +42,9 @@ impl EguiUi {
             item_defs,
             inventory_open: false,
             inventory_view: None,
+            stack_carried_by_mouse: None,
+            last_mouse_position: egui::Pos2 { x: 0., y: 0. },
+            stack_carried_by_mouse_offset: (0., 0.),
         }
     }
     pub(crate) fn wants_draw(&self) -> bool {
@@ -52,21 +62,26 @@ impl EguiUi {
     ) {
         if self.inventory_open {
             self.draw_popup(
-                &self.inventory_view.clone().unwrap_or_else(|| {
-                    PopupDescription {
+                &self
+                    .inventory_view
+                    .clone()
+                    .unwrap_or_else(|| PopupDescription {
                         popup_id: u64::MAX,
                         title: "Error".to_string(),
                         element: vec![proto::UiElement {
                             element: Some(proto::ui_element::Element::Label(
-                                "The server hasn't sent a definition for the inventory popup".to_string(),
+                                "The server hasn't sent a definition for the inventory popup"
+                                    .to_string(),
                             )),
                         }],
-                    }
-                }),
+                    }),
                 ctx,
                 atlas_texture_id,
                 client_state,
             )
+        }
+        if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+            self.last_mouse_position = pos;
         }
     }
 
@@ -125,6 +140,31 @@ impl EguiUi {
         });
     }
 
+    pub(crate) fn get_carried_itemstack(&self, vk_ctx: &VulkanContext) -> Result<Option<FlatTextureDrawCall>> {
+        if let Some(stack) = &self.stack_carried_by_mouse {
+            let x = self.stack_carried_by_mouse_offset.0 + self.last_mouse_position.x;
+            let y = self.stack_carried_by_mouse_offset.1 + self.last_mouse_position.y;
+            let texture_rect = get_texture(stack, &self.atlas_coords, &self.item_defs);
+            // only needed for its size, a bit inefficient
+            let frame_pixels = *self.atlas_coords.get(FRAME_UNSELECTED).unwrap();
+            // todo get rid of this hardcoding :(
+            let position_rect = texture_packer::Rect::new(
+                x as u32,
+                y as u32,
+                frame_pixels.w - 4,
+                frame_pixels.h - 4,
+            );
+
+            let mut builder = FlatTextureDrawBuilder::new();
+
+            builder.rect(position_rect, texture_rect, self.texture_atlas.dimensions());
+            // todo number
+            Ok(Some(builder.build(vk_ctx)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn draw_inventory_view(
         &self,
         ui: &mut egui::Ui,
@@ -135,7 +175,12 @@ impl EguiUi {
         let contents = inventory.contents();
 
         if contents.len() != dims.0 as usize * dims.1 as usize {
-            ui.label(format!("Error: inventory is {}*{} but server only sent {} stacks", dims.0, dims.1, contents.len()));
+            ui.label(format!(
+                "Error: inventory is {}*{} but server only sent {} stacks",
+                dims.0,
+                dims.1,
+                contents.len()
+            ));
             return;
         }
 
@@ -225,6 +270,9 @@ impl EguiUi {
     pub(crate) fn texture_atlas(&self) -> &Texture2DHolder {
         self.texture_atlas.as_ref()
     }
+    pub(crate) fn clone_texture_atlas(&self) -> Arc<Texture2DHolder> {
+        self.texture_atlas.clone()
+    }
 
     pub(crate) fn pixel_rect_to_uv(&self, pixel_rect: texture_packer::Rect) -> egui::Rect {
         let width = self.texture_atlas.dimensions().0 as f32;
@@ -242,13 +290,7 @@ impl EguiUi {
         &self,
         item: &cuberef_core::protocol::items::ItemStack,
     ) -> egui::Rect {
-        let pixel_rect: texture_packer::Rect = self
-            .item_defs
-            .get(&item.item_name)
-            .and_then(|x| x.inventory_texture.as_ref())
-            .map(|x| x.texture_name.as_ref())
-            .and_then(|x: &str| self.atlas_coords.get(x).copied())
-            .unwrap_or(*self.atlas_coords.get(UNKNOWN_TEXTURE).unwrap());
+        let pixel_rect = get_texture(item, &self.atlas_coords, &self.item_defs);
         self.pixel_rect_to_uv(pixel_rect)
     }
 }

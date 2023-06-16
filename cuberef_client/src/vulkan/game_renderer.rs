@@ -77,11 +77,11 @@ impl CuberefRenderer {
 
         let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
         let cube_pipeline =
-            cube_provider.make_pipeline(&ctx, client_state.cube_renderer.texture())?;
+            cube_provider.make_pipeline(&ctx, client_state.cube_renderer.atlas())?;
 
         let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_pipeline =
-            flat_provider.make_pipeline(&ctx, client_state.hud.lock().clone_texture())?;
+            flat_provider.make_pipeline(&ctx, (client_state.hud.lock().texture_atlas(), 0))?;
 
         let egui_adapter = EguiAdapter::new(&ctx, event_loop, client_state.egui.clone())?;
 
@@ -210,10 +210,11 @@ impl CuberefRenderer {
                     // as long as the bindings' types match those the pipelines' shaders expect.
                     // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
                     // you cannot create one independently of any particular pipeline.
-                    let command_buf_builder = self
-                        .ctx
-                        .start_command_buffer(self.ctx.framebuffers[image_i as usize].clone())
-                        .unwrap();
+                    let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
+                    self.ctx.start_render_pass(
+                        &mut command_buf_builder,
+                        self.ctx.framebuffers[image_i as usize].clone(),
+                    ).unwrap();
 
                     let command_buffers =
                         self.build_command_buffers(window_size, command_buf_builder);
@@ -364,7 +365,11 @@ impl CuberefRenderer {
             )
             .unwrap();
         self.egui_adapter
-            .draw(&self.ctx, &mut command_buf_builder, &self.client_state)
+            .draw(
+                &self.ctx,
+                &mut command_buf_builder,
+                &self.client_state,
+            )
             .unwrap();
 
         self.finish_command_buffer(command_buf_builder).unwrap()
@@ -374,22 +379,29 @@ impl CuberefRenderer {
         self.ctx.viewport.dimensions = size.into();
         self.cube_pipeline = self
             .cube_provider
-            .make_pipeline(&self.ctx, self.client_state.cube_renderer.texture())
+            .make_pipeline(&self.ctx, self.client_state.cube_renderer.atlas())
             .unwrap();
         self.flat_pipeline = self
             .flat_provider
-            .make_pipeline(&self.ctx, self.client_state.hud.lock().clone_texture())?;
+            .make_pipeline(&self.ctx, (self.client_state.hud.lock().texture_atlas(), 0))?;
+        self.egui_adapter.notify_resize(&self.ctx)?;
         Ok(())
     }
 
     fn finish_command_buffer(
         &self,
-        mut builder: CommandBufferBuilder,
+        mut builder: CommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) -> Result<PrimaryAutoCommandBuffer> {
         let _span = span!();
         builder.end_render_pass()?;
         builder
             .build()
             .with_context(|| "Command buffer build failed")
+    }
+}
+
+impl Drop for CuberefRenderer {
+    fn drop(&mut self) {
+        self.client_state.shutdown.cancel()
     }
 }

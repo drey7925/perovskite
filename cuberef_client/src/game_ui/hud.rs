@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-use super::{CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED, UNKNOWN_TEXTURE};
+use super::{CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED, UNKNOWN_TEXTURE, get_texture};
 
 pub(crate) struct GameHud {
     pub(crate) texture_coords: HashMap<String, Rect>,
@@ -155,7 +155,7 @@ impl GameHud {
         Ok(outputs)
     }
 
-    pub(crate) fn clone_texture(&self) -> Arc<Texture2DHolder> {
+    pub(crate) fn clone_atlas(&self) -> Arc<Texture2DHolder> {
         self.texture_atlas.clone()
     }
 
@@ -256,7 +256,7 @@ impl GameHud {
             let stack = &main_inv.contents()[i as usize];
             if let Some(stack) = stack {
                 let tex_coord = self.get_texture(stack);
-                builder.rect(item_rect, tex_coord, self.clone_texture().dimensions());
+                builder.rect(item_rect, tex_coord, self.clone_atlas().dimensions());
 
                 let frame_topright = (frame0_corner.0 + offset + w - 2, frame0_corner.1 + 2);
                 // todo handle items that have a wear bar
@@ -287,16 +287,7 @@ impl GameHud {
     }
 
     pub(crate) fn get_texture(&self, item: &cuberef_core::protocol::items::ItemStack) -> Rect {
-        let Some(item) = self.item_defs.get(&item.item_name) else {
-            return *self.texture_coords.get(UNKNOWN_TEXTURE).unwrap();
-        };
-        let Some(tex_ref) = &item.inventory_texture else {
-            return *self.texture_coords.get(UNKNOWN_TEXTURE).unwrap();
-        };
-        self.texture_coords
-            .get(&tex_ref.texture_name)
-            .copied()
-            .unwrap_or(*self.texture_coords.get(UNKNOWN_TEXTURE).unwrap())
+        get_texture(item, &self.texture_coords, &self.item_defs)
     }
 
     fn set_slot(

@@ -165,18 +165,18 @@ pub(crate) mod frag_simple {
 pub(crate) trait PipelineWrapper<T, U> {
     type PassIdentifier;
     /// Actually draw. The pipeline must have been bound using bind.
-    fn draw(
+    fn draw<L>(
         &mut self,
-        builder: &mut CommandBufferBuilder,
+        builder: &mut CommandBufferBuilder<L>,
         draw_calls: &[T],
         pass: Self::PassIdentifier,
     ) -> Result<()>;
     /// Bind the pipeline. Must be called each frame before draw
-    fn bind(
+    fn bind<L>(
         &mut self,
         ctx: &VulkanContext,
         per_frame_config: U,
-        command_buf_builder: &mut CommandBufferBuilder,
+        command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: Self::PassIdentifier,
     ) -> Result<()>;
 }
@@ -186,12 +186,12 @@ where
     Self: Sized,
 {
     type DrawCall;
-    type PerPipelineConfig;
+    type PerPipelineConfig<'a> where Self: 'a;
     type PerFrameConfig;
     type PipelineWrapperImpl: PipelineWrapper<Self::DrawCall, Self::PerFrameConfig>;
     fn make_pipeline(
         &self,
         ctx: &VulkanContext,
-        config: Self::PerPipelineConfig,
+        config: Self::PerPipelineConfig<'_>,
     ) -> Result<Self::PipelineWrapperImpl>;
 }

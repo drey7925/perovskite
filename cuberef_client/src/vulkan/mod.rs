@@ -32,7 +32,7 @@ use vulkano::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
     },
     device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo},
-    format::Format,
+    format::{Format, NumericType},
     image::{
         view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
@@ -52,8 +52,7 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-type CommandBufferBuilder =
-    AutoCommandBufferBuilder<PrimaryAutoCommandBuffer, Arc<StandardCommandBufferAllocator>>;
+type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
 
 use self::util::select_physical_device;
 #[derive(Clone)]
@@ -137,14 +136,14 @@ impl VulkanContext {
                 .expect("failed to get surface capabilities");
 
             let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
-            let image_format = Some(
-                physical_device
-                    .surface_formats(&surface, Default::default())?
-                    .get(0)
-                    .with_context(|| "Could not find an image format")?
-                    .0,
-            );
-
+            let formats = physical_device.surface_formats(&surface, Default::default())?;
+            log::info!("Surface available color formats: {formats:?}");
+            let &(image_format, color_space) = formats
+                .iter()
+                .filter(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
+                .next()
+                .with_context(|| "Could not find an image format")?;
+            log::info!("Will render to {image_format:?}, {color_space:?}");
             let mut image_count = caps.min_image_count;
             if let Some(max_image_count) = caps.max_image_count {
                 if max_image_count >= 3 {
@@ -157,10 +156,11 @@ impl VulkanContext {
                 surface,
                 SwapchainCreateInfo {
                     min_image_count: image_count,
-                    image_format,
+                    image_format: Some(image_format),
                     image_extent: window.inner_size().into(),
                     image_usage: ImageUsage::COLOR_ATTACHMENT,
                     composite_alpha,
+                    image_color_space: color_space,
                     ..Default::default()
                 },
             )?
@@ -250,12 +250,21 @@ impl VulkanContext {
         Ok(())
     }
 
-    fn start_command_buffer(&self, framebuffer: Arc<Framebuffer>) -> Result<CommandBufferBuilder> {
-        let mut builder = AutoCommandBufferBuilder::primary(
+    fn start_command_buffer(&self) -> Result<CommandBufferBuilder<PrimaryAutoCommandBuffer>> {
+        let builder = AutoCommandBufferBuilder::primary(
             &self.command_buffer_allocator,
             self.queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
+
+        Ok(builder)
+    }
+
+    fn start_render_pass(
+        &self,
+        builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer: Arc<Framebuffer>,
+    ) -> Result<()> {
         builder.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some((1.0, 0).into())],
@@ -263,8 +272,7 @@ impl VulkanContext {
             },
             SubpassContents::Inline,
         )?;
-
-        Ok(builder)
+        Ok(())
     }
 
     pub(crate) fn window_size(&self) -> (u32, u32) {

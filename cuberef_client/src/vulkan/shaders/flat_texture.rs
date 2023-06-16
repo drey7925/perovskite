@@ -44,7 +44,7 @@ use super::vert_2d::UniformData;
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
-struct FlatTextureVertex {
+pub(crate) struct FlatTextureVertex {
     #[format(R32G32_SFLOAT)]
     /// Position in pixel space
     pub(crate) position: [f32; 2],
@@ -56,6 +56,12 @@ struct FlatTextureVertex {
 #[derive(Clone)]
 pub(crate) struct FlatTextureDrawCall {
     vertex_buffer: Subbuffer<[FlatTextureVertex]>,
+}
+
+impl FlatTextureDrawCall {
+    pub(crate) fn vertex_buffer(&self) -> &Subbuffer<[FlatTextureVertex]> {
+        &self.vertex_buffer
+    }
 }
 
 pub(crate) struct FlatTextureDrawBuilder {
@@ -147,9 +153,9 @@ pub(crate) struct FlatTexPipelineWrapper {
 }
 impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
     type PassIdentifier = ();
-    fn draw(
+    fn draw<L>(
         &mut self,
-        builder: &mut CommandBufferBuilder,
+        builder: &mut CommandBufferBuilder<L>,
         draw_calls: &[FlatTextureDrawCall],
         _pass: (),
     ) -> anyhow::Result<()> {
@@ -163,11 +169,11 @@ impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
         Ok(())
     }
 
-    fn bind(
+    fn bind<L>(
         &mut self,
         ctx: &crate::vulkan::VulkanContext,
         _per_frame_config: (),
-        command_buf_builder: &mut CommandBufferBuilder,
+        command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: (),
     ) -> anyhow::Result<()> {
         let layout = self.pipeline.layout().clone();
@@ -206,13 +212,15 @@ impl PipelineProvider for FlatTexPipelineProvider {
     type DrawCall = FlatTextureDrawCall;
     type PerFrameConfig = ();
     type PipelineWrapperImpl = FlatTexPipelineWrapper;
-    type PerPipelineConfig = Arc<Texture2DHolder>;
+    // texture atlas, subpass number
+    type PerPipelineConfig<'a> = (&'a Texture2DHolder, u32);
 
     fn make_pipeline(
         &self,
         ctx: &VulkanContext,
-        config: Arc<Texture2DHolder>,
+        config: (&Texture2DHolder, u32),
     ) -> Result<Self::PipelineWrapperImpl> {
+        let (atlas, subpass) = config;
         let pipeline = GraphicsPipeline::start()
             .vertex_input_state(FlatTextureVertex::per_vertex())
             .vertex_shader(self.vs.entry_point("main").unwrap(), ())
@@ -232,7 +240,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
             .color_blend_state(
                 vulkano::pipeline::graphics::color_blend::ColorBlendState::default().blend_alpha(),
             )
-            .render_pass(Subpass::from(ctx.render_pass.clone(), 0).unwrap())
+            .render_pass(Subpass::from(ctx.render_pass.clone(), subpass).unwrap())
             .build(self.device.clone())?;
 
         let buffer = Buffer::from_data(
@@ -251,7 +259,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
         )
         .with_context(|| "Failed to make buffer for uniforms")?;
 
-        let texture_descriptor_set = config.descriptor_set(&pipeline, 0, 0)?;
+        let texture_descriptor_set = atlas.descriptor_set(&pipeline, 0, 0)?;
         Ok(FlatTexPipelineWrapper {
             pipeline,
             buffer,

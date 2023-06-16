@@ -209,7 +209,10 @@ impl BlockRenderer {
         })
     }
 
-    pub(crate) fn texture(&self) -> Arc<Texture2DHolder> {
+    pub(crate) fn atlas(&self) -> &Texture2DHolder {
+        &self.texture_atlas
+    }
+    pub(crate) fn clone_atlas(&self) -> Arc<Texture2DHolder> {
         self.texture_atlas.clone()
     }
 
