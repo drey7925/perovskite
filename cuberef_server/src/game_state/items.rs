@@ -84,7 +84,7 @@ impl ItemStack {
                     Some(QuantityType::Wear(_)) => 0,
                     None => 0,
                 },
-                splittable: matches!(item.proto.quantity_type, Some(QuantityType::Stack(_))),
+                stackable: matches!(item.proto.quantity_type, Some(QuantityType::Stack(_))),
             },
         }
     }
@@ -175,7 +175,7 @@ impl MaybeStack for Option<ItemStack> {
         match count {
             Some(count) => {
                 if self.is_some() {
-                    if self.as_ref().unwrap().proto.splittable {
+                    if self.as_ref().unwrap().proto.stackable {
                         let self_count = self.as_mut().unwrap().proto.quantity;
                         let taken = self_count.min(count);
                         let remaining = self_count.saturating_sub(count);

@@ -35,7 +35,9 @@ use crate::{
     },
 };
 
-use super::{CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED, UNKNOWN_TEXTURE, get_texture};
+use super::{
+    get_texture, CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED, UNKNOWN_TEXTURE,
+};
 
 pub(crate) struct GameHud {
     pub(crate) texture_coords: HashMap<String, Rect>,
@@ -149,7 +151,13 @@ impl GameHud {
 
         let mut fps_builder = FlatTextureDrawBuilder::new();
         let fps = self.fps_counter.tick() as u32;
-        self.render_number((128, 0), fps, &mut fps_builder);
+        render_number(
+            (128, 0),
+            fps,
+            &mut fps_builder,
+            &self.texture_coords,
+            &self.texture_atlas,
+        );
         outputs.push(fps_builder.build(ctx)?);
 
         Ok(outputs)
@@ -172,38 +180,6 @@ impl GameHud {
             1,
         );
         builder.build(ctx)
-    }
-
-    // Numbers are right-aligned, with pos being the rightmost point
-    fn render_number(
-        &self,
-        pos: (u32, u32),
-        mut number: u32,
-        builder: &mut FlatTextureDrawBuilder,
-    ) {
-        let digits_frame = self.texture_coords[DIGIT_ATLAS];
-        let mut x = pos.0 - DIGIT_WIDTH;
-        loop {
-            let digit = number % 10;
-            builder.rect(
-                Rect::new(x, pos.1, DIGIT_WIDTH, digits_frame.h),
-                Rect::new(
-                    digits_frame.x + digit * DIGIT_WIDTH,
-                    digits_frame.y,
-                    DIGIT_WIDTH,
-                    digits_frame.h,
-                ),
-                self.texture_atlas.dimensions(),
-            );
-            if x < DIGIT_WIDTH {
-                break;
-            }
-            x -= DIGIT_WIDTH - 1;
-            number /= 10;
-            if number == 0 {
-                return;
-            }
-        }
     }
 
     fn recreate_hotbar(
@@ -260,7 +236,15 @@ impl GameHud {
 
                 let frame_topright = (frame0_corner.0 + offset + w - 2, frame0_corner.1 + 2);
                 // todo handle items that have a wear bar
-                self.render_number(frame_topright, stack.quantity, &mut builder);
+                if stack.max_stack > 1 && stack.quantity != 1 {
+                    render_number(
+                        frame_topright,
+                        stack.quantity,
+                        &mut builder,
+                        &self.texture_coords,
+                        &self.texture_atlas,
+                    );
+                }
             }
 
             let frame_rect = Rect::new(frame0_corner.0 + offset, frame0_corner.1, w, h);
@@ -313,6 +297,39 @@ impl GameHud {
 
     pub(crate) fn texture_atlas(&self) -> &Texture2DHolder {
         self.texture_atlas.as_ref()
+    }
+}
+
+// Numbers are right-aligned, with pos being the rightmost point
+pub(crate) fn render_number(
+    pos: (u32, u32),
+    mut number: u32,
+    builder: &mut FlatTextureDrawBuilder,
+    atlas_coords: &HashMap<String, Rect>,
+    atlas: &Texture2DHolder,
+) {
+    let digits_frame = atlas_coords[DIGIT_ATLAS];
+    let mut x = pos.0 - DIGIT_WIDTH;
+    loop {
+        let digit = number % 10;
+        builder.rect(
+            Rect::new(x, pos.1, DIGIT_WIDTH, digits_frame.h),
+            Rect::new(
+                digits_frame.x + digit * DIGIT_WIDTH,
+                digits_frame.y,
+                DIGIT_WIDTH,
+                digits_frame.h,
+            ),
+            atlas.dimensions(),
+        );
+        if x < DIGIT_WIDTH {
+            break;
+        }
+        x -= DIGIT_WIDTH - 1;
+        number /= 10;
+        if number == 0 {
+            return;
+        }
     }
 }
 

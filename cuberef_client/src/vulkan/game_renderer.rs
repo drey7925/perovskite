@@ -211,10 +211,12 @@ impl CuberefRenderer {
                     // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
                     // you cannot create one independently of any particular pipeline.
                     let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
-                    self.ctx.start_render_pass(
-                        &mut command_buf_builder,
-                        self.ctx.framebuffers[image_i as usize].clone(),
-                    ).unwrap();
+                    self.ctx
+                        .start_render_pass(
+                            &mut command_buf_builder,
+                            self.ctx.framebuffers[image_i as usize].clone(),
+                        )
+                        .unwrap();
 
                     let command_buffers =
                         self.build_command_buffers(window_size, command_buf_builder);
@@ -365,11 +367,7 @@ impl CuberefRenderer {
             )
             .unwrap();
         self.egui_adapter
-            .draw(
-                &self.ctx,
-                &mut command_buf_builder,
-                &self.client_state,
-            )
+            .draw(&self.ctx, &mut command_buf_builder, &self.client_state)
             .unwrap();
 
         self.finish_command_buffer(command_buf_builder).unwrap()

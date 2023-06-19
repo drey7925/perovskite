@@ -66,7 +66,7 @@ impl DroppedItem {
                         item_name: item.clone(),
                         quantity: count,
                         max_stack: 256,
-                        splittable: true,
+                        stackable: true,
                     },
                 }])
             }),
@@ -78,7 +78,7 @@ impl DroppedItem {
                         item_name: item,
                         quantity: count,
                         max_stack: 256,
-                        splittable: true,
+                        stackable: true,
                     },
                 }])
             }),

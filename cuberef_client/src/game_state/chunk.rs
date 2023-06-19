@@ -80,7 +80,6 @@ impl ClientChunk {
         // a redraw
         if old_id != new_id {
             self.block_ids[block_coord.offset().as_index()] = new_id;
-            self.cached_vertex_data = None;
         }
 
         Ok(old_id != new_id)

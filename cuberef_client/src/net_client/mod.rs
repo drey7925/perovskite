@@ -301,6 +301,19 @@ impl OutboundContext {
                 ))
                 .await?;
             }
+            GameAction::Inventory(action) => {
+                self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Inventory(
+                    rpc::InventoryAction {
+                        source_view: action.source_view,
+                        source_slot: action.source_slot.try_into()?,
+                        destination_view: action.destination_view,
+                        destnation_slot: action.destination_slot.try_into()?,
+                        count: action.count,
+                        swap: action.swap,
+                    },
+                ))
+                .await?;
+            }
         }
         Ok(())
     }
@@ -414,7 +427,7 @@ impl InboundContext {
                 self.handle_unsubscribe(unsub).await?;
             }
             Some(rpc::stream_to_client::ServerMessage::MapDeltaUpdate(delta_update)) => {
-                self.handle_delta_update(delta_update).await?;
+                self.handle_map_delta_update(delta_update).await?;
             }
             Some(rpc::stream_to_client::ServerMessage::InventoryUpdate(inventory_update)) => {
                 self.handle_inventory_update(inventory_update).await?;
@@ -532,7 +545,7 @@ impl InboundContext {
         Ok(())
     }
 
-    async fn handle_delta_update(&mut self, batch: &rpc::MapDeltaUpdateBatch) -> Result<()> {
+    async fn handle_map_delta_update(&mut self, batch: &rpc::MapDeltaUpdateBatch) -> Result<()> {
         let chunk_manager_read_lock = self.client_state.chunks.read_lock();
 
         let mut missing_coord = false;
@@ -619,10 +632,12 @@ impl InboundContext {
         &mut self,
         inventory_update: &rpc::InventoryUpdate,
     ) -> Result<()> {
-        let Some(inv_proto) = &inventory_update.inventory else {
-            return self.send_bugcheck("Missing inventory in InventoryUpdate".to_string()).await;
+        if inventory_update.inventory.is_none() {
+            return self
+                .send_bugcheck("Missing inventory in InventoryUpdate".to_string())
+                .await;
         };
-        let inv = ClientInventory::from_proto(inv_proto.clone());
+        let inv = ClientInventory::from_proto(inventory_update);
         let mut hud_lock = self.client_state.hud.lock();
         if Some(inventory_update.view_id) == hud_lock.hotbar_view_id {
             hud_lock.invalidate_hotbar();
@@ -662,7 +677,9 @@ impl InboundContext {
             .lock()
             .set_position(pos_vector.try_into()?);
 
-        self.client_state.egui.lock().inventory_view = state_update.inventory_popup.clone();
+        let mut egui_lock = self.client_state.egui.lock();
+        egui_lock.inventory_view = state_update.inventory_popup.clone();
+        egui_lock.inventory_manipulation_view_id = Some(state_update.inventory_manipulation_view);
 
         let mut hud_lock = self.client_state.hud.lock();
         hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);

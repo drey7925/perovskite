@@ -49,14 +49,22 @@ impl ClientItemManager {
 
 #[derive(Debug)]
 pub(crate) struct ClientInventory {
+    id: u64,
     pub(crate) dimensions: (u32, u32),
     stacks: Vec<Option<items_proto::ItemStack>>,
+    pub(crate) can_place: bool,
+    pub(crate) can_take: bool,
+    pub(crate) take_exact: bool
 }
 impl ClientInventory {
-    pub(crate) fn from_proto(proto: items_proto::Inventory) -> ClientInventory {
+    pub(crate) fn from_proto(
+        proto: &cuberef_core::protocol::game_rpc::InventoryUpdate,
+    ) -> ClientInventory {
+        let inventory = proto.inventory.clone().unwrap();
         ClientInventory {
-            dimensions: (proto.height, proto.width),
-            stacks: proto
+            id: proto.view_id,
+            dimensions: (inventory.height, inventory.width),
+            stacks: inventory
                 .contents
                 .into_iter()
                 .map(|x| {
@@ -67,6 +75,9 @@ impl ClientInventory {
                     }
                 })
                 .collect(),
+            can_place: proto.can_place,
+            can_take: proto.can_take,
+            take_exact: proto.take_exact
         }
     }
     pub(crate) fn contents(&self) -> &[Option<items_proto::ItemStack>] {

@@ -82,7 +82,7 @@ message ItemStack {
   // old stacks will carry the old stacking behavior.
   uint32 max_stack = 3;
 
-  bool splittable = 4;
+  bool stackable = 4;
 
   // TODO future expansion: extended data, in a way that prevents client tampering
 }

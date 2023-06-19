@@ -797,6 +797,7 @@ dependencies = [
  "log",
  "microbench",
  "parking_lot",
+ "polonius-the-crab",
  "prost",
  "rand 0.8.5",
  "rocksdb",
@@ -2145,6 +2146,12 @@ dependencies = [
  "flate2",
  "miniz_oxide 0.7.1",
 ]
+
+[[package]]
+name = "polonius-the-crab"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0119ad75060c93b2017796396280ab9c1870738bf3b66a8cb20deb3c9075426"
 
 [[package]]
 name = "ppv-lite86"

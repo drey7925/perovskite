@@ -4,20 +4,24 @@ use egui::TextureId;
 use egui_winit_vulkano::{Gui, GuiConfig};
 use parking_lot::Mutex;
 use vulkano::{
-    command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferInheritanceInfo,
-        SubpassContents,
-    },
+    command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents},
     image::SampleCount,
     render_pass::Subpass,
 };
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
-use crate::{game_state::ClientState, game_ui::egui_ui::EguiUi, vulkan::{VulkanContext, Texture2DHolder}};
+use crate::{
+    game_state::ClientState,
+    game_ui::egui_ui::EguiUi,
+    vulkan::{Texture2DHolder, VulkanContext},
+};
 
 use anyhow::{Context, Result};
 
-use super::{flat_texture::{FlatTexPipelineWrapper, FlatTexPipelineProvider}, PipelineProvider, PipelineWrapper};
+use super::{
+    flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
+    PipelineProvider, PipelineWrapper,
+};
 
 // Main thread components of egui rendering (e.g. the Gui which contains a non-Send event loop)
 pub(crate) struct EguiAdapter {
@@ -26,7 +30,7 @@ pub(crate) struct EguiAdapter {
     atlas_texture_id: TextureId,
     atlas: Arc<Texture2DHolder>,
     flat_overlay_pipeline: FlatTexPipelineWrapper,
-    flat_overlay_provider: FlatTexPipelineProvider
+    flat_overlay_provider: FlatTexPipelineProvider,
 }
 impl EguiAdapter {
     pub(crate) fn window_event(&mut self, event: &WindowEvent) -> bool {
@@ -56,18 +60,18 @@ impl EguiAdapter {
             config,
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
-        let atlas_texture_id =
-            gui_adapter.register_user_image_view(atlas.clone_image_view());
+        let atlas_texture_id = gui_adapter.register_user_image_view(atlas.clone_image_view());
 
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
-        let flat_overlay_pipeline = flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
+        let flat_overlay_pipeline =
+            flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
         Ok(EguiAdapter {
             gui_adapter,
             egui_ui,
             atlas_texture_id,
             atlas,
             flat_overlay_pipeline,
-            flat_overlay_provider
+            flat_overlay_provider,
         })
     }
 
@@ -91,7 +95,7 @@ impl EguiAdapter {
             builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
             builder.execute_commands(cmdbuf)?;
 
-            if let Some(draw_call) = egui.get_carried_itemstack(ctx)? {
+            if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
                 let mut secondary_builder = AutoCommandBufferBuilder::secondary(
                     &ctx.command_buffer_allocator,
                     ctx.queue.queue_family_index(),
@@ -105,8 +109,11 @@ impl EguiAdapter {
                         ..Default::default()
                     },
                 )?;
-                self.flat_overlay_pipeline.bind(ctx, (), &mut secondary_builder, ()).unwrap();
-                self.flat_overlay_pipeline.draw(&mut secondary_builder, &[draw_call], ())?;
+                self.flat_overlay_pipeline
+                    .bind(ctx, (), &mut secondary_builder, ())
+                    .unwrap();
+                self.flat_overlay_pipeline
+                    .draw(&mut secondary_builder, &[draw_call], ())?;
                 builder.execute_commands(secondary_builder.build()?)?;
             }
 
@@ -119,7 +126,9 @@ impl EguiAdapter {
     }
 
     pub(crate) fn notify_resize(&mut self, ctx: &VulkanContext) -> Result<()> {
-        self.flat_overlay_pipeline = self.flat_overlay_provider.make_pipeline(ctx, (self.atlas.as_ref(), 1))?;
+        self.flat_overlay_pipeline = self
+            .flat_overlay_provider
+            .make_pipeline(ctx, (self.atlas.as_ref(), 1))?;
         Ok(())
     }
 }

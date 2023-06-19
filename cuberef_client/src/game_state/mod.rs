@@ -56,10 +56,21 @@ pub(crate) struct PlaceAction {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct InventoryAction {
+    pub(crate) source_view: u64,
+    pub(crate) source_slot: usize,
+    pub(crate) destination_view: u64,
+    pub(crate) destination_slot: usize,
+    pub(crate) count: u32,
+    pub(crate) swap: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum GameAction {
     Dig(DigTapAction),
     Tap(DigTapAction),
     Place(PlaceAction),
+    Inventory(InventoryAction),
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<Mutex<ClientChunk>>>;
@@ -188,7 +199,6 @@ impl ClientState {
                         scancode, state, ..
                     }),
             } => {
-                
                 if scancode == 0x17 && state == ElementState::Pressed {
                     self.egui.lock().open_inventory()
                 }

@@ -16,6 +16,7 @@
 
 use std::{
     borrow::Borrow,
+    marker::PhantomData,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -112,7 +113,7 @@ impl Inventory {
                     item_name: String::from(""),
                     quantity: 0,
                     max_stack: 0,
-                    splittable: false,
+                    stackable: false,
                 },
             })
             .collect();
@@ -232,7 +233,7 @@ impl InventoryManager {
         mutator: F,
     ) -> Result<T>
     where
-        F: FnOnce(&mut Vec<Inventory>) -> Result<T>,
+        F: FnOnce(&mut [Inventory]) -> Result<T>,
     {
         let db = self.db.lock();
         let mut inventories = Vec::with_capacity(keys.len());
@@ -295,6 +296,14 @@ pub struct BorrowedStack {
     borrowed_stack: ItemStack,
 }
 
+pub struct VirtualOutputCallbacks<T> {
+    /// Callback that shows what items are visible in the view. This should be idempotent
+    peek: Box<dyn Fn(&T) -> Vec<Option<ItemStack>> + Sync + Send>,
+    /// Callback of (context, slot#, count). If count is None, user is taking everything visible in peek.
+    /// If this view is take_exact, then the impl is free to disregard the count parameter
+    take: Box<dyn FnMut(&T, usize, Option<u32>) -> Option<ItemStack> + Sync + Send>,
+}
+
 /// Where the items in the inventory view actually come from.
 ///
 /// The type parameter T represents the type passed to the callbacks as context.
@@ -309,13 +318,11 @@ pub enum ViewBacking<T> {
     /// a callback of a virtual view)
     ///
     /// TODO figure out what happens if the returned items can't fit or they have an empty borrows_from
-    Transient(Vec<Option<BorrowedStack>>),
+    Transient(parking_lot::RwLock<Vec<Option<BorrowedStack>>>),
     /// This inventory view is generated on-the-fly and does not represent real items
     /// e.g. the output of a recipe grid.
     ///
     /// Once an item is taken from the view, it becomes real, and must be placed somewhere.
-    ///
-    /// TODO figure out the types of the callback(s) (while implementing a sample use-case)
     ///
     /// This includes a callback that can e.g. consume input items from other views when
     /// an itemstack is taken from the view.
@@ -326,9 +333,9 @@ pub enum ViewBacking<T> {
     ///
     /// Note that VirtualInput and VirtualOutput may be refactored into the same enum variant with the callbacks combined;
     /// however the edge cases involving both input and output are not yet resolved in the current MVP.
-    VirtualOutput(Box<dyn Fn(&T) -> Vec<ItemStack> + Sync + Send>),
+    VirtualOutput(parking_lot::RwLock<VirtualOutputCallbacks<T>>),
     /// This inventory view doesn't hold anything. When a stack is placed into it, it is consumed from
-    /// its source and a callback (whose type is still TBD) will be invoked.
+    /// its source and a callback will be invoked.
     ///
     /// Nothing interesting happens when this view is deleted, because this view doesn't "hold" any items.
     ///
@@ -358,6 +365,7 @@ pub struct InventoryView<T> {
     pub(crate) can_place: bool,
     /// Whether the user can take things out of this view
     pub(crate) can_take: bool,
+    take_exact: bool,
     /// The kind of inventory this view is showing    
     pub(crate) backing: ViewBacking<T>,
     pub(crate) id: InventoryViewId,
@@ -378,6 +386,7 @@ impl<T> InventoryView<T> {
             dimensions: inventory.dimensions,
             can_place,
             can_take,
+            take_exact: false,
             backing: ViewBacking::Stored(inventory_key),
             game_state,
             id: next_id(),
@@ -392,6 +401,7 @@ impl<T> InventoryView<T> {
         mut initial_contents: Vec<Option<BorrowedStack>>,
         can_place: bool,
         can_take: bool,
+        take_exact: bool,
     ) -> Result<InventoryView<T>> {
         if initial_contents.is_empty() {
             initial_contents.resize_with(dimensions.0 as usize * dimensions.1 as usize, || None);
@@ -401,7 +411,8 @@ impl<T> InventoryView<T> {
             dimensions,
             can_place,
             can_take,
-            backing: ViewBacking::Transient(initial_contents),
+            take_exact,
+            backing: ViewBacking::Transient(initial_contents.into()),
             id: next_id(),
             game_state,
         })
@@ -425,7 +436,11 @@ impl<T> InventoryView<T> {
 }
 
 /// A representation of an inventory view that's independent of the actual callback type involved.
-pub trait TypeErasedInventoryView: Send + Sync + 'static {
+pub struct InventoryViewWithContext<'a, T> {
+    pub(crate) view: &'a InventoryView<T>,
+    pub(crate) context: &'a T,
+}
+pub trait TypeErasedInventoryView {
     /// Get the ID of this view
     fn id(&self) -> InventoryViewId;
 
@@ -438,21 +453,110 @@ pub trait TypeErasedInventoryView: Send + Sync + 'static {
     /// views (if virtual).
     ///
     /// peek should be called immediately after to see what the view should display.
-    fn take(&mut self, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>>;
+    fn take(&self, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>>;
     /// Attempts to place a stack into the given slot in the view.
     /// Returns the leftover stack (possibly the entire provided stack if it cannot be accepted here)
     ///
     /// peek should be called immediate after to see what the view should display.
-    fn put(&mut self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>>;
+    fn put(&self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>>;
+
+    fn can_place(&self) -> bool;
+    fn can_take(&self) -> bool;
+    // if true, user must take exactly the amount shown in the stack they're taking. Probably only useful for VirtualOutput
+    // stacks (or maybe transient stacks) used as crafting output or similar.
+    fn take_exact(&self) -> bool;
+
+    fn to_client_proto(&self) -> Result<cuberef_core::protocol::game_rpc::InventoryUpdate>;
 }
-impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
+
+impl<'a, T> TypeErasedInventoryView for InventoryViewWithContext<'a, T> {
+    fn id(&self) -> InventoryViewId {
+        self.view.id
+    }
+
+    fn dimensions(&self) -> (u32, u32) {
+        self.view.dimensions
+    }
+
     fn peek(&self) -> Result<Vec<Option<ItemStack>>> {
+        self.view.peek(&self.context)
+    }
+
+    fn take(&self, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>> {
+        self.view.take(&self.context, slot, count)
+    }
+
+    fn put(&self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>> {
+        self.view.put(&self.context, slot, stack)
+    }
+
+    fn can_place(&self) -> bool {
+        self.view.can_place
+    }
+
+    fn can_take(&self) -> bool {
+        self.view.can_take
+    }
+
+    fn take_exact(&self) -> bool {
+        self.view.take_exact
+    }
+
+    fn to_client_proto(&self) -> Result<cuberef_core::protocol::game_rpc::InventoryUpdate> {
+        self.view.to_client_proto(&self.context)
+    }
+}
+
+impl TypeErasedInventoryView for &InventoryView<()> {
+    fn id(&self) -> InventoryViewId {
+        self.id
+    }
+
+    fn dimensions(&self) -> (u32, u32) {
+        self.dimensions
+    }
+
+    fn peek(&self) -> Result<Vec<Option<ItemStack>>> {
+        (*self).peek(&())
+    }
+
+    fn take(&self, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>> {
+        (*self).take(&(), slot, count)
+    }
+
+    fn put(&self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>> {
+        (*self).put(&(), slot, stack)
+    }
+
+    fn can_place(&self) -> bool {
+        self.can_place
+    }
+
+    fn can_take(&self) -> bool {
+        self.can_take
+    }
+
+    fn take_exact(&self) -> bool {
+        self.take_exact
+    }
+
+    fn to_client_proto(&self) -> Result<cuberef_core::protocol::game_rpc::InventoryUpdate> {
+        (*self).to_client_proto(&())
+    }
+}
+
+impl<T> InventoryView<T> {
+    /// See the items in this view (e.g. to display the inventory).
+    fn peek(&self, context: &T) -> Result<Vec<Option<ItemStack>>> {
         match &self.backing {
             ViewBacking::Transient(contents) => Ok(contents
+                .borrow()
+                .try_read()
+                .context("already borrowed")?
                 .iter()
                 .map(|x| x.as_ref().map(|x| x.borrowed_stack.clone()))
                 .collect()),
-            ViewBacking::VirtualOutput(_) => todo!(),
+            ViewBacking::VirtualOutput(virt_out) => Ok((virt_out.read().peek)(context)),
             ViewBacking::VirtualInput(_) => todo!(),
             ViewBacking::Stored(key) => Ok(self
                 .game_state
@@ -463,13 +567,18 @@ impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
                 .to_vec()),
         }
     }
-
-    fn take(&mut self, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>> {
+    /// Takes a stack from one of the slots in this view (e.g. when clicked with a cursor).
+    /// This will either modify the items in this view (if transient/stored) or possibly modify other
+    /// views (if virtual).
+    ///
+    /// peek should be called immediately after to see what the view should display.
+    fn take(&self, context: &T, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>> {
         ensure!(slot < (self.dimensions.0 as usize * self.dimensions.1 as usize));
-        match &mut self.backing {
+        match &self.backing {
             ViewBacking::Transient(contents) => {
+                let mut guard = contents.try_write().context("already borrowed")?;
                 // unwrap is ok - we checked the length
-                let slot_contents = contents.get_mut(slot).unwrap();
+                let slot_contents = guard.get_mut(slot).unwrap();
                 if slot_contents.is_some() {
                     let borrows_from = slot_contents.as_ref().unwrap().borrows_from;
                     let mut inner = Some(slot_contents.as_ref().unwrap().borrowed_stack.clone());
@@ -488,7 +597,13 @@ impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
                     Ok(None)
                 }
             }
-            ViewBacking::VirtualOutput(_) => todo!(),
+            ViewBacking::VirtualOutput(virt_out) => Ok((virt_out.write().take)(
+                context, slot, count,
+            )
+            .map(|x| BorrowedStack {
+                borrows_from: None,
+                borrowed_stack: x,
+            })),
             ViewBacking::VirtualInput(_) => todo!(),
             ViewBacking::Stored(key) => Ok(self
                 .game_state
@@ -496,20 +611,23 @@ impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
                 .mutate_inventory_atomically(key, |inv| {
                     Ok(inv.contents_mut().get_mut(slot).unwrap().take_items(count))
                 })?
-                .map(|obtained| {
-                    BorrowedStack {
-                        borrows_from: Some((*key, slot)),
-                        borrowed_stack: obtained,
-                    }
+                .map(|obtained| BorrowedStack {
+                    borrows_from: Some((*key, slot)),
+                    borrowed_stack: obtained,
                 })),
         }
     }
 
-    fn put(&mut self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>> {
+    /// Attempts to place a stack into the given slot in the view.
+    /// Returns the leftover stack (possibly the entire provided stack if it cannot be accepted here)
+    ///
+    /// peek should be called immediate after to see what the view should display.
+    fn put(&self, context: &T, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>> {
         ensure!(slot < (self.dimensions.0 as usize * self.dimensions.1 as usize));
-        match &mut self.backing {
+        match &self.backing {
             ViewBacking::Transient(contents) => {
-                let slot_contents = contents.get_mut(slot).unwrap();
+                let mut guard = contents.try_write().context("already borrowed")?;
+                let slot_contents = guard.get_mut(slot).unwrap();
                 if slot_contents.is_none() {
                     *slot_contents = Some(stack);
                     Ok(None)
@@ -517,11 +635,9 @@ impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
                     let mut inner = slot_contents.as_mut().unwrap().borrowed_stack.clone();
                     let leftover = inner.try_merge(stack.borrowed_stack);
 
-                    Ok(leftover.map(|leftover| {
-                        BorrowedStack {
-                            borrows_from: stack.borrows_from,
-                            borrowed_stack: leftover,
-                        }
+                    Ok(leftover.map(|leftover| BorrowedStack {
+                        borrows_from: stack.borrows_from,
+                        borrowed_stack: leftover,
                     }))
                 }
             }
@@ -544,12 +660,58 @@ impl<T: 'static> TypeErasedInventoryView for InventoryView<T> {
         }
     }
 
+    /// Get the ID of this view
     fn id(&self) -> InventoryViewId {
         self.id
     }
-
+    /// Get the dimensions of this view
     fn dimensions(&self) -> (u32, u32) {
         self.dimensions
+    }
+
+    fn can_place(&self) -> bool {
+        self.can_place
+    }
+
+    fn can_take(&self) -> bool {
+        self.can_take
+    }
+
+    // if true, user must take exactly the amount shown in the stack they're taking. Probably only useful for VirtualOutput
+    // stacks (or maybe transient stacks) used as crafting output or similar.
+    fn take_exact(&self) -> bool {
+        self.take_exact
+    }
+
+    fn to_client_proto(
+        &self,
+        context: &T,
+    ) -> Result<cuberef_core::protocol::game_rpc::InventoryUpdate> {
+        Ok(cuberef_core::protocol::game_rpc::InventoryUpdate {
+            inventory: Some(cuberef_core::protocol::items::Inventory {
+                height: self.dimensions().0,
+                width: self.dimensions().1,
+                contents: self
+                    .peek(context)?
+                    .into_iter()
+                    .map(|x| {
+                        x.map_or_else(
+                            || cuberef_core::protocol::items::ItemStack {
+                                item_name: "".to_string(),
+                                quantity: 0,
+                                max_stack: 0,
+                                stackable: false,
+                            },
+                            |x| x.proto,
+                        )
+                    })
+                    .collect(),
+            }),
+            view_id: self.id().0,
+            can_place: self.can_place(),
+            can_take: self.can_take(),
+            take_exact: self.take_exact(),
+        })
     }
 }
 

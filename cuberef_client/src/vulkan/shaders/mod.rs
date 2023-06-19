@@ -186,7 +186,9 @@ where
     Self: Sized,
 {
     type DrawCall;
-    type PerPipelineConfig<'a> where Self: 'a;
+    type PerPipelineConfig<'a>
+    where
+        Self: 'a;
     type PerFrameConfig;
     type PipelineWrapperImpl: PipelineWrapper<Self::DrawCall, Self::PerFrameConfig>;
     fn make_pipeline(

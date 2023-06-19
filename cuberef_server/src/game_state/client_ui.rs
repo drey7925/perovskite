@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     inventory::{
-        BorrowedStack, InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView,
+        BorrowedStack, InventoryKey, InventoryView, InventoryViewId,
     },
     GameState,
 };
@@ -17,7 +17,6 @@ pub type Button = proto::Button;
 /// Callbacks for inventory views will receive this hashmap,
 /// mapping all inventory views using the form_key passed when calling
 /// inventory_view_stored or inventory_view_transient
-pub type CallbackContext<'a> = HashMap<String, &'a mut dyn TypeErasedInventoryView>;
 
 /// Choice of a widget. This API is subject to change.
 pub enum UiElement {
@@ -37,7 +36,7 @@ pub enum PopupAction {
     /// The popup was closed
     PopupClosed,
     /// A button (added to the UI programmatically) was clicked; its key is given here
-    ButtonClicked(String)
+    ButtonClicked(String),
 }
 
 /// Passed when a callback is invoked
@@ -46,7 +45,7 @@ pub struct PopupResponse {
     /// The key of the button that was clicked
     user_action: PopupAction,
     /// The values of all textfields
-    textfield_values: HashMap<String, String>
+    textfield_values: HashMap<String, String>,
 }
 
 /// A server-side representation of a custom UI drawn on the client's screen.
@@ -57,9 +56,9 @@ pub struct Popup {
     title: String,
     game_state: Arc<GameState>,
     widgets: Vec<UiElement>,
-    inventory_views: HashMap<String, InventoryView<CallbackContext<'static>>>,
+    inventory_views: HashMap<String, InventoryView<Popup>>,
     interested_stored_inventories: HashSet<InventoryKey>,
-    inventory_update_callback: Option<Box<dyn Fn(CallbackContext) + Send + Sync>>,
+    inventory_update_callback: Option<Box<dyn Fn(&Popup) + Send + Sync>>,
     button_callback: Option<Box<dyn Fn(PopupResponse) + Send + Sync>>,
 }
 impl Popup {
@@ -155,6 +154,7 @@ impl Popup {
             initial_contents,
             can_place,
             can_take,
+            false
         )?;
         self.widgets
             .push(UiElement::InventoryView(form_key.clone(), view.id));
@@ -176,16 +176,16 @@ impl Popup {
     /// This replaces any previously set function
     pub fn set_inventory_action_callback<F>(mut self, callback: F) -> Self
     where
-        F: Fn(CallbackContext) + Send + Sync + 'static,
+        F: Fn(&Popup) + Send + Sync + 'static,
     {
         self.inventory_update_callback = Some(Box::new(callback));
         self
     }
 
     /// Sets a function that will be called when a button is clicked
-    /// 
+    ///
     /// Exact parameters are still tbd
-    /// 
+    ///
     /// This replaces any previously set function
     pub fn set_button_callback<F>(mut self, callback: F) -> Self
     where
@@ -195,14 +195,9 @@ impl Popup {
         self
     }
 
-    pub(crate) fn invoke_inventory_action_callback(&mut self) {
+    pub(crate) fn invoke_inventory_action_callback(&self) {
         if let Some(callback) = &self.inventory_update_callback {
-            let context = self
-                .inventory_views
-                .iter_mut()
-                .map(|(k, v)| (k.clone(), v as &mut dyn TypeErasedInventoryView))
-                .collect();
-            callback(context);
+            callback(self);
         }
     }
 
@@ -248,9 +243,9 @@ impl Popup {
         }
     }
 
-    pub(crate) fn inventory_views(
+    pub(crate) fn inventory_views (
         &self,
-    ) -> impl Iterator<Item = &InventoryView<CallbackContext<'static>>> {
+    ) -> impl Iterator<Item = &InventoryView<Popup>> {
         self.inventory_views.values()
     }
 }

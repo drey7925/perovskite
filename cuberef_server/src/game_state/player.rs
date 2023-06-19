@@ -22,20 +22,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
-use cuberef_core::{coordinates::PlayerPositionUpdate, protocol::players::StoredPlayer};
+use cuberef_core::{
+    coordinates::PlayerPositionUpdate,
+    protocol::{game_rpc::InventoryAction, players::StoredPlayer},
+};
 
+use log::warn;
 use parking_lot::Mutex;
+use polonius_the_crab::{polonius, polonius_return};
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::database::database_engine::{GameDatabase, KeySpace};
+use crate::{database::database_engine::{GameDatabase, KeySpace}, game_state::inventory::InventoryViewWithContext};
 
 use super::{
     client_ui::Popup,
-    inventory::{InventoryKey, InventoryView, InventoryViewId},
+    inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
     GameState,
 };
 
@@ -58,9 +63,6 @@ impl Player {
     /// player's inventory
     pub fn main_inventory(&self) -> InventoryKey {
         self.main_inventory_key
-    }
-    pub fn hotbar_inventory_view(&self) -> InventoryViewId {
-        self.state.lock().hotbar_inventory_view.id
     }
     pub fn last_position(&self) -> PlayerPositionUpdate {
         self.state.lock().last_position
@@ -93,8 +95,16 @@ impl Player {
                 inventory_popup: make_inventory_popup(game_state.clone(), main_inventory_key)?,
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
-                    game_state,
+                    game_state.clone(),
                     false,
+                    false,
+                )?,
+                inventory_manipulation_view: InventoryView::new_transient(
+                    game_state,
+                    (1, 1),
+                    vec![None],
+                    true,
+                    true,
                     false,
                 )?,
             }),
@@ -119,8 +129,16 @@ impl Player {
                 inventory_popup: make_inventory_popup(game_state.clone(), main_inventory_key)?,
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
-                    game_state,
+                    game_state.clone(),
                     false,
+                    false,
+                )?,
+                inventory_manipulation_view: InventoryView::new_transient(
+                    game_state,
+                    (1, 1),
+                    vec![None],
+                    true,
+                    true,
                     false,
                 )?,
             }
@@ -139,7 +157,7 @@ fn make_inventory_popup(
         .title("Inventory")
         .inventory_view_stored("main".to_string(), main_inventory_key, true, true)?
         .set_inventory_action_callback(|ctx| {
-            println!("testonly {:?}", ctx.keys().collect::<Vec<_>>());
+            println!("testonly inv update");
         }))
 }
 
@@ -151,6 +169,92 @@ pub(crate) struct PlayerState {
     pub(crate) active_popups: Vec<Popup>,
     // The player's main inventory, which is shown in the user hotbar
     pub(crate) hotbar_inventory_view: InventoryView<()>,
+    // A 1x1 transient view used to carry items with the mouse
+    pub(crate) inventory_manipulation_view: InventoryView<()>,
+}
+impl PlayerState {
+    pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {
+        let source_view = self.find_inv_view(InventoryViewId(action.source_view))?;
+        let destination_view = self.find_inv_view(InventoryViewId(action.destination_view))?;
+
+        if source_view.can_take() && destination_view.can_place() {
+            if action.swap {
+                let taken_stack = source_view.take(action.source_slot as usize, None)?;
+                let other_taken_stack =
+                    destination_view.take(action.destnation_slot as usize, None)?;
+
+                if let Some(taken_stack) = taken_stack {
+                    // verify no leftover
+                    ensure!(destination_view
+                        .put(action.destnation_slot as usize, taken_stack)?
+                        .is_none());
+                }
+
+                if let Some(other_taken_stack) = other_taken_stack {
+                    // verify no leftover
+                    ensure!(source_view
+                        .put(action.source_slot as usize, other_taken_stack)?
+                        .is_none());
+                }
+            } else {
+                let taken_stack =
+                    source_view.take(action.source_slot as usize, Some(action.count))?;
+                if let Some(taken_stack) = taken_stack {
+                    let leftover =
+                        destination_view.put(action.destnation_slot as usize, taken_stack)?;
+                    if let Some(leftover) = leftover {
+                        let still_leftover =
+                            source_view.put(action.source_slot as usize, leftover)?;
+                        if let Some(still_leftover) = still_leftover {
+                            log::warn!("Still-leftover items were destroyed: {:?}", still_leftover);
+                        }
+                    }
+                }
+            }
+        } else {
+            warn!("Inventory view(s) not found for {action:?}");
+        }
+        for popup in self
+            .active_popups
+            .iter()
+            .chain(std::iter::once(&self.inventory_popup))
+        {
+            if popup
+                .inventory_views()
+                .any(|x| x.id.0 == action.source_view || x.id.0 == action.destination_view)
+            {
+                popup.invoke_inventory_action_callback();
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn find_inv_view<'a>(
+        &'a self,
+        id: InventoryViewId,
+    ) -> Result<Box<dyn TypeErasedInventoryView + 'a>> {
+        if self.inventory_manipulation_view.id == id {
+            return Ok(Box::new(&self.inventory_manipulation_view));
+        }
+        if self.hotbar_inventory_view.id == id {
+            return Ok(Box::new(&self.hotbar_inventory_view));
+        }
+
+        for popup in self
+            .active_popups
+            .iter()
+            .chain(std::iter::once(&self.inventory_popup))
+        {
+            if let Some(result) = popup.inventory_views().find(|x| x.id == id) {
+                return Ok(Box::new(InventoryViewWithContext {
+                                    view: result,
+                                    context: &popup,
+                                }))
+            }
+        }
+
+        bail!("View not found");
+    }
 }
 
 // Struct held by the client contexts for this player. When dropped, the
