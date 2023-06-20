@@ -147,7 +147,7 @@ impl CuberefGame for CuberefGameServerImpl {
             item_defs: self
                 .game_state
                 .item_manager()
-                .item_types()
+                .registered_items()
                 .map(|x| x.proto.clone())
                 .collect(),
         }))

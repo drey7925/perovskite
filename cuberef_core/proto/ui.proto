@@ -27,6 +27,8 @@ message TextField {
   string initial = 3;
   // Whether the textfield is editable
   bool enabled = 4;
+  
+  // todo support multiline, other styling
 }
 message Button {
   // The key used to identify that this button was clicked

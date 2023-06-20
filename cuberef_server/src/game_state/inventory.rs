@@ -27,7 +27,7 @@ use crate::{
 use anyhow::{bail, ensure, Context, Result};
 use cuberef_core::protocol::items as items_proto;
 use log::warn;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use prost::Message;
 use tokio::sync::broadcast;
 
@@ -291,17 +291,17 @@ pub struct InventoryViewId(pub(crate) u64);
 #[derive(Clone, Debug)]
 pub struct BorrowedStack {
     /// The location (inventory key, offset) that this stack is borrowing from
-    borrows_from: Option<(InventoryKey, usize)>,
+    pub borrows_from: Option<(InventoryKey, usize)>,
     /// The stack that is borrowed from the location indicated.
-    borrowed_stack: ItemStack,
+    pub borrowed_stack: ItemStack,
 }
 
 pub struct VirtualOutputCallbacks<T> {
     /// Callback that shows what items are visible in the view. This should be idempotent
-    peek: Box<dyn Fn(&T) -> Vec<Option<ItemStack>> + Sync + Send>,
+    pub peek: Box<dyn Fn(&T) -> Vec<Option<ItemStack>> + Sync + Send>,
     /// Callback of (context, slot#, count). If count is None, user is taking everything visible in peek.
     /// If this view is take_exact, then the impl is free to disregard the count parameter
-    take: Box<dyn FnMut(&T, usize, Option<u32>) -> Option<ItemStack> + Sync + Send>,
+    pub take: Box<dyn FnMut(&T, usize, Option<u32>) -> Option<ItemStack> + Sync + Send>,
 }
 
 /// Where the items in the inventory view actually come from.
@@ -372,7 +372,7 @@ pub struct InventoryView<T> {
     game_state: Arc<GameState>,
 }
 impl<T> InventoryView<T> {
-    pub fn new_stored(
+    pub(crate) fn new_stored(
         inventory_key: InventoryKey,
         game_state: Arc<GameState>,
         can_place: bool,
@@ -395,7 +395,7 @@ impl<T> InventoryView<T> {
     /// Creates a new transient view. This view is inert until added to a UI.
     ///
     /// initial_contents must either have length equal to dimensions.0 * dimensions.1, or be zero length
-    pub fn new_transient(
+    pub(crate) fn new_transient(
         game_state: Arc<GameState>,
         dimensions: (u32, u32),
         mut initial_contents: Vec<Option<BorrowedStack>>,
@@ -418,12 +418,66 @@ impl<T> InventoryView<T> {
         })
     }
 
+    pub(crate) fn new_virtual_output(
+        game_state: Arc<GameState>,
+        dimensions: (u32, u32),
+        callbacks: VirtualOutputCallbacks<T>,
+        take_exact: bool,
+    ) -> Result<InventoryView<T>> {
+        Ok(InventoryView {
+            dimensions,
+            can_place: false,
+            can_take: true,
+            take_exact,
+            backing: ViewBacking::VirtualOutput(RwLock::new(callbacks)),
+            id: next_id(),
+            game_state,
+        })
+    }
+
     /// Clears all the items in the view, returning them to their
     /// respective origin locations
-    pub(crate) fn clear(&mut self) {
-        if let ViewBacking::Transient(_transient_data) = &mut self.backing {
-            log::warn!("TODO drop transient");
+    pub(crate) fn clear_if_transient(&mut self, owner_inv_key: Option<InventoryKey>) -> Result<()> {
+        if let ViewBacking::Transient(transient_data) = &mut self.backing {
+            for stack in transient_data.write().iter_mut() {
+                if let Some(stack) = stack.take() {
+                    let leftover = if let Some((key, slot)) = stack.borrows_from {
+                        let leftover = self
+                            .game_state
+                            .inventory_manager()
+                            .mutate_inventory_atomically(&key, |inv| {
+                                let mut leftover = inv
+                                    .contents_mut()
+                                    .get_mut(slot)
+                                    .with_context(|| "Out of bounds slot #")?
+                                    .try_merge(Some(stack.borrowed_stack));
+                                if leftover.is_some() {
+                                    leftover = inv.try_insert(leftover.unwrap());
+                                }
+                                Ok(leftover)
+                            })?;
+                        leftover
+                    } else {
+                        Some(stack.borrowed_stack)
+                    };
+                    if leftover.is_some() {
+                        if let Some(key) = owner_inv_key {
+                            self.game_state
+                                .inventory_manager()
+                                .mutate_inventory_atomically(&key, |inv| {
+                                    let leftover = inv.try_insert(leftover.unwrap());
+                                    if leftover.is_some() {
+                                        log::warn!("Could not return {:?} to a home; its home inventory was full", leftover.unwrap());
+                                        // TODO handle this
+                                    }
+                                    Ok(())
+                                })?;
+                        };
+                    }
+                }
+            }
         }
+        Ok(())
     }
     /// Returns true if this view is backed by the given inventory key
     pub(crate) fn wants_update_for(&self, key: &InventoryKey) -> bool {
@@ -547,7 +601,7 @@ impl TypeErasedInventoryView for &InventoryView<()> {
 
 impl<T> InventoryView<T> {
     /// See the items in this view (e.g. to display the inventory).
-    fn peek(&self, context: &T) -> Result<Vec<Option<ItemStack>>> {
+    pub fn peek(&self, context: &T) -> Result<Vec<Option<ItemStack>>> {
         match &self.backing {
             ViewBacking::Transient(contents) => Ok(contents
                 .borrow()
@@ -556,7 +610,11 @@ impl<T> InventoryView<T> {
                 .iter()
                 .map(|x| x.as_ref().map(|x| x.borrowed_stack.clone()))
                 .collect()),
-            ViewBacking::VirtualOutput(virt_out) => Ok((virt_out.read().peek)(context)),
+            ViewBacking::VirtualOutput(virt_out) => {
+                let peeked = (virt_out.read().peek)(context);
+                ensure!(peeked.len() == self.dimensions.0 as usize * self.dimensions.1 as usize);
+                Ok(peeked)
+            }
             ViewBacking::VirtualInput(_) => todo!(),
             ViewBacking::Stored(key) => Ok(self
                 .game_state
@@ -572,7 +630,12 @@ impl<T> InventoryView<T> {
     /// views (if virtual).
     ///
     /// peek should be called immediately after to see what the view should display.
-    fn take(&self, context: &T, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>> {
+    pub fn take(
+        &self,
+        context: &T,
+        slot: usize,
+        count: Option<u32>,
+    ) -> Result<Option<BorrowedStack>> {
         ensure!(slot < (self.dimensions.0 as usize * self.dimensions.1 as usize));
         match &self.backing {
             ViewBacking::Transient(contents) => {
@@ -622,7 +685,12 @@ impl<T> InventoryView<T> {
     /// Returns the leftover stack (possibly the entire provided stack if it cannot be accepted here)
     ///
     /// peek should be called immediate after to see what the view should display.
-    fn put(&self, context: &T, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>> {
+    pub fn put(
+        &self,
+        context: &T,
+        slot: usize,
+        stack: BorrowedStack,
+    ) -> Result<Option<BorrowedStack>> {
         ensure!(slot < (self.dimensions.0 as usize * self.dimensions.1 as usize));
         match &self.backing {
             ViewBacking::Transient(contents) => {
@@ -641,7 +709,10 @@ impl<T> InventoryView<T> {
                     }))
                 }
             }
-            ViewBacking::VirtualOutput(_) => todo!(),
+            ViewBacking::VirtualOutput(_) => {
+                // can't put into a virtualoutput
+                return Ok(Some(stack));
+            }
             ViewBacking::VirtualInput(_) => todo!(),
             ViewBacking::Stored(key) => Ok(self
                 .game_state
@@ -717,7 +788,9 @@ impl<T> InventoryView<T> {
 
 impl<T> Drop for InventoryView<T> {
     fn drop(&mut self) {
-        self.clear()
+        if let Err(e) = self.clear_if_transient(None) {
+            log::error!("Failed to drop inventory view: {e:?}");
+        }
     }
 }
 

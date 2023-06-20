@@ -65,12 +65,13 @@ pub(crate) struct InventoryAction {
     pub(crate) swap: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum GameAction {
     Dig(DigTapAction),
     Tap(DigTapAction),
     Place(PlaceAction),
     Inventory(InventoryAction),
+    PopupResponse(cuberef_core::protocol::ui::PopupResponse),
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<Mutex<ClientChunk>>>;

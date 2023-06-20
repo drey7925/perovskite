@@ -314,6 +314,12 @@ impl OutboundContext {
                 ))
                 .await?;
             }
+            GameAction::PopupResponse(popup_response) => {
+                self.send_sequenced_message(rpc::stream_to_server::ClientMessage::PopupResponse(
+                    popup_response,
+                ))
+                .await?;
+            }
         }
         Ok(())
     }

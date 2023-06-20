@@ -54,7 +54,7 @@ pub(crate) struct ClientInventory {
     stacks: Vec<Option<items_proto::ItemStack>>,
     pub(crate) can_place: bool,
     pub(crate) can_take: bool,
-    pub(crate) take_exact: bool
+    pub(crate) take_exact: bool,
 }
 impl ClientInventory {
     pub(crate) fn from_proto(
@@ -77,7 +77,7 @@ impl ClientInventory {
                 .collect(),
             can_place: proto.can_place,
             can_take: proto.can_take,
-            take_exact: proto.take_exact
+            take_exact: proto.take_exact,
         }
     }
     pub(crate) fn contents(&self) -> &[Option<items_proto::ItemStack>] {

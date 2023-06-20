@@ -22,6 +22,8 @@ use std::time::Instant;
 
 use crate::game_state::blocks;
 use crate::game_state::blocks::BlockType;
+use crate::game_state::client_ui::PopupAction;
+use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
@@ -202,7 +204,7 @@ impl ClientOutboundContext {
             .iter()
             .chain(once(&player_state.inventory_popup))
         {
-            for view in popup.inventory_views() {
+            for view in popup.inventory_views().values() {
                 updates.push(make_inventory_update(
                     &self.game_state,
                     &InventoryViewWithContext {
@@ -255,7 +257,7 @@ impl ClientOutboundContext {
             .iter()
             .chain(once(&player_state.inventory_popup))
         {
-            for view in popup.inventory_views() {
+            for view in popup.inventory_views().values() {
                 if view.wants_update_for(&key) {
                     updates.push(make_inventory_update(
                         &self.game_state,
@@ -543,22 +545,16 @@ impl ClientOutboundContext {
             velocity: cgmath::Vector3::zero(),
             face_direction: (0., 0.),
         };
-        
+
         let player_state = self.player_context.state.lock();
-        let hotbar_update = make_inventory_update(
-            &self.game_state,
-            &&player_state.hotbar_inventory_view,
-        )?;
-        let inv_manipulation_update = make_inventory_update(
-            &self.game_state,
-            &&player_state.inventory_manipulation_view,
-        )?;
+        let hotbar_update =
+            make_inventory_update(&self.game_state, &&player_state.hotbar_inventory_view)?;
+        let inv_manipulation_update =
+            make_inventory_update(&self.game_state, &&player_state.inventory_manipulation_view)?;
         drop(player_state);
 
         self.outbound_tx.send(Ok(hotbar_update)).await?;
-        self.outbound_tx
-            .send(Ok(inv_manipulation_update))
-            .await?;
+        self.outbound_tx.send(Ok(inv_manipulation_update)).await?;
         self.send_popup_updates().await?;
 
         let player_state = self.player_context.state.lock();
@@ -703,7 +699,10 @@ impl ClientInboundContext {
                 self.handle_place(place_message).await?;
             }
             Some(proto::stream_to_server::ClientMessage::Inventory(inventory_message)) => {
-                self.handle_inventory(inventory_message).await?;
+                self.handle_inventory_action(inventory_message).await?;
+            }
+            Some(proto::stream_to_server::ClientMessage::PopupResponse(response)) => {
+                self.handle_popup_response(response).await?;
             }
             Some(_) => {
                 warn!(
@@ -912,7 +911,7 @@ impl ClientInboundContext {
             })
     }
 
-    async fn handle_inventory(&mut self, action: &proto::InventoryAction) -> Result<()> {
+    async fn handle_inventory_action(&mut self, action: &proto::InventoryAction) -> Result<()> {
         if action.source_view == action.destination_view {
             log::error!(
                 "Cannot handle an inventory action with the same source and destination view"
@@ -933,9 +932,10 @@ impl ClientInboundContext {
         {
             if popup
                 .inventory_views()
+                .values()
                 .any(|x| x.id.0 == action.source_view || x.id.0 == action.destination_view)
             {
-                for view in popup.inventory_views() {
+                for view in popup.inventory_views().values() {
                     views_to_send.insert(view.id);
                 }
             }
@@ -948,6 +948,83 @@ impl ClientInboundContext {
                 player_state.find_inv_view(view)?.as_ref(),
             )?);
         }
+        // drop before async calls
+        drop(player_state);
+        for update in updates {
+            self.outbound_tx
+                .send(Ok(update))
+                .await
+                .with_context(|| "Could not send outbound message (inventory update)")?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_popup_response(
+        &mut self,
+        action: &cuberef_core::protocol::ui::PopupResponse,
+    ) -> Result<()> {
+        let mut player_state = self.player_context.state.lock();
+        let user_action = if action.closed {
+            PopupAction::PopupClosed
+        } else {
+            PopupAction::ButtonClicked(action.clicked_button.clone())
+        };
+        let mut updates = vec![];
+        if action.closed {
+            player_state
+                .inventory_manipulation_view
+                .clear_if_transient(Some(self.player_context.main_inventory_key))?;
+            updates.push(make_inventory_update(
+                &self.game_state,
+                &&player_state.inventory_manipulation_view,
+            )?);
+        }
+        if let Some(popup) = player_state
+            .active_popups
+            .iter_mut()
+            .find(|x| x.id() == action.popup_id)
+        {
+            popup.handle_response(
+                PopupResponse {
+                    user_action,
+                    textfield_values: action.text_fields.clone(),
+                },
+                self.player_context.main_inventory(),
+            )?;
+            for view in popup.inventory_views().values() {
+                updates.push(make_inventory_update(
+                    &self.game_state,
+                    &InventoryViewWithContext {
+                        view,
+                        context: &popup,
+                    },
+                )?);
+            }
+        } else if player_state.inventory_popup.id() == action.popup_id {
+            player_state.inventory_popup.handle_response(
+                PopupResponse {
+                    user_action,
+                    textfield_values: action.text_fields.clone(),
+                },
+                self.player_context.main_inventory(),
+            )?;
+            for view in player_state.inventory_popup.inventory_views().values() {
+                updates.push(make_inventory_update(
+                    &self.game_state,
+                    &InventoryViewWithContext {
+                        view,
+                        context: &player_state.inventory_popup,
+                    },
+                )?);
+            }
+        } else {
+            log::error!(
+                "Got popup response for nonexistent popup {:?}",
+                action.popup_id
+            );
+        }
+
         // drop before async calls
         drop(player_state);
         for update in updates {

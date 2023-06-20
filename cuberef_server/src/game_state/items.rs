@@ -231,7 +231,7 @@ impl ItemManager {
         }
     }
 
-    pub(crate) fn item_types(&self) -> impl Iterator<Item = &Item> {
+    pub(crate) fn registered_items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
     }
 }

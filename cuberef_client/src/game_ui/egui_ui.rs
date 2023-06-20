@@ -1,10 +1,13 @@
 use anyhow::Result;
 use cuberef_core::protocol::items::ItemStack;
-use cuberef_core::protocol::ui as proto;
+use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
-use egui::{vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId};
+use egui::{
+    collapsing_header, popup, vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId,
+};
 use log::warn;
 use parking_lot::MutexGuard;
+use rustc_hash::FxHashMap;
 use std::{collections::HashMap, sync::Arc, usize};
 
 use crate::game_state::items::InventoryViewManager;
@@ -34,6 +37,8 @@ pub(crate) struct EguiUi {
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
+    text_fields: FxHashMap<(u64, String), String>,
+
     pub(crate) inventory_manipulation_view_id: Option<u64>,
     last_mouse_position: egui::Pos2,
     stack_carried_by_mouse_offset: (f32, f32),
@@ -51,6 +56,7 @@ impl EguiUi {
             inventory_open: false,
             inventory_view: None,
             scale: 1.0,
+            text_fields: FxHashMap::default(),
             inventory_manipulation_view_id: None,
             last_mouse_position: egui::Pos2 { x: 0., y: 0. },
             stack_carried_by_mouse_offset: (0., 0.),
@@ -95,6 +101,23 @@ impl EguiUi {
         }
     }
 
+    fn get_text_fields(&self, popup_id: u64) -> HashMap<String, String> {
+        self.text_fields
+            .iter()
+            .filter(|((popup, _), _)| popup == &popup_id)
+            .map(|((_, form_key), value)| (form_key.clone(), value.clone()))
+            .collect()
+    }
+    fn clear_text_fields(&mut self, popup: &PopupDescription) {
+        for field in popup.element.iter() {
+            if let Some(proto::ui_element::Element::TextField(text_field)) = &field.element {
+                // ugh, clone
+                self.text_fields
+                    .remove(&(popup.popup_id, text_field.key.clone()));
+            }
+        }
+    }
+
     pub(crate) fn draw_popup(
         &mut self,
         popup: &proto::PopupDescription,
@@ -102,29 +125,31 @@ impl EguiUi {
         atlas_texture_id: TextureId,
         client_state: &ClientState,
     ) {
-        // todo send a response
-        let mut text_field_contents = HashMap::new();
         egui::Window::new(popup.title.clone()).show(ctx, |ui| {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                // todo close the correct view, send events back
-                self.inventory_open = false;
-            }
+            ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+
+            let mut clicked_button = None;
             for element in &popup.element {
                 match &element.element {
                     Some(proto::ui_element::Element::Label(label)) => {
                         ui.label(label);
                     }
                     Some(proto::ui_element::Element::TextField(text_field)) => {
-                        let mut value = text_field.initial.clone();
+                        let value = self
+                            .text_fields
+                            .entry((popup.popup_id, text_field.key.clone()))
+                            .or_insert(text_field.initial.clone());
                         // todo support multiline, other styling
-                        let editor = egui::TextEdit::singleline(&mut value);
-                        ui.add_enabled(text_field.enabled, editor);
-                        text_field_contents.insert(text_field.key.clone(), value);
+                        let editor = egui::TextEdit::singleline(value);
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                            let label = ui.label(text_field.label.clone());
+                            ui.add_enabled(text_field.enabled, editor).labelled_by(label.id);
+                        });
                     }
                     Some(proto::ui_element::Element::Button(button_def)) => {
                         let button = egui::Button::new(button_def.label.clone());
                         if ui.add_enabled(button_def.enabled, button).clicked() {
-                            log::info!("todo handle button click");
+                            clicked_button = Some(button_def.key.clone());
                         }
                     }
                     Some(proto::ui_element::Element::Inventory(inventory)) => {
@@ -138,8 +163,35 @@ impl EguiUi {
                             client_state,
                         );
                     }
-                    None => todo!(),
+                    None => {
+                        ui.label("Invalid/missing popup item entry");
+                    }
                 }
+            }
+            if let Some(clicked_button) = clicked_button {
+                send_event(
+                    client_state,
+                    GameAction::PopupResponse(PopupResponse {
+                        popup_id: popup.popup_id,
+                        closed: false,
+                        clicked_button,
+                        text_fields: self.get_text_fields(popup.popup_id),
+                    }),
+                );
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                // todo close the correct view
+                send_event(
+                    client_state,
+                    GameAction::PopupResponse(PopupResponse {
+                        popup_id: popup.popup_id,
+                        closed: true,
+                        clicked_button: "".to_string(),
+                        text_fields: self.get_text_fields(popup.popup_id),
+                    }),
+                );
+                self.clear_text_fields(popup);
+                self.inventory_open = false;
             }
         });
     }
@@ -255,10 +307,10 @@ impl EguiUi {
                 let frame_response = ui.put(frame_rect, frame_image);
 
                 if frame_response.clicked() {
-                    clicked_index = dbg!(Some((index, InvClickType::LeftClick)));
+                    clicked_index = Some((index, InvClickType::LeftClick));
                     self.stack_carried_by_mouse_offset = (-frame_size.x / 2., -frame_size.y / 2.)
                 } else if frame_response.clicked_by(egui::PointerButton::Secondary) {
-                    clicked_index = dbg!(Some((index, InvClickType::RightClick)));
+                    clicked_index = Some((index, InvClickType::RightClick));
                 }
 
                 if let Some(stack) = &contents[index] {
@@ -289,7 +341,7 @@ impl EguiUi {
                                 let mut text = stack.quantity.to_string();
                                 let label_rect = egui::Rect::from_min_size(
                                     min_corner + vec2(40.0, 2.0),
-                                    frame_size - vec2(38.0, 48.0),
+                                    frame_size - vec2(38.0, 42.0),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::TOP),
@@ -594,7 +646,11 @@ fn handle_moves(
         return;
     };
 
-    if let Err(_) = client_state.actions.try_send(GameAction::Inventory(action)) {
+    send_event(client_state, GameAction::Inventory(action));
+}
+
+fn send_event(client_state: &ClientState, action: GameAction) {
+    if let Err(_) = client_state.actions.try_send(action) {
         log::info!("Sending action failed; server disconnected or lagging badly");
     }
 }

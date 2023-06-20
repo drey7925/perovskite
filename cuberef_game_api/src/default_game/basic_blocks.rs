@@ -78,7 +78,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
-                DIRT_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
             )
             .set_dropped_item(DIRT.0, 1)
             // testonly

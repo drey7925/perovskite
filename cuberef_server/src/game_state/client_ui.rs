@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     inventory::{
-        BorrowedStack, InventoryKey, InventoryView, InventoryViewId,
+        BorrowedStack, InventoryKey, InventoryView, InventoryViewId, VirtualOutputCallbacks,
     },
     GameState,
 };
@@ -43,9 +43,9 @@ pub enum PopupAction {
 /// Contents TBD
 pub struct PopupResponse {
     /// The key of the button that was clicked
-    user_action: PopupAction,
+    pub user_action: PopupAction,
     /// The values of all textfields
-    textfield_values: HashMap<String, String>,
+    pub textfield_values: HashMap<String, String>,
 }
 
 /// A server-side representation of a custom UI drawn on the client's screen.
@@ -81,31 +81,36 @@ impl Popup {
         self
     }
     /// Adds a new label to this popup. At the moment, the layout is still TBD.
-    pub fn label(mut self, label: String) -> Self {
-        self.widgets.push(UiElement::Label(label));
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.widgets.push(UiElement::Label(label.into()));
         self
     }
     /// Adds a new text field to this popup. At the moment, the layout is still TBD.
     pub fn text_field(
         mut self,
-        key: String,
-        label: String,
-        initial: String,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        initial: impl Into<String>,
         enabled: bool,
     ) -> Self {
         self.widgets.push(UiElement::TextField(TextField {
-            key,
-            label,
-            initial,
+            key: key.into(),
+            label: label.into(),
+            initial: initial.into(),
             enabled,
         }));
         self
     }
     /// Adds a new button to this popup.
-    pub fn button(mut self, key: String, label: String, enabled: bool) -> Self {
+    pub fn button(
+        mut self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        enabled: bool,
+    ) -> Self {
         self.widgets.push(UiElement::Button(Button {
-            key,
-            label,
+            key: key.into(),
+            label: label.into(),
             enabled,
         }));
         self
@@ -115,11 +120,12 @@ impl Popup {
     /// game database.
     pub fn inventory_view_stored(
         mut self,
-        form_key: String,
+        form_key: impl Into<String>,
         inventory_key: InventoryKey,
         can_place: bool,
         can_take: bool,
     ) -> Result<Self> {
+        let form_key = form_key.into();
         let view =
             InventoryView::new_stored(inventory_key, self.game_state.clone(), can_place, can_take)?;
         self.widgets
@@ -142,19 +148,20 @@ impl Popup {
     /// initial_contents must either have length equal to dimensions.0 * dimensions.1, or be zero length
     pub fn inventory_view_transient(
         mut self,
-        form_key: String,
+        form_key: impl Into<String>,
         dimensions: (u32, u32),
         initial_contents: Vec<Option<BorrowedStack>>,
         can_place: bool,
         can_take: bool,
     ) -> Result<Self> {
+        let form_key = form_key.into();
         let view = InventoryView::new_transient(
             self.game_state.clone(),
             dimensions,
             initial_contents,
             can_place,
             can_take,
-            false
+            false,
         )?;
         self.widgets
             .push(UiElement::InventoryView(form_key.clone(), view.id));
@@ -169,6 +176,35 @@ impl Popup {
             None => Ok(self),
         }
     }
+
+    pub fn inventory_view_virtual_output(
+        mut self,
+        form_key: impl Into<String>,
+        dimensions: (u32, u32),
+        callbacks: VirtualOutputCallbacks<Popup>,
+        take_exact: bool,
+    ) -> Result<Self> {
+        let form_key = form_key.into();
+        let view = InventoryView::new_virtual_output(
+            self.game_state.clone(),
+            dimensions,
+            callbacks,
+            take_exact,
+        )?;
+        self.widgets
+            .push(UiElement::InventoryView(form_key.clone(), view.id));
+        match self.inventory_views.insert(form_key.clone(), view) {
+            Some(view) => {
+                bail!(
+                    "form_key {} already registered for view {:?}",
+                    form_key,
+                    view.id
+                );
+            }
+            None => Ok(self),
+        }
+    }
+
     /// Sets a function that will be called after any inventories are updated.
     ///
     /// Exact parameters are still tbd
@@ -201,10 +237,16 @@ impl Popup {
         }
     }
 
-    pub(crate) fn invoke_button_callback(&self, response: PopupResponse) {
+    pub(crate) fn handle_response(&mut self, response: PopupResponse, player_main_inv: InventoryKey) -> Result<()> {
+        if let PopupAction::PopupClosed = response.user_action {
+            for view in self.inventory_views.values_mut() {
+                view.clear_if_transient(Some(player_main_inv))?;
+            }
+        }
         if let Some(callback) = &self.button_callback {
             callback(response)
         }
+        Ok(())
     }
 
     pub(crate) fn to_proto(&self) -> proto::PopupDescription {
@@ -243,10 +285,12 @@ impl Popup {
         }
     }
 
-    pub(crate) fn inventory_views (
-        &self,
-    ) -> impl Iterator<Item = &InventoryView<Popup>> {
-        self.inventory_views.values()
+    pub(crate) fn inventory_views(&self) -> &HashMap<String, InventoryView<Popup>> {
+        &self.inventory_views
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 }
 
