@@ -23,6 +23,7 @@ pub mod inventory;
 pub mod items;
 pub mod mapgen;
 pub mod player;
+pub mod game_behaviors;
 
 #[cfg(test)]
 pub mod tests;
@@ -44,6 +45,7 @@ use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
 use crate::media::MediaManager;
 
 use self::blocks::BlockTypeManager;
+use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
 use self::player::PlayerManager;
@@ -58,6 +60,7 @@ pub struct GameState {
     media_resources: Arc<MediaManager>,
     early_shutdown: CancellationToken,
     mapgen_seed: u32,
+    game_behaviors: GameBehaviors
 }
 
 impl GameState {
@@ -67,6 +70,7 @@ impl GameState {
         items: ItemManager,
         media: MediaManager,
         mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
+        game_behaviors: GameBehaviors
     ) -> Result<Arc<Self>> {
         // TODO figure out a way to replace unwrap with error propagation
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
@@ -81,30 +85,8 @@ impl GameState {
             media_resources: Arc::new(media),
             early_shutdown: CancellationToken::new(),
             mapgen_seed,
+            game_behaviors
         }))
-    }
-
-    pub(crate) fn new_testonly(
-        map: Arc<ServerGameMap>,
-        mapgen: Arc<dyn MapgenInterface>,
-        database: Arc<dyn GameDatabase>,
-        inventory_manager: Arc<InventoryManager>,
-        item_manager: Arc<ItemManager>,
-        player_manager: Arc<PlayerManager>,
-        media_resources: Arc<MediaManager>,
-        shutdown: CancellationToken,
-    ) -> Self {
-        Self {
-            map,
-            mapgen,
-            database,
-            inventory_manager,
-            item_manager,
-            player_manager,
-            media_resources,
-            early_shutdown: shutdown,
-            mapgen_seed: 0,
-        }
     }
 
     /// Gets the map for this game.
@@ -159,6 +141,10 @@ impl GameState {
 
     pub fn item_manager(&self) -> &ItemManager {
         self.item_manager.as_ref()
+    }
+
+    pub fn game_behaviors(&self) -> &GameBehaviors {
+        &self.game_behaviors
     }
 }
 

@@ -36,3 +36,8 @@ vec3D = "0.3.0"
 
 [dev-dependencies]
 ctor = "0.2.0"
+
+
+[features]
+default = []
+deadlock_detection = ["parking_lot/deadlock_detection"]

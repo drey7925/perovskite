@@ -12,12 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use crate::game_builder::GameBuilder;
 
 use anyhow::Result;
+use cuberef_core::protocol::items::item_def::QuantityType;
+use cuberef_server::game_state::items::ItemStack;
+
+use self::recipes::{RecipeBook, RecipeImpl, RecipeSlot};
 
 /// Blocks defined in the default game.
 pub mod basic_blocks;
+/// Basic server behaviors not covered in other modules
+pub mod game_behaviors;
+/// Recipes for crafting, smelting, etc
+pub mod recipes;
 
 /// Common block groups that are defined in the default game and integrate with its tools
 pub mod block_groups {
@@ -38,6 +48,8 @@ pub mod mapgen;
 /// a [GameBuilder].
 pub struct DefaultGameBuilder {
     inner: GameBuilder,
+
+    crafting_recipes: Arc<RecipeBook<9>>,
 }
 impl DefaultGameBuilder {
     /// Provides access to the [GameBuilder] that this DefaultGameBuilder is wrapping,
@@ -53,28 +65,63 @@ impl DefaultGameBuilder {
     }
     /// Creates a new default-game builder with custom server configuration.
     #[cfg(feature = "unstable_api")]
-    pub fn new_from_args(
-        args: &crate::game_builder::server_api::ServerArgs,
-    ) -> Result<DefaultGameBuilder> {
+    pub fn new_from_args(args: &cuberef_server::server::ServerArgs) -> Result<DefaultGameBuilder> {
         Self::new_with_builtins(GameBuilder::from_args(args)?)
     }
 
     fn new_with_builtins(
-        mut builder: GameBuilder,
+        builder: GameBuilder,
     ) -> std::result::Result<DefaultGameBuilder, anyhow::Error> {
+        let mut builder = DefaultGameBuilder {
+            inner: builder,
+            crafting_recipes: Arc::new(RecipeBook::new()),
+        };
         register_defaults(&mut builder)?;
-        Ok(DefaultGameBuilder { inner: builder })
+        Ok(builder)
     }
 
     /// Adds an ore to the mapgen.
     ///
     /// **API skeleton, unimplemented, parameters TBD**
     /// Will be made pub when finalized and implemented
-    fn register_ore(_ore_block: &str) {
+    fn register_ore(&mut self, _ore_block: &str) {
         unimplemented!()
     }
 
+    /// Returns an Arc for the crafting recipes in this game.
+    pub fn crafting_recipes(&mut self) -> Arc<RecipeBook<9>> {
+        self.crafting_recipes.clone()
+    }
+    /// Registers a new crafting recipe.
+    ///
+    /// If stackable is false, quantity represents item wear. Behavior is undefined if stackable is false,
+    /// the item isn't subject to tool wear, and quantity != 1.
+    /// 
+    /// This API is subject to change.
+    pub fn register_crafting_recipe(
+        &mut self,
+        slots: [RecipeSlot; 9],
+        result: String,
+        quantity: u32,
+        stackable: bool,
+    ) {
+        self.crafting_recipes.register_recipe(RecipeImpl {
+            slots,
+            result: ItemStack {
+                proto: cuberef_core::protocol::items::ItemStack {
+                    item_name: result,
+                    quantity,
+                    max_stack: if stackable { 256 } else { quantity },
+                    stackable,
+                },
+            },
+            shapeless: false
+        })
+    }
+
+    /// Starts a game based on this builder.
     pub fn build_and_run(mut self) -> Result<()> {
+        self.crafting_recipes.sort();
         self.game_builder()
             .inner
             .set_mapgen(|blocks, seed| mapgen::build_mapgen(blocks, seed));
@@ -82,7 +129,9 @@ impl DefaultGameBuilder {
     }
 }
 
-fn register_defaults(game_builder: &mut GameBuilder) -> Result<()> {
-    basic_blocks::register_basic_blocks(game_builder)?;
+fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
+    basic_blocks::register_basic_blocks(&mut game_builder.inner)?;
+    game_behaviors::register_game_behaviors(game_builder)?;
+    recipes::register_default_recipes(game_builder);
     Ok(())
 }

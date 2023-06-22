@@ -14,6 +14,7 @@
 
 use std::path::Path;
 
+use crate::maybe_export;
 use cuberef_core::{
     constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE},
     protocol::{
@@ -45,10 +46,10 @@ impl From<Tex> for TextureReference {
 /// Type-safe newtype wrapper for a block name
 pub struct Block(pub &'static str);
 
+#[cfg(feature = "unstable_api")]
 /// Unstable re-export of the raw gameserver API. This API is subject to
 /// breaking changes that do not follow semver, before 1.0
-#[cfg(feature = "unstable_api")]
-pub use cuberef_server::server as server_api;
+use cuberef_server::server as server_api;
 
 use crate::blocks::BlockBuilder;
 
@@ -68,7 +69,8 @@ impl GameBuilder {
     pub fn from_cmdline() -> Result<GameBuilder> {
         Self::new_with_builtins(ServerBuilder::from_cmdline()?)
     }
-    /// Creates a new game builder with custom server configuration.
+
+    /// Creates a new game builder with custom server configuration
     #[cfg(feature = "unstable_api")]
     pub fn from_args(args: &server_api::ServerArgs) -> Result<GameBuilder> {
         Self::new_with_builtins(ServerBuilder::from_args(args)?)
@@ -76,16 +78,17 @@ impl GameBuilder {
 
     /// Borrows the ServerBuilder that can be used to directly register
     /// items, blocks, etc using the low-level unstable API.
-    #[cfg(feature = "unstable_api")]
+    #[cfg(feature="unstable_api")]
     pub fn server_builder_mut(&mut self) -> &mut server_api::ServerBuilder {
         &mut self.inner
     }
 
     /// Returns the ServerBuilder with everything built so far.
-    #[cfg(feature = "unstable_api")]
+    #[cfg(feature="unstable_api")]
     pub fn into_server_builder(self) -> server_api::ServerBuilder {
         self.inner
     }
+
     /// Run the game server
     pub fn run_game_server(self) -> Result<()> {
         self.inner.build()?.serve()

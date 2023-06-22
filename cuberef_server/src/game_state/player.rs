@@ -29,10 +29,8 @@ use cuberef_core::{
     protocol::{game_rpc::InventoryAction, players::StoredPlayer},
 };
 
-use itertools::Itertools;
 use log::warn;
 use parking_lot::{Mutex, RwLock};
-use polonius_the_crab::{polonius, polonius_return};
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -100,7 +98,11 @@ impl Player {
                     face_direction: (0., 0.),
                 },
                 active_popups: vec![],
-                inventory_popup: make_inventory_popup(game_state.clone(), main_inventory_key)?,
+                inventory_popup: (game_state.game_behaviors().make_inventory_popup)(
+                    game_state.clone(),
+                    proto.name.clone(),
+                    main_inventory_key,
+                )?,
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
                     game_state.clone(),
@@ -134,7 +136,11 @@ impl Player {
                     face_direction: (0., 0.),
                 },
                 active_popups: vec![],
-                inventory_popup: make_inventory_popup(game_state.clone(), main_inventory_key)?,
+                inventory_popup: (game_state.game_behaviors().make_inventory_popup)(
+                    game_state.clone(),
+                    name.to_string(),
+                    main_inventory_key,
+                )?,
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
                     game_state.clone(),
@@ -155,135 +161,6 @@ impl Player {
 
         Ok(player)
     }
-}
-
-fn make_inventory_popup(
-    game_state: Arc<GameState>,
-    main_inventory_key: InventoryKey,
-) -> Result<Popup> {
-    // Generally all the callbacks would reference a more interesting arc that backs the inventory
-    // For this example, we only need to store one vec
-    let mut all_items = game_state
-        .item_manager()
-        .registered_items()
-        .map(|x| Some(ItemStack::new(x, 256)))
-        .collect::<Vec<Option<ItemStack>>>();
-
-    // TODO pagination
-    all_items.resize_with(32, || None);
-    let all_items_for_peek = Arc::new(RwLock::new(all_items));
-    let all_items_for_take = all_items_for_peek.clone();
-    let all_items_for_update = all_items_for_peek.clone();
-    let creative_inv_callbacks = VirtualOutputCallbacks {
-        peek: Box::new(move |_| {
-            log::info!("Debug only: peeking from creative");
-            all_items_for_peek.read().clone()
-        }),
-        take: Box::new(move |_, slot, count| {
-            log::info!("Debug only: taking from creative");
-            let mut stack = all_items_for_take.read().get(slot).cloned().flatten();
-            if stack.is_some() && count.is_some() {
-                stack.as_mut().unwrap().proto.quantity = count.unwrap();
-            }
-            stack
-        }),
-    };
-    let game_state_clone = game_state.clone();
-
-    let doubler_callbacks = VirtualOutputCallbacks {
-        peek: Box::new(|ctx: &Popup| {
-            ctx.inventory_views()
-                .get("doubler_in")
-                .unwrap()
-                .peek(ctx)
-                .unwrap()
-        }),
-        take: Box::new(|ctx, _slot, count| {
-            let mut result = ctx
-                .inventory_views()
-                .get("doubler_in")
-                .unwrap()
-                .peek(ctx)
-                .unwrap()[0]
-                .clone();
-            if let Some(result_mut) = result.as_mut() {
-                if let Some(count) = count {
-                    result_mut.proto.quantity = count;
-                }
-            }
-            result
-        }),
-    };
-
-    let teleporter_callbacks = VirtualOutputCallbacks {
-        peek: Box::new(|ctx: &Popup| {
-            ctx.inventory_views()
-                .get("doubler_in")
-                .unwrap()
-                .peek(ctx)
-                .unwrap()
-                .iter()
-                .map(|x| {
-                    x.as_ref().map(|x| ItemStack {
-                        proto: cuberef_core::protocol::items::ItemStack {
-                            quantity: 1,
-                            ..x.proto.clone()
-                        },
-                    })
-                }).collect()
-        }),
-        take: Box::new(|ctx, slot, count| {
-            ctx.inventory_views()
-                .get("doubler_in")
-                .unwrap()
-                .take(ctx, slot, count)
-                .unwrap()
-                .and_then(|x| {
-                    Some(ItemStack {
-                        proto: cuberef_core::protocol::items::ItemStack {
-                            quantity: 1,
-                            ..x.borrowed_stack.proto
-                        },
-                    })
-                })
-        }),
-    };
-
-    Ok(Popup::new(game_state)
-        .title("Inventory")
-        .text_field("count", "Item count: ", "256", true)
-        .button("update_btn", "Update", true)
-        .label("Creative items:")
-        .inventory_view_virtual_output("creative", (4, 8), creative_inv_callbacks, false)?
-        .label("Input:")
-        .inventory_view_transient("doubler_in", (1, 1), vec![], true, true)?
-        .label("Cloner (testonly):")
-        .inventory_view_virtual_output("doubler_out", (1, 1), doubler_callbacks, true)?
-        .label("Teleporter (testonly):")
-        .inventory_view_virtual_output("teleporter_out", (1, 1), teleporter_callbacks, false)?
-        .label("Player inventory:")
-        .inventory_view_stored("main", main_inventory_key, true, true)?
-        .set_button_callback(move |response| {
-            if let PopupAction::ButtonClicked(x) = &response.user_action {
-                if x == "update_btn" {
-                    if let Some(count) = response
-                        .textfield_values
-                        .get("count")
-                        .and_then(|x| x.parse::<u32>().ok())
-                    {
-                        if count >= 1 {
-                            let mut all_items = game_state_clone
-                                .item_manager()
-                                .registered_items()
-                                .map(|x| Some(ItemStack::new(x, count)))
-                                .collect::<Vec<Option<ItemStack>>>();
-                            all_items.resize_with(32, || None);
-                            *all_items_for_update.write() = all_items;
-                        }
-                    }
-                }
-            }
-        }))
 }
 
 pub(crate) struct PlayerState {

@@ -196,27 +196,27 @@ impl ClientOutboundContext {
     }
 
     async fn send_popup_updates(&mut self) -> Result<()> {
-        let player_state = self.player_context.state.lock();
-        let mut updates = vec![];
+        let updates = {
+            let player_state = self.player_context.state.lock();
+            let mut updates = vec![];
 
-        for popup in player_state
-            .active_popups
-            .iter()
-            .chain(once(&player_state.inventory_popup))
-        {
-            for view in popup.inventory_views().values() {
-                updates.push(make_inventory_update(
-                    &self.game_state,
-                    &InventoryViewWithContext {
-                        view,
-                        context: popup,
-                    },
-                )?);
+            for popup in player_state
+                .active_popups
+                .iter()
+                .chain(once(&player_state.inventory_popup))
+            {
+                for view in popup.inventory_views().values() {
+                    updates.push(make_inventory_update(
+                        &self.game_state,
+                        &InventoryViewWithContext {
+                            view,
+                            context: popup,
+                        },
+                    )?);
+                }
             }
-        }
-
-        // Drop lock before async calls
-        drop(player_state);
+            updates
+        };
         for update in updates {
             self.outbound_tx
                 .send(Ok(update))
@@ -243,35 +243,35 @@ impl ClientOutboundContext {
             Ok(x) => x,
         };
 
-        let player_state = self.player_context.state.lock();
-        let mut updates = vec![];
-        if player_state.hotbar_inventory_view.wants_update_for(&key) {
-            updates.push(make_inventory_update(
-                &self.game_state,
-                &&player_state.hotbar_inventory_view,
-            )?);
-        }
+        let updates = {
+            let player_state = self.player_context.state.lock();
+            let mut updates = vec![];
+            if player_state.hotbar_inventory_view.wants_update_for(&key) {
+                updates.push(make_inventory_update(
+                    &self.game_state,
+                    &&player_state.hotbar_inventory_view,
+                )?);
+            }
 
-        for popup in player_state
-            .active_popups
-            .iter()
-            .chain(once(&player_state.inventory_popup))
-        {
-            for view in popup.inventory_views().values() {
-                if view.wants_update_for(&key) {
-                    updates.push(make_inventory_update(
-                        &self.game_state,
-                        &InventoryViewWithContext {
-                            view,
-                            context: popup,
-                        },
-                    )?);
+            for popup in player_state
+                .active_popups
+                .iter()
+                .chain(once(&player_state.inventory_popup))
+            {
+                for view in popup.inventory_views().values() {
+                    if view.wants_update_for(&key) {
+                        updates.push(make_inventory_update(
+                            &self.game_state,
+                            &InventoryViewWithContext {
+                                view,
+                                context: popup,
+                            },
+                        )?);
+                    }
                 }
             }
-        }
-
-        // Drop lock before async calls
-        drop(player_state);
+            updates
+        };
 
         for update in updates {
             self.outbound_tx
@@ -425,9 +425,9 @@ impl ClientOutboundContext {
     }
 
     async fn teleport_player(&mut self, location: Vector3<f64>) -> Result<()> {
-        let player_state = self.player_context.state.lock();
-        self.outbound_tx
-            .send(Ok(StreamToClient {
+        let message = {
+            let player_state = self.player_context.state.lock();
+            StreamToClient {
                 tick: self.game_state.tick(),
                 server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                     proto::SetClientState {
@@ -444,7 +444,10 @@ impl ClientOutboundContext {
                         inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
                     },
                 )),
-            }))
+            }
+        };
+        self.outbound_tx
+            .send(Ok(message))
             .await
             .with_context(|| "Could not send outbound message (initial state)")
     }
@@ -546,20 +549,24 @@ impl ClientOutboundContext {
             face_direction: (0., 0.),
         };
 
-        let player_state = self.player_context.state.lock();
-        let hotbar_update =
-            make_inventory_update(&self.game_state, &&player_state.hotbar_inventory_view)?;
-        let inv_manipulation_update =
-            make_inventory_update(&self.game_state, &&player_state.inventory_manipulation_view)?;
-        drop(player_state);
+        let (hotbar_update, inv_manipulation_update) = {
+            let player_state = self.player_context.state.lock();
+            (
+                make_inventory_update(&self.game_state, &&player_state.hotbar_inventory_view)?,
+                make_inventory_update(
+                    &self.game_state,
+                    &&player_state.inventory_manipulation_view,
+                )?,
+            )
+        };
 
         self.outbound_tx.send(Ok(hotbar_update)).await?;
         self.outbound_tx.send(Ok(inv_manipulation_update)).await?;
         self.send_popup_updates().await?;
 
-        let player_state = self.player_context.state.lock();
-        self.outbound_tx
-            .send(Ok(StreamToClient {
+        let message = {
+            let player_state = self.player_context.state.lock();
+            StreamToClient {
                 tick: self.game_state.tick(),
                 server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                     proto::SetClientState {
@@ -577,7 +584,10 @@ impl ClientOutboundContext {
                         inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
                     },
                 )),
-            }))
+            }
+        };
+        self.outbound_tx
+            .send(Ok(message))
             .await
             .with_context(|| "Could not send outbound message (initial state)")?;
         Ok(())
@@ -919,37 +929,39 @@ impl ClientInboundContext {
             // todo send the user an error
             return Ok(());
         }
+        let updates = {
+            let mut views_to_send = HashSet::new();
+            let mut player_state = self.player_context.player.state.lock();
 
-        let mut views_to_send = HashSet::new();
-        let mut player_state = self.player_context.player.state.lock();
+            player_state.handle_inventory_action(action)?;
 
-        player_state.handle_inventory_action(action)?;
-
-        for popup in player_state
-            .active_popups
-            .iter()
-            .chain(once(&player_state.inventory_popup))
-        {
-            if popup
-                .inventory_views()
-                .values()
-                .any(|x| x.id.0 == action.source_view || x.id.0 == action.destination_view)
+            for popup in player_state
+                .active_popups
+                .iter()
+                .chain(once(&player_state.inventory_popup))
             {
-                for view in popup.inventory_views().values() {
-                    views_to_send.insert(view.id);
+                if popup
+                    .inventory_views()
+                    .values()
+                    .any(|x| x.id.0 == action.source_view || x.id.0 == action.destination_view)
+                {
+                    for view in popup.inventory_views().values() {
+                        views_to_send.insert(view.id);
+                    }
                 }
             }
-        }
 
-        let mut updates = vec![];
-        for view in views_to_send {
-            updates.push(make_inventory_update(
-                &self.game_state,
-                player_state.find_inv_view(view)?.as_ref(),
-            )?);
-        }
-        // drop before async calls
-        drop(player_state);
+            let mut updates = vec![];
+            for view in views_to_send {
+                updates.push(make_inventory_update(
+                    &self.game_state,
+                    player_state.find_inv_view(view)?.as_ref(),
+                )?);
+            }
+            // drop before async calls
+            drop(player_state);
+            updates
+        };
         for update in updates {
             self.outbound_tx
                 .send(Ok(update))
@@ -964,69 +976,72 @@ impl ClientInboundContext {
         &mut self,
         action: &cuberef_core::protocol::ui::PopupResponse,
     ) -> Result<()> {
-        let mut player_state = self.player_context.state.lock();
         let user_action = if action.closed {
             PopupAction::PopupClosed
         } else {
             PopupAction::ButtonClicked(action.clicked_button.clone())
         };
-        let mut updates = vec![];
-        if action.closed {
-            player_state
-                .inventory_manipulation_view
-                .clear_if_transient(Some(self.player_context.main_inventory_key))?;
-            updates.push(make_inventory_update(
-                &self.game_state,
-                &&player_state.inventory_manipulation_view,
-            )?);
-        }
-        if let Some(popup) = player_state
-            .active_popups
-            .iter_mut()
-            .find(|x| x.id() == action.popup_id)
-        {
-            popup.handle_response(
-                PopupResponse {
-                    user_action,
-                    textfield_values: action.text_fields.clone(),
-                },
-                self.player_context.main_inventory(),
-            )?;
-            for view in popup.inventory_views().values() {
+        let updates = {
+            let mut player_state = self.player_context.state.lock();
+            let mut updates = vec![];
+            if action.closed {
+                player_state
+                    .inventory_manipulation_view
+                    .clear_if_transient(Some(self.player_context.main_inventory_key))?;
                 updates.push(make_inventory_update(
                     &self.game_state,
-                    &InventoryViewWithContext {
-                        view,
-                        context: &popup,
-                    },
+                    &&player_state.inventory_manipulation_view,
                 )?);
             }
-        } else if player_state.inventory_popup.id() == action.popup_id {
-            player_state.inventory_popup.handle_response(
-                PopupResponse {
-                    user_action,
-                    textfield_values: action.text_fields.clone(),
-                },
-                self.player_context.main_inventory(),
-            )?;
-            for view in player_state.inventory_popup.inventory_views().values() {
-                updates.push(make_inventory_update(
-                    &self.game_state,
-                    &InventoryViewWithContext {
-                        view,
-                        context: &player_state.inventory_popup,
+            if let Some(popup) = player_state
+                .active_popups
+                .iter_mut()
+                .find(|x| x.id() == action.popup_id)
+            {
+                popup.handle_response(
+                    PopupResponse {
+                        user_action,
+                        textfield_values: action.text_fields.clone(),
                     },
-                )?);
+                    self.player_context.main_inventory(),
+                )?;
+                for view in popup.inventory_views().values() {
+                    updates.push(make_inventory_update(
+                        &self.game_state,
+                        &InventoryViewWithContext {
+                            view,
+                            context: &popup,
+                        },
+                    )?);
+                }
+            } else if player_state.inventory_popup.id() == action.popup_id {
+                player_state.inventory_popup.handle_response(
+                    PopupResponse {
+                        user_action,
+                        textfield_values: action.text_fields.clone(),
+                    },
+                    self.player_context.main_inventory(),
+                )?;
+                for view in player_state.inventory_popup.inventory_views().values() {
+                    updates.push(make_inventory_update(
+                        &self.game_state,
+                        &InventoryViewWithContext {
+                            view,
+                            context: &player_state.inventory_popup,
+                        },
+                    )?);
+                }
+            } else {
+                log::error!(
+                    "Got popup response for nonexistent popup {:?}",
+                    action.popup_id
+                );
             }
-        } else {
-            log::error!(
-                "Got popup response for nonexistent popup {:?}",
-                action.popup_id
-            );
-        }
 
-        // drop before async calls
-        drop(player_state);
+            // drop before async calls
+            drop(player_state);
+            updates
+        };
         for update in updates {
             self.outbound_tx
                 .send(Ok(update))

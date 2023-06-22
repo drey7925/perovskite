@@ -29,8 +29,8 @@ use tonic::codegen::CompressionEncoding;
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
-        blocks::BlockTypeManager, items::ItemManager, mapgen::MapgenInterface, testutils::FakeAuth,
-        GameState,
+        blocks::BlockTypeManager, game_behaviors::GameBehaviors, items::ItemManager,
+        mapgen::MapgenInterface, testutils::FakeAuth, GameState,
     },
     media::MediaManager,
     network_server::{auth::AuthService, grpc_service::CuberefGameServerImpl},
@@ -86,6 +86,30 @@ impl Server {
     }
 
     async fn serve_async(&self) -> Result<()> {
+        #[cfg(feature = "deadlock_detection")]
+        {
+            use parking_lot::deadlock;
+            use std::thread;
+            use std::time::Duration;
+
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_secs(3));
+                let deadlocks = deadlock::check_deadlock();
+                if deadlocks.is_empty() {
+                    continue;
+                }
+
+                println!("{} deadlocks detected", deadlocks.len());
+                for (i, threads) in deadlocks.iter().enumerate() {
+                    println!("Deadlock #{}", i);
+                    for t in threads {
+                        println!("Thread Id {:#?}", t.thread_id());
+                        println!("{:#?}", t.backtrace());
+                    }
+                }
+            });
+        }
+
         let cuberef_service = CuberefGameServer::new(CuberefGameServerImpl::new(
             self.game_state.clone(),
             self.auth.clone(),
@@ -128,6 +152,7 @@ pub struct ServerBuilder {
     media: MediaManager,
     auth: Arc<dyn AuthService>,
     args: ServerArgs,
+    game_behaviors: GameBehaviors,
 }
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
@@ -163,6 +188,7 @@ impl ServerBuilder {
             // TODO real auth
             auth: Arc::new(FakeAuth {}),
             args: args.clone(),
+            game_behaviors: Default::default(),
         })
     }
     pub fn blocks(&mut self) -> &mut BlockTypeManager {
@@ -204,9 +230,14 @@ impl ServerBuilder {
                 self.items,
                 self.media,
                 self.mapgen.with_context(|| "Mapgen not specified")?,
+                self.game_behaviors,
             )?,
             self.auth,
             addr,
         )
+    }
+
+    pub fn game_behaviors_mut(&mut self) -> &mut GameBehaviors {
+        &mut self.game_behaviors
     }
 }

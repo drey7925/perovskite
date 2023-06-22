@@ -285,7 +285,7 @@ impl Popup {
         }
     }
 
-    pub(crate) fn inventory_views(&self) -> &HashMap<String, InventoryView<Popup>> {
+    pub fn inventory_views(&self) -> &HashMap<String, InventoryView<Popup>> {
         &self.inventory_views
     }
 

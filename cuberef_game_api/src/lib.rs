@@ -26,6 +26,8 @@ pub mod blocks;
 pub use cuberef_core::constants;
 /// Provides functionality to build and start a game and server.
 pub mod game_builder;
+/// Contains utilities for defining items.
+pub mod items;
 
 /// Provides a default set of game content centered around exploring a natural
 /// procedurally-generated world, collecting resources through mining, converting
@@ -37,3 +39,63 @@ pub mod game_builder;
 /// The default game will provide a map generator (WIP).
 #[cfg(feature = "default_game")]
 pub mod default_game;
+
+#[macro_export]
+#[cfg(doc)]
+macro_rules! maybe_export {
+    {
+        $(
+        $(#[$outer:meta])*
+        fn $name:ident $params: tt
+            $(-> $rtype:ty)? $body:block
+        )+
+    } => {
+        #[cfg(feature="unstable_api")]
+        $($(#[$outer])+)*
+        $(pub(crate) fn $name $params $(-> $rtype)? $body)+
+    };
+    (
+        $(#[$outer:meta])* use $p:path as $i:ident) => {
+        $(#[$outer])*
+        #[cfg(feature="unstable_api")] pub use $p as $i;
+    }
+}
+
+#[macro_export]
+#[cfg(all(not(feature = "unstable_api"), not(doc)))]
+macro_rules! maybe_export {
+    {
+        $(#[$outer:meta])+
+        $(fn $name:ident $params: tt
+            $(-> $rtype:ty)? $body:block
+        )+
+    } => {
+        #[$($outer)+]
+        $(pub(crate) fn $name $params $(-> $rtype)? $body)+
+    };
+    (
+        $(#[$outer:meta])* use $p:path as $i:ident) => {
+        $(#[$outer])*
+        pub(crate) use $p as $i;
+    }
+}
+
+#[macro_export]
+#[cfg(all(feature = "unstable_api", not(doc)))]
+macro_rules! maybe_export {
+    {
+        $(
+        $(#[$outer:meta])*
+        fn $name:ident $params: tt
+            $(-> $rtype:ty)? $body:block
+        )+
+    } => {
+        $($(#[$outer])+
+        pub fn $name $params $(-> $rtype)? $body)+
+    };
+    (
+        $(#[$outer:meta])* use $p:path as $i:ident) => {
+        $(#[$outer])*
+        pub use $p as $i;
+    }
+}

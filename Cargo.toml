@@ -5,3 +5,4 @@ members = [
     "cuberef_core",
     "cuberef_game_api"
 ]
+resolver = "2"

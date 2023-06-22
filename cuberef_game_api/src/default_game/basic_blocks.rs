@@ -109,6 +109,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     // TODO: implement actual water
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(BRITTLE)
+        .add_item_group("testonly_wet")
         .set_texture_all(WATER_TEXTURE)
         .set_inventory_display_name("Water block")
         .set_needs_translucency();

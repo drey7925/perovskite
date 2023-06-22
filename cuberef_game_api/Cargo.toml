@@ -12,6 +12,8 @@ cuberef_core = { path = "../cuberef_core", version = "0.0.1" }
 anyhow = "1.0.70"
 env_logger = "0.10.0"
 noise = "0.8.2"
+parking_lot = "0.12.1"
+log = "0.4.17"
 
 [features]
 default = ["default_game"]
@@ -21,3 +23,5 @@ unstable_api = []
 # Provides a simple default game, centered around exploration, small-scale resource
 # collection, mining, building, etc. This game may expand over time.
 default_game = []
+# If enabled, server will detect deadlocks and log them.
+deadlock_detection = ["cuberef_server/deadlock_detection"]

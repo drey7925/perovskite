@@ -702,7 +702,14 @@ impl<T> InventoryView<T> {
                 } else {
                     let mut inner = slot_contents.as_mut().unwrap().borrowed_stack.clone();
                     let leftover = inner.try_merge(stack.borrowed_stack);
-
+                    *slot_contents = Some(BorrowedStack {
+                        borrows_from: slot_contents
+                            .as_ref()
+                            .unwrap()
+                            .borrows_from
+                            .or_else(|| stack.borrows_from),
+                        borrowed_stack: inner,
+                    });
                     Ok(leftover.map(|leftover| BorrowedStack {
                         borrows_from: stack.borrows_from,
                         borrowed_stack: leftover,
