@@ -8,7 +8,7 @@ use vulkano::{
     image::SampleCount,
     render_pass::Subpass,
 };
-use winit::{event::WindowEvent, event_loop::EventLoop};
+use winit::{event::WindowEvent, event_loop::{EventLoop, EventLoopWindowTarget}};
 
 use crate::{
     game_state::ClientState,
@@ -44,7 +44,7 @@ impl EguiAdapter {
 
     pub(crate) fn new(
         ctx: &crate::vulkan::VulkanContext,
-        event_loop: &EventLoop<()>,
+        event_loop: &EventLoopWindowTarget<()>,
         egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {
         let config = GuiConfig {

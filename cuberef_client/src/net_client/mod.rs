@@ -36,7 +36,10 @@ use cuberef_core::{
 use image::DynamicImage;
 use parking_lot::{Condvar, Mutex};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::{sync::mpsc, task::spawn_blocking};
+use tokio::{
+    sync::{mpsc, watch},
+    task::spawn_blocking,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request};
@@ -57,14 +60,15 @@ use crate::{
 async fn connect_grpc(
     server_addr: String,
 ) -> Result<rpc::cuberef_game_client::CuberefGameClient<Channel>> {
-    CuberefGameClient::connect(server_addr)
-        .await
-        .with_context(|| "Failed to connect")
+    CuberefGameClient::connect(server_addr).await.map_err(|e| {
+        anyhow::Error::msg(e.to_string())
+    })
 }
 
 pub(crate) async fn connect_game(
     server_addr: String,
-    cloned_context: VulkanContext,
+    ctx: &VulkanContext,
+    progress: &mut watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
     log::info!("Connecting to {}...", &server_addr);
     let mut connection = connect_grpc(server_addr.clone())
@@ -73,12 +77,14 @@ pub(crate) async fn connect_game(
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
     log::info!("Connection to {} established.", &server_addr);
+    progress.send((0.2, "Loading block definitions...".to_string()))?;
     let block_defs_proto = connection.get_block_defs(GetBlockDefsRequest {}).await?;
     log::info!(
         "{} block defs loaded from server",
         block_defs_proto.get_ref().block_types.len()
     );
 
+    progress.send((0.3, "Loading block textures...".to_string()))?;
     let texture_loader = GrpcTextureLoader {
         connection: connection.clone(),
     };
@@ -87,10 +93,11 @@ pub(crate) async fn connect_game(
         block_defs_proto.into_inner().block_types,
     )?);
 
-    let cube_renderer = Arc::new(
-        BlockRenderer::new(block_types.clone(), texture_loader.clone(), &cloned_context).await?,
-    );
+    progress.send((0.4, "Setting up renderer...".to_string()))?;
+    let cube_renderer =
+        Arc::new(BlockRenderer::new(block_types.clone(), texture_loader.clone(), ctx).await?);
 
+    progress.send((0.5, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
     log::info!(
         "{} item defs loaded from server",
@@ -100,14 +107,14 @@ pub(crate) async fn connect_game(
         item_defs_proto.into_inner().item_defs,
     )?);
 
-    let (hud, egui) =
-        crate::game_ui::make_uis(items.clone(), texture_loader, &cloned_context).await?;
+    progress.send((0.6, "Setting up UI...".to_string()))?;
+    let (hud, egui) = crate::game_ui::make_uis(items.clone(), texture_loader, ctx).await?;
 
     // TODO clean up this hacky cloning of the context.
     // We need to clone it to start up the game ui without running into borrow checker issues,
     // since it provides access to the allocators. We then drop it early to ensure that it's not
     // used from these coroutines
-    drop(cloned_context);
+    drop(ctx);
 
     let (action_sender, action_receiver) = mpsc::channel(4);
     let client_state = Arc::new(ClientState {
@@ -146,6 +153,8 @@ pub(crate) async fn connect_game(
         outbound.cancellation.cancel();
     });
 
+    progress.send((1.0, "Connected!".to_string()))?;
+    tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
     Ok(client_state)
 }
 

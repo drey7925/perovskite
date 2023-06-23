@@ -14,11 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::Parser;
 use winit::event_loop::EventLoop;
 
-use crate::vulkan::game_renderer::CuberefRenderer;
+use crate::vulkan::game_renderer::GameRenderer;
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -31,7 +33,7 @@ pub fn run_client(args: &ClientArgs) -> Result<()> {
     let _tracy_client = tracy_client::Client::start();
     let event_loop = EventLoop::new();
 
-    let window = CuberefRenderer::create(&event_loop, &args.server)?;
+    let window = GameRenderer::create(&event_loop)?;
     window.run_loop(event_loop);
     Ok(())
 }

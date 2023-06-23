@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use log::warn;
+use parking_lot::Mutex;
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
@@ -52,7 +53,7 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
+pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
 
 use self::util::select_physical_device;
 #[derive(Clone)]
@@ -282,6 +283,18 @@ impl VulkanContext {
 
     pub(crate) fn allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
         self.memory_allocator.clone()
+    }
+
+    pub(crate) fn swapchain(&self) -> &Swapchain {
+        self.swapchain.as_ref()
+    }
+
+    pub(crate) fn clone_queue(&self) -> Arc<Queue> {
+        self.queue.clone()
+    }
+
+    pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {
+        self.render_pass.clone()
     }
 }
 

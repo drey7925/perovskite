@@ -131,6 +131,7 @@ impl<const N: usize> RecipeImpl<N> {
 
 pub(crate) fn register_default_recipes(game_builder: &mut super::DefaultGameBuilder) {
     use RecipeSlot::*;
+    // testonly
     game_builder.register_crafting_recipe(
         [
             Group("testonly_wet".to_string()),
@@ -145,6 +146,22 @@ pub(crate) fn register_default_recipes(game_builder: &mut super::DefaultGameBuil
         ],
         DIRT_WITH_GRASS.0.to_string(),
         1,
+        true,
+    );
+    game_builder.register_crafting_recipe(
+        [
+            Group("testonly_wet".to_string()),
+            Group("testonly_wet".to_string()),
+            Exact("default:dirt".to_string()),
+            Exact("default:dirt".to_string()),
+            Empty,
+            Empty,
+            Empty,
+            Empty,
+            Empty,
+        ],
+        DIRT_WITH_GRASS.0.to_string(),
+        2,
         true,
     );
 }

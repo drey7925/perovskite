@@ -20,3 +20,4 @@ pub mod game_state;
 pub(crate) mod game_ui;
 pub(crate) mod net_client;
 pub mod vulkan;
+pub(crate) mod main_menu;
