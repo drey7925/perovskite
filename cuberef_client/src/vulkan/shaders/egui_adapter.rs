@@ -10,7 +10,7 @@ use vulkano::{
 };
 use winit::{
     event::WindowEvent,
-    event_loop::{EventLoop, EventLoopWindowTarget},
+    event_loop::{EventLoopWindowTarget},
 };
 
 use crate::{

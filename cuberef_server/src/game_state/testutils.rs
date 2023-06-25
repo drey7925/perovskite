@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{sync::Arc};
 
 use anyhow::Context;
 use cuberef_core::{
@@ -29,7 +29,7 @@ use cuberef_core::{
         items::item_def::QuantityType,
     },
 };
-use log::warn;
+
 
 use crate::{
     game_state::{

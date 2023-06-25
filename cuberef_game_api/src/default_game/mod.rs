@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::game_builder::GameBuilder;
 
 use anyhow::Result;
-use cuberef_core::protocol::items::item_def::QuantityType;
+
 use cuberef_server::game_state::items::ItemStack;
 
 use self::recipes::{RecipeBook, RecipeImpl, RecipeSlot};

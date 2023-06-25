@@ -33,7 +33,7 @@ use crate::{
         mapgen::MapgenInterface, GameState,
     },
     media::MediaManager,
-    network_server::{auth::AuthService, grpc_service::CuberefGameServerImpl},
+    network_server::{grpc_service::CuberefGameServerImpl},
 };
 
 #[derive(Parser, Debug, Clone)]

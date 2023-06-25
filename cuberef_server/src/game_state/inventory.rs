@@ -16,7 +16,6 @@
 
 use std::{
     borrow::Borrow,
-    marker::PhantomData,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -442,8 +441,7 @@ impl<T> InventoryView<T> {
             for stack in transient_data.write().iter_mut() {
                 if let Some(stack) = stack.take() {
                     let leftover = if let Some((key, slot)) = stack.borrows_from {
-                        let leftover = self
-                            .game_state
+                        self.game_state
                             .inventory_manager()
                             .mutate_inventory_atomically(&key, |inv| {
                                 let mut leftover = inv
@@ -455,8 +453,7 @@ impl<T> InventoryView<T> {
                                     leftover = inv.try_insert(leftover.unwrap());
                                 }
                                 Ok(leftover)
-                            })?;
-                        leftover
+                            })?
                     } else {
                         Some(stack.borrowed_stack)
                     };
@@ -533,15 +530,15 @@ impl<'a, T> TypeErasedInventoryView for InventoryViewWithContext<'a, T> {
     }
 
     fn peek(&self) -> Result<Vec<Option<ItemStack>>> {
-        self.view.peek(&self.context)
+        self.view.peek(self.context)
     }
 
     fn take(&self, slot: usize, count: Option<u32>) -> Result<Option<BorrowedStack>> {
-        self.view.take(&self.context, slot, count)
+        self.view.take(self.context, slot, count)
     }
 
     fn put(&self, slot: usize, stack: BorrowedStack) -> Result<Option<BorrowedStack>> {
-        self.view.put(&self.context, slot, stack)
+        self.view.put(self.context, slot, stack)
     }
 
     fn can_place(&self) -> bool {
@@ -557,7 +554,7 @@ impl<'a, T> TypeErasedInventoryView for InventoryViewWithContext<'a, T> {
     }
 
     fn to_client_proto(&self) -> Result<cuberef_core::protocol::game_rpc::InventoryUpdate> {
-        self.view.to_client_proto(&self.context)
+        self.view.to_client_proto(self.context)
     }
 }
 
@@ -687,7 +684,7 @@ impl<T> InventoryView<T> {
     /// peek should be called immediate after to see what the view should display.
     pub fn put(
         &self,
-        context: &T,
+        _context: &T,
         slot: usize,
         stack: BorrowedStack,
     ) -> Result<Option<BorrowedStack>> {
@@ -707,7 +704,7 @@ impl<T> InventoryView<T> {
                             .as_ref()
                             .unwrap()
                             .borrows_from
-                            .or_else(|| stack.borrows_from),
+                            .or(stack.borrows_from),
                         borrowed_stack: inner,
                     });
                     Ok(leftover.map(|leftover| BorrowedStack {
@@ -718,7 +715,7 @@ impl<T> InventoryView<T> {
             }
             ViewBacking::VirtualOutput(_) => {
                 // can't put into a virtualoutput
-                return Ok(Some(stack));
+                Ok(Some(stack))
             }
             ViewBacking::VirtualInput(_) => todo!(),
             ViewBacking::Stored(key) => Ok(self

@@ -25,8 +25,6 @@ use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
-    image::SampleCount,
-    render_pass::Subpass,
     swapchain::{self, AcquireError, SwapchainPresentInfo},
     sync::{future::FenceSignalFuture, FlushError, GpuFuture},
 };
@@ -214,7 +212,7 @@ pub(crate) enum GameState {
     Active(ActiveGame),
 }
 impl GameState {
-    fn as_mut<'a>(&'a mut self) -> GameStateMutRef<'a> {
+    fn as_mut(&mut self) -> GameStateMutRef<'_> {
         match self {
             GameState::MainMenu => GameStateMutRef::MainMenu,
             GameState::Connecting(x) => GameStateMutRef::Connecting(x),
@@ -250,8 +248,7 @@ impl GameState {
             let pending_error = game.client_state.pending_error.lock().take();
             if let Some(err) = pending_error {
                 *self = GameState::ConnectError(err)
-            }
-            else if game.client_state.cancel_requested() {
+            } else if game.client_state.cancel_requested() {
                 *self = GameState::MainMenu;
             }
         }
@@ -299,7 +296,7 @@ impl GameRenderer {
 
         event_loop.run(move |event, event_loop, control_flow| {
             let mut game_lock = self.game.lock();
-            game_lock.update_if_connected(&self.ctx, &event_loop);
+            game_lock.update_if_connected(&self.ctx, event_loop);
             {
                 let _span = span!("client_state handling window event");
 
@@ -317,14 +314,12 @@ impl GameRenderer {
                     if !consumed {
                         game.client_state.window_event(&event);
                     }
-                } else {
-                    if let Event::WindowEvent {
-                        window_id: _,
-                        event,
-                    } = &event
-                    {
-                        self.main_menu.lock().update(&event);
-                    }
+                } else if let Event::WindowEvent {
+                    window_id: _,
+                    event,
+                } = &event
+                {
+                    self.main_menu.lock().update(event);
                 }
             }
             match event {
@@ -522,7 +517,7 @@ pub(crate) struct ConnectionSettings {
     pub(crate) register: bool,
 
     pub(crate) progress: watch::Sender<(f32, String)>,
-    pub(crate) result: oneshot::Sender<Result<ActiveGame>>
+    pub(crate) result: oneshot::Sender<Result<ActiveGame>>,
 }
 
 async fn connect_impl(
@@ -534,8 +529,15 @@ async fn connect_impl(
     mut progress: watch::Sender<(f32, String)>,
 ) -> Result<ActiveGame> {
     progress.send((0.1, format!("Connecting to {}", server_addr)))?;
-    let client_state =
-        net_client::connect_game(server_addr, username, password, register, &ctx, &mut progress).await?;
+    let client_state = net_client::connect_game(
+        server_addr,
+        username,
+        password,
+        register,
+        &ctx,
+        &mut progress,
+    )
+    .await?;
 
     let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
     let cube_pipeline = cube_provider.make_pipeline(&ctx, client_state.cube_renderer.atlas())?;

@@ -1007,7 +1007,7 @@ impl ClientInboundContext {
                         &self.game_state,
                         &InventoryViewWithContext {
                             view,
-                            context: &popup,
+                            context: popup,
                         },
                     )?);
                 }

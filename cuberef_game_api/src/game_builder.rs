@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use crate::maybe_export;
+
 use cuberef_core::{
     constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE},
     protocol::{

@@ -10,8 +10,7 @@ use cuberef_core::{
     coordinates::{ChunkCoordinate, PlayerPositionUpdate, BlockCoordinate},
     protocol::{
         game_rpc::{
-            self as rpc, cuberef_game_client::CuberefGameClient, GetBlockDefsRequest,
-            GetItemDefsRequest, GetMediaRequest, StreamToClient, StreamToServer,
+            self as rpc, StreamToClient, StreamToServer,
         }, coordinates::Angles,
     },
 };

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{RwLock};
 use std::sync::Arc;
 
 use cuberef_server::game_state::{
@@ -24,6 +24,7 @@ pub(crate) fn register_game_behaviors(game_builder: &mut DefaultGameBuilder) -> 
     Ok(())
 }
 
+#[allow(clippy::unnecessary_unwrap)]
 fn make_inventory_popup(
     game_state: Arc<GameState>,
     main_inventory_key: InventoryKey,
@@ -78,8 +79,8 @@ fn make_inventory_popup(
             let input = source_view.peek(ctx).unwrap();
             let result = crafting_recipes.find(&game_state, &input);
             if result.is_some() {
-                for i in 0..9 {
-                    if input[i].is_some() {
+                for (i, item) in input.iter().enumerate() {
+                    if item.is_some() {
                         source_view.take(ctx, i, Some(1)).unwrap();
                     }
                 }

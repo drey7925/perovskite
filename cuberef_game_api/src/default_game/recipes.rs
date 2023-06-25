@@ -104,8 +104,7 @@ impl<const N: usize> RecipeImpl<N> {
         if self.shapeless {
             todo!("shapeless solver not written");
         } else {
-            for j in 0..N {
-                let stack = stacks[j];
+            for (j, stack) in stacks.iter().enumerate() {
                 match &self.slots[j] {
                     RecipeSlot::Empty => {
                         if stack.is_some() {

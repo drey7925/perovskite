@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use log::warn;
-use parking_lot::Mutex;
+
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
@@ -142,8 +142,7 @@ impl VulkanContext {
             log::info!("Surface available color formats: {formats:?}");
             let &(image_format, color_space) = formats
                 .iter()
-                .filter(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
-                .next()
+                .find(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
                 .with_context(|| "Could not find an image format")?;
             log::info!("Will render to {image_format:?}, {color_space:?}");
             let mut image_count = caps.min_image_count;

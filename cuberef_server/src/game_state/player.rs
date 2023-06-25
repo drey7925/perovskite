@@ -30,7 +30,7 @@ use cuberef_core::{
 };
 
 use log::warn;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex};
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -41,12 +41,10 @@ use crate::{
 };
 
 use super::{
-    client_ui::{Popup, PopupAction},
+    client_ui::{Popup},
     inventory::{
         InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView,
-        VirtualOutputCallbacks,
     },
-    items::ItemStack,
     GameState,
 };
 
@@ -251,7 +249,7 @@ impl PlayerState {
             if let Some(result) = popup.inventory_views().values().find(|x| x.id == id) {
                 return Ok(Box::new(InventoryViewWithContext {
                     view: result,
-                    context: &popup,
+                    context: popup,
                 }));
             }
         }

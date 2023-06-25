@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+
 
 use anyhow::Result;
 use clap::Parser;
@@ -29,7 +29,7 @@ pub struct ClientArgs {
     server: String,
 }
 
-pub fn run_client(args: &ClientArgs) -> Result<()> {
+pub fn run_client(_args: &ClientArgs) -> Result<()> {
     let _tracy_client = tracy_client::Client::start();
     let event_loop = EventLoop::new();
 

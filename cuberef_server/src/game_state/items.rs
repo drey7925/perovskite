@@ -132,7 +132,6 @@ impl ItemStack {
                     quantity: remaining,
                     ..stack.proto
                 },
-                ..stack
             })
         }
     }

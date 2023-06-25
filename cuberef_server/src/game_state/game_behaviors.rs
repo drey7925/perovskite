@@ -28,9 +28,9 @@ mod defaults {
         _player_name: String,
         main_inventory_key: InventoryKey,
     ) -> Result<Popup> {
-        Ok(Popup::new(game_state)
+        Popup::new(game_state)
             .title("Inventory")
             .label("Player inventory:")
-            .inventory_view_stored("main", main_inventory_key, true, true)?)
+            .inventory_view_stored("main", main_inventory_key, true, true)
     }
 }

@@ -36,7 +36,7 @@ use crate::{
 };
 
 use super::{
-    get_texture, CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED, UNKNOWN_TEXTURE,
+    get_texture, CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED,
 };
 
 pub(crate) struct GameHud {

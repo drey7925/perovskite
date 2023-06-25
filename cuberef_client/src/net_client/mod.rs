@@ -15,18 +15,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    backtrace,
-    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use self::client_context::*;
 use anyhow::{bail, Context, Error, Result};
-use cgmath::InnerSpace;
+
 use cuberef_core::{
     auth::CuberefOpaqueAuth,
-    coordinates::{ChunkCoordinate, ChunkOffset},
     protocol::game_rpc::{
         self as rpc, cuberef_game_client::CuberefGameClient, stream_to_client::ServerMessage,
         stream_to_server::ClientMessage, GetBlockDefsRequest, GetItemDefsRequest, GetMediaRequest,
@@ -36,28 +33,26 @@ use cuberef_core::{
 use image::DynamicImage;
 use opaque_ke::{
     ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
-    RegistrationResponse, ServerLoginStartResult,
+    RegistrationResponse,
 };
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Mutex};
 use rand::rngs::OsRng;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxHashMap};
 use tokio::{
     sync::{mpsc, watch},
-    task::spawn_blocking,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request, Streaming};
-use tracy_client::{plot, span};
+
 
 use crate::{
     cube_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
     game_state::{
-        chunk::{maybe_mesh_chunk, mesh_chunk, ClientChunk},
-        items::{ClientInventory, ClientItemManager, InventoryViewManager},
+        items::{ClientItemManager, InventoryViewManager},
         physics::PhysicsState,
         tool_controller::ToolController,
-        ChunkManager, ClientState, GameAction,
+        ChunkManager, ClientState,
     },
     vulkan::VulkanContext,
 };
@@ -133,9 +128,7 @@ pub(crate) async fn connect_game(
 
     // TODO clean up this hacky cloning of the context.
     // We need to clone it to start up the game ui without running into borrow checker issues,
-    // since it provides access to the allocators. We then drop it early to ensure that it's not
-    // used from these coroutines
-    drop(ctx);
+    // since it provides access to the allocators.
 
     let (action_sender, action_receiver) = mpsc::channel(4);
     let client_state = Arc::new(ClientState {

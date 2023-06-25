@@ -19,12 +19,12 @@ use std::{sync::Arc, u8};
 use cuberef_core::{
     auth::CuberefOpaqueAuth,
     protocol::game_rpc::{
-        self, stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StartAuth,
+        stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StartAuth,
         StreamToClient, StreamToServer,
     },
 };
 use opaque_ke::{
-    ClientLoginFinishResult, CredentialFinalization, CredentialRequest, RegistrationRequest,
+    CredentialFinalization, CredentialRequest, RegistrationRequest,
     RegistrationUpload, ServerLogin, ServerLoginStartParameters, ServerLoginStartResult,
     ServerRegistration, ServerSetup,
 };
@@ -54,7 +54,7 @@ impl AuthService {
             None => {
                 let mut rng = OsRng;
                 let server_setup = ServerSetup::new(&mut rng);
-                db.put(&db_key, &server_setup.serialize())?;
+                db.put(db_key, &server_setup.serialize())?;
                 server_setup
             }
         };
@@ -94,20 +94,20 @@ impl AuthService {
                 )
             })?,
         );
-        let db_key = &db_key_from_username(&username);
-        if !self
+        let db_key = &db_key_from_username(username);
+        if self
             .db
             .get(db_key)
             .map_err(|e| {
                 log::error!("Internal DB lookup error: {e:?}");
                 tonic::Status::internal("Internal finish_registration error")
             })?
-            .is_none()
+            .is_some()
         {
             return Err(tonic::Status::already_exists("This username is already taken."));
         }
         self.db
-            .put(&db_key, &server_registration_finish_result.serialize())
+            .put(db_key, &server_registration_finish_result.serialize())
             .map_err(|e| {
                 log::error!("Internal DB store error: {e:?}");
                 tonic::Status::internal("Internal finish_registration error")
@@ -120,7 +120,7 @@ impl AuthService {
         username: &str,
         client_request: &[u8],
     ) -> tonic::Result<ServerLoginStartResult<CuberefOpaqueAuth>> {
-        let pw_file = self.db.get(&db_key_from_username(&username)).map_err(|e| {
+        let pw_file = self.db.get(&db_key_from_username(username)).map_err(|e| {
             log::error!("Internal DB lookup error: {e:?}");
             tonic::Status::internal("Internal start_login error")
         })?;
@@ -144,7 +144,7 @@ impl AuthService {
             &mut rng,
             &self.server_setup,
             Some(pw_file),
-            CredentialRequest::deserialize(&client_request).map_err(|e| {
+            CredentialRequest::deserialize(client_request).map_err(|e| {
                 log::error!("OPAQUE start_login parse error: {e:?}");
                 tonic::Status::invalid_argument("OPAQUE start_login message could not be parsed")
             })?,
@@ -163,7 +163,7 @@ impl AuthService {
         client_login_credential: &[u8],
     ) -> tonic::Result<()> {
         let result = prior_phase.state.finish(
-            CredentialFinalization::deserialize(&client_login_credential).map_err(|e| {
+            CredentialFinalization::deserialize(client_login_credential).map_err(|e| {
                 log::error!("OPAQUE finish_login parse error: {e:?}");
                 tonic::Status::invalid_argument("OPAQUE finish_login message could not be parsed")
             })?,

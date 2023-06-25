@@ -3,7 +3,7 @@ use cuberef_core::protocol::items::ItemStack;
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{
-    collapsing_header, popup, vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId,
+    vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId,
 };
 use log::warn;
 use parking_lot::MutexGuard;
@@ -413,6 +413,8 @@ impl EguiUi {
     }
 }
 
+// Allow unnecessary_unwrap until https://github.com/rust-lang/rust/issues/53667 is stabilized
+#[allow(clippy::unnecessary_unwrap)]
 fn handle_moves(
     clicked_inv_id: u64,
     index: usize,
@@ -437,7 +439,7 @@ fn handle_moves(
     let can_place = inventory.can_place;
     let can_take = dbg!(inventory.can_take);
     let take_exact = inventory.take_exact;
-    drop(inventory);
+
     let carried_stack = match inventory_manager
         .inventory_views
         .get_mut(&manipulation_view)
@@ -452,18 +454,18 @@ fn handle_moves(
 
     let action = if clicked_stack.is_some() && carried_stack.is_some() {
         // Case 1: both stacks have items
-        let clicked_stack_ref = clicked_stack.unwrap().clone();
+        let clicked_stack = clicked_stack.unwrap();
         let carried_stack_ref = carried_stack.as_ref().unwrap();
 
         if can_place
-            && clicked_stack_ref.item_name == carried_stack_ref.item_name
+            && clicked_stack.item_name == carried_stack_ref.item_name
             && carried_stack_ref.stackable
         {
             // You can place into the inventory, and you may or may not be able to take.
             // If the items match, place what you're holding
-            let mut quantity = clicked_stack_ref
+            let mut quantity = clicked_stack
                 .max_stack
-                .saturating_sub(clicked_stack_ref.quantity)
+                .saturating_sub(clicked_stack.quantity)
                 .min(carried_stack_ref.quantity);
             if click_type == InvClickType::RightClick {
                 quantity = quantity.min(1);
@@ -495,27 +497,27 @@ fn handle_moves(
                 swap: false,
             }
         } else if can_take
-            && clicked_stack_ref.item_name == carried_stack_ref.item_name
-            && clicked_stack_ref.stackable
+            && clicked_stack.item_name == carried_stack_ref.item_name
+            && clicked_stack.stackable
         {
             // You can take from the inventory, and your items match. Take from it.
 
             let mut quantity = carried_stack_ref
                 .max_stack
                 .saturating_sub(carried_stack_ref.quantity)
-                .min(clicked_stack_ref.quantity);
+                .min(clicked_stack.quantity);
             if !take_exact && click_type == InvClickType::RightClick {
-                quantity = quantity.min((clicked_stack_ref.quantity + 1) / 2);
+                quantity = quantity.min((clicked_stack.quantity + 1) / 2);
             }
-            if take_exact && quantity < clicked_stack_ref.quantity {
+            if take_exact && quantity < clicked_stack.quantity {
                 // we can't take enough but we need to take exactly what's given, give up
                 return;
             }
-            drop(carried_stack_ref);
+
             // move into the carried stack
             carried_stack.as_mut().unwrap().quantity += quantity;
             // and out of the clicked stack
-            if quantity > 0 && (quantity == clicked_stack_ref.quantity) {
+            if quantity > 0 && (quantity == clicked_stack.quantity) {
                 inventory_manager
                     .inventory_views
                     .get_mut(&view_key)
@@ -547,8 +549,7 @@ fn handle_moves(
             // You can both give and take, and your items don't match. Swap.
 
             let carried = carried_stack_ref.clone();
-            let clicked = clicked_stack_ref.clone();
-            *carried_stack = Some(clicked);
+            *carried_stack = Some(clicked_stack);
             inventory_manager
                 .inventory_views
                 .get_mut(&view_key)
@@ -613,7 +614,7 @@ fn handle_moves(
         }
         if source_quantity == quantity {
             // move into the carried stack
-            *carried_stack = clicked_stack.clone();
+            *carried_stack = clicked_stack;
             // and out of the clicked stack
             inventory_manager
                 .inventory_views
@@ -651,7 +652,7 @@ fn handle_moves(
 }
 
 fn send_event(client_state: &ClientState, action: GameAction) {
-    if let Err(_) = client_state.actions.try_send(action) {
+    if client_state.actions.try_send(action).is_err() {
         log::info!("Sending action failed; server disconnected or lagging badly");
     }
 }
