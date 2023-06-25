@@ -55,7 +55,6 @@ use itertools::iproduct;
 use log::error;
 use log::info;
 use log::warn;
-use parking_lot::MutexGuard;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -65,14 +64,12 @@ pub(crate) async fn make_client_contexts(
     game_state: Arc<GameState>,
     player_context: PlayerContext,
     inbound_rx: tonic::Streaming<proto::StreamToServer>,
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>
 ) -> Result<(
     ClientInboundContext,
     ClientOutboundContext,
-    mpsc::Receiver<Result<proto::StreamToClient, tonic::Status>>,
 )> {
     let id = CLIENT_CONTEXT_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    let (tx_send, tx_recv) = mpsc::channel(4);
 
     let initial_position = PlayerPositionUpdate {
         tick: game_state.tick(),
@@ -99,7 +96,7 @@ pub(crate) async fn make_client_contexts(
         cancellation: cancellation.clone(),
         inbound_rx,
         own_positions: pos_send,
-        outbound_tx: tx_send.clone(),
+        outbound_tx: outbound_tx.clone(),
         next_pos_writeback: Instant::now(),
         chunk_pacing: Aimd {
             val: INITIAL_CHUNKS_PER_UPDATE as f64,
@@ -116,7 +113,7 @@ pub(crate) async fn make_client_contexts(
         context_id: id,
         game_state,
         player_context,
-        outbound_tx: tx_send,
+        outbound_tx,
         cancellation,
         block_events,
         inventory_events,
@@ -125,7 +122,7 @@ pub(crate) async fn make_client_contexts(
         interested_inventories,
         chunks_known_to_client: HashSet::new(),
     };
-    Ok((inbound, outbound, tx_recv))
+    Ok((inbound, outbound))
 }
 
 // State/structure backing a gRPC GameStream on the outbound side

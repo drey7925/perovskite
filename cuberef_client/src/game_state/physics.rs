@@ -302,7 +302,9 @@ impl PhysicsState {
                 );
                 new_pos =
                     clamp_collisions(post_bump_outcome, down_bump_target, &chunks, block_types);
-                println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
+                if cfg!(debug_assertions) {
+                    println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
+                }
             }
         }
 

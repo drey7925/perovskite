@@ -96,7 +96,7 @@ impl DefaultGameBuilder {
     ///
     /// If stackable is false, quantity represents item wear. Behavior is undefined if stackable is false,
     /// the item isn't subject to tool wear, and quantity != 1.
-    /// 
+    ///
     /// This API is subject to change.
     pub fn register_crafting_recipe(
         &mut self,
@@ -115,7 +115,7 @@ impl DefaultGameBuilder {
                     stackable,
                 },
             },
-            shapeless: false
+            shapeless: false,
         })
     }
 

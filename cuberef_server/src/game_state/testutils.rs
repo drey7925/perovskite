@@ -39,53 +39,10 @@ use crate::{
         mapgen::MapgenInterface,
         GameState,
     },
-    network_server::auth::{AuthOutcome, AuthService, RegisterOutcome, TokenOutcome},
     server::ServerBuilder,
 };
 
 const EMPTY: Empty = Empty {};
-
-pub struct FakeAuth {}
-impl AuthService for FakeAuth {
-    fn create_account(
-        &self,
-        username: &str,
-        _password_hash: &[u8],
-        remote_addr: Option<SocketAddr>,
-    ) -> anyhow::Result<crate::network_server::auth::RegisterOutcome> {
-        warn!(
-            "FakeAuth allowing account creation for {} from {:?}",
-            username, remote_addr
-        );
-        Ok(RegisterOutcome::Success("faketoken".to_string()))
-    }
-
-    fn authenticate_user(
-        &self,
-        username: &str,
-        _password_hash: &[u8],
-        remote_addr: Option<SocketAddr>,
-    ) -> anyhow::Result<crate::network_server::auth::AuthOutcome> {
-        warn!(
-            "FakeAuth allowing authentication for {} from {:?}",
-            username, remote_addr
-        );
-        Ok(AuthOutcome::Success("faketoken".to_string()))
-    }
-
-    fn check_token(
-        &self,
-        username: &str,
-        _token: &str,
-        remote_addr: Option<SocketAddr>,
-    ) -> anyhow::Result<TokenOutcome> {
-        warn!(
-            "FakeAuth allowing fake token for {} from {:?}",
-            username, remote_addr
-        );
-        Ok(TokenOutcome::Success)
-    }
-}
 
 pub struct FakeMapgen {
     pub block_type_manager: Arc<BlockTypeManager>,

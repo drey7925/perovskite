@@ -8,7 +8,10 @@ use vulkano::{
     image::SampleCount,
     render_pass::Subpass,
 };
-use winit::{event::WindowEvent, event_loop::{EventLoop, EventLoopWindowTarget}};
+use winit::{
+    event::WindowEvent,
+    event_loop::{EventLoop, EventLoopWindowTarget},
+};
 
 use crate::{
     game_state::ClientState,

@@ -2,11 +2,12 @@ use std::ops::Deref;
 
 use anyhow::Context;
 use egui::{Color32, Layout, ProgressBar, TextEdit};
+use tokio::sync::{oneshot, watch};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
 use crate::vulkan::{
-    game_renderer::{ConnectionState, GameState},
+    game_renderer::{ConnectionSettings, ConnectionState, GameState},
     VulkanContext,
 };
 
@@ -15,6 +16,8 @@ pub(crate) struct MainMenu {
     host_field: String,
     user_field: String,
     pass_field: String,
+    confirm_pass_field: String,
+    show_register_popup: bool,
 }
 impl MainMenu {
     pub(crate) fn new(ctx: &VulkanContext, event_loop: &EventLoop<()>) -> MainMenu {
@@ -37,15 +40,16 @@ impl MainMenu {
             host_field: "".to_string(),
             user_field: "".to_string(),
             pass_field: "".to_string(),
+            confirm_pass_field: "".to_string(),
+            show_register_popup: false,
         }
     }
 
-    fn draw_ui<F>(&mut self, game_state: &mut GameState, connect_callback: F)
-    where
-        F: FnOnce(String, String, String) -> ConnectionState,
-    {
+    fn draw_ui(&mut self, game_state: &mut GameState) -> Option<ConnectionSettings> {
+        let mut result = None;
+
         egui::CentralPanel::default().show(&self.egui_gui.egui_ctx, |ui| {
-            ui.set_enabled(matches!(game_state, GameState::MainMenu));
+            ui.set_enabled(matches!(game_state, GameState::MainMenu) && !self.show_register_popup);
             ui.visuals_mut().override_text_color = Some(Color32::WHITE);
             ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                 let label = ui.label("Server address: ");
@@ -58,7 +62,7 @@ impl MainMenu {
                 ui.add(editor).labelled_by(label.id);
             });
             ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
-                let label = ui.label("Password (currently unused): ");
+                let label = ui.label("Password: ");
                 let editor = TextEdit::singleline(&mut self.pass_field).password(true);
                 ui.add(editor).labelled_by(label.id);
             });
@@ -66,11 +70,20 @@ impl MainMenu {
             let connect_button = egui::Button::new("Connect");
 
             if ui.add(connect_button).clicked() {
-                *game_state = GameState::Connecting(connect_callback(
+                let (state, settings) = make_connection(
                     self.host_field.clone(),
                     self.user_field.clone(),
                     self.pass_field.clone(),
-                ));
+                    false,
+                );
+                self.pass_field.clear();
+                *game_state = GameState::Connecting(state);
+                result = Some(settings);
+            }
+            let register_button = egui::Button::new("Register New Account");
+
+            if ui.add(register_button).clicked() {
+                self.show_register_popup = true;
             }
         });
         match game_state {
@@ -111,18 +124,50 @@ impl MainMenu {
                     });
             }
         }
+        if self.show_register_popup {
+            egui::Window::new("Register new account: ").show(&self.egui_gui.egui_ctx, |ui| {
+                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
+                    let label = ui.label("Confirm password: ");
+                    let editor = TextEdit::singleline(&mut self.confirm_pass_field).password(true);
+                    ui.add(editor).labelled_by(label.id);
+                });
+                let register_button = egui::Button::new("Register");
+                if ui.add(register_button).clicked() {
+                    self.show_register_popup = false;
+                    if self.pass_field != self.confirm_pass_field {
+                        *game_state =
+                            GameState::ConnectError("Passwords did not match".to_string());
+                    } else if self.pass_field.trim().is_empty() {
+                        *game_state = GameState::ConnectError(
+                            "Please specify a non-empty password".to_string(),
+                        );
+                    } else {
+                        let (state, settings) = make_connection(
+                            self.host_field.clone(),
+                            self.user_field.clone(),
+                            self.pass_field.clone(),
+                            true,
+                        );
+                        *game_state = GameState::Connecting(state);
+                        result = Some(settings);
+                    }
+                    self.pass_field.clear();
+                }
+            });
+        }
+
+        result
     }
-    pub(crate) fn draw<L, F>(
+
+    pub(crate) fn draw<L>(
         &mut self,
         ctx: &VulkanContext,
         game_state: &mut GameState,
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
-        connect_callback: F,
-    ) where
-        F: FnOnce(String, String, String) -> ConnectionState,
-    {
+    ) -> Option<ConnectionSettings> {
         self.egui_gui.begin_frame();
-        self.draw_ui(game_state, connect_callback);
+        let result = self.draw_ui(game_state);
         builder
             .next_subpass(vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers)
             .unwrap();
@@ -131,8 +176,33 @@ impl MainMenu {
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
 
         builder.execute_commands(secondary).unwrap();
+        result
     }
     pub(crate) fn update(&mut self, event: &WindowEvent) {
         self.egui_gui.update(event);
     }
+}
+
+fn make_connection(
+    host: String,
+    user: String,
+    pass: String,
+    register: bool,
+) -> (ConnectionState, ConnectionSettings) {
+    let progress = watch::channel((0.0, "Starting connection...".to_string()));
+    let result = oneshot::channel();
+
+    let state = ConnectionState {
+        progress: progress.1,
+        result: result.1,
+    };
+    let settings = ConnectionSettings {
+        host,
+        user,
+        pass,
+        register,
+        progress: progress.0,
+        result: result.0,
+    };
+    (state, settings)
 }

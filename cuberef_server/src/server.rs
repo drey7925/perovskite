@@ -30,7 +30,7 @@ use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
         blocks::BlockTypeManager, game_behaviors::GameBehaviors, items::ItemManager,
-        mapgen::MapgenInterface, testutils::FakeAuth, GameState,
+        mapgen::MapgenInterface, GameState,
     },
     media::MediaManager,
     network_server::{auth::AuthService, grpc_service::CuberefGameServerImpl},
@@ -57,20 +57,17 @@ pub struct ServerArgs {
 pub struct Server {
     runtime: tokio::runtime::Runtime,
     game_state: Arc<GameState>,
-    auth: Arc<dyn AuthService>,
     bind_address: SocketAddr,
 }
 impl Server {
     fn new(
         runtime: tokio::runtime::Runtime,
         game_state: Arc<GameState>,
-        auth: Arc<dyn AuthService>,
         bind_address: SocketAddr,
     ) -> Result<Server> {
         Ok(Server {
             runtime,
             game_state,
-            auth,
             bind_address,
         })
     }
@@ -112,7 +109,6 @@ impl Server {
 
         let cuberef_service = CuberefGameServer::new(CuberefGameServerImpl::new(
             self.game_state.clone(),
-            self.auth.clone(),
         ))
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
@@ -150,7 +146,6 @@ pub struct ServerBuilder {
     items: ItemManager,
     mapgen: Option<Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>>,
     media: MediaManager,
-    auth: Arc<dyn AuthService>,
     args: ServerArgs,
     game_behaviors: GameBehaviors,
 }
@@ -185,8 +180,6 @@ impl ServerBuilder {
             items,
             mapgen: None,
             media,
-            // TODO real auth
-            auth: Arc::new(FakeAuth {}),
             args: args.clone(),
             game_behaviors: Default::default(),
         })
@@ -207,9 +200,6 @@ impl ServerBuilder {
         F: (FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>) + 'static,
     {
         self.mapgen = Some(Box::new(mapgen))
-    }
-    pub fn set_auth(&mut self, auth: Arc<dyn AuthService>) {
-        self.auth = auth;
     }
 
     pub fn build(self) -> Result<Server> {
@@ -232,7 +222,6 @@ impl ServerBuilder {
                 self.mapgen.with_context(|| "Mapgen not specified")?,
                 self.game_behaviors,
             )?,
-            self.auth,
             addr,
         )
     }

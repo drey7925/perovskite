@@ -78,13 +78,13 @@ impl GameBuilder {
 
     /// Borrows the ServerBuilder that can be used to directly register
     /// items, blocks, etc using the low-level unstable API.
-    #[cfg(feature="unstable_api")]
+    #[cfg(feature = "unstable_api")]
     pub fn server_builder_mut(&mut self) -> &mut server_api::ServerBuilder {
         &mut self.inner
     }
 
     /// Returns the ServerBuilder with everything built so far.
-    #[cfg(feature="unstable_api")]
+    #[cfg(feature = "unstable_api")]
     pub fn into_server_builder(self) -> server_api::ServerBuilder {
         self.inner
     }

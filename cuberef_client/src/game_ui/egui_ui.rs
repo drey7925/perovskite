@@ -143,7 +143,8 @@ impl EguiUi {
                         let editor = egui::TextEdit::singleline(value);
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                             let label = ui.label(text_field.label.clone());
-                            ui.add_enabled(text_field.enabled, editor).labelled_by(label.id);
+                            ui.add_enabled(text_field.enabled, editor)
+                                .labelled_by(label.id);
                         });
                     }
                     Some(proto::ui_element::Element::Button(button_def)) => {

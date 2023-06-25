@@ -53,7 +53,8 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
+pub(crate) type CommandBufferBuilder<L> =
+    AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
 
 use self::util::select_physical_device;
 #[derive(Clone)]
@@ -72,7 +73,7 @@ pub(crate) struct VulkanContext {
 }
 impl VulkanContext {
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanContext> {
-        let library = vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
+        let library: Arc<vulkano::VulkanLibrary> = vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
         let required_extensions = vulkano_win::required_extensions(&library);
         let instance = Instance::new(
             library,

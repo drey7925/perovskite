@@ -17,13 +17,13 @@
 pub mod blocks;
 pub mod client_ui;
 pub mod event;
+pub mod game_behaviors;
 pub mod game_map;
 pub mod handlers;
 pub mod inventory;
 pub mod items;
 pub mod mapgen;
 pub mod player;
-pub mod game_behaviors;
 
 #[cfg(test)]
 pub mod tests;
@@ -43,6 +43,7 @@ use crate::database::database_engine::{GameDatabase, KeySpace};
 
 use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
 use crate::media::MediaManager;
+use crate::network_server::auth::AuthService;
 
 use self::blocks::BlockTypeManager;
 use self::game_behaviors::GameBehaviors;
@@ -60,7 +61,8 @@ pub struct GameState {
     media_resources: Arc<MediaManager>,
     early_shutdown: CancellationToken,
     mapgen_seed: u32,
-    game_behaviors: GameBehaviors
+    game_behaviors: GameBehaviors,
+    auth: AuthService
 }
 
 impl GameState {
@@ -70,7 +72,7 @@ impl GameState {
         items: ItemManager,
         media: MediaManager,
         mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
-        game_behaviors: GameBehaviors
+        game_behaviors: GameBehaviors,
     ) -> Result<Arc<Self>> {
         // TODO figure out a way to replace unwrap with error propagation
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
@@ -81,11 +83,12 @@ impl GameState {
             database: db.clone(),
             inventory_manager: Arc::new(InventoryManager::new(db.clone())),
             item_manager: Arc::new(items),
-            player_manager: PlayerManager::new(weak.clone(), db),
+            player_manager: PlayerManager::new(weak.clone(), db.clone()),
             media_resources: Arc::new(media),
             early_shutdown: CancellationToken::new(),
             mapgen_seed,
-            game_behaviors
+            game_behaviors,
+            auth: AuthService::create(db).unwrap()
         }))
     }
 
@@ -145,6 +148,10 @@ impl GameState {
 
     pub fn game_behaviors(&self) -> &GameBehaviors {
         &self.game_behaviors
+    }
+
+    pub(crate) fn auth(&self) -> &AuthService {
+        &self.auth
     }
 }
 

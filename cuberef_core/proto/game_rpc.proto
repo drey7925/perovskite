@@ -30,9 +30,6 @@ service CuberefGame {
     // events.
     rpc GameStream(stream StreamToServer) returns (stream StreamToClient);
 
-    // TODO Do not use - needs redesign to use PAKE
-    rpc Authenticate(AuthRequest) returns (AuthResponse);
-
     // Get all the blocks defined in the game.
     rpc GetBlockDefs(GetBlockDefsRequest) returns (GetBlockDefsResponse);
 
@@ -44,14 +41,6 @@ service CuberefGame {
 
     // Fetch media
     rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
-}
-
-message AuthRequest {
-    // TODO design for PAKE
-}
-
-message AuthResponse {
-    bytes token = 1;
 }
 
 message GetBlockDefsRequest {}
@@ -85,6 +74,11 @@ message StreamToServer {
     uint64 client_tick = 2;
 
     oneof client_message {
+        // Flow control messages
+
+        // Client is finished initializing and is ready to play!
+        Nop client_initial_ready = 40;
+
         // Keepalive/testing
         Nop nop = 81;
         // Client wants to dig
@@ -107,6 +101,15 @@ message StreamToServer {
         //
         // e.g., server sent a delta update, but the client didn't have the block in memory
         ClientBugCheck bug_check = 127;
+
+        // Indicates the client wants to authenticate. Must be the first message sent.
+        StartAuth start_authentication = 150;
+
+        // The second client->server message of the OPAQUE protocol in the registration flow
+        bytes client_registration_upload = 151;
+
+        // The second client->server message of the OPAQUE protocol in the login flow
+        bytes client_login_credential = 152;
     };
 }
 
@@ -134,6 +137,13 @@ message StreamToClient {
         // Client state needs to be set (either during game startup or because the
         // player is being teleported
         SetClientState client_state = 86;
+
+        // The server->client message sent as part of registration in the OPAQUE protocol
+        bytes server_registration_response = 150;
+        // The server->client message sent as part of login in the OPAQUE protocol
+        bytes server_login_response = 151;
+        // Indicates that authentication is successful
+        Nop auth_success = 152;
     };
 }
 
@@ -244,4 +254,13 @@ message SetClientState {
     cuberef.protocol.ui.PopupDescription inventory_popup = 3;
     // A 1x1 transient view used for the item that the player clicked and is moving around.
     uint64 inventory_manipulation_view = 4;
+}
+
+message StartAuth {
+    string username = 1;
+    // If true, register for a new account. If false, log into an existing account.
+    bool register = 2;
+    // If register is true, the first client->server message in the OPAQUE registration flow.
+    // Otherwise, the first client->server message in the OPAQUE login flow.
+    bytes opaque_request = 3;
 }

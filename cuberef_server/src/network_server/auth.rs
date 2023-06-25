@@ -14,56 +14,288 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
-use std::net::SocketAddr;
+use std::{sync::Arc, u8};
 
-pub enum AuthOutcome {
-    /// Successful, here's the token
-    Success(String),
-    WrongPassword,
-    NoSuchAccount,
+use cuberef_core::{
+    auth::CuberefOpaqueAuth,
+    protocol::game_rpc::{
+        self, stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StartAuth,
+        StreamToClient, StreamToServer,
+    },
+};
+use opaque_ke::{
+    ClientLoginFinishResult, CredentialFinalization, CredentialRequest, RegistrationRequest,
+    RegistrationUpload, ServerLogin, ServerLoginStartParameters, ServerLoginStartResult,
+    ServerRegistration, ServerSetup,
+};
+use rand::rngs::OsRng;
+use tokio::sync::mpsc;
+
+use crate::database::database_engine::{GameDatabase, KeySpace};
+
+fn db_key_from_username(username: &str) -> Vec<u8> {
+    let mut key_builder = Vec::new();
+    key_builder.append(&mut b"user_auth_opaque_".to_vec());
+    key_builder.append(&mut hex::encode(username).as_bytes().to_vec());
+    KeySpace::UserMeta.make_key(&key_builder)
 }
 
-pub enum RegisterOutcome {
-    /// Successful, here's a token to use
-    Success(String),
-    AccountExists,
-    RegistrationForbidden,
+pub struct AuthService {
+    db: Arc<dyn GameDatabase>,
+    server_setup: ServerSetup<CuberefOpaqueAuth>,
 }
+impl AuthService {
+    pub(crate) fn create(db: Arc<dyn GameDatabase>) -> anyhow::Result<AuthService> {
+        const DB_KEY: &[u8] = b"auth_opaque_serversetup";
+        let db_key = &KeySpace::Metadata.make_key(DB_KEY);
+        let server_setup = match db.get(db_key)? {
+            Some(x) => ServerSetup::<CuberefOpaqueAuth>::deserialize(&x)
+                .map_err(|e| anyhow::Error::msg(format!("OPAQUE ServerSetup error: {e:?}")))?,
+            None => {
+                let mut rng = OsRng;
+                let server_setup = ServerSetup::new(&mut rng);
+                db.put(&db_key, &server_setup.serialize())?;
+                server_setup
+            }
+        };
+        Ok(AuthService {
+            db: db.clone(),
+            server_setup,
+        })
+    }
 
-pub enum TokenOutcome {
-    Success,
-    Failure,
-}
+    fn start_registration(&self, username: &str, client_request: &[u8]) -> tonic::Result<Vec<u8>> {
+        let server_registration_start_result = ServerRegistration::<CuberefOpaqueAuth>::start(
+            &self.server_setup,
+            RegistrationRequest::deserialize(client_request).map_err(|e| {
+                log::error!("OPAQUE start_registration parse error: {e:?}");
+                tonic::Status::invalid_argument(
+                    "OPAQUE start_registration message could not be parsed",
+                )
+            })?,
+            username.as_bytes(),
+        )
+        .map_err(|e| {
+            log::error!("OPAQUE start_registration error: {e:?}");
+            tonic::Status::unauthenticated("OPAQUE start_registration failed")
+        })?;
+        Ok(server_registration_start_result
+            .message
+            .serialize()
+            .to_vec())
+    }
 
-/// Service for authenticating users and their tokens.
-/// Users have long-lived usernames and passwords, and short-lived tokens that are valid
-/// while a cuberef server is running.
-///
-/// For security, we will use a PAKE algorithm like docs.rs/opaque-ke
-/// THIS IS NOT YET IMPLEMENTED
-/// THE API HERE WILL CHANGE WHEN IT IS
-pub trait AuthService: Send + Sync {
-    // Takes uername, password hash, and remote IP. Adds an account to the database, or returs an error if forbidden/impossible
-    fn create_account(
+    fn finish_registration(&self, username: &str, client_upload: &[u8]) -> tonic::Result<()> {
+        let server_registration_finish_result = ServerRegistration::<CuberefOpaqueAuth>::finish(
+            RegistrationUpload::deserialize(client_upload).map_err(|e| {
+                log::error!("OPAQUE finish_registration parse error: {e:?}");
+                tonic::Status::invalid_argument(
+                    "OPAQUE finish_registration message could not be parsed",
+                )
+            })?,
+        );
+        let db_key = &db_key_from_username(&username);
+        if !self
+            .db
+            .get(db_key)
+            .map_err(|e| {
+                log::error!("Internal DB lookup error: {e:?}");
+                tonic::Status::internal("Internal finish_registration error")
+            })?
+            .is_none()
+        {
+            return Err(tonic::Status::already_exists("This username is already taken."));
+        }
+        self.db
+            .put(&db_key, &server_registration_finish_result.serialize())
+            .map_err(|e| {
+                log::error!("Internal DB store error: {e:?}");
+                tonic::Status::internal("Internal finish_registration error")
+            })?;
+        Ok(())
+    }
+
+    fn start_login(
         &self,
         username: &str,
-        password_hash: &[u8],
-        remote_addr: Option<SocketAddr>,
-    ) -> Result<RegisterOutcome>;
-    // Takes username, password hash, and remote IP. Tries to auth, and returns an AuthOutcome
-    fn authenticate_user(
+        client_request: &[u8],
+    ) -> tonic::Result<ServerLoginStartResult<CuberefOpaqueAuth>> {
+        let pw_file = self.db.get(&db_key_from_username(&username)).map_err(|e| {
+            log::error!("Internal DB lookup error: {e:?}");
+            tonic::Status::internal("Internal start_login error")
+        })?;
+        let pw_file = match pw_file {
+            Some(x) => x,
+            None => {
+                return Err(tonic::Status::unauthenticated(
+                    "No such user found; please register",
+                ));
+            }
+        };
+        let pw_file = ServerRegistration::deserialize(&pw_file).map_err(|e| {
+            log::error!("OPAQUE start_login parse error: {e:?}");
+            tonic::Status::invalid_argument(
+                "OPAQUE start_login data corrupted; please contact server admin",
+            )
+        })?;
+
+        let mut rng = OsRng;
+        ServerLogin::start(
+            &mut rng,
+            &self.server_setup,
+            Some(pw_file),
+            CredentialRequest::deserialize(&client_request).map_err(|e| {
+                log::error!("OPAQUE start_login parse error: {e:?}");
+                tonic::Status::invalid_argument("OPAQUE start_login message could not be parsed")
+            })?,
+            username.as_bytes(),
+            ServerLoginStartParameters::default(),
+        )
+        .map_err(|e| {
+            log::error!("OPAQUE start_login step failed: {e:?}");
+            tonic::Status::unauthenticated("OPAQUE start_login failed")
+        })
+    }
+
+    fn finish_login(
         &self,
-        username: &str,
-        password_hash: &[u8],
-        remote_addr: Option<SocketAddr>,
-    ) -> Result<AuthOutcome>;
-    // Checks if a token came from this authservice. If it did, and the remote addr also matches, return the username for this user
-    // TODO change return type?
-    fn check_token(
+        prior_phase: ServerLoginStartResult<CuberefOpaqueAuth>,
+        client_login_credential: &[u8],
+    ) -> tonic::Result<()> {
+        let result = prior_phase.state.finish(
+            CredentialFinalization::deserialize(&client_login_credential).map_err(|e| {
+                log::error!("OPAQUE finish_login parse error: {e:?}");
+                tonic::Status::invalid_argument("OPAQUE finish_login message could not be parsed")
+            })?,
+        );
+        match result {
+            Ok(_) => Ok(()),
+            Err(opaque_ke::errors::ProtocolError::InvalidLoginError) => {
+                Err(tonic::Status::unauthenticated("Invalid password"))
+            }
+            e @ Err(_) => {
+                log::error!("OPAQUE finish_login step failed: {e:?}");
+                Err(tonic::Status::unauthenticated("OPAQUE finish_login failed"))
+            }
+        }
+    }
+
+    pub(crate) async fn do_auth_flow(
         &self,
-        username: &str,
-        token: &str,
-        remote_addr: Option<SocketAddr>,
-    ) -> Result<TokenOutcome>;
+        inbound: &mut tonic::Streaming<StreamToServer>,
+        outbound: &mpsc::Sender<tonic::Result<StreamToClient>>,
+    ) -> tonic::Result<String> {
+        match inbound.message().await {
+            Ok(Some(StreamToServer {
+                client_message: Some(ClientMessage::StartAuthentication(req)),
+                ..
+            })) => {
+                if req.register {
+                    self.do_registration_flow(req, inbound, outbound).await
+                } else {
+                    self.do_login_flow(req, inbound, outbound).await
+                }
+            }
+            Ok(Some(_)) => Err(tonic::Status::unauthenticated(
+                "Client's first message wasn't StartAuthentication",
+            )),
+            Ok(None) => Err(tonic::Status::unauthenticated(
+                "Client disconnected before authenticating",
+            )),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn do_registration_flow(
+        &self,
+        req: StartAuth,
+        inbound: &mut tonic::Streaming<StreamToServer>,
+        outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
+    ) -> tonic::Result<String> {
+        assert!(req.register);
+        outbound
+            .send(Ok(StreamToClient {
+                tick: 0,
+                server_message: Some(ServerMessage::ServerRegistrationResponse(
+                    self.start_registration(&req.username, &req.opaque_request)?,
+                )),
+            }))
+            .await
+            .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
+
+        let response = inbound.message().await.map_err(|_| {
+            tonic::Status::unavailable("Error reading registration response from client")
+        })?;
+        match response {
+            Some(StreamToServer {
+                client_message: Some(ClientMessage::ClientRegistrationUpload(data)),
+                ..
+            }) => {
+                self.finish_registration(&req.username, &data)?;
+                outbound
+                    .send(Ok(StreamToClient {
+                        tick: 0,
+                        server_message: Some(ServerMessage::AuthSuccess(Nop {})),
+                    }))
+                    .await
+                    .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
+
+                Ok(req.username)
+            }
+            Some(_) => Err(tonic::Status::unauthenticated(
+                "Client did not send a registration response",
+            )),
+            None => Err(tonic::Status::unauthenticated(
+                "Client disconnected before finishing registration",
+            )),
+        }
+    }
+
+    async fn do_login_flow(
+        &self,
+        req: StartAuth,
+
+        inbound: &mut tonic::Streaming<StreamToServer>,
+        outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
+    ) -> tonic::Result<String> {
+        assert!(!req.register);
+        let login_state = self.start_login(&req.username, &req.opaque_request)?;
+        outbound
+            .send(Ok(StreamToClient {
+                tick: 0,
+                server_message: Some(ServerMessage::ServerLoginResponse(
+                    login_state.message.serialize().to_vec(),
+                )),
+            }))
+            .await
+            .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
+
+        let response = inbound
+            .message()
+            .await
+            .map_err(|_| tonic::Status::unavailable("Error reading login response from client"))?;
+        match response {
+            Some(StreamToServer {
+                client_message: Some(ClientMessage::ClientLoginCredential(data)),
+                ..
+            }) => {
+                self.finish_login(login_state, &data)?;
+                outbound
+                .send(Ok(StreamToClient {
+                    tick: 0,
+                    server_message: Some(ServerMessage::AuthSuccess(Nop {})),
+                }))
+                .await
+                .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
+
+                Ok(req.username)
+            }
+            Some(_) => Err(tonic::Status::unauthenticated(
+                "Client did not send a login credential",
+            )),
+            None => Err(tonic::Status::unauthenticated(
+                "Client disconnected before finishing registration",
+            )),
+        }
+    }
 }

@@ -14,20 +14,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::SocketAddr;
 use std::{pin::Pin, sync::Arc};
 
 use cuberef_core::protocol::game_rpc::cuberef_game_server::CuberefGame;
-use cuberef_core::protocol::game_rpc::{self as proto};
+use cuberef_core::protocol::game_rpc::stream_to_server::ClientMessage;
+use cuberef_core::protocol::game_rpc::{self as proto, StreamToClient, StreamToServer};
 
 use log::{error, info, warn};
+use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Result, Status, Streaming};
 
 use crate::game_state::GameState;
 
-use super::auth::AuthService;
 use super::client_context::make_client_contexts;
 
 fn get_metadata(req_metadata: &MetadataMap, key: &str) -> Result<String, tonic::Status> {
@@ -46,37 +46,11 @@ fn get_metadata(req_metadata: &MetadataMap, key: &str) -> Result<String, tonic::
 
 pub struct CuberefGameServerImpl {
     game_state: Arc<GameState>,
-    auth_service: Arc<dyn AuthService>,
 }
 
 impl CuberefGameServerImpl {
-    pub fn new(game_state: Arc<GameState>, auth_service: Arc<dyn AuthService>) -> Self {
-        Self {
-            game_state,
-            auth_service,
-        }
-    }
-
-    fn check_auth_token(
-        &self,
-        req_metadata: &MetadataMap,
-        remote_addr: Option<SocketAddr>,
-    ) -> Result<String, tonic::Status> {
-        let username = get_metadata(req_metadata, "x-cuberef-username")?;
-        let token = get_metadata(req_metadata, "x-cuberef-token")?;
-        match self
-            .auth_service
-            .check_token(&username, &token, remote_addr)
-        {
-            Ok(super::auth::TokenOutcome::Success) => Ok(username),
-            Ok(super::auth::TokenOutcome::Failure) => {
-                Err(tonic::Status::unauthenticated("Bad token"))
-            }
-            Err(e) => {
-                error!("check_token failed: {:?}", e);
-                Err(tonic::Status::internal("Internal auth error"))
-            }
-        }
+    pub fn new(game_state: Arc<GameState>) -> Self {
+        Self { game_state }
     }
 }
 
@@ -89,41 +63,12 @@ impl CuberefGame for CuberefGameServerImpl {
         &self,
         req: Request<Streaming<proto::StreamToServer>>,
     ) -> Result<Response<Self::GameStreamStream>> {
-        let username = self.check_auth_token(req.metadata(), req.remote_addr())?;
         info!("Stream established from {:?}", req.remote_addr());
-
-        let player_context = self
-            .game_state
-            .player_manager()
-            .clone()
-            .connect(&username)
-            .map_err(|_x| Status::internal("Failed to establish player context"))?;
-
-        let inbound = req.into_inner();
-
-        let (mut inbound, mut outbound, outbound_rx) =
-            match make_client_contexts(self.game_state.clone(), player_context, inbound).await {
-                Ok((inbound, outbound, rx)) => (inbound, outbound, rx),
-                Err(e) => {
-                    error!("Error setting up client context: {:?}", e);
-                    return Result::Err(Status::internal(
-                        "Failed to establish client context on server",
-                    ));
-                }
-            };
-
-        // TODO handle the result rather than just quietly shutting down
-        tokio::spawn(async move { inbound.run_inbound_loop().await.unwrap() });
-        tokio::spawn(async move { outbound.run_outbound_loop().await.unwrap() });
+        let (outbound_tx, outbound_rx) = mpsc::channel(4);
+        let game_state = self.game_state.clone();
+        tokio::spawn(async move { game_stream_impl(game_state, req.into_inner(), outbound_tx).await.unwrap() });
 
         Result::Ok(Response::new(Box::pin(ReceiverStream::new(outbound_rx))))
-    }
-
-    async fn authenticate(
-        &self,
-        _req: Request<proto::AuthRequest>,
-    ) -> Result<Response<proto::AuthResponse>> {
-        Result::Err(Status::unimplemented("authenticate unimplemented"))
     }
 
     async fn get_block_defs(
@@ -189,4 +134,83 @@ impl CuberefGame for CuberefGameServerImpl {
                 .collect(),
         }))
     }
+}
+
+async fn game_stream_impl(
+    game_state: Arc<GameState>,
+    mut inbound_rx: tonic::Streaming<StreamToServer>,
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+) -> anyhow::Result<()> {
+    let username = match game_state
+        .auth()
+        .do_auth_flow(&mut inbound_rx, &outbound_tx)
+        .await
+    {
+        Ok(x) => x,
+        Err(e) => {
+            return outbound_tx
+                .send(Err(e))
+                .await
+                .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
+        }
+    };
+    let player_context = game_state
+        .player_manager()
+        .clone()
+        .connect(&username)
+        .map_err(|_x| Status::internal("Failed to establish player context"))?;
+
+    // Wait for the initial ready message from the client
+    match inbound_rx.message().await? {
+        Some(StreamToServer {
+            client_message: Some(ClientMessage::ClientInitialReady(_)),
+            ..
+        }) => {
+            // all OK
+            log::info!("Client reports ready; starting up client's context on server");
+        }
+        Some(_) => {
+            let err_response = Err(tonic::Status::invalid_argument(
+                "Client did not send a ClientInitialReady as its first message after authenticating.",
+            ));
+            return outbound_tx
+                .send(err_response)
+                .await
+                .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
+        }
+        None => {
+            let err_response = Err(tonic::Status::unavailable(
+            "Client did not send a ClientInitialReady and disconnected instead.",
+        ));
+            return outbound_tx
+                .send(err_response)
+                .await
+                .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
+        }
+    }
+
+    let (mut inbound, mut outbound) = match make_client_contexts(
+        game_state.clone(),
+        player_context,
+        inbound_rx,
+        outbound_tx.clone(),
+    )
+    .await
+    {
+        Ok((inbound, outbound)) => (inbound, outbound),
+        Err(e) => {
+            error!("Error setting up client context: {:?}", e);
+            return outbound_tx
+                .send(Err(tonic::Status::internal(format!(
+                    "Failure setting up client contexts: {e:?}"
+                ))))
+                .await
+                .map_err(|_| anyhow::Error::msg("Failed to send context setup error"));
+        }
+    };
+
+    // TODO handle the result rather than just quietly shutting down
+    tokio::spawn(async move { inbound.run_inbound_loop().await.unwrap() });
+    tokio::spawn(async move { outbound.run_outbound_loop().await.unwrap() });
+    Ok(())
 }

@@ -6,13 +6,16 @@ license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Core code shared between client and server"
 
 [dependencies]
-tonic = "0.9.1"
+anyhow = "1.0.70"
+argon2 = "0.4.1"
+cgmath = "0.18.0"
+opaque-ke = { version = "2.0.0", features = ["argon2"] }
 prost = "0.11"
 prost-types = "0.11"
+rand = "0.8.5"
 thiserror = "1.0.40"
-anyhow = "1.0.70"
+tonic = "0.9.1"
 vec3D = "0.3.0"
-cgmath = "0.18.0"
 
 [build-dependencies]
 tonic-build = "0.9.1"

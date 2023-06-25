@@ -246,6 +246,14 @@ impl GameState {
                     // pass
                 }
             }
+        } else if let GameState::Active(game) = self {
+            let pending_error = game.client_state.pending_error.lock().take();
+            if let Some(err) = pending_error {
+                *self = GameState::ConnectError(err)
+            }
+            else if game.client_state.cancel_requested() {
+                *self = GameState::MainMenu;
+            }
         }
     }
 }
@@ -280,38 +288,6 @@ impl GameRenderer {
             main_menu: Mutex::new(main_menu),
             rt,
         })
-    }
-
-    async fn connect_impl(
-        ctx: VulkanContext,
-        server_addr: String,
-        username: String,
-        password: String,
-        mut progress: watch::Sender<(f32, String)>,
-    ) -> Result<ActiveGame> {
-        progress.send((0.1, format!("Connecting to {}", server_addr)))?;
-        let client_state =
-            net_client::connect_game(server_addr.to_string(), &ctx, &mut progress)
-                .await?;
-
-        let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
-        let cube_pipeline =
-            cube_provider.make_pipeline(&ctx, client_state.cube_renderer.atlas())?;
-
-        let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
-        let flat_pipeline =
-            flat_provider.make_pipeline(&ctx, (client_state.hud.lock().texture_atlas(), 0))?;
-
-        let game = ActiveGame {
-            cube_provider,
-            cube_pipeline,
-            flat_provider,
-            flat_pipeline,
-            client_state,
-            egui_adapter: None,
-        };
-
-        Ok(game)
     }
 
     pub fn run_loop(mut self, event_loop: EventLoop<()>) {
@@ -369,7 +345,6 @@ impl GameRenderer {
                 }
                 Event::MainEventsCleared => {
                     if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-
                         let _span = span!("MainEventsCleared");
                         if self.ctx.window.has_focus() && game.client_state.should_capture() {
                             let size = self.ctx.window.inner_size();
@@ -455,32 +430,13 @@ impl GameRenderer {
                     {
                         game.build_command_buffers(window_size, &self.ctx, command_buf_builder)
                     } else {
-                        let rt = self.rt.clone();
-                        let ctx = self.ctx.clone();
-                        self.main_menu.lock().draw(
+                        if let Some(connection_settings) = self.main_menu.lock().draw(
                             &self.ctx,
                             &mut game_lock,
                             &mut command_buf_builder,
-                            |host, user, pass| {
-                                let progress =
-                                    watch::channel((0.0, "Starting connection...".to_string()));
-                                let result = oneshot::channel();
-                                rt.spawn(async move {
-                                    let active_game =
-                                        Self::connect_impl(ctx, host, user, pass, progress.0).await;
-                                    match result.0.send(active_game) {
-                                        Ok(_) => {},
-                                        Err(_) => {
-                                            panic!("Failed to hand off the active game to the renderer.")
-                                        },
-                                    }
-                                });
-                                ConnectionState {
-                                    progress: progress.1,
-                                    result: result.1,
-                                }
-                            },
-                        );
+                        ) {
+                            self.start_connection(connection_settings);
+                        }
                         finish_command_buffer(command_buf_builder).unwrap()
                     };
 
@@ -516,6 +472,31 @@ impl GameRenderer {
             }
         })
     }
+
+    fn start_connection(&self, settings: ConnectionSettings) {
+        {
+            {
+                let ctx = self.ctx.clone();
+                self.rt.spawn(async move {
+                    let active_game = connect_impl(
+                        ctx,
+                        settings.host,
+                        settings.user,
+                        settings.pass,
+                        settings.register,
+                        settings.progress,
+                    )
+                    .await;
+                    match settings.result.send(active_game) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            panic!("Failed to hand off the active game to the renderer.")
+                        }
+                    }
+                });
+            }
+        }
+    }
 }
 
 impl Drop for ActiveGame {
@@ -532,4 +513,45 @@ fn finish_command_buffer(
     builder
         .build()
         .with_context(|| "Command buffer build failed")
+}
+
+pub(crate) struct ConnectionSettings {
+    pub(crate) host: String,
+    pub(crate) user: String,
+    pub(crate) pass: String,
+    pub(crate) register: bool,
+
+    pub(crate) progress: watch::Sender<(f32, String)>,
+    pub(crate) result: oneshot::Sender<Result<ActiveGame>>
+}
+
+async fn connect_impl(
+    ctx: VulkanContext,
+    server_addr: String,
+    username: String,
+    password: String,
+    register: bool,
+    mut progress: watch::Sender<(f32, String)>,
+) -> Result<ActiveGame> {
+    progress.send((0.1, format!("Connecting to {}", server_addr)))?;
+    let client_state =
+        net_client::connect_game(server_addr, username, password, register, &ctx, &mut progress).await?;
+
+    let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
+    let cube_pipeline = cube_provider.make_pipeline(&ctx, client_state.cube_renderer.atlas())?;
+
+    let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
+    let flat_pipeline =
+        flat_provider.make_pipeline(&ctx, (client_state.hud.lock().texture_atlas(), 0))?;
+
+    let game = ActiveGame {
+        cube_provider,
+        cube_pipeline,
+        flat_provider,
+        flat_pipeline,
+        client_state,
+        egui_adapter: None,
+    };
+
+    Ok(game)
 }

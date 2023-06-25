@@ -18,6 +18,6 @@ pub mod client_main;
 pub(crate) mod cube_renderer;
 pub mod game_state;
 pub(crate) mod game_ui;
+pub(crate) mod main_menu;
 pub(crate) mod net_client;
 pub mod vulkan;
-pub(crate) mod main_menu;

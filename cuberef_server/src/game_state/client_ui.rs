@@ -237,7 +237,11 @@ impl Popup {
         }
     }
 
-    pub(crate) fn handle_response(&mut self, response: PopupResponse, player_main_inv: InventoryKey) -> Result<()> {
+    pub(crate) fn handle_response(
+        &mut self,
+        response: PopupResponse,
+        player_main_inv: InventoryKey,
+    ) -> Result<()> {
         if let PopupAction::PopupClosed = response.user_action {
             for view in self.inventory_views.values_mut() {
                 view.clear_if_transient(Some(player_main_inv))?;

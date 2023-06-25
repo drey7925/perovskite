@@ -177,6 +177,8 @@ pub(crate) struct ClientState {
     // GameHud manages its own state.
     pub(crate) hud: Arc<Mutex<GameHud>>,
     pub(crate) egui: Arc<Mutex<EguiUi>>,
+
+    pub(crate) pending_error: Mutex<Option<String>>
 }
 impl ClientState {
     pub(crate) fn window_event(&self, event: &Event<()>) {
