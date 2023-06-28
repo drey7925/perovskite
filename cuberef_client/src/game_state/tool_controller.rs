@@ -49,6 +49,7 @@ pub(crate) struct ToolController {
     dig_button_just_pressed: bool,
     dig_button_just_released: bool,
     place_button_just_pressed: bool,
+    interact_key_just_pressed: bool,
     current_item: ItemDef,
     current_slot: u32,
     current_item_interacting_groups: Vec<Vec<String>>,
@@ -61,6 +62,7 @@ impl ToolController {
             dig_button_just_pressed: false,
             dig_button_just_released: false,
             place_button_just_pressed: false,
+            interact_key_just_pressed: false,
             current_item: default_item(),
             current_slot: 0,
             current_item_interacting_groups: get_dig_interacting_groups(&default_item()),
@@ -77,6 +79,9 @@ impl ToolController {
             self.dig_button_just_released = true;
         }
         self.dig_button_pressed = false;
+    }
+    pub(crate) fn interact_key_pressed(&mut self) {
+        self.interact_key_just_pressed = true;
     }
     // Signal that the secondary mouse button has been pressed
     pub(crate) fn secondary_mouse_down(&mut self) {
@@ -186,6 +191,9 @@ impl ToolController {
                 anchor: Some(pointee),
                 item_slot: self.current_slot,
             }))
+        } else if self.interact_key_just_pressed {
+            self.interact_key_just_pressed = false;
+            action = Some(GameAction::InteractKey(pointee))
         }
         self.dig_button_just_pressed = false;
         if let Some(action) = &action {

@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Error;
-
+use rustc_hash::FxHashMap;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -26,7 +26,10 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::database::database_engine::{GameDatabase, KeySpace};
+use crate::{
+    database::database_engine::{GameDatabase, KeySpace},
+    game_state::inventory::Inventory,
+};
 
 use super::{
     blocks::{
@@ -144,7 +147,7 @@ pub struct MapChunk {
     // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
     // set_block and related to allow an API to set blocks when given a &mut MapChunk
     pub(crate) block_ids: Vec<u32>,
-    extended_data: Vec<Option<ExtendedData>>,
+    extended_data: FxHashMap<u16, ExtendedData>,
 
     game_state: Weak<GameState>,
     dirty: bool,
@@ -152,8 +155,7 @@ pub struct MapChunk {
 }
 impl MapChunk {
     fn new(own_coord: ChunkCoordinate, game_state: Arc<GameState>) -> Self {
-        let mut extended_data = Vec::new();
-        extended_data.resize_with(4096, || None);
+        let extended_data = FxHashMap::default();
         Self {
             own_coord,
             block_ids: vec![0; 4096],
@@ -176,7 +178,7 @@ impl MapChunk {
             let block_coord = self.own_coord.with_offset(offset);
 
             if usage == ChunkUsage::Server {
-                if let Some(ext_data) = &self.extended_data[index] {
+                if let Some(ext_data) = self.extended_data.get(&index.try_into().unwrap()) {
                     if let Some(ext_data_proto) =
                         self.extended_data_to_proto(index, block_coord, ext_data)?
                     {
@@ -213,36 +215,53 @@ impl MapChunk {
             .map()
             .block_type_manager()
             .get_block_by_id(id.into())?;
-        if block_type.extended_data_handling == ExtDataHandling::NoExtData {
+        if block_type.extended_data_handling == ExtDataHandling::NoExtData && ext_data.custom_data.is_some() {
             error!(
             "Found extended data, but block {} doesn't support extended data, while serializing {:?}, ",
             block_type.client_info.short_name, block_coord,
         );
         }
-        let handler_context = InlineContext {
-            tick: game_state.tick(),
-            initiator: EventInitiator::Engine,
-            location: block_coord,
-            block_types: game_state.map().block_type_manager(),
-            items: game_state.item_manager(),
-        };
-        Ok(match block_type.serialize_extended_data_handler {
-            Some(ref serialize) => {
-                serialize(handler_context, ext_data)?.map(|serialized_ext_data| {
-                    mapchunk_proto::ExtendedData {
-                        offset_in_chunk: block_index.try_into().unwrap(),
-                        serialized_data: serialized_ext_data,
+
+        if ext_data.custom_data.is_some() || !ext_data.inventories.is_empty() {
+            let serialized_custom_data = match ext_data.custom_data.as_ref() {
+                Some(x) => match &block_type.serialize_extended_data_handler {
+                    Some(serializer) => {
+                        let handler_context = InlineContext {
+                            tick: game_state.tick(),
+                            initiator: EventInitiator::Engine,
+                            location: block_coord,
+                            block_types: game_state.map().block_type_manager(),
+                            items: game_state.item_manager(),
+                        };
+
+                        (serializer)(handler_context, x)?
                     }
-                })
-            }
-            None => {
-                error!(
-                            "Block at {:?}, type {} indicated extended data, but had no deserialize handler",
-                            block_coord, block_type.client_info.short_name
-                        );
-                None
-            }
-        })
+                    None => {
+                        if ext_data.custom_data.is_some() {
+                            error!(
+                                    "Block at {:?}, type {} indicated extended data, but had no serialize handler",
+                                    block_coord, block_type.client_info.short_name
+                                );
+                        }
+                        None
+                    }
+                },
+                None => None,
+            };
+            let inventories = ext_data
+                .inventories
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_proto()))
+                .collect();
+
+            Ok(Some(mapchunk_proto::ExtendedData {
+                offset_in_chunk: block_index.try_into().unwrap(),
+                serialized_data: serialized_custom_data.unwrap_or_else(|| vec![]),
+                inventories,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn deserialize(
@@ -269,7 +288,13 @@ impl MapChunk {
         extended_data: Option<ExtendedData>,
     ) {
         self.block_ids[coordinate.as_index()] = block.id().into();
-        self.extended_data[coordinate.as_index()] = extended_data;
+        if let Some(extended_data) = extended_data {
+            self.extended_data
+                .insert(coordinate.as_index().try_into().unwrap(), extended_data);
+        } else {
+            self.extended_data
+                .remove(&coordinate.as_index().try_into().unwrap());
+        }
     }
 }
 
@@ -278,8 +303,7 @@ fn parse_v1(
     coordinate: ChunkCoordinate,
     game_state: Arc<GameState>,
 ) -> std::result::Result<MapChunk, anyhow::Error> {
-    let mut extended_data = Vec::new();
-    extended_data.resize_with(4096, || None);
+    let mut extended_data = FxHashMap::default();
     ensure!(
         chunk_data.block_ids.len() == 4096,
         "Block IDs length != 4096"
@@ -288,6 +312,7 @@ fn parse_v1(
     for mapchunk_proto::ExtendedData {
         offset_in_chunk,
         serialized_data,
+        inventories,
     } in chunk_data.extended_data.iter()
     {
         ensure!(*offset_in_chunk < 4096);
@@ -316,12 +341,32 @@ fn parse_v1(
             items: game_state.item_manager(),
         };
         if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
-            extended_data[*offset_in_chunk as usize] =
-                deserialize(handler_context, serialized_data)?
+            extended_data.insert(
+                (*offset_in_chunk).try_into().unwrap(),
+                ExtendedData {
+                    custom_data: deserialize(handler_context, &serialized_data)?,
+                    inventories: inventories
+                        .iter()
+                        .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
+                        .collect::<Result<HashMap<_, _>>>()?,
+                },
+            );
         } else {
-            error!(
-                "Block at {:?}, type {} indicated extended data, but had no deserialize handler",
-                block_coord, block_def.client_info.short_name
+            if !serialized_data.is_empty() {
+                warn!(
+                    "Block at {:?}, type {} has extended data, but had no deserialize handler",
+                    block_coord, block_def.client_info.short_name
+                );
+            }
+            extended_data.insert(
+                (*offset_in_chunk).try_into().unwrap(),
+                ExtendedData {
+                    custom_data: None,
+                    inventories: inventories
+                        .iter()
+                        .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
+                        .collect::<Result<HashMap<_, _>>>()?,
+                },
             );
         }
     }
@@ -428,7 +473,10 @@ impl ServerGameMap {
         let chunk = self.get_chunk(&mut lock, coord.chunk())?;
 
         let id = chunk.block_ids[coord.offset().as_index()];
-        let ext_data = match &chunk.extended_data[coord.offset().as_index()] {
+        let ext_data = match chunk
+            .extended_data
+            .get(&coord.offset().as_index().try_into().unwrap())
+        {
             Some(x) => extended_data_callback(x),
             None => None,
         };
@@ -455,7 +503,7 @@ impl ServerGameMap {
         &self,
         coord: BlockCoordinate,
         block: T,
-        extended_data: Option<ExtendedData>,
+        new_data: Option<ExtendedData>,
     ) -> Result<(BlockTypeHandle, Option<ExtendedData>)> {
         let block = block
             .as_handle(&self.block_type_manager)
@@ -465,13 +513,15 @@ impl ServerGameMap {
 
         let old_id = chunk.block_ids[coord.offset().as_index()];
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
-        let old_data = std::mem::replace(
-            chunk
+        let old_data = match new_data {
+            Some(new_data) => chunk
                 .extended_data
-                .get_mut(coord.offset().as_index())
-                .unwrap(),
-            extended_data,
-        );
+                .insert(coord.offset().as_index().try_into().unwrap(), new_data),
+            None => chunk
+                .extended_data
+                .remove(&coord.offset().as_index().try_into().unwrap()),
+        };
+
         chunk.block_ids[coord.offset().as_index()] = block.id().into();
         chunk.dirty = true;
         self.enqueue_writeback(coord.chunk())?;
@@ -542,19 +592,18 @@ impl ServerGameMap {
             old_block,
             chunk
                 .extended_data
-                .get(coord.offset().as_index())
-                .unwrap()
-                .as_ref(),
+                .get(&coord.offset().as_index().try_into().unwrap()),
         ) {
             return Ok((CasOutcome::Mismatch, old_block, None));
         }
-        let old_data = std::mem::replace(
-            chunk
+        let old_data = match extended_data {
+            Some(new_data) => chunk
                 .extended_data
-                .get_mut(coord.offset().as_index())
-                .unwrap(),
-            extended_data,
-        );
+                .insert(coord.offset().as_index().try_into().unwrap(), new_data),
+            None => chunk
+                .extended_data
+                .remove(&coord.offset().as_index().try_into().unwrap()),
+        };
         chunk.block_ids[coord.offset().as_index()] = block.id().into();
         chunk.dirty = true;
         self.enqueue_writeback(coord.chunk())?;
@@ -582,21 +631,27 @@ impl ServerGameMap {
         let mut lock = self.live_chunks.lock();
         let chunk = self.get_chunk(&mut lock, coord.chunk())?;
 
-        let mut extended_data = ExtendedDataHolder::new(
-            chunk
+        let mut extended_data = chunk
             .extended_data
-            .get_mut(coord.offset().as_index())
-            .with_context(|| format!("Bugcheck: extended_data for {:?} was out of bounds in the chunk's extended data array", coord)).unwrap());
+            .remove(&coord.offset().as_index().try_into().unwrap());
+
+        let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
         let old_id = chunk.block_ids[coord.offset().as_index()].into();
         let mut block_type = self.block_type_manager().make_blockref(old_id)?;
-        let closure_result = mutator(&mut block_type, &mut extended_data);
+        let closure_result = mutator(&mut block_type, &mut data_holder);
+        let dirty = data_holder.dirty();
 
+        if let Some(new_data) = extended_data {
+            chunk
+                .extended_data
+                .insert(coord.offset().as_index().try_into().unwrap(), new_data);
+        }
         let new_id = block_type.id();
         if new_id != old_id {
             chunk.block_ids[coord.offset().as_index()] = new_id.into();
             chunk.dirty = true;
         }
-        if extended_data.dirty() {
+        if dirty {
             chunk.dirty = true;
         }
         if chunk.dirty {
@@ -669,7 +724,7 @@ impl ServerGameMap {
             let ctx = HandlerContext {
                 tick,
                 initiator: initiator.clone(),
-                game_state: &self.game_state(),
+                game_state: self.game_state().clone(),
             };
             drops.append(&mut run_handler(
                 || (full_handler)(ctx, coord, tool),

@@ -14,9 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
-use super::{game_map::ServerGameMap, items::ItemManager, player::Player, GameState};
+use super::{game_map::ServerGameMap, items::ItemManager, player::Player, GameState, client_ui::Popup};
 
 // Private, lightweight representation of who initiated an event.
 // This is used to reconcile responses in the game stream to the requests
@@ -44,7 +44,7 @@ pub struct HandlerContext<'a> {
     /// The character
     pub(crate) initiator: EventInitiator<'a>,
     /// Access to the map
-    pub(crate) game_state: &'a GameState,
+    pub(crate) game_state: Arc<GameState>,
 }
 
 impl<'a> HandlerContext<'a> {
@@ -59,5 +59,8 @@ impl<'a> HandlerContext<'a> {
     }
     pub fn items(&self) -> &ItemManager {
         self.game_state.item_manager()
+    }
+    pub fn new_popup(&self) -> Popup {
+        Popup::new(self.game_state.clone())
     }
 }

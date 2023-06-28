@@ -29,7 +29,7 @@ pub struct ClientArgs {
     server: String,
 }
 
-pub fn run_client(_args: &ClientArgs) -> Result<()> {
+pub fn run_client() -> Result<()> {
     let _tracy_client = tracy_client::Client::start();
     let event_loop = EventLoop::new();
 

@@ -90,6 +90,7 @@ impl ClientInventory {
 
 pub(crate) struct InventoryViewManager {
     // TODO encapsulate these better
+    // TODO stop leaking them
     pub(crate) inventory_views: FxHashMap<u64, ClientInventory>,
 }
 impl InventoryViewManager {}

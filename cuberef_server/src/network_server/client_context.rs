@@ -56,6 +56,7 @@ use log::error;
 use log::info;
 use log::warn;
 use tokio::sync::{broadcast, mpsc, watch};
+use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
 
 static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -64,11 +65,8 @@ pub(crate) async fn make_client_contexts(
     game_state: Arc<GameState>,
     player_context: PlayerContext,
     inbound_rx: tonic::Streaming<proto::StreamToServer>,
-    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>
-) -> Result<(
-    ClientInboundContext,
-    ClientOutboundContext,
-)> {
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+) -> Result<(ClientInboundContext, ClientOutboundContext)> {
     let id = CLIENT_CONTEXT_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     let initial_position = PlayerPositionUpdate {
@@ -711,6 +709,9 @@ impl ClientInboundContext {
             Some(proto::stream_to_server::ClientMessage::PopupResponse(response)) => {
                 self.handle_popup_response(response).await?;
             }
+            Some(proto::stream_to_server::ClientMessage::InteractKey(interact_key)) => {
+                self.handle_interact_key(interact_key).await?;
+            }
             Some(_) => {
                 warn!(
                     "Unimplemented client->server message {:?} on context {}",
@@ -757,7 +758,7 @@ impl ClientInboundContext {
                     let ctx = HandlerContext {
                         tick: self.game_state.tick(),
                         initiator: initiator.clone(),
-                        game_state: &self.game_state,
+                        game_state: self.game_state.clone(),
                     };
                     handlers::run_handler(
                         || {
@@ -888,7 +889,7 @@ impl ClientInboundContext {
                     let ctx = HandlerContext {
                         tick: self.game_state.tick(),
                         initiator: initiator.clone(),
-                        game_state: &self.game_state,
+                        game_state: self.game_state.clone(),
                     };
                     let new_stack = handlers::run_handler(
                         || {
@@ -926,39 +927,39 @@ impl ClientInboundContext {
             // todo send the user an error
             return Ok(());
         }
-        let updates = {
-            let mut views_to_send = HashSet::new();
-            let mut player_state = self.player_context.player.state.lock();
-
-            player_state.handle_inventory_action(action)?;
-
-            for popup in player_state
-                .active_popups
-                .iter()
-                .chain(once(&player_state.inventory_popup))
+        let updates =
             {
-                if popup
-                    .inventory_views()
-                    .values()
-                    .any(|x| x.id.0 == action.source_view || x.id.0 == action.destination_view)
-                {
-                    for view in popup.inventory_views().values() {
-                        views_to_send.insert(view.id);
-                    }
-                }
-            }
+                let mut views_to_send = HashSet::new();
+                block_in_place(|| -> anyhow::Result<Vec<StreamToClient>> {
+                    let mut player_state = self.player_context.player.state.lock();
 
-            let mut updates = vec![];
-            for view in views_to_send {
-                updates.push(make_inventory_update(
-                    &self.game_state,
-                    player_state.find_inv_view(view)?.as_ref(),
-                )?);
-            }
-            // drop before async calls
-            drop(player_state);
-            updates
-        };
+                    player_state.handle_inventory_action(action)?;
+
+                    for popup in player_state
+                        .active_popups
+                        .iter()
+                        .chain(once(&player_state.inventory_popup))
+                    {
+                        if popup.inventory_views().values().any(|x| {
+                            x.id.0 == action.source_view || x.id.0 == action.destination_view
+                        }) {
+                            for view in popup.inventory_views().values() {
+                                views_to_send.insert(view.id);
+                            }
+                        }
+                    }
+
+                    let mut updates = vec![];
+                    for view in views_to_send {
+                        updates.push(make_inventory_update(
+                            &self.game_state,
+                            player_state.find_inv_view(view)?.as_ref(),
+                        )?);
+                    }
+
+                    anyhow::Result::Ok(updates)
+                })?
+            };
         for update in updates {
             self.outbound_tx
                 .send(Ok(update))
@@ -1034,7 +1035,11 @@ impl ClientInboundContext {
                     action.popup_id
                 );
             }
-
+            if action.closed {
+                player_state
+                    .active_popups
+                    .retain(|x| x.id() != action.popup_id)
+            }
             // drop before async calls
             drop(player_state);
             updates
@@ -1046,6 +1051,62 @@ impl ClientInboundContext {
                 .with_context(|| "Could not send outbound message (inventory update)")?;
         }
 
+        Ok(())
+    }
+
+    async fn handle_interact_key(
+        &mut self,
+        interact_message: &proto::InteractKeyAction,
+    ) -> Result<()> {
+        let coord: BlockCoordinate = interact_message
+            .block_coord
+            .as_ref()
+            .map(|x| x.into())
+            .with_context(|| "Missing block_coord")?;
+        let ctx = HandlerContext {
+            tick: self.game_state.tick(),
+            initiator: EventInitiator::Player(&self.player_context),
+            game_state: self.game_state.clone(),
+        };
+        let block = self.game_state.map().get_block(coord)?;
+        let mut messages = vec![];
+        if let Some(handler) = &self
+            .game_state
+            .map()
+            .block_type_manager()
+            .get_block(&block)
+            .unwrap()
+            .0
+            .interact_key_handler
+        {
+            if let Some(popup) = block_in_place(|| (handler)(ctx, coord))? {
+                messages.push(StreamToClient {
+                    tick: self.game_state.tick(),
+                    server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
+                });
+                for view in popup.inventory_views().values() {
+                    messages.push(make_inventory_update(
+                        &self.game_state,
+                        &InventoryViewWithContext {
+                            view,
+                            context: &popup,
+                        },
+                    )?)
+                }
+                self.player_context
+                    .player
+                    .state
+                    .lock()
+                    .active_popups
+                    .push(popup);
+            }
+        }
+        for message in messages {
+            self.outbound_tx
+                .send(Ok(dbg!(message)))
+                .await
+                .with_context(|| "Could not send outbound message (inventory update)")?;
+        }
         Ok(())
     }
 }
@@ -1116,8 +1177,10 @@ fn make_inventory_update(
     game_state: &GameState,
     view: &dyn TypeErasedInventoryView,
 ) -> Result<StreamToClient> {
-    Ok(StreamToClient {
-        tick: game_state.tick(),
-        server_message: Some(ServerMessage::InventoryUpdate(view.to_client_proto()?)),
+    block_in_place(|| {
+        Ok(StreamToClient {
+            tick: game_state.tick(),
+            server_message: Some(ServerMessage::InventoryUpdate(view.to_client_proto()?)),
+        })
     })
 }

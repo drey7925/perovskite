@@ -16,6 +16,9 @@
 
 use std::{
     borrow::Borrow,
+    collections::HashMap,
+    fmt::format,
+    ops::DerefMut,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -24,13 +27,13 @@ use crate::{
     game_state::items::{ItemStack, MaybeStack},
 };
 use anyhow::{bail, ensure, Context, Result};
-use cuberef_core::protocol::items as items_proto;
+use cuberef_core::{coordinates::BlockCoordinate, protocol::items as items_proto};
 use log::warn;
 use parking_lot::{Mutex, RwLock};
 use prost::Message;
 use tokio::sync::broadcast;
 
-use super::GameState;
+use super::{blocks::ExtendedData, GameState};
 
 /// Opaque unique identifier for an inventory.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -62,7 +65,7 @@ impl InventoryKey {
 /// That UI will have rules on access control that the server will enforce
 #[derive(Debug)]
 pub struct Inventory {
-    key: InventoryKey,
+    key: Option<InventoryKey>,
     pub dimensions: (u32, u32),
     contents: Vec<Option<ItemStack>>,
 }
@@ -79,15 +82,18 @@ impl Inventory {
         let mut contents = Vec::new();
         contents.resize_with(len.try_into().unwrap(), || None);
         Ok(Inventory {
-            key: InventoryKey {
+            key: Some(InventoryKey {
                 id: uuid::Uuid::new_v4(),
-            },
+            }),
             dimensions,
             contents,
         })
     }
 
-    fn from_proto(proto: items_proto::Inventory, key: InventoryKey) -> Result<Inventory> {
+    pub(crate) fn from_proto(
+        proto: items_proto::Inventory,
+        key: Option<InventoryKey>,
+    ) -> Result<Inventory> {
         let size = proto
             .width
             .checked_mul(proto.height)
@@ -177,10 +183,11 @@ impl InventoryManager {
         let inventory = Inventory::new((height, width))?;
         let db = self.db.lock();
         db.put(
-            &inventory.key.to_db_key(),
+            // unwrap OK because we just generated an inventory with a key
+            &inventory.key.unwrap().to_db_key(),
             &inventory.to_proto().encode_to_vec(),
         )?;
-        Ok(inventory.key)
+        Ok(inventory.key.unwrap())
     }
     /// Get a readonly copy of an inventory.
     pub fn get(&self, key: &InventoryKey) -> Result<Option<Inventory>> {
@@ -189,7 +196,7 @@ impl InventoryManager {
         match bytes {
             Some(x) => {
                 let inv_proto = items_proto::Inventory::decode(x.borrow())?;
-                Ok(Some(Inventory::from_proto(inv_proto, *key)?))
+                Ok(Some(Inventory::from_proto(inv_proto, Some(*key))?))
             }
             None => Ok(None),
         }
@@ -208,7 +215,7 @@ impl InventoryManager {
         let mut inv = match bytes {
             Some(x) => {
                 let inv_proto = items_proto::Inventory::decode(x.borrow())?;
-                Inventory::from_proto(inv_proto, *key)?
+                Inventory::from_proto(inv_proto, Some(*key))?
             }
             None => {
                 bail!("Inventory ID not found")
@@ -241,7 +248,7 @@ impl InventoryManager {
             let inv = match bytes {
                 Some(x) => {
                     let inv_proto = items_proto::Inventory::decode(x.borrow())?;
-                    Inventory::from_proto(inv_proto, *key)?
+                    Inventory::from_proto(inv_proto, Some(*key))?
                 }
                 None => {
                     bail!("Inventory ID not found")
@@ -253,8 +260,8 @@ impl InventoryManager {
         let result = mutator(&mut inventories);
         for inv in inventories {
             let new_bytes = inv.to_proto().encode_to_vec();
-            db.put(&inv.key.to_db_key(), &new_bytes)?;
-            self.broadcast_update(inv.key)
+            db.put(&inv.key.unwrap().to_db_key(), &new_bytes)?;
+            self.broadcast_update(inv.key.unwrap())
         }
         result
     }
@@ -283,6 +290,24 @@ impl InventoryManager {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct InventoryViewId(pub(crate) u64);
 
+#[derive(Clone, Debug)]
+pub enum BorrowLocation {
+    /// Stored in the inventory manager (inventory key, slot)
+    Global(InventoryKey, usize),
+    /// Stored in a block (coordinate, key, slot)
+    Block(BlockCoordinate, String, usize),
+    /// Not borrowing from somewhere
+    NotBorrowed,
+}
+impl BorrowLocation {
+    fn or(self, alternative: BorrowLocation) -> BorrowLocation {
+        if let Self::NotBorrowed = self {
+            return alternative;
+        }
+        return self;
+    }
+}
+
 /// A stack of items that came from some real inventory, and is now in a transient inventory
 /// (or being held by the user's cursor).
 ///
@@ -290,7 +315,7 @@ pub struct InventoryViewId(pub(crate) u64);
 #[derive(Clone, Debug)]
 pub struct BorrowedStack {
     /// The location (inventory key, offset) that this stack is borrowing from
-    pub borrows_from: Option<(InventoryKey, usize)>,
+    pub borrows_from: BorrowLocation,
     /// The stack that is borrowed from the location indicated.
     pub borrowed_stack: ItemStack,
 }
@@ -345,6 +370,9 @@ pub enum ViewBacking<T> {
     /// This inventory view is stored in the database. Nothing interesting happens when the view
     /// is deleted, because any actions on the view have been written back to the database by then.
     Stored(InventoryKey),
+
+    // This inventory view is stored in the extended data of a block.
+    StoredInBlock(BlockCoordinate, String),
 }
 
 /// A view into an inventory, meant for user interaction.
@@ -434,14 +462,55 @@ impl<T> InventoryView<T> {
         })
     }
 
+    pub(crate) fn new_block(
+        game_state: Arc<GameState>,
+        dimensions: (u32, u32),
+        coord: BlockCoordinate,
+        key: String,
+        can_place: bool,
+        can_take: bool,
+        take_exact: bool
+    ) -> Result<InventoryView<T>> {
+        let actual_dimensions = game_state
+            .map()
+            .mutate_block_atomically(coord, |_, ext_data| {
+                if ext_data.is_none() {
+                    *(ext_data.deref_mut()) = Some(ExtendedData {
+                        custom_data: None,
+                        inventories: HashMap::new(),
+                    });
+                }
+                let inv = ext_data.as_mut().unwrap().inventories.entry(key.clone()).or_insert_with(|| {
+                    let mut contents = vec![];
+                    contents.resize_with(dimensions.0 as usize * dimensions.1 as usize, || None);
+                    Inventory {
+                        key: None,
+                        dimensions,
+                        contents,
+                    }
+                });
+                Ok(inv.dimensions)
+            })?;
+        Ok(InventoryView {
+            dimensions: actual_dimensions,
+            can_place,
+            can_take,
+            take_exact,
+            backing: ViewBacking::StoredInBlock(coord, key),
+            id: next_id(),
+            game_state: game_state,
+        })
+    }
+
     /// Clears all the items in the view, returning them to their
     /// respective origin locations
     pub(crate) fn clear_if_transient(&mut self, owner_inv_key: Option<InventoryKey>) -> Result<()> {
         if let ViewBacking::Transient(transient_data) = &mut self.backing {
             for stack in transient_data.write().iter_mut() {
                 if let Some(stack) = stack.take() {
-                    let leftover = if let Some((key, slot)) = stack.borrows_from {
-                        self.game_state
+                    let leftover = match stack.borrows_from {
+                        BorrowLocation::Global(key, slot) => self
+                            .game_state
                             .inventory_manager()
                             .mutate_inventory_atomically(&key, |inv| {
                                 let mut leftover = inv
@@ -453,9 +522,27 @@ impl<T> InventoryView<T> {
                                     leftover = inv.try_insert(leftover.unwrap());
                                 }
                                 Ok(leftover)
-                            })?
-                    } else {
-                        Some(stack.borrowed_stack)
+                            })?,
+                        BorrowLocation::Block(coord, key, slot) => self
+                            .game_state
+                            .map()
+                            .mutate_block_atomically(coord, |_, ext_data| {
+                                match ext_data.as_mut().and_then(|x| x.inventories.get_mut(&key)) {
+                                    Some(inv) => {
+                                        let mut leftover = inv
+                                            .contents_mut()
+                                            .get_mut(slot)
+                                            .with_context(|| "Out of bounds slot #")?
+                                            .try_merge(Some(stack.borrowed_stack));
+                                        if leftover.is_some() {
+                                            leftover = inv.try_insert(leftover.unwrap());
+                                        }
+                                        Ok(leftover)
+                                    }
+                                    None => Ok(Some(stack.borrowed_stack)),
+                                }
+                            })?,
+                        BorrowLocation::NotBorrowed => Some(stack.borrowed_stack),
                     };
                     if leftover.is_some() {
                         if let Some(key) = owner_inv_key {
@@ -620,6 +707,19 @@ impl<T> InventoryView<T> {
                 .with_context(|| format!("Inventory {key:?} in view {:?} not found", self.id))?
                 .contents()
                 .to_vec()),
+            ViewBacking::StoredInBlock(coord, key) => Ok(self
+                .game_state
+                .map()
+                .get_block_with_extended_data(*coord, |x| {
+                    Some(
+                        x.inventories
+                            .get(key)
+                            .map(|x| x.contents.to_vec())
+                            .unwrap_or(vec![]),
+                    )
+                })?
+                .1
+                .unwrap_or(vec![])),
         }
     }
     /// Takes a stack from one of the slots in this view (e.g. when clicked with a cursor).
@@ -640,7 +740,7 @@ impl<T> InventoryView<T> {
                 // unwrap is ok - we checked the length
                 let slot_contents = guard.get_mut(slot).unwrap();
                 if slot_contents.is_some() {
-                    let borrows_from = slot_contents.as_ref().unwrap().borrows_from;
+                    let borrows_from = slot_contents.as_ref().unwrap().borrows_from.clone();
                     let mut inner = Some(slot_contents.as_ref().unwrap().borrowed_stack.clone());
                     let obtained = inner.take_items(count);
 
@@ -661,7 +761,7 @@ impl<T> InventoryView<T> {
                 context, slot, count,
             )
             .map(|x| BorrowedStack {
-                borrows_from: None,
+                borrows_from: BorrowLocation::NotBorrowed,
                 borrowed_stack: x,
             })),
             ViewBacking::VirtualInput(_) => todo!(),
@@ -672,9 +772,27 @@ impl<T> InventoryView<T> {
                     Ok(inv.contents_mut().get_mut(slot).unwrap().take_items(count))
                 })?
                 .map(|obtained| BorrowedStack {
-                    borrows_from: Some((*key, slot)),
+                    borrows_from: BorrowLocation::Global(*key, slot),
                     borrowed_stack: obtained,
                 })),
+            ViewBacking::StoredInBlock(coord, key) => self
+                .game_state
+                .map()
+                .mutate_block_atomically(*coord, |_, ext_data| {
+                    Ok(ext_data
+                        .as_mut()
+                        .and_then(|x| x.inventories.get_mut(key))
+                        .and_then(|x| {
+                            x.contents_mut()
+                                .get_mut(slot)
+                                .unwrap()
+                                .take_items(count)
+                                .map(|x| BorrowedStack {
+                                    borrows_from: BorrowLocation::Block(*coord, key.clone(), slot),
+                                    borrowed_stack: x,
+                                })
+                        }))
+                }),
         }
     }
 
@@ -704,7 +822,8 @@ impl<T> InventoryView<T> {
                             .as_ref()
                             .unwrap()
                             .borrows_from
-                            .or(stack.borrows_from),
+                            .clone()
+                            .or(stack.borrows_from.clone()),
                         borrowed_stack: inner,
                     });
                     Ok(leftover.map(|leftover| BorrowedStack {
@@ -725,13 +844,32 @@ impl<T> InventoryView<T> {
                     Ok(inv
                         .contents_mut()
                         .get_mut(slot)
-                        .unwrap()
+                        .with_context(|| "Out of bounds slot #")?
                         .try_merge(Some(stack.borrowed_stack)))
                 })?
                 .map(|leftover| BorrowedStack {
                     borrows_from: stack.borrows_from,
                     borrowed_stack: leftover,
                 })),
+            ViewBacking::StoredInBlock(coord, key) => Ok(self
+                .game_state
+                .map()
+                .mutate_block_atomically(*coord, |_, ext_data| {
+                    match ext_data.as_mut().and_then(|x| x.inventories.get_mut(key)) {
+                        Some(x) => {
+                            let leftover = x
+                                .contents_mut()
+                                .get_mut(slot)
+                                .with_context(|| "Out of bounds slot #")?
+                                .try_merge(Some(stack.borrowed_stack));
+                            Ok(leftover.map(|x| BorrowedStack {
+                                borrows_from: stack.borrows_from,
+                                borrowed_stack: x,
+                            }))
+                        }
+                        None => Ok(Some(stack)),
+                    }
+                })?),
         }
     }
 

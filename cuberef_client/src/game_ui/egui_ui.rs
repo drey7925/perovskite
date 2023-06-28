@@ -2,12 +2,11 @@ use anyhow::Result;
 use cuberef_core::protocol::items::ItemStack;
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
-use egui::{
-    vec2, Color32, Sense, Stroke, TextEdit, TextStyle, TextureId,
-};
+use egui::{vec2, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use log::warn;
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
+use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
 
 use crate::game_state::items::InventoryViewManager;
@@ -37,6 +36,8 @@ pub(crate) struct EguiUi {
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
+    visible_popups: Vec<PopupDescription>,
+
     text_fields: FxHashMap<(u64, String), String>,
 
     pub(crate) inventory_manipulation_view_id: Option<u64>,
@@ -56,6 +57,7 @@ impl EguiUi {
             inventory_open: false,
             inventory_view: None,
             scale: 1.0,
+            visible_popups: vec![],
             text_fields: FxHashMap::default(),
             inventory_manipulation_view_id: None,
             last_mouse_position: egui::Pos2 { x: 0., y: 0. },
@@ -63,7 +65,7 @@ impl EguiUi {
         }
     }
     pub(crate) fn wants_draw(&self) -> bool {
-        self.inventory_open
+        self.inventory_open || !self.visible_popups.is_empty()
         // todo other popups
     }
     pub(crate) fn open_inventory(&mut self) {
@@ -76,26 +78,53 @@ impl EguiUi {
         client_state: &ClientState,
     ) {
         self.scale = ctx.input(|i| i.pixels_per_point);
-        if self.inventory_open {
-            self.draw_popup(
-                &self
-                    .inventory_view
-                    .clone()
-                    .unwrap_or_else(|| PopupDescription {
-                        popup_id: u64::MAX,
-                        title: "Error".to_string(),
-                        element: vec![proto::UiElement {
-                            element: Some(proto::ui_element::Element::Label(
-                                "The server hasn't sent a definition for the inventory popup"
-                                    .to_string(),
-                            )),
-                        }],
-                    }),
+
+        if !self.visible_popups.is_empty() {
+            for popup in self
+                .visible_popups
+                .clone()
+                .iter()
+                .take(self.visible_popups.len() - 1)
+            {
+                self.draw_popup(&popup, ctx, atlas_texture_id, client_state, false);
+            }
+            let result = self.draw_popup(
+                &self.visible_popups.last().unwrap().clone(),
                 ctx,
                 atlas_texture_id,
                 client_state,
-            )
+                true,
+            );
+            if result.is_break() {
+                self.visible_popups.pop();
+            }
+        } else if self.inventory_open {
+            if self
+                .draw_popup(
+                    &self
+                        .inventory_view
+                        .clone()
+                        .unwrap_or_else(|| PopupDescription {
+                            popup_id: u64::MAX,
+                            title: "Error".to_string(),
+                            element: vec![proto::UiElement {
+                                element: Some(proto::ui_element::Element::Label(
+                                    "The server hasn't sent a definition for the inventory popup"
+                                        .to_string(),
+                                )),
+                            }],
+                        }),
+                    ctx,
+                    atlas_texture_id,
+                    client_state,
+                    true,
+                )
+                .is_break()
+            {
+                self.inventory_open = false;
+            }
         }
+
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
             self.last_mouse_position = pos;
         }
@@ -118,83 +147,94 @@ impl EguiUi {
         }
     }
 
-    pub(crate) fn draw_popup(
+    fn draw_popup(
         &mut self,
         popup: &proto::PopupDescription,
         ctx: &egui::Context,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
-    ) {
-        egui::Window::new(popup.title.clone()).show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+        enabled: bool,
+    ) -> ControlFlow<(), ()> {
+        egui::Window::new(popup.title.clone())
+            .id(Id::new(popup.popup_id))
+            .show(ctx, |ui| {
+                ui.set_enabled(enabled);
+                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
 
-            let mut clicked_button = None;
-            for element in &popup.element {
-                match &element.element {
-                    Some(proto::ui_element::Element::Label(label)) => {
-                        ui.label(label);
-                    }
-                    Some(proto::ui_element::Element::TextField(text_field)) => {
-                        let value = self
-                            .text_fields
-                            .entry((popup.popup_id, text_field.key.clone()))
-                            .or_insert(text_field.initial.clone());
-                        // todo support multiline, other styling
-                        let editor = egui::TextEdit::singleline(value);
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                            let label = ui.label(text_field.label.clone());
-                            ui.add_enabled(text_field.enabled, editor)
-                                .labelled_by(label.id);
-                        });
-                    }
-                    Some(proto::ui_element::Element::Button(button_def)) => {
-                        let button = egui::Button::new(button_def.label.clone());
-                        if ui.add_enabled(button_def.enabled, button).clicked() {
-                            clicked_button = Some(button_def.key.clone());
+                let mut clicked_button = None;
+                for element in &popup.element {
+                    match &element.element {
+                        Some(proto::ui_element::Element::Label(label)) => {
+                            ui.label(label);
+                        }
+                        Some(proto::ui_element::Element::TextField(text_field)) => {
+                            let value = self
+                                .text_fields
+                                .entry((popup.popup_id, text_field.key.clone()))
+                                .or_insert(text_field.initial.clone());
+                            // todo support multiline, other styling
+                            let editor = egui::TextEdit::singleline(value);
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                                let label = ui.label(text_field.label.clone());
+                                ui.add_enabled(text_field.enabled, editor)
+                                    .labelled_by(label.id);
+                            });
+                        }
+                        Some(proto::ui_element::Element::Button(button_def)) => {
+                            let button = egui::Button::new(button_def.label.clone());
+                            if ui.add_enabled(button_def.enabled, button).clicked() {
+                                clicked_button = Some(button_def.key.clone());
+                            }
+                        }
+                        Some(proto::ui_element::Element::Inventory(inventory)) => {
+                            let mut inventory_manager = client_state.inventories.lock();
+
+                            self.draw_inventory_view(
+                                ui,
+                                inventory.inventory_key,
+                                &mut inventory_manager,
+                                atlas_texture_id,
+                                client_state,
+                            );
+                        }
+                        None => {
+                            ui.label("Invalid/missing popup item entry");
                         }
                     }
-                    Some(proto::ui_element::Element::Inventory(inventory)) => {
-                        let mut inventory_manager = client_state.inventories.lock();
-
-                        self.draw_inventory_view(
-                            ui,
-                            inventory.inventory_key,
-                            &mut inventory_manager,
-                            atlas_texture_id,
-                            client_state,
-                        );
-                    }
-                    None => {
-                        ui.label("Invalid/missing popup item entry");
-                    }
                 }
-            }
-            if let Some(clicked_button) = clicked_button {
-                send_event(
-                    client_state,
-                    GameAction::PopupResponse(PopupResponse {
-                        popup_id: popup.popup_id,
-                        closed: false,
-                        clicked_button,
-                        text_fields: self.get_text_fields(popup.popup_id),
-                    }),
-                );
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                // todo close the correct view
-                send_event(
-                    client_state,
-                    GameAction::PopupResponse(PopupResponse {
-                        popup_id: popup.popup_id,
-                        closed: true,
-                        clicked_button: "".to_string(),
-                        text_fields: self.get_text_fields(popup.popup_id),
-                    }),
-                );
-                self.clear_text_fields(popup);
-                self.inventory_open = false;
-            }
-        });
+                if let Some(clicked_button) = clicked_button {
+                    send_event(
+                        client_state,
+                        GameAction::PopupResponse(PopupResponse {
+                            popup_id: popup.popup_id,
+                            closed: false,
+                            clicked_button,
+                            text_fields: self.get_text_fields(popup.popup_id),
+                        }),
+                    );
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    send_event(
+                        client_state,
+                        GameAction::PopupResponse(PopupResponse {
+                            popup_id: popup.popup_id,
+                            closed: true,
+                            clicked_button: "".to_string(),
+                            text_fields: self.get_text_fields(popup.popup_id),
+                        }),
+                    );
+                    self.clear_text_fields(popup);
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .and_then(|x| x.inner)
+            .unwrap_or(ControlFlow::Continue(()))
+    }
+
+    pub(crate) fn show_popup(&mut self, desc: &PopupDescription) {
+        self.visible_popups.push(dbg!(desc.clone()))
     }
 
     pub(crate) fn get_carried_itemstack(

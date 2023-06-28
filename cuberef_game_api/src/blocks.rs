@@ -43,7 +43,7 @@ use cuberef_server::game_state::{
     items::{Item, ItemStack},
 };
 
-use crate::game_builder::{Block, GameBuilder};
+use crate::{game_builder::{Block, GameBuilder}, maybe_export};
 
 /// The item obtained when the block is dug.
 enum DroppedItem {
@@ -97,6 +97,7 @@ pub struct BlockBuilder {
     dropped_item: DroppedItem,
     // Temporarily exposed for water until the API is stabilized.
     pub(crate) physics_info: PhysicsInfo,
+    modifier: Option<Box<dyn FnOnce(&mut BlockType)>>
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -135,6 +136,7 @@ impl BlockBuilder {
             },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
             physics_info: PhysicsInfo::Solid(Empty {}),
+            modifier: None
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -244,11 +246,19 @@ impl BlockBuilder {
         self.item.proto.groups.push(group.into());
         self
     }
-
+    /// Set the display name visible when hovering in the inventory.
     pub fn set_inventory_display_name(mut self, display_name: &str) -> Self {
         self.item.proto.display_name = display_name.into();
         self
     }
+
+    maybe_export!(
+        /// Run arbitrary changes on the block definition just before it's registered
+        fn set_modifier(mut self, modifier: Box<dyn FnOnce(&mut BlockType)>) -> Self {
+            self.modifier = Some(modifier);
+            self
+        }
+    );
 
     pub(crate) fn build_and_deploy_into(self, game_builder: &mut GameBuilder) -> Result<()> {
         let mut block = BlockType::default();
@@ -261,7 +271,9 @@ impl BlockBuilder {
             physics_info: Some(self.physics_info),
         };
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
-
+        if let Some(modifier) = self.modifier {
+            (modifier)(&mut block);
+        }
         let block_handle = game_builder.inner.blocks().register_block(block)?;
 
         let mut item = self.item;
@@ -272,6 +284,7 @@ impl BlockBuilder {
             }
             match ctx
                 .game_map()
+                // TODO be more flexible with placement (e.g. water)
                 .compare_and_set_block(coord, air_block, block_handle, None, false)?
                 .0
             {

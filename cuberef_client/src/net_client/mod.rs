@@ -44,6 +44,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request, Streaming};
+use unicode_normalization::UnicodeNormalization;
 
 
 use crate::{
@@ -171,6 +172,12 @@ pub(crate) async fn connect_game(
     Ok(client_state)
 }
 
+// To avoid inconsistencies between operating systems and environments, attempt to normalize any
+// unicode in the password.
+fn normalize_password(password: String) -> String {
+    password.nfkc().to_string()
+}
+
 async fn do_auth_handshake(
     tx: &mpsc::Sender<StreamToServer>,
     rx: &mut Streaming<StreamToClient>,
@@ -179,9 +186,9 @@ async fn do_auth_handshake(
     register: bool,
 ) -> Result<()> {
     if register {
-        do_register_handshake(tx, rx, username, password).await
+        do_register_handshake(tx, rx, username, normalize_password(password)).await
     } else {
-        do_login_handshake(tx, rx, username, password).await
+        do_login_handshake(tx, rx, username, normalize_password(password)).await
     }
 }
 

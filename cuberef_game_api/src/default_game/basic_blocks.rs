@@ -20,6 +20,7 @@ use crate::{
 };
 use anyhow::Result;
 use cuberef_core::protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo};
+use cuberef_server::game_state::{client_ui::Popup, blocks::ExtDataHandling};
 
 use super::block_groups::{BRITTLE, GRANULAR};
 
@@ -31,6 +32,8 @@ pub const DIRT_WITH_GRASS: Block = Block("default:dirt_with_grass");
 pub const STONE: Block = Block("default:stone");
 /// Transparent glass.
 pub const GLASS: Block = Block("default:glass");
+/// Unlocked chest.
+pub const CHEST: Block = Block("default:chest");
 
 /// Water
 /// Stability note: not stable (liquids are TBD)
@@ -42,6 +45,8 @@ const GRASS_TOP_TEXTURE: Tex = Tex("default:grass_top");
 const STONE_TEXTURE: Tex = Tex("default:stone");
 const GLASS_TEXTURE: Tex = Tex("default:glass");
 const WATER_TEXTURE: Tex = Tex("default:water");
+// TODO real chest texture
+const CHEST_TEXTURE: Tex = Tex("default:chest");
 
 pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     register_core_blocks(game_builder)?;
@@ -62,6 +67,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
+    include_texture_bytes!(game_builder, CHEST_TEXTURE, "textures/chest_side.png")?;
     game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
@@ -125,5 +131,38 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         surf_sink_speed: -0.5,
     });
     game_builder.add_block(water_builder)?;
+
+    // testonly
+    game_builder.add_block(
+        BlockBuilder::new(CHEST)
+            .set_texture_all(CHEST_TEXTURE)
+            .set_inventory_display_name("Unlocked chest")
+            .set_modifier(Box::new(|bt| {
+                bt.extended_data_handling = ExtDataHandling::ServerSide;
+                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
+                    cuberef_server::game_state::event::EventInitiator::Engine => Ok(None),
+                    cuberef_server::game_state::event::EventInitiator::Player(p) => Ok(Some(
+                        (ctx.new_popup()
+                            .title("Chest")
+                            .inventory_view_block(
+                                "chest_inv",
+                                (4, 8),
+                                coord,
+                                "chest_inv".to_string(),
+                                true,
+                                true,
+                                false,
+                            )?
+                            .inventory_view_stored(
+                                "player_inv",
+                                p.main_inventory(),
+                                true,
+                                true,
+                            ))?,
+                    )),
+                }))
+            })),
+    )?;
+
     Ok(())
 }

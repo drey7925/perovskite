@@ -177,7 +177,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
             tap_handler_full: None,
             tap_handler_inline: None,
             place_upon_handler: None,
-            interact_key_handlers: vec![],
+            interact_key_handler: None,
             is_unknown_block: false,
             block_type_manager_id: None,
         })
@@ -259,7 +259,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
                 Ok(vec![])
             })),
             place_upon_handler: None,
-            interact_key_handlers: vec![],
+            interact_key_handler: None,
             is_unknown_block: false,
             block_type_manager_id: None,
         })
@@ -287,7 +287,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
             tap_handler_full: None,
             tap_handler_inline: None,
             place_upon_handler: None,
-            interact_key_handlers: vec![],
+            interact_key_handler: None,
             is_unknown_block: false,
             block_type_manager_id: None,
         })

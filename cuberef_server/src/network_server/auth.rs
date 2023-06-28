@@ -24,9 +24,9 @@ use cuberef_core::{
     },
 };
 use opaque_ke::{
-    CredentialFinalization, CredentialRequest, RegistrationRequest,
-    RegistrationUpload, ServerLogin, ServerLoginStartParameters, ServerLoginStartResult,
-    ServerRegistration, ServerSetup,
+    CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
+    ServerLogin, ServerLoginStartParameters, ServerLoginStartResult, ServerRegistration,
+    ServerSetup,
 };
 use rand::rngs::OsRng;
 use tokio::sync::mpsc;
@@ -104,7 +104,9 @@ impl AuthService {
             })?
             .is_some()
         {
-            return Err(tonic::Status::already_exists("This username is already taken."));
+            return Err(tonic::Status::already_exists(
+                "This username is already taken.",
+            ));
         }
         self.db
             .put(db_key, &server_registration_finish_result.serialize())
@@ -190,10 +192,15 @@ impl AuthService {
                 client_message: Some(ClientMessage::StartAuthentication(req)),
                 ..
             })) => {
+                let username = validate_username(&req.username)?;
                 if req.register {
-                    self.do_registration_flow(req, inbound, outbound).await
+                    self.do_registration_flow(&req.opaque_request, &username, inbound, outbound)
+                        .await?;
+                    Ok(username)
                 } else {
-                    self.do_login_flow(req, inbound, outbound).await
+                    self.do_login_flow(&req.opaque_request, &username, inbound, outbound)
+                        .await?;
+                    Ok(username)
                 }
             }
             Ok(Some(_)) => Err(tonic::Status::unauthenticated(
@@ -208,16 +215,16 @@ impl AuthService {
 
     async fn do_registration_flow(
         &self,
-        req: StartAuth,
+        opaque_request: &[u8],
+        username: &str,
         inbound: &mut tonic::Streaming<StreamToServer>,
         outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
-    ) -> tonic::Result<String> {
-        assert!(req.register);
+    ) -> tonic::Result<()> {
         outbound
             .send(Ok(StreamToClient {
                 tick: 0,
                 server_message: Some(ServerMessage::ServerRegistrationResponse(
-                    self.start_registration(&req.username, &req.opaque_request)?,
+                    self.start_registration(&username, opaque_request)?,
                 )),
             }))
             .await
@@ -231,7 +238,7 @@ impl AuthService {
                 client_message: Some(ClientMessage::ClientRegistrationUpload(data)),
                 ..
             }) => {
-                self.finish_registration(&req.username, &data)?;
+                self.finish_registration(username, &data)?;
                 outbound
                     .send(Ok(StreamToClient {
                         tick: 0,
@@ -240,7 +247,7 @@ impl AuthService {
                     .await
                     .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
 
-                Ok(req.username)
+                Ok(())
             }
             Some(_) => Err(tonic::Status::unauthenticated(
                 "Client did not send a registration response",
@@ -253,13 +260,12 @@ impl AuthService {
 
     async fn do_login_flow(
         &self,
-        req: StartAuth,
-
+        opaque_request: &[u8],
+        username: &str,
         inbound: &mut tonic::Streaming<StreamToServer>,
         outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
-    ) -> tonic::Result<String> {
-        assert!(!req.register);
-        let login_state = self.start_login(&req.username, &req.opaque_request)?;
+    ) -> tonic::Result<()> {
+        let login_state = self.start_login(username, opaque_request)?;
         outbound
             .send(Ok(StreamToClient {
                 tick: 0,
@@ -281,14 +287,14 @@ impl AuthService {
             }) => {
                 self.finish_login(login_state, &data)?;
                 outbound
-                .send(Ok(StreamToClient {
-                    tick: 0,
-                    server_message: Some(ServerMessage::AuthSuccess(Nop {})),
-                }))
-                .await
-                .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
+                    .send(Ok(StreamToClient {
+                        tick: 0,
+                        server_message: Some(ServerMessage::AuthSuccess(Nop {})),
+                    }))
+                    .await
+                    .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
 
-                Ok(req.username)
+                Ok(())
             }
             Some(_) => Err(tonic::Status::unauthenticated(
                 "Client did not send a login credential",
@@ -298,4 +304,39 @@ impl AuthService {
             )),
         }
     }
+}
+
+fn validate_username(username: &str) -> tonic::Result<String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Err(tonic::Status::invalid_argument(
+            "Username must not be blank",
+        ));
+    };
+    // Limits to make it easier to identify players
+    // There's no technical limitation requiring these, but usernames that don't follow these rules
+    // are error-prone and hard to type (including for server admins)
+    if trimmed.len() > 16 {
+        return Err(tonic::Status::invalid_argument(
+            "Username is too long (max 16 characters)",
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|x| x.is_ascii_alphanumeric() || x == '_' || x == '.')
+    {
+        return Err(tonic::Status::invalid_argument(
+            "Username must only contain letters, numbers, underscores, and dots",
+        ));
+    }
+    if trimmed.contains("._")
+        || trimmed.contains("|.")
+        || trimmed.contains("..")
+        || trimmed.contains("__")
+    {
+        return Err(tonic::Status::invalid_argument(
+            "Username can't contain consecutive dots or underscores",
+        ));
+    }
+    Ok(trimmed.to_string())
 }

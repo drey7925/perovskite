@@ -29,7 +29,9 @@ use log::{info, warn};
 use crate::database::database_engine::{GameDatabase, KeySpace};
 
 use super::{
+    client_ui::Popup,
     event::{EventInitiator, HandlerContext},
+    inventory::Inventory,
     items::{Item, ItemManager, ItemStack},
 };
 use cuberef_core::{
@@ -40,10 +42,15 @@ use cuberef_core::{
 };
 use prost::Message;
 
-/// In-memory extended data that may be associated with a block at a
-/// particular location. Use `downcast_ref` to try to get the inner data
-/// of the Any as a concrete type.
-pub type ExtendedData = Box<dyn Any + Send + 'static>;
+pub type CustomData = Box<dyn Any + Send + 'static>;
+pub struct ExtendedData {
+    /// In-memory extended data that may be associated with a block at a
+    /// particular location. Use `downcast_ref` to try to get the inner data
+    /// of the Any as a concrete type.
+    pub custom_data: Option<CustomData>,
+    /// Inventories that can be shown in inventory views
+    pub(crate) inventories: HashMap<String, Inventory>,
+}
 
 pub type FullHandler = dyn Fn(HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<Vec<ItemStack>>
     + Send
@@ -113,8 +120,9 @@ pub struct BlockType {
     pub extended_data_handling: ExtDataHandling,
 
     /// Called when the block is being loaded into memory. Should be a pure function
-    /// and as fast as possible. Typically, this should simply be a wrapper around a block_protobuf
-    /// deserialization step or similar.
+    /// and as fast as possible. Typically, this should simply be a wrapper around a protobuf
+    /// deserialization step or similar. This callback does not need to handle any block inventories;
+    /// they are handled automatically by the engine.
     ///
     /// Only called if extended_data_handling is not None and there's serialized extended data
     /// for this block.
@@ -122,10 +130,11 @@ pub struct BlockType {
     /// If this returns an Err, the game will crash since this represents data loss due to corrupt data
     /// in a chunk.
     pub deserialize_extended_data_handler:
-        Option<Box<dyn Fn(InlineContext, &[u8]) -> Result<Option<ExtendedData>> + Send + Sync>>,
+        Option<Box<dyn Fn(InlineContext, &[u8]) -> Result<Option<CustomData>> + Send + Sync>>,
     /// Called when the block is being written back to disk. Should be a pure function
-    /// and as fast as possible. Should typically be a wrapper around a block_protobuf serialization
-    /// step or similar.
+    /// and as fast as possible. Should typically be a wrapper around a protobuf serialization
+    /// step or similar. This callback does not need to handle any block inventories; they are automatically
+    /// handled by the engine.
     ///
     /// Only called if `extended_data_handling` is not equal to `NoExtData` and the extended data itself is
     /// Some. If this returns None, no extended data will be serialized to storage - an example
@@ -135,11 +144,12 @@ pub struct BlockType {
     /// If this returns an Err, the game will crash since this represents data loss. Note that this can cause
     /// other changes to a map chunk to be lost.
     pub serialize_extended_data_handler:
-        Option<Box<dyn Fn(InlineContext, &ExtendedData) -> Result<Option<Vec<u8>>> + Send + Sync>>,
+        Option<Box<dyn Fn(InlineContext, &CustomData) -> Result<Option<Vec<u8>>> + Send + Sync>>,
     /// If extended_data_handling is one of the client-side options, called whenever the block
     /// needs to be sent to a client (subject to the caching policy, see doc for `ExtDataHandling`)
     ///
-    /// The function is called with the extended data obtained from deserialize_extended_data_handler.
+    /// The function is called with the extended data obtained from deserialize_extended_data_handler
+    /// as well as any inventories.
     ///
     /// If the response is Some(...), all fields other than id and short_name override the defaults
     /// for this block.
@@ -178,12 +188,16 @@ pub struct BlockType {
     ///
     /// Note that if the handler performs changes, they will not be rolled back if the handler subsequently returns Err.
     pub dig_handler_inline: Option<Box<InlineHandler>>,
-    /// Same as dig_handler_full but for when the block is hit with a tool but not dug fully
+    /// Same as dig_handler_full but for the case when the block is hit with a tool but not dug fully
     pub tap_handler_full: Option<Box<FullHandler>>,
-    /// Same as dig_handler_inline but for when the block is hit with a tool but not dug fully
+    /// Same as dig_handler_inline but for the case when the block is hit with a tool but not dug fully
     pub tap_handler_inline: Option<Box<InlineHandler>>,
 
-    /// Called when the given item is placed onto this block. The second parameter indicates the item being placed.
+    /// Called when the given item is placed onto this block.
+    ///
+    /// The second parameter indicates the coordinate
+    ///
+    /// The third parameter indicates the item being placed.
     /// Note that this is invoked when the place key/button is placed while pointing to this block; it is not
     /// necessarily true that the placement is vertically above this block.
     ///
@@ -192,11 +206,14 @@ pub struct BlockType {
     pub place_upon_handler: Option<
         Box<dyn Fn(HandlerContext, BlockCoordinate, Option<Item>) -> Result<()> + Send + Sync>,
     >,
-    /// Called when the interact key is pressed and an interaction is selected. The indices of this vector are
-    /// managed internally by the engine.
+    /// Called when the interact key is pressed and an interaction is selected.
+    ///
+    /// This can mutate the given block (using handlercontext) if desired, and return a popup (if desired)
     ///
     /// The signature of this callback is subject to change.
-    pub interact_key_handlers: Vec<Box<dyn Fn(HandlerContext) -> Result<()> + Send + Sync>>,
+    pub interact_key_handler: Option<
+        Box<dyn Fn(HandlerContext, BlockCoordinate) -> Result<Option<Popup>> + Send + Sync>,
+    >,
     // Internal impl details
     pub(crate) is_unknown_block: bool,
     pub(crate) block_type_manager_id: Option<usize>,
@@ -238,7 +255,7 @@ impl Default for BlockType {
             tap_handler_full: None,
             tap_handler_inline: None,
             place_upon_handler: None,
-            interact_key_handlers: vec![],
+            interact_key_handler: None,
             is_unknown_block: false,
             block_type_manager_id: None,
         }
@@ -609,7 +626,7 @@ fn make_unknown_block_server(
         tap_handler_full: None,
         tap_handler_inline: None,
         place_upon_handler: None,
-        interact_key_handlers: vec![],
+        interact_key_handler: None,
         is_unknown_block: true,
         block_type_manager_id: None,
     }

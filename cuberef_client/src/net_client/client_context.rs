@@ -10,7 +10,7 @@ use cuberef_core::{
     coordinates::{ChunkCoordinate, PlayerPositionUpdate, BlockCoordinate},
     protocol::{
         game_rpc::{
-            self as rpc, StreamToClient, StreamToServer,
+            self as rpc, StreamToClient, StreamToServer, InteractKeyAction,
         }, coordinates::Angles,
     },
 };
@@ -183,6 +183,13 @@ impl OutboundContext {
                     popup_response,
                 ))
                 .await?;
+            },
+            GameAction::InteractKey(block_coord) => {
+                self.send_sequenced_message(rpc::stream_to_server::ClientMessage::InteractKey(
+                    InteractKeyAction {
+                        block_coord: Some(block_coord.into()),
+                    }
+                )).await?;
             }
         }
         Ok(())
@@ -316,6 +323,9 @@ impl InboundContext {
             }
             Some(rpc::stream_to_client::ServerMessage::ClientState(client_state)) => {
                 self.handle_client_state_update(client_state).await?;
+            }
+            Some(rpc::stream_to_client::ServerMessage::ShowPopup(popup_desc)) => {
+                self.client_state.egui.lock().show_popup(popup_desc);
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);

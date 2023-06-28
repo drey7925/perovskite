@@ -187,7 +187,6 @@ impl ActiveGame {
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanContext, size: PhysicalSize<u32>) -> Result<()> {
-        ctx.viewport.dimensions = size.into();
         self.cube_pipeline = self
             .cube_provider
             .make_pipeline(ctx, self.client_state.cube_renderer.atlas())
@@ -363,6 +362,14 @@ impl GameRenderer {
                                 .unwrap();
                         }
                     }
+                    else {
+                        self.ctx
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None)
+                                .unwrap();
+                            self.ctx.window.set_cursor_visible(true);
+                    }
+                    
                     if resized || recreate_swapchain {
                         let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
@@ -370,6 +377,7 @@ impl GameRenderer {
                         self.ctx.recreate_swapchain(size).unwrap();
                         if resized {
                             resized = false;
+                            self.ctx.viewport.dimensions = size.into();
                             if let GameStateMutRef::Active(game) = game_lock.as_mut() {
                                 game.handle_resize(&mut self.ctx, size).unwrap();
                             }

@@ -40,6 +40,7 @@ pub(crate) mod chunk;
 pub(crate) mod items;
 pub(crate) mod physics;
 pub(crate) mod tool_controller;
+pub(crate) mod input;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DigTapAction {
@@ -72,6 +73,7 @@ pub(crate) enum GameAction {
     Place(PlaceAction),
     Inventory(InventoryAction),
     PopupResponse(cuberef_core::protocol::ui::PopupResponse),
+    InteractKey(BlockCoordinate)
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<Mutex<ClientChunk>>>;
@@ -204,6 +206,9 @@ impl ClientState {
             } => {
                 if scancode == 0x17 && state == ElementState::Pressed {
                     self.egui.lock().open_inventory()
+                }
+                if scancode == 0x21 && state == ElementState::Pressed {
+                    self.tool_controller.lock().interact_key_pressed()
                 }
                 self.physics_state.lock().keyboard_input(scancode, state);
             }

@@ -10,7 +10,7 @@ use super::{
     GameState,
 };
 use anyhow::{bail, Result};
-use cuberef_core::protocol::ui as proto;
+use cuberef_core::{protocol::ui as proto, coordinates::BlockCoordinate};
 
 pub type TextField = proto::TextField;
 pub type Button = proto::Button;
@@ -189,6 +189,40 @@ impl Popup {
             self.game_state.clone(),
             dimensions,
             callbacks,
+            take_exact,
+        )?;
+        self.widgets
+            .push(UiElement::InventoryView(form_key.clone(), view.id));
+        match self.inventory_views.insert(form_key.clone(), view) {
+            Some(view) => {
+                bail!(
+                    "form_key {} already registered for view {:?}",
+                    form_key,
+                    view.id
+                );
+            }
+            None => Ok(self),
+        }
+    }
+
+    pub fn inventory_view_block(
+        mut self,
+        form_key: impl Into<String>,
+        default_dimensions: (u32, u32),
+        coord: BlockCoordinate,
+        key: String,
+        can_place: bool,
+        can_take: bool,
+        take_exact: bool
+    ) -> Result<Self> {
+        let form_key = form_key.into();
+        let view = InventoryView::new_block(
+            self.game_state.clone(),
+            default_dimensions,
+            coord,
+            key,
+            can_place,
+            can_take,
             take_exact,
         )?;
         self.widgets

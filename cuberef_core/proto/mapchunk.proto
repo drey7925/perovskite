@@ -18,13 +18,15 @@ syntax = "proto3";
 
 package cuberef.protocol.map;
 
-import "blocks.proto";
+import "items.proto";
 
 message ExtendedData {
     // Offset in the chunk, 0..4095
     uint32 offset_in_chunk = 1;
     // Serialized data, passed to the relevant handler
     bytes serialized_data = 2;
+    // Inventories stored in a block
+    map<string, cuberef.protocol.items.Inventory> inventories = 3;
 }
 
 message ChunkV1 {

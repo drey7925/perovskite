@@ -71,9 +71,9 @@ impl MainMenu {
 
             if ui.add(connect_button).clicked() {
                 let (state, settings) = make_connection(
-                    self.host_field.clone(),
-                    self.user_field.clone(),
-                    self.pass_field.clone(),
+                    self.host_field.trim().to_string(),
+                    self.user_field.trim().to_string(),
+                    self.pass_field.trim().to_string(),
                     false,
                 );
                 self.pass_field.clear();
@@ -132,6 +132,11 @@ impl MainMenu {
                     let editor = TextEdit::singleline(&mut self.confirm_pass_field).password(true);
                     ui.add(editor).labelled_by(label.id);
                 });
+                if password_has_special_chars(self.pass_field.trim()) {
+                    ui.colored_label(Color32::LIGHT_RED, textwrap::dedent("
+                    Warning: Password contains special characters.
+                    This is not recommended because special characters might be encoded inconsistently on different systems.").trim());
+                }
                 let register_button = egui::Button::new("Register");
                 if ui.add(register_button).clicked() {
                     self.show_register_popup = false;
@@ -144,15 +149,20 @@ impl MainMenu {
                         );
                     } else {
                         let (state, settings) = make_connection(
-                            self.host_field.clone(),
-                            self.user_field.clone(),
-                            self.pass_field.clone(),
+                            self.host_field.trim().to_string(),
+                            self.user_field.trim().to_string(),
+                            self.pass_field.trim().to_string(),
                             true,
                         );
                         *game_state = GameState::Connecting(state);
                         result = Some(settings);
                     }
                     self.pass_field.clear();
+                }
+                let cancel_button = egui::Button::new("Cancel");
+                if ui.add(cancel_button).clicked() {
+                    self.show_register_popup = false;
+                    self.confirm_pass_field.clear();
                 }
             });
         }
@@ -181,6 +191,10 @@ impl MainMenu {
     pub(crate) fn update(&mut self, event: &WindowEvent) {
         self.egui_gui.update(event);
     }
+}
+
+fn password_has_special_chars(password: &str) -> bool {
+    password.chars().any(|x| !x.is_ascii_graphic())
 }
 
 fn make_connection(

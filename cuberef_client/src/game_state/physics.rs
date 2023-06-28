@@ -26,6 +26,7 @@ use cuberef_core::{
 };
 use log::info;
 
+use tracy_client::{span, plot};
 use winit::event::ElementState;
 
 use crate::cube_renderer::ClientBlockTypeManager;
@@ -206,6 +207,7 @@ impl PhysicsState {
     }
 
     fn update_standard(&mut self, delta: std::time::Duration, client_state: &ClientState) {
+        let _span = span!("physics_standard");
         // todo handle long deltas without falling through the ground
         let delta_secs = delta.as_secs_f64();
 
@@ -254,6 +256,8 @@ impl PhysicsState {
         if self.pressed(0x30) {
             log::info!("debug breakpoint {}", new_yv);
         }
+
+        plot!("physics_delta", (target - self.pos).magnitude());
 
         let mut new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
         // If we hit a floor or ceiling
@@ -484,22 +488,29 @@ fn clamp_collisions_loop(
     }
     let mut prev = old_pos;
     loop {
+        let intended_delta = target - prev;
+        let shortened_mag = intended_delta.magnitude().min(0.05);
+        if shortened_mag < COLLISION_EPS {
+            return prev;
+        }
+        let shortened_delta = (intended_delta / intended_delta.magnitude()) * shortened_mag;
+        let shortened_target = prev + shortened_delta;
         let current = prev;
         let current = clamp_collisions(
             current,
-            vec3(target.x, current.y, current.z),
+            vec3(shortened_target.x, current.y, current.z),
             chunks,
             block_types,
         );
         let current = clamp_collisions(
             current,
-            vec3(current.x, target.y, current.z),
+            vec3(current.x, shortened_target.y, current.z),
             chunks,
             block_types,
         );
         let current = clamp_collisions(
             current,
-            vec3(current.x, current.y, target.z),
+            vec3(current.x, current.y, shortened_target.z),
             chunks,
             block_types,
         );
