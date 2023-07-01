@@ -24,16 +24,15 @@ use cuberef_core::{
         BlockTypeDef,
     },
 };
-use log::info;
 
-use tracy_client::{span, plot};
-use winit::event::ElementState;
+use tracy_client::{plot, span};
 
 use crate::cube_renderer::ClientBlockTypeManager;
 
-use super::{ChunkManagerView, ClientState};
-
-const MOUSE_SENSITIVITY: f64 = 0.5;
+use super::{
+    input::{BoundAction, InputState},
+    ChunkManagerView, ClientState,
+};
 
 const PLAYER_WIDTH: f64 = 0.75;
 const EYE_TO_TOP: f64 = 0.2;
@@ -110,8 +109,6 @@ pub(crate) struct PhysicsState {
     el: Deg<f64>,
     target_az: Deg<f64>,
     target_el: Deg<f64>,
-    pressed_keys: HashSet<u32>,
-    should_capture: bool,
     physics_mode: PhysicsMode,
     // Used for the standard physics mode
     y_velocity: f64,
@@ -127,65 +124,10 @@ impl PhysicsState {
             el: Deg(0.),
             target_az: Deg(0.),
             target_el: Deg(0.),
-            pressed_keys: HashSet::new(),
-            should_capture: true,
             physics_mode: PhysicsMode::Standard,
             y_velocity: 0.,
             landed_last_frame: false,
             last_land_height: 0.,
-        }
-    }
-    pub(crate) fn mouse_delta(&mut self, x: f64, y: f64) {
-        if self.should_capture {
-            self.target_az = Deg((self.target_az.0 + (x * MOUSE_SENSITIVITY)).rem_euclid(360.0));
-            self.target_el = Deg((self.target_el.0 - (y * MOUSE_SENSITIVITY)).clamp(-90.0, 90.0));
-        }
-    }
-    pub(crate) fn keyboard_input(&mut self, scancode: u32, state: ElementState) {
-        let state = match state {
-            winit::event::ElementState::Pressed => true,
-            winit::event::ElementState::Released => false,
-        };
-        match scancode {
-            // special case scancodes
-            // alt
-            0x38 => {
-                if state {
-                    self.should_capture = !self.should_capture;
-                }
-            }
-            // F1, debug dump
-            0x3b => {
-                info!(
-                    "PhysicsState debug @ {:?} {:?} {:?}",
-                    self.pos, self.az, self.el
-                );
-            }
-            0x19 => {
-                if state {
-                    self.physics_mode = self.physics_mode.next();
-                    info!("PhysicsMode switched to {:?}", self.physics_mode)
-                }
-            }
-            0x18 => {
-                self.pos = vec3(3., 12.0, 3.);
-                info!("Testonly teleported near origin");
-            }
-            0x15 => {
-                self.pos = vec3(256., 12.0, 2147483640.);
-                info!("Testonly teleported near edge");
-            }
-            // general case
-            x => {
-                if !self.should_capture {
-                    println!("sc:{:x} @ {:?}", x, self.pos);
-                }
-                if state {
-                    self.pressed_keys.insert(x);
-                } else {
-                    self.pressed_keys.remove(&x);
-                }
-            }
         }
     }
 
@@ -196,17 +138,32 @@ impl PhysicsState {
         _aspect_ratio: f64,
         delta: Duration,
     ) -> (cgmath::Vector3<f64>, (f64, f64)) {
-        self.update_angles(delta);
+        let mut input = client_state.input.lock();
+        if input.take_just_pressed(BoundAction::TogglePhysics) {
+            self.physics_mode = self.physics_mode.next();
+        }
+        let (x, y) = input.take_mouse_delta();
+        self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
+        self.target_el = Deg((self.target_el.0 - (y)).clamp(-90.0, 90.0));
+
+        self.update_smooth_angles(delta);
         match self.physics_mode {
-            PhysicsMode::Standard => self.update_standard(delta, client_state),
-            PhysicsMode::FlyingCollisions => self.update_flying(delta, true, client_state),
-            PhysicsMode::Noclip => self.update_flying(delta, false, client_state),
+            PhysicsMode::Standard => self.update_standard(&mut input, delta, client_state),
+            PhysicsMode::FlyingCollisions => {
+                self.update_flying(&mut input, delta, true, client_state)
+            }
+            PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
         }
 
         (self.pos, (self.angle()))
     }
 
-    fn update_standard(&mut self, delta: std::time::Duration, client_state: &ClientState) {
+    fn update_standard(
+        &mut self,
+        input: &mut InputState,
+        delta: std::time::Duration,
+        client_state: &ClientState,
+    ) {
         let _span = span!("physics_standard");
         // todo handle long deltas without falling through the ground
         let delta_secs = delta.as_secs_f64();
@@ -227,7 +184,9 @@ impl PhysicsState {
 
         let block_physics = surrounding_block.and_then(|x| x.physics_info.as_ref());
         let (mut new_yv, target) = match block_physics {
-            Some(PhysicsInfo::Air(_)) => self.update_target_air(self.pos, delta_secs * 3.0, delta),
+            Some(PhysicsInfo::Air(_)) => {
+                self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
+            }
             Some(PhysicsInfo::Fluid(fluid_data)) => {
                 let surface_test_block = get_block(
                     BlockCoordinate {
@@ -242,20 +201,16 @@ impl PhysicsState {
                     surface_test_block.and_then(|x| x.physics_info.as_ref()),
                     Some(PhysicsInfo::Air(_))
                 );
-                self.update_target_fluid(self.pos, fluid_data, delta, is_surface)
+                self.update_target_fluid(input, self.pos, fluid_data, delta, is_surface)
             }
             Some(PhysicsInfo::Solid(_)) => {
                 // We're in a block, possibly one we just placed. This shouldn't happen, so allow
                 // the user to jump or walk out of it (unless they would run into other solid blocks
                 // in the process)
-                self.update_target_air(self.pos, delta_secs * 3.0, delta)
+                self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
             }
-            None => self.update_target_air(self.pos, delta_secs * 3.0, delta),
+            None => self.update_target_air(input, self.pos, delta_secs * 3.0, delta),
         };
-
-        if self.pressed(0x30) {
-            log::info!("debug breakpoint {}", new_yv);
-        }
 
         plot!("physics_delta", (target - self.pos).magnitude());
 
@@ -318,6 +273,7 @@ impl PhysicsState {
 
     fn update_target_air(
         &mut self,
+        input: &mut InputState,
         pos: Vector3<f64>,
         distance: f64,
         time_delta: Duration,
@@ -325,18 +281,18 @@ impl PhysicsState {
         // TODO stop using raw scancodes here
         // TODO make these configurable by the user
         let mut target = pos;
-        if self.pressed(0x11) {
+        if input.is_pressed(BoundAction::MoveForward) {
             target.z += self.az.cos() * distance;
             target.x -= self.az.sin() * distance;
-        } else if self.pressed(0x1f) {
+        } else if input.is_pressed(BoundAction::MoveBackward) {
             target.z -= self.az.cos() * distance;
             target.x += self.az.sin() * distance;
         }
 
-        if self.pressed(0x1e) {
+        if input.is_pressed(BoundAction::MoveLeft) {
             target.z += self.az.sin() * distance;
             target.x += self.az.cos() * distance;
-        } else if self.pressed(0x20) {
+        } else if input.is_pressed(BoundAction::MoveRight) {
             target.z -= self.az.sin() * distance;
             target.x -= self.az.cos() * distance;
         }
@@ -344,7 +300,7 @@ impl PhysicsState {
         let mut new_yv = self.y_velocity - (time_delta.as_secs_f64() * GRAVITY_ACCEL)
             + (DAMPING * self.y_velocity.min(0.).powi(2) * time_delta.as_secs_f64());
         // Jump key
-        if self.pressed(0x39) && self.landed_last_frame {
+        if input.is_pressed(BoundAction::Jump) && self.landed_last_frame {
             self.landed_last_frame = false;
             new_yv = JUMP_VELOCITY;
         }
@@ -354,6 +310,7 @@ impl PhysicsState {
 
     fn update_target_fluid(
         &self,
+        input: &mut InputState,
         pos: Vector3<f64>,
         fluid_data: &cuberef_core::protocol::blocks::FluidPhysicsInfo,
         delta: Duration,
@@ -376,24 +333,24 @@ impl PhysicsState {
             )
         };
         let mut target = pos;
-        if self.pressed(0x11) {
+        if input.is_pressed(BoundAction::MoveForward) {
             target.z += self.az.cos() * horizontal_speed * delta;
             target.x -= self.az.sin() * horizontal_speed * delta;
-        } else if self.pressed(0x1f) {
+        } else if input.is_pressed(BoundAction::MoveBackward) {
             target.z -= self.az.cos() * horizontal_speed * delta;
             target.x += self.az.sin() * horizontal_speed * delta;
         }
 
-        if self.pressed(0x1e) {
+        if input.is_pressed(BoundAction::MoveLeft) {
             target.z += self.az.sin() * horizontal_speed * delta;
             target.x += self.az.cos() * horizontal_speed * delta;
-        } else if self.pressed(0x20) {
+        } else if input.is_pressed(BoundAction::MoveRight) {
             target.z -= self.az.sin() * horizontal_speed * delta;
             target.x -= self.az.cos() * horizontal_speed * delta;
         }
-        let vy = if self.pressed(0x39) {
+        let vy = if input.is_pressed(BoundAction::Jump) {
             jump_velocity
-        } else if self.pressed(0x2a) {
+        } else if input.is_pressed(BoundAction::Descend) {
             sink_velocity
         } else {
             vertical_velocity
@@ -404,6 +361,7 @@ impl PhysicsState {
 
     fn update_flying(
         &mut self,
+        input: &mut InputState,
         delta: std::time::Duration,
         collisions: bool,
         client_state: &ClientState,
@@ -412,28 +370,25 @@ impl PhysicsState {
 
         let mut new_pos = self.pos;
 
-        if self.pressed(0x11) {
+        if input.is_pressed(BoundAction::MoveForward) {
             new_pos.z += self.az.cos() * distance;
             new_pos.x -= self.az.sin() * distance;
-        } else if self.pressed(0x1f) {
+        } else if input.is_pressed(BoundAction::MoveBackward) {
             new_pos.z -= self.az.cos() * distance;
             new_pos.x += self.az.sin() * distance;
         }
 
-        if self.pressed(0x1e) {
+        if input.is_pressed(BoundAction::MoveLeft) {
             new_pos.z += self.az.sin() * distance;
             new_pos.x += self.az.cos() * distance;
-        } else if self.pressed(0x20) {
+        } else if input.is_pressed(BoundAction::MoveRight) {
             new_pos.z -= self.az.sin() * distance;
             new_pos.x -= self.az.cos() * distance;
         }
-        if self.pressed(0x39) {
+        if input.is_pressed(BoundAction::Jump) {
             new_pos.y += distance;
-        } else if self.pressed(0x2a) {
+        } else if input.is_pressed(BoundAction::Descend) {
             new_pos.y -= distance;
-        }
-        if self.pressed(0x30) {
-            log::info!("debug breakpoint");
         }
 
         if collisions {
@@ -443,10 +398,6 @@ impl PhysicsState {
         }
 
         self.pos = new_pos
-    }
-
-    fn pressed(&self, arg: u32) -> bool {
-        self.pressed_keys.contains(&arg)
     }
 
     pub(crate) fn pos(&self) -> Vector3<f64> {
@@ -459,11 +410,7 @@ impl PhysicsState {
         (self.az.0, self.el.0)
     }
 
-    pub(crate) fn should_capture(&self) -> bool {
-        self.should_capture
-    }
-
-    fn update_angles(&mut self, delta: std::time::Duration) {
+    fn update_smooth_angles(&mut self, delta: std::time::Duration) {
         let factor =
             ANGLE_SMOOTHING_FACTOR.powf(delta.as_secs_f64() / ANGLE_SMOOTHING_REFERENCE_DELTA);
         self.el = (self.el * factor) + (self.target_el * (1.0 - factor));

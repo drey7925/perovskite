@@ -40,6 +40,8 @@ textwrap = { version = "0.16.0", default-features = false }
 serde = { version = "1.0.163", features = ["derive"] }
 toml = "0.7.5"
 directories = "5.0.1"
+arc-swap = "1.6.0"
+ron = "0.8.0"
 
 [features]
 default = []

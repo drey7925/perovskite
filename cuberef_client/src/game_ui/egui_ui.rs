@@ -2,7 +2,7 @@ use anyhow::Result;
 use cuberef_core::protocol::items::ItemStack;
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
-use egui::{vec2, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
+use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use log::warn;
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
@@ -33,6 +33,7 @@ pub(crate) struct EguiUi {
     item_defs: Arc<ClientItemManager>,
 
     inventory_open: bool,
+    pause_menu_open: bool,
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
@@ -55,6 +56,7 @@ impl EguiUi {
             atlas_coords,
             item_defs,
             inventory_open: false,
+            pause_menu_open: false,
             inventory_view: None,
             scale: 1.0,
             visible_popups: vec![],
@@ -65,11 +67,13 @@ impl EguiUi {
         }
     }
     pub(crate) fn wants_draw(&self) -> bool {
-        self.inventory_open || !self.visible_popups.is_empty()
-        // todo other popups
+        self.inventory_open || !self.visible_popups.is_empty() || self.pause_menu_open
     }
     pub(crate) fn open_inventory(&mut self) {
         self.inventory_open = true;
+    }
+    pub(crate) fn open_pause_menu(&mut self) {
+        self.pause_menu_open = true;
     }
     pub(crate) fn draw_all_uis(
         &mut self,
@@ -86,47 +90,49 @@ impl EguiUi {
                 .iter()
                 .take(self.visible_popups.len() - 1)
             {
-                self.draw_popup(&popup, ctx, atlas_texture_id, client_state, false);
+                self.draw_popup(popup, ctx, atlas_texture_id, client_state, false);
             }
             let result = self.draw_popup(
                 &self.visible_popups.last().unwrap().clone(),
                 ctx,
                 atlas_texture_id,
                 client_state,
-                true,
+                !self.pause_menu_open,
             );
             if result.is_break() {
                 self.visible_popups.pop();
             }
         } else if self.inventory_open {
-            if self
-                .draw_popup(
-                    &self
-                        .inventory_view
-                        .clone()
-                        .unwrap_or_else(|| PopupDescription {
-                            popup_id: u64::MAX,
-                            title: "Error".to_string(),
-                            element: vec![proto::UiElement {
-                                element: Some(proto::ui_element::Element::Label(
-                                    "The server hasn't sent a definition for the inventory popup"
-                                        .to_string(),
-                                )),
-                            }],
-                        }),
-                    ctx,
-                    atlas_texture_id,
-                    client_state,
-                    true,
-                )
-                .is_break()
-            {
+            let result = self.draw_popup(
+                &self
+                    .inventory_view
+                    .clone()
+                    .unwrap_or_else(|| PopupDescription {
+                        popup_id: u64::MAX,
+                        title: "Error".to_string(),
+                        element: vec![proto::UiElement {
+                            element: Some(proto::ui_element::Element::Label(
+                                "The server hasn't sent a definition for the inventory popup"
+                                    .to_string(),
+                            )),
+                        }],
+                    }),
+                ctx,
+                atlas_texture_id,
+                client_state,
+                !self.pause_menu_open,
+            );
+            if result.is_break() {
                 self.inventory_open = false;
             }
         }
 
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
             self.last_mouse_position = pos;
+        }
+
+        if self.pause_menu_open {
+            self.draw_pause_menu(ctx, client_state);
         }
     }
 
@@ -157,6 +163,8 @@ impl EguiUi {
     ) -> ControlFlow<(), ()> {
         egui::Window::new(popup.title.clone())
             .id(Id::new(popup.popup_id))
+            .collapsible(false)
+            .resizable(false)
             .show(ctx, |ui| {
                 ui.set_enabled(enabled);
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
@@ -425,9 +433,6 @@ impl EguiUi {
         }
     }
 
-    pub(crate) fn texture_atlas(&self) -> &Texture2DHolder {
-        self.texture_atlas.as_ref()
-    }
     pub(crate) fn clone_texture_atlas(&self) -> Arc<Texture2DHolder> {
         self.texture_atlas.clone()
     }
@@ -450,6 +455,37 @@ impl EguiUi {
     ) -> egui::Rect {
         let pixel_rect = get_texture(item, &self.atlas_coords, &self.item_defs);
         self.pixel_rect_to_uv(pixel_rect)
+    }
+
+    fn draw_pause_menu(&mut self, ctx: &egui::Context, client_state: &ClientState) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.pause_menu_open = false;
+        }
+        egui::Window::new("Game paused")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                if ui.add_enabled(true, Button::new("Resume")).clicked() {
+                    self.pause_menu_open = false;
+                }
+                if ui
+                    .add_enabled(false, Button::new("Settings (TODO)"))
+                    .clicked()
+                {
+                    todo!();
+                }
+                if ui
+                    .add_enabled(true, Button::new("Return to Main Menu"))
+                    .clicked()
+                {
+                    client_state.shutdown.cancel();
+                }
+                if ui.add_enabled(true, Button::new("Quit")).clicked() {
+                    client_state.shutdown.cancel();
+                    *client_state.wants_exit_from_game.lock() = true;
+                }
+            });
     }
 }
 

@@ -212,9 +212,6 @@ impl BlockRenderer {
     pub(crate) fn atlas(&self) -> &Texture2DHolder {
         &self.texture_atlas
     }
-    pub(crate) fn clone_atlas(&self) -> Arc<Texture2DHolder> {
-        self.texture_atlas.clone()
-    }
 
     pub(crate) fn allocator(&self) -> &GenericMemoryAllocator<Arc<FreeListAllocator>> {
         &self.allocator

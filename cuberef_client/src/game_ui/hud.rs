@@ -18,15 +18,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use texture_packer::Rect;
-use winit::{
-    dpi::PhysicalPosition,
-    event::{DeviceEvent, ElementState, Event, KeyboardInput},
-};
+
 
 use crate::{
     game_state::{
-        items::{ClientItemManager, InventoryViewManager},
-        tool_controller::ToolController,
+        items::ClientItemManager,
         ClientState,
     },
     vulkan::{
@@ -35,9 +31,7 @@ use crate::{
     },
 };
 
-use super::{
-    get_texture, CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED,
-};
+use super::{get_texture, CROSSHAIR, DIGIT_ATLAS, FRAME_SELECTED, FRAME_UNSELECTED};
 
 pub(crate) struct GameHud {
     pub(crate) texture_coords: HashMap<String, Rect>,
@@ -50,7 +44,6 @@ pub(crate) struct GameHud {
 
     pub(crate) crosshair_draw_call: Option<FlatTextureDrawCall>,
     pub(crate) hotbar_draw_call: Option<FlatTextureDrawCall>,
-    pub(crate) pixel_scroll_pos: i32,
 
     pub(crate) fps_counter: fps_counter::FPSCounter,
 }
@@ -59,79 +52,27 @@ impl GameHud {
         self.hotbar_slot
     }
 
-    pub(crate) fn window_event(
-        &mut self,
-        event: &Event<()>,
-        client_state: &ClientState,
-        tool_controller: &mut ToolController,
-    ) {
-        match *event {
-            Event::DeviceEvent {
-                event:
-                    DeviceEvent::Key(KeyboardInput {
-                        scancode, state, ..
-                    }),
-                ..
-            } => {
-                if state == ElementState::Pressed && (2..=9).contains(&scancode) {
-                    let slot = scancode - 2;
-                    self.set_slot(
-                        slot,
-                        client_state,
-                        tool_controller,
-                        &client_state.inventories.lock(),
-                    );
-                }
-            }
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseWheel { delta },
-                ..
-            } => {
-                let slot_delta = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                        self.pixel_scroll_pos = 0;
-                        y.round() as i32
-                    }
-                    winit::event::MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                        self.pixel_scroll_pos += y.round() as i32;
-                        // todo make config
-                        const SMOOTH_SCROLL_PIXELS_PER_SLOT: i32 = 100;
-                        let slot_delta = self
-                            .pixel_scroll_pos
-                            .div_euclid(SMOOTH_SCROLL_PIXELS_PER_SLOT);
-                        self.pixel_scroll_pos = self
-                            .pixel_scroll_pos
-                            .rem_euclid(SMOOTH_SCROLL_PIXELS_PER_SLOT);
-                        slot_delta
-                    }
-                };
-                if slot_delta != 0 {
-                    let inventories = client_state.inventories.lock();
-                    if let Some(main_inv) = self
-                        .hotbar_view_id
-                        .and_then(|x| inventories.inventory_views.get(&x))
-                    {
-                        let slots = main_inv.dimensions.1 as i32;
-                        // Feels more intutive with the sign flipped
-                        let new_slot = (self.hotbar_slot as i32 - slot_delta).rem_euclid(slots);
-                        self.set_slot(
-                            new_slot.try_into().unwrap(),
-                            client_state,
-                            tool_controller,
-                            &inventories,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(crate) fn render(
+    pub(crate) fn update_and_render(
         &mut self,
         ctx: &VulkanContext,
         client_state: &ClientState,
     ) -> Result<Vec<FlatTextureDrawCall>> {
+        let slot_delta = client_state.input.lock().take_scroll_slots();
+        if slot_delta != 0 {
+            if let Some(slots) = self.hotbar_view_id.and_then(|x| {
+                client_state
+                    .inventories
+                    .lock()
+                    .inventory_views
+                    .get(&x)
+                    .map(|x| x.dimensions.1)
+            }) {
+                let new_slot =
+                    (self.hotbar_slot as i32 - slot_delta).rem_euclid(slots.try_into().unwrap());
+                self.set_slot(new_slot.try_into().unwrap(), client_state);
+            }
+        }
+
         let window_size = ctx.window_size();
         if self.crosshair_draw_call.is_none() || window_size != self.last_size {
             self.crosshair_draw_call = Some(self.recreate_crosshair(ctx, window_size)?);
@@ -274,25 +215,24 @@ impl GameHud {
         get_texture(item, &self.texture_coords, &self.item_defs)
     }
 
-    fn set_slot(
-        &mut self,
-        slot: u32,
-        client_state: &ClientState,
-        tool_controller: &mut ToolController,
-        inventories: &InventoryViewManager,
-    ) {
+    fn set_slot(&mut self, slot: u32, client_state: &ClientState) {
         self.hotbar_slot = slot;
-        if let Some(main_inv) = self
-            .hotbar_view_id
-            .and_then(|x| inventories.inventory_views.get(&x))
-        {
-            let stack = main_inv.contents()[slot as usize].clone();
-            let item = stack
-                .and_then(|x| client_state.items.get(&x.item_name))
-                .cloned();
-            tool_controller.update_item(client_state, slot, item);
-            self.hotbar_draw_call = None;
-        }
+        let stack = self.hotbar_view_id.and_then(|x| {
+            client_state
+                .inventories
+                .lock()
+                .inventory_views
+                .get(&x)
+                .and_then(|x| x.contents()[slot as usize].clone())
+        });
+        let item = stack
+            .and_then(|x| client_state.items.get(&x.item_name))
+            .cloned();
+        client_state
+            .tool_controller
+            .lock()
+            .update_item(client_state, slot, item);
+        self.hotbar_draw_call = None;
     }
 
     pub(crate) fn texture_atlas(&self) -> &Texture2DHolder {

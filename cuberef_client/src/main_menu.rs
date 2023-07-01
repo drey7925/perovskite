@@ -1,14 +1,18 @@
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 
 use anyhow::Context;
+use arc_swap::ArcSwap;
 use egui::{Color32, Layout, ProgressBar, TextEdit};
 use tokio::sync::{oneshot, watch};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
-use crate::vulkan::{
-    game_renderer::{ConnectionSettings, ConnectionState, GameState},
-    VulkanContext,
+use crate::{
+    game_state::settings::GameSettings,
+    vulkan::{
+        game_renderer::{ConnectionSettings, ConnectionState, GameState},
+        VulkanContext,
+    },
 };
 
 pub(crate) struct MainMenu {
@@ -18,9 +22,14 @@ pub(crate) struct MainMenu {
     pass_field: String,
     confirm_pass_field: String,
     show_register_popup: bool,
+    settings: Arc<ArcSwap<GameSettings>>,
 }
 impl MainMenu {
-    pub(crate) fn new(ctx: &VulkanContext, event_loop: &EventLoop<()>) -> MainMenu {
+    pub(crate) fn new(
+        ctx: &VulkanContext,
+        event_loop: &EventLoop<()>,
+        settings: Arc<ArcSwap<GameSettings>>,
+    ) -> MainMenu {
         let gui_config = egui_winit_vulkano::GuiConfig {
             preferred_format: Some(ctx.swapchain().image_format()),
             is_overlay: true,
@@ -37,11 +46,12 @@ impl MainMenu {
         );
         MainMenu {
             egui_gui,
-            host_field: "".to_string(),
-            user_field: "".to_string(),
+            host_field: settings.load().last_hostname.clone(),
+            user_field: settings.load().last_username.clone(),
             pass_field: "".to_string(),
             confirm_pass_field: "".to_string(),
             show_register_popup: false,
+            settings,
         }
     }
 
@@ -70,6 +80,17 @@ impl MainMenu {
             let connect_button = egui::Button::new("Connect");
 
             if ui.add(connect_button).clicked() {
+                self.settings.rcu(|x| {
+                    let old = x.clone();
+                    GameSettings {
+                        last_hostname: self.host_field.trim().to_string(),
+                        last_username: self.user_field.trim().to_string(),
+                        ..old.deref().clone()
+                    }
+                });
+                if let Err(e) = self.settings.load().save_to_disk() {
+                    log::error!("Failure saving settings: {}", e);
+                }
                 let (state, settings) = make_connection(
                     self.host_field.trim().to_string(),
                     self.user_field.trim().to_string(),

@@ -16,8 +16,7 @@
 
 use std::{
     collections::{hash_map::Entry, HashMap},
-    mem::swap,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
@@ -402,11 +401,7 @@ impl PlayerManager {
     }
 
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        let mut lock = self.writeback.lock();
-        let mut writeback_handle = None;
-        swap(lock.deref_mut(), &mut writeback_handle);
-        // lock must be dropped before the await point
-        drop(lock);
+        let writeback_handle = self.writeback.lock().take();
         writeback_handle.unwrap().await??;
         tokio::task::block_in_place(|| self.flush())?;
         Ok(())

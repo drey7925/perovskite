@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use arc_swap::ArcSwap;
 use log::info;
 
 use parking_lot::Mutex;
@@ -36,7 +37,7 @@ use winit::{
 };
 
 use crate::{
-    game_state::{ClientState, FrameState},
+    game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
 };
@@ -84,7 +85,7 @@ impl ActiveGame {
         if let Some(pointee) = tool_state.pointee {
             cube_draw_calls.push(
                 self.client_state
-                    .cube_renderer
+                    .block_renderer
                     .make_pointee_cube(player_position, pointee)
                     .unwrap(),
             );
@@ -93,7 +94,7 @@ impl ActiveGame {
         if let Some(neighbor) = tool_state.neighbor {
             cube_draw_calls.push(
                 self.client_state
-                    .cube_renderer
+                    .block_renderer
                     .make_pointee_cube(player_position, neighbor)
                     .unwrap(),
             );
@@ -172,7 +173,7 @@ impl ActiveGame {
                     .client_state
                     .hud
                     .lock()
-                    .render(ctx, &self.client_state)
+                    .update_and_render(ctx, &self.client_state)
                     .unwrap(),
                 (),
             )
@@ -186,10 +187,10 @@ impl ActiveGame {
         finish_command_buffer(command_buf_builder).unwrap()
     }
 
-    fn handle_resize(&mut self, ctx: &mut VulkanContext, size: PhysicalSize<u32>) -> Result<()> {
+    fn handle_resize(&mut self, ctx: &mut VulkanContext) -> Result<()> {
         self.cube_pipeline = self
             .cube_provider
-            .make_pipeline(ctx, self.client_state.cube_renderer.atlas())
+            .make_pipeline(ctx, self.client_state.block_renderer.atlas())
             .unwrap();
         self.flat_pipeline = self
             .flat_provider
@@ -219,7 +220,12 @@ impl GameState {
             GameState::ConnectError(x) => GameStateMutRef::ConnectError(x),
         }
     }
-    fn update_if_connected(&mut self, ctx: &VulkanContext, event_loop: &EventLoopWindowTarget<()>) {
+    fn update_if_connected(
+        &mut self,
+        ctx: &VulkanContext,
+        event_loop: &EventLoopWindowTarget<()>,
+        control_flow: &mut ControlFlow,
+    ) {
         if let GameState::Connecting(state) = self {
             match state.result.try_recv() {
                 Ok(Ok(mut game)) => {
@@ -248,6 +254,9 @@ impl GameState {
             if let Some(err) = pending_error {
                 *self = GameState::ConnectError(err)
             } else if game.client_state.cancel_requested() {
+                if *game.client_state.wants_exit_from_game.lock() {
+                    *control_flow = ControlFlow::ExitWithCode(0);
+                }
                 *self = GameState::MainMenu;
             }
         }
@@ -263,6 +272,7 @@ pub(crate) enum GameStateMutRef<'a> {
 
 pub struct GameRenderer {
     ctx: VulkanContext,
+    settings: Arc<ArcSwap<GameSettings>>,
     game: Mutex<GameState>,
 
     main_menu: Mutex<MainMenu>,
@@ -270,6 +280,10 @@ pub struct GameRenderer {
 }
 impl GameRenderer {
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<GameRenderer> {
+        let settings = Arc::new(ArcSwap::new(
+            GameSettings::load_from_disk()?.unwrap_or_default().into(),
+        ));
+
         let ctx = VulkanContext::create(event_loop).unwrap();
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -277,9 +291,10 @@ impl GameRenderer {
                 .build()
                 .unwrap(),
         );
-        let main_menu = MainMenu::new(&ctx, event_loop);
+        let main_menu = MainMenu::new(&ctx, event_loop, settings.clone());
         Ok(GameRenderer {
             ctx,
+            settings,
             game: Mutex::new(GameState::MainMenu),
             main_menu: Mutex::new(main_menu),
             rt,
@@ -295,7 +310,7 @@ impl GameRenderer {
 
         event_loop.run(move |event, event_loop, control_flow| {
             let mut game_lock = self.game.lock();
-            game_lock.update_if_connected(&self.ctx, event_loop);
+            game_lock.update_if_connected(&self.ctx, event_loop, control_flow);
             {
                 let _span = span!("client_state handling window event");
 
@@ -340,7 +355,9 @@ impl GameRenderer {
                 Event::MainEventsCleared => {
                     if let GameStateMutRef::Active(game) = game_lock.as_mut() {
                         let _span = span!("MainEventsCleared");
-                        if self.ctx.window.has_focus() && game.client_state.should_capture() {
+                        if self.ctx.window.has_focus()
+                            && game.client_state.input.lock().is_mouse_captured()
+                        {
                             let size = self.ctx.window.inner_size();
                             self.ctx
                                 .window
@@ -361,15 +378,14 @@ impl GameRenderer {
                                 .set_cursor_grab(winit::window::CursorGrabMode::None)
                                 .unwrap();
                         }
-                    }
-                    else {
+                    } else {
                         self.ctx
-                                .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None)
-                                .unwrap();
-                            self.ctx.window.set_cursor_visible(true);
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None)
+                            .unwrap();
+                        self.ctx.window.set_cursor_visible(true);
                     }
-                    
+
                     if resized || recreate_swapchain {
                         let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
@@ -379,7 +395,7 @@ impl GameRenderer {
                             resized = false;
                             self.ctx.viewport.dimensions = size.into();
                             if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                                game.handle_resize(&mut self.ctx, size).unwrap();
+                                game.handle_resize(&mut self.ctx).unwrap();
                             }
                         }
                     }
@@ -476,28 +492,28 @@ impl GameRenderer {
         })
     }
 
-    fn start_connection(&self, settings: ConnectionSettings) {
+    fn start_connection(&self, connection: ConnectionSettings) {
+        let game_settings = self.settings.clone();
         {
-            {
-                let ctx = self.ctx.clone();
-                self.rt.spawn(async move {
-                    let active_game = connect_impl(
-                        ctx,
-                        settings.host,
-                        settings.user,
-                        settings.pass,
-                        settings.register,
-                        settings.progress,
-                    )
-                    .await;
-                    match settings.result.send(active_game) {
-                        Ok(_) => {}
-                        Err(_) => {
-                            panic!("Failed to hand off the active game to the renderer.")
-                        }
+            let ctx = self.ctx.clone();
+            self.rt.spawn(async move {
+                let active_game = connect_impl(
+                    ctx,
+                    game_settings,
+                    connection.host,
+                    connection.user,
+                    connection.pass,
+                    connection.register,
+                    connection.progress,
+                )
+                .await;
+                match connection.result.send(active_game) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        panic!("Failed to hand off the active game to the renderer.")
                     }
-                });
-            }
+                }
+            });
         }
     }
 }
@@ -530,6 +546,7 @@ pub(crate) struct ConnectionSettings {
 
 async fn connect_impl(
     ctx: VulkanContext,
+    settings: Arc<ArcSwap<GameSettings>>,
     server_addr: String,
     username: String,
     password: String,
@@ -542,13 +559,14 @@ async fn connect_impl(
         username,
         password,
         register,
+        settings,
         &ctx,
         &mut progress,
     )
     .await?;
 
     let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
-    let cube_pipeline = cube_provider.make_pipeline(&ctx, client_state.cube_renderer.atlas())?;
+    let cube_pipeline = cube_provider.make_pipeline(&ctx, client_state.block_renderer.atlas())?;
 
     let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
     let flat_pipeline =

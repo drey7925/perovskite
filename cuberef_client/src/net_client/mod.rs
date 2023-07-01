@@ -16,12 +16,13 @@
 
 use std::{
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use self::client_context::*;
 use anyhow::{bail, Context, Error, Result};
 
+use arc_swap::ArcSwap;
 use cuberef_core::{
     auth::CuberefOpaqueAuth,
     protocol::game_rpc::{
@@ -35,25 +36,18 @@ use opaque_ke::{
     ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
     RegistrationResponse,
 };
-use parking_lot::{Mutex};
 use rand::rngs::OsRng;
-use rustc_hash::{FxHashMap};
-use tokio::{
-    sync::{mpsc, watch},
-};
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
-
 
 use crate::{
     cube_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
     game_state::{
-        items::{ClientItemManager, InventoryViewManager},
-        physics::PhysicsState,
-        tool_controller::ToolController,
-        ChunkManager, ClientState,
+        items::ClientItemManager,
+        settings::GameSettings,
+        ClientState,
     },
     vulkan::VulkanContext,
 };
@@ -74,6 +68,7 @@ pub(crate) async fn connect_game(
     username: String,
     password: String,
     register: bool,
+    settings: Arc<ArcSwap<GameSettings>>,
     ctx: &VulkanContext,
     progress: &mut watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
@@ -111,8 +106,7 @@ pub(crate) async fn connect_game(
     )?);
 
     progress.send((0.5, "Setting up block renderer...".to_string()))?;
-    let cube_renderer =
-        Arc::new(BlockRenderer::new(block_types.clone(), texture_loader.clone(), ctx).await?);
+    let block_renderer = BlockRenderer::new(block_types.clone(), texture_loader.clone(), ctx).await?;
 
     progress.send((0.6, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
@@ -132,23 +126,15 @@ pub(crate) async fn connect_game(
     // since it provides access to the allocators.
 
     let (action_sender, action_receiver) = mpsc::channel(4);
-    let client_state = Arc::new(ClientState {
+    let client_state = Arc::new(ClientState::new(
+        settings,
         block_types,
         items,
-        last_update: Mutex::new(Instant::now()),
-        physics_state: Mutex::new(PhysicsState::new()),
-        tool_controller: Mutex::new(ToolController::new()),
-        chunks: ChunkManager::new(),
-        inventories: Mutex::new(InventoryViewManager {
-            inventory_views: FxHashMap::default(),
-        }),
-        shutdown: CancellationToken::new(),
-        actions: action_sender,
-        cube_renderer,
-        hud: Arc::new(Mutex::new(hud)),
-        egui: Arc::new(Mutex::new(egui)),
-        pending_error: Mutex::new(None),
-    });
+        action_sender,
+        hud,
+        egui,
+        block_renderer,
+    ));
 
     let (mut inbound, mut outbound) =
         make_contexts(client_state.clone(), tx_send, stream, action_receiver).await?;

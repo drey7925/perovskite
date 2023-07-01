@@ -18,6 +18,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use cgmath::{Deg, Zero};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
@@ -26,21 +27,24 @@ use parking_lot::{Mutex, RwLockReadGuard};
 use rustc_hash::FxHashMap;
 use tokio::sync::mpsc;
 use tracy_client::span;
-use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
+use winit::event::Event;
 
 use crate::cube_renderer::{BlockRenderer, ClientBlockTypeManager};
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
+use self::input::{InputState, BoundAction};
 use self::items::{ClientItemManager, InventoryViewManager};
+use self::settings::GameSettings;
 use self::tool_controller::{ToolController, ToolState};
 
 pub(crate) mod chunk;
+pub(crate) mod input;
 pub(crate) mod items;
 pub(crate) mod physics;
+pub(crate) mod settings;
 pub(crate) mod tool_controller;
-pub(crate) mod input;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DigTapAction {
@@ -73,7 +77,7 @@ pub(crate) enum GameAction {
     Place(PlaceAction),
     Inventory(InventoryAction),
     PopupResponse(cuberef_core::protocol::ui::PopupResponse),
-    InteractKey(BlockCoordinate)
+    InteractKey(BlockCoordinate),
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<Mutex<ClientChunk>>>;
@@ -163,6 +167,9 @@ impl Deref for ChunkManagerClonedView {
 
 // todo clean up, make private
 pub(crate) struct ClientState {
+    pub(crate) settings: Arc<ArcSwap<GameSettings>>,
+    pub(crate) input: Mutex<InputState>,
+
     pub(crate) block_types: Arc<ClientBlockTypeManager>,
     pub(crate) items: Arc<ClientItemManager>,
     pub(crate) last_update: parking_lot::Mutex<Instant>,
@@ -173,75 +180,49 @@ pub(crate) struct ClientState {
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) actions: mpsc::Sender<GameAction>,
 
-    // cube_renderer doesn't currently need a mutex because it's stateless
+    // block_renderer doesn't currently need a mutex because it's stateless
     // and keeps its cached geometry data in the chunks themselves
-    pub(crate) cube_renderer: Arc<BlockRenderer>,
+    pub(crate) block_renderer: Arc<BlockRenderer>,
     // GameHud manages its own state.
     pub(crate) hud: Arc<Mutex<GameHud>>,
     pub(crate) egui: Arc<Mutex<EguiUi>>,
 
-    pub(crate) pending_error: Mutex<Option<String>>
+    pub(crate) pending_error: Mutex<Option<String>>,
+    pub(crate) wants_exit_from_game: Mutex<bool>,
 }
 impl ClientState {
-    pub(crate) fn window_event(&self, event: &Event<()>) {
-        match *event {
-            Event::DeviceEvent {
-                device_id: _,
-                event: DeviceEvent::MouseMotion { delta: (x, y) },
-            } => {
-                self.physics_state.lock().mouse_delta(x, y);
-            }
-            Event::DeviceEvent {
-                device_id: _,
-                event: DeviceEvent::Button { button, state },
-            } => {
-                log::info!("btn: {button}, {state:?}");
-            }
-            Event::DeviceEvent {
-                device_id: _,
-                event:
-                    DeviceEvent::Key(KeyboardInput {
-                        scancode, state, ..
-                    }),
-            } => {
-                if scancode == 0x17 && state == ElementState::Pressed {
-                    self.egui.lock().open_inventory()
-                }
-                if scancode == 0x21 && state == ElementState::Pressed {
-                    self.tool_controller.lock().interact_key_pressed()
-                }
-                self.physics_state.lock().keyboard_input(scancode, state);
-            }
-            Event::WindowEvent {
-                window_id: _,
-                event:
-                    WindowEvent::MouseInput {
-                        device_id: _,
-                        state,
-                        button,
-                        ..
-                    },
-            } => {
-                log::info!("Mouse: {state:?}, {button:?}");
-                match (button, state) {
-                    (MouseButton::Left, ElementState::Pressed) => {
-                        self.tool_controller.lock().mouse_down()
-                    }
-                    (MouseButton::Left, ElementState::Released) => {
-                        self.tool_controller.lock().mouse_up()
-                    }
-                    (MouseButton::Right, ElementState::Released) => {
-                        self.tool_controller.lock().secondary_mouse_down()
-                    }
-                    _ => {}
-                }
-            }
-
-            _ => {}
+    pub(crate) fn new(
+        settings: Arc<ArcSwap<GameSettings>>,
+        block_types: Arc<ClientBlockTypeManager>,
+        items: Arc<ClientItemManager>,
+        action_sender: mpsc::Sender<GameAction>,
+        hud: GameHud,
+        egui: EguiUi,
+        block_renderer: BlockRenderer,
+    ) -> ClientState {
+        ClientState {
+            settings: settings.clone(),
+            input: Mutex::new(InputState::new(settings)),
+            block_types,
+            items,
+            last_update: Mutex::new(Instant::now()),
+            physics_state: Mutex::new(physics::PhysicsState::new()),
+            chunks: ChunkManager::new(),
+            inventories: Mutex::new(InventoryViewManager::new()),
+            tool_controller: Mutex::new(ToolController::new()),
+            shutdown: tokio_util::sync::CancellationToken::new(),
+            actions: action_sender,
+            block_renderer: Arc::new(block_renderer),
+            hud: Arc::new(Mutex::new(hud)),
+            egui: Arc::new(Mutex::new(egui)),
+            pending_error: Mutex::new(None),
+            wants_exit_from_game: Mutex::new(false),
         }
-        self.hud
-            .lock()
-            .window_event(event, self, &mut self.tool_controller.lock());
+    }
+
+    pub(crate) fn window_event(&self, event: &Event<()>) {
+        let mut input = self.input.lock();
+        input.event(event);
     }
     pub(crate) fn last_position(&self) -> PlayerPositionUpdate {
         let lock = self.physics_state.lock();
@@ -254,6 +235,17 @@ impl ClientState {
         }
     }
     pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
+        {
+            let mut input = self.input.lock();
+            input.set_modal_active(self.egui.lock().wants_draw());
+            if input.take_just_pressed(BoundAction::Inventory) {
+                self.egui.lock().open_inventory();
+            } else if input.take_just_pressed(BoundAction::Menu) {
+                self.egui.lock().open_pause_menu();
+            }
+        }
+
+
         let delta = {
             let mut lock = self.last_update.lock();
             let now = Instant::now();
@@ -285,10 +277,6 @@ impl ClientState {
             player_position,
             tool_state,
         }
-    }
-
-    pub(crate) fn should_capture(&self) -> bool {
-        self.physics_state.lock().should_capture()
     }
 
     pub(crate) fn cancel_requested(&self) -> bool {

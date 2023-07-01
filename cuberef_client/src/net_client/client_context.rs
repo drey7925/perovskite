@@ -501,7 +501,7 @@ impl InboundContext {
                 mesh_chunk(
                     chunk,
                     &self.client_state.chunks.read_lock(),
-                    &self.client_state.cube_renderer,
+                    &self.client_state.block_renderer,
                 )?;
             }
         }

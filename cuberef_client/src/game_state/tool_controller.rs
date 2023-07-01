@@ -28,7 +28,7 @@ use cuberef_core::protocol::items::ItemDef;
 use line_drawing::WalkVoxels;
 use rustc_hash::FxHashSet;
 
-use super::{ClientState, GameAction};
+use super::{input::BoundAction, ClientState, GameAction};
 
 struct DigState {
     // 0.0 to 1.0
@@ -45,11 +45,6 @@ struct DigState {
 // Computes the block that the player is pointing at, tracks the progress of digging, etc.
 pub(crate) struct ToolController {
     dig_progress: Option<DigState>,
-    dig_button_pressed: bool,
-    dig_button_just_pressed: bool,
-    dig_button_just_released: bool,
-    place_button_just_pressed: bool,
-    interact_key_just_pressed: bool,
     current_item: ItemDef,
     current_slot: u32,
     current_item_interacting_groups: Vec<Vec<String>>,
@@ -58,34 +53,10 @@ impl ToolController {
     pub(crate) fn new() -> ToolController {
         ToolController {
             dig_progress: None,
-            dig_button_pressed: false,
-            dig_button_just_pressed: false,
-            dig_button_just_released: false,
-            place_button_just_pressed: false,
-            interact_key_just_pressed: false,
             current_item: default_item(),
             current_slot: 0,
             current_item_interacting_groups: get_dig_interacting_groups(&default_item()),
         }
-    }
-    // Signal that the mouse has been pressed
-    pub(crate) fn mouse_down(&mut self) {
-        self.dig_button_pressed = true;
-        self.dig_button_just_pressed = true;
-    }
-    // Signal that the mouse has been released
-    pub(crate) fn mouse_up(&mut self) {
-        if self.dig_button_pressed {
-            self.dig_button_just_released = true;
-        }
-        self.dig_button_pressed = false;
-    }
-    pub(crate) fn interact_key_pressed(&mut self) {
-        self.interact_key_just_pressed = true;
-    }
-    // Signal that the secondary mouse button has been pressed
-    pub(crate) fn secondary_mouse_down(&mut self) {
-        self.place_button_just_pressed = true;
     }
 
     // Update the current item
@@ -122,6 +93,8 @@ impl ToolController {
         };
         let mut action = None;
 
+        let mut input = client_state.input.lock();
+
         if self.dig_progress.as_ref().map_or(true, |x: &DigState| {
             x.coord != pointee || !x.id.equals_ignore_variant(BlockId(block_def.id))
         }) {
@@ -142,14 +115,14 @@ impl ToolController {
                 item_dig_behavior: Some(behavior),
                 base_durability: block_def.base_dig_time,
             });
-        } else if self.dig_button_pressed {
+        } else if input.is_pressed(BoundAction::Dig) {
             if let Some(dig_progress) = &mut self.dig_progress {
                 // The pointee is the same, update dig progress
                 let delta_progress = match dig_progress.item_dig_behavior {
                     None => 0.,
                     Some(DigBehavior::InstantDig(_)) => 0.,
                     Some(DigBehavior::InstantDigOneshot(_)) => {
-                        if self.dig_button_just_pressed {
+                        if input.take_just_pressed(BoundAction::Dig) {
                             action = Some(GameAction::Dig(super::DigTapAction {
                                 target: pointee,
                                 prev: neighbor,
@@ -177,25 +150,22 @@ impl ToolController {
                     }));
                 }
             }
-        } else if self.dig_button_just_released {
-            self.dig_button_just_released = false;
+        } else if input.take_just_released(BoundAction::Dig) {
             action = Some(GameAction::Tap(super::DigTapAction {
                 target: pointee,
                 prev: neighbor,
                 item_slot: self.current_slot,
             }))
-        } else if self.place_button_just_pressed && neighbor.is_some() {
-            self.place_button_just_pressed = false;
+        } else if input.take_just_pressed(BoundAction::Place) && neighbor.is_some() {
             action = Some(GameAction::Place(super::PlaceAction {
                 target: neighbor.unwrap(),
                 anchor: Some(pointee),
                 item_slot: self.current_slot,
             }))
-        } else if self.interact_key_just_pressed {
-            self.interact_key_just_pressed = false;
+        } else if input.take_just_pressed(BoundAction::Interact) {
             action = Some(GameAction::InteractKey(pointee))
         }
-        self.dig_button_just_pressed = false;
+
         if let Some(action) = &action {
             log::info!("Sending player action: {:?}", action);
         }

@@ -93,4 +93,10 @@ pub(crate) struct InventoryViewManager {
     // TODO stop leaking them
     pub(crate) inventory_views: FxHashMap<u64, ClientInventory>,
 }
-impl InventoryViewManager {}
+impl InventoryViewManager {
+    pub(crate) fn new() -> InventoryViewManager {
+        InventoryViewManager {
+            inventory_views: FxHashMap::default(),
+        }
+    }
+}

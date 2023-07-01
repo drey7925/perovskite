@@ -59,7 +59,7 @@ impl MeshWorker {
                     maybe_mesh_chunk(
                         coord,
                         &self.client_state.chunks.read_lock(),
-                        &self.client_state.cube_renderer,
+                        &self.client_state.block_renderer,
                     )?;
                 }
             }

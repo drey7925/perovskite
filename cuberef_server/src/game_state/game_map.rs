@@ -19,8 +19,6 @@ use rustc_hash::FxHashMap;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
-    mem::swap,
-    ops::DerefMut,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
@@ -215,7 +213,9 @@ impl MapChunk {
             .map()
             .block_type_manager()
             .get_block_by_id(id.into())?;
-        if block_type.extended_data_handling == ExtDataHandling::NoExtData && ext_data.custom_data.is_some() {
+        if block_type.extended_data_handling == ExtDataHandling::NoExtData
+            && ext_data.custom_data.is_some()
+        {
             error!(
             "Found extended data, but block {} doesn't support extended data, while serializing {:?}, ",
             block_type.client_info.short_name, block_coord,
@@ -256,7 +256,7 @@ impl MapChunk {
 
             Ok(Some(mapchunk_proto::ExtendedData {
                 offset_in_chunk: block_index.try_into().unwrap(),
-                serialized_data: serialized_custom_data.unwrap_or_else(|| vec![]),
+                serialized_data: serialized_custom_data.unwrap_or_default(),
                 inventories,
             }))
         } else {
@@ -344,7 +344,7 @@ fn parse_v1(
             extended_data.insert(
                 (*offset_in_chunk).try_into().unwrap(),
                 ExtendedData {
-                    custom_data: deserialize(handler_context, &serialized_data)?,
+                    custom_data: deserialize(handler_context, serialized_data)?,
                     inventories: inventories
                         .iter()
                         .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
@@ -724,7 +724,7 @@ impl ServerGameMap {
             let ctx = HandlerContext {
                 tick,
                 initiator: initiator.clone(),
-                game_state: self.game_state().clone(),
+                game_state: self.game_state(),
             };
             drops.append(&mut run_handler(
                 || (full_handler)(ctx, coord, tool),
@@ -874,18 +874,10 @@ impl ServerGameMap {
     }
 
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        let mut lock = self.writeback_handle.lock();
-        let mut writeback_handle = None;
-        swap(lock.deref_mut(), &mut writeback_handle);
-        // lock must be dropped before the await point
-        drop(lock);
+        let writeback_handle = self.writeback_handle.lock().take();
         writeback_handle.unwrap().await??;
-
-        let mut lock = self.cleanup_handle.lock();
-        let mut cleanup_handle = None;
-        swap(lock.deref_mut(), &mut cleanup_handle);
-        // lock must be dropped before the await point
-        drop(lock);
+        
+        let cleanup_handle = self.cleanup_handle.lock().take();
         cleanup_handle.unwrap().await??;
         self.flush();
         Ok(())

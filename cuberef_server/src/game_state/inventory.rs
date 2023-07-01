@@ -17,7 +17,6 @@
 use std::{
     borrow::Borrow,
     collections::HashMap,
-    fmt::format,
     ops::DerefMut,
     sync::{atomic::AtomicU64, Arc},
 };
@@ -304,7 +303,7 @@ impl BorrowLocation {
         if let Self::NotBorrowed = self {
             return alternative;
         }
-        return self;
+        self
     }
 }
 
@@ -498,7 +497,7 @@ impl<T> InventoryView<T> {
             take_exact,
             backing: ViewBacking::StoredInBlock(coord, key),
             id: next_id(),
-            game_state: game_state,
+            game_state,
         })
     }
 

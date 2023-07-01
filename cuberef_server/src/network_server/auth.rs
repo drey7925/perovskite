@@ -19,8 +19,8 @@ use std::{sync::Arc, u8};
 use cuberef_core::{
     auth::CuberefOpaqueAuth,
     protocol::game_rpc::{
-        stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StartAuth,
-        StreamToClient, StreamToServer,
+        stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StreamToClient,
+        StreamToServer,
     },
 };
 use opaque_ke::{
@@ -95,15 +95,11 @@ impl AuthService {
             })?,
         );
         let db_key = &db_key_from_username(username);
-        if self
-            .db
-            .get(db_key)
-            .map_err(|e| {
-                log::error!("Internal DB lookup error: {e:?}");
-                tonic::Status::internal("Internal finish_registration error")
-            })?
-            .is_some()
-        {
+        let user_registration = self.db.get(db_key).map_err(|e| {
+            log::error!("Internal DB lookup error: {e:?}");
+            tonic::Status::internal("Internal finish_registration error")
+        })?;
+        if user_registration.is_some() {
             return Err(tonic::Status::already_exists(
                 "This username is already taken.",
             ));
@@ -224,7 +220,7 @@ impl AuthService {
             .send(Ok(StreamToClient {
                 tick: 0,
                 server_message: Some(ServerMessage::ServerRegistrationResponse(
-                    self.start_registration(&username, opaque_request)?,
+                    self.start_registration(username, opaque_request)?,
                 )),
             }))
             .await

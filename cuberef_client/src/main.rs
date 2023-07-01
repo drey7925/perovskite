@@ -13,12 +13,9 @@
 // limitations under the License.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-use clap::Parser;
-use cuberef_client::client_main::{self, ClientArgs};
+use cuberef_client::client_main;
 
 fn main() {
-    //console_subscriber::init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     client_main::run_client().unwrap();
 }

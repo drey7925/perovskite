@@ -20,7 +20,7 @@ use crate::{
 };
 use anyhow::Result;
 use cuberef_core::protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo};
-use cuberef_server::game_state::{client_ui::Popup, blocks::ExtDataHandling};
+use cuberef_server::game_state::blocks::ExtDataHandling;
 
 use super::block_groups::{BRITTLE, GRANULAR};
 

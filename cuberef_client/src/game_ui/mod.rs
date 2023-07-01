@@ -38,7 +38,6 @@ where
         crosshair_draw_call: None,
         hotbar_draw_call: None,
         hotbar_view_id: None,
-        pixel_scroll_pos: 0,
         fps_counter: fps_counter::FPSCounter::new(),
     };
 
