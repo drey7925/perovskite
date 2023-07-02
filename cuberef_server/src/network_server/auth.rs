@@ -216,6 +216,7 @@ impl AuthService {
         inbound: &mut tonic::Streaming<StreamToServer>,
         outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
     ) -> tonic::Result<()> {
+        log::info!("Starting registration for {}", username);
         outbound
             .send(Ok(StreamToClient {
                 tick: 0,
@@ -261,6 +262,7 @@ impl AuthService {
         inbound: &mut tonic::Streaming<StreamToServer>,
         outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
     ) -> tonic::Result<()> {
+        log::info!("Starting login for {}", username);
         let login_state = self.start_login(username, opaque_request)?;
         outbound
             .send(Ok(StreamToClient {
@@ -288,8 +290,7 @@ impl AuthService {
                         server_message: Some(ServerMessage::AuthSuccess(Nop {})),
                     }))
                     .await
-                    .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
-
+                    .map_err(|_| tonic::Status::unavailable("Error sending success message to client"))?;
                 Ok(())
             }
             Some(_) => Err(tonic::Status::unauthenticated(

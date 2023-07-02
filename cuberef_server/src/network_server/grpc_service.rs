@@ -146,8 +146,12 @@ async fn game_stream_impl(
         .do_auth_flow(&mut inbound_rx, &outbound_tx)
         .await
     {
-        Ok(x) => x,
+        Ok(x) => {
+            log::info!("Player {} successfully authenticated", x);
+            x
+        },
         Err(e) => {
+            log::error!("Player failed to authenticate: {e:?}");
             return outbound_tx
                 .send(Err(e))
                 .await
@@ -167,7 +171,7 @@ async fn game_stream_impl(
             ..
         }) => {
             // all OK
-            log::info!("Client reports ready; starting up client's context on server");
+            log::info!("Client for {} reports ready; starting up client's context on server", username);
         }
         Some(_) => {
             let err_response = Err(tonic::Status::invalid_argument(
@@ -176,7 +180,7 @@ async fn game_stream_impl(
             return outbound_tx
                 .send(err_response)
                 .await
-                .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
+                .map_err(|_| anyhow::Error::msg("Failed to send ClientInitialReady-expected error"));
         }
         None => {
             let err_response = Err(tonic::Status::unavailable(

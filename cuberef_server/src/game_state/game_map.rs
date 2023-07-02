@@ -16,6 +16,8 @@
 
 use anyhow::Error;
 use rustc_hash::FxHashMap;
+use std::ops::{Deref, DerefMut};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -44,7 +46,10 @@ use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::map as mapchunk_proto,
 };
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{
+    Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockUpgradableReadGuard,
+    RwLockWriteGuard,
+};
 use prost::Message;
 
 use log::{error, info, warn};
@@ -149,7 +154,6 @@ pub struct MapChunk {
 
     game_state: Weak<GameState>,
     dirty: bool,
-    last_accessed: Instant,
 }
 impl MapChunk {
     fn new(own_coord: ChunkCoordinate, game_state: Arc<GameState>) -> Self {
@@ -160,12 +164,7 @@ impl MapChunk {
             extended_data,
             game_state: Arc::downgrade(&game_state),
             dirty: false,
-            last_accessed: Instant::now(),
         }
-    }
-
-    fn bump_access_time(&mut self) {
-        self.last_accessed = Instant::now();
     }
 
     fn serialize(&self, usage: ChunkUsage) -> Result<mapchunk_proto::StoredChunk> {
@@ -376,7 +375,6 @@ fn parse_v1(
         extended_data,
         game_state: Arc::downgrade(&game_state),
         dirty: false,
-        last_accessed: Instant::now(),
     })
 }
 
@@ -384,6 +382,108 @@ fn parse_v1(
 pub(crate) struct BlockUpdate {
     pub(crate) location: BlockCoordinate,
     pub(crate) new_value: BlockTypeHandle,
+}
+
+struct MapChunkInnerGuard<'a> {
+    guard: MutexGuard<'a, HolderState>,
+}
+impl<'a> Deref for MapChunkInnerGuard<'a> {
+    type Target = MapChunk;
+    fn deref(&self) -> &Self::Target {
+        self.guard.unwrap()
+    }
+}
+impl<'a> DerefMut for MapChunkInnerGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard.unwrap_mut()
+    }
+}
+
+enum HolderState {
+    Empty,
+    Err(anyhow::Error),
+    Ok(MapChunk),
+}
+impl HolderState {
+    fn unwrap_mut(&mut self) -> &mut MapChunk {
+        if let HolderState::Ok(x) = self {
+            x
+        } else {
+            panic!("HolderState is not Ok");
+        }
+    }
+    fn unwrap(&self) -> &MapChunk {
+        if let HolderState::Ok(x) = self {
+            x
+        } else {
+            panic!("HolderState is not Ok");
+        }
+    }
+}
+
+struct MapChunkHolder {
+    chunk: Mutex<HolderState>,
+    condition: Condvar,
+    last_accessed: Mutex<Instant>,
+}
+impl MapChunkHolder {
+    fn new_empty() -> Self {
+        Self {
+            chunk: Mutex::new(HolderState::Empty),
+            condition: Condvar::new(),
+            last_accessed: Mutex::new(Instant::now()),
+        }
+    }
+    /// Get the chunk, blocking until it's loaded
+    fn wait_and_get(&self) -> Result<MapChunkInnerGuard<'_>> {
+        let mut guard = self.chunk.lock();
+
+        loop {
+            self.bump_access_time();
+            match &*guard {
+                HolderState::Empty => self.condition.wait(&mut guard),
+                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+                HolderState::Ok(_) => return Ok(MapChunkInnerGuard { guard }),
+            }
+        }
+    }
+    /// Get the chunk, returning None if it's not loaded yet
+    fn try_get(&self) -> Result<Option<MapChunkInnerGuard<'_>>> {
+        let guard = self.chunk.lock();
+        self.bump_access_time();
+        match &*guard {
+            HolderState::Empty => Ok(None),
+            HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+            HolderState::Ok(_) => Ok(Some(MapChunkInnerGuard { guard })),
+        }
+    }
+    /// Set the chunk, and notify any threads waiting in wait_and_get
+    fn fill(&self, chunk: MapChunk) {
+        *self.chunk.lock() = HolderState::Ok(chunk);
+        self.condition.notify_all();
+    }
+    /// Set the chunk to an error, and notify any waiting threads so they can propagate the error
+    fn set_err(&self, err: anyhow::Error) {
+        *self.chunk.lock() = HolderState::Err(err);
+    }
+
+    fn bump_access_time(&self) {
+        *self.last_accessed.lock() = Instant::now();
+    }
+}
+
+struct MapChunkOuterGuard<'a> {
+    // TODO: This has a slight inefficiency - we have to call get() on the map an extra time
+    read_guard: RwLockReadGuard<'a, HashMap<ChunkCoordinate, MapChunkHolder>>,
+    coord: ChunkCoordinate,
+}
+impl<'a> Deref for MapChunkOuterGuard<'a> {
+    type Target = MapChunkHolder;
+    fn deref(&self) -> &Self::Target {
+        // This unwrap should always succeed - get_chunk and friends ensure that the chunk is inserted
+        // before MapChunkOuterGuard is created
+        self.read_guard.get(&self.coord).as_ref().unwrap()
+    }
 }
 
 /// Represents the entire map of the world.
@@ -398,7 +498,7 @@ pub struct ServerGameMap {
     // * Sharding
     // * DashMap
     // * Inner vs outer locks https://gist.github.com/drey7925/c4b89ff1d15c635875619ce19a749914
-    live_chunks: Mutex<HashMap<ChunkCoordinate, MapChunk>>,
+    live_chunks: RwLock<HashMap<ChunkCoordinate, MapChunkHolder>>,
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
     writeback_sender: mpsc::Sender<WritebackReq>,
@@ -420,7 +520,7 @@ impl ServerGameMap {
         let result = Arc::new(ServerGameMap {
             game_state,
             database,
-            live_chunks: Mutex::new(HashMap::new()),
+            live_chunks: RwLock::new(HashMap::new()),
             block_type_manager,
             block_update_sender,
             writeback_sender,
@@ -447,7 +547,7 @@ impl ServerGameMap {
     }
 
     pub(crate) fn bump_access_time(&self, coord: ChunkCoordinate) {
-        if let Some(chunk) = self.live_chunks.lock().get_mut(&coord) {
+        if let Some(chunk) = self.live_chunks.read().get(&coord) {
             chunk.bump_access_time();
         }
     }
@@ -469,8 +569,8 @@ impl ServerGameMap {
     where
         F: FnOnce(&ExtendedData) -> Option<T>,
     {
-        let mut lock = self.live_chunks.lock();
-        let chunk = self.get_chunk(&mut lock, coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let chunk = chunk_guard.wait_and_get()?;
 
         let id = chunk.block_ids[coord.offset().as_index()];
         let ext_data = match chunk
@@ -489,8 +589,8 @@ impl ServerGameMap {
 
     /// Gets a block + variant without its extended data
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockTypeHandle> {
-        let mut lock = self.live_chunks.lock();
-        let chunk = self.get_chunk(&mut lock, coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let chunk = chunk_guard.wait_and_get()?;
 
         let id = chunk.block_ids[coord.offset().as_index()];
 
@@ -508,8 +608,9 @@ impl ServerGameMap {
         let block = block
             .as_handle(&self.block_type_manager)
             .with_context(|| "Block not found")?;
-        let mut lock = self.live_chunks.lock();
-        let chunk = self.get_chunk(&mut lock, coord.chunk())?;
+
+        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let mut chunk = chunk_guard.wait_and_get()?;
 
         let old_id = chunk.block_ids[coord.offset().as_index()];
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
@@ -583,8 +684,8 @@ impl ServerGameMap {
             .as_handle(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
-        let mut lock = self.live_chunks.lock();
-        let chunk = self.get_chunk(&mut lock, coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let mut chunk = chunk_guard.wait_and_get()?;
 
         let old_id = chunk.block_ids[coord.offset().as_index()];
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
@@ -628,8 +729,8 @@ impl ServerGameMap {
     where
         F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
     {
-        let mut lock = self.live_chunks.lock();
-        let chunk = self.get_chunk(&mut lock, coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let mut chunk = chunk_guard.wait_and_get()?;
 
         let mut extended_data = chunk
             .extended_data
@@ -741,35 +842,49 @@ impl ServerGameMap {
     }
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
-    fn get_chunk<'a>(
-        &'a self,
-        lock: &'a mut MutexGuard<HashMap<ChunkCoordinate, MapChunk>>,
-        coord: ChunkCoordinate,
-    ) -> Result<&'a mut MapChunk> {
-        // We can't use or_insert_with because load_uncached_or_generate_chunk is fallible
-        match lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(x) => {
-                let chunk = x.into_mut();
-                chunk.bump_access_time();
-                Ok(chunk)
-            }
-            std::collections::hash_map::Entry::Vacant(v) => {
-                let mut chunk = self.load_uncached_or_generate_chunk(coord)?;
-                chunk.bump_access_time();
-                Ok(v.insert(chunk))
-            }
-        }
-    }
+    fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
+        // Start with an upgradable read
+        let lock = self.live_chunks.upgradable_read();
 
-    // Gets a chunk, only if it is currently in memory.
-    fn get_chunk_cached<'a>(
-        &'a self,
-        lock: &'a mut MutexGuard<HashMap<ChunkCoordinate, MapChunk>>,
-        coord: ChunkCoordinate,
-    ) -> Option<&'a mut MapChunk> {
-        match lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(x) => Some(x.into_mut()),
-            std::collections::hash_map::Entry::Vacant(_) => None,
+        if lock.contains_key(&coord) {
+            return Ok(MapChunkOuterGuard {
+                read_guard: RwLockUpgradableReadGuard::downgrade(lock),
+                coord,
+            });
+        }
+
+        // The chunk is not loaded. Upgrade the lock temporarily, get an entry into the map, and then fill it
+        // under a read lock
+        let mut write_lock = RwLockUpgradableReadGuard::upgrade(lock);
+        write_lock.insert(coord, MapChunkHolder::new_empty());
+
+        // We are the thread that inserted the chunk. Downgrade back to a read lock, and fill the chunk before returning.
+        let read_lock = RwLockWriteGuard::downgrade(write_lock);
+        // Unwrap is safe, since we just inserted the chunk
+        let chunk_guard = read_lock.get(&coord).unwrap();
+
+        // We assert this is unwind-safe: it only interacts with the database and mapgen, which themselves shouldn't have
+        // weird unwinding behavior. TODO validate this
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.load_uncached_or_generate_chunk(coord)
+        })) {
+            Ok(Ok(chunk)) => {
+                chunk_guard.fill(chunk);
+                Ok(MapChunkOuterGuard {
+                    read_guard: read_lock,
+                    coord,
+                })
+            }
+            Ok(Err(e)) => {
+                let message = Error::msg(format!("Failed to load chunk: {e:?}"));
+                chunk_guard.set_err(e);
+                Err(message)
+            }
+            Err(e) => {
+                chunk_guard.set_err(Error::msg(format!("Chunk load/generate panicked: {e:?}")));
+                // Unfortunate duplication, anyhow::Error is not Clone
+                Err(Error::msg(format!("Chunk load/generate panicked: {e:?}")))
+            }
         }
     }
 
@@ -797,24 +912,28 @@ impl ServerGameMap {
         Weak::upgrade(&self.game_state).unwrap()
     }
 
-    #[cfg(test)]
-    pub(crate) fn unload_chunk(&self, coord: ChunkCoordinate) -> Result<()> {
-        let mut lock = self.live_chunks.lock();
-        self.unload_chunk_locked(&mut lock, coord)
-    }
-
     fn unload_chunk_locked(
         &self,
-        lock: &mut MutexGuard<HashMap<ChunkCoordinate, MapChunk>>,
+        lock: &mut RwLockWriteGuard<HashMap<ChunkCoordinate, MapChunkHolder>>,
         coord: ChunkCoordinate,
     ) -> Result<()> {
         let chunk = lock.remove(&coord);
         if let Some(chunk) = chunk {
-            if chunk.dirty {
-                self.database.put(
-                    &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
-                    &chunk.serialize(ChunkUsage::Server)?.encode_to_vec(),
-                )?;
+            match &*chunk.chunk.lock() {
+                HolderState::Empty => {
+                    log::warn!("chunk unload got a chunk with an empty holder. This should never happen - please file a bug");
+                }
+                HolderState::Err(e) => {
+                    log::warn!("chunk unload trying to unload a chunk with an error: {e:?}");
+                }
+                HolderState::Ok(chunk) => {
+                    if chunk.dirty {
+                        self.database.put(
+                            &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
+                            &chunk.serialize(ChunkUsage::Server)?.encode_to_vec(),
+                        )?;
+                    }
+                }
             }
         }
         Ok(())
@@ -857,16 +976,22 @@ impl ServerGameMap {
         coord: ChunkCoordinate,
         load_if_missing: bool,
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
-        let mut lock = self.live_chunks.lock();
-        let chunk = if load_if_missing {
-            self.get_chunk(&mut lock, coord)?
+        if load_if_missing {
+            let chunk_guard = self.get_chunk(coord)?;
+            let chunk = chunk_guard.wait_and_get()?;
+            Ok(Some(chunk.serialize(ChunkUsage::Client)?))
         } else {
-            match self.get_chunk_cached(&mut lock, coord) {
-                None => return Ok(None),
-                Some(x) => x,
+            let guard = self.live_chunks.read();
+            let chunk_holder = guard.get(&coord);
+            if let Some(chunk_holder) = chunk_holder {
+                match chunk_holder.try_get()? {
+                    Some(x) => Ok(Some(x.serialize(ChunkUsage::Client)?)),
+                    None => Ok(None),
+                }
+            } else {
+                Ok(None)
             }
-        };
-        Ok(Some(chunk.serialize(ChunkUsage::Client)?))
+        }
     }
 
     pub(crate) fn request_shutdown(&self) {
@@ -876,7 +1001,7 @@ impl ServerGameMap {
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
         let writeback_handle = self.writeback_handle.lock().take();
         writeback_handle.unwrap().await??;
-        
+
         let cleanup_handle = self.cleanup_handle.lock().take();
         cleanup_handle.unwrap().await??;
         self.flush();
@@ -884,7 +1009,7 @@ impl ServerGameMap {
     }
 
     pub(crate) fn flush(&self) {
-        let mut lock = self.live_chunks.lock();
+        let mut lock = self.live_chunks.write();
         let coords: Vec<_> = lock.keys().copied().collect();
         log::info!(
             "ServerGameMap being flushed: Writing back {} chunks",
@@ -948,13 +1073,13 @@ impl MapCacheCleanup {
     fn do_cleanup(&self) -> Result<()> {
         loop {
             let now = Instant::now();
-            let mut lock = self.map.live_chunks.lock();
+            let mut lock = self.map.live_chunks.write();
             if lock.len() <= CACHE_CLEANUP_KEEP_N_RECENTLY_USED {
                 return Ok(());
             }
             let mut entries: Vec<_> = lock
                 .iter()
-                .map(|(k, v)| (v.last_accessed, *k, v.dirty))
+                .map(|(k, v)| (*v.last_accessed.lock(), *k))
                 .filter(|&entry| (now - entry.0) >= CACHE_CLEAN_MIN_AGE)
                 .collect();
             entries.sort_unstable_by_key(|entry| entry.0);
@@ -1003,18 +1128,25 @@ impl GameMapWriteback {
     }
 
     fn do_writebacks(&self, writebacks: Vec<ChunkCoordinate>) -> Result<()> {
-        let mut lock = self.map.live_chunks.lock();
+        let lock = self.map.live_chunks.read();
         for coord in writebacks {
-            match lock.get_mut(&coord) {
-                Some(chunk) => {
-                    if !chunk.dirty {
-                        warn!("Writeback thread got chunk {:?} but it wasn't dirty", coord);
+            match lock.get(&coord) {
+                Some(chunk_holder) => {
+                    if let Some(mut chunk) = chunk_holder.try_get()? {
+                        if !chunk.dirty {
+                            warn!("Writeback thread got chunk {:?} but it wasn't dirty", coord);
+                        }
+                        self.map.database.put(
+                            &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
+                            &chunk.serialize(ChunkUsage::Server)?.encode_to_vec(),
+                        )?;
+                        chunk.dirty = false;
+                    } else {
+                        warn!(
+                            "Writeback thread got chunk {:?} but it wasn't loaded yet",
+                            coord
+                        );
                     }
-                    self.map.database.put(
-                        &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
-                        &chunk.serialize(ChunkUsage::Server)?.encode_to_vec(),
-                    )?;
-                    chunk.dirty = false;
                 }
                 None => {
                     warn!(

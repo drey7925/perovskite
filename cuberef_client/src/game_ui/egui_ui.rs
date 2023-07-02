@@ -242,7 +242,7 @@ impl EguiUi {
     }
 
     pub(crate) fn show_popup(&mut self, desc: &PopupDescription) {
-        self.visible_popups.push(dbg!(desc.clone()))
+        self.visible_popups.push(desc.clone())
     }
 
     pub(crate) fn get_carried_itemstack(

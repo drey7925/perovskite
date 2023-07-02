@@ -1103,7 +1103,7 @@ impl ClientInboundContext {
         }
         for message in messages {
             self.outbound_tx
-                .send(Ok(dbg!(message)))
+                .send(Ok(message))
                 .await
                 .with_context(|| "Could not send outbound message (inventory update)")?;
         }
