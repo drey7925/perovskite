@@ -22,6 +22,7 @@ use arc_swap::ArcSwap;
 use cgmath::{Deg, Zero};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
+use cuberef_core::protocol;
 use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
 use rustc_hash::FxHashMap;
@@ -34,7 +35,7 @@ use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
-use self::input::{InputState, BoundAction};
+use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::settings::GameSettings;
 use self::tool_controller::{ToolController, ToolState};
@@ -80,7 +81,7 @@ pub(crate) enum GameAction {
     InteractKey(BlockCoordinate),
 }
 
-pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<Mutex<ClientChunk>>>;
+pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
 pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
 }
@@ -113,36 +114,48 @@ impl ChunkManager {
         &self,
         coord: ChunkCoordinate,
         chunk: ClientChunk,
-    ) -> Option<Arc<Mutex<ClientChunk>>> {
+    ) -> Option<Arc<ClientChunk>> {
         let mut lock = {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
-        lock.insert(coord, Arc::new(Mutex::new(chunk)))
+        lock.insert(coord, Arc::new(chunk))
     }
-    pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<Mutex<ClientChunk>>> {
+    pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
         let mut lock = {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
         lock.remove(coord)
     }
+
+    pub(crate) fn insert_or_update(
+        &self,
+        coord: ChunkCoordinate,
+        proto: protocol::game_rpc::MapChunk,
+    ) -> anyhow::Result<()> {
+        let mut lock = {
+            let _span = span!("Acquire global chunk lock");
+            self.chunks.write()
+        };
+        match lock.entry(coord) {
+            std::collections::hash_map::Entry::Occupied(x) => x.get().update_from(proto),
+            std::collections::hash_map::Entry::Vacant(x) => {
+                x.insert(Arc::new(ClientChunk::from_proto(proto)?));
+                Ok(())
+            }
+        }
+    }
 }
 pub(crate) struct ChunkManagerView<'a> {
     guard: RwLockReadGuard<'a, ChunkMap>,
 }
 impl<'a> ChunkManagerView<'a> {
-    pub(crate) fn get_mut(
-        &'a self,
-        coord: &ChunkCoordinate,
-    ) -> Option<impl Deref<Target = ClientChunk> + DerefMut + 'a> {
-        self.guard.get(coord).map(|x| x.as_ref().lock())
-    }
     pub(crate) fn get(
         &'a self,
         coord: &ChunkCoordinate,
-    ) -> Option<impl Deref<Target = ClientChunk> + 'a> {
-        self.get_mut(coord)
+    ) -> Option<&'a Arc<ClientChunk>> {
+        self.guard.get(&coord)
     }
     pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
         self.guard.contains_key(coord)
@@ -153,8 +166,11 @@ pub(crate) struct ChunkManagerClonedView {
     data: ChunkMap,
 }
 impl ChunkManagerClonedView {
-    fn get<'a>(&'a self, coord: &ChunkCoordinate) -> Option<impl Deref<Target = ClientChunk> + 'a> {
-        self.data.get(coord).map(|x| x.as_ref().lock())
+    pub(crate) fn get(
+        &self,
+        coord: &ChunkCoordinate,
+    ) -> Option<&Arc<ClientChunk>> {
+        self.data.get(&coord)
     }
 }
 impl Deref for ChunkManagerClonedView {
@@ -244,7 +260,6 @@ impl ClientState {
                 self.egui.lock().open_pause_menu();
             }
         }
-
 
         let delta = {
             let mut lock = self.last_update.lock();

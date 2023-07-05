@@ -96,7 +96,7 @@ impl GameBuilder {
 
     // Instantiate some builtin content
     fn new_with_builtins(mut inner: ServerBuilder) -> Result<GameBuilder> {
-        inner.media().register_from_memory(
+        inner.media_mut().register_from_memory(
             FALLBACK_UNKNOWN_TEXTURE,
             include_bytes!("media/block_unknown.png"),
         )?;
@@ -110,12 +110,16 @@ impl GameBuilder {
             base_dig_time: 1.0,
             groups: vec![],
         };
-        let air_block = inner.blocks().register_block(air_block)?;
+        let air_block = inner.blocks_mut().register_block(air_block)?;
         Ok(GameBuilder { inner, air_block })
     }
     /// Registers a block and its corresponding item in the game.
     pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<()> {
         block_builder.build_and_deploy_into(self)
+    }
+
+    pub fn get_block(&self, block_name: Block) -> Option<BlockTypeHandle> {
+        self.inner.blocks().get_by_name(&block_name.0)
     }
 
     /// Adds a texture to the game by reading from a file.
@@ -127,14 +131,14 @@ impl GameBuilder {
         tex_name: Tex,
         file_path: impl AsRef<Path>,
     ) -> Result<()> {
-        self.inner.media().register_from_file(tex_name.0, file_path)
+        self.inner.media_mut().register_from_file(tex_name.0, file_path)
     }
 
     /// Adds a texture to the game with data passed as bytes.
     /// tex_name must be unique across all textures; an error will be returned
     /// if it is a duplicate
     pub fn register_texture_bytes(&mut self, tex_name: Tex, data: &[u8]) -> Result<()> {
-        self.inner.media().register_from_memory(tex_name.0, data)
+        self.inner.media_mut().register_from_memory(tex_name.0, data)
     }
 }
 

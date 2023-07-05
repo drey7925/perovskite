@@ -15,9 +15,9 @@ pub(crate) struct GameSettings {
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
+        //panic!("backtrace");
         let project_dirs = directories::ProjectDirs::from("foo", "drey7925", "cuberef")
             .context("couldn't find config dir")?;
-        print!("Saving settings to {}", project_dirs.config_dir().display());
         let config_dir = project_dirs.config_dir();
         if !config_dir.exists() {
             create_dir_all(config_dir)?;

@@ -18,11 +18,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rocksdb::{Options, DB};
+use tracy_client::span;
 
 use super::database_engine::GameDatabase;
 
 pub(crate) struct RocksDbBackend {
     db: rocksdb::DB,
+    tracy: tracy_client::Client,
 }
 impl RocksDbBackend {
     pub(crate) fn new<P: AsRef<Path>>(path: P) -> Result<RocksDbBackend> {
@@ -39,15 +41,20 @@ impl RocksDbBackend {
                 .unwrap()
                 .unwrap()
         );
-        Ok(RocksDbBackend { db })
+        Ok(RocksDbBackend {
+            db,
+            tracy: tracy_client::Client::start(),
+        })
     }
 }
 impl GameDatabase for RocksDbBackend {
     fn get(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        let _span = span!("db get");
         self.db.get(key).with_context(|| "RocksDB get failed")
     }
 
     fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        let _span = span!("db put");
         self.db
             .put(key, value)
             .with_context(|| "RocksDB put failed")

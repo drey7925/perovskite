@@ -108,7 +108,7 @@ impl ActiveGame {
         cube_draw_calls.extend(
             chunk_lock
                 .values()
-                .filter_map(|chunk| chunk.lock().make_draw_call(player_position)),
+                .filter_map(|chunk| chunk.make_draw_call(player_position)),
         );
         plot!(
             "chunk_rate",

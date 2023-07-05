@@ -30,7 +30,7 @@ use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
         blocks::BlockTypeManager, game_behaviors::GameBehaviors, items::ItemManager,
-        mapgen::MapgenInterface, GameState,
+        mapgen::MapgenInterface, GameState, game_map::{TimerSettings, TimerCallback},
     },
     media::MediaManager,
     network_server::{grpc_service::CuberefGameServerImpl},
@@ -79,6 +79,7 @@ impl Server {
     /// Starts the network server, and blocks until the game
     /// is shut down with Ctrl+C or start_shutdown is called on the game state.
     pub fn serve(&self) -> Result<()> {
+        let _tracy_client = tracy_client::Client::start();
         self.runtime.block_on(self.serve_async())
     }
 
@@ -90,7 +91,7 @@ impl Server {
             use std::time::Duration;
 
             thread::spawn(move || loop {
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(10));
                 let deadlocks = deadlock::check_deadlock();
                 if deadlocks.is_empty() {
                     continue;
@@ -146,6 +147,7 @@ pub struct ServerBuilder {
     items: ItemManager,
     mapgen: Option<Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>>,
     media: MediaManager,
+    map_timers: Vec<(String, TimerSettings, TimerCallback)>,
     args: ServerArgs,
     game_behaviors: GameBehaviors,
 }
@@ -180,18 +182,31 @@ impl ServerBuilder {
             items,
             mapgen: None,
             media,
+            map_timers: Vec::new(),
             args: args.clone(),
             game_behaviors: Default::default(),
         })
     }
-    pub fn blocks(&mut self) -> &mut BlockTypeManager {
+    pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
         &mut self.blocks
     }
-    pub fn items(&mut self) -> &mut ItemManager {
+    pub fn blocks(&self) -> &BlockTypeManager {
+        &self.blocks
+    }
+    pub fn items_mut(&mut self) -> &mut ItemManager {
         &mut self.items
     }
-    pub fn media(&mut self) -> &mut MediaManager {
+    pub fn items(&self) -> &ItemManager {
+        &self.items
+    }
+    pub fn media_mut(&mut self) -> &mut MediaManager {
         &mut self.media
+    }
+    pub fn media(&self) -> &MediaManager {
+        &self.media
+    }
+    pub fn add_timer(&mut self, name: impl Into<String>, settings: TimerSettings, callback: TimerCallback) {
+        self.map_timers.push((name.into(), settings, callback));
     }
     /// Sets the mapgen for this game.
     /// Stability note: The mapgen API is a WIP, and has not been stabilized yet.
@@ -212,16 +227,21 @@ impl ServerBuilder {
         let blocks = Arc::new(self.blocks);
         blocks.save_to(self.db.as_ref())?;
         let _rt_guard = self.runtime.enter();
+        let game_state = 
+        GameState::new(
+            self.db,
+            blocks,
+            self.items,
+            self.media,
+            self.mapgen.with_context(|| "Mapgen not specified")?,
+            self.game_behaviors,
+        )?;
+        for (name, settings, callback) in self.map_timers {
+            game_state.map().register_timer(name, settings, callback)?;
+        }
         Server::new(
             self.runtime,
-            GameState::new(
-                self.db,
-                blocks,
-                self.items,
-                self.media,
-                self.mapgen.with_context(|| "Mapgen not specified")?,
-                self.game_behaviors,
-            )?,
+            game_state,
             addr,
         )
     }

@@ -304,14 +304,15 @@ impl BlockRenderer {
                 for z in 0..16 {
                     let offset = ChunkOffset { x, y, z };
 
-                    let block = self.get_block(current_chunk.block_ids(), offset);
+                    let block_ids = current_chunk.block_ids();
+                    let block = self.get_block(&block_ids, offset);
                     if let Some(RenderInfo::Cube(cube_render_info)) = &block.render_info {
                         if include_block_when(block) {
                             self.emit_full_cube(
                                 block,
                                 chunk_data,
                                 current_chunk.coord().with_offset(offset),
-                                current_chunk.block_ids(),
+                                &current_chunk.block_ids(),
                                 &mut vtx,
                                 &mut idx,
                                 cube_render_info,
@@ -477,7 +478,7 @@ impl BlockRenderer {
         } else {
             all_chunks
                 .get(&target_chunk)
-                .map(|x| self.get_block(x.block_ids(), target.offset()))
+                .map(|x| self.get_block(&x.block_ids(), target.offset()))
         }
     }
 

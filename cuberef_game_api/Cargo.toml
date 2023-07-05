@@ -25,3 +25,5 @@ unstable_api = []
 default_game = []
 # If enabled, server will detect deadlocks and log them.
 deadlock_detection = ["cuberef_server/deadlock_detection"]
+# Performance tracing
+tracy = ["cuberef_server/tracy"]

@@ -23,6 +23,7 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
 
+use parking_lot::{RwLock, Mutex, RwLockReadGuard};
 use tracy_client::span;
 
 use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
@@ -30,10 +31,20 @@ use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
 use super::ChunkManagerView;
 
+pub(crate) struct BlockIdView<'a>(RwLockReadGuard<'a, Vec<BlockId>>);
+impl Deref for BlockIdView<'_> {
+    type Target = [BlockId; 4096];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_slice().try_into().unwrap()
+    }
+
+}
+
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
-    block_ids: Vec<BlockId>,
-    cached_vertex_data: Option<VkChunkVertexData>,
+    block_ids: RwLock<Vec<BlockId>>,
+    cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
 }
 impl ClientChunk {
     pub(crate) fn from_proto(proto: rpc_proto::MapChunk) -> Result<ClientChunk> {
@@ -58,28 +69,58 @@ impl ClientChunk {
         };
         Ok(ClientChunk {
             coord,
-            block_ids,
-            cached_vertex_data: None,
+            block_ids: RwLock::new(block_ids),
+            cached_vertex_data: Mutex::new(None),
         })
     }
 
-    pub(crate) fn block_ids(&self) -> &[BlockId; 4096] {
-        (self.block_ids.deref()).try_into().unwrap()
+    pub(crate) fn block_ids<'a>(&'a self) -> BlockIdView<'a> {
+        // Recursive lock acquisition with RwLock::read() can lead to deadlock
+        // This is more writer-unfair but does not have a deadlock risk
+        // The mesh worker will eventually leave this chunk alone and allow a writer to get access
+        BlockIdView(self.block_ids.read_recursive())
     }
 
-    pub(crate) fn apply_delta(&mut self, proto: &rpc_proto::MapDeltaUpdate) -> Result<bool> {
+    pub(crate) fn update_from(&self, proto: rpc_proto::MapChunk) -> Result<()> {
+        let coord: ChunkCoordinate = proto
+            .chunk_coord
+            .with_context(|| "Missing chunk_coord")?
+            .into();
+        ensure!(coord == self.coord);
+        let data = proto
+            .chunk_data
+            .with_context(|| "chunk_data missing")?
+            .chunk_data
+            .with_context(|| "inner chunk_data missing")?;
+        let block_ids = match data {
+            cuberef_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
+                ensure!(v1_data.block_ids.len() == 4096);
+                v1_data
+                    .block_ids
+                    .iter()
+                    .map(|&x| BlockId::from(x))
+                    .collect::<Vec<_>>()
+            }
+        };
+        *self.block_ids.write() = block_ids;
+        Ok(())
+    }
+
+    pub(crate) fn apply_delta(&self, proto: &rpc_proto::MapDeltaUpdate) -> Result<bool> {
         let block_coord: BlockCoordinate = proto
             .block_coord
             .clone()
             .with_context(|| "block_coord missing in MapDeltaUpdate")?
             .into();
         ensure!(block_coord.chunk() == self.coord);
-        let old_id = self.block_ids[block_coord.offset().as_index()];
+
+        let mut block_ids = self.block_ids.write();
+        let old_id = block_ids[block_coord.offset().as_index()];
         let new_id = BlockId::from(proto.new_id);
         // TODO future optimization: check whether a change in variant actually requires
         // a redraw
         if old_id != new_id {
-            self.block_ids[block_coord.offset().as_index()] = new_id;
+            block_ids[block_coord.offset().as_index()] = new_id;
         }
 
         Ok(old_id != new_id)
@@ -102,7 +143,7 @@ impl ClientChunk {
             16. * self.coord.z as f64,
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
-        self.cached_vertex_data.as_ref().and_then(|x| {
+        self.cached_vertex_data.lock().as_ref().and_then(|x| {
             Some(CubeGeometryDrawCall {
                 models: x.clone_if_nonempty()?,
                 model_matrix: Matrix4::from_translation(relative_origin.cast().unwrap()),
@@ -111,7 +152,7 @@ impl ClientChunk {
     }
 
     pub(crate) fn get(&self, offset: ChunkOffset) -> BlockId {
-        self.block_ids[offset.as_index()]
+        self.block_ids.read()[offset.as_index()]
     }
 
     pub(crate) fn coord(&self) -> ChunkCoordinate {
@@ -137,11 +178,9 @@ pub(crate) fn mesh_chunk(
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
     let _span = span!("meshing");
-    let mut current_chunk = chunk_data
-        .get_mut(&chunk_coord)
-        .with_context(|| "The chunk being meshed is not loaded")?;
-    let vertex_data = cube_renderer.mesh_chunk(chunk_data, current_chunk.deref())?;
-    current_chunk.cached_vertex_data = Some(vertex_data);
-
+    if let Some(current_chunk) = chunk_data.get(&chunk_coord) {
+        let vertex_data = cube_renderer.mesh_chunk(chunk_data, current_chunk.deref())?;
+        *current_chunk.cached_vertex_data.lock() = Some(vertex_data);
+    }
     Ok(())
 }

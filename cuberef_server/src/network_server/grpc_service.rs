@@ -162,7 +162,11 @@ async fn game_stream_impl(
         .player_manager()
         .clone()
         .connect(&username)
-        .map_err(|_x| Status::internal("Failed to establish player context"))?;
+        .map_err(|x| {
+            log::error!("Failed to establish player context: {:?}", x);
+            Status::internal("Failed to establish player context")
+        
+        })?;
 
     // Wait for the initial ready message from the client
     match inbound_rx.message().await? {

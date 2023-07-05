@@ -1,24 +1,31 @@
-use std::{sync::Arc, collections::{HashMap, HashSet}, time::{Instant, Duration}, backtrace};
+use std::{
+    backtrace,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use crate::game_state::{
+    chunk::{mesh_chunk, ClientChunk},
+    items::ClientInventory,
+    ClientState, GameAction,
+};
 use anyhow::Result;
-use parking_lot::{Mutex, Condvar};
+use cuberef_core::{
+    coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
+    protocol::{
+        coordinates::Angles,
+        game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
+    },
+};
+use parking_lot::{Condvar, Mutex};
 use rustc_hash::FxHashSet;
 use tokio::{sync::mpsc, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
-use cuberef_core::{
-    coordinates::{ChunkCoordinate, PlayerPositionUpdate, BlockCoordinate},
-    protocol::{
-        game_rpc::{
-            self as rpc, StreamToClient, StreamToServer, InteractKeyAction,
-        }, coordinates::Angles,
-    },
-};
 use tracy_client::{plot, span};
-use crate::game_state::{ClientState, GameAction, chunk::{ClientChunk, mesh_chunk}, items::ClientInventory};
 
 use super::mesh_worker::MeshWorker;
-
 
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
@@ -57,7 +64,6 @@ pub(crate) async fn make_contexts(
 
     Ok((inbound, outbound))
 }
-
 
 pub(crate) struct OutboundContext {
     outbound_tx: mpsc::Sender<rpc::StreamToServer>,
@@ -183,13 +189,14 @@ impl OutboundContext {
                     popup_response,
                 ))
                 .await?;
-            },
+            }
             GameAction::InteractKey(block_coord) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::InteractKey(
                     InteractKeyAction {
                         block_coord: Some(block_coord.into()),
-                    }
-                )).await?;
+                    },
+                ))
+                .await?;
             }
         }
         Ok(())
@@ -341,7 +348,6 @@ impl InboundContext {
     }
 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
-        // TODO offload meshing to another thread
         match &chunk.chunk_coord {
             Some(coord) => {
                 tokio::task::block_in_place(|| {
@@ -349,7 +355,7 @@ impl InboundContext {
                     let coord = coord.into();
                     self.client_state
                         .chunks
-                        .insert(coord, ClientChunk::from_proto(chunk.clone())?);
+                        .insert_or_update(coord, chunk.clone())?;
 
                     self.enqueue_for_meshing(coord);
 
@@ -425,7 +431,9 @@ impl InboundContext {
                     bad_coords.push(coord.clone());
                 }
             }
-            self.mesh_worker.queue.lock().remove(&coord.into());
+            tokio::task::block_in_place(|| {
+                self.mesh_worker.queue.lock().remove(&coord.into());
+            });
         }
         if !bad_coords.is_empty() {
             self.send_bugcheck(format!(
@@ -438,8 +446,28 @@ impl InboundContext {
     }
 
     async fn handle_map_delta_update(&mut self, batch: &rpc::MapDeltaUpdateBatch) -> Result<()> {
-        let chunk_manager_read_lock = self.client_state.chunks.read_lock();
+        let (missing_coord, unknown_coords) =
+            tokio::task::block_in_place(|| self.map_delta_update_sync(batch))?;
+        if missing_coord {
+            self.send_bugcheck("Missing block_coord in delta update".to_string())
+                .await?;
+        }
+        for coord in unknown_coords {
+            self.send_bugcheck(format!(
+                "Got delta at {:?} but chunk is not in cache",
+                coord
+            ))
+            .await?;
+        }
 
+        Ok(())
+    }
+
+    fn map_delta_update_sync(
+        &mut self,
+        batch: &rpc::MapDeltaUpdateBatch,
+    ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
+        let chunk_manager_read_lock = self.client_state.chunks.read_lock();
         let mut missing_coord = false;
         let mut unknown_coords = Vec::new();
         let mut needs_remesh = FxHashSet::default();
@@ -451,16 +479,15 @@ impl InboundContext {
                     continue;
                 }
             };
-            let chunk = chunk_manager_read_lock.get_mut(&block_coord.chunk());
-            let mut chunk = match chunk {
-                Some(x) => x,
+            let has_delta = match chunk_manager_read_lock.get(&block_coord.chunk()) {
+                Some(x) => x.apply_delta(update).unwrap(),
                 None => {
                     unknown_coords.push(block_coord);
-                    continue;
+                    false
                 }
             };
             // unwrap because we expect all errors to be internal.
-            if chunk.apply_delta(update).unwrap() {
+            if has_delta {
                 needs_remesh.insert(block_coord.chunk());
                 if let Some(neighbor) = block_coord.try_delta(-1, 0, 0) {
                     if neighbor.chunk() != block_coord.chunk() {
@@ -494,30 +521,18 @@ impl InboundContext {
                 }
             }
         }
-        drop(chunk_manager_read_lock);
         {
             let _span = span!("remesh for delta");
             for chunk in needs_remesh {
                 mesh_chunk(
                     chunk,
-                    &self.client_state.chunks.read_lock(),
+                    &chunk_manager_read_lock,
                     &self.client_state.block_renderer,
                 )?;
             }
         }
-        if missing_coord {
-            self.send_bugcheck("Missing block_coord in delta update".to_string())
-                .await?;
-        }
-        for coord in unknown_coords {
-            self.send_bugcheck(format!(
-                "Got delta at {:?} but chunk is not in cache",
-                coord
-            ))
-            .await?;
-        }
-
-        Ok(())
+        drop(chunk_manager_read_lock);
+        Ok((missing_coord, unknown_coords))
     }
 
     async fn handle_inventory_update(

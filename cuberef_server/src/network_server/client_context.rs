@@ -37,6 +37,7 @@ use crate::game_state::items::DigResult;
 use crate::game_state::items::Item;
 use crate::game_state::player::PlayerContext;
 use crate::game_state::GameState;
+use crate::run_handler;
 
 use anyhow::bail;
 use anyhow::Context;
@@ -58,6 +59,8 @@ use log::warn;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
+use tracy_client::plot;
+use tracy_client::span;
 
 static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -296,7 +299,11 @@ impl ClientOutboundContext {
         // Drain and batch as many updates as possible
         while updates.len() < MAX_UPDATE_BATCH_SIZE {
             match self.block_events.try_recv() {
-                Ok(update) => updates.push(update),
+                Ok(update) => {
+                    if self.wants_block_update(update.location) {
+                        updates.push(update)
+                    }
+                }
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(e) => {
                     // we'll deal with it the next time the main loop runs
@@ -304,12 +311,10 @@ impl ClientOutboundContext {
                 }
             }
         }
+        plot!("block updates", updates.len() as f64);
 
         let mut update_protos = Vec::new();
         for update in updates {
-            if !self.wants_block_update(update.location) {
-                continue;
-            }
             if !self
                 .chunks_known_to_client
                 .contains(&update.location.chunk())
@@ -353,11 +358,9 @@ impl ClientOutboundContext {
         // resubscribe, rather than missing events if we resubscribe to the broadcast after sending current
         // chunk states
         self.block_events.resubscribe();
-        let chunks: Vec<_> = self.interested_chunks.drain().collect();
         self.chunks_known_to_client.clear();
-        for chunk in chunks {
-            self.subscribe_to_chunk(chunk, false).await?;
-        }
+        self.interested_chunks.clear();
+        // TODO back off with the number of chunks to subscribe to
         Ok(())
     }
 
@@ -657,7 +660,7 @@ impl ClientInboundContext {
         match &message.client_message {
             None => {
                 warn!(
-                    "Client context {} got empty message from client",
+                    "Client context {} got empty/unknown message from client",
                     self.context_id
                 );
             }
@@ -694,8 +697,7 @@ impl ClientInboundContext {
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
-                self.handle_pos_update(message.client_tick, pos_update)
-                    .await?;
+                self.handle_pos_update(message.client_tick, pos_update)?;
             }
             Some(proto::stream_to_server::ClientMessage::BugCheck(bug_check)) => {
                 error!("Client bug check: {:?}", bug_check);
@@ -739,6 +741,30 @@ impl ClientInboundContext {
         G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
         H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
     {
+        tokio::task::block_in_place(|| {
+            self.map_handler_sync(
+                selected_inv_slot,
+                get_item_handler,
+                coord,
+                get_block_inline_handler,
+                get_block_full_handler,
+            )
+        })
+    }
+
+    fn map_handler_sync<F, G, H>(
+        &mut self,
+        selected_inv_slot: u32,
+        get_item_handler: F,
+        coord: BlockCoordinate,
+        get_block_inline_handler: G,
+        get_block_full_handler: H,
+    ) -> std::result::Result<(), anyhow::Error>
+    where
+        F: FnOnce(&Item) -> Option<&items::BlockInteractionHandler>,
+        G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
+        H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
+    {
         self.game_state
             .inventory_manager()
             .mutate_inventory_atomically(&self.player_context.main_inventory(), |inventory| {
@@ -760,31 +786,27 @@ impl ClientInboundContext {
                         initiator: initiator.clone(),
                         game_state: self.game_state.clone(),
                     };
-                    handlers::run_handler(
+                    run_handler!(
                         || {
-                            tokio::task::block_in_place(|| {
-                                handler(
-                                    ctx,
-                                    coord,
-                                    self.game_state.map().get_block(coord)?,
-                                    stack.as_ref().unwrap(),
-                                )
-                            })
+                            handler(
+                                ctx,
+                                coord,
+                                self.game_state.map().get_block(coord)?,
+                                stack.as_ref().unwrap(),
+                            )
                         },
                         "item dig handler",
                         initiator.clone(),
                     )?
                 } else {
                     // This is blocking code, not async code (because of the mutex ops)
-                    let obtained_items = tokio::task::block_in_place(|| {
-                        self.game_state.map().run_block_interaction(
-                            coord,
-                            initiator,
-                            stack.as_ref(),
-                            get_block_inline_handler,
-                            get_block_full_handler,
-                        )
-                    })?;
+                    let obtained_items = self.game_state.map().run_block_interaction(
+                        coord,
+                        initiator,
+                        stack.as_ref(),
+                        get_block_inline_handler,
+                        get_block_full_handler,
+                    )?;
                     DigResult {
                         updated_tool: stack.clone(),
                         obtained_items,
@@ -824,7 +846,7 @@ impl ClientInboundContext {
         Ok(())
     }
 
-    async fn handle_pos_update(&mut self, tick: u64, update: &proto::ClientUpdate) -> Result<()> {
+    fn handle_pos_update(&mut self, tick: u64, update: &proto::ClientUpdate) -> Result<()> {
         match &update.position {
             Some(pos_update) => {
                 let (az, el) = match &pos_update.face_direction {
@@ -871,29 +893,30 @@ impl ClientInboundContext {
     }
 
     async fn handle_place(&mut self, place_message: &proto::PlaceAction) -> Result<()> {
-        self.game_state
-            .inventory_manager()
-            .mutate_inventory_atomically(&self.player_context.main_inventory(), |inventory| {
-                let stack = inventory
-                    .contents_mut()
-                    .get_mut(place_message.item_slot as usize)
-                    .with_context(|| "Item slot was out of bounds")?;
+        tokio::task::block_in_place(|| {
+            let _span = span!("handle_place");
+            self.game_state
+                .inventory_manager()
+                .mutate_inventory_atomically(&self.player_context.main_inventory(), |inventory| {
+                    let stack = inventory
+                        .contents_mut()
+                        .get_mut(place_message.item_slot as usize)
+                        .with_context(|| "Item slot was out of bounds")?;
 
-                let initiator = EventInitiator::Player(&self.player_context);
+                    let initiator = EventInitiator::Player(&self.player_context);
 
-                let handler = stack
-                    .as_ref()
-                    .and_then(|x| self.game_state.item_manager().from_stack(x))
-                    .and_then(|x| x.place_handler.as_deref());
-                if let Some(handler) = handler {
-                    let ctx = HandlerContext {
-                        tick: self.game_state.tick(),
-                        initiator: initiator.clone(),
-                        game_state: self.game_state.clone(),
-                    };
-                    let new_stack = handlers::run_handler(
-                        || {
-                            tokio::task::block_in_place(|| {
+                    let handler = stack
+                        .as_ref()
+                        .and_then(|x| self.game_state.item_manager().from_stack(x))
+                        .and_then(|x| x.place_handler.as_deref());
+                    if let Some(handler) = handler {
+                        let ctx = HandlerContext {
+                            tick: self.game_state.tick(),
+                            initiator: initiator.clone(),
+                            game_state: self.game_state.clone(),
+                        };
+                        let new_stack = run_handler!(
+                            || {
                                 handler(
                                     ctx,
                                     place_message
@@ -908,15 +931,15 @@ impl ClientInboundContext {
                                         .into(),
                                     stack.as_ref().unwrap(),
                                 )
-                            })
-                        },
-                        "item_place",
-                        initiator,
-                    )?;
-                    *stack = new_stack;
-                }
-                Ok(())
-            })
+                            },
+                            "item_place",
+                            initiator,
+                        )?;
+                        *stack = new_stack;
+                    }
+                    Ok(())
+                })
+        })
     }
 
     async fn handle_inventory_action(&mut self, action: &proto::InventoryAction) -> Result<()> {
@@ -979,7 +1002,8 @@ impl ClientInboundContext {
         } else {
             PopupAction::ButtonClicked(action.clicked_button.clone())
         };
-        let updates = {
+        let updates = tokio::task::block_in_place(|| -> anyhow::Result<_> {
+            let _span = span!("handle_popup_response");
             let mut player_state = self.player_context.state.lock();
             let mut updates = vec![];
             if action.closed {
@@ -1042,8 +1066,8 @@ impl ClientInboundContext {
             }
             // drop before async calls
             drop(player_state);
-            updates
-        };
+            anyhow::Result::Ok(updates)
+        })?;
         for update in updates {
             self.outbound_tx
                 .send(Ok(update))
@@ -1058,6 +1082,19 @@ impl ClientInboundContext {
         &mut self,
         interact_message: &proto::InteractKeyAction,
     ) -> Result<()> {
+        let messages = tokio::task::block_in_place(|| -> anyhow::Result<_> {
+            self.handle_interact_key_sync(interact_message)
+        })?;
+        for message in messages {
+            self.outbound_tx
+                .send(Ok(message))
+                .await
+                .with_context(|| "Could not send outbound message (inventory update)")?;
+        }
+        Ok(())
+    }
+
+    fn handle_interact_key_sync(&mut self, interact_message: &proto::InteractKeyAction) -> Result<Vec<StreamToClient>> {
         let coord: BlockCoordinate = interact_message
             .block_coord
             .as_ref()
@@ -1079,7 +1116,11 @@ impl ClientInboundContext {
             .0
             .interact_key_handler
         {
-            if let Some(popup) = block_in_place(|| (handler)(ctx, coord))? {
+            if let Some(popup) = run_handler!(
+                || (handler)(ctx, coord),
+                "interact_key",
+                EventInitiator::Player(&self.player_context.player),
+            )? {
                 messages.push(StreamToClient {
                     tick: self.game_state.tick(),
                     server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
@@ -1101,13 +1142,7 @@ impl ClientInboundContext {
                     .push(popup);
             }
         }
-        for message in messages {
-            self.outbound_tx
-                .send(Ok(message))
-                .await
-                .with_context(|| "Could not send outbound message (inventory update)")?;
-        }
-        Ok(())
+        Ok(messages)
     }
 }
 impl Drop for ClientInboundContext {
@@ -1118,10 +1153,10 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 16;
-const LOAD_LAZY_DISTANCE: i32 = 18;
-const UNLOAD_DISTANCE: i32 = 20;
-const MAX_UPDATE_BATCH_SIZE: usize = 32;
+const LOAD_EAGER_DISTANCE: i32 = 30;
+const LOAD_LAZY_DISTANCE: i32 = 40;
+const UNLOAD_DISTANCE: i32 = 50;
+const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 16;
 const MAX_CHUNKS_PER_UPDATE: usize = 512;

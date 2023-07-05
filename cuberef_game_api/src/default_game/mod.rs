@@ -12,13 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use crate::game_builder::GameBuilder;
+use crate::{
+    default_game::basic_blocks::{DIRT_WITH_GRASS, DIRT_WITH_GRASS2, GLASS},
+    game_builder::GameBuilder,
+};
 
 use anyhow::Result;
 
-use cuberef_server::game_state::items::ItemStack;
+use cuberef_core::coordinates::BlockCoordinate;
+use cuberef_server::game_state::{
+    blocks::{BlockTypeHandle, ExtendedDataHolder},
+    game_map::{TimerCallback, TimerInlineCallback, TimerSettings},
+    items::ItemStack,
+};
 
 use self::recipes::{RecipeBook, RecipeImpl, RecipeSlot};
 
@@ -125,6 +133,63 @@ impl DefaultGameBuilder {
         self.game_builder()
             .inner
             .set_mapgen(|blocks, seed| mapgen::build_mapgen(blocks, seed));
+        let timer_settings = TimerSettings {
+            interval: Duration::from_secs(5),
+            shards: 4,
+            spreading: 0.2,
+            block_types: vec![
+                DIRT_WITH_GRASS.0.to_string(),
+                DIRT_WITH_GRASS2.0.to_string(),
+            ],
+            per_block_probability: 0.5,
+            ..Default::default()
+        };
+
+        struct TestTimerImpl(
+            Box<
+                dyn Fn(
+                        BlockCoordinate,
+                        u64,
+                        &mut BlockTypeHandle,
+                        &mut ExtendedDataHolder,
+                    ) -> Result<()>
+                    + Send
+                    + Sync,
+            >,
+        );
+        impl TimerInlineCallback for TestTimerImpl {
+            fn inline_callback(
+                &self,
+                coordinate: cuberef_core::coordinates::BlockCoordinate,
+                missed_timers: u64,
+                block_type: &mut cuberef_server::game_state::blocks::BlockTypeHandle,
+                data: &mut cuberef_server::game_state::blocks::ExtendedDataHolder,
+            ) -> Result<()> {
+                self.0(coordinate, missed_timers, block_type, data)
+            }
+        };
+
+        let callback = {
+            let dwg1 = self.inner.get_block(DIRT_WITH_GRASS).unwrap();
+            let dwg2 = self.inner.get_block(DIRT_WITH_GRASS2).unwrap();
+            move |coordinate: BlockCoordinate,
+                  missed_timers: u64,
+                  block_type: &mut BlockTypeHandle,
+                  data: &mut ExtendedDataHolder| {
+                if *block_type == dwg1 {
+                    *block_type = dwg2;
+                } else {
+                    *block_type = dwg1;
+                }
+                Ok(())
+            }
+        };
+
+        self.game_builder().inner.add_timer(
+            "test_timer",
+            timer_settings,
+            TimerCallback::InlineLocked(Box::new(TestTimerImpl(Box::new(callback)))),
+        );
         self.inner.run_game_server()
     }
 }

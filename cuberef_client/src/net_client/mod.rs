@@ -143,13 +143,13 @@ pub(crate) async fn connect_game(
     tokio::spawn(async move {
         match inbound.run_inbound_loop().await {
             Ok(_) => log::info!("Inbound loop shut down normally"),
-            Err(e) => log::info!("Inbound loop crashed: {e:?}"),
+            Err(e) => log::error!("Inbound loop crashed: {e:?}"),
         }
     });
     tokio::spawn(async move {
         match outbound.run_outbound_loop().await {
             Ok(_) => log::info!("Outbound loop shut down normally"),
-            Err(e) => log::info!("Outbound loop crashed: {e:?}"),
+            Err(e) => log::error!("Outbound loop crashed: {e:?}"),
         }
     });
 

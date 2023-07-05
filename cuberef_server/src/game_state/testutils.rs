@@ -95,12 +95,12 @@ fn testonly_make_tex(name: &str) -> Option<TextureReference> {
 }
 
 pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
-    let grass = builder.blocks().make_block_name("test:grass".to_string());
-    let air = builder.blocks().make_block_name("test:air".to_string());
-    let air2 = builder.blocks().make_block_name("test:air".to_string());
+    let grass = builder.blocks_mut().make_block_name("test:grass".to_string());
+    let air = builder.blocks_mut().make_block_name("test:air".to_string());
+    let air2 = builder.blocks_mut().make_block_name("test:air".to_string());
 
     builder
-        .items()
+        .items_mut()
         .register_item(super::items::Item {
             proto: cuberef_core::protocol::items::ItemDef {
                 short_name: "test:dirt".to_string(),
@@ -139,7 +139,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
         .unwrap();
 
     let dirt_block = builder
-        .blocks()
+        .blocks_mut()
         .register_block(BlockType {
             client_info: BlockTypeDef {
                 id: 0,
@@ -183,7 +183,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
         })
         .unwrap();
     let _dirt_grass_block = builder
-        .blocks()
+        .blocks_mut()
         .register_block(BlockType {
             client_info: BlockTypeDef {
                 id: 0,
@@ -265,7 +265,7 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
         })
         .unwrap();
     let _air_block = builder
-        .blocks()
+        .blocks_mut()
         .register_block(BlockType {
             client_info: BlockTypeDef {
                 id: 0,
@@ -294,18 +294,18 @@ pub fn register_test_blocks_and_items(builder: &mut ServerBuilder) {
         .unwrap();
 
     builder
-        .media()
+        .media_mut()
         .register_from_memory("dirt.png", include_bytes!("testonly_media/test_dirt.png"))
         .unwrap();
     builder
-        .media()
+        .media_mut()
         .register_from_memory(
             "dirt_grass.png",
             include_bytes!("testonly_media/test_dirt_grass.png"),
         )
         .unwrap();
     builder
-        .media()
+        .media_mut()
         .register_from_memory("grass.png", include_bytes!("testonly_media/test_grass.png"))
         .unwrap();
 }

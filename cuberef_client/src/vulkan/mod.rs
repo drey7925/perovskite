@@ -42,7 +42,7 @@ use vulkano::{
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sampler::{Filter, Sampler, SamplerCreateInfo},
-    swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
+    swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo, SwapchainCreationError},
     sync::GpuFuture,
     Version,
 };
@@ -73,7 +73,8 @@ pub(crate) struct VulkanContext {
 }
 impl VulkanContext {
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanContext> {
-        let library: Arc<vulkano::VulkanLibrary> = vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
+        let library: Arc<vulkano::VulkanLibrary> =
+            vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
         let required_extensions = vulkano_win::required_extensions(&library);
         let instance = Instance::new(
             library,
@@ -140,10 +141,7 @@ impl VulkanContext {
             let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
             let formats = physical_device.surface_formats(&surface, Default::default())?;
             log::info!("Surface available color formats: {formats:?}");
-            let &(image_format, color_space) = formats
-                .iter()
-                .find(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
-                .with_context(|| "Could not find an image format")?;
+            let (image_format, color_space) = find_best_format(formats)?;
             log::info!("Will render to {image_format:?}, {color_space:?}");
             let mut image_count = caps.min_image_count;
             if let Some(max_image_count) = caps.max_image_count {
@@ -296,6 +294,20 @@ impl VulkanContext {
     pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {
         self.render_pass.clone()
     }
+}
+
+fn find_best_format(
+    formats: Vec<(Format, vulkano::swapchain::ColorSpace)>,
+) -> Result<(Format, vulkano::swapchain::ColorSpace)> {
+    // todo get an HDR format
+    // This requires enabling ext_swapchain_colorspace and also getting shaders to do
+    // srgb conversions if applicable
+
+    Ok(formats
+        .iter()
+        .find(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
+        .cloned()
+        .with_context(|| "Could not find an image format")?)
 }
 
 // Helper to get framebuffers for swapchain images

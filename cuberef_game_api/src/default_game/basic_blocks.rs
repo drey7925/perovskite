@@ -28,6 +28,8 @@ use super::block_groups::{BRITTLE, GRANULAR};
 pub const DIRT: Block = Block("default:dirt");
 /// Dirt with grass on top.
 pub const DIRT_WITH_GRASS: Block = Block("default:dirt_with_grass");
+/// testonly
+pub const DIRT_WITH_GRASS2: Block = Block("default:dirt_with_grass2");
 /// Solid grey stone.
 pub const STONE: Block = Block("default:stone");
 /// Transparent glass.
@@ -82,6 +84,30 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_GRASS_SIDE_TEXTURE,
                 GRASS_TOP_TEXTURE,
                 DIRT_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
+            )
+            .set_dropped_item(DIRT.0, 1)
+            // testonly
+            .set_dropped_item_closure(|| {
+                // Test only: There is no way to get glass yet (no sand, no crafting)
+                // We need glass to test renderer changes
+                if TESTONLY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 2 == 0 {
+                    ("default:dirt".into(), 1)
+                } else {
+                    ("default:glass".into(), 5)
+                }
+            }),
+    )?;
+    game_builder.add_block(
+        BlockBuilder::new(DIRT_WITH_GRASS2)
+            .add_block_group(GRANULAR)
+            .set_individual_textures(
+                DIRT_GRASS_SIDE_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
+                DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,

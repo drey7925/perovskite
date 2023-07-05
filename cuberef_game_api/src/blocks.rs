@@ -274,7 +274,7 @@ impl BlockBuilder {
         if let Some(modifier) = self.modifier {
             (modifier)(&mut block);
         }
-        let block_handle = game_builder.inner.blocks().register_block(block)?;
+        let block_handle = game_builder.inner.blocks_mut().register_block(block)?;
 
         let mut item = self.item;
         let air_block = game_builder.air_block;
@@ -292,7 +292,7 @@ impl BlockBuilder {
                 CasOutcome::Mismatch => Ok(Some(stack.clone())),
             }
         }));
-        game_builder.inner.items().register_item(item)?;
+        game_builder.inner.items_mut().register_item(item)?;
         Ok(())
     }
 }

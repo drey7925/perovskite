@@ -14,15 +14,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use tracy_client::{span, span_location};
+
 use super::event::EventInitiator;
 
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
 /// Currently a no-op
 #[inline]
-pub(crate) fn run_handler<T, F>(closure: F, _name: &'static str, _initiator: EventInitiator) -> T
+pub(crate) fn run_handler_impl<T, F>(closure: F, _name: &'static str, _initiator: EventInitiator) -> T
 where
     F: FnOnce() -> T,
 {
     // TODO tracing, etc
     (closure)()
+}
+
+#[macro_export]
+macro_rules! run_handler {
+    ($closure:expr, $name:literal, $initiator:expr $(,)?) => {
+        {
+            let _span = span!(concat!($name, " handler"));
+            $crate::game_state::handlers::run_handler_impl($closure, $name, $initiator)
+        }
+    };
 }

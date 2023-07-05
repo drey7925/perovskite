@@ -78,8 +78,8 @@ impl MainMenu {
             });
 
             let connect_button = egui::Button::new("Connect");
-
-            if ui.add(connect_button).clicked() {
+            let connect_enabled = matches!(game_state, GameState::MainMenu);
+            if ui.add_enabled(connect_enabled, connect_button).clicked() {
                 self.settings.rcu(|x| {
                     let old = x.clone();
                     GameSettings {
