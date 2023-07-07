@@ -40,7 +40,7 @@ use crate::vulkan::{
     CommandBufferBuilder, Texture2DHolder, VulkanContext,
 };
 
-use super::vert_2d::UniformData;
+use super::{vert_2d::UniformData, frag_simple};
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
@@ -181,6 +181,7 @@ impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
             .set_layouts()
             .get(1)
             .with_context(|| "Layout missing set 1")?;
+        // todo - do we need to create this every frame?
         let per_frame_set = PersistentDescriptorSet::new(
             &ctx.descriptor_set_allocator,
             per_frame_set_layout.clone(),
@@ -204,7 +205,7 @@ pub(crate) struct FlatTexPipelineProvider {
 impl FlatTexPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<Self> {
         let vs = vert_2d::load_flat_tex(device.clone())?;
-        let fs = frag_lighting::load(device.clone())?;
+        let fs = frag_simple::load(device.clone())?;
         Ok(FlatTexPipelineProvider { device, vs, fs })
     }
 }
@@ -240,7 +241,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
             .color_blend_state(
                 vulkano::pipeline::graphics::color_blend::ColorBlendState::default().blend_alpha(),
             )
-            .render_pass(Subpass::from(ctx.render_pass.clone(), subpass).unwrap())
+            .render_pass(Subpass::from(ctx.post_blit_pass.clone(), subpass).unwrap())
             .build(self.device.clone())?;
 
         let buffer = Buffer::from_data(

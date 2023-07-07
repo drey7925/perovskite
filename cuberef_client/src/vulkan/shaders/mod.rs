@@ -21,6 +21,7 @@ use super::{CommandBufferBuilder, VulkanContext};
 pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
 pub(crate) mod flat_texture;
+pub(crate) mod supersampler;
 
 /// Shaders that render 3D
 /// If we need more advanced texturing, this might be subdivided later on
@@ -128,7 +129,6 @@ pub(crate) mod vert_2d {
                 };
 
                 layout(location = 0) out vec2 uv_texcoord_out;
-                layout(location = 1) out float brightness_out;
 
                 void main() {
                     // pixel -> normalized device coordinates
@@ -143,6 +143,49 @@ pub(crate) mod vert_2d {
     }
 }
 
+// Simple vertex shader for blitting a flat texture to the screen without pixel conversions
+// This shader should be run without a depth test
+pub(crate) mod vert_2d_blit {
+    vulkano_shaders::shader! {
+        shaders: {
+            flat_tex: {
+            ty: "vertex",
+            src: r"
+            #version 460
+
+                layout(location = 0) out vec2 uv_texcoord_out;
+
+                const vec2 ndcs[] = vec2[](
+                    vec2(-1.0, -1.0),
+                    vec2(1.0, -1.0),
+                    vec2(1.0, 1.0),
+                    vec2(-1.0, -1.0),
+                    vec2(1.0, 1.0),
+                    vec2(-1.0, 1.0)
+                );
+                const vec2 uvs[] = vec2[](
+                    vec2(0.0, 0.0),
+                    vec2(1.0, 0.0),
+                    vec2(1.0, 1.0),
+                    vec2(0.0, 0.0),
+                    vec2(1.0, 1.0),
+                    vec2(0.0, 1.0)
+                );
+
+                void main() {
+                    // pixel -> normalized device coordinates
+                    vec2 ndc = ndcs[gl_VertexIndex];
+                    // Z shouldn't matter (no depth test)
+                    gl_Position = vec4(ndc, 0.5, 1.0);
+                    uv_texcoord_out = uvs[gl_VertexIndex];
+                }
+            "
+            }
+        }
+    }
+}
+
+
 // Fragment shader(s) that simply render colors directly
 pub(crate) mod frag_simple {
     vulkano_shaders::shader! {
@@ -153,10 +196,29 @@ pub(crate) mod frag_simple {
     layout(location = 0) in vec2 uv_texcoord;
 
     layout(location = 0) out vec4 f_color;
-    layout(set = 0, binding = 1) uniform sampler2D tex;
+    layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
         f_color = texture(tex, uv_texcoord);
+    }
+    "
+    }
+}
+
+// Fragment shader(s) that blits from the previous subpass
+pub(crate) mod frag_blit {
+    vulkano_shaders::shader! {
+    ty: "fragment",
+    src: r"
+    #version 460
+
+    layout(location = 0) in vec2 uv_texcoord;
+
+    layout(location = 0) out vec4 f_color;
+    layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput  tex;
+
+    void main() {
+        f_color = subpassLoad(tex);
     }
     "
     }

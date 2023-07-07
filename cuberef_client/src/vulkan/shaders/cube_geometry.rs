@@ -30,7 +30,7 @@ use vulkano::{
             input_assembly::InputAssemblyState,
             rasterization::RasterizationState,
             vertex_input::Vertex,
-            viewport::ViewportState,
+            viewport::{Viewport, ViewportState},
         },
         GraphicsPipeline, Pipeline, StateMode,
     },
@@ -278,6 +278,15 @@ impl PipelineProvider for CubePipelineProvider {
         ctx: &VulkanContext,
         config: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
+        let supersampling = ctx.supersampling;
+        let viewport = Viewport {
+            origin: [0.0, 0.0],
+            dimensions: [
+                ctx.viewport.dimensions[0] * supersampling.get() as f32,
+                ctx.viewport.dimensions[1] * supersampling.get() as f32,
+            ],
+            depth_range: 0.0..1.0,
+        };
         let default_pipeline = GraphicsPipeline::start()
             .vertex_input_state(CubeGeometryVertex::per_vertex())
             .vertex_shader(
@@ -287,9 +296,7 @@ impl PipelineProvider for CubePipelineProvider {
                 (),
             )
             .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
-                .viewport
-                .clone()]))
+            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([viewport]))
             .rasterization_state(
                 RasterizationState::default()
                     .front_face(
@@ -300,7 +307,7 @@ impl PipelineProvider for CubePipelineProvider {
             .color_blend_state(ColorBlendState::default().blend_alpha())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
             .render_pass(
-                Subpass::from(ctx.render_pass.clone(), 0).context("Could not find subpass 0")?,
+                Subpass::from(ctx.pre_blit_pass.clone(), 0).context("Could not find subpass 0")?,
             );
 
         let solid_pipeline = default_pipeline

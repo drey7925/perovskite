@@ -39,7 +39,7 @@ impl MainMenu {
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_queue(),
-            Subpass::from(ctx.clone_render_pass(), 1)
+            Subpass::from(ctx.clone_render_pass_postblit(), 0)
                 .context("Could not find subpass 0")
                 .unwrap(),
             gui_config,
@@ -199,9 +199,7 @@ impl MainMenu {
     ) -> Option<ConnectionSettings> {
         self.egui_gui.begin_frame();
         let result = self.draw_ui(game_state);
-        builder
-            .next_subpass(vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers)
-            .unwrap();
+
         let secondary = self
             .egui_gui
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);

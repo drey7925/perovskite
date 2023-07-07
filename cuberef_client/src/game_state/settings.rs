@@ -1,5 +1,7 @@
 use std::fs::create_dir_all;
 
+use crate::vulkan::settings::GraphicsSettings;
+
 use super::input::KeybindSettings;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,8 @@ const SETTINGS_RON_FILE: &str = "settings.ron";
 #[serde(default)]
 pub(crate) struct GameSettings {
     pub(crate) input: KeybindSettings,
+    pub(crate) graphics: GraphicsSettings,
+
     pub(crate) last_hostname: String,
     pub(crate) last_username: String,
 }

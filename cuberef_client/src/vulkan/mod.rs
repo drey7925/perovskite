@@ -15,12 +15,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod game_renderer;
+pub(crate) mod settings;
 pub(crate) mod shaders;
 pub(crate) mod util;
-
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use log::warn;
 
 use vulkano::{
@@ -35,7 +36,7 @@ use vulkano::{
     device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo},
     format::{Format, NumericType},
     image::{
-        view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
+        view::{ImageView, ImageViewCreateInfo}, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{FreeListAllocator, GenericMemoryAllocator, StandardMemoryAllocator},
@@ -56,23 +57,28 @@ use winit::{
 pub(crate) type CommandBufferBuilder<L> =
     AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
 
-use self::util::select_physical_device;
+use self::{settings::GraphicsSettings, util::select_physical_device};
 #[derive(Clone)]
 pub(crate) struct VulkanContext {
     vk_device: Arc<Device>,
     queue: Arc<Queue>,
-    render_pass: Arc<RenderPass>,
+    pre_blit_pass: Arc<RenderPass>,
+    post_blit_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<SwapchainImage>>,
-    framebuffers: Vec<Arc<Framebuffer>>,
+    framebuffers: Vec<(Arc<Framebuffer>, Arc<Framebuffer>)>,
     window: Arc<Window>,
     memory_allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     viewport: Viewport,
+    supersampling: NonZeroU32
 }
 impl VulkanContext {
-    pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanContext> {
+    pub(crate) fn create(
+        event_loop: &EventLoop<()>,
+        settings: &GraphicsSettings,
+    ) -> Result<VulkanContext> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
         let required_extensions = vulkano_win::required_extensions(&library);
@@ -157,7 +163,7 @@ impl VulkanContext {
                     min_image_count: image_count,
                     image_format: Some(image_format),
                     image_extent: window.inner_size().into(),
-                    image_usage: ImageUsage::COLOR_ATTACHMENT,
+                    image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                     composite_alpha,
                     image_color_space: color_space,
                     ..Default::default()
@@ -165,7 +171,7 @@ impl VulkanContext {
             )?
         };
 
-        let render_pass = vulkano::ordered_passes_renderpass!(
+        let pre_blit_pass = vulkano::ordered_passes_renderpass!(
             vk_device.clone(),
             attachments: {
                 color: {
@@ -187,14 +193,26 @@ impl VulkanContext {
                     depth_stencil: {depth},
                     input: [],
                 },
+            ]
+        )?;
+        let post_blit_pass = vulkano::ordered_passes_renderpass!(
+            vk_device.clone(),
+            attachments: {
+                post_blit: {
+                    load: Load,
+                    store: Store,
+                    format: swapchain.image_format(),
+                    samples: 1,
+                },
+            },
+            passes: [
                 {
-                    color: [color],
+                    color: [post_blit],
                     depth_stencil: {},
                     input: []
                 },
             ]
         )?;
-
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(vk_device.clone()));
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
             vk_device.clone(),
@@ -202,13 +220,20 @@ impl VulkanContext {
         ));
         let descriptor_set_allocator =
             Arc::new(StandardDescriptorSetAllocator::new(vk_device.clone()));
-        let framebuffers =
-            get_framebuffers_with_depth(&swapchain_images, &memory_allocator, render_pass.clone());
+        let supersampling = settings.supersampling;
+        let framebuffers = get_framebuffers_with_depth(
+            &swapchain_images,
+            &memory_allocator,
+            pre_blit_pass.clone(),
+            post_blit_pass.clone(),
+            supersampling,
+        );
 
         Ok(VulkanContext {
             vk_device,
             queue,
-            render_pass,
+            pre_blit_pass,
+            post_blit_pass,
             swapchain,
             swapchain_images,
             framebuffers,
@@ -217,10 +242,15 @@ impl VulkanContext {
             command_buffer_allocator,
             descriptor_set_allocator,
             viewport,
+            supersampling
         })
     }
 
-    fn recreate_swapchain(&mut self, size: PhysicalSize<u32>) -> Result<()> {
+    fn recreate_swapchain(
+        &mut self,
+        size: PhysicalSize<u32>,
+        supersampling: NonZeroU32,
+    ) -> Result<()> {
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent: size.into(),
             ..self.swapchain.create_info()
@@ -244,7 +274,9 @@ impl VulkanContext {
         self.framebuffers = get_framebuffers_with_depth(
             &new_images,
             &self.memory_allocator,
-            self.render_pass.clone(),
+            self.pre_blit_pass.clone(),
+            self.post_blit_pass.clone(),
+            supersampling,
         );
         Ok(())
     }
@@ -259,7 +291,7 @@ impl VulkanContext {
         Ok(builder)
     }
 
-    fn start_render_pass(
+    fn start_preblit_render_pass(
         &self,
         builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
         framebuffer: Arc<Framebuffer>,
@@ -270,6 +302,36 @@ impl VulkanContext {
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassContents::Inline,
+        )?;
+        Ok(())
+    }
+
+    fn start_postblit_render_pass_inline(
+        &self,
+        builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer: Arc<Framebuffer>,
+    ) -> Result<()> {
+        builder.begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values: vec![None],
+                ..RenderPassBeginInfo::framebuffer(framebuffer)
+            },
+            SubpassContents::Inline,
+        )?;
+        Ok(())
+    }
+
+    fn start_postblit_render_pass_secondary(
+        &self,
+        builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer: Arc<Framebuffer>,
+    ) -> Result<()> {
+        builder.begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values: vec![None],
+                ..RenderPassBeginInfo::framebuffer(framebuffer)
+            },
+            SubpassContents::SecondaryCommandBuffers,
         )?;
         Ok(())
     }
@@ -291,8 +353,8 @@ impl VulkanContext {
         self.queue.clone()
     }
 
-    pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {
-        self.render_pass.clone()
+    pub(crate) fn clone_render_pass_postblit(&self) -> Arc<RenderPass> {
+        self.post_blit_pass.clone()
     }
 }
 
@@ -325,30 +387,58 @@ fn find_best_format(
 pub(crate) fn get_framebuffers_with_depth(
     images: &[Arc<SwapchainImage>],
     allocator: &StandardMemoryAllocator,
-    render_pass: Arc<RenderPass>,
-) -> Vec<Arc<Framebuffer>> {
+    pre_blit_pass: Arc<RenderPass>,
+    post_blit_pass: Arc<RenderPass>,
+    supersampling: NonZeroU32,
+) -> Vec<(Arc<Framebuffer>, Arc<Framebuffer>)> {
     images
         .iter()
         .map(|image| {
-            let view = ImageView::new_default(image.clone()).unwrap();
-            let depth_buffer = ImageView::new_default(
+            let mut post_blit_info = ImageViewCreateInfo::from_image(&image);
+            post_blit_info.usage |= ImageUsage::COLOR_ATTACHMENT;
+            post_blit_info.usage |= ImageUsage::TRANSFER_DST;
+            let post_blit = ImageView::new(image.clone(), post_blit_info).unwrap();
+
+            let color = ImageView::new_default(
+                AttachmentImage::with_usage(
+                    allocator,
+                    [
+                        image.dimensions().width() * supersampling.get(),
+                        image.dimensions().height() * supersampling.get(),
+                    ],
+                    image.format(),
+                    ImageUsage::TRANSFER_SRC | ImageUsage::COLOR_ATTACHMENT
+                ).unwrap()
+            ).unwrap();
+            let depth = ImageView::new_default(
                 AttachmentImage::transient(
                     allocator,
-                    image.dimensions().width_height(),
+                    [
+                        image.dimensions().width() * supersampling.get(),
+                        image.dimensions().height() * supersampling.get(),
+                    ],
                     Format::D24_UNORM_S8_UINT,
                 )
                 .unwrap(),
             )
             .unwrap();
 
-            Framebuffer::new(
-                render_pass.clone(),
+            let pre_blit = Framebuffer::new(
+                pre_blit_pass.clone(),
                 FramebufferCreateInfo {
-                    attachments: vec![view, depth_buffer],
+                    attachments: vec![color, depth],
                     ..Default::default()
                 },
             )
-            .unwrap()
+            .unwrap();
+            let post_blit = Framebuffer::new(
+                post_blit_pass.clone(),
+                FramebufferCreateInfo {
+                    attachments: vec![post_blit],
+                    ..Default::default()
+                },
+            ).unwrap();
+            (pre_blit, post_blit)
         })
         .collect::<Vec<_>>()
 }

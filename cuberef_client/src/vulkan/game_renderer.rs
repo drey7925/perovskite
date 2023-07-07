@@ -25,7 +25,9 @@ use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::{
-    command_buffer::PrimaryAutoCommandBuffer,
+    command_buffer::{BlitImageInfo, PrimaryAutoCommandBuffer},
+    render_pass::Framebuffer,
+    sampler::Filter,
     swapchain::{self, AcquireError, SwapchainPresentInfo},
     sync::{future::FenceSignalFuture, FlushError, GpuFuture},
 };
@@ -46,7 +48,7 @@ use super::{
     shaders::{
         cube_geometry::{self, BlockRenderPass},
         egui_adapter::{self, EguiAdapter},
-        flat_texture, PipelineProvider, PipelineWrapper,
+        flat_texture, supersampler, PipelineProvider, PipelineWrapper,
     },
     CommandBufferBuilder, VulkanContext,
 };
@@ -58,13 +60,16 @@ pub(crate) struct ActiveGame {
     flat_provider: flat_texture::FlatTexPipelineProvider,
     flat_pipeline: flat_texture::FlatTexPipelineWrapper,
 
+    // supersampler_provider: supersampler::SupersamplerBlitPipelineProvider,
+    // supersampler_pipeline: supersampler::SupersamplerBlitPipelineWrapper,
+
     egui_adapter: Option<egui_adapter::EguiAdapter>,
 
     client_state: Arc<ClientState>,
 }
 
 impl ActiveGame {
-    fn build_command_buffers(
+    fn build_command_buffers_preblit(
         &mut self,
         window_size: PhysicalSize<u32>,
         ctx: &VulkanContext,
@@ -72,6 +77,7 @@ impl ActiveGame {
             PrimaryAutoCommandBuffer,
             Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
         >,
+        framebuffer_id: usize,
     ) -> PrimaryAutoCommandBuffer {
         let _span = span!("build renderer buffers");
         let FrameState {
@@ -163,6 +169,25 @@ impl ActiveGame {
                 .unwrap();
         }
 
+        // self.supersampler_pipeline
+        //     .bind(ctx, framebuffer_id, &mut command_buf_builder, ())
+        //     .unwrap();
+        // self.supersampler_pipeline
+        //     .draw(&mut command_buf_builder, &[], ())
+        //     .unwrap();
+
+        finish_command_buffer(command_buf_builder).unwrap()
+    }
+    fn build_command_buffers_postblit(
+        &mut self,
+        window_size: PhysicalSize<u32>,
+        ctx: &VulkanContext,
+        mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
+            PrimaryAutoCommandBuffer,
+            Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
+        >,
+        framebuffer_id: usize,
+    ) -> PrimaryAutoCommandBuffer {
         self.flat_pipeline
             .bind(ctx, (), &mut command_buf_builder, ())
             .unwrap();
@@ -195,6 +220,9 @@ impl ActiveGame {
         self.flat_pipeline = self
             .flat_provider
             .make_pipeline(ctx, (self.client_state.hud.lock().texture_atlas(), 0))?;
+        // self.supersampler_pipeline = self
+        //     .supersampler_provider
+        //     .make_pipeline(ctx, &ctx.framebuffers)?;
         self.egui_adapter.as_mut().unwrap().notify_resize(ctx)?;
         Ok(())
     }
@@ -284,7 +312,7 @@ impl GameRenderer {
             GameSettings::load_from_disk()?.unwrap_or_default().into(),
         ));
 
-        let ctx = VulkanContext::create(event_loop).unwrap();
+        let ctx = VulkanContext::create(event_loop, &settings.load().graphics).unwrap();
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -390,7 +418,9 @@ impl GameRenderer {
                         let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
                         recreate_swapchain = false;
-                        self.ctx.recreate_swapchain(size).unwrap();
+                        self.ctx
+                            .recreate_swapchain(size, self.settings.load().graphics.supersampling)
+                            .unwrap();
                         if resized {
                             resized = false;
                             self.ctx.viewport.dimensions = size.into();
@@ -438,51 +468,93 @@ impl GameRenderer {
                     // as long as the bindings' types match those the pipelines' shaders expect.
                     // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
                     // you cannot create one independently of any particular pipeline.
-                    let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
-                    self.ctx
-                        .start_render_pass(
-                            &mut command_buf_builder,
-                            self.ctx.framebuffers[image_i as usize].clone(),
-                        )
-                        .unwrap();
-                    let command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut()
-                    {
-                        game.build_command_buffers(window_size, &self.ctx, command_buf_builder)
-                    } else {
-                        if let Some(connection_settings) = self.main_menu.lock().draw(
-                            &self.ctx,
-                            &mut game_lock,
-                            &mut command_buf_builder,
-                        ) {
-                            self.start_connection(connection_settings);
-                        }
-                        finish_command_buffer(command_buf_builder).unwrap()
-                    };
+                    let mut preblit = self.ctx.start_command_buffer().unwrap();
+                    
+                    let mut postblit_builder = self.ctx.start_command_buffer().unwrap();
+                    
+                        
+                    let (preblit, postblit) =
+                        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                            self.ctx
+                            .start_preblit_render_pass(
+                                &mut preblit,
+                                self.ctx.framebuffers[image_i as usize].0.clone(),
+                            )
+                            .unwrap();
+                            let preblit = game.build_command_buffers_preblit(
+                                window_size,
+                                &self.ctx,
+                                preblit,
+                                image_i as usize,
+                            );
+
+                            let mut blit_info = BlitImageInfo::images(
+                                self.ctx.framebuffers[image_i as usize].0.attachments()[0].image(),
+                                self.ctx.framebuffers[image_i as usize].1.attachments()[0].image(),
+                            );
+                            blit_info.filter = Filter::Linear;
+                            
+                            postblit_builder.blit_image(blit_info).unwrap();
+                            self.ctx.start_postblit_render_pass_inline(
+                                &mut postblit_builder,
+                                self.ctx.framebuffers[image_i as usize].1.clone(),
+                            ).unwrap();
+                            let postblit = Some(game.build_command_buffers_postblit(
+                                window_size,
+                                &self.ctx,
+                                postblit_builder,
+                                image_i as usize,
+                            ));
+
+                            (preblit, postblit)
+                        } else {
+                            self.ctx.start_postblit_render_pass_secondary(
+                                &mut postblit_builder,
+                                self.ctx.framebuffers[image_i as usize].1.clone(),
+                            ).unwrap();
+                            if let Some(connection_settings) =
+                                self.main_menu
+                                    .lock()
+                                    .draw(&self.ctx, &mut game_lock, &mut postblit_builder)
+                            {
+                                self.start_connection(connection_settings);
+                            }
+                            (preblit.build().unwrap(), Some(finish_command_buffer(postblit_builder).unwrap()))
+                        };
 
                     {
                         let _span = span!("submit to Vulkan");
-                        let future = previous_future
-                            .join(acquire_future)
-                            .then_execute(self.ctx.queue.clone(), command_buffers)
-                            .unwrap()
-                            .then_swapchain_present(
-                                self.ctx.queue.clone(),
-                                SwapchainPresentInfo::swapchain_image_index(
-                                    self.ctx.swapchain.clone(),
-                                    image_i,
-                                ),
-                            )
-                            .then_signal_fence_and_flush();
-                        fences[image_i as usize] = match future {
-                            Ok(value) => Some(Arc::new(value)),
-                            Err(FlushError::OutOfDate) => {
-                                recreate_swapchain = true;
-                                None
+                        let future = match postblit {
+                            Some(postblit) => {
+                                let future = previous_future
+                                    .join(acquire_future)
+                                    .then_execute(self.ctx.queue.clone(), preblit)
+                                    .unwrap()
+                                    .then_execute(self.ctx.queue.clone(), postblit)
+                                    .unwrap()
+                                    .then_swapchain_present(
+                                        self.ctx.queue.clone(),
+                                        SwapchainPresentInfo::swapchain_image_index(
+                                            self.ctx.swapchain.clone(),
+                                            image_i,
+                                        ),
+                                    )
+                                    .then_signal_fence_and_flush();
+                                fences[image_i as usize] = match future {
+                                    Ok(value) => Some(Arc::new(value)),
+                                    Err(FlushError::OutOfDate) => {
+                                        recreate_swapchain = true;
+                                        None
+                                    }
+                                    Err(e) => {
+                                        println!("failed to flush future: {e}");
+                                        None
+                                    }
+                                };
                             }
-                            Err(e) => {
-                                println!("failed to flush future: {e}");
-                                None
-                            }
+                            None => {
+                                panic!()
+                            },
                         };
                     }
                     previous_fence_i = image_i;
@@ -572,11 +644,18 @@ async fn connect_impl(
     let flat_pipeline =
         flat_provider.make_pipeline(&ctx, (client_state.hud.lock().texture_atlas(), 0))?;
 
+    // let supersampler_provider =
+    //     supersampler::SupersamplerBlitPipelineProvider::new(ctx.vk_device.clone())?;
+    // let supersampler_pipeline = supersampler_provider.make_pipeline(&ctx, &ctx.framebuffers)?;
+
     let game = ActiveGame {
         cube_provider,
         cube_pipeline,
         flat_provider,
         flat_pipeline,
+        // supersampler_provider,
+        // supersampler_pipeline,
+
         client_state,
         egui_adapter: None,
     };

@@ -59,7 +59,7 @@ impl EguiAdapter {
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.queue.clone(),
-            Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
+            Subpass::from(ctx.post_blit_pass.clone(), 0).context("Could not find subpass 2")?,
             config,
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
@@ -67,7 +67,7 @@ impl EguiAdapter {
 
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_overlay_pipeline =
-            flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
+            flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 0))?;
         Ok(EguiAdapter {
             gui_adapter,
             egui_ui,
@@ -95,7 +95,6 @@ impl EguiAdapter {
             let cmdbuf = self
                 .gui_adapter
                 .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
-            builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
             builder.execute_commands(cmdbuf)?;
 
             if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
@@ -105,7 +104,7 @@ impl EguiAdapter {
                     vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                     CommandBufferInheritanceInfo {
                         render_pass: Some(
-                            Subpass::from(ctx.render_pass.clone(), 1)
+                            Subpass::from(ctx.post_blit_pass.clone(), 0)
                                 .with_context(|| "Render subpass 1 not found")?
                                 .into(),
                         ),
@@ -122,8 +121,8 @@ impl EguiAdapter {
 
             Ok(())
         } else {
-            // We still need to advance to the next subpass, even if we aren't drawing anything
-            builder.next_subpass(SubpassContents::Inline)?;
+            // // We still need to advance to the next subpass, even if we aren't drawing anything
+            // builder.next_subpass(SubpassContents::Inline)?;
             Ok(())
         }
     }
@@ -131,7 +130,7 @@ impl EguiAdapter {
     pub(crate) fn notify_resize(&mut self, ctx: &VulkanContext) -> Result<()> {
         self.flat_overlay_pipeline = self
             .flat_overlay_provider
-            .make_pipeline(ctx, (self.atlas.as_ref(), 1))?;
+            .make_pipeline(ctx, (self.atlas.as_ref(), 0))?;
         Ok(())
     }
 }
