@@ -34,10 +34,12 @@ pub struct DigResult {
     /// Items that were obtained from digging and ought to be added to the player's inventory
     pub obtained_items: Vec<ItemStack>,
 }
-
+/// (handler context, coordinate of the block, the block seen on the map then, the item stack in use)
 pub type BlockInteractionHandler = dyn Fn(HandlerContext, BlockCoordinate, BlockTypeHandle, &ItemStack) -> Result<DigResult>
     + Send
     + Sync;
+/// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
+/// The anchor block is the existing block that the player was pointing to when they clicked the place button.
 pub type PlaceHandler = dyn Fn(HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>>
     + Send
     + Sync;
@@ -136,6 +138,29 @@ impl ItemStack {
         }
     }
 
+    /// Tries to merge the provided stack into this one, without allowing leftovers. Returns true on success, false (and self is unmodified) on failure
+    pub fn try_merge_all(&mut self, stack: ItemStack) -> bool {
+        // We aren't stackable.
+        if self.proto.max_stack == 0 {
+            return false;
+        }
+        // The other stack is either non-stackable or wear-based. Don't try to stack,
+        // even if we have the same item name and think it's stackable.
+        if stack.proto.max_stack == 0 {
+            return false;
+        }
+        if self.proto.item_name != stack.proto.item_name {
+            return false;
+        }
+
+        let available_space = self.proto.max_stack.saturating_sub(self.proto.quantity);
+        if available_space < stack.proto.quantity {
+            return false;
+        }
+        self.proto.quantity += stack.proto.quantity;
+        true
+    }
+
     pub fn decrement(&self) -> Option<ItemStack> {
         match self.proto.quantity {
             0 | 1 => None,
@@ -152,9 +177,14 @@ impl ItemStack {
 pub trait MaybeStack {
     /// Try to merge the provided stack into this one. Returns leftovers.
     fn try_merge(&mut self, other: Self) -> Self;
+    /// Try to merge the provided stack into this one. Do not allow leftovers. True if merged successfully.
+    fn try_merge_all(&mut self, other: Self) -> bool;
     /// Try to take some subset of items (or the entire stack if count is None).
     /// Returns what could be taken.
     fn take_items(&mut self, count: Option<u32>) -> Self;
+    /// Try to take the requested number of items (or the entire stack if count is None).
+    /// If the stack doesn't contain enough items, None is returned.
+    fn try_take_all(&mut self, count: Option<u32>) -> Self;
 }
 impl MaybeStack for Option<ItemStack> {
     fn try_merge(&mut self, other: Option<ItemStack>) -> Option<ItemStack> {
@@ -167,6 +197,23 @@ impl MaybeStack for Option<ItemStack> {
                 }
             },
             None => None,
+        }
+    }
+
+    fn try_merge_all(&mut self, other: Self) -> bool {
+        match other {
+            Some(other) => {
+                match self {
+                    Some(self_inner) => ItemStack::try_merge_all(self_inner, other),
+                    None => {
+                        *self = Some(other);
+                        // We can always insert into an empty stack.
+                        true
+                    },
+                }
+            },
+            // If the other stack is empty, we have nothing to insert, which we can always do successfully.
+            None => true,
         }
     }
 
@@ -189,6 +236,32 @@ impl MaybeStack for Option<ItemStack> {
                                 },
                             })
                         }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            None => self.take(),
+        }
+    }
+
+    fn try_take_all(&mut self, count: Option<u32>) -> Self {
+        match count {
+            Some(count) => {
+                if self.as_ref().unwrap().proto.stackable {
+                    let available = self.as_mut().unwrap().proto.quantity;
+                    if available == count {
+                        self.take()
+                    } else if available > count {
+                        self.as_mut().unwrap().proto.quantity -= count;
+                        Some(ItemStack {
+                            proto: proto::ItemStack {
+                                quantity: count,
+                                ..self.as_ref().unwrap().proto.clone()
+                            },
+                        })
                     } else {
                         None
                     }

@@ -174,7 +174,7 @@ pub struct InventoryManager {
     // switch to a mutex-protected set of keys being accessed + condvar to release threads that block
     // waiting for an inventory mutation to finish)
     db: Mutex<Arc<dyn GameDatabase>>,
-    update_sender: broadcast::Sender<InventoryKey>,
+    update_sender: broadcast::Sender<UpdatedInventory>,
 }
 impl InventoryManager {
     /// Create a new, empty inventory
@@ -273,14 +273,21 @@ impl InventoryManager {
         }
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<InventoryKey> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<UpdatedInventory> {
         self.update_sender.subscribe()
     }
 
     fn broadcast_update(&self, key: InventoryKey) {
-        match self.update_sender.send(key) {
+        match self.update_sender.send(UpdatedInventory::Stored(key)) {
             Ok(_) => {}
             Err(_) => warn!("No receivers for inventory key update {:?}", key),
+        }
+    }
+
+    pub(crate) fn broadcast_block_update(&self, block: BlockCoordinate) {
+        match self.update_sender.send(UpdatedInventory::StoredInBlock(block)) {
+            Ok(_) => {},
+            Err(_) => warn!("No receivers for block update {:?}", block),
         }
     }
 }
@@ -468,28 +475,37 @@ impl<T> InventoryView<T> {
         key: String,
         can_place: bool,
         can_take: bool,
-        take_exact: bool
+        take_exact: bool,
     ) -> Result<InventoryView<T>> {
-        let actual_dimensions = game_state
-            .map()
-            .mutate_block_atomically(coord, |_, ext_data| {
-                if ext_data.is_none() {
-                    *(ext_data.deref_mut()) = Some(ExtendedData {
-                        custom_data: None,
-                        inventories: HashMap::new(),
-                    });
-                }
-                let inv = ext_data.as_mut().unwrap().inventories.entry(key.clone()).or_insert_with(|| {
-                    let mut contents = vec![];
-                    contents.resize_with(dimensions.0 as usize * dimensions.1 as usize, || None);
-                    Inventory {
-                        key: None,
-                        dimensions,
-                        contents,
+        let actual_dimensions =
+            game_state
+                .map()
+                .mutate_block_atomically(coord, |_, ext_data| {
+                    if ext_data.is_none() {
+                        *(ext_data.deref_mut()) = Some(ExtendedData {
+                            custom_data: None,
+                            inventories: hashbrown::HashMap::new(),
+                        });
                     }
-                });
-                Ok(inv.dimensions)
-            })?;
+                    let inv = ext_data
+                        .as_mut()
+                        .unwrap()
+                        .inventories
+                        .entry(key.clone())
+                        .or_insert_with(|| {
+                            let mut contents = vec![];
+                            contents
+                                .resize_with(dimensions.0 as usize * dimensions.1 as usize, || {
+                                    None
+                                });
+                            Inventory {
+                                key: None,
+                                dimensions,
+                                contents,
+                            }
+                        });
+                    Ok(inv.dimensions)
+                })?;
         Ok(InventoryView {
             dimensions: actual_dimensions,
             can_place,
@@ -563,11 +579,22 @@ impl<T> InventoryView<T> {
         Ok(())
     }
     /// Returns true if this view is backed by the given inventory key
-    pub(crate) fn wants_update_for(&self, key: &InventoryKey) -> bool {
-        if let ViewBacking::Stored(our_key) = &self.backing {
-            our_key == key
-        } else {
-            false
+    pub(crate) fn wants_update_for(&self, key: &UpdatedInventory) -> bool {
+        match key {
+            UpdatedInventory::Stored(key) => {
+                if let ViewBacking::Stored(our_key) = &self.backing {
+                    our_key == key
+                } else {
+                    false
+                }
+            }
+            UpdatedInventory::StoredInBlock(coord) => {
+                if let ViewBacking::StoredInBlock(block_coord, ..) = &self.backing {
+                    block_coord == coord
+                } else {
+                    false
+                }
+            },
         }
     }
 }
@@ -778,6 +805,7 @@ impl<T> InventoryView<T> {
                 .game_state
                 .map()
                 .mutate_block_atomically(*coord, |_, ext_data| {
+                    ext_data.set_dirty();
                     Ok(ext_data
                         .as_mut()
                         .and_then(|x| x.inventories.get_mut(key))
@@ -854,6 +882,7 @@ impl<T> InventoryView<T> {
                 .game_state
                 .map()
                 .mutate_block_atomically(*coord, |_, ext_data| {
+                    ext_data.set_dirty();
                     match ext_data.as_mut().and_then(|x| x.inventories.get_mut(key)) {
                         Some(x) => {
                             let leftover = x
@@ -939,6 +968,12 @@ static INVENTORY_VIEW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> InventoryViewId {
     InventoryViewId(INVENTORY_VIEW_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum UpdatedInventory {
+    Stored(InventoryKey),
+    StoredInBlock(BlockCoordinate),
 }
 
 const BROADCAST_CHANNEL_SIZE: usize = 32;

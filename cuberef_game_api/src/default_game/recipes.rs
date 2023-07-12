@@ -1,5 +1,5 @@
 use cuberef_server::game_state::{
-    items::{Item, ItemStack},
+    items::{Item, ItemManager, ItemStack},
     GameState,
 };
 use parking_lot::RwLock;
@@ -20,11 +20,11 @@ use super::basic_blocks::DIRT_WITH_GRASS;
 ///
 /// When a recipe is added, the recipe book is no longer considered sorted until [`sort()`](#method.sort)
 /// is called. When the book is not sorted, ambiguous matches are broken arbitrarily.
-pub struct RecipeBook<const N: usize> {
-    recipes: RwLock<Vec<RecipeImpl<N>>>,
+pub struct RecipeBook<const N: usize, T: Clone> {
+    recipes: RwLock<Vec<RecipeImpl<N, T>>>,
 }
-impl<const N: usize> RecipeBook<N> {
-    pub(crate) fn new() -> RecipeBook<N> {
+impl<const N: usize, T: Clone> RecipeBook<N, T> {
+    pub(crate) fn new() -> RecipeBook<N, T> {
         RecipeBook {
             recipes: RwLock::new(Vec::new()),
         }
@@ -36,17 +36,18 @@ impl<const N: usize> RecipeBook<N> {
             .sort_unstable_by_key(RecipeImpl::sort_key)
     }
 
-    pub fn find(&self, game_state: &GameState, stacks: &[Option<ItemStack>]) -> Option<ItemStack> {
+    pub fn find(
+        &self,
+        items: &ItemManager,
+        stacks: &[&Option<ItemStack>],
+    ) -> Option<RecipeImpl<N, T>> {
         if stacks.len() != N {
             log::error!("Invalid stacks length passed to Recipes::find()");
             return None;
         }
         let stacks: Vec<Option<&Item>> = stacks
             .iter()
-            .map(|x| {
-                x.as_ref()
-                    .and_then(|y| game_state.item_manager().get_item(&y.proto.item_name))
-            })
+            .map(|x| x.as_ref().and_then(|y| items.get_item(&y.proto.item_name)))
             .collect();
 
         let stacks = match stacks.try_into() {
@@ -61,18 +62,20 @@ impl<const N: usize> RecipeBook<N> {
             .read()
             .iter()
             .find(|x| x.matches(&stacks))
-            .map(|x| x.result.clone())
+            .map(|x| (*x).clone())
     }
 
     maybe_export!(
         /// Adds a recipe to this recipe book
-        fn register_recipe(&self, recipe: Recipe<N>) {
+        fn register_recipe(&self, recipe: Recipe<N, T>) {
             self.recipes.write().push(recipe);
         }
     );
 }
 
 /// Defines what items match a slot in a recipe.
+///
+/// TODO(future) add a variant that consumes multiple items from a stack
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecipeSlot {
     /// The slot should be empty
@@ -82,18 +85,28 @@ pub enum RecipeSlot {
     /// The item should be exactly the indicated item
     Exact(String),
 }
+impl RecipeSlot {
+    /// How many items to take from the input. At the moment, this is always 1, since there is not yet a variant
+    /// that consumes multiple items from a stack
+    pub fn quantity(&self) -> u32 {
+        1
+    }
+}
 
 maybe_export!(use self::RecipeImpl as Recipe);
 
-pub struct RecipeImpl<const N: usize> {
+#[derive(Debug, Clone)]
+pub struct RecipeImpl<const N: usize, T> {
     /// The N slots that need to be filled
     pub slots: [RecipeSlot; N],
     /// The result obtained from this crafting recipe
     pub result: ItemStack,
     /// If true, the inputs may be given in any order
     pub shapeless: bool,
+    /// Any metadata for this recipe (e.g. time, non-inventory resources, etc)
+    pub metadata: T,
 }
-impl<const N: usize> RecipeImpl<N> {
+impl<const N: usize, T> RecipeImpl<N, T> {
     fn sort_key(&self) -> usize {
         self.slots
             .iter()
@@ -128,7 +141,7 @@ impl<const N: usize> RecipeImpl<N> {
     }
 }
 
-pub(crate) fn register_default_recipes(game_builder: &mut super::DefaultGameBuilder) {
+pub(crate) fn register_test_recipes(game_builder: &mut super::DefaultGameBuilder) {
     use RecipeSlot::*;
     // testonly
     game_builder.register_crafting_recipe(

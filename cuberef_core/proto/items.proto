@@ -68,6 +68,8 @@ message InteractionRule {
     double constant_time = 13;
     // scaled_time * block's dig_time_multiplier = time
     double scaled_time = 14;
+    // The tool interacts with the block as far as raycasting, but it can't dig it
+    Empty undiggable = 15;
   }
 }
 

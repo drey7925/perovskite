@@ -65,18 +65,19 @@ macro_rules! maybe_export {
 #[cfg(all(not(feature = "unstable_api"), not(doc)))]
 macro_rules! maybe_export {
     {
-        $(#[$outer:meta])+
-        $(fn $name:ident $params: tt
+        $(
+        $(#[$outer:meta])*
+        fn $name:ident $params: tt
             $(-> $rtype:ty)? $body:block
         )+
     } => {
-        #[$($outer)+]
-        $(pub(crate) fn $name $params $(-> $rtype)? $body)+
+        $($(#[$outer])+
+        pub fn $name $params $(-> $rtype)? $body)+
     };
     (
         $(#[$outer:meta])* use $p:path as $i:ident) => {
         $(#[$outer])*
-        pub(crate) use $p as $i;
+        pub use $p as $i;
     }
 }
 

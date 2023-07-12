@@ -51,7 +51,7 @@ pub struct Block(pub &'static str);
 /// breaking changes that do not follow semver, before 1.0
 use cuberef_server::server as server_api;
 
-use crate::blocks::BlockBuilder;
+use crate::blocks::{BlockBuilder, BlockTypeHandleWrapper};
 
 /// Stable API for building and configuring a game.
 ///
@@ -114,7 +114,7 @@ impl GameBuilder {
         Ok(GameBuilder { inner, air_block })
     }
     /// Registers a block and its corresponding item in the game.
-    pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<()> {
+    pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<BlockTypeHandleWrapper> {
         block_builder.build_and_deploy_into(self)
     }
 

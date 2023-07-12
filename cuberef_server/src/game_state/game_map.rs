@@ -53,8 +53,7 @@ use cuberef_core::{
     protocol::map as mapchunk_proto,
 };
 use parking_lot::{
-    Condvar, MappedMutexGuard, Mutex, MutexGuard, RwLock, RwLockReadGuard,
-    RwLockUpgradableReadGuard, RwLockWriteGuard,
+    Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 use prost::Message;
 
@@ -150,11 +149,16 @@ pub(crate) enum ChunkUsage {
     Server,
 }
 
-// todo figure out the mapgen API and lock this down if necessary
+/// Representation of a single chunk in memory. Most game logic should instead use the game map directly,
+/// which abstracts over chunk boundaries and presents a unified interface that does not require being aware
+/// of how chunks are divided.
+/// 
+/// This class is meant for use by map generators and bulk map accesses that would be inefficient when done
+/// block-by-block.
 pub struct MapChunk {
     own_coord: ChunkCoordinate,
     // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
-    // set_block and related to allow an API to set blocks when given a &mut MapChunk
+    // more calls similar to mutate_block_atomically
     pub(crate) block_ids: Vec<u32>,
     extended_data: FxHashMap<u16, ExtendedData>,
 
@@ -285,9 +289,11 @@ impl MapChunk {
             None => bail!("Missing chunk_data or unrecognized format"),
         }
     }
-    /// Sets the block at th given coordinate within the chunk.
+    /// Sets the block at the given coordinate within the chunk.
     /// This function is intended to be used from map generators, and may
     /// lead to data loss or inconsistency when used elsewhere
+    /// 
+    /// TODO refactor and fix
     pub fn set_block(
         &mut self,
         coordinate: ChunkOffset,
@@ -304,7 +310,8 @@ impl MapChunk {
         }
     }
 
-    fn mutate_block_atomically<F, T>(
+    /// See the docstring of [ServerGameMap::mutate_block_atomically()].
+    pub fn mutate_block_atomically<F, T>(
         &mut self,
         offset: ChunkOffset,
         mutator: F,
@@ -334,6 +341,7 @@ impl MapChunk {
         }
         if dirty {
             self.dirty = true;
+            self.game_state.upgrade().unwrap().inventory_manager().broadcast_block_update(self.own_coord.with_offset(offset));
         }
 
         if new_id != old_id {
@@ -397,7 +405,7 @@ fn parse_v1(
                     inventories: inventories
                         .iter()
                         .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
-                        .collect::<Result<HashMap<_, _>>>()?,
+                        .collect::<Result<hashbrown::HashMap<_, _>>>()?,
                 },
             );
         } else {
@@ -414,7 +422,7 @@ fn parse_v1(
                     inventories: inventories
                         .iter()
                         .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
-                        .collect::<Result<HashMap<_, _>>>()?,
+                        .collect::<Result<hashbrown::HashMap<_, _>>>()?,
                 },
             );
         }
@@ -485,18 +493,6 @@ impl MapChunkHolder {
         }
     }
 
-    fn wait_and_get2(&self) -> Result<MappedMutexGuard<MapChunk>> {
-        let mut guard = self.chunk.lock();
-        loop {
-            self.bump_access_time();
-            match &*guard {
-                HolderState::Empty => self.condition.wait(&mut guard),
-                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => return Ok(MutexGuard::map(guard, |x| x.unwrap_mut())),
-            }
-        }
-    }
-
     /// Get the chunk, blocking until it's loaded
     fn wait_and_get(&self) -> Result<MapChunkInnerGuard<'_>> {
         let mut guard = self.chunk.lock();
@@ -530,7 +526,10 @@ impl MapChunkHolder {
     }
     /// Set the chunk to an error, and notify any waiting threads so they can propagate the error
     fn set_err(&self, err: anyhow::Error) {
-        *self.chunk.lock() = HolderState::Err(err);
+        let mut guard = self.chunk.lock();
+        assert!(matches!(*guard, HolderState::Empty));
+        *guard = HolderState::Err(err);
+        self.condition.notify_all();
     }
 
     fn bump_access_time(&self) {
@@ -837,6 +836,29 @@ impl ServerGameMap {
         )
     }
 
+    /// Runs the given dig or interact handler for the block at the specified coordinate.
+    /// 
+    /// This method will retrieve the block at the provided coordinate, look up its dig or interact
+    /// handler based on the provided callbacks, and invoke it with the given context.
+    ///
+    /// Any items dropped by the handler will be returned. Note that if a dig handler is provided,
+    /// it is assumed the block's dig handler has already been run separately.
+    ///
+    /// # Arguments
+    ///
+    /// * `coord` - The block coordinate to run the handler for
+    /// * `initiator` - The initiator of this event, for handler context  
+    /// * `tool` - Optional tool item stack, if this is a tool interaction
+    /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler
+    /// * `get_block_full_handler` - Callback to retrieve the desired full handler
+    ///
+    /// # Returns
+    ///
+    /// A vector containing any item stacks dropped by the invoked handlers.
+    ///
+    /// # Errors
+    /// 
+    /// Returns any error encountered while retrieving the block or invoking handlers.
     pub fn run_block_interaction<F, G>(
         &self,
         coord: BlockCoordinate,
@@ -895,62 +917,67 @@ impl ServerGameMap {
     // Gets a chunk, loading it from database/generating it if it is not in memory
     fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
         let _span = span!("get_chunk");
-        // Start with an upgradable read lock, in case we need to insert.
-        //
-        // Note that we need to downgrade the lock as soon as possible for performance:
-        // https://morestina.net/blog/1739/upgradable-parking_lotrwlock-might-not-be-what-you-expect
-        //
-        // We end up having a brief critical section that gets fully serialized, but it's very small:
-        // it checks if the key exists in the map, and then possibly inserts an empty MapChunkHolder (which
-        // is fast to construct, does not call into game content/state, and does not block during construction)
-        let lock = {
-            let _span = span!("acquire game_map upg read lock");
-            self.live_chunks.upgradable_read()
-        };
 
-        if lock.contains_key(&coord) {
-            return Ok(MapChunkOuterGuard {
-                read_guard: RwLockUpgradableReadGuard::downgrade(lock),
-                coord,
-            });
-        }
-
-        // The chunk is not loaded. Upgrade the lock temporarily, get an entry into the map, and then fill it
-        // under a read lock
-        let mut write_lock = {
-            let _span = span!("game_map upgrading read->write");
-            RwLockUpgradableReadGuard::upgrade(lock)
-        };
-        write_lock.insert(coord, MapChunkHolder::new_empty());
-
-        // We are the thread that inserted the chunk. Downgrade back to a read lock, and fill the chunk before returning.
-        let read_lock = RwLockWriteGuard::downgrade(write_lock);
-        // Unwrap is safe, since we just inserted the chunk
-        let chunk_guard = read_lock.get(&coord).unwrap();
-
-        // We assert this is unwind-safe: it only interacts with the database and mapgen, which themselves shouldn't have
-        // weird unwinding behavior. Furthermore, we are poisoning the given mapchunk.
-        match catch_unwind(AssertUnwindSafe(|| {
-            self.load_uncached_or_generate_chunk(coord)
-        })) {
-            Ok(Ok(chunk)) => {
-                chunk_guard.fill(chunk);
-                Ok(MapChunkOuterGuard {
-                    read_guard: read_lock,
+        let mut load_chunk_tries = 0;
+        let result = loop {
+            let read_guard = {
+                let _span = span!("acquire game_map read lock");
+                self.live_chunks.read()
+            };
+            // All good. The chunk is loaded.
+            if read_guard.contains_key(&coord) {
+                return Ok(MapChunkOuterGuard {
+                    read_guard,
                     coord,
-                })
+                });
             }
-            Ok(Err(e)) => {
-                let message = Error::msg(format!("Failed to load chunk: {e:?}"));
-                chunk_guard.set_err(e);
-                Err(message)
+            load_chunk_tries += 1;
+            drop(read_guard);
+
+            // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
+            // under a read lock
+            // This can't be done with an upgradable lock due to a deadlock risk.
+            let mut write_guard = {
+                let _span = span!("acquire game_map write lock");
+                self.live_chunks.write()
+            };
+            if write_guard.contains_key(&coord) {
+                // Someone raced with us. Try looping again.
+                log::info!("Race while upgrading in get_chunk; retrying two-phase lock");
+                drop(write_guard);
+                continue;
             }
-            Err(e) => {
-                chunk_guard.set_err(Error::msg(format!("Chunk load/generate panicked: {e:?}")));
-                // Unfortunate duplication, anyhow::Error is not Clone
-                Err(Error::msg(format!("Chunk load/generate panicked: {e:?}")))
+
+            // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
+            // Since we still hold the write lock, 
+            let prev = write_guard.insert(coord, MapChunkHolder::new_empty());
+            assert!(prev.is_none());
+
+            // Now we downgrade the read lock.
+            // If another thread races ahead of us and does the same lookup, they'll get an empty chunk holder and will wait
+            // for the condition variable to be signalled (while NOT holding the inner lock).
+            let read_guard = RwLockWriteGuard::downgrade(write_guard);
+            // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
+            let chunk_guard = read_guard.get(&coord).unwrap();
+            match self.load_uncached_or_generate_chunk(coord) {
+                Ok(chunk) => {
+                    chunk_guard.fill(chunk);
+                    break Ok(MapChunkOuterGuard {
+                        read_guard,
+                        coord,
+                    })
+                }
+                Err(e) => {
+                    chunk_guard.set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
+                    // Unfortunate duplication, anyhow::Error is not Clone
+                    break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")))
+                }
             }
+        };
+        if load_chunk_tries > 1 {
+            log::warn!("Took {load_chunk_tries} tries to load {coord:?}");
         }
+        result
     }
 
     // Loads the chunk from the DB, or generates it if missing, REGARDLESS of whether the chunk
@@ -969,7 +996,7 @@ impl ServerGameMap {
         chunk.dirty = true;
         {
             let _span = span!("mapgen running");
-            self.game_state().mapgen().fill_chunk(coord, &mut chunk);
+            run_handler!(|| Ok(self.game_state().mapgen().fill_chunk(coord, &mut chunk)), "mapgen", EventInitiator::Engine)?;
         }
         // This will only execute after the mutex is released.
         self.enqueue_writeback(coord)?;
@@ -1042,8 +1069,7 @@ impl ServerGameMap {
     }
 
     /// Get a chunk from the map and return its client proto if either load_if_missing is true, or
-    /// the chunk is already cached in memory. If load_if_missing is true, the chunk will be kept in
-    /// memory after this function returns.
+    /// the chunk is already cached in memory. If this loads a chunk, the chunk will stay in memory.
     pub(crate) fn get_chunk_client_proto(
         &self,
         coord: ChunkCoordinate,
@@ -1054,19 +1080,20 @@ impl ServerGameMap {
             let chunk = chunk_guard.wait_and_get()?;
             Ok(Some(chunk.serialize(ChunkUsage::Client)?))
         } else {
-            let guard = {
-                let _span = span!("acquire gamemap read lock");
-                self.live_chunks.read()
-            };
-            let chunk_holder = guard.get(&coord);
-            if let Some(chunk_holder) = chunk_holder {
-                match chunk_holder.try_get()? {
-                    Some(x) => Ok(Some(x.serialize(ChunkUsage::Client)?)),
-                    None => Ok(None),
-                }
-            } else {
-                Ok(None)
-            }
+            Ok(None)
+            // let guard = {
+            //     let _span = span!("acquire gamemap read lock");
+            //     self.live_chunks.read()
+            // };
+            // let chunk_holder = guard.get(&coord);
+            // if let Some(chunk_holder) = chunk_holder {
+            //     match chunk_holder.try_get()? {
+            //         Some(x) => Ok(Some(x.serialize(ChunkUsage::Client)?)),
+            //         None => Ok(None),
+            //     }
+            // } else {
+            //     Ok(None)
+            // }
         }
     }
 
@@ -1344,12 +1371,14 @@ pub trait TimerInlineCallback: Send + Sync {
     ///     or the game engine is overloaded. *Currently unimplemented, always 0*.
     /// * block_type: Mutable reference to the block type in the block.
     /// * data: Mutable reference to the extended data in the block.
+    /// * ctx: Context for the callback
     fn inline_callback(
         &self,
         coordinate: BlockCoordinate,
         missed_timers: u64,
         block_type: &mut BlockTypeHandle,
         data: &mut ExtendedDataHolder,
+        ctx: &InlineContext
     ) -> Result<()>;
 }
 
@@ -1396,7 +1425,7 @@ pub struct TimerSettings {
     /// Intermediate values - spread the shards out, but in a smaller span of time
     pub spreading: f64,
     /// The set of block types (*not* including variant types) that this timer should act on
-    pub block_types: Vec<String>,
+    pub block_types: Vec<BlockTypeHandle>,
     // The probability that the action will be taken for each matching block. Each matching block is
     // sampled independently, using an unspecified RNG that does not derive from the game seed.
     pub per_block_probability: f64,
@@ -1456,19 +1485,7 @@ impl GameMapTimer {
         total_shards: u32,
         game_state: Arc<GameState>,
     ) -> Result<()> {
-        let block_types = self
-            .settings
-            .block_types
-            .iter()
-            .map(|x| {
-                game_state
-                    .map()
-                    .block_type_manager()
-                    .get_by_name(&x)
-                    .with_context(|| format!("Block {} not found", x))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let block_types = FxHashSet::from_iter(block_types.iter().map(|x| x.id().base_id()));
+        let block_types = FxHashSet::from_iter(self.settings.block_types.iter().map(|x| x.id().base_id()));
 
         let mut interval = tokio::time::interval_at(start_time.into(), self.settings.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1529,33 +1546,13 @@ impl GameMapTimer {
                 let block_id = BlockId(chunk.block_ids[i]);
                 if block_types.contains(&block_id.base_id()) {
                     if sampler.sample(&mut rng) {
-                        match &self.callback {
-                            TimerCallback::InlineLocked(cb) => chunk.mutate_block_atomically(
-                                ChunkOffset::from_index(i),
-                                |block_id, extended_data| {
-                                    run_handler!(
-                                        || cb.inline_callback(
-                                            coord.with_offset(ChunkOffset::from_index(i)),
-                                            0,
-                                            block_id,
-                                            extended_data,
-                                        ),
-                                        "timer_inline_locked",
-                                        EventInitiator::Engine
-                                    )?;
-                                    Ok(())
-                                },
-                                map,
-                            )?,
-                            TimerCallback::InlineUnlocked(cb) => run_handler!(
-                                || cb.inline_callback(
-                                    coord.with_offset(ChunkOffset::from_index(i)),
-                                    0,
-                                    game_state
-                                ),
-                                "timer_inline_locked",
-                                EventInitiator::Engine
-                            )?,
+                        match self.run_callback(&mut chunk, ChunkOffset::from_index(i), map, coord, game_state) {
+                            Ok(()) => {
+                                // continue
+                            }
+                            Err(e) => {
+                                log::error!("Timer callback {} failed: {:?}", self.name, e);
+                            }
                         }
                     }
                 }
@@ -1566,6 +1563,46 @@ impl GameMapTimer {
         }
 
         Ok(())
+    }
+
+    fn run_callback(&self, chunk: &mut MapChunkInnerGuard<'_>, offset: ChunkOffset, map: &ServerGameMap, coord: ChunkCoordinate, game_state: &Arc<GameState>) -> Result<(), Error> {
+        Ok(match &self.callback {
+            TimerCallback::InlineLocked(cb) => chunk.mutate_block_atomically(
+                offset,
+                |block_id, extended_data| {
+                    let ctx = InlineContext {
+                        // todo actual ticks
+                        tick: 0,
+                        initiator: EventInitiator::Engine,
+                        location: coord.with_offset(offset),
+                        block_types: game_state.map().block_type_manager(),
+                        items: game_state.item_manager(),
+                    };
+                    run_handler!(
+                        || cb.inline_callback(
+                            coord.with_offset(offset),
+                            0,
+                            block_id,
+                            extended_data,
+                            &ctx
+                        ),
+                        "timer_inline_locked",
+                        EventInitiator::Engine
+                    )?;
+                    Ok(())
+                },
+                map,
+            )?,
+            TimerCallback::InlineUnlocked(cb) => run_handler!(
+                || cb.inline_callback(
+                    coord.with_offset(offset),
+                    0,
+                    game_state
+                ),
+                "timer_inline_locked",
+                EventInitiator::Engine
+            )?,
+        })
     }
 
     async fn await_shutdown(&self) -> Result<()> {

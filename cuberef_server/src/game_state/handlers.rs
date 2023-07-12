@@ -14,6 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::panic::{UnwindSafe, AssertUnwindSafe};
+
+use anyhow::Error;
 use tracy_client::{span, span_location};
 
 use super::event::EventInitiator;
@@ -21,12 +24,15 @@ use super::event::EventInitiator;
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
 /// Currently a no-op
 #[inline]
-pub(crate) fn run_handler_impl<T, F>(closure: F, _name: &'static str, _initiator: EventInitiator) -> T
+pub(crate) fn run_handler_impl<T, F>(closure: F, name: &'static str, _initiator: EventInitiator) -> anyhow::Result<T>
 where
-    F: FnOnce() -> T,
+    F: FnOnce() -> anyhow::Result<T>,
 {
-    // TODO tracing, etc
-    (closure)()
+    // todo clean up AssertUnwindSafe if possible
+    match std::panic::catch_unwind(AssertUnwindSafe(closure)) {
+        Ok(x) => x,
+        Err(_e) => Err(Error::msg(format!("Handler {} panicked", name))),
+    }
 }
 
 #[macro_export]

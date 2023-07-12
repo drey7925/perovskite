@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use cgmath::{Deg, Zero};
+use cuberef_core::constants::block_groups::DEFAULT_SOLID;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use cuberef_core::protocol;
@@ -30,7 +31,7 @@ use tokio::sync::mpsc;
 use tracy_client::span;
 use winit::event::Event;
 
-use crate::cube_renderer::{BlockRenderer, ClientBlockTypeManager};
+use crate::cube_renderer::{BlockRenderer, ClientBlockTypeManager, fallback_texture};
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
@@ -303,4 +304,24 @@ pub(crate) struct FrameState {
     pub(crate) view_proj_matrix: cgmath::Matrix4<f32>,
     pub(crate) player_position: cgmath::Vector3<f64>,
     pub(crate) tool_state: ToolState,
+}
+
+use cuberef_core::protocol::blocks as blocks_proto;
+
+pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {
+    blocks_proto::BlockTypeDef {
+        render_info: Some(blocks_proto::block_type_def::RenderInfo::Cube(
+            blocks_proto::CubeRenderInfo {
+                tex_left: fallback_texture(),
+                tex_right: fallback_texture(),
+                tex_top: fallback_texture(),
+                tex_bottom: fallback_texture(),
+                tex_front: fallback_texture(),
+                tex_back: fallback_texture(),
+                render_mode: blocks_proto::CubeRenderMode::SolidOpaque.into(),
+            },
+        )),
+        groups: vec![DEFAULT_SOLID.to_string()],
+        ..Default::default()
+    }
 }

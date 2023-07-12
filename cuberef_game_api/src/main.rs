@@ -16,7 +16,14 @@
 
 use cuberef_game_api::default_game::DefaultGameBuilder;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+    
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let game = DefaultGameBuilder::new_from_commandline().unwrap();

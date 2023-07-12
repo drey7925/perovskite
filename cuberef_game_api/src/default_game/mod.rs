@@ -14,10 +14,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use crate::{
-    default_game::basic_blocks::{DIRT_WITH_GRASS, DIRT_WITH_GRASS2, GLASS},
-    game_builder::GameBuilder,
-};
+use crate::game_builder::GameBuilder;
 
 use anyhow::Result;
 
@@ -37,7 +34,13 @@ pub mod game_behaviors;
 /// Recipes for crafting, smelting, etc
 pub mod recipes;
 
+#[cfg(feature = "unstable_api")]
+/// Furnace implementation,
+pub mod furnace;
+mod furnace;
+
 /// Common block groups that are defined in the default game and integrate with its tools
+/// See also [cuberef_core::constants::block_groups]
 pub mod block_groups {
     /// Brittle, stone-like blocks that are best removed with a pickaxe.
     /// e.g. stone, cobble, bricks
@@ -46,6 +49,11 @@ pub mod block_groups {
     pub const GRANULAR: &str = "default:granular";
     /// Woody blocks that are best removed with an axe, e.g. wood
     pub const FIBROUS: &str = "default:fibrous";
+}
+/// Common item groups that are defined in the default game and integrate with its mechanisms
+pub mod item_groups {
+    /// Items that should not be shown in the creative inventory
+    pub const HIDDEN_FROM_CREATIVE: &str = "default:hidden_from_creative";
 }
 /// Control of the map generator.
 pub mod mapgen;
@@ -57,7 +65,12 @@ pub mod mapgen;
 pub struct DefaultGameBuilder {
     inner: GameBuilder,
 
-    crafting_recipes: Arc<RecipeBook<9>>,
+    crafting_recipes: Arc<RecipeBook<9, ()>>,
+    // Metadata is number of furnace timer ticks (period tbd) that it takes to smelt this recipe
+    smelting_recipes: Arc<RecipeBook<1, u32>>,
+    // Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
+    // Output item is ignored
+    smelting_fuels: Arc<RecipeBook<1, u32>>,
 }
 impl DefaultGameBuilder {
     /// Provides access to the [GameBuilder] that this DefaultGameBuilder is wrapping,
@@ -83,6 +96,8 @@ impl DefaultGameBuilder {
         let mut builder = DefaultGameBuilder {
             inner: builder,
             crafting_recipes: Arc::new(RecipeBook::new()),
+            smelting_recipes: Arc::new(RecipeBook::new()),
+            smelting_fuels: Arc::new(RecipeBook::new()),
         };
         register_defaults(&mut builder)?;
         Ok(builder)
@@ -97,7 +112,7 @@ impl DefaultGameBuilder {
     }
 
     /// Returns an Arc for the crafting recipes in this game.
-    pub fn crafting_recipes(&mut self) -> Arc<RecipeBook<9>> {
+    pub fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>> {
         self.crafting_recipes.clone()
     }
     /// Registers a new crafting recipe.
@@ -105,7 +120,7 @@ impl DefaultGameBuilder {
     /// If stackable is false, quantity represents item wear. Behavior is undefined if stackable is false,
     /// the item isn't subject to tool wear, and quantity != 1.
     ///
-    /// This API is subject to change.
+    /// **This API is subject to change.**
     pub fn register_crafting_recipe(
         &mut self,
         slots: [RecipeSlot; 9],
@@ -124,72 +139,74 @@ impl DefaultGameBuilder {
                 },
             },
             shapeless: false,
+            metadata: (),
         })
     }
 
     /// Starts a game based on this builder.
     pub fn build_and_run(mut self) -> Result<()> {
         self.crafting_recipes.sort();
+        self.smelting_recipes.sort();
         self.game_builder()
             .inner
             .set_mapgen(|blocks, seed| mapgen::build_mapgen(blocks, seed));
-        let timer_settings = TimerSettings {
-            interval: Duration::from_secs(5),
-            shards: 4,
-            spreading: 0.2,
-            block_types: vec![
-                DIRT_WITH_GRASS.0.to_string(),
-                DIRT_WITH_GRASS2.0.to_string(),
-            ],
-            per_block_probability: 0.5,
-            ..Default::default()
-        };
+        // let timer_settings = TimerSettings {
+        //     interval: Duration::from_secs(5),
+        //     shards: 4,
+        //     spreading: 0.2,
+        //     block_types: vec![
+        //         DIRT_WITH_GRASS.0.to_string(),
+        //         DIRT_WITH_GRASS2.0.to_string(),
+        //     ],
+        //     per_block_probability: 0.5,
+        //     ..Default::default()
+        // };
 
-        struct TestTimerImpl(
-            Box<
-                dyn Fn(
-                        BlockCoordinate,
-                        u64,
-                        &mut BlockTypeHandle,
-                        &mut ExtendedDataHolder,
-                    ) -> Result<()>
-                    + Send
-                    + Sync,
-            >,
-        );
-        impl TimerInlineCallback for TestTimerImpl {
-            fn inline_callback(
-                &self,
-                coordinate: cuberef_core::coordinates::BlockCoordinate,
-                missed_timers: u64,
-                block_type: &mut cuberef_server::game_state::blocks::BlockTypeHandle,
-                data: &mut cuberef_server::game_state::blocks::ExtendedDataHolder,
-            ) -> Result<()> {
-                self.0(coordinate, missed_timers, block_type, data)
-            }
-        };
+        // struct TestTimerImpl(
+        //     Box<
+        //         dyn Fn(
+        //                 BlockCoordinate,
+        //                 u64,
+        //                 &mut BlockTypeHandle,
+        //                 &mut ExtendedDataHolder,
+        //             ) -> Result<()>
+        //             + Send
+        //             + Sync,
+        //     >,
+        // );
+        // impl TimerInlineCallback for TestTimerImpl {
+        //     fn inline_callback(
+        //         &self,
+        //         coordinate: cuberef_core::coordinates::BlockCoordinate,
+        //         missed_timers: u64,
+        //         block_type: &mut cuberef_server::game_state::blocks::BlockTypeHandle,
+        //         data: &mut cuberef_server::game_state::blocks::ExtendedDataHolder,
+        //     ) -> Result<()> {
+        //         self.0(coordinate, missed_timers, block_type, data)
+        //     }
+        // };
 
-        let callback = {
-            let dwg1 = self.inner.get_block(DIRT_WITH_GRASS).unwrap();
-            let dwg2 = self.inner.get_block(DIRT_WITH_GRASS2).unwrap();
-            move |coordinate: BlockCoordinate,
-                  missed_timers: u64,
-                  block_type: &mut BlockTypeHandle,
-                  data: &mut ExtendedDataHolder| {
-                if *block_type == dwg1 {
-                    *block_type = dwg2;
-                } else {
-                    *block_type = dwg1;
-                }
-                Ok(())
-            }
-        };
+        // let callback = {
+        //     let dwg1 = self.inner.get_block(DIRT_WITH_GRASS).unwrap();
+        //     let dwg2 = self.inner.get_block(DIRT_WITH_GRASS2).unwrap();
+        //     move |coordinate: BlockCoordinate,
+        //           missed_timers: u64,
+        //           block_type: &mut BlockTypeHandle,
+        //           data: &mut ExtendedDataHolder| {
+        //         if *block_type == dwg1 {
+        //             *block_type = dwg2;
+        //         } else {
+        //             *block_type = dwg1;
+        //         }
+        //         Ok(())
+        //     }
+        // };
 
-        self.game_builder().inner.add_timer(
-            "test_timer",
-            timer_settings,
-            TimerCallback::InlineLocked(Box::new(TestTimerImpl(Box::new(callback)))),
-        );
+        // self.game_builder().inner.add_timer(
+        //     "test_timer",
+        //     timer_settings,
+        //     TimerCallback::InlineLocked(Box::new(TestTimerImpl(Box::new(callback)))),
+        // );
         self.inner.run_game_server()
     }
 }
@@ -197,6 +214,7 @@ impl DefaultGameBuilder {
 fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     basic_blocks::register_basic_blocks(&mut game_builder.inner)?;
     game_behaviors::register_game_behaviors(game_builder)?;
-    recipes::register_default_recipes(game_builder);
+    recipes::register_test_recipes(game_builder);
+    furnace::register_furnace(game_builder)?;
     Ok(())
 }

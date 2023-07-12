@@ -30,6 +30,7 @@ use crate::game_state::event::HandlerContext;
 use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::handlers;
 use crate::game_state::inventory::InventoryKey;
+use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
 use crate::game_state::items;
@@ -143,7 +144,7 @@ pub(crate) struct ClientOutboundContext {
     // responsible for filtering)
     block_events: broadcast::Receiver<BlockUpdate>,
     // TODO consider delta updates for this
-    inventory_events: broadcast::Receiver<InventoryKey>,
+    inventory_events: broadcast::Receiver<UpdatedInventory>,
     // This character's own movement, coming from their client (forwarded by the ClientInboundContext to here
     // and to elsewhere)
     // In the future, anticheat might check for shenanigans involving these, probably not as part of ClientOutboundContext
@@ -227,7 +228,7 @@ impl ClientOutboundContext {
 
     async fn handle_inventory_update(
         &mut self,
-        update: Result<InventoryKey, broadcast::error::RecvError>,
+        update: Result<UpdatedInventory, broadcast::error::RecvError>,
     ) -> Result<()> {
         let key = match update {
             Err(broadcast::error::RecvError::Lagged(x)) => {
@@ -370,21 +371,6 @@ impl ClientOutboundContext {
         Ok(())
     }
 
-    // Add a chunk to the list of interesting chunks - the client will receive notifications for these
-    // chunks
-    async fn subscribe_to_chunk(
-        &mut self,
-        coord: ChunkCoordinate,
-        load_if_missing: bool,
-    ) -> Result<bool> {
-        self.interested_chunks.insert(coord);
-        // Add the chunk to the interesting set first, then send its state
-        // This ensures that we err on the side of extraneous block updates, rather than missing ones
-        // TODO future optimization/cleanup add a block update seqnum of some kind???
-        // Otherwise, inline maybe_send_full_chunk
-        self.maybe_send_full_chunk(coord, load_if_missing).await
-    }
-
     // Sends a full chunk
     async fn maybe_send_full_chunk(
         &mut self,
@@ -501,35 +487,44 @@ impl ClientOutboundContext {
             )),
         };
 
-        let mut candidate_chunks = vec![];
+        let mut sent_chunks = 0;
         for &(dx, dy, dz) in LOAD_LAZY_SORTED_COORDS.iter() {
-            let chunk = ChunkCoordinate {
+            let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
                 z: player_chunk.z.saturating_add(dz),
             };
-            if !chunk.is_in_bounds() {
+            let distance = dx.abs() + dy.abs() + dz.abs();
+            if !coord.is_in_bounds() || self.chunks_known_to_client.contains(&coord) {
                 continue;
             }
-            candidate_chunks.push(chunk);
-        }
-        let mut num_added = 0;
-        for chunk in candidate_chunks {
-            // TODO: consider whether we want an L(infinity) metric (i.e. max) rather than L1 (manhattan distance)
-            let load_if_missing =
-                chunk.manhattan_distance(player_chunk) <= LOAD_EAGER_DISTANCE as u32;
-
-            if chunk.manhattan_distance(player_chunk) <= LOAD_LAZY_DISTANCE as u32 {
-                self.game_state.map().bump_access_time(chunk);
-                if !self.chunks_known_to_client.contains(&chunk) {
-                    self.subscribe_to_chunk(chunk, load_if_missing).await?;
-                    num_added += 1;
-                    if num_added >= update.chunks_to_send {
-                        break;
-                    }
+            let chunk_data = tokio::task::block_in_place(|| {
+                self.game_state
+                    .map()
+                    .get_chunk_client_proto(coord, distance <= LOAD_EAGER_DISTANCE)
+            })?;
+            if let Some(chunk_data) = chunk_data {
+                let message = proto::StreamToClient {
+                    tick: self.game_state.tick(),
+                    server_message: Some(proto::stream_to_client::ServerMessage::MapChunk(
+                        proto::MapChunk {
+                            chunk_coord: Some(coord.into()),
+                            chunk_data: Some(chunk_data),
+                        },
+                    )),
+                };
+                self.outbound_tx
+                    .send(Ok(message))
+                    .await
+                    .with_context(|| "Could not send outbound message (chunk contents)")?;
+                self.chunks_known_to_client.insert(coord);
+                sent_chunks += 1;
+                if sent_chunks > update.chunks_to_send {
+                    break;
                 }
             }
         }
+
         if !chunks_to_unsubscribe.is_empty() {
             self.outbound_tx
                 .send(Ok(message))
@@ -1094,7 +1089,10 @@ impl ClientInboundContext {
         Ok(())
     }
 
-    fn handle_interact_key_sync(&mut self, interact_message: &proto::InteractKeyAction) -> Result<Vec<StreamToClient>> {
+    fn handle_interact_key_sync(
+        &mut self,
+        interact_message: &proto::InteractKeyAction,
+    ) -> Result<Vec<StreamToClient>> {
         let coord: BlockCoordinate = interact_message
             .block_coord
             .as_ref()
@@ -1153,9 +1151,9 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 30;
-const LOAD_LAZY_DISTANCE: i32 = 40;
-const UNLOAD_DISTANCE: i32 = 50;
+const LOAD_EAGER_DISTANCE: i32 = 20;
+const LOAD_LAZY_DISTANCE: i32 = 30;
+const UNLOAD_DISTANCE: i32 = 40;
 const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 16;

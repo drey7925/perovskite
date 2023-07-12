@@ -22,6 +22,7 @@ use cuberef_core::{
         block_groups::DEFAULT_SOLID, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
+    coordinates::BlockCoordinate,
     protocol::{
         self,
         blocks::{
@@ -38,12 +39,16 @@ use cuberef_core::{
 pub use cuberef_server::game_state::blocks as server_api;
 
 use cuberef_server::game_state::{
-    blocks::{BlockType, InlineHandler},
+    blocks::{BlockType, ExtendedData, ExtendedDataHolder, InlineHandler, BlockTypeHandle},
+    event::HandlerContext,
     game_map::CasOutcome,
     items::{Item, ItemStack},
 };
 
-use crate::{game_builder::{Block, GameBuilder}, maybe_export};
+use crate::{
+    game_builder::{Block, GameBuilder},
+    maybe_export,
+};
 
 /// The item obtained when the block is dug.
 enum DroppedItem {
@@ -85,6 +90,36 @@ impl DroppedItem {
         }
     }
 }
+#[cfg(feature = "unstable_api")]
+pub type ExtendedDataInitializer = Box<
+    dyn Fn(
+            HandlerContext,
+            BlockCoordinate,
+            BlockCoordinate,
+            &ItemStack,
+        ) -> Result<Option<ExtendedData>>
+        + Send
+        + Sync,
+>;
+#[cfg(not(feature = "unstable_api"))]
+pub(crate) type ExtendedDataInitializer = Box<
+    dyn Fn(
+            HandlerContext,
+            BlockCoordinate,
+            BlockCoordinate,
+            &ItemStack,
+        ) -> Result<Option<ExtendedData>>
+        + Send
+        + Sync,
+>;
+
+#[cfg(feature = "unstable_api")]
+/// Opaque wrapper around BlockTypeHandle. Enabling the `unstable_api` feature will expose the underlying block type handle.
+pub struct BlockTypeHandleWrapper(pub BlockTypeHandle);
+#[cfg(not(feature = "unstable_api"))]
+/// Opaque wrapper around BlockTypeHandle. Enabling the `unstable_api` feature will expose the underlying block type handle.
+pub struct BlockTypeHandleWrapper(pub(crate) BlockTypeHandle);
+
 
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
@@ -97,7 +132,9 @@ pub struct BlockBuilder {
     dropped_item: DroppedItem,
     // Temporarily exposed for water until the API is stabilized.
     pub(crate) physics_info: PhysicsInfo,
-    modifier: Option<Box<dyn FnOnce(&mut BlockType)>>
+    modifier: Option<Box<dyn FnOnce(&mut BlockType)>>,
+    /// Same parameters as [cuberef_server::game_state::items::PlaceHandler]
+    extended_data_initializer: Option<ExtendedDataInitializer>,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -136,7 +173,8 @@ impl BlockBuilder {
             },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
             physics_info: PhysicsInfo::Solid(Empty {}),
-            modifier: None
+            modifier: None,
+            extended_data_initializer: None,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -259,8 +297,19 @@ impl BlockBuilder {
             self
         }
     );
+    maybe_export!(
+        /// Sets a function to generate extended data just before the block is placed
+        /// This will be run even if the block is not placed due to a conflicting material
+        fn set_extended_data_initializer(
+            mut self,
+            extended_data_initializer: ExtendedDataInitializer,
+        ) -> Self {
+            self.extended_data_initializer = Some(extended_data_initializer);
+            self
+        }
+    );
 
-    pub(crate) fn build_and_deploy_into(self, game_builder: &mut GameBuilder) -> Result<()> {
+    pub(crate) fn build_and_deploy_into(mut self, game_builder: &mut GameBuilder) -> Result<BlockTypeHandleWrapper> {
         let mut block = BlockType::default();
         block.client_info = BlockTypeDef {
             id: 0,
@@ -278,14 +327,20 @@ impl BlockBuilder {
 
         let mut item = self.item;
         let air_block = game_builder.air_block;
-        item.place_handler = Some(Box::new(move |ctx, coord, _, stack| {
+        let extended_data_initializer = self.extended_data_initializer.take();
+        item.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
             if stack.proto().quantity == 0 {
                 return Ok(None);
             }
+            let extended_data = match &extended_data_initializer {
+                Some(x) => (x)(ctx.clone(), coord, anchor, stack)?,
+                None => None,
+            };
+
             match ctx
                 .game_map()
                 // TODO be more flexible with placement (e.g. water)
-                .compare_and_set_block(coord, air_block, block_handle, None, false)?
+                .compare_and_set_block(coord, air_block, block_handle, extended_data, false)?
                 .0
             {
                 CasOutcome::Match => Ok(stack.decrement()),
@@ -293,7 +348,7 @@ impl BlockBuilder {
             }
         }));
         game_builder.inner.items_mut().register_item(item)?;
-        Ok(())
+        Ok(BlockTypeHandleWrapper(block_handle))
     }
 }
 

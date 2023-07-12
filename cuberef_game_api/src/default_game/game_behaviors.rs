@@ -1,5 +1,5 @@
 use anyhow::Result;
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use std::sync::Arc;
 
 use cuberef_server::game_state::{
@@ -28,7 +28,7 @@ pub(crate) fn register_game_behaviors(game_builder: &mut DefaultGameBuilder) -> 
 fn make_inventory_popup(
     game_state: Arc<GameState>,
     main_inventory_key: InventoryKey,
-    crafting_recipes: Arc<RecipeBook<9>>,
+    crafting_recipes: Arc<RecipeBook<9, ()>>,
 ) -> Result<Popup> {
     // Generally all the callbacks would reference a more interesting arc that backs the inventory
     // For this example, we only need to store one vec
@@ -68,7 +68,12 @@ fn make_inventory_popup(
                 .unwrap()
                 .peek(ctx)
                 .unwrap();
-            let result = crafting_recipes.find(&game_state, &input);
+            let result = crafting_recipes
+                .find(
+                    game_state.item_manager(),
+                    input.iter().collect::<Vec<_>>().as_slice(),
+                )
+                .map(|x| x.result.clone());
             vec![result]
         })
     };
@@ -77,7 +82,10 @@ fn make_inventory_popup(
         Box::new(move |ctx: &Popup, _slot, _count| {
             let source_view = ctx.inventory_views().get("craft_in").unwrap();
             let input = source_view.peek(ctx).unwrap();
-            let result = crafting_recipes.find(&game_state, &input);
+            let result = crafting_recipes.find(
+                game_state.item_manager(),
+                input.iter().collect::<Vec<_>>().as_slice(),
+            );
             if result.is_some() {
                 for (i, item) in input.iter().enumerate() {
                     if item.is_some() {
@@ -85,7 +93,7 @@ fn make_inventory_popup(
                     }
                 }
             }
-            result
+            result.map(|x| x.result.clone())
         })
     };
 

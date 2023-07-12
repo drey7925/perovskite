@@ -49,12 +49,17 @@ pub struct ExtendedData {
     /// of the Any as a concrete type.
     pub custom_data: Option<CustomData>,
     /// Inventories that can be shown in inventory views
-    pub(crate) inventories: HashMap<String, Inventory>,
+    /// Note that nothing here prevents you from messing with inventories that are still
+    /// visible in popups.
+    /// TODO: switch back to std hashmap once get_many_mut is stabilized
+    pub inventories: hashbrown::HashMap<String, Inventory>,
 }
-
+/// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
 pub type FullHandler = dyn Fn(HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<Vec<ItemStack>>
     + Send
     + Sync;
+/// Takes (handler context, mutable reference to the block type in the map, 
+/// mutable reference to the extended data holder, item stack used to dig), returns dropped item stacks.
 pub type InlineHandler = dyn Fn(
         InlineContext,
         &mut BlockTypeHandle,
@@ -211,9 +216,8 @@ pub struct BlockType {
     /// This can mutate the given block (using handlercontext) if desired, and return a popup (if desired)
     ///
     /// The signature of this callback is subject to change.
-    pub interact_key_handler: Option<
-        Box<dyn Fn(HandlerContext, BlockCoordinate) -> Result<Option<Popup>> + Send + Sync>,
-    >,
+    pub interact_key_handler:
+        Option<Box<dyn Fn(HandlerContext, BlockCoordinate) -> Result<Option<Popup>> + Send + Sync>>,
     // Internal impl details
     pub(crate) is_unknown_block: bool,
     pub(crate) block_type_manager_id: Option<usize>,
@@ -263,6 +267,8 @@ impl Default for BlockType {
 }
 
 /// Represents extended data for a block on the map.
+/// 
+/// **Data loss warning:** [ExtendedDataHolder::set_dirty()] *must* be called after making meaningful changes to the extended data
 pub struct ExtendedDataHolder<'a> {
     extended_data: &'a mut Option<ExtendedData>,
     dirty: bool,
@@ -278,6 +284,17 @@ impl<'a> ExtendedDataHolder<'a> {
     pub(crate) fn dirty(&self) -> bool {
         self.dirty
     }
+
+    pub fn clear(&mut self) {
+        self.dirty = true;
+        *self.extended_data = None;
+        
+    }
+    /// Marks the extended data as needing to be written back to disk.
+    /// **Data loss warning:** If this is not set, changes to the extended data may be lost.
+    pub fn set_dirty(&mut self) {
+        self.dirty = true;
+    }
 }
 impl<'a> Deref for ExtendedDataHolder<'a> {
     type Target = Option<ExtendedData>;
@@ -288,7 +305,6 @@ impl<'a> Deref for ExtendedDataHolder<'a> {
 }
 impl<'a> DerefMut for ExtendedDataHolder<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.dirty = true;
         self.extended_data
     }
 }
@@ -605,7 +621,10 @@ fn make_unknown_block_server(
             id: id.base_id(),
             short_name,
             render_info: Some(blocks_proto::block_type_def::RenderInfo::Cube(
-                Default::default(),
+                blocks_proto::CubeRenderInfo {
+                    render_mode: blocks_proto::CubeRenderMode::SolidOpaque.into(),
+                    ..Default::default()
+                },
             )),
             physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(E)),
             groups: vec![],
@@ -662,6 +681,9 @@ impl BlockTypeHandle {
             manager_unique_id: self.manager_unique_id,
             id: new_id,
         })
+    }
+    pub fn variant(&self) -> u16 {
+        self.id.variant()
     }
     pub(crate) fn id(&self) -> BlockId {
         self.id

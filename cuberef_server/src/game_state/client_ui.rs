@@ -58,6 +58,7 @@ pub struct Popup {
     widgets: Vec<UiElement>,
     inventory_views: HashMap<String, InventoryView<Popup>>,
     interested_stored_inventories: HashSet<InventoryKey>,
+    interested_coordinates: HashSet<BlockCoordinate>,
     inventory_update_callback: Option<Box<dyn Fn(&Popup) + Send + Sync>>,
     button_callback: Option<Box<dyn Fn(PopupResponse) + Send + Sync>>,
 }
@@ -71,6 +72,7 @@ impl Popup {
             widgets: vec![],
             inventory_views: HashMap::new(),
             interested_stored_inventories: HashSet::new(),
+            interested_coordinates: HashSet::new(),
             inventory_update_callback: None,
             button_callback: None,
         }
@@ -210,7 +212,7 @@ impl Popup {
         form_key: impl Into<String>,
         default_dimensions: (u32, u32),
         coord: BlockCoordinate,
-        key: String,
+        inv_key: String,
         can_place: bool,
         can_take: bool,
         take_exact: bool
@@ -220,7 +222,7 @@ impl Popup {
             self.game_state.clone(),
             default_dimensions,
             coord,
-            key,
+            inv_key,
             can_place,
             can_take,
             take_exact,

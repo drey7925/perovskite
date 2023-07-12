@@ -43,7 +43,7 @@ use vulkano::memory::allocator::{
 };
 
 use crate::game_state::chunk::ClientChunk;
-use crate::game_state::ChunkManagerView;
+use crate::game_state::{ChunkManagerView, make_fallback_blockdef};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
@@ -85,7 +85,7 @@ impl ClientBlockTypeManager {
 
         Ok(ClientBlockTypeManager {
             block_defs,
-            fallback_block_def: make_fallback(),
+            fallback_block_def: make_fallback_blockdef(),
         })
     }
 
@@ -695,29 +695,12 @@ async fn build_texture_atlas<T: AsyncTextureLoader>(
     Ok((texture_atlas, texture_coords))
 }
 
-fn fallback_texture() -> Option<TextureReference> {
+pub(crate) fn fallback_texture() -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: FALLBACK_UNKNOWN_TEXTURE.to_string(),
     })
 }
 
-fn make_fallback() -> blocks_proto::BlockTypeDef {
-    blocks_proto::BlockTypeDef {
-        render_info: Some(blocks_proto::block_type_def::RenderInfo::Cube(
-            blocks_proto::CubeRenderInfo {
-                tex_left: fallback_texture(),
-                tex_right: fallback_texture(),
-                tex_top: fallback_texture(),
-                tex_bottom: fallback_texture(),
-                tex_front: fallback_texture(),
-                tex_back: fallback_texture(),
-                render_mode: CubeRenderMode::SolidOpaque.into(),
-            },
-        )),
-
-        ..Default::default()
-    }
-}
 
 enum TextureRotation {
     Zero,

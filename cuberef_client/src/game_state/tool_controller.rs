@@ -28,7 +28,7 @@ use cuberef_core::protocol::items::ItemDef;
 use line_drawing::WalkVoxels;
 use rustc_hash::FxHashSet;
 
-use super::{input::BoundAction, ClientState, GameAction};
+use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
 
 struct DigState {
     // 0.0 to 1.0
@@ -48,6 +48,7 @@ pub(crate) struct ToolController {
     current_item: ItemDef,
     current_slot: u32,
     current_item_interacting_groups: Vec<Vec<String>>,
+    fallback_blockdef: BlockTypeDef,
 }
 impl ToolController {
     pub(crate) fn new() -> ToolController {
@@ -56,6 +57,7 @@ impl ToolController {
             current_item: default_item(),
             current_slot: 0,
             current_item_interacting_groups: get_dig_interacting_groups(&default_item()),
+            fallback_blockdef: make_fallback_blockdef(),
         }
     }
 
@@ -137,6 +139,9 @@ impl ToolController {
                     Some(DigBehavior::ScaledTime(scale)) => {
                         delta.as_secs_f64() / (scale * dig_progress.base_durability)
                     }
+                    Some(DigBehavior::Undiggable(_)) => {
+                        0.
+                    }
                 };
 
                 dig_progress.progress += delta_progress;
@@ -186,7 +191,7 @@ impl ToolController {
     }
 
     fn compute_pointee<'a>(
-        &self,
+        &'a self,
         client_state: &'a ClientState,
     ) -> Option<(BlockCoordinate, Option<BlockCoordinate>, &'a BlockTypeDef)> {
         let last_state = client_state.last_position();
@@ -216,14 +221,16 @@ impl ToolController {
             let chunk = chunks.get(&coord.chunk());
             if let Some(chunk) = chunk {
                 let id = chunk.get(coord.offset());
-                if let Some(def) = client_state.block_types.get_blockdef(id) {
-                    for rule in self.current_item_interacting_groups.iter() {
-                        if rule.iter().all(|x| def.groups.contains(x)) {
-                            return Some((coord, prev, def));
-                        }
+                let block_def = client_state
+                    .block_types
+                    .get_blockdef(id)
+                    .unwrap_or(&self.fallback_blockdef);
+                for rule in self.current_item_interacting_groups.iter() {
+                    if rule.iter().all(|x| block_def.groups.contains(x)) {
+                        return Some((coord, prev, block_def));
                     }
-                    prev = Some(coord);
                 }
+                prev = Some(coord);
             }
         }
         None
