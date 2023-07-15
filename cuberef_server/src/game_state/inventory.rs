@@ -970,7 +970,7 @@ fn next_id() -> InventoryViewId {
     InventoryViewId(INVENTORY_VIEW_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) enum UpdatedInventory {
     Stored(InventoryKey),
     StoredInBlock(BlockCoordinate),

@@ -66,7 +66,11 @@ impl CuberefGame for CuberefGameServerImpl {
         info!("Stream established from {:?}", req.remote_addr());
         let (outbound_tx, outbound_rx) = mpsc::channel(4);
         let game_state = self.game_state.clone();
-        tokio::spawn(async move { game_stream_impl(game_state, req.into_inner(), outbound_tx).await.unwrap() });
+        tokio::spawn(async move {
+            game_stream_impl(game_state, req.into_inner(), outbound_tx)
+                .await
+                .unwrap()
+        });
 
         Result::Ok(Response::new(Box::pin(ReceiverStream::new(outbound_rx))))
     }
@@ -149,7 +153,7 @@ async fn game_stream_impl(
         Ok(x) => {
             log::info!("Player {} successfully authenticated", x);
             x
-        },
+        }
         Err(e) => {
             log::error!("Player failed to authenticate: {e:?}");
             return outbound_tx
@@ -165,7 +169,6 @@ async fn game_stream_impl(
         .map_err(|x| {
             log::error!("Failed to establish player context: {:?}", x);
             Status::internal("Failed to establish player context")
-        
         })?;
 
     // Wait for the initial ready message from the client
@@ -175,21 +178,23 @@ async fn game_stream_impl(
             ..
         }) => {
             // all OK
-            log::info!("Client for {} reports ready; starting up client's context on server", username);
+            log::info!(
+                "Client for {} reports ready; starting up client's context on server",
+                username
+            );
         }
         Some(_) => {
             let err_response = Err(tonic::Status::invalid_argument(
                 "Client did not send a ClientInitialReady as its first message after authenticating.",
             ));
-            return outbound_tx
-                .send(err_response)
-                .await
-                .map_err(|_| anyhow::Error::msg("Failed to send ClientInitialReady-expected error"));
+            return outbound_tx.send(err_response).await.map_err(|_| {
+                anyhow::Error::msg("Failed to send ClientInitialReady-expected error")
+            });
         }
         None => {
             let err_response = Err(tonic::Status::unavailable(
-            "Client did not send a ClientInitialReady and disconnected instead.",
-        ));
+                "Client did not send a ClientInitialReady and disconnected instead.",
+            ));
             return outbound_tx
                 .send(err_response)
                 .await
@@ -218,7 +223,13 @@ async fn game_stream_impl(
     };
 
     // TODO handle the result rather than just quietly shutting down
-    tokio::spawn(async move { inbound.run_inbound_loop().await.unwrap() });
-    tokio::spawn(async move { outbound.run_outbound_loop().await.unwrap() });
+    tokio::spawn(async move {
+        if let Err(e) = inbound.run_inbound_loop().await {
+            log::error!("Error running inbound loop: {:?}", e);
+        }
+    });
+    tokio::spawn(async move { if let Err(e) = outbound.run_outbound_loop().await {
+        log::error!("Error running outbound loop: {:?}", e);
+    } });
     Ok(())
 }

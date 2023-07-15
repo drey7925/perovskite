@@ -498,7 +498,6 @@ impl MapChunkHolder {
         let mut guard = self.chunk.lock();
         let _span = span!("wait_and_get");
         loop {
-            self.bump_access_time();
             match &*guard {
                 HolderState::Empty => self.condition.wait(&mut guard),
                 HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
@@ -509,7 +508,6 @@ impl MapChunkHolder {
     /// Get the chunk, returning None if it's not loaded yet
     fn try_get(&self) -> Result<Option<MapChunkInnerGuard<'_>>> {
         let guard = self.chunk.lock();
-        self.bump_access_time();
         match &*guard {
             HolderState::Empty => Ok(None),
             HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
@@ -1146,7 +1144,7 @@ enum WritebackReq {
 }
 
 // TODO expose as flags or configs
-const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(15);
+const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(5);
 const CACHE_CLEAN_INTERVAL: Duration = Duration::from_secs(3);
 const CACHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 128;
 const CACHE_CLEANUP_RELOCK_EVERY_N: usize = 32;
@@ -1157,13 +1155,12 @@ struct MapCacheCleanup {
 }
 impl MapCacheCleanup {
     async fn run_loop(&mut self) -> Result<()> {
+        let mut interval = tokio::time::interval(CACHE_CLEAN_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         while !self.cancellation.is_cancelled() {
-            let deadline = Instant::now() + CACHE_CLEAN_INTERVAL;
             tokio::select! {
-                _ = tokio::time::sleep_until(deadline.into()) => {
-                    let start = Instant::now();
+                _ = interval.tick() => {
                     tokio::task::block_in_place(|| self.do_cleanup())?;
-                    let _time = Instant::now() - start;
                 }
                 _ = self.cancellation.cancelled() => {
                     info!("Map cache cleanup thread shutting down");
@@ -1179,7 +1176,7 @@ impl MapCacheCleanup {
             let _span = span!("map cache cleanup iteration");
             let now = Instant::now();
             let mut lock = {
-                let _span = span!("acquire game_map write lock");
+                let _span = span!("game_map cleanup write lock");
                 self.map.live_chunks.write()
             };
             if lock.len() <= CACHE_CLEANUP_KEEP_N_RECENTLY_USED {
@@ -1224,7 +1221,7 @@ impl GameMapWriteback {
     async fn run_loop(&mut self) -> Result<()> {
         while !self.cancellation.is_cancelled() {
             let writebacks = self.gather().await.unwrap();
-            info!("Writing back {} chunks", writebacks.len());
+            //info!("Writing back {} chunks", writebacks.len());
 
             if writebacks.len() >= (WRITEBACK_COALESCE_MAX_SIZE) * 4 {
                 warn!("Writeback backlog of {} chunks is unusually high; is the writeback thread falling behind?", writebacks.len());
@@ -1240,7 +1237,9 @@ impl GameMapWriteback {
         let _span = span!("game_map do_writebacks");
         let lock = {
             let _span = span!("acquire game_map read lock for writeback");
-            self.map.live_chunks.read()
+            // This lock needs to barge ahead of writers to avoid starvation.
+            // If writeback is overloaded, writers may as well wait a bit.
+            self.map.live_chunks.read_recursive()
         };
         for coord in writebacks {
             match lock.get(&coord) {

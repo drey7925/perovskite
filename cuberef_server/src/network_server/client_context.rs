@@ -30,9 +30,9 @@ use crate::game_state::event::HandlerContext;
 use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::handlers;
 use crate::game_state::inventory::InventoryKey;
-use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
+use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
 use crate::game_state::items::DigResult;
 use crate::game_state::items::Item;
@@ -42,6 +42,7 @@ use crate::run_handler;
 
 use anyhow::bail;
 use anyhow::Context;
+use anyhow::Error;
 use anyhow::Result;
 use cgmath::Vector3;
 use cgmath::Zero;
@@ -57,6 +58,8 @@ use itertools::iproduct;
 use log::error;
 use log::info;
 use log::warn;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
@@ -236,43 +239,61 @@ impl ClientOutboundContext {
                 // TODO resync in the future? Right now we just kick the client off
                 // A client that's desynced on inventory updates is struggling, so not sure
                 // what we can do
-                bail!("Client {} is lagged, {} pending", self.context_id, x);
+                warn!("Client {} is lagged, {} pending", self.context_id, x);
+                self.inventory_events.resubscribe();
+                return Ok(());
             }
             Err(broadcast::error::RecvError::Closed) => return self.shut_down_connected_client(),
             Ok(x) => x,
         };
-
-        let updates = {
-            let player_state = self.player_context.state.lock();
-            let mut updates = vec![];
-            if player_state.hotbar_inventory_view.wants_update_for(&key) {
-                updates.push(make_inventory_update(
-                    &self.game_state,
-                    &&player_state.hotbar_inventory_view,
-                )?);
+        let mut update_keys = FxHashSet::default();
+        update_keys.insert(key);
+        for _ in 0..64 {
+            match self.inventory_events.try_recv() {
+                Ok(update) => {
+                    update_keys.insert(update);
+                }
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    // we'll deal with it the next time the main loop runs
+                    warn!("Unexpected error from inventory events broadcast: {:?}", e);
+                }
             }
+        }
 
-            for popup in player_state
-                .active_popups
-                .iter()
-                .chain(once(&player_state.inventory_popup))
-            {
-                for view in popup.inventory_views().values() {
-                    if view.wants_update_for(&key) {
-                        updates.push(make_inventory_update(
-                            &self.game_state,
-                            &InventoryViewWithContext {
-                                view,
-                                context: popup,
-                            },
-                        )?);
+        let update_messages = {
+            let player_state = self.player_context.state.lock();
+            let mut update_messages = vec![];
+            for key in update_keys {
+                if player_state.hotbar_inventory_view.wants_update_for(&key) {
+                    update_messages.push(make_inventory_update(
+                        &self.game_state,
+                        &&player_state.hotbar_inventory_view,
+                    )?);
+                }
+
+                for popup in player_state
+                    .active_popups
+                    .iter()
+                    .chain(once(&player_state.inventory_popup))
+                {
+                    for view in popup.inventory_views().values() {
+                        if view.wants_update_for(&key) {
+                            update_messages.push(make_inventory_update(
+                                &self.game_state,
+                                &InventoryViewWithContext {
+                                    view,
+                                    context: popup,
+                                },
+                            )?);
+                        }
                     }
                 }
             }
-            updates
+            update_messages
         };
 
-        for update in updates {
+        for update in update_messages {
             self.outbound_tx
                 .send(Ok(update))
                 .await
@@ -296,13 +317,16 @@ impl ClientOutboundContext {
             Err(broadcast::error::RecvError::Closed) => return self.shut_down_connected_client(),
             Ok(x) => x,
         };
-        let mut updates = vec![update];
+        let mut updates = FxHashMap::default();
+        updates.insert(update.location, update);
         // Drain and batch as many updates as possible
+        // TODO coalesce
         while updates.len() < MAX_UPDATE_BATCH_SIZE {
             match self.block_events.try_recv() {
                 Ok(update) => {
                     if self.wants_block_update(update.location) {
-                        updates.push(update)
+                        // last update wins
+                        updates.insert(update.location, update);
                     }
                 }
                 Err(broadcast::error::TryRecvError::Empty) => break,
@@ -315,7 +339,7 @@ impl ClientOutboundContext {
         plot!("block updates", updates.len() as f64);
 
         let mut update_protos = Vec::new();
-        for update in updates {
+        for update in updates.values() {
             if !self
                 .chunks_known_to_client
                 .contains(&update.location.chunk())
@@ -402,7 +426,7 @@ impl ClientOutboundContext {
                 self.outbound_tx
                     .send(Ok(message))
                     .await
-                    .with_context(|| "Could not send outbound message (full mapchunk)")?;
+                    .map_err(|_| Error::msg("Could not send outbound message (full mapchunk)"))?;
                 Ok(true)
             }
         }
@@ -433,7 +457,7 @@ impl ClientOutboundContext {
         self.outbound_tx
             .send(Ok(message))
             .await
-            .with_context(|| "Could not send outbound message (initial state)")
+            .map_err(|_| Error::msg("Could not send outbound message (initial state)"))
     }
 
     async fn handle_position_update(&mut self, update: PositionAndPacing) -> Result<()> {
@@ -495,7 +519,11 @@ impl ClientOutboundContext {
                 z: player_chunk.z.saturating_add(dz),
             };
             let distance = dx.abs() + dy.abs() + dz.abs();
-            if !coord.is_in_bounds() || self.chunks_known_to_client.contains(&coord) {
+            if !coord.is_in_bounds() {
+                continue;
+            }
+            self.game_state.map().bump_access_time(coord);
+            if self.chunks_known_to_client.contains(&coord) {
                 continue;
             }
             let chunk_data = tokio::task::block_in_place(|| {
@@ -516,7 +544,7 @@ impl ClientOutboundContext {
                 self.outbound_tx
                     .send(Ok(message))
                     .await
-                    .with_context(|| "Could not send outbound message (chunk contents)")?;
+                    .map_err(|_| Error::msg("Could not send outbound message (full mapchunk)"))?;
                 self.chunks_known_to_client.insert(coord);
                 sent_chunks += 1;
                 if sent_chunks > update.chunks_to_send {
@@ -526,10 +554,9 @@ impl ClientOutboundContext {
         }
 
         if !chunks_to_unsubscribe.is_empty() {
-            self.outbound_tx
-                .send(Ok(message))
-                .await
-                .with_context(|| "Could not send outbound message (chunk unsubscribe)")?;
+            self.outbound_tx.send(Ok(message)).await.map_err(|_| {
+                Error::msg("Could not send outbound message (mapchunk unsubscribe)")
+            })?;
         }
         Ok(())
     }
@@ -582,7 +609,7 @@ impl ClientOutboundContext {
         self.outbound_tx
             .send(Ok(message))
             .await
-            .with_context(|| "Could not send outbound message (initial state)")?;
+            .map_err(|_| Error::msg("Could not send outbound message (initial state)"))?;
         Ok(())
     }
 }
@@ -836,7 +863,7 @@ impl ClientInboundContext {
         self.outbound_tx
             .send(Ok(message))
             .await
-            .with_context(|| "Could not send outbound message (sequence ack)")?;
+            .map_err(|_| Error::msg("Could not send outbound message (sequence ack)"))?;
 
         Ok(())
     }
@@ -982,7 +1009,7 @@ impl ClientInboundContext {
             self.outbound_tx
                 .send(Ok(update))
                 .await
-                .with_context(|| "Could not send outbound message (inventory update)")?;
+                .map_err(|_| Error::msg("Could not send outbound message (inventory update)"))?;
         }
 
         Ok(())
@@ -1067,7 +1094,7 @@ impl ClientInboundContext {
             self.outbound_tx
                 .send(Ok(update))
                 .await
-                .with_context(|| "Could not send outbound message (inventory update)")?;
+                .map_err(|_| Error::msg("Could not send outbound message (popup update)"))?;
         }
 
         Ok(())
@@ -1084,7 +1111,7 @@ impl ClientInboundContext {
             self.outbound_tx
                 .send(Ok(message))
                 .await
-                .with_context(|| "Could not send outbound message (inventory update)")?;
+                .map_err(|_| Error::msg("Could not send outbound message (interact key)"))?;
         }
         Ok(())
     }
@@ -1151,9 +1178,9 @@ impl Drop for ClientInboundContext {
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
-const LOAD_EAGER_DISTANCE: i32 = 20;
-const LOAD_LAZY_DISTANCE: i32 = 30;
-const UNLOAD_DISTANCE: i32 = 40;
+const LOAD_EAGER_DISTANCE: i32 = 15;
+const LOAD_LAZY_DISTANCE: i32 = 20;
+const UNLOAD_DISTANCE: i32 = 30;
 const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 16;

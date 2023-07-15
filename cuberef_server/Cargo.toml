@@ -49,3 +49,5 @@ deadlock_detection = ["parking_lot/deadlock_detection"]
 
 # Performance tracing
 tracy = ["tracy-client/enable"]
+
+dhat-heap = []

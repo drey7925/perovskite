@@ -6,3 +6,6 @@ members = [
     "cuberef_game_api"
 ]
 resolver = "2"
+
+[profile.release]
+debug = 1

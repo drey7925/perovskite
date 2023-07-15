@@ -21,3 +21,5 @@ pub(crate) mod game_ui;
 pub(crate) mod main_menu;
 pub(crate) mod net_client;
 pub mod vulkan;
+
+pub mod loadtester;
