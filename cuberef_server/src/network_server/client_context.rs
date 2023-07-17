@@ -15,9 +15,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::iter::once;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::game_state::blocks;
@@ -28,6 +32,7 @@ use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
 use crate::game_state::game_map::BlockUpdate;
+use crate::game_state::game_map::CACHE_CLEAN_MIN_AGE;
 use crate::game_state::handlers;
 use crate::game_state::inventory::InventoryKey;
 use crate::game_state::inventory::InventoryViewWithContext;
@@ -36,6 +41,7 @@ use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
 use crate::game_state::items::DigResult;
 use crate::game_state::items::Item;
+use crate::game_state::player;
 use crate::game_state::player::PlayerContext;
 use crate::game_state::GameState;
 use crate::run_handler;
@@ -58,8 +64,10 @@ use itertools::iproduct;
 use log::error;
 use log::info;
 use log::warn;
+use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+use rustc_hash::FxHasher;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
@@ -68,12 +76,76 @@ use tracy_client::span;
 
 static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
+pub(crate) struct PlayerCoroutinePack {
+    pub(crate) context: Arc<SharedContext>,
+    chunk_sender: MapChunkSender,
+    block_event_sender: BlockEventSender,
+    inventory_event_sender: InventoryEventSender,
+    inbound_worker: InboundWorker,
+}
+impl PlayerCoroutinePack {
+    pub(crate) async fn run_all(mut self) -> Result<()> {
+        let username = self.context.player_context.name().to_string();
+        initialize_protocol_state(&mut self.context, &self.inbound_worker.outbound_tx).await?;
+        #[cfg(not(tokio_unstable))]
+        {
+            tracing::info!("Starting workers for {}...", username);
+            tokio::spawn(async move {
+                if let Err(e) = self.inbound_worker.run_inbound_loop().await {
+                    log::error!("Error running inbound loop: {:?}", e);
+                }
+            });
+            tokio::spawn(async move {
+                if let Err(e) = self.chunk_sender.run_loop().await {
+                    log::error!("Error running chunk sender: {:?}", e);
+                }
+            });
+            tokio::spawn(async move {
+                if let Err(e) = self.block_event_sender.run_outbound_loop().await {
+                    log::error!("Error running block event sender loop: {:?}", e);
+                }
+            });
+            tokio::spawn(async move {
+                if let Err(e) = self.inventory_event_sender.run_outbound_loop().await {
+                    log::error!("Error running inventory event sender loop: {:?}", e);
+                }
+            });
+        }
+        #[cfg(tokio_unstable)]
+        {
+            
+            tracing::info!("[tokio-unstable] Starting named workers for {}...", username);
+            tokio::task::Builder::new().name(&format!("inbound_worker_{}", username)).spawn(async move {
+                if let Err(e) = self.inbound_worker.run_inbound_loop().await {
+                    log::error!("Error running inbound loop: {:?}", e);
+                }
+            });
+            tokio::task::Builder::new().name(&format!("chunk_sender_{}", username)).spawn(async move {
+                if let Err(e) = self.chunk_sender.run_loop().await {
+                    log::error!("Error running chunk sender: {:?}", e);
+                }
+            });
+            tokio::task::Builder::new().name(&format!("block_event_sender_{}", username)).spawn(async move {
+                if let Err(e) = self.block_event_sender.run_outbound_loop().await {
+                    log::error!("Error running block event sender loop: {:?}", e);
+                }
+            });
+            tokio::task::Builder::new().name(&format!("inv_event_sender_{}", username)).spawn(async move {
+                if let Err(e) = self.inventory_event_sender.run_outbound_loop().await {
+                    log::error!("Error running inventory event sender loop: {:?}", e);
+                }
+            });
+        }
+        Ok(())
+    }
+}
+
 pub(crate) async fn make_client_contexts(
     game_state: Arc<GameState>,
     player_context: PlayerContext,
     inbound_rx: tonic::Streaming<proto::StreamToServer>,
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
-) -> Result<(ClientInboundContext, ClientOutboundContext)> {
+) -> Result<PlayerCoroutinePack> {
     let id = CLIENT_CONTEXT_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     let initial_position = PlayerPositionUpdate {
@@ -94,11 +166,22 @@ pub(crate) async fn make_client_contexts(
 
     let player_context = Arc::new(player_context);
 
-    let inbound = ClientInboundContext {
-        context_id: id,
-        game_state: game_state.clone(),
-        player_context: player_context.clone(),
-        cancellation: cancellation.clone(),
+    let block_events = game_state.map().subscribe();
+    let inventory_events = game_state.inventory_manager().subscribe();
+    let chunk_tracker = Arc::new(ChunkTracker::new(
+        game_state.clone(),
+        player_context.clone(),
+    ));
+
+    let context = Arc::new(SharedContext {
+        game_state,
+        player_context,
+        id,
+        cancellation,
+    });
+
+    let inbound_worker = InboundWorker {
+        context: context.clone(),
         inbound_rx,
         own_positions: pos_send,
         outbound_tx: outbound_tx.clone(),
@@ -111,220 +194,420 @@ pub(crate) async fn make_client_contexts(
             multiplicative_decrease: 0.5,
         },
     };
-    let block_events = game_state.map().subscribe();
-    let inventory_events = game_state.inventory_manager().subscribe();
-
-    let outbound = ClientOutboundContext {
-        context_id: id,
-        game_state,
-        player_context,
-        outbound_tx,
-        cancellation,
-        block_events,
-        inventory_events,
-        own_positions: pos_recv,
-        interested_chunks: HashSet::new(),
-        interested_inventories,
-        chunks_known_to_client: HashSet::new(),
+    let chunk_sender = MapChunkSender {
+        context: context.clone(),
+        outbound_tx: outbound_tx.clone(),
+        chunk_tracker: chunk_tracker.clone(),
+        position: pos_recv,
     };
-    Ok((inbound, outbound))
+    let block_event_sender = BlockEventSender {
+        context: context.clone(),
+        outbound_tx: outbound_tx.clone(),
+        block_events,
+        chunk_tracker,
+    };
+    let inventory_event_sender = InventoryEventSender {
+        context: context.clone(),
+        outbound_tx: outbound_tx.clone(),
+        inventory_events,
+        interested_inventories,
+    };
+
+    Ok(PlayerCoroutinePack {
+        context,
+        chunk_sender,
+        block_event_sender,
+        inventory_event_sender,
+        inbound_worker,
+    })
 }
 
-// State/structure backing a gRPC GameStream on the outbound side
-pub(crate) struct ClientOutboundContext {
-    // Core fields
-    context_id: usize,
+async fn initialize_protocol_state(
+    context: &SharedContext,
+    outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
+) -> Result<()> {
+    let initial_position = PlayerPositionUpdate {
+        tick: context.game_state.tick(),
+        position: context.player_context.last_position().position,
+        velocity: cgmath::Vector3::zero(),
+        face_direction: (0., 0.),
+    };
+
+    let (hotbar_update, inv_manipulation_update) = {
+        let player_state = context.player_context.state.lock();
+        (
+            make_inventory_update(&context.game_state, &&player_state.hotbar_inventory_view)?,
+            make_inventory_update(
+                &context.game_state,
+                &&player_state.inventory_manipulation_view,
+            )?,
+        )
+    };
+
+    outbound_tx.send(Ok(hotbar_update)).await?;
+    outbound_tx.send(Ok(inv_manipulation_update)).await?;
+    send_all_popups(context, outbound_tx).await?;
+
+    let message = {
+        let player_state = context.player_context.state.lock();
+        StreamToClient {
+            tick: context.game_state.tick(),
+            server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
+                proto::SetClientState {
+                    position: Some(PositionUpdate {
+                        position: Some(initial_position.position.try_into()?),
+                        velocity: Some(Vector3::zero().try_into()?),
+                        face_direction: Some(Angles {
+                            deg_azimuth: 0.,
+                            deg_elevation: 0.,
+                        }),
+                    }),
+                    // TODO pull these out (or better yet, the whole proto) into a player_state method
+                    hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
+                    inventory_popup: Some(player_state.inventory_popup.to_proto()),
+                    inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
+                },
+            )),
+        }
+    };
+    outbound_tx
+        .send(Ok(message))
+        .await
+        .map_err(|_| Error::msg("Could not send outbound message (initial state)"))?;
+    Ok(())
+}
+
+async fn send_all_popups(
+    context: &SharedContext,
+    outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
+) -> Result<()> {
+    let updates = {
+        let player_state = context.player_context.state.lock();
+        let mut updates = vec![];
+
+        for popup in player_state
+            .active_popups
+            .iter()
+            .chain(once(&player_state.inventory_popup))
+        {
+            for view in popup.inventory_views().values() {
+                updates.push(make_inventory_update(
+                    &context.game_state,
+                    &InventoryViewWithContext {
+                        view,
+                        context: popup,
+                    },
+                )?);
+            }
+        }
+        updates
+    };
+    for update in updates {
+        outbound_tx
+            .send(Ok(update))
+            .await
+            .with_context(|| "Could not send outbound message (inventory update)")?;
+    }
+
+    Ok(())
+}
+
+pub struct SharedContext {
     game_state: Arc<GameState>,
     player_context: Arc<PlayerContext>,
+    id: usize,
+    cancellation: CancellationToken,
+}
+impl Drop for SharedContext {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
+}
+
+/// Tracks what chunks are close enough to the player to be of interest
+pub(crate) struct ChunkTracker {
+    player_context: Arc<PlayerContext>,
+    game_state: Arc<GameState>,
+    // The client knows about these chunks, and we should send updates to them
+    loaded_chunks: RwLock<FxHashSet<ChunkCoordinate>>,
+    // todo later - chunks that the client might have unloaded, but might be worth sending on a best-effort basis
+    // todo - move AIMD pacing into this
+}
+impl ChunkTracker {
+    pub(crate) fn new(game_state: Arc<GameState>, player_context: Arc<PlayerContext>) -> Self {
+        Self {
+            game_state,
+            player_context,
+            loaded_chunks: RwLock::new(FxHashSet::default()),
+        }
+    }
+    fn is_loaded(&self, coord: ChunkCoordinate) -> bool {
+        self.loaded_chunks.read().contains(&coord)
+    }
+    // Marks a chunk as loaded. This must be called before the chunk is actually loaded and sent to the client
+    fn mark_chunk_loaded(&self, player_coord: ChunkCoordinate) {
+        self.loaded_chunks.write().insert(player_coord);
+    }
+
+    // Marks a chunk as unloaded. This must be called after the chunk is actually unloaded and sent to the client
+    fn mark_chunk_unloaded(&self, player_coord: ChunkCoordinate) {
+        self.loaded_chunks.write().remove(&player_coord);
+    }
+
+    fn mark_chunks_unloaded(&self, chunks: impl Iterator<Item = ChunkCoordinate>) {
+        let mut write_lock = self.loaded_chunks.write();
+        for coord in chunks {
+            write_lock.remove(&coord);
+        }
+    }
+
+    fn clear(&self) {
+        self.loaded_chunks.write().clear();
+    }
+}
+
+// Loads and unloads player chunks
+pub(crate) struct MapChunkSender {
+    context: Arc<SharedContext>,
+
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    chunk_tracker: Arc<ChunkTracker>,
+
+    position: watch::Receiver<PositionAndPacing>,
+}
+const ACCESS_TIME_BUMP_SHARDS: u32 = 32;
+impl MapChunkSender {
+    #[tracing::instrument(
+        name = "MapChunkSender loop",
+        level = "trace",
+        skip(self),
+        fields(
+            player_name = %self.context.player_context.name(),
+        ),
+    )]
+    pub(crate) async fn run_loop(&mut self) -> Result<()> {
+        assert!(CACHE_CLEAN_MIN_AGE > (Duration::from_secs_f64(0.2) * ACCESS_TIME_BUMP_SHARDS));
+        let mut access_time_bump_idx = 0;
+        while !self.context.cancellation.is_cancelled() {
+            tokio::select! {
+                _ = self.position.changed() => {
+                    access_time_bump_idx = (access_time_bump_idx + 1) % ACCESS_TIME_BUMP_SHARDS;
+                    let update = *self.position.borrow_and_update();
+                    self.handle_position_update(update, access_time_bump_idx).await?;
+                }
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
+                }
+                _ = self.context.game_state.await_start_shutdown() => {
+                    info!("Game shutting down, disconnecting {}", self.context.id);
+                    // cancel the inbound context as well
+                    self.context.cancellation.cancel();
+                }
+            };
+        }
+        Ok(())
+    }
+    #[tracing::instrument(
+        name = "HandlePositionUpdate",
+        level = "trace",
+        skip(self, update),
+        fields(
+            player_name = %self.context.player_context.name(),
+            budget = %update.chunks_to_send,
+            player_chunk
+        ),
+    )]
+    async fn handle_position_update(&mut self, update: PositionAndPacing, bump_index: u32) -> Result<()> {
+        let position = update.position;
+        // TODO anticheat/safety checks
+        // TODO consider caching more in the player's movement direction as a form of prefetch???
+        let player_block_coord: BlockCoordinate = match position.position.try_into() {
+            Ok(x) => x,
+            Err(e) => {
+                log::warn!(
+                    "Player had invalid position: {:?}, error {:?}",
+                    position.position,
+                    e
+                );
+                // TODO teleport the player
+                BlockCoordinate::new(0, 0, 0)
+            }
+        };
+        let player_chunk = player_block_coord.chunk();
+        tracing::Span::current().record("player_chunk", format!("{:?}", player_chunk));
+
+        // Phase 1: Unload chunks that are too far away
+        let chunks_to_unsubscribe: Vec<_> = self
+            .chunk_tracker
+            .loaded_chunks
+            .read()
+            .iter()
+            .filter(|&x| self.should_unload(player_chunk, *x))
+            .cloned()
+            .collect();
+        let message = proto::StreamToClient {
+            tick: self.context.game_state.tick(),
+            server_message: Some(proto::stream_to_client::ServerMessage::MapChunkUnsubscribe(
+                proto::MapChunkUnsubscribe {
+                    chunk_coord: chunks_to_unsubscribe.iter().map(|&x| x.into()).collect(),
+                },
+            )),
+        };
+        self.outbound_tx
+            .send(Ok(message))
+            .await
+            .map_err(|_| Error::msg("Could not send outbound message (mapchunk unsubscribe)"))?;
+        self.chunk_tracker
+            .mark_chunks_unloaded(chunks_to_unsubscribe.into_iter());
+
+        // Phase 2: Load chunks that are close enough.
+        // Chunks are expensive to load and send, so we keep track of
+        let mut sent_chunks = 0;
+        for &(dx, dy, dz) in LOAD_LAZY_SORTED_COORDS.iter() {
+            let coord = ChunkCoordinate {
+                x: player_chunk.x.saturating_add(dx),
+                y: player_chunk.y.saturating_add(dy),
+                z: player_chunk.z.saturating_add(dz),
+            };
+            let distance = dx.abs() + dy.abs() + dz.abs();
+            if !coord.is_in_bounds() {
+                continue;
+            }
+            if self.position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE {
+                // If we already have a new position update, restart the process with the new position
+                tracing::event!(
+                    tracing::Level::TRACE,
+                    "Got a new position update, restarting the load process"
+                );
+                break;
+            }
+            let mut hasher = FxHasher::default();
+            coord.hash(&mut hasher);
+            let hash = hasher.finish();
+            if hash % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
+                self.context.game_state.map().bump_access_time(coord);
+            }
+            if self.chunk_tracker.is_loaded(coord) {
+                continue;
+            }
+            // We load chunks as long as they're close enough and the map system
+            // isn't overloaded. If the map system is overloaded, we'll only load
+            // chunks that are close enough to the player to really matter.
+            let should_load = distance <= LOAD_EAGER_DISTANCE
+                && (distance <= FORCE_LOAD_DISTANCE
+                    || !self.context.game_state.map().in_pushback());
+
+            let chunk_data = tokio::task::block_in_place(|| {
+                self.context
+                    .game_state
+                    .map()
+                    .get_chunk_client_proto(coord, should_load)
+            })?;
+            if let Some(chunk_data) = chunk_data {
+                let message = proto::StreamToClient {
+                    tick: self.context.game_state.tick(),
+                    server_message: Some(proto::stream_to_client::ServerMessage::MapChunk(
+                        proto::MapChunk {
+                            chunk_coord: Some(coord.into()),
+                            chunk_data: Some(chunk_data),
+                        },
+                    )),
+                };
+                self.outbound_tx
+                    .send(Ok(message))
+                    .await
+                    .map_err(|_| Error::msg("Could not send outbound message (full mapchunk)"))?;
+                self.chunk_tracker.mark_chunk_loaded(coord);
+                sent_chunks += 1;
+                if sent_chunks > update.chunks_to_send {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn should_unload(&self, player_chunk: ChunkCoordinate, chunk: ChunkCoordinate) -> bool {
+        player_chunk.manhattan_distance(chunk) > UNLOAD_DISTANCE as u32
+    }
+}
+
+// Sends block updates to the client
+pub(crate) struct BlockEventSender {
+    context: Arc<SharedContext>,
 
     // RPC stream is sent via this channel
     outbound_tx: mpsc::Sender<tonic::Result<proto::StreamToClient>>,
 
-    // Inbound channels/flags
-    // Cancellation, shared with the inbound context
-    cancellation: CancellationToken,
-    // All updates to the map from all sources, not yet filtered by location (ClientOutboundContext is
+    // All updates to the map from all sources, not yet filtered by location (BlockEventSender is
     // responsible for filtering)
     block_events: broadcast::Receiver<BlockUpdate>,
-    // TODO consider delta updates for this
-    inventory_events: broadcast::Receiver<UpdatedInventory>,
-    // This character's own movement, coming from their client (forwarded by the ClientInboundContext to here
-    // and to elsewhere)
-    // In the future, anticheat might check for shenanigans involving these, probably not as part of ClientOutboundContext
-    // coroutines
-    own_positions: watch::Receiver<PositionAndPacing>,
-
-    // Server-side state per-client state
-    // Chunks that are close enough to the player to be of interest.
-    // This will have hysteresis to avoid flapping unsubscribes/resubscribes;
-    // the distance at which a client subscribes to a chunk is smaller than the distance
-    // at which they will unsubscribe from the chunk
-    interested_chunks: HashSet<ChunkCoordinate>,
-    // The client should have these chunks cached already. If a chunk is missing from this set
-    // we'll need to send the full chunk to the client first.
-    chunks_known_to_client: HashSet<ChunkCoordinate>,
-
-    interested_inventories: HashSet<InventoryKey>,
+    chunk_tracker: Arc<ChunkTracker>,
 }
-impl ClientOutboundContext {
-    // Poll for world events and send relevant messages to the client through outbound_tx
+impl BlockEventSender {
+    #[tracing::instrument(
+        name = "BlockEventOutboundLoop",
+        level = "info",
+        skip(self),
+        fields(
+            player_name = %self.context.player_context.name(),
+        )
+    )]
     pub(crate) async fn run_outbound_loop(&mut self) -> Result<()> {
-        self.initialize_outbound_loop().await?;
-
-        while !self.cancellation.is_cancelled() {
+        while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 block_event = self.block_events.recv() => {
                     self.handle_block_update(block_event).await?;
                 }
-                inv_key = self.inventory_events.recv() => {
-                    self.handle_inventory_update(inv_key).await?;
-                }
-                _ = self.own_positions.changed() => {
-                    let update = *self.own_positions.borrow_and_update();
-                    self.handle_position_update(update).await?;
-                }
-                _ = self.cancellation.cancelled() => {
-                    info!("Client outbound loop {} detected cancellation and shutting down", self.context_id)
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
                     // pass
-                }
-                _ = self.game_state.await_start_shutdown() => {
-                    info!("Game shutting down, disconnecting {}", self.context_id);
-                    // cancel the inbound context as well
-                    self.cancellation.cancel();
                 }
             };
         }
         Ok(())
     }
 
-    async fn send_popup_updates(&mut self) -> Result<()> {
-        let updates = {
-            let player_state = self.player_context.state.lock();
-            let mut updates = vec![];
-
-            for popup in player_state
-                .active_popups
-                .iter()
-                .chain(once(&player_state.inventory_popup))
-            {
-                for view in popup.inventory_views().values() {
-                    updates.push(make_inventory_update(
-                        &self.game_state,
-                        &InventoryViewWithContext {
-                            view,
-                            context: popup,
-                        },
-                    )?);
-                }
-            }
-            updates
-        };
-        for update in updates {
-            self.outbound_tx
-                .send(Ok(update))
-                .await
-                .with_context(|| "Could not send outbound message (inventory update)")?;
-        }
-
-        Ok(())
-    }
-
-    async fn handle_inventory_update(
-        &mut self,
-        update: Result<UpdatedInventory, broadcast::error::RecvError>,
-    ) -> Result<()> {
-        let key = match update {
-            Err(broadcast::error::RecvError::Lagged(x)) => {
-                log::error!("Client {} is lagged, {} pending", self.context_id, x);
-                // TODO resync in the future? Right now we just kick the client off
-                // A client that's desynced on inventory updates is struggling, so not sure
-                // what we can do
-                warn!("Client {} is lagged, {} pending", self.context_id, x);
-                self.inventory_events.resubscribe();
-                return Ok(());
-            }
-            Err(broadcast::error::RecvError::Closed) => return self.shut_down_connected_client(),
-            Ok(x) => x,
-        };
-        let mut update_keys = FxHashSet::default();
-        update_keys.insert(key);
-        for _ in 0..64 {
-            match self.inventory_events.try_recv() {
-                Ok(update) => {
-                    update_keys.insert(update);
-                }
-                Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    // we'll deal with it the next time the main loop runs
-                    warn!("Unexpected error from inventory events broadcast: {:?}", e);
-                }
-            }
-        }
-
-        let update_messages = {
-            let player_state = self.player_context.state.lock();
-            let mut update_messages = vec![];
-            for key in update_keys {
-                if player_state.hotbar_inventory_view.wants_update_for(&key) {
-                    update_messages.push(make_inventory_update(
-                        &self.game_state,
-                        &&player_state.hotbar_inventory_view,
-                    )?);
-                }
-
-                for popup in player_state
-                    .active_popups
-                    .iter()
-                    .chain(once(&player_state.inventory_popup))
-                {
-                    for view in popup.inventory_views().values() {
-                        if view.wants_update_for(&key) {
-                            update_messages.push(make_inventory_update(
-                                &self.game_state,
-                                &InventoryViewWithContext {
-                                    view,
-                                    context: popup,
-                                },
-                            )?);
-                        }
-                    }
-                }
-            }
-            update_messages
-        };
-
-        for update in update_messages {
-            self.outbound_tx
-                .send(Ok(update))
-                .await
-                .with_context(|| "Could not send outbound message (inventory update)")?;
-        }
-
-        Ok(())
-    }
-
+    #[tracing::instrument(
+        name = "HandleBlockUpdate",
+        level = "trace",
+        skip(self, update),
+        fields(
+            player_name = %self.context.player_context.name(),
+        )
+    )]
     async fn handle_block_update(
         &mut self,
         update: Result<BlockUpdate, broadcast::error::RecvError>,
     ) -> Result<()> {
         let update = match update {
-            Err(broadcast::error::RecvError::Lagged(x)) => {
-                log::warn!("Client {} is lagged, {} pending", self.context_id, x);
+            Err(broadcast::error::RecvError::Lagged(num_pending)) => {
+                tracing::warn!(
+                    "Client {} is lagged, {} pending",
+                    self.context.id,
+                    num_pending
+                );
                 // This client context is lagging behind and lost block updates.
                 // Fall back and get it resynced
                 return self.handle_block_update_lagged().await;
             }
-            Err(broadcast::error::RecvError::Closed) => return self.shut_down_connected_client(),
+            Err(broadcast::error::RecvError::Closed) => {
+                self.context.cancellation.cancel();
+                return Ok(());
+            }
             Ok(x) => x,
         };
         let mut updates = FxHashMap::default();
-        updates.insert(update.location, update);
+        if self.chunk_tracker.is_loaded(update.location.chunk()) {
+            updates.insert(update.location, update);
+        }
         // Drain and batch as many updates as possible
         // TODO coalesce
         while updates.len() < MAX_UPDATE_BATCH_SIZE {
             match self.block_events.try_recv() {
                 Ok(update) => {
-                    if self.wants_block_update(update.location) {
+                    if self.chunk_tracker.is_loaded(update.location.chunk()) {
                         // last update wins
                         updates.insert(update.location, update);
                     }
@@ -337,20 +620,14 @@ impl ClientOutboundContext {
             }
         }
         plot!("block updates", updates.len() as f64);
+        tracing::event!(
+            tracing::Level::TRACE,
+            "Sending {} block updates",
+            updates.len()
+        );
 
         let mut update_protos = Vec::new();
         for update in updates.values() {
-            if !self
-                .chunks_known_to_client
-                .contains(&update.location.chunk())
-            {
-                // The client doesn't know this chunk, but we think it should be interested in it
-                // It was probably not in server cache when it became interesting, and wasn't
-                // interesting enough to load into memory then. However, it's being updated, so we
-                // may as well get it to the client
-                self.maybe_send_full_chunk(update.location.chunk(), true)
-                    .await?;
-            }
             update_protos.push(proto::MapDeltaUpdate {
                 block_coord: Some(update.location.into()),
                 new_id: update.new_value.id().into(),
@@ -359,7 +636,7 @@ impl ClientOutboundContext {
 
         if !update_protos.is_empty() {
             let message = proto::StreamToClient {
-                tick: self.game_state.tick(),
+                tick: self.context.game_state.tick(),
                 server_message: Some(proto::stream_to_client::ServerMessage::MapDeltaUpdate(
                     MapDeltaUpdateBatch {
                         updates: update_protos,
@@ -374,69 +651,20 @@ impl ClientOutboundContext {
         Ok(())
     }
 
-    fn wants_block_update(&self, coord: BlockCoordinate) -> bool {
-        self.interested_chunks.contains(&coord.chunk())
-    }
-
     async fn handle_block_update_lagged(&mut self) -> Result<()> {
         // this ends up racy. resubscribe first, so we get duplicate/pointless events after the
         // resubscribe, rather than missing events if we resubscribe to the broadcast after sending current
         // chunk states
         self.block_events.resubscribe();
-        self.chunks_known_to_client.clear();
-        self.interested_chunks.clear();
-        // TODO back off with the number of chunks to subscribe to
+        self.chunk_tracker.clear();
         Ok(())
-    }
-
-    fn shut_down_connected_client(&mut self) -> Result<()> {
-        log::error!("Unimplemented: clean shutdown for connected client");
-        self.cancellation.cancel();
-        Ok(())
-    }
-
-    // Sends a full chunk
-    async fn maybe_send_full_chunk(
-        &mut self,
-        coord: ChunkCoordinate,
-        load_if_missing: bool,
-    ) -> std::result::Result<bool, anyhow::Error> {
-        if self.chunks_known_to_client.contains(&coord) {
-            // The client already has this chunk and we think they have an up to date copy.
-            return Ok(true);
-        }
-        let chunk_proto = tokio::task::block_in_place(|| {
-            self.game_state
-                .map()
-                .get_chunk_client_proto(coord, load_if_missing)
-        })?;
-        match chunk_proto {
-            None => Ok(false),
-            Some(chunk_data) => {
-                self.chunks_known_to_client.insert(coord);
-                let message = proto::StreamToClient {
-                    tick: self.game_state.tick(),
-                    server_message: Some(proto::stream_to_client::ServerMessage::MapChunk(
-                        proto::MapChunk {
-                            chunk_coord: Some(coord.into()),
-                            chunk_data: Some(chunk_data),
-                        },
-                    )),
-                };
-                self.outbound_tx
-                    .send(Ok(message))
-                    .await
-                    .map_err(|_| Error::msg("Could not send outbound message (full mapchunk)"))?;
-                Ok(true)
-            }
-        }
     }
 
     async fn teleport_player(&mut self, location: Vector3<f64>) -> Result<()> {
         let message = {
-            let player_state = self.player_context.state.lock();
+            let player_state = self.context.player_context.state.lock();
             StreamToClient {
-                tick: self.game_state.tick(),
+                tick: self.context.game_state.tick(),
                 server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                     proto::SetClientState {
                         position: Some(PositionUpdate {
@@ -459,175 +687,123 @@ impl ClientOutboundContext {
             .await
             .map_err(|_| Error::msg("Could not send outbound message (initial state)"))
     }
+}
 
-    async fn handle_position_update(&mut self, update: PositionAndPacing) -> Result<()> {
-        let position = update.position;
-        // TODO anticheat/safety checks
-        // TODO consider caching more in the player's movement direction as a form of prefetch???
-        let player_block_coord: BlockCoordinate = match position.position.try_into() {
-            Ok(x) => x,
-            Err(e) => {
-                log::warn!(
-                    "Player had invalid position: {:?}, error {:?}",
-                    position.position,
-                    e
-                );
-                self.teleport_player(Vector3::zero()).await?;
-                BlockCoordinate::new(0, 0, 0)
-            }
-        };
-        let player_chunk = player_block_coord.chunk();
+pub(crate) struct InventoryEventSender {
+    context: Arc<SharedContext>,
+    // RPC stream is sent via this channel
+    outbound_tx: mpsc::Sender<tonic::Result<proto::StreamToClient>>,
 
-        // These chunks are far enough away to unsubscribe, but the client doesn't even know about them yet
-        let chunks_to_silently_unsubscribe = self
-            .interested_chunks
-            .iter()
-            .copied()
-            .filter(|&chunk| player_chunk.manhattan_distance(chunk) > UNLOAD_DISTANCE as u32)
-            .collect::<Vec<_>>();
-
-        for chunk in chunks_to_silently_unsubscribe.iter() {
-            self.interested_chunks.remove(chunk);
-        }
-
-        // These chunks are far enough away to unsubscribe, and the client knows about them
-        let chunks_to_unsubscribe = self
-            .chunks_known_to_client
-            .iter()
-            .copied()
-            .filter(|&chunk| player_chunk.manhattan_distance(chunk) > UNLOAD_DISTANCE as u32)
-            .collect::<Vec<_>>();
-
-        for chunk in chunks_to_unsubscribe.iter() {
-            self.chunks_known_to_client.remove(chunk);
-        }
-
-        let message = proto::StreamToClient {
-            tick: self.game_state.tick(),
-            server_message: Some(proto::stream_to_client::ServerMessage::MapChunkUnsubscribe(
-                proto::MapChunkUnsubscribe {
-                    chunk_coord: chunks_to_unsubscribe.iter().map(|&x| x.into()).collect(),
-                },
-            )),
-        };
-
-        let mut sent_chunks = 0;
-        for &(dx, dy, dz) in LOAD_LAZY_SORTED_COORDS.iter() {
-            let coord = ChunkCoordinate {
-                x: player_chunk.x.saturating_add(dx),
-                y: player_chunk.y.saturating_add(dy),
-                z: player_chunk.z.saturating_add(dz),
+    // TODO consider delta updates for this
+    inventory_events: broadcast::Receiver<UpdatedInventory>,
+    interested_inventories: HashSet<InventoryKey>,
+}
+impl InventoryEventSender {
+    #[tracing::instrument(
+        name = "InventoryOutboundLoop",
+        level = "info",
+        skip(self),
+        fields(
+            player_name = %self.context.player_context.name(),
+        )
+    )]
+    pub(crate) async fn run_outbound_loop(&mut self) -> Result<()> {
+        while !self.context.cancellation.is_cancelled() {
+            tokio::select! {
+                inventory_update = self.inventory_events.recv() => {
+                    self.handle_inventory_update(inventory_update).await?;
+                }
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
+                    // pass
+                }
             };
-            let distance = dx.abs() + dy.abs() + dz.abs();
-            if !coord.is_in_bounds() {
-                continue;
+        }
+        Ok(())
+    }
+
+    async fn handle_inventory_update(
+        &mut self,
+        update: Result<UpdatedInventory, broadcast::error::RecvError>,
+    ) -> Result<()> {
+        let key = match update {
+            Err(broadcast::error::RecvError::Lagged(x)) => {
+                log::error!("Client {} is lagged, {} pending", self.context.id, x);
+                // TODO resync in the future? Right now we just kick the client off
+                // A client that's desynced on inventory updates is struggling, so not sure
+                // what we can do
+                tracing::error!("Client {} is lagged, {} pending", self.context.id, x);
+                self.inventory_events.resubscribe();
+                return Ok(());
             }
-            self.game_state.map().bump_access_time(coord);
-            if self.chunks_known_to_client.contains(&coord) {
-                continue;
+            Err(broadcast::error::RecvError::Closed) => {
+                self.context.cancellation.cancel();
+                return Ok(());
             }
-            let chunk_data = tokio::task::block_in_place(|| {
-                self.game_state
-                    .map()
-                    .get_chunk_client_proto(coord, distance <= LOAD_EAGER_DISTANCE)
-            })?;
-            if let Some(chunk_data) = chunk_data {
-                let message = proto::StreamToClient {
-                    tick: self.game_state.tick(),
-                    server_message: Some(proto::stream_to_client::ServerMessage::MapChunk(
-                        proto::MapChunk {
-                            chunk_coord: Some(coord.into()),
-                            chunk_data: Some(chunk_data),
-                        },
-                    )),
-                };
-                self.outbound_tx
-                    .send(Ok(message))
-                    .await
-                    .map_err(|_| Error::msg("Could not send outbound message (full mapchunk)"))?;
-                self.chunks_known_to_client.insert(coord);
-                sent_chunks += 1;
-                if sent_chunks > update.chunks_to_send {
-                    break;
+            Ok(x) => x,
+        };
+        let mut update_keys = FxHashSet::default();
+        update_keys.insert(key);
+        for _ in 0..64 {
+            match self.inventory_events.try_recv() {
+                Ok(update) => {
+                    update_keys.insert(update);
+                }
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    // we'll deal with it the next time the main loop runs
+                    warn!("Unexpected error from inventory events broadcast: {:?}", e);
                 }
             }
         }
 
-        if !chunks_to_unsubscribe.is_empty() {
-            self.outbound_tx.send(Ok(message)).await.map_err(|_| {
-                Error::msg("Could not send outbound message (mapchunk unsubscribe)")
-            })?;
-        }
-        Ok(())
-    }
+        let update_messages = {
+            let player_state = self.context.player_context.state.lock();
+            let mut update_messages = vec![];
+            for key in update_keys {
+                if player_state.hotbar_inventory_view.wants_update_for(&key) {
+                    update_messages.push(make_inventory_update(
+                        &self.context.game_state,
+                        &&player_state.hotbar_inventory_view,
+                    )?);
+                }
 
-    async fn initialize_outbound_loop(&mut self) -> Result<()> {
-        let initial_position = PlayerPositionUpdate {
-            tick: self.game_state.tick(),
-            position: self.player_context.last_position().position,
-            velocity: cgmath::Vector3::zero(),
-            face_direction: (0., 0.),
-        };
-
-        let (hotbar_update, inv_manipulation_update) = {
-            let player_state = self.player_context.state.lock();
-            (
-                make_inventory_update(&self.game_state, &&player_state.hotbar_inventory_view)?,
-                make_inventory_update(
-                    &self.game_state,
-                    &&player_state.inventory_manipulation_view,
-                )?,
-            )
-        };
-
-        self.outbound_tx.send(Ok(hotbar_update)).await?;
-        self.outbound_tx.send(Ok(inv_manipulation_update)).await?;
-        self.send_popup_updates().await?;
-
-        let message = {
-            let player_state = self.player_context.state.lock();
-            StreamToClient {
-                tick: self.game_state.tick(),
-                server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
-                    proto::SetClientState {
-                        position: Some(PositionUpdate {
-                            position: Some(initial_position.position.try_into()?),
-                            velocity: Some(Vector3::zero().try_into()?),
-                            face_direction: Some(Angles {
-                                deg_azimuth: 0.,
-                                deg_elevation: 0.,
-                            }),
-                        }),
-                        // TODO pull these out (or better yet, the whole proto) into a player_state method
-                        hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
-                        inventory_popup: Some(player_state.inventory_popup.to_proto()),
-                        inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
-                    },
-                )),
+                for popup in player_state
+                    .active_popups
+                    .iter()
+                    .chain(once(&player_state.inventory_popup))
+                {
+                    for view in popup.inventory_views().values() {
+                        if view.wants_update_for(&key) {
+                            update_messages.push(make_inventory_update(
+                                &self.context.game_state,
+                                &InventoryViewWithContext {
+                                    view,
+                                    context: popup,
+                                },
+                            )?);
+                        }
+                    }
+                }
             }
+            update_messages
         };
-        self.outbound_tx
-            .send(Ok(message))
-            .await
-            .map_err(|_| Error::msg("Could not send outbound message (initial state)"))?;
+
+        for update in update_messages {
+            self.outbound_tx
+                .send(Ok(update))
+                .await
+                .with_context(|| "Could not send outbound message (inventory update)")?;
+        }
+
         Ok(())
     }
 }
-impl Drop for ClientOutboundContext {
-    fn drop(&mut self) {
-        self.cancellation.cancel();
-    }
-}
-// State/structure backing a gRPC GameStream on the inbound side
-pub(crate) struct ClientInboundContext {
-    // Core fields
-    // Matches the ID of the outbound context
-    context_id: usize,
-    game_state: Arc<GameState>,
-    player_context: Arc<PlayerContext>,
 
-    // Cancellation, shared with the outbound context
-    cancellation: CancellationToken,
+// State/structure backing a gRPC GameStream on the inbound side
+pub(crate) struct InboundWorker {
+    context: Arc<SharedContext>,
+
     // RPC stream is received via this channel
     inbound_rx: tonic::Streaming<proto::StreamToServer>,
     // Some inbound loop operations don't actually require the outbound loop.
@@ -641,26 +817,26 @@ pub(crate) struct ClientInboundContext {
 
     chunk_pacing: Aimd,
 }
-impl ClientInboundContext {
+impl InboundWorker {
     // Poll for world events and send them through outbound_tx
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
-        while !self.cancellation.is_cancelled() {
+        while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
                     match message {
                         Err(e) => {
-                            warn!("Client {}, Failure reading inbound message: {:?}", self.context_id, e)
+                            warn!("Client {}, Failure reading inbound message: {:?}", self.context.id, e)
                         },
                         Ok(None) => {
-                            info!("Client {} disconnected cleanly", self.context_id);
-                            self.cancellation.cancel();
+                            info!("Client {} disconnected", self.context.id);
+                            self.context.cancellation.cancel();
                             return Ok(());
                         }
                         Ok(Some(message)) => {
                             match self.handle_message(&message).await {
                                 Ok(_) => {},
                                 Err(e) => {
-                                    warn!("Client {} failed to handle message: {:?}, error: {:?}", self.context_id, message, e);
+                                    warn!("Client {} failed to handle message: {:?}, error: {:?}", self.context.id, message, e);
                                     // TODO notify the client once there's a chat or server->client error handling message
                                 },
                             }
@@ -668,8 +844,8 @@ impl ClientInboundContext {
                     }
 
                 }
-                _ = self.cancellation.cancelled() => {
-                    info!("Client inbound context {} detected cancellation and shutting down", self.context_id)
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Client inbound context {} detected cancellation and shutting down", self.context.id)
                     // pass
                 }
             };
@@ -683,7 +859,7 @@ impl ClientInboundContext {
             None => {
                 warn!(
                     "Client context {} got empty/unknown message from client",
-                    self.context_id
+                    self.context.id
                 );
             }
             Some(proto::stream_to_server::ClientMessage::Dig(dig_message)) => {
@@ -739,7 +915,7 @@ impl ClientInboundContext {
             Some(_) => {
                 warn!(
                     "Unimplemented client->server message {:?} on context {}",
-                    message, self.context_id
+                    message, self.context.id
                 );
             }
         }
@@ -750,6 +926,14 @@ impl ClientInboundContext {
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "map_handler",
+        level = "trace",
+        skip(self, coord, selected_inv_slot, get_item_handler, get_block_inline_handler, get_block_full_handler),
+        fields(
+            player_name = %self.context.player_context.name(),
+        ),
+    )]
     async fn run_map_handlers<F, G, H>(
         &mut self,
         coord: BlockCoordinate,
@@ -787,33 +971,34 @@ impl ClientInboundContext {
         G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
         H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
     {
-        self.game_state
-            .inventory_manager()
-            .mutate_inventory_atomically(&self.player_context.main_inventory(), |inventory| {
+        let game_state = &self.context.game_state;
+        game_state.inventory_manager().mutate_inventory_atomically(
+            &self.context.player_context.main_inventory(),
+            |inventory| {
                 let stack = inventory
                     .contents_mut()
                     .get_mut(selected_inv_slot as usize)
                     .with_context(|| "Item slot was out of bounds")?;
 
-                let initiator = EventInitiator::Player(&self.player_context);
+                let initiator = EventInitiator::Player(&self.context.player_context);
 
                 let item_dig_handler = stack
                     .as_ref()
-                    .and_then(|x| self.game_state.item_manager().from_stack(x))
+                    .and_then(|x| game_state.item_manager().from_stack(x))
                     .and_then(get_item_handler);
 
                 let result = if let Some(handler) = item_dig_handler {
                     let ctx = HandlerContext {
-                        tick: self.game_state.tick(),
+                        tick: game_state.tick(),
                         initiator: initiator.clone(),
-                        game_state: self.game_state.clone(),
+                        game_state: game_state.clone(),
                     };
                     run_handler!(
                         || {
                             handler(
                                 ctx,
                                 coord,
-                                self.game_state.map().get_block(coord)?,
+                                game_state.map().get_block(coord)?,
                                 stack.as_ref().unwrap(),
                             )
                         },
@@ -822,7 +1007,7 @@ impl ClientInboundContext {
                     )?
                 } else {
                     // This is blocking code, not async code (because of the mutex ops)
-                    let obtained_items = self.game_state.map().run_block_interaction(
+                    let obtained_items = game_state.map().run_block_interaction(
                         coord,
                         initiator,
                         stack.as_ref(),
@@ -846,7 +1031,8 @@ impl ClientInboundContext {
                     error!("Dropped items from dig_block not empty; TODO/FIXME handle those items");
                 }
                 Ok(())
-            })
+            },
+        )
     }
 
     async fn send_ack(&mut self, sequence: u64) -> Result<()> {
@@ -854,7 +1040,7 @@ impl ClientInboundContext {
             return Ok(());
         };
         let message = proto::StreamToClient {
-            tick: self.game_state.tick(),
+            tick: self.context.game_state.tick(),
             server_message: Some(proto::stream_to_client::ServerMessage::HandledSequence(
                 sequence,
             )),
@@ -905,7 +1091,7 @@ impl ClientInboundContext {
                     position: pos,
                     chunks_to_send: self.chunk_pacing.get(),
                 });
-                self.player_context.update_position(pos);
+                self.context.player_context.update_position(pos);
             }
             None => {
                 warn!("No position in update message from client");
@@ -914,56 +1100,78 @@ impl ClientInboundContext {
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "place_action",
+        level = "trace",
+        skip(self),
+        fields(
+            player_name = %self.context.player_context.name(),
+        ),
+    )]
     async fn handle_place(&mut self, place_message: &proto::PlaceAction) -> Result<()> {
         tokio::task::block_in_place(|| {
             let _span = span!("handle_place");
-            self.game_state
+            self.context
+                .game_state
                 .inventory_manager()
-                .mutate_inventory_atomically(&self.player_context.main_inventory(), |inventory| {
-                    let stack = inventory
-                        .contents_mut()
-                        .get_mut(place_message.item_slot as usize)
-                        .with_context(|| "Item slot was out of bounds")?;
+                .mutate_inventory_atomically(
+                    &self.context.player_context.main_inventory(),
+                    |inventory| {
+                        let stack = inventory
+                            .contents_mut()
+                            .get_mut(place_message.item_slot as usize)
+                            .with_context(|| "Item slot was out of bounds")?;
 
-                    let initiator = EventInitiator::Player(&self.player_context);
+                        let initiator = EventInitiator::Player(&self.context.player_context);
 
-                    let handler = stack
-                        .as_ref()
-                        .and_then(|x| self.game_state.item_manager().from_stack(x))
-                        .and_then(|x| x.place_handler.as_deref());
-                    if let Some(handler) = handler {
-                        let ctx = HandlerContext {
-                            tick: self.game_state.tick(),
-                            initiator: initiator.clone(),
-                            game_state: self.game_state.clone(),
-                        };
-                        let new_stack = run_handler!(
-                            || {
-                                handler(
-                                    ctx,
-                                    place_message
-                                        .block_coord
-                                        .clone()
-                                        .with_context(|| "Missing block_coord in place message")?
-                                        .into(),
-                                    place_message
-                                        .anchor
-                                        .clone()
-                                        .with_context(|| "Missing anchor in place message")?
-                                        .into(),
-                                    stack.as_ref().unwrap(),
-                                )
-                            },
-                            "item_place",
-                            initiator,
-                        )?;
-                        *stack = new_stack;
-                    }
-                    Ok(())
-                })
+                        let handler = stack
+                            .as_ref()
+                            .and_then(|x| self.context.game_state.item_manager().from_stack(x))
+                            .and_then(|x| x.place_handler.as_deref());
+                        if let Some(handler) = handler {
+                            let ctx = HandlerContext {
+                                tick: self.context.game_state.tick(),
+                                initiator: initiator.clone(),
+                                game_state: self.context.game_state.clone(),
+                            };
+                            let new_stack = run_handler!(
+                                || {
+                                    handler(
+                                        ctx,
+                                        place_message
+                                            .block_coord
+                                            .clone()
+                                            .with_context(|| {
+                                                "Missing block_coord in place message"
+                                            })?
+                                            .into(),
+                                        place_message
+                                            .anchor
+                                            .clone()
+                                            .with_context(|| "Missing anchor in place message")?
+                                            .into(),
+                                        stack.as_ref().unwrap(),
+                                    )
+                                },
+                                "item_place",
+                                initiator,
+                            )?;
+                            *stack = new_stack;
+                        }
+                        Ok(())
+                    },
+                )
         })
     }
 
+    #[tracing::instrument(
+        name = "inventory_action",
+        level = "trace",
+        skip(self),
+        fields(
+            player_name = %self.context.player_context.name(),
+        ),
+    )]
     async fn handle_inventory_action(&mut self, action: &proto::InventoryAction) -> Result<()> {
         if action.source_view == action.destination_view {
             log::error!(
@@ -976,7 +1184,7 @@ impl ClientInboundContext {
             {
                 let mut views_to_send = HashSet::new();
                 block_in_place(|| -> anyhow::Result<Vec<StreamToClient>> {
-                    let mut player_state = self.player_context.player.state.lock();
+                    let mut player_state = self.context.player_context.player.state.lock();
 
                     player_state.handle_inventory_action(action)?;
 
@@ -997,7 +1205,7 @@ impl ClientInboundContext {
                     let mut updates = vec![];
                     for view in views_to_send {
                         updates.push(make_inventory_update(
-                            &self.game_state,
+                            &self.context.game_state,
                             player_state.find_inv_view(view)?.as_ref(),
                         )?);
                     }
@@ -1015,6 +1223,17 @@ impl ClientInboundContext {
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "popup_response",
+        level = "trace",
+        skip(self, action),
+        fields(
+            player_name = %self.context.player_context.name(),
+            id = %action.popup_id,
+            was_closed = %action.closed,
+            button = %action.clicked_button,
+        ),
+    )]
     async fn handle_popup_response(
         &mut self,
         action: &cuberef_core::protocol::ui::PopupResponse,
@@ -1026,14 +1245,14 @@ impl ClientInboundContext {
         };
         let updates = tokio::task::block_in_place(|| -> anyhow::Result<_> {
             let _span = span!("handle_popup_response");
-            let mut player_state = self.player_context.state.lock();
+            let mut player_state = self.context.player_context.state.lock();
             let mut updates = vec![];
             if action.closed {
                 player_state
                     .inventory_manipulation_view
-                    .clear_if_transient(Some(self.player_context.main_inventory_key))?;
+                    .clear_if_transient(Some(self.context.player_context.main_inventory_key))?;
                 updates.push(make_inventory_update(
-                    &self.game_state,
+                    &self.context.game_state,
                     &&player_state.inventory_manipulation_view,
                 )?);
             }
@@ -1047,11 +1266,11 @@ impl ClientInboundContext {
                         user_action,
                         textfield_values: action.text_fields.clone(),
                     },
-                    self.player_context.main_inventory(),
+                    self.context.player_context.main_inventory(),
                 )?;
                 for view in popup.inventory_views().values() {
                     updates.push(make_inventory_update(
-                        &self.game_state,
+                        &self.context.game_state,
                         &InventoryViewWithContext {
                             view,
                             context: popup,
@@ -1064,11 +1283,11 @@ impl ClientInboundContext {
                         user_action,
                         textfield_values: action.text_fields.clone(),
                     },
-                    self.player_context.main_inventory(),
+                    self.context.player_context.main_inventory(),
                 )?;
                 for view in player_state.inventory_popup.inventory_views().values() {
                     updates.push(make_inventory_update(
-                        &self.game_state,
+                        &self.context.game_state,
                         &InventoryViewWithContext {
                             view,
                             context: &player_state.inventory_popup,
@@ -1100,6 +1319,14 @@ impl ClientInboundContext {
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "interact_key",
+        level = "trace",
+        skip(self),
+        fields(
+            player_name = %self.context.player_context.name(),
+        ),
+    )]
     async fn handle_interact_key(
         &mut self,
         interact_message: &proto::InteractKeyAction,
@@ -1126,13 +1353,14 @@ impl ClientInboundContext {
             .map(|x| x.into())
             .with_context(|| "Missing block_coord")?;
         let ctx = HandlerContext {
-            tick: self.game_state.tick(),
-            initiator: EventInitiator::Player(&self.player_context),
-            game_state: self.game_state.clone(),
+            tick: self.context.game_state.tick(),
+            initiator: EventInitiator::Player(&self.context.player_context),
+            game_state: self.context.game_state.clone(),
         };
-        let block = self.game_state.map().get_block(coord)?;
+        let block = self.context.game_state.map().get_block(coord)?;
         let mut messages = vec![];
         if let Some(handler) = &self
+            .context
             .game_state
             .map()
             .block_type_manager()
@@ -1144,22 +1372,23 @@ impl ClientInboundContext {
             if let Some(popup) = run_handler!(
                 || (handler)(ctx, coord),
                 "interact_key",
-                EventInitiator::Player(&self.player_context.player),
+                EventInitiator::Player(&self.context.player_context.player),
             )? {
                 messages.push(StreamToClient {
-                    tick: self.game_state.tick(),
+                    tick: self.context.game_state.tick(),
                     server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
                 });
                 for view in popup.inventory_views().values() {
                     messages.push(make_inventory_update(
-                        &self.game_state,
+                        &self.context.game_state,
                         &InventoryViewWithContext {
                             view,
                             context: &popup,
                         },
                     )?)
                 }
-                self.player_context
+                self.context
+                    .player_context
                     .player
                     .state
                     .lock()
@@ -1170,17 +1399,22 @@ impl ClientInboundContext {
         Ok(messages)
     }
 }
-impl Drop for ClientInboundContext {
+impl Drop for InboundWorker {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        self.context.cancellation.cancel();
     }
 }
 
 // TODO tune these and make them adjustable via settings
 // Units of chunks
+// Chunks within this distance will be loaded into memory if not yet loaded
 const LOAD_EAGER_DISTANCE: i32 = 15;
+// Chunks within this distance will be sent if they are already loaded into memory
 const LOAD_LAZY_DISTANCE: i32 = 20;
 const UNLOAD_DISTANCE: i32 = 30;
+// Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
+const FORCE_LOAD_DISTANCE: i32 = 2;
+
 const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 16;

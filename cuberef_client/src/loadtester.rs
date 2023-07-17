@@ -91,6 +91,7 @@ impl Loadtester {
                     
                 println!("{}", cs.actions.capacity());
             }
+            panic!();
         }))
     }
 }

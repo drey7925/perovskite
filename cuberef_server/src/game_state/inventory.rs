@@ -167,20 +167,18 @@ pub struct InventoryManager {
     // For now, just throw a mutex around an (already thread-safe) DB for basic
     // atomicity/mutual exclusion
     //
-    // TODO add caching in the future, if needed for performance reasons
-    //
-    // TODO FIXME there is a massive deadlock in mutate_inventor{y|ies}_atomically here since
-    //  the db lock is held during the callback. This should be restructured to avoid this (i.e.
-    // switch to a mutex-protected set of keys being accessed + condvar to release threads that block
-    // waiting for an inventory mutation to finish)
-    db: Mutex<Arc<dyn GameDatabase>>,
+    // This whole lock is a massive hack, but it works well enough
+    db: RwLock<Arc<dyn GameDatabase>>,
     update_sender: broadcast::Sender<UpdatedInventory>,
 }
 impl InventoryManager {
     /// Create a new, empty inventory
     pub fn make_inventory(&self, height: u32, width: u32) -> Result<InventoryKey> {
         let inventory = Inventory::new((height, width))?;
-        let db = self.db.lock();
+        let db = {
+            let _span = tracy_client::span!("inventory lock");
+            self.db.read()
+        };
         db.put(
             // unwrap OK because we just generated an inventory with a key
             &inventory.key.unwrap().to_db_key(),
@@ -190,7 +188,7 @@ impl InventoryManager {
     }
     /// Get a readonly copy of an inventory.
     pub fn get(&self, key: &InventoryKey) -> Result<Option<Inventory>> {
-        let db = self.db.lock();
+        let db = self.db.read();
         let bytes = db.get(&key.to_db_key())?;
         match bytes {
             Some(x) => {
@@ -208,7 +206,10 @@ impl InventoryManager {
     where
         F: FnOnce(&mut Inventory) -> Result<T>,
     {
-        let db = self.db.lock();
+        let db = {
+            let _span = tracy_client::span!("inventory lock");
+            self.db.read()
+        };
         let db_key = key.to_db_key();
         let bytes = db.get(&db_key)?;
         let mut inv = match bytes {
@@ -240,7 +241,10 @@ impl InventoryManager {
     where
         F: FnOnce(&mut [Inventory]) -> Result<T>,
     {
-        let db = self.db.lock();
+        let db = {
+            let _span = tracy_client::span!("inventory lock");
+            self.db.read()
+        };
         let mut inventories = Vec::with_capacity(keys.len());
         for key in keys {
             let bytes = db.get(&key.to_db_key())?;

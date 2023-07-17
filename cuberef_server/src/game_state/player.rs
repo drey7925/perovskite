@@ -268,6 +268,9 @@ impl PlayerContext {
     pub(crate) fn update_position(&self, pos: PlayerPositionUpdate) {
         self.player.state.lock().last_position = pos;
     }
+    pub fn name(&self) -> &str {
+        &self.player.name
+    }
 }
 impl Deref for PlayerContext {
     type Target = Player;

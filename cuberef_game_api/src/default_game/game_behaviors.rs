@@ -45,11 +45,9 @@ fn make_inventory_popup(
     let all_items_for_update = all_items_for_peek.clone();
     let creative_inv_callbacks = VirtualOutputCallbacks {
         peek: Box::new(move |_| {
-            log::info!("Debug only: peeking from creative");
             all_items_for_peek.read().clone()
         }),
         take: Box::new(move |_, slot, count| {
-            log::info!("Debug only: taking from creative");
             let mut stack = all_items_for_take.read().get(slot).cloned().flatten();
             if stack.is_some() && count.is_some() {
                 stack.as_mut().unwrap().proto.quantity = count.unwrap();

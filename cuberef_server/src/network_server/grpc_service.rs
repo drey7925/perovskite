@@ -202,7 +202,7 @@ async fn game_stream_impl(
         }
     }
 
-    let (mut inbound, mut outbound) = match make_client_contexts(
+    match make_client_contexts(
         game_state.clone(),
         player_context,
         inbound_rx,
@@ -210,7 +210,7 @@ async fn game_stream_impl(
     )
     .await
     {
-        Ok((inbound, outbound)) => (inbound, outbound),
+        Ok(coroutines) => coroutines.run_all().await?,
         Err(e) => {
             error!("Error setting up client context: {:?}", e);
             return outbound_tx
@@ -222,14 +222,6 @@ async fn game_stream_impl(
         }
     };
 
-    // TODO handle the result rather than just quietly shutting down
-    tokio::spawn(async move {
-        if let Err(e) = inbound.run_inbound_loop().await {
-            log::error!("Error running inbound loop: {:?}", e);
-        }
-    });
-    tokio::spawn(async move { if let Err(e) = outbound.run_outbound_loop().await {
-        log::error!("Error running outbound loop: {:?}", e);
-    } });
+
     Ok(())
 }

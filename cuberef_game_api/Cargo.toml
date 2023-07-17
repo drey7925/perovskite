@@ -17,6 +17,11 @@ log = "0.4.17"
 prost = "0.11.9"
 dhat = "0.3.2"
 hashbrown = "0.14.0"
+console-subscriber = { version = "0.1.5", optional = true }
+tracing = "0.1.37"
+tracing-subscriber =  { version = "0.3", features = ["fmt", "env-filter", "std"] }
+tracing-log = "0.1.3"
+tracing-tracy = "0.10.2"
 
 [features]
 default = ["default_game"]
@@ -32,3 +37,5 @@ deadlock_detection = ["cuberef_server/deadlock_detection"]
 tracy = ["cuberef_server/tracy"]
 # Heap profiling
 dhat-heap = []
+# tokio-console; Requires RUSTFLAGS="--cfg tokio_unstable"
+tokio-console = ["dep:console-subscriber"]

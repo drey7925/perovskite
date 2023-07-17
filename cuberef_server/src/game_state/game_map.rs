@@ -52,9 +52,7 @@ use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::map as mapchunk_proto,
 };
-use parking_lot::{
-    Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use prost::Message;
 
 use log::{error, info, warn};
@@ -152,7 +150,7 @@ pub(crate) enum ChunkUsage {
 /// Representation of a single chunk in memory. Most game logic should instead use the game map directly,
 /// which abstracts over chunk boundaries and presents a unified interface that does not require being aware
 /// of how chunks are divided.
-/// 
+///
 /// This class is meant for use by map generators and bulk map accesses that would be inefficient when done
 /// block-by-block.
 pub struct MapChunk {
@@ -292,7 +290,7 @@ impl MapChunk {
     /// Sets the block at the given coordinate within the chunk.
     /// This function is intended to be used from map generators, and may
     /// lead to data loss or inconsistency when used elsewhere
-    /// 
+    ///
     /// TODO refactor and fix
     pub fn set_block(
         &mut self,
@@ -341,7 +339,11 @@ impl MapChunk {
         }
         if dirty {
             self.dirty = true;
-            self.game_state.upgrade().unwrap().inventory_manager().broadcast_block_update(self.own_coord.with_offset(offset));
+            self.game_state
+                .upgrade()
+                .unwrap()
+                .inventory_manager()
+                .broadcast_block_update(self.own_coord.with_offset(offset));
         }
 
         if new_id != old_id {
@@ -539,6 +541,31 @@ struct MapChunkOuterGuard<'a> {
     // TODO: This has a slight inefficiency - we have to call get() on the map an extra time
     read_guard: RwLockReadGuard<'a, FxHashMap<ChunkCoordinate, MapChunkHolder>>,
     coord: ChunkCoordinate,
+    writeback_permit: Option<mpsc::Permit<'a, WritebackReq>>,
+    force_writeback: bool,
+}
+impl<'a> MapChunkOuterGuard<'a> {
+    // Actually submits a writeback request to the writeback queue.
+    // Naming note - _inner because ServerGameMap first does some error checking and
+    // monitoring/stats before calling this.
+    fn write_back_inner(mut self) {
+        self.writeback_permit
+            .take()
+            .unwrap()
+            .send(WritebackReq::Chunk(self.coord));
+    }
+}
+impl<'a> Drop for MapChunkOuterGuard<'a> {
+    fn drop(&mut self) {
+        if self.force_writeback {
+            // If the permit is still there, we didn't write this chunk back.
+            // Do so now.
+            // If the permit was already taken, we don't need to do anything.
+            if let Some(permit) = self.writeback_permit.take() {
+                permit.send(WritebackReq::Chunk(self.coord));
+            }
+        }
+    }
 }
 impl<'a> Deref for MapChunkOuterGuard<'a> {
     type Target = MapChunkHolder;
@@ -702,7 +729,9 @@ impl ServerGameMap {
 
         chunk.block_ids[coord.offset().as_index()] = block.id().into();
         chunk.dirty = true;
-        self.enqueue_writeback(coord.chunk())?;
+
+        drop(chunk);
+        self.enqueue_writeback(chunk_guard)?;
         self.broadcast_block_change(BlockUpdate {
             location: coord,
             new_value: block,
@@ -784,7 +813,8 @@ impl ServerGameMap {
         };
         chunk.block_ids[coord.offset().as_index()] = block.id().into();
         chunk.dirty = true;
-        self.enqueue_writeback(coord.chunk())?;
+        drop(chunk);
+        chunk_guard.write_back_inner();
         self.broadcast_block_change(BlockUpdate {
             location: coord,
             new_value: block,
@@ -811,7 +841,8 @@ impl ServerGameMap {
 
         let result = chunk.mutate_block_atomically(coord.offset(), mutator, &self);
         if chunk.dirty {
-            self.enqueue_writeback(coord.chunk())?;
+            drop(chunk);
+            self.enqueue_writeback(chunk_guard)?;
         };
         result
     }
@@ -835,7 +866,7 @@ impl ServerGameMap {
     }
 
     /// Runs the given dig or interact handler for the block at the specified coordinate.
-    /// 
+    ///
     /// This method will retrieve the block at the provided coordinate, look up its dig or interact
     /// handler based on the provided callbacks, and invoke it with the given context.
     ///
@@ -855,7 +886,7 @@ impl ServerGameMap {
     /// A vector containing any item stacks dropped by the invoked handlers.
     ///
     /// # Errors
-    /// 
+    ///
     /// Returns any error encountered while retrieving the block or invoking handlers.
     pub fn run_block_interaction<F, G>(
         &self,
@@ -913,8 +944,14 @@ impl ServerGameMap {
     }
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
+    #[tracing::instrument(
+        level = "trace",
+        name = "get_chunk",
+        skip(self)
+    )]
     fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
-        let _span = span!("get_chunk");
+
+        let writeback_permit = self.get_writeback_permit()?;
 
         let mut load_chunk_tries = 0;
         let result = loop {
@@ -927,6 +964,8 @@ impl ServerGameMap {
                 return Ok(MapChunkOuterGuard {
                     read_guard,
                     coord,
+                    writeback_permit: Some(writeback_permit),
+                    force_writeback: false,
                 });
             }
             load_chunk_tries += 1;
@@ -947,7 +986,7 @@ impl ServerGameMap {
             }
 
             // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
-            // Since we still hold the write lock, 
+            // Since we still hold the write lock,
             let prev = write_guard.insert(coord, MapChunkHolder::new_empty());
             assert!(prev.is_none());
 
@@ -958,17 +997,19 @@ impl ServerGameMap {
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
             let chunk_guard = read_guard.get(&coord).unwrap();
             match self.load_uncached_or_generate_chunk(coord) {
-                Ok(chunk) => {
+                Ok((chunk, force_writeback)) => {
                     chunk_guard.fill(chunk);
                     break Ok(MapChunkOuterGuard {
                         read_guard,
                         coord,
-                    })
+                        writeback_permit: Some(writeback_permit),
+                        force_writeback,
+                    });
                 }
                 Err(e) => {
                     chunk_guard.set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
                     // Unfortunate duplication, anyhow::Error is not Clone
-                    break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")))
+                    break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
                 }
             }
         };
@@ -978,27 +1019,47 @@ impl ServerGameMap {
         result
     }
 
+    fn get_writeback_permit(&self) -> Result<mpsc::Permit<'_, WritebackReq>> {
+        let _span = span!("get writeback permit");
+        Ok(tokio::runtime::Handle::current().block_on(self.writeback_sender.reserve())?)
+    }
+
+    fn try_get_writeback_permit(&self) -> Result<Option<mpsc::Permit<'_, WritebackReq>>> {
+        match self.writeback_sender.try_reserve() {
+            Ok(permit) => Ok(Some(permit)),
+            Err(mpsc::error::TrySendError::Full(_)) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     // Loads the chunk from the DB, or generates it if missing, REGARDLESS of whether the chunk
     // is in memory.
     // If the chunk is already in memory, this may cause data loss by reading a stale instance
     // from the DB/mapgen
-    fn load_uncached_or_generate_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunk> {
+    // Returns the chunk and a boolean - if true, the chunk was generated and should be written
+    // back unconditionally.
+    fn load_uncached_or_generate_chunk(&self, coord: ChunkCoordinate) -> Result<(MapChunk, bool)> {
         let data = self
             .database
             .get(&KeySpace::MapchunkData.make_key(&coord.as_bytes()))?;
         if let Some(data) = data {
-            return MapChunk::deserialize(coord, &data, self.game_state());
+            return Ok((
+                MapChunk::deserialize(coord, &data, self.game_state())?,
+                false,
+            ));
         }
 
         let mut chunk = MapChunk::new(coord, self.game_state());
         chunk.dirty = true;
         {
             let _span = span!("mapgen running");
-            run_handler!(|| Ok(self.game_state().mapgen().fill_chunk(coord, &mut chunk)), "mapgen", EventInitiator::Engine)?;
+            run_handler!(
+                || Ok(self.game_state().mapgen().fill_chunk(coord, &mut chunk)),
+                "mapgen",
+                EventInitiator::Engine
+            )?;
         }
-        // This will only execute after the mutex is released.
-        self.enqueue_writeback(coord)?;
-        Ok(chunk)
+        Ok((chunk, true))
     }
 
     pub fn game_state(&self) -> Arc<GameState> {
@@ -1040,7 +1101,7 @@ impl ServerGameMap {
             Err(_) => { /* pass, for now */ }
         }
     }
-    fn enqueue_writeback(&self, chunk: ChunkCoordinate) -> Result<()> {
+    fn enqueue_writeback(&self, chunk: MapChunkOuterGuard<'_>) -> Result<()> {
         if self.shutdown.is_cancelled() {
             return Err(Error::msg("Writeback thread was shut down"));
         }
@@ -1048,16 +1109,8 @@ impl ServerGameMap {
             "writeback queue capacity",
             self.writeback_sender.capacity() as f64
         );
-        match self
-            .writeback_sender
-            .blocking_send(WritebackReq::Chunk(chunk))
-        {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                log::error!("Couldn't enqueue the writeback; data loss may occur");
-                Err(Error::msg("enqueue_writeback failed"))
-            }
-        }
+        chunk.write_back_inner();
+        Ok(())
     }
 
     /// Create a receiver that is notified of changes to all block IDs (including variant changes).
@@ -1131,6 +1184,11 @@ impl ServerGameMap {
             }
         }
     }
+
+    /// Rudimentary backpressure/flow control.
+    pub(crate) fn in_pushback(&self) -> bool {
+        self.writeback_sender.capacity() < (WRITEBACK_QUEUE_SIZE / 2)
+    }
 }
 impl Drop for ServerGameMap {
     fn drop(&mut self) {
@@ -1144,7 +1202,7 @@ enum WritebackReq {
 }
 
 // TODO expose as flags or configs
-const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(5);
+pub(crate) const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(10);
 const CACHE_CLEAN_INTERVAL: Duration = Duration::from_secs(3);
 const CACHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 128;
 const CACHE_CLEANUP_RELOCK_EVERY_N: usize = 32;
@@ -1221,7 +1279,6 @@ impl GameMapWriteback {
     async fn run_loop(&mut self) -> Result<()> {
         while !self.cancellation.is_cancelled() {
             let writebacks = self.gather().await.unwrap();
-            //info!("Writing back {} chunks", writebacks.len());
 
             if writebacks.len() >= (WRITEBACK_COALESCE_MAX_SIZE) * 4 {
                 warn!("Writeback backlog of {} chunks is unusually high; is the writeback thread falling behind?", writebacks.len());
@@ -1235,6 +1292,7 @@ impl GameMapWriteback {
 
     fn do_writebacks(&self, writebacks: Vec<ChunkCoordinate>) -> Result<()> {
         let _span = span!("game_map do_writebacks");
+        tracing::trace!("Writing back {} chunks", writebacks.len());
         let lock = {
             let _span = span!("acquire game_map read lock for writeback");
             // This lock needs to barge ahead of writers to avoid starvation.
@@ -1350,7 +1408,10 @@ impl GameMapWriteback {
         }
         dedup.reverse();
         plot!("writeback_coalesce_items", entries_len as f64);
-        plot!("writeback_dedup_ratio", dedup.len() as f64 / entries_len as f64);
+        plot!(
+            "writeback_dedup_ratio",
+            dedup.len() as f64 / entries_len as f64
+        );
         Some(dedup)
     }
 }
@@ -1377,7 +1438,7 @@ pub trait TimerInlineCallback: Send + Sync {
         missed_timers: u64,
         block_type: &mut BlockTypeHandle,
         data: &mut ExtendedDataHolder,
-        ctx: &InlineContext
+        ctx: &InlineContext,
     ) -> Result<()>;
 }
 
@@ -1476,7 +1537,14 @@ impl GameMapTimer {
         }
         Ok(())
     }
-
+    #[tracing::instrument(
+        name = "timer_shard",
+        level = "trace",
+        skip(self, shard_id, total_shards, game_state),
+        fields(
+            timer_name = %self.name,
+        )
+    )]
     async fn run_shard(
         &self,
         start_time: Instant,
@@ -1484,7 +1552,8 @@ impl GameMapTimer {
         total_shards: u32,
         game_state: Arc<GameState>,
     ) -> Result<()> {
-        let block_types = FxHashSet::from_iter(self.settings.block_types.iter().map(|x| x.id().base_id()));
+        let block_types =
+            FxHashSet::from_iter(self.settings.block_types.iter().map(|x| x.id().base_id()));
 
         let mut interval = tokio::time::interval_at(start_time.into(), self.settings.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1507,6 +1576,7 @@ impl GameMapTimer {
         block_types: &FxHashSet<u32>,
     ) -> Result<()> {
         let _span = span!("timer tick");
+        let mut writeback_permit = Some(game_state.map().get_writeback_permit()?);
         let mut read_lock = {
             let _span = span!("acquire game_map read lock");
             game_state.map().live_chunks.read()
@@ -1514,7 +1584,22 @@ impl GameMapTimer {
         let coords = read_lock.keys().cloned().collect::<Vec<_>>();
         plot!("timer tick coords", coords.len() as f64);
         for (i, coord) in coords.into_iter().enumerate() {
-            if i % 100 == 0 {
+            if writeback_permit.is_none() {
+                // A chunk used our writeback permit. Get a new one.
+                // Fast path - if we can get a permit without blocking, take it
+                if let Some(permit) = game_state.map().try_get_writeback_permit()? {
+                    writeback_permit = Some(permit);
+                } else {
+                    drop(read_lock);
+
+                    writeback_permit = Some(game_state.map().get_writeback_permit()?);
+
+                    read_lock = {
+                        let _span = span!("reacquire game_map read lock (need permit)");
+                        game_state.map().live_chunks.read()
+                    };
+                }
+            } else if i % 100 == 0 {
                 let _span = span!("timer bumping");
                 RwLockReadGuard::bump(&mut read_lock);
             }
@@ -1522,7 +1607,13 @@ impl GameMapTimer {
             coord.hash(&mut hasher);
             if hasher.finish() % total_shards as u64 == shard_id as u64 {
                 if let Some(chunk) = read_lock.get(&coord) {
-                    self.handle_chunk(coord, chunk, &game_state, block_types)?;
+                    self.handle_chunk(
+                        coord,
+                        chunk,
+                        &game_state,
+                        block_types,
+                        &mut writeback_permit,
+                    )?;
                 }
             }
         }
@@ -1535,7 +1626,9 @@ impl GameMapTimer {
         chunk: &MapChunkHolder,
         game_state: &Arc<GameState>,
         block_types: &FxHashSet<u32>,
+        writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     ) -> Result<()> {
+        assert!(writeback_permit.is_some());
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
         let map = game_state.map();
@@ -1545,7 +1638,13 @@ impl GameMapTimer {
                 let block_id = BlockId(chunk.block_ids[i]);
                 if block_types.contains(&block_id.base_id()) {
                     if sampler.sample(&mut rng) {
-                        match self.run_callback(&mut chunk, ChunkOffset::from_index(i), map, coord, game_state) {
+                        match self.run_callback(
+                            &mut chunk,
+                            ChunkOffset::from_index(i),
+                            map,
+                            coord,
+                            game_state,
+                        ) {
                             Ok(()) => {
                                 // continue
                             }
@@ -1557,14 +1656,24 @@ impl GameMapTimer {
                 }
             }
             if chunk.dirty {
-                game_state.map().enqueue_writeback(coord)?;
+                writeback_permit
+                    .take()
+                    .unwrap()
+                    .send(WritebackReq::Chunk(chunk.own_coord));
             }
         }
 
         Ok(())
     }
 
-    fn run_callback(&self, chunk: &mut MapChunkInnerGuard<'_>, offset: ChunkOffset, map: &ServerGameMap, coord: ChunkCoordinate, game_state: &Arc<GameState>) -> Result<(), Error> {
+    fn run_callback(
+        &self,
+        chunk: &mut MapChunkInnerGuard<'_>,
+        offset: ChunkOffset,
+        map: &ServerGameMap,
+        coord: ChunkCoordinate,
+        game_state: &Arc<GameState>,
+    ) -> Result<(), Error> {
         Ok(match &self.callback {
             TimerCallback::InlineLocked(cb) => chunk.mutate_block_atomically(
                 offset,
@@ -1593,11 +1702,7 @@ impl GameMapTimer {
                 map,
             )?,
             TimerCallback::InlineUnlocked(cb) => run_handler!(
-                || cb.inline_callback(
-                    coord.with_offset(offset),
-                    0,
-                    game_state
-                ),
+                || cb.inline_callback(coord.with_offset(offset), 0, game_state),
                 "timer_inline_locked",
                 EventInitiator::Engine
             )?,
