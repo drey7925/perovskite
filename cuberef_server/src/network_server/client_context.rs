@@ -314,7 +314,15 @@ impl ChunkTracker {
         Self {
             game_state,
             player_context,
-            loaded_chunks_bloom: cbloom::Filter::new(128, (LOAD_LAZY_DISTANCE as usize).pow(3) / 2),
+            // Bloom filter size is given in bytes, not bits - but many formulae and calculators use bits.
+            // According to https://hur.st/bloomfilter/?n=50000&p=&m=64%20KiB&k=, we can expect a reasonable false positive rate here
+            // for our current supported draw distances.
+            //
+            // We'll probably get more false positives from chunks being unloaded.
+            //
+            // TODO consider clearing and regenerating the bloom filter when false positive rate goes up due to unloaded chunks still
+            // present in the filter
+            loaded_chunks_bloom: cbloom::Filter::new(65536, (LOAD_LAZY_DISTANCE as usize).pow(3) / 2),
             loaded_chunks: RwLock::new(FxHashSet::default()),
         }
     }
