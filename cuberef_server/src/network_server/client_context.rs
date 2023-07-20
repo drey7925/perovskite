@@ -41,7 +41,7 @@ use crate::game_state::player::PlayerContext;
 use crate::game_state::GameState;
 use crate::run_handler;
 
-use anyhow::bail;
+
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
@@ -80,7 +80,7 @@ pub(crate) struct PlayerCoroutinePack {
 impl PlayerCoroutinePack {
     pub(crate) async fn run_all(mut self) -> Result<()> {
         let username = self.context.player_context.name().to_string();
-        initialize_protocol_state(&mut self.context, &self.inbound_worker.outbound_tx).await?;
+        initialize_protocol_state(&self.context, &self.inbound_worker.outbound_tx).await?;
 
         tracing::info!("Starting workers for {}...", username);
         crate::spawn_async(&format!("inbound_worker_{}", username), async move {

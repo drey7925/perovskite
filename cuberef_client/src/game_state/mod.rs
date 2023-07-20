@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -156,7 +156,7 @@ impl<'a> ChunkManagerView<'a> {
         &'a self,
         coord: &ChunkCoordinate,
     ) -> Option<&'a Arc<ClientChunk>> {
-        self.guard.get(&coord)
+        self.guard.get(coord)
     }
     pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
         self.guard.contains_key(coord)
@@ -171,7 +171,7 @@ impl ChunkManagerClonedView {
         &self,
         coord: &ChunkCoordinate,
     ) -> Option<&Arc<ClientChunk>> {
-        self.data.get(&coord)
+        self.data.get(coord)
     }
 }
 impl Deref for ChunkManagerClonedView {

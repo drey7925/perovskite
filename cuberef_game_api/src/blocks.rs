@@ -39,7 +39,7 @@ use cuberef_core::{
 pub use cuberef_server::game_state::blocks as server_api;
 
 use cuberef_server::game_state::{
-    blocks::{BlockType, ExtendedData, ExtendedDataHolder, InlineHandler, BlockTypeHandle},
+    blocks::{BlockType, ExtendedData, InlineHandler, BlockTypeHandle},
     event::HandlerContext,
     game_map::CasOutcome,
     items::{Item, ItemStack},

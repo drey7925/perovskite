@@ -16,7 +16,7 @@
 
 use cuberef_game_api::default_game::DefaultGameBuilder;
 use tracing::metadata::LevelFilter;
-use tracing_subscriber::{prelude::*, registry::LookupSpan, EnvFilter};
+use tracing_subscriber::{prelude::*, registry::LookupSpan};
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]

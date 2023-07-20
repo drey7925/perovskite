@@ -16,7 +16,6 @@
 
 use std::{
     borrow::Borrow,
-    collections::HashMap,
     ops::DerefMut,
     sync::{atomic::AtomicU64, Arc},
 };
@@ -27,8 +26,8 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use cuberef_core::{coordinates::BlockCoordinate, protocol::items as items_proto};
-use log::warn;
-use parking_lot::{Mutex, RwLock};
+
+use parking_lot::{RwLock};
 use prost::Message;
 use tokio::sync::broadcast;
 use tracing::trace;

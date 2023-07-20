@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc};
 
 use crate::game_builder::GameBuilder;
 
 use anyhow::Result;
 
-use cuberef_core::coordinates::BlockCoordinate;
+
 use cuberef_server::game_state::{
-    blocks::{BlockTypeHandle, ExtendedDataHolder},
-    game_map::{TimerCallback, TimerInlineCallback, TimerSettings},
     items::ItemStack,
 };
 

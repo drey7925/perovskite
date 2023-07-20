@@ -14,10 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::panic::{UnwindSafe, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe};
 
 use anyhow::Error;
-use tracy_client::{span, span_location};
+
 
 use super::event::EventInitiator;
 

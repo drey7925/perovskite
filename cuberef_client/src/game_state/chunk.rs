@@ -74,7 +74,7 @@ impl ClientChunk {
         })
     }
 
-    pub(crate) fn block_ids<'a>(&'a self) -> BlockIdView<'a> {
+    pub(crate) fn block_ids(&self) -> BlockIdView<'_> {
         // Recursive lock acquisition with RwLock::read() can lead to deadlock
         // This is more writer-unfair but does not have a deadlock risk
         // The mesh worker will eventually leave this chunk alone and allow a writer to get access

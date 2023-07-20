@@ -19,12 +19,9 @@ use cuberef_core::block_id::BlockId;
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::hash::{Hash, Hasher};
-use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fmt::Debug,
     sync::{Arc, Weak},
     time::{Duration, Instant},
@@ -842,7 +839,7 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get()?;
 
-        let result = chunk.mutate_block_atomically(coord.offset(), mutator, &self);
+        let result = chunk.mutate_block_atomically(coord.offset(), mutator, self);
         if chunk.dirty {
             drop(chunk);
             self.enqueue_writeback(chunk_guard)?;
@@ -988,8 +985,8 @@ impl ServerGameMap {
             write_guard.insert(coord, MapChunkHolder::new_empty());
 
             // Now we downgrade the read lock.
-            // If another thread races ahead of us and does the same lookup before we manage to fill the chunk, 
-            // they'll get an empty chunk holder and will wait for the condition variable to be signalled 
+            // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
+            // they'll get an empty chunk holder and will wait for the condition variable to be signalled
             // (when that thread waits on the condition variable, it atomically releases the inner lock)
             let read_guard = RwLockWriteGuard::downgrade(write_guard);
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
@@ -1052,7 +1049,10 @@ impl ServerGameMap {
         {
             let _span = span!("mapgen running");
             run_handler!(
-                || Ok(self.game_state().mapgen().fill_chunk(coord, &mut chunk)),
+                || {
+                    self.game_state().mapgen().fill_chunk(coord, &mut chunk);
+                    Ok(())
+                },
                 "mapgen",
                 EventInitiator::Engine
             )?;
@@ -1094,10 +1094,9 @@ impl ServerGameMap {
 
     // Broadcasts when a block on the map changes
     fn broadcast_block_change(&self, update: BlockUpdate) {
-        match self.block_update_sender.send(update) {
-            Ok(_) => {}
-            Err(_) => { /* pass, for now */ }
-        }
+        // The only error we expect is that there are no receivers. This is fine; we might
+        // be running a timer for a block that's still loaded after all players log out
+        let _ = self.block_update_sender.send(update);
     }
     fn enqueue_writeback(&self, chunk: MapChunkOuterGuard<'_>) -> Result<()> {
         if self.shutdown.is_cancelled() {
@@ -1509,12 +1508,13 @@ struct GameMapTimer {
     callback: TimerCallback,
     settings: TimerSettings,
     cancellation: CancellationToken,
-    tasks: Mutex<Vec<JoinHandle<Result<()>>>>,
+    // This mutex must be held across an await (for each handle), so we use a tokio async mutex here.
+    tasks: tokio::sync::Mutex<Vec<JoinHandle<Result<()>>>>,
 }
 impl GameMapTimer {
     fn spawn_shards(self: &Arc<Self>, game_state: Arc<GameState>, shard_count: u32) -> Result<()> {
         ensure!(!self.cancellation.is_cancelled());
-        let mut tasks = self.tasks.lock();
+        let mut tasks = self.tasks.blocking_lock();
         // Hacky: Delay 0.1 seconds to allow shards to start up
         let first_run = Instant::now() + Duration::from_millis(100);
         for shard_id in 0..shard_count {
@@ -1635,21 +1635,19 @@ impl GameMapTimer {
             assert!(chunk.block_ids.len() == 4096);
             for i in 0..4096 {
                 let block_id = BlockId(chunk.block_ids[i]);
-                if block_types.contains(&block_id.base_id()) {
-                    if sampler.sample(&mut rng) {
-                        match self.run_callback(
-                            &mut chunk,
-                            ChunkOffset::from_index(i),
-                            map,
-                            coord,
-                            game_state,
-                        ) {
-                            Ok(()) => {
-                                // continue
-                            }
-                            Err(e) => {
-                                log::error!("Timer callback {} failed: {:?}", self.name, e);
-                            }
+                if block_types.contains(&block_id.base_id()) && sampler.sample(&mut rng) {
+                    match self.run_callback(
+                        &mut chunk,
+                        ChunkOffset::from_index(i),
+                        map,
+                        coord,
+                        game_state,
+                    ) {
+                        Ok(()) => {
+                            // continue
+                        }
+                        Err(e) => {
+                            log::error!("Timer callback {} failed: {:?}", self.name, e);
                         }
                     }
                 }
@@ -1673,7 +1671,7 @@ impl GameMapTimer {
         coord: ChunkCoordinate,
         game_state: &Arc<GameState>,
     ) -> Result<(), Error> {
-        Ok(match &self.callback {
+        match &self.callback {
             TimerCallback::InlineLocked(cb) => chunk.mutate_block_atomically(
                 offset,
                 |block_id, extended_data| {
@@ -1705,11 +1703,12 @@ impl GameMapTimer {
                 "timer_inline_locked",
                 EventInitiator::Engine
             )?,
-        })
+        }
+        Ok(())
     }
 
     async fn await_shutdown(&self) -> Result<()> {
-        for task in self.tasks.lock().drain(..) {
+        for task in self.tasks.lock().await.drain(..) {
             task.await??;
         }
         Ok(())
@@ -1749,7 +1748,7 @@ impl ServerGameMap {
             callback,
             settings,
             cancellation: self.shutdown.clone(),
-            tasks: Mutex::new(vec![]),
+            tasks: tokio::sync::Mutex::new(vec![]),
         });
         timer.spawn_shards(self.game_state().clone(), shards)?;
         timer_controller.timers.insert(name, timer);

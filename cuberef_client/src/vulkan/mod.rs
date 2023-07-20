@@ -42,7 +42,7 @@ use vulkano::{
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sampler::{Filter, Sampler, SamplerCreateInfo},
-    swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo, SwapchainCreationError},
+    swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
     sync::GpuFuture,
     Version,
 };
@@ -303,11 +303,11 @@ fn find_best_format(
     // This requires enabling ext_swapchain_colorspace and also getting shaders to do
     // srgb conversions if applicable
 
-    Ok(formats
+    formats
         .iter()
         .find(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
         .cloned()
-        .with_context(|| "Could not find an image format")?)
+        .with_context(|| "Could not find an image format")
 }
 
 // Helper to get framebuffers for swapchain images

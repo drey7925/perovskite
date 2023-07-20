@@ -1,6 +1,5 @@
 use cuberef_server::game_state::{
     items::{Item, ItemManager, ItemStack},
-    GameState,
 };
 use parking_lot::RwLock;
 

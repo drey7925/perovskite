@@ -119,7 +119,7 @@ impl GameBuilder {
     }
 
     pub fn get_block(&self, block_name: Block) -> Option<BlockTypeHandle> {
-        self.inner.blocks().get_by_name(&block_name.0)
+        self.inner.blocks().get_by_name(block_name.0)
     }
 
     /// Adds a texture to the game by reading from a file.

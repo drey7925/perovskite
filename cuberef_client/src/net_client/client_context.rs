@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::game_state::{
-    chunk::{mesh_chunk, ClientChunk},
+    chunk::{mesh_chunk},
     items::ClientInventory,
     ClientState, GameAction,
 };

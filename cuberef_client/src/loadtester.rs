@@ -1,17 +1,17 @@
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Vector3};
+use cgmath::{vec3};
 use cuberef_core::coordinates::BlockCoordinate;
 use rand::{self, Rng};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-use tracy_client::plot;
+
 use winit::event_loop::EventLoop;
 
 use crate::{
-    game_state::{settings::GameSettings, ClientState, DigTapAction},
+    game_state::{settings::GameSettings, DigTapAction},
     net_client,
-    vulkan::{shaders::PipelineProvider, VulkanContext},
+    vulkan::{VulkanContext},
 };
 
 pub struct Loadtester {
@@ -91,5 +91,10 @@ impl Loadtester {
             }
             panic!();
         }))
+    }
+}
+impl Default for Loadtester {
+    fn default() -> Self {
+        Self::new()
     }
 }

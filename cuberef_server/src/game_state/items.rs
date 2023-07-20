@@ -209,9 +209,9 @@ impl MaybeStack for Option<ItemStack> {
                         *self = Some(other);
                         // We can always insert into an empty stack.
                         true
-                    },
+                    }
                 }
-            },
+            }
             // If the other stack is empty, we have nothing to insert, which we can always do successfully.
             None => true,
         }
@@ -252,18 +252,18 @@ impl MaybeStack for Option<ItemStack> {
             Some(count) => {
                 if self.as_ref().unwrap().proto.stackable {
                     let available = self.as_mut().unwrap().proto.quantity;
-                    if available == count {
-                        self.take()
-                    } else if available > count {
-                        self.as_mut().unwrap().proto.quantity -= count;
-                        Some(ItemStack {
-                            proto: proto::ItemStack {
-                                quantity: count,
-                                ..self.as_ref().unwrap().proto.clone()
-                            },
-                        })
-                    } else {
-                        None
+                    match available.cmp(&count) {
+                        std::cmp::Ordering::Less => None,
+                        std::cmp::Ordering::Equal => self.take(),
+                        std::cmp::Ordering::Greater => {
+                            self.as_mut().unwrap().proto.quantity -= count;
+                            Some(ItemStack {
+                                proto: proto::ItemStack {
+                                    quantity: count,
+                                    ..self.as_ref().unwrap().proto.clone()
+                                },
+                            })
+                        }
                     }
                 } else {
                     None

@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use cuberef_core::constants;
@@ -15,7 +15,7 @@ use prost::Message;
 
 use crate::{
     blocks::BlockBuilder,
-    game_builder::{Block, GameBuilder, Tex},
+    game_builder::{Block, Tex},
     include_texture_bytes,
 };
 
@@ -81,12 +81,12 @@ impl TimerInlineCallback for FurnaceTimerCallback {
         }
         let mut set_dirty = false;
         let extended_data = data.get_or_insert_with(|| ExtendedData {
-            custom_data: Some(Box::new(FurnaceState::default())),
+            custom_data: Some(Box::<FurnaceState>::default()),
             inventories: hashbrown::HashMap::new(),
         });
         let state: &mut FurnaceState = match extended_data
             .custom_data
-            .get_or_insert_with(|| Box::new(FurnaceState::default()))
+            .get_or_insert_with(|| Box::<FurnaceState>::default())
             .as_mut()
             .downcast_mut()
         {
@@ -122,15 +122,11 @@ impl TimerInlineCallback for FurnaceTimerCallback {
                         set_dirty = true;
                         self.set_appearance_on(block_type);
                     }
-                } else {
-                    if self.shut_down_furnace(block_type, state) {
-                        set_dirty = true;
-                    }
-                }
-            } else {
-                if self.shut_down_furnace(block_type, state) {
+                } else if self.shut_down_furnace(block_type, state) {
                     set_dirty = true;
                 }
+            } else if self.shut_down_furnace(block_type, state) {
+                set_dirty = true;
             }
         } else {
             state.flame_left -= 1;
@@ -143,7 +139,7 @@ impl TimerInlineCallback for FurnaceTimerCallback {
             .as_ref()
             .map(|x| x.proto.item_name.as_str())
             .unwrap_or("");
-        if &state.smelted_item != current_input {
+        if state.smelted_item != current_input {
             state.smelt_progress = 0;
             set_dirty = true;
             // Check if we have a recipe for this input
@@ -167,7 +163,9 @@ impl TimerInlineCallback for FurnaceTimerCallback {
             if state.smelt_progress >= state.smelt_ticks {
                 // unwrap should be fine - if we started smelting it, we have a recipe (see above)
                 let recipe = self.recipes.find(ctx.items(), &[input_stack]).unwrap();
-                let can_take_input = input_stack.as_ref().is_some_and(|x| x.proto.quantity >= recipe.slots[0].quantity());
+                let can_take_input = input_stack
+                    .as_ref()
+                    .is_some_and(|x| x.proto.quantity >= recipe.slots[0].quantity());
                 if !can_take_input {
                     // The input item got yoinked
                     // This can only happen once recipes support taking more than one item, but we still want to be ready for that feature
@@ -175,7 +173,10 @@ impl TimerInlineCallback for FurnaceTimerCallback {
                     state.smelt_progress = 0;
                     return Ok(());
                 } else if output_stack.try_merge_all(Some(recipe.result.clone())) {
-                    if input_stack.try_take_all(Some(recipe.slots[0].quantity())).is_none() {
+                    if input_stack
+                        .try_take_all(Some(recipe.slots[0].quantity()))
+                        .is_none()
+                    {
                         log::warn!("Couldn't take items we thought were in the stack. This should not happen.");
                     }
 
@@ -203,8 +204,11 @@ impl TimerInlineCallback for FurnaceTimerCallback {
 }
 
 impl FurnaceTimerCallback {
-    fn shut_down_furnace(&self, block_type: &mut BlockTypeHandle, state: &mut FurnaceState) -> bool {
-
+    fn shut_down_furnace(
+        &self,
+        block_type: &mut BlockTypeHandle,
+        state: &mut FurnaceState,
+    ) -> bool {
         let dirty_from_blocktype = if block_type.equals_ignore_variant(self.furnace_on_handle) {
             *block_type = self
                 .furnace_off_handle
@@ -348,11 +352,11 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
     Ok(())
 }
 
-fn furnace_deserialize(ctx: InlineContext, data: &[u8]) -> Result<Option<CustomData>> {
+fn furnace_deserialize(_ctx: InlineContext, data: &[u8]) -> Result<Option<CustomData>> {
     let furnace = FurnaceState::decode(data)?;
     Ok(Some(Box::new(furnace)))
 }
-fn furnace_serialize(ctx: InlineContext, state: &CustomData) -> Result<Option<Vec<u8>>> {
+fn furnace_serialize(_ctx: InlineContext, state: &CustomData) -> Result<Option<Vec<u8>>> {
     let furnace = state
         .downcast_ref::<FurnaceState>()
         .context("FurnaceState downcast failed")?;
