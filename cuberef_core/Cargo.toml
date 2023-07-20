@@ -13,6 +13,7 @@ opaque-ke = { version = "2.0.0", features = ["argon2"] }
 prost = "0.11"
 prost-types = "0.11"
 rand = "0.8.5"
+rustc-hash = "1.1.0"
 thiserror = "1.0.40"
 tonic = "0.9.1"
 vec3D = "0.3.0"

@@ -88,8 +88,6 @@ impl Loadtester {
                     prev: None,
                     item_slot: 0,
                 })).await.unwrap();
-                    
-                println!("{}", cs.actions.capacity());
             }
             panic!();
         }))

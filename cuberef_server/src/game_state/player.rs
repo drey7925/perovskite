@@ -367,7 +367,7 @@ impl PlayerManager {
     pub(crate) fn new(
         game_state: Weak<GameState>,
         db: Arc<dyn GameDatabase>,
-    ) -> Arc<PlayerManager> {
+    ) -> Result<Arc<PlayerManager>> {
         let result = Arc::new(PlayerManager {
             game_state,
             db,
@@ -375,8 +375,8 @@ impl PlayerManager {
             shutdown: CancellationToken::new(),
             writeback: Mutex::new(None),
         });
-        result.start_writeback();
-        result
+        result.start_writeback()?;
+        Ok(result)
     }
 
     pub(crate) async fn writeback_loop(self: Arc<Self>) -> Result<()> {
@@ -394,9 +394,10 @@ impl PlayerManager {
         Ok(())
     }
 
-    fn start_writeback(self: &Arc<Self>) {
+    fn start_writeback(self: &Arc<Self>) -> Result<()> {
         let clone = self.clone();
-        *(self.writeback.lock()) = Some(tokio::spawn(async { clone.writeback_loop().await }));
+        *(self.writeback.lock()) = Some(crate::spawn_async("player_writeback", async { clone.writeback_loop().await })?);
+        Ok(())
     }
 
     pub(crate) fn request_shutdown(&self) {

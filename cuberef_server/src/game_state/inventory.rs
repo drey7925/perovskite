@@ -31,6 +31,7 @@ use log::warn;
 use parking_lot::{Mutex, RwLock};
 use prost::Message;
 use tokio::sync::broadcast;
+use tracing::trace;
 
 use super::{blocks::ExtendedData, GameState};
 
@@ -177,7 +178,7 @@ impl InventoryManager {
         let inventory = Inventory::new((height, width))?;
         let db = {
             let _span = tracy_client::span!("inventory lock");
-            self.db.read()
+            self.db.write()
         };
         db.put(
             // unwrap OK because we just generated an inventory with a key
@@ -208,7 +209,7 @@ impl InventoryManager {
     {
         let db = {
             let _span = tracy_client::span!("inventory lock");
-            self.db.read()
+            self.db.write()
         };
         let db_key = key.to_db_key();
         let bytes = db.get(&db_key)?;
@@ -243,7 +244,7 @@ impl InventoryManager {
     {
         let db = {
             let _span = tracy_client::span!("inventory lock");
-            self.db.read()
+            self.db.write()
         };
         let mut inventories = Vec::with_capacity(keys.len());
         for key in keys {
@@ -284,14 +285,14 @@ impl InventoryManager {
     fn broadcast_update(&self, key: InventoryKey) {
         match self.update_sender.send(UpdatedInventory::Stored(key)) {
             Ok(_) => {}
-            Err(_) => warn!("No receivers for inventory key update {:?}", key),
+            Err(_) => trace!("No receivers for inventory key update {:?}", key),
         }
     }
 
     pub(crate) fn broadcast_block_update(&self, block: BlockCoordinate) {
         match self.update_sender.send(UpdatedInventory::StoredInBlock(block)) {
             Ok(_) => {},
-            Err(_) => warn!("No receivers for block update {:?}", block),
+            Err(_) => trace!("No receivers for block update {:?}", block),
         }
     }
 }
@@ -980,4 +981,4 @@ pub(crate) enum UpdatedInventory {
     StoredInBlock(BlockCoordinate),
 }
 
-const BROADCAST_CHANNEL_SIZE: usize = 32;
+const BROADCAST_CHANNEL_SIZE: usize = 256;

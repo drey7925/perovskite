@@ -16,11 +16,49 @@
 
 use cuberef_game_api::default_game::DefaultGameBuilder;
 use tracing::metadata::LevelFilter;
-use tracing_subscriber::{prelude::*, EnvFilter};
+use tracing_subscriber::{prelude::*, registry::LookupSpan, EnvFilter};
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
+
+#[cfg(not(feature = "tracy"))]
+pub fn tracy_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+where
+    S: tracing::Subscriber,
+    for<'a> S: LookupSpan<'a>,
+{
+    Box::new(Option::<Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>>::None)
+}
+#[cfg(feature = "tracy")]
+pub fn tracy_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+where
+    S: tracing::Subscriber,
+    for<'a> S: LookupSpan<'a>,
+{
+    Box::new(
+        tracing_tracy::TracyLayer::new().with_filter(tracing_subscriber::filter::filter_fn(|x| {
+            x.module_path().is_some_and(|x| x.contains("cuberef"))
+        })),
+    )
+}
+
+#[cfg(not(feature = "tokio-console"))]
+pub fn tokio_console_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+where
+    S: tracing::Subscriber,
+    for<'a> S: LookupSpan<'a>,
+{
+    Box::new(Option::<Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>>::None)
+}
+#[cfg(feature = "tokio-console")]
+pub fn tokio_console_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+where
+    S: tracing::Subscriber,
+    for<'a> S: LookupSpan<'a>,
+{
+    Box::new(console_subscriber::spawn())
+}
 
 fn main() {
     #[cfg(feature = "dhat-heap")]
@@ -28,24 +66,17 @@ fn main() {
         let _profiler = dhat::Profiler::new_heap();
     }
 
-    #[cfg(feature = "tokio-console")]
-    {
-        let console_layer = console_subscriber::spawn();
-        tracing_subscriber::registry()
-            .with(console_layer)
-            .with(tracing_subscriber::fmt::layer().with_filter(
+    tracing_subscriber::registry()
+        .with(tokio_console_layer())
+        .with(tracy_layer())
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
                 tracing_subscriber::EnvFilter::builder()
                     .with_default_directive(LevelFilter::INFO.into())
-                    .from_env_lossy()))
-            .with(tracing_tracy::TracyLayer::new().with_filter(tracing_subscriber::filter::filter_fn(|x| {
-                x.module_path().is_some_and(|x| x.contains("cuberef"))
-            })))
-            .init();
-    }
-    #[cfg(not(feature = "tokio-console"))]
-    {
-        tracing_subscriber::fmt::init();
-    }
+                    .from_env_lossy(),
+            ),
+        )
+        .init();
 
     let game = DefaultGameBuilder::new_from_commandline().unwrap();
     game.build_and_run().unwrap();

@@ -628,14 +628,17 @@ impl ServerGameMap {
             receiver: writeback_receiver,
             cancellation: cancellation.clone(),
         };
-        let writeback_handle = tokio::spawn(async move { writeback.run_loop().await });
-        *result.writeback_handle.lock() = Some(writeback_handle);
 
         let mut cache_cleanup = MapCacheCleanup {
             map: result.clone(),
             cancellation: cancellation.clone(),
         };
-        let cleanup_handle = tokio::spawn(async move { cache_cleanup.run_loop().await });
+
+        let writeback_handle =
+            crate::spawn_async("map_writeback", async move { writeback.run_loop().await })?;
+        *result.writeback_handle.lock() = Some(writeback_handle);
+        let cleanup_handle =
+            crate::spawn_async("map_cleanup", async move { cache_cleanup.run_loop().await })?;
         *result.cleanup_handle.lock() = Some(cleanup_handle);
 
         let timer_controller = TimerController {
@@ -944,13 +947,8 @@ impl ServerGameMap {
     }
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
-    #[tracing::instrument(
-        level = "trace",
-        name = "get_chunk",
-        skip(self)
-    )]
+    #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
     fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
-
         let writeback_permit = self.get_writeback_permit()?;
 
         let mut load_chunk_tries = 0;
@@ -986,13 +984,13 @@ impl ServerGameMap {
             }
 
             // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
-            // Since we still hold the write lock,
-            let prev = write_guard.insert(coord, MapChunkHolder::new_empty());
-            assert!(prev.is_none());
+            // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
+            write_guard.insert(coord, MapChunkHolder::new_empty());
 
             // Now we downgrade the read lock.
-            // If another thread races ahead of us and does the same lookup, they'll get an empty chunk holder and will wait
-            // for the condition variable to be signalled (while NOT holding the inner lock).
+            // If another thread races ahead of us and does the same lookup before we manage to fill the chunk, 
+            // they'll get an empty chunk holder and will wait for the condition variable to be signalled 
+            // (when that thread waits on the condition variable, it atomically releases the inner lock)
             let read_guard = RwLockWriteGuard::downgrade(write_guard);
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
             let chunk_guard = read_guard.get(&coord).unwrap();
@@ -1528,11 +1526,14 @@ impl GameMapTimer {
             {
                 let cloned_self = self.clone();
                 let cloned_game_state = game_state.clone();
-                tasks.push(tokio::task::spawn(async move {
-                    cloned_self
-                        .run_shard(start_time, shard_id, shard_count, cloned_game_state)
-                        .await
-                }));
+                tasks.push(crate::spawn_async(
+                    &format!("timer_{}_shard_{}", self.name, shard_id),
+                    async move {
+                        cloned_self
+                            .run_shard(start_time, shard_id, shard_count, cloned_game_state)
+                            .await
+                    },
+                )?);
             }
         }
         Ok(())
@@ -1603,9 +1604,7 @@ impl GameMapTimer {
                 let _span = span!("timer bumping");
                 RwLockReadGuard::bump(&mut read_lock);
             }
-            let mut hasher = rustc_hash::FxHasher::default();
-            coord.hash(&mut hasher);
-            if hasher.finish() % total_shards as u64 == shard_id as u64 {
+            if coord.hash_u64() % total_shards as u64 == shard_id as u64 {
                 if let Some(chunk) = read_lock.get(&coord) {
                     self.handle_chunk(
                         coord,

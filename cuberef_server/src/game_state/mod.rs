@@ -83,7 +83,7 @@ impl GameState {
             database: db.clone(),
             inventory_manager: Arc::new(InventoryManager::new(db.clone())),
             item_manager: Arc::new(items),
-            player_manager: PlayerManager::new(weak.clone(), db.clone()),
+            player_manager: PlayerManager::new(weak.clone(), db.clone()).unwrap(),
             media_resources: Arc::new(media),
             early_shutdown: CancellationToken::new(),
             mapgen_seed,

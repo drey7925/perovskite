@@ -20,3 +20,27 @@ pub mod game_state;
 pub mod media;
 pub mod network_server;
 pub mod server;
+
+use anyhow::Result;
+use std::future::Future;
+use tokio::task::JoinHandle;
+
+#[cfg(tokio_unstable)]
+pub(crate) fn spawn_async<T>(name: &str, task: T) -> Result<JoinHandle<T::Output>>
+where
+    T: Future + Send + 'static,
+    T::Output: Send + 'static,
+{
+    use std::thread::JoinHandle;
+
+    Ok(tokio::task::Builder::new().name(name).spawn(task)?)
+}
+
+#[cfg(not(tokio_unstable))]
+pub(crate) fn spawn_async<T>(_name: &str, task: T) -> Result<JoinHandle<T::Output>>
+where
+    T: Future + Send + 'static,
+    T::Output: Send + 'static,
+{
+    Ok(tokio::task::spawn(task))
+}

@@ -14,9 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fmt::Debug, ops::RangeInclusive};
+use std::{fmt::Debug, ops::RangeInclusive, hash::{Hash, Hasher}};
 
 use anyhow::{ensure, Result};
+use rustc_hash::FxHasher;
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct BlockCoordinate {
@@ -106,6 +107,7 @@ impl TryFrom<cgmath::Vector3<f64>> for BlockCoordinate {
     }
 }
 
+/// Represents an offset of a block within a chunk.
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct ChunkOffset {
     pub x: u8,
@@ -154,6 +156,7 @@ impl Debug for ChunkOffset {
     }
 }
 
+/// Represents a location of a map chunk.
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct ChunkCoordinate {
@@ -166,6 +169,7 @@ impl ChunkCoordinate {
         Self { x, y, z }
     }
 
+    /// Returns a new block coordinate with the given offset within this chunk.
     #[inline]
     pub fn with_offset(&self, offset: ChunkOffset) -> BlockCoordinate {
         offset.debug_check();
@@ -175,25 +179,29 @@ impl ChunkCoordinate {
             z: self.z * 16 + (offset.z as i32),
         }
     }
-
+    /// Returns the Manhattan distance between the two coordinates
     pub fn manhattan_distance(&self, other: ChunkCoordinate) -> u32 {
         self.x
             .abs_diff(other.x)
             .saturating_add(self.y.abs_diff(other.y))
             .saturating_add(self.z.abs_diff(other.z))
     }
+    /// Returns the L-infinity (max distance along all three dimensions) norm between the two coordinates
     pub fn l_infinity_norm_distance(&self, other: ChunkCoordinate) -> u32 {
         self.x
             .abs_diff(other.x)
             .max(self.y.abs_diff(other.y))
             .max(self.z.abs_diff(other.z))
     }
+    /// Returns true if the coordinate is in-bounds. Because *block* coordinates need to
+    /// fit into an i32, not every possible chunk coordinate is actually in-bounds.
     pub fn is_in_bounds(&self) -> bool {
         const BOUNDS_RANGE: RangeInclusive<i32> = (i32::MIN / 16)..=(i32::MAX / 16);
         BOUNDS_RANGE.contains(&self.x)
             && BOUNDS_RANGE.contains(&self.y)
             && BOUNDS_RANGE.contains(&self.z)
     }
+    /// Adds the given offset to the coordinate, and returns it, if it is in-bounds.
     pub fn try_delta(&self, x: i32, y: i32, z: i32) -> Option<ChunkCoordinate> {
         let x = self.x.checked_add(x)?;
         let y = self.y.checked_add(y)?;
@@ -204,6 +212,14 @@ impl ChunkCoordinate {
         } else {
             None
         }
+    }
+    /// Convenience helper to hash a ChunkCoordinate to a u64.
+    /// The result is not guaranteed to be the same between versions or runs,
+    /// and hence should not be persisted.
+    pub fn hash_u64(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        self.hash(&mut hasher);
+        hasher.finish()
     }
 }
 impl Debug for ChunkCoordinate {

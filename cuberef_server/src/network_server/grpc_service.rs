@@ -66,11 +66,11 @@ impl CuberefGame for CuberefGameServerImpl {
         info!("Stream established from {:?}", req.remote_addr());
         let (outbound_tx, outbound_rx) = mpsc::channel(4);
         let game_state = self.game_state.clone();
-        tokio::spawn(async move {
+        crate::spawn_async("game_stream", async move {
             game_stream_impl(game_state, req.into_inner(), outbound_tx)
                 .await
                 .unwrap()
-        });
+        }).map_err(|e| Status::internal(e.to_string()))?;
 
         Result::Ok(Response::new(Box::pin(ReceiverStream::new(outbound_rx))))
     }

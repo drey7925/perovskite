@@ -15,9 +15,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
-use std::future::Future;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::iter::once;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -33,7 +30,6 @@ use crate::game_state::event::HandlerContext;
 
 use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::game_map::CACHE_CLEAN_MIN_AGE;
-use crate::game_state::handlers;
 use crate::game_state::inventory::InventoryKey;
 use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
@@ -41,7 +37,6 @@ use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
 use crate::game_state::items::DigResult;
 use crate::game_state::items::Item;
-use crate::game_state::player;
 use crate::game_state::player::PlayerContext;
 use crate::game_state::GameState;
 use crate::run_handler;
@@ -67,7 +62,6 @@ use log::warn;
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
-use rustc_hash::FxHasher;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
@@ -87,55 +81,29 @@ impl PlayerCoroutinePack {
     pub(crate) async fn run_all(mut self) -> Result<()> {
         let username = self.context.player_context.name().to_string();
         initialize_protocol_state(&mut self.context, &self.inbound_worker.outbound_tx).await?;
-        #[cfg(not(tokio_unstable))]
-        {
-            tracing::info!("Starting workers for {}...", username);
-            tokio::spawn(async move {
-                if let Err(e) = self.inbound_worker.run_inbound_loop().await {
-                    log::error!("Error running inbound loop: {:?}", e);
-                }
-            });
-            tokio::spawn(async move {
-                if let Err(e) = self.chunk_sender.run_loop().await {
-                    log::error!("Error running chunk sender: {:?}", e);
-                }
-            });
-            tokio::spawn(async move {
-                if let Err(e) = self.block_event_sender.run_outbound_loop().await {
-                    log::error!("Error running block event sender loop: {:?}", e);
-                }
-            });
-            tokio::spawn(async move {
-                if let Err(e) = self.inventory_event_sender.run_outbound_loop().await {
-                    log::error!("Error running inventory event sender loop: {:?}", e);
-                }
-            });
-        }
-        #[cfg(tokio_unstable)]
-        {
-            
-            tracing::info!("[tokio-unstable] Starting named workers for {}...", username);
-            tokio::task::Builder::new().name(&format!("inbound_worker_{}", username)).spawn(async move {
-                if let Err(e) = self.inbound_worker.run_inbound_loop().await {
-                    log::error!("Error running inbound loop: {:?}", e);
-                }
-            });
-            tokio::task::Builder::new().name(&format!("chunk_sender_{}", username)).spawn(async move {
-                if let Err(e) = self.chunk_sender.run_loop().await {
-                    log::error!("Error running chunk sender: {:?}", e);
-                }
-            });
-            tokio::task::Builder::new().name(&format!("block_event_sender_{}", username)).spawn(async move {
-                if let Err(e) = self.block_event_sender.run_outbound_loop().await {
-                    log::error!("Error running block event sender loop: {:?}", e);
-                }
-            });
-            tokio::task::Builder::new().name(&format!("inv_event_sender_{}", username)).spawn(async move {
-                if let Err(e) = self.inventory_event_sender.run_outbound_loop().await {
-                    log::error!("Error running inventory event sender loop: {:?}", e);
-                }
-            });
-        }
+
+        tracing::info!("Starting workers for {}...", username);
+        crate::spawn_async(&format!("inbound_worker_{}", username), async move {
+            if let Err(e) = self.inbound_worker.run_inbound_loop().await {
+                log::error!("Error running inbound loop: {:?}", e);
+            }
+        })?;
+        crate::spawn_async(&format!("chunk_sender_{}", username), async move {
+            if let Err(e) = self.chunk_sender.run_loop().await {
+                log::error!("Error running chunk sender: {:?}", e);
+            }
+        })?;
+        crate::spawn_async(&format!("block_event_sender_{}", username), async move {
+            if let Err(e) = self.block_event_sender.run_outbound_loop().await {
+                log::error!("Error running block event sender loop: {:?}", e);
+            }
+        })?;
+        crate::spawn_async(&format!("inv_event_sender_{}", username), async move {
+            if let Err(e) = self.inventory_event_sender.run_outbound_loop().await {
+                log::error!("Error running inventory event sender loop: {:?}", e);
+            }
+        })?;
+
         Ok(())
     }
 }
@@ -222,6 +190,13 @@ pub(crate) async fn make_client_contexts(
     })
 }
 
+#[tracing::instrument(
+    name = "initialize_protocol_state",
+    skip_all,
+    fields(
+        player = %context.player_context.name(),
+    )
+)]
 async fn initialize_protocol_state(
     context: &SharedContext,
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
@@ -328,6 +303,7 @@ impl Drop for SharedContext {
 pub(crate) struct ChunkTracker {
     player_context: Arc<PlayerContext>,
     game_state: Arc<GameState>,
+    loaded_chunks_bloom: cbloom::Filter,
     // The client knows about these chunks, and we should send updates to them
     loaded_chunks: RwLock<FxHashSet<ChunkCoordinate>>,
     // todo later - chunks that the client might have unloaded, but might be worth sending on a best-effort basis
@@ -338,18 +314,24 @@ impl ChunkTracker {
         Self {
             game_state,
             player_context,
+            loaded_chunks_bloom: cbloom::Filter::new(128, (LOAD_LAZY_DISTANCE as usize).pow(3) / 2),
             loaded_chunks: RwLock::new(FxHashSet::default()),
         }
     }
     fn is_loaded(&self, coord: ChunkCoordinate) -> bool {
+        if !self.loaded_chunks_bloom.maybe_contains(coord.hash_u64()) {
+            return false;
+        }
         self.loaded_chunks.read().contains(&coord)
     }
     // Marks a chunk as loaded. This must be called before the chunk is actually loaded and sent to the client
-    fn mark_chunk_loaded(&self, player_coord: ChunkCoordinate) {
-        self.loaded_chunks.write().insert(player_coord);
+    fn mark_chunk_loaded(&self, coord: ChunkCoordinate) {
+        self.loaded_chunks_bloom.insert(coord.hash_u64());
+        self.loaded_chunks.write().insert(coord);
     }
 
-    // Marks a chunk as unloaded. This must be called after the chunk is actually unloaded and sent to the client
+    // Marks a chunk as unloaded. This must be called after the chunk is actually unloaded and the corresponding message is sent
+    // to the client
     fn mark_chunk_unloaded(&self, player_coord: ChunkCoordinate) {
         self.loaded_chunks.write().remove(&player_coord);
     }
@@ -362,6 +344,7 @@ impl ChunkTracker {
     }
 
     fn clear(&self) {
+        self.loaded_chunks_bloom.clear();
         self.loaded_chunks.write().clear();
     }
 }
@@ -417,7 +400,11 @@ impl MapChunkSender {
             player_chunk
         ),
     )]
-    async fn handle_position_update(&mut self, update: PositionAndPacing, bump_index: u32) -> Result<()> {
+    async fn handle_position_update(
+        &mut self,
+        update: PositionAndPacing,
+        bump_index: u32,
+    ) -> Result<()> {
         let position = update.position;
         // TODO anticheat/safety checks
         // TODO consider caching more in the player's movement direction as a form of prefetch???
@@ -481,10 +468,8 @@ impl MapChunkSender {
                 );
                 break;
             }
-            let mut hasher = FxHasher::default();
-            coord.hash(&mut hasher);
-            let hash = hasher.finish();
-            if hash % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
+
+            if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
                 self.context.game_state.map().bump_access_time(coord);
             }
             if self.chunk_tracker.is_loaded(coord) {
@@ -744,20 +729,26 @@ impl InventoryEventSender {
         };
         let mut update_keys = FxHashSet::default();
         update_keys.insert(key);
-        for _ in 0..64 {
-            match self.inventory_events.try_recv() {
-                Ok(update) => {
-                    update_keys.insert(update);
-                }
-                Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    // we'll deal with it the next time the main loop runs
-                    warn!("Unexpected error from inventory events broadcast: {:?}", e);
+
+        tracing::span!(tracing::Level::TRACE, "gather inventory updates").in_scope(|| {
+            for _ in 0..256 {
+                match self.inventory_events.try_recv() {
+                    Ok(update) => {
+                        update_keys.insert(update);
+                    }
+                    Err(broadcast::error::TryRecvError::Empty) => break,
+                    Err(e) => {
+                        // we'll deal with it the next time the main loop runs
+                        warn!("Unexpected error from inventory events broadcast: {:?}", e);
+                    }
                 }
             }
-        }
-
-        let update_messages = {
+        });
+        let update_messages = tracing::span!(
+            tracing::Level::TRACE,
+            "filter and serialize inventory updates"
+        )
+        .in_scope(|| -> anyhow::Result<_> {
             let player_state = self.context.player_context.state.lock();
             let mut update_messages = vec![];
             for key in update_keys {
@@ -786,8 +777,8 @@ impl InventoryEventSender {
                     }
                 }
             }
-            update_messages
-        };
+            Ok(update_messages)
+        })?;
 
         for update in update_messages {
             self.outbound_tx

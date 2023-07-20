@@ -21,7 +21,8 @@ console-subscriber = { version = "0.1.5", optional = true }
 tracing = "0.1.37"
 tracing-subscriber =  { version = "0.3", features = ["fmt", "env-filter", "std"] }
 tracing-log = "0.1.3"
-tracing-tracy = "0.10.2"
+tracing-tracy =  { version = "0.10.2", default-features = false, features = [ "system-tracing", "context-switch-tracing", "sampling", "code-transfer",
+            "broadcast" ] }
 
 [features]
 default = ["default_game"]
@@ -34,7 +35,7 @@ default_game = []
 # If enabled, server will detect deadlocks and log them.
 deadlock_detection = ["cuberef_server/deadlock_detection"]
 # Performance tracing
-tracy = ["cuberef_server/tracy"]
+tracy = ["cuberef_server/tracy", "tracing-tracy/enable"]
 # Heap profiling
 dhat-heap = []
 # tokio-console; Requires RUSTFLAGS="--cfg tokio_unstable"
