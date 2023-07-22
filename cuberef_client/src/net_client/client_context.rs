@@ -36,6 +36,7 @@ pub(crate) async fn make_contexts(
     let cancellation = client_state.shutdown.clone();
 
     let ack_map = Arc::new(Mutex::new(HashMap::new()));
+    // TODO (low-value optimization): multiple mesh workers for high render distances?
     let mesh_worker = Arc::new(MeshWorker {
         client_state: client_state.clone(),
         queue: Mutex::new(HashSet::new()),

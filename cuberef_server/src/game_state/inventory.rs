@@ -27,7 +27,7 @@ use crate::{
 use anyhow::{bail, ensure, Context, Result};
 use cuberef_core::{coordinates::BlockCoordinate, protocol::items as items_proto};
 
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use prost::Message;
 use tokio::sync::broadcast;
 use tracing::trace;
@@ -111,14 +111,9 @@ impl Inventory {
         let contents = self
             .contents
             .iter()
-            .map(|x| match x {
-                Some(x) => x.proto().clone(),
-                None => items_proto::ItemStack {
-                    item_name: String::from(""),
-                    quantity: 0,
-                    max_stack: 0,
-                    stackable: false,
-                },
+            .map(|x| {
+                x.as_ref()
+                    .map_or_else(|| make_empty_stack(), |x| x.proto.clone())
             })
             .collect();
         items_proto::Inventory {
@@ -289,8 +284,11 @@ impl InventoryManager {
     }
 
     pub(crate) fn broadcast_block_update(&self, block: BlockCoordinate) {
-        match self.update_sender.send(UpdatedInventory::StoredInBlock(block)) {
-            Ok(_) => {},
+        match self
+            .update_sender
+            .send(UpdatedInventory::StoredInBlock(block))
+        {
+            Ok(_) => {}
             Err(_) => trace!("No receivers for block update {:?}", block),
         }
     }
@@ -598,7 +596,7 @@ impl<T> InventoryView<T> {
                 } else {
                     false
                 }
-            },
+            }
         }
     }
 }
@@ -939,17 +937,7 @@ impl<T> InventoryView<T> {
                 contents: self
                     .peek(context)?
                     .into_iter()
-                    .map(|x| {
-                        x.map_or_else(
-                            || cuberef_core::protocol::items::ItemStack {
-                                item_name: "".to_string(),
-                                quantity: 0,
-                                max_stack: 0,
-                                stackable: false,
-                            },
-                            |x| x.proto,
-                        )
-                    })
+                    .map(|x| x.map_or_else(make_empty_stack, |x| x.proto))
                     .collect(),
             }),
             view_id: self.id().0,
@@ -965,6 +953,15 @@ impl<T> Drop for InventoryView<T> {
         if let Err(e) = self.clear_if_transient(None) {
             log::error!("Failed to drop inventory view: {e:?}");
         }
+    }
+}
+
+fn make_empty_stack() -> cuberef_core::protocol::items::ItemStack {
+    cuberef_core::protocol::items::ItemStack {
+        item_name: "".to_string(),
+        quantity: 0,
+        current_wear: 0,
+        quantity_type: None,
     }
 }
 

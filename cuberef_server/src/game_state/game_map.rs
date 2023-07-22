@@ -304,54 +304,6 @@ impl MapChunk {
                 .remove(&coordinate.as_index().try_into().unwrap());
         }
     }
-
-    /// See the docstring of [ServerGameMap::mutate_block_atomically()].
-    pub fn mutate_block_atomically<F, T>(
-        &mut self,
-        offset: ChunkOffset,
-        mutator: F,
-        game_map: &ServerGameMap,
-    ) -> anyhow::Result<T>
-    where
-        F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
-    {
-        let mut extended_data = self
-            .extended_data
-            .remove(&offset.as_index().try_into().unwrap());
-
-        let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
-        let old_id = self.block_ids[offset.as_index()].into();
-        let mut block_type = game_map.block_type_manager().make_blockref(old_id)?;
-        let closure_result = mutator(&mut block_type, &mut data_holder);
-        let dirty = data_holder.dirty();
-
-        if let Some(new_data) = extended_data {
-            self.extended_data
-                .insert(offset.as_index().try_into().unwrap(), new_data);
-        }
-        let new_id = block_type.id();
-        if new_id != old_id {
-            self.block_ids[offset.as_index()] = new_id.into();
-            self.dirty = true;
-        }
-        if dirty {
-            self.dirty = true;
-            self.game_state
-                .upgrade()
-                .unwrap()
-                .inventory_manager()
-                .broadcast_block_update(self.own_coord.with_offset(offset));
-        }
-
-        if new_id != old_id {
-            game_map.broadcast_block_change(BlockUpdate {
-                location: self.own_coord.with_offset(offset),
-                new_value: block_type,
-            });
-        }
-
-        closure_result
-    }
 }
 
 fn parse_v1(
@@ -482,6 +434,7 @@ struct MapChunkHolder {
     chunk: Mutex<HolderState>,
     condition: Condvar,
     last_accessed: Mutex<Instant>,
+    block_bloom_filter: cbloom::Filter,
 }
 impl MapChunkHolder {
     fn new_empty() -> Self {
@@ -489,6 +442,10 @@ impl MapChunkHolder {
             chunk: Mutex::new(HolderState::Empty),
             condition: Condvar::new(),
             last_accessed: Mutex::new(Instant::now()),
+            // TODO: make bloom filter configurable or adaptive
+            // For now, 128 bytes is a reasonable overhead (a chunk contains 4096 u32s which is 16 KiB already + extended data)
+            // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
+            block_bloom_filter: cbloom::Filter::with_size_and_hashers(128, 5),
         }
     }
 
@@ -515,6 +472,10 @@ impl MapChunkHolder {
     }
     /// Set the chunk, and notify any threads waiting in wait_and_get
     fn fill(&self, chunk: MapChunk) {
+        for block_id in chunk.block_ids.iter() {
+            self.block_bloom_filter
+                .insert(BlockId::from(*block_id).base_id() as u64);
+        }
         let _span = span!("game_map waiting to fill chunk");
         let mut guard = self.chunk.lock();
         assert!(matches!(*guard, HolderState::Empty));
@@ -731,6 +692,9 @@ impl ServerGameMap {
         chunk.dirty = true;
 
         drop(chunk);
+        chunk_guard
+            .block_bloom_filter
+            .insert(block.id().base_id() as u64);
         self.enqueue_writeback(chunk_guard)?;
         self.broadcast_block_change(BlockUpdate {
             location: coord,
@@ -814,6 +778,9 @@ impl ServerGameMap {
         chunk.block_ids[coord.offset().as_index()] = block.id().into();
         chunk.dirty = true;
         drop(chunk);
+        chunk_guard
+            .block_bloom_filter
+            .insert(block.id().base_id() as u64);
         chunk_guard.write_back_inner();
         self.broadcast_block_change(BlockUpdate {
             location: coord,
@@ -832,6 +799,8 @@ impl ServerGameMap {
     /// * If the mutator returns a non-Ok status, any changes it made will still be applied.
     ///
     /// It is not safe to call other GameMap functions (e.g. get/set blocks) from the handler - they may deadlock.
+    ///
+    /// Warning: If the mutator panics, the extended data may be lost.
     pub fn mutate_block_atomically<F, T>(&self, coord: BlockCoordinate, mutator: F) -> Result<T>
     where
         F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
@@ -839,12 +808,70 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get()?;
 
-        let result = chunk.mutate_block_atomically(coord.offset(), mutator, self);
-        if chunk.dirty {
-            drop(chunk);
-            self.enqueue_writeback(chunk_guard)?;
-        };
+        let result = self.mutate_block_atomically_locked(
+            &chunk_guard,
+            &mut chunk,
+            coord.offset(),
+            mutator,
+            self,
+        );
+
         result
+    }
+
+    /// Internal impl detail of mutate_block_atomically and timers
+    fn mutate_block_atomically_locked<F, T>(
+        &self,
+        holder: &MapChunkHolder,
+        chunk: &mut MapChunkInnerGuard<'_>,
+        offset: ChunkOffset,
+        mutator: F,
+        game_map: &ServerGameMap,
+    ) -> anyhow::Result<T>
+    where
+        F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
+    {
+        let mut extended_data = chunk
+            .extended_data
+            .remove(&offset.as_index().try_into().unwrap());
+
+        let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
+
+        let old_id = chunk.block_ids[offset.as_index()].into();
+        let mut block_type = game_map.block_type_manager().make_blockref(old_id)?;
+        let closure_result = mutator(&mut block_type, &mut data_holder);
+
+        let extended_data_dirty = data_holder.dirty();
+        if let Some(new_data) = extended_data {
+            chunk
+                .extended_data
+                .insert(offset.as_index().try_into().unwrap(), new_data);
+        }
+
+        let new_id = block_type.id();
+        if new_id != old_id {
+            chunk.block_ids[offset.as_index()] = new_id.into();
+            chunk.dirty = true;
+            holder.block_bloom_filter.insert(new_id.base_id() as u64)
+        }
+        if extended_data_dirty {
+            chunk.dirty = true;
+            // data holder is dirty, so inventories might have been updated
+            self.game_state
+                .upgrade()
+                .unwrap()
+                .inventory_manager()
+                .broadcast_block_update(chunk.own_coord.with_offset(offset));
+        }
+
+        if new_id != old_id {
+            game_map.broadcast_block_change(BlockUpdate {
+                location: chunk.own_coord.with_offset(offset),
+                new_value: block_type,
+            });
+        }
+
+        closure_result
     }
 
     /// Digs a block, running its on-dig event handler. The items it drops are returned.
@@ -1606,13 +1633,19 @@ impl GameMapTimer {
             }
             if coord.hash_u64() % total_shards as u64 == shard_id as u64 {
                 if let Some(chunk) = read_lock.get(&coord) {
-                    self.handle_chunk(
-                        coord,
-                        chunk,
-                        &game_state,
-                        block_types,
-                        &mut writeback_permit,
-                    )?;
+                    if self.settings.block_types.iter().any(|x| {
+                        chunk
+                            .block_bloom_filter
+                            .maybe_contains(x.id().base_id() as u64)
+                    }) {
+                        self.handle_chunk(
+                            coord,
+                            chunk,
+                            &game_state,
+                            block_types,
+                            &mut writeback_permit,
+                        )?;
+                    }
                 }
             }
         }
@@ -1622,7 +1655,7 @@ impl GameMapTimer {
     fn handle_chunk(
         &self,
         coord: ChunkCoordinate,
-        chunk: &MapChunkHolder,
+        holder: &MapChunkHolder,
         game_state: &Arc<GameState>,
         block_types: &FxHashSet<u32>,
         writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
@@ -1631,12 +1664,16 @@ impl GameMapTimer {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
         let map = game_state.map();
-        if let Some(mut chunk) = chunk.try_get()? {
+        if let Some(mut chunk) = holder.try_get()? {
             assert!(chunk.block_ids.len() == 4096);
             for i in 0..4096 {
                 let block_id = BlockId(chunk.block_ids[i]);
+                assert!(holder
+                    .block_bloom_filter
+                    .maybe_contains(block_id.base_id() as u64));
                 if block_types.contains(&block_id.base_id()) && sampler.sample(&mut rng) {
                     match self.run_callback(
+                        holder,
                         &mut chunk,
                         ChunkOffset::from_index(i),
                         map,
@@ -1665,6 +1702,7 @@ impl GameMapTimer {
 
     fn run_callback(
         &self,
+        holder: &MapChunkHolder,
         chunk: &mut MapChunkInnerGuard<'_>,
         offset: ChunkOffset,
         map: &ServerGameMap,
@@ -1672,7 +1710,9 @@ impl GameMapTimer {
         game_state: &Arc<GameState>,
     ) -> Result<(), Error> {
         match &self.callback {
-            TimerCallback::InlineLocked(cb) => chunk.mutate_block_atomically(
+            TimerCallback::InlineLocked(cb) => map.mutate_block_atomically_locked(
+                holder,
+                chunk,
                 offset,
                 |block_id, extended_data| {
                     let ctx = InlineContext {

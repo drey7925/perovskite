@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use cuberef_core::constants;
+use cuberef_core::{constants, protocol::game_rpc::MapChunkUnsubscribe};
 use cuberef_server::game_state::{
     blocks::{
         BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData, ExtendedDataHolder,
@@ -329,8 +329,8 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
             proto: cuberef_core::protocol::items::ItemStack {
                 item_name: DIRT.0.to_string(),
                 quantity: 1,
-                max_stack: 256,
-                stackable: true,
+                current_wear: 1,
+                quantity_type: Some(cuberef_core::protocol::items::item_stack::QuantityType::Stack(256))
             },
         },
         shapeless: false,
@@ -342,8 +342,8 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
             proto: cuberef_core::protocol::items::ItemStack {
                 item_name: STONE.0.to_string(),
                 quantity: 1,
-                max_stack: 256,
-                stackable: true,
+                current_wear: 1,
+                quantity_type: Some(cuberef_core::protocol::items::item_stack::QuantityType::Stack(256))
             },
         },
         shapeless: false,

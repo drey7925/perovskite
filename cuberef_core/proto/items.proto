@@ -79,14 +79,19 @@ message ItemStack {
   string item_name = 1;
   // The quantity; interpretation depends on quantity_type
   uint32 quantity = 2;
-  // If stackable, the max stack size. Note that this is a property of the item stack,
-  // not the item itself - if the item definition changes after the stack is created,
-  // old stacks will carry the old stacking behavior.
-  uint32 max_stack = 3;
-
-  bool stackable = 4;
-
-  // TODO future expansion: extended data, in a way that prevents client tampering
+  
+  uint32 current_wear = 5;
+  // Copy of ItemDef.quantity_type
+  oneof quantity_type {
+    // If set, the item stacks up to N copies. Stacks can be split up.
+    uint32 stack = 11;
+    // If set, the item has wear (from 0 to N) but does not stack.
+    // Note that items don't automatically destroy themselves when wear reaches
+    // zero, unless the item's callback does so explicitly
+    //
+    // Item cannot be split up.
+    uint32 wear = 12;
+  }
 }
 
 message Inventory {

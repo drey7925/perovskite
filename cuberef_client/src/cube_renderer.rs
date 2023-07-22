@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
-use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
+use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero, SquareMatrix};
 
 use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
@@ -316,6 +316,7 @@ impl BlockRenderer {
                                 &mut vtx,
                                 &mut idx,
                                 cube_render_info,
+                                Matrix4::identity(),
                                 &suppress_face_when,
                             );
                         }
@@ -335,6 +336,7 @@ impl BlockRenderer {
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         render_info: &CubeRenderInfo,
+        transformation: Matrix4<f32>,
         suppress_face_when: F,
     ) where
         F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
@@ -699,14 +701,6 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: FALLBACK_UNKNOWN_TEXTURE.to_string(),
     })
-}
-
-
-enum TextureRotation {
-    Zero,
-    Ccw90,
-    Flip180,
-    Cw90,
 }
 
 #[inline]

@@ -17,14 +17,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use cuberef_core::items::ItemStackExt;
 use texture_packer::Rect;
 
-
 use crate::{
-    game_state::{
-        items::ClientItemManager,
-        ClientState,
-    },
+    game_state::{items::ClientItemManager, ClientState},
     vulkan::{
         shaders::flat_texture::{self, FlatTextureDrawBuilder, FlatTextureDrawCall},
         Texture2DHolder, VulkanContext,
@@ -177,14 +174,16 @@ impl GameHud {
 
                 let frame_topright = (frame0_corner.0 + offset + w - 2, frame0_corner.1 + 2);
                 // todo handle items that have a wear bar
-                if stack.max_stack > 1 && stack.quantity != 1 {
-                    render_number(
-                        frame_topright,
-                        stack.quantity,
-                        &mut builder,
-                        &self.texture_coords,
-                        &self.texture_atlas,
-                    );
+                if stack.stackable() {
+                    if stack.quantity != 1 {
+                        render_number(
+                            frame_topright,
+                            stack.quantity,
+                            &mut builder,
+                            &self.texture_coords,
+                            &self.texture_atlas,
+                        );
+                    }
                 }
             }
 

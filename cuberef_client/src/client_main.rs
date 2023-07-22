@@ -20,7 +20,7 @@ use anyhow::Result;
 use clap::Parser;
 use winit::event_loop::EventLoop;
 
-use crate::{vulkan::game_renderer::GameRenderer};
+use crate::vulkan::game_renderer::GameRenderer;
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]

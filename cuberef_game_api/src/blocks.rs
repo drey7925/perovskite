@@ -29,6 +29,7 @@ use cuberef_core::{
             block_type_def::{PhysicsInfo, RenderInfo},
             BlockTypeDef, CubeRenderInfo, CubeRenderMode, Empty,
         },
+        items as items_proto,
         items::{item_def::QuantityType, ItemDef},
         render::TextureReference,
     },
@@ -70,8 +71,8 @@ impl DroppedItem {
                     proto: protocol::items::ItemStack {
                         item_name: item.clone(),
                         quantity: count,
-                        max_stack: 256,
-                        stackable: true,
+                        current_wear: 1,
+                        quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256))
                     },
                 }])
             }),
@@ -82,8 +83,8 @@ impl DroppedItem {
                     proto: protocol::items::ItemStack {
                         item_name: item,
                         quantity: count,
-                        max_stack: 256,
-                        stackable: true,
+                        current_wear: 1,
+                        quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256))
                     },
                 }])
             }),

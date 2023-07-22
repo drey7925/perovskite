@@ -1,5 +1,6 @@
 use anyhow::Result;
-use cuberef_core::protocol::items::ItemStack;
+use cuberef_core::items::ItemStackExt;
+use cuberef_core::protocol::items::{self as items_proto, ItemStack};
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
@@ -279,14 +280,16 @@ impl EguiUi {
             builder.rect(position_rect, texture_rect, self.texture_atlas.dimensions());
             let frame_topright = (position_rect.right(), position_rect.top());
             // todo unify this with hud.rs
-            if stack.max_stack > 1 && stack.quantity != 1 {
-                render_number(
-                    frame_topright,
-                    stack.quantity,
-                    &mut builder,
-                    &self.atlas_coords,
-                    &self.texture_atlas,
-                )
+            if stack.stackable() {
+                if stack.quantity != 1 {
+                    render_number(
+                        frame_topright,
+                        stack.quantity,
+                        &mut builder,
+                        &self.atlas_coords,
+                        &self.texture_atlas,
+                    )
+                }
             }
 
             Ok(Some(builder.build(vk_ctx)?))
@@ -535,12 +538,12 @@ fn handle_moves(
 
         if can_place
             && clicked_stack.item_name == carried_stack_ref.item_name
-            && carried_stack_ref.stackable
+            && carried_stack_ref.stackable()
         {
             // You can place into the inventory, and you may or may not be able to take.
             // If the items match, place what you're holding
             let mut quantity = clicked_stack
-                .max_stack
+                .max_stack()
                 .saturating_sub(clicked_stack.quantity)
                 .min(carried_stack_ref.quantity);
             if click_type == InvClickType::RightClick {
@@ -574,12 +577,12 @@ fn handle_moves(
             }
         } else if can_take
             && clicked_stack.item_name == carried_stack_ref.item_name
-            && clicked_stack.stackable
+            && clicked_stack.stackable()
         {
             // You can take from the inventory, and your items match. Take from it.
 
             let mut quantity = carried_stack_ref
-                .max_stack
+                .max_stack()
                 .saturating_sub(carried_stack_ref.quantity)
                 .min(clicked_stack.quantity);
             if !take_exact && click_type == InvClickType::RightClick {

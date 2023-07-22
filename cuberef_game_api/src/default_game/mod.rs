@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use crate::game_builder::GameBuilder;
 
 use anyhow::Result;
 
-
-use cuberef_server::game_state::{
-    items::ItemStack,
-};
+use cuberef_core::protocol::items as items_proto;
+use cuberef_server::game_state::items::ItemStack;
 
 use self::recipes::{RecipeBook, RecipeImpl, RecipeSlot};
 
@@ -124,16 +122,30 @@ impl DefaultGameBuilder {
         slots: [RecipeSlot; 9],
         result: String,
         quantity: u32,
-        stackable: bool,
+        quantity_type: Option<items_proto::item_stack::QuantityType>,
     ) {
         self.crafting_recipes.register_recipe(RecipeImpl {
             slots,
             result: ItemStack {
                 proto: cuberef_core::protocol::items::ItemStack {
                     item_name: result,
-                    quantity,
-                    max_stack: if stackable { 256 } else { quantity },
-                    stackable,
+                    quantity: if matches!(
+                        quantity_type,
+                        Some(items_proto::item_stack::QuantityType::Stack(_))
+                    ) {
+                        quantity
+                    } else {
+                        1
+                    },
+                    current_wear: if matches!(
+                        quantity_type,
+                        Some(items_proto::item_stack::QuantityType::Wear(_))
+                    ) {
+                        quantity
+                    } else {
+                        1
+                    },
+                    quantity_type: quantity_type,
                 },
             },
             shapeless: false,

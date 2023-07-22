@@ -1,6 +1,5 @@
-use cuberef_server::game_state::{
-    items::{Item, ItemManager, ItemStack},
-};
+use cuberef_server::game_state::items::{Item, ItemManager, ItemStack};
+use cuberef_core::protocol::items as items_proto;
 use parking_lot::RwLock;
 
 use crate::maybe_export;
@@ -157,7 +156,7 @@ pub(crate) fn register_test_recipes(game_builder: &mut super::DefaultGameBuilder
         ],
         DIRT_WITH_GRASS.0.to_string(),
         1,
-        true,
+        Some(items_proto::item_stack::QuantityType::Stack(256)),
     );
     game_builder.register_crafting_recipe(
         [
@@ -173,6 +172,6 @@ pub(crate) fn register_test_recipes(game_builder: &mut super::DefaultGameBuilder
         ],
         DIRT_WITH_GRASS.0.to_string(),
         2,
-        true,
+        Some(items_proto::item_stack::QuantityType::Stack(256)),
     );
 }

@@ -76,17 +76,31 @@ pub struct ItemStack {
 }
 impl ItemStack {
     /// Creates an ItemStack of the given item
-    pub fn new(item: &Item, quantity: u32) -> ItemStack {
-        ItemStack {
-            proto: proto::ItemStack {
-                item_name: item.proto.short_name.clone(),
-                quantity,
-                max_stack: match item.proto.quantity_type {
-                    Some(QuantityType::Stack(x)) => x,
-                    Some(QuantityType::Wear(_)) => 0,
-                    None => 0,
+    pub fn new(item: &Item, quantity_or_wear: u32) -> ItemStack {
+        match item.proto.quantity_type {
+            Some(QuantityType::Stack(x)) => ItemStack {
+                proto: proto::ItemStack {
+                    item_name: item.proto.short_name.clone(),
+                    quantity: quantity_or_wear,
+                    current_wear: 1,
+                    quantity_type: Some(proto::item_stack::QuantityType::Stack(x)),
                 },
-                stackable: matches!(item.proto.quantity_type, Some(QuantityType::Stack(_))),
+            },
+            Some(QuantityType::Wear(x)) => ItemStack {
+                proto: proto::ItemStack {
+                    item_name: item.proto.short_name.clone(),
+                    quantity: 1,
+                    current_wear: quantity_or_wear,
+                    quantity_type: Some(proto::item_stack::QuantityType::Wear(x)),
+                },
+            },
+            None => ItemStack {
+                proto: proto::ItemStack {
+                    item_name: item.proto.short_name.clone(),
+                    quantity: 1,
+                    current_wear: 1,
+                    quantity_type: None,
+                },
             },
         }
     }
@@ -105,60 +119,62 @@ impl ItemStack {
     }
 
     /// Tries to merge the provided stack into this one, returning any leftover.
-    pub fn try_merge(&mut self, stack: ItemStack) -> Option<ItemStack> {
-        // We aren't stackable.
-        if self.proto.max_stack == 0 {
-            return Some(stack);
+    pub fn try_merge(&mut self, other: ItemStack) -> Option<ItemStack> {
+        if self.proto.item_name != other.proto.item_name {
+            return Some(other);
         }
-        // The other stack is either non-stackable or wear-based. Don't try to stack,
-        // even if we have the same item name and think it's stackable.
-        if stack.proto.max_stack == 0 {
-            return Some(stack);
+        // other isn't stackable
+        if !matches!(
+            other.proto.quantity_type,
+            Some(proto::item_stack::QuantityType::Stack(_))
+        ) {
+            return Some(other);
         }
-        if self.proto.item_name != stack.proto.item_name {
-            return Some(stack);
-        }
-
-        let move_size = stack
-            .proto
-            .quantity
-            .min(self.proto.max_stack.saturating_sub(self.proto.quantity));
-
-        self.proto.quantity += move_size;
-        let remaining = stack.proto.quantity - move_size;
-        if remaining == 0 {
-            None
+        if let Some(proto::item_stack::QuantityType::Stack(max_stack)) = self.proto.quantity_type {
+            let move_size = other
+                .proto
+                .quantity
+                .min(max_stack.saturating_sub(self.proto.quantity));
+            self.proto.quantity += move_size;
+            let remaining = other.proto.quantity - move_size;
+            if remaining == 0 {
+                None
+            } else {
+                Some(ItemStack {
+                    proto: proto::ItemStack {
+                        quantity: remaining,
+                        ..other.proto
+                    },
+                })
+            }
         } else {
-            Some(ItemStack {
-                proto: proto::ItemStack {
-                    quantity: remaining,
-                    ..stack.proto
-                },
-            })
+            // we aren't stackable
+            return Some(other);
         }
     }
 
     /// Tries to merge the provided stack into this one, without allowing leftovers. Returns true on success, false (and self is unmodified) on failure
-    pub fn try_merge_all(&mut self, stack: ItemStack) -> bool {
-        // We aren't stackable.
-        if self.proto.max_stack == 0 {
+    pub fn try_merge_all(&mut self, other: ItemStack) -> bool {
+        if self.proto.item_name != other.proto.item_name {
             return false;
         }
-        // The other stack is either non-stackable or wear-based. Don't try to stack,
-        // even if we have the same item name and think it's stackable.
-        if stack.proto.max_stack == 0 {
+        // other isn't stackable
+        if !matches!(
+            other.proto.quantity_type,
+            Some(proto::item_stack::QuantityType::Stack(_))
+        ) {
             return false;
         }
-        if self.proto.item_name != stack.proto.item_name {
-            return false;
+        if let Some(proto::item_stack::QuantityType::Stack(max_stack)) = self.proto.quantity_type {
+            let available_space = max_stack.saturating_sub(self.proto.quantity);
+            if available_space < other.proto.quantity {
+                return false;
+            }
+            self.proto.quantity += other.proto.quantity;
+            true
+        } else {
+            false
         }
-
-        let available_space = self.proto.max_stack.saturating_sub(self.proto.quantity);
-        if available_space < stack.proto.quantity {
-            return false;
-        }
-        self.proto.quantity += stack.proto.quantity;
-        true
     }
 
     pub fn decrement(&self) -> Option<ItemStack> {
@@ -220,19 +236,21 @@ impl MaybeStack for Option<ItemStack> {
     fn take_items(&mut self, count: Option<u32>) -> Option<ItemStack> {
         match count {
             Some(count) => {
-                if self.is_some() {
-                    if self.as_ref().unwrap().proto.stackable {
-                        let self_count = self.as_mut().unwrap().proto.quantity;
+                if let Some(self_stack) = self.as_mut() {
+                    if let Some(proto::item_stack::QuantityType::Stack(_)) =
+                        self_stack.proto.quantity_type
+                    {
+                        let self_count = self_stack.proto.quantity;
                         let taken = self_count.min(count);
                         let remaining = self_count.saturating_sub(count);
                         if remaining == 0 {
                             self.take()
                         } else {
-                            self.as_mut().unwrap().proto.quantity = remaining;
+                            self_stack.proto.quantity = remaining;
                             Some(ItemStack {
                                 proto: proto::ItemStack {
                                     quantity: taken,
-                                    ..self.as_ref().unwrap().proto.clone()
+                                    ..self_stack.proto.clone()
                                 },
                             })
                         }
@@ -250,20 +268,26 @@ impl MaybeStack for Option<ItemStack> {
     fn try_take_all(&mut self, count: Option<u32>) -> Self {
         match count {
             Some(count) => {
-                if self.as_ref().unwrap().proto.stackable {
-                    let available = self.as_mut().unwrap().proto.quantity;
-                    match available.cmp(&count) {
-                        std::cmp::Ordering::Less => None,
-                        std::cmp::Ordering::Equal => self.take(),
-                        std::cmp::Ordering::Greater => {
-                            self.as_mut().unwrap().proto.quantity -= count;
-                            Some(ItemStack {
-                                proto: proto::ItemStack {
-                                    quantity: count,
-                                    ..self.as_ref().unwrap().proto.clone()
-                                },
-                            })
+                if let Some(self_stack) = self.as_mut() {
+                    if let Some(proto::item_stack::QuantityType::Stack(_)) =
+                        self_stack.proto.quantity_type
+                    {
+                        let available = self.as_mut().unwrap().proto.quantity;
+                        match available.cmp(&count) {
+                            std::cmp::Ordering::Less => None,
+                            std::cmp::Ordering::Equal => self.take(),
+                            std::cmp::Ordering::Greater => {
+                                self.as_mut().unwrap().proto.quantity -= count;
+                                Some(ItemStack {
+                                    proto: proto::ItemStack {
+                                        quantity: count,
+                                        ..self.as_ref().unwrap().proto.clone()
+                                    },
+                                })
+                            }
                         }
+                    } else {
+                        None
                     }
                 } else {
                     None
