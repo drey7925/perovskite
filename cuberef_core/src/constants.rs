@@ -33,6 +33,13 @@ pub mod blocks {
     pub const AIR: &str = "builtin:air";
 }
 
+pub mod item_groups {
+    /// Item group for all items that have a wear bar corresponding to physical wear (e.g. pickaxes)
+    /// as opposed to e.g. electrical charge, which could be used in some game plugin
+    pub const TOOL_WEAR: &str = "default:tool_wear";
+    
+}
+
 pub mod items {
     use crate::protocol::items::{interaction_rule::DigBehavior, InteractionRule};
 
@@ -44,14 +51,17 @@ pub mod items {
             InteractionRule {
                 block_group: vec![NOT_DIGGABLE.to_string()],
                 dig_behavior: None,
+                tool_wear: 0,
             },
             InteractionRule {
                 block_group: vec![TOOL_REQUIRED.to_string()],
                 dig_behavior: None,
+                tool_wear: 0,
             },
             InteractionRule {
                 block_group: vec![DEFAULT_SOLID.to_string()],
                 dig_behavior: Some(DigBehavior::ConstantTime(1.0)),
+                tool_wear: 0,
             },
         ]
     }

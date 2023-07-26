@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cuberef_core::{
     constants::{
         block_groups::DEFAULT_SOLID, items::default_item_interaction_rules,
@@ -40,10 +40,10 @@ use cuberef_core::{
 pub use cuberef_server::game_state::blocks as server_api;
 
 use cuberef_server::game_state::{
-    blocks::{BlockType, ExtendedData, InlineHandler, BlockTypeHandle},
+    blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
     game_map::CasOutcome,
-    items::{Item, ItemStack},
+    items::{InteractionRuleExt, Item, ItemStack},
 };
 
 use crate::{
@@ -55,39 +55,67 @@ use crate::{
 enum DroppedItem {
     None,
     Fixed(String, u32),
-    Dynamic(Box<dyn Fn() -> (String, u32) + Sync + Send>),
+    Dynamic(Box<dyn Fn() -> (String, u32) + Sync + Send + 'static>),
 }
 impl DroppedItem {
-    fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
+    fn build_dig_handler_inner<F>(closure: F, game_builder: &GameBuilder) -> Box<InlineHandler>
+    where
+        F: Fn() -> Vec<ItemStack> + Sync + Send + 'static,
+    {
         let air_block = game_builder.air_block;
+        Box::new(move |ctx, target_block, ext_data, stack| {
+            let block_type = ctx.block_types().get_block(&target_block)?.0;
+            let rule = ctx
+                .items()
+                .from_stack(stack)
+                .and_then(|item| item.get_interaction_rule(block_type));
+            if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
+                *target_block = air_block;
+                ext_data.clear();
+
+                Ok(BlockInteractionResult {
+                    item_stacks: closure(),
+                    tool_wear: match rule {
+                        Some(rule) => rule.tool_wear(block_type)?,
+                        None => 0,
+                    },
+                })
+            } else {
+                Ok(Default::default())
+            }
+        })
+    }
+
+    fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
         match self {
-            DroppedItem::None => Box::new(move |_, target_block, _, _| {
-                *target_block = air_block;
-                Ok(vec![])
-            }),
-            DroppedItem::Fixed(item, count) => Box::new(move |_, target_block, _, _| {
-                *target_block = air_block;
-                Ok(vec![ItemStack {
-                    proto: protocol::items::ItemStack {
-                        item_name: item.clone(),
-                        quantity: count,
-                        current_wear: 1,
-                        quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256))
-                    },
-                }])
-            }),
-            DroppedItem::Dynamic(closure) => Box::new(move |_, target_block, _, _| {
-                let (item, count) = closure();
-                *target_block = air_block;
-                Ok(vec![ItemStack {
-                    proto: protocol::items::ItemStack {
-                        item_name: item,
-                        quantity: count,
-                        current_wear: 1,
-                        quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256))
-                    },
-                }])
-            }),
+            DroppedItem::None => Self::build_dig_handler_inner(|| vec![], game_builder),
+            DroppedItem::Fixed(item, count) => Self::build_dig_handler_inner(
+                move || {
+                    vec![ItemStack {
+                        proto: protocol::items::ItemStack {
+                            item_name: item.clone(),
+                            quantity: count,
+                            current_wear: 1,
+                            quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256)),
+                        },
+                    }]
+                },
+                game_builder,
+            ),
+            DroppedItem::Dynamic(closure) => Self::build_dig_handler_inner(
+                move || {
+                    let (item, count) = closure();
+                    vec![ItemStack {
+                        proto: protocol::items::ItemStack {
+                            item_name: item.clone(),
+                            quantity: count,
+                            current_wear: 1,
+                            quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256)),
+                        },
+                    }]
+                },
+                game_builder,
+            ),
         }
     }
 }
@@ -121,7 +149,6 @@ pub struct BlockTypeHandleWrapper(pub BlockTypeHandle);
 /// Opaque wrapper around BlockTypeHandle. Enabling the `unstable_api` feature will expose the underlying block type handle.
 pub struct BlockTypeHandleWrapper(pub(crate) BlockTypeHandle);
 
-
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
 /// [server_api::BlockType] (when used directly) can.
@@ -136,6 +163,7 @@ pub struct BlockBuilder {
     modifier: Option<Box<dyn FnOnce(&mut BlockType)>>,
     /// Same parameters as [cuberef_server::game_state::items::PlaceHandler]
     extended_data_initializer: Option<ExtendedDataInitializer>,
+    wear_multiplier: f64,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -154,7 +182,7 @@ impl BlockBuilder {
             dig_handler: None,
             tap_handler: None,
             place_handler: Some(Box::new(|_, _, _, _| {
-                panic!("Incomplete place_handler");
+                panic!("Incomplete place_handler; item registration was not completed properly");
             })),
         };
 
@@ -176,6 +204,7 @@ impl BlockBuilder {
             physics_info: PhysicsInfo::Solid(Empty {}),
             modifier: None,
             extended_data_initializer: None,
+            wear_multiplier: 1.0,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -310,7 +339,10 @@ impl BlockBuilder {
         }
     );
 
-    pub(crate) fn build_and_deploy_into(mut self, game_builder: &mut GameBuilder) -> Result<BlockTypeHandleWrapper> {
+    pub(crate) fn build_and_deploy_into(
+        mut self,
+        game_builder: &mut GameBuilder,
+    ) -> Result<BlockTypeHandleWrapper> {
         let mut block = BlockType::default();
         block.client_info = BlockTypeDef {
             id: 0,
@@ -319,6 +351,7 @@ impl BlockBuilder {
             groups: self.block_groups.into_iter().collect(),
             render_info: Some(RenderInfo::Cube(self.block_render_info)),
             physics_info: Some(self.physics_info),
+            wear_multiplier: self.wear_multiplier,
         };
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
         if let Some(modifier) = self.modifier {
@@ -329,6 +362,7 @@ impl BlockBuilder {
         let mut item = self.item;
         let air_block = game_builder.air_block;
         let extended_data_initializer = self.extended_data_initializer.take();
+        // todo factor out a default place handler and export it to users of the API
         item.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
             if stack.proto().quantity == 0 {
                 return Ok(None);

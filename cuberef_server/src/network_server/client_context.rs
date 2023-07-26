@@ -35,12 +35,11 @@ use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
 use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
-use crate::game_state::items::DigResult;
 use crate::game_state::items::Item;
+use crate::game_state::items::ItemInteractionResult;
 use crate::game_state::player::PlayerContext;
 use crate::game_state::GameState;
 use crate::run_handler;
-
 
 use anyhow::Context;
 use anyhow::Error;
@@ -322,7 +321,10 @@ impl ChunkTracker {
             //
             // TODO consider clearing and regenerating the bloom filter when false positive rate goes up due to unloaded chunks still
             // present in the filter
-            loaded_chunks_bloom: cbloom::Filter::new(65536, (LOAD_LAZY_DISTANCE as usize).pow(3) / 2),
+            loaded_chunks_bloom: cbloom::Filter::new(
+                65536,
+                (LOAD_LAZY_DISTANCE as usize).pow(3) / 2,
+            ),
             loaded_chunks: RwLock::new(FxHashSet::default()),
         }
     }
@@ -872,7 +874,11 @@ impl InboundWorker {
                 self.run_map_handlers(
                     coord,
                     dig_message.item_slot,
-                    |item| item.dig_handler.as_deref(),
+                    |item| {
+                        item.dig_handler
+                            .as_deref()
+                            .unwrap_or(&items::default_dig_handler)
+                    },
                     |block| block.dig_handler_inline.as_deref(),
                     |block| block.dig_handler_full.as_deref(),
                 )
@@ -887,7 +893,11 @@ impl InboundWorker {
                 self.run_map_handlers(
                     coord,
                     tap_message.item_slot,
-                    |item| item.tap_handler.as_deref(),
+                    |item| {
+                        item.tap_handler
+                            .as_deref()
+                            .unwrap_or(&items::default_tap_handler)
+                    },
                     |block| block.tap_handler_inline.as_deref(),
                     |block| block.tap_handler_full.as_deref(),
                 )
@@ -942,7 +952,7 @@ impl InboundWorker {
         get_block_full_handler: H,
     ) -> Result<()>
     where
-        F: FnOnce(&Item) -> Option<&items::BlockInteractionHandler>,
+        F: FnOnce(&Item) -> &items::BlockInteractionHandler,
         G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
         H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
     {
@@ -966,11 +976,12 @@ impl InboundWorker {
         get_block_full_handler: H,
     ) -> std::result::Result<(), anyhow::Error>
     where
-        F: FnOnce(&Item) -> Option<&items::BlockInteractionHandler>,
+        F: FnOnce(&Item) -> &items::BlockInteractionHandler,
         G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
         H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
     {
         let game_state = &self.context.game_state;
+
         game_state.inventory_manager().mutate_inventory_atomically(
             &self.context.player_context.main_inventory(),
             |inventory| {
@@ -981,41 +992,30 @@ impl InboundWorker {
 
                 let initiator = EventInitiator::Player(&self.context.player_context);
 
-                let item_dig_handler = stack
-                    .as_ref()
-                    .and_then(|x| game_state.item_manager().from_stack(x))
-                    .and_then(get_item_handler);
+                let item_dig_handler = game_state
+                    .item_manager()
+                    .from_stack(stack.as_ref())
+                    .map(get_item_handler);
 
-                let result = if let Some(handler) = item_dig_handler {
+                let result = if let Some(item_dig_handler) = item_dig_handler {
                     let ctx = HandlerContext {
                         tick: game_state.tick(),
                         initiator: initiator.clone(),
                         game_state: game_state.clone(),
                     };
                     run_handler!(
-                        || {
-                            handler(
-                                ctx,
-                                coord,
-                                game_state.map().get_block(coord)?,
-                                stack.as_ref().unwrap(),
-                            )
-                        },
+                        || { item_dig_handler(ctx, coord, stack.as_ref().unwrap(),) },
                         "item dig handler",
                         initiator.clone(),
                     )?
                 } else {
-                    // This is blocking code, not async code (because of the mutex ops)
-                    let obtained_items = game_state.map().run_block_interaction(
-                        coord,
-                        initiator,
-                        stack.as_ref(),
-                        get_block_inline_handler,
-                        get_block_full_handler,
-                    )?;
-                    DigResult {
+                    tracing::warn!(
+                        "No item handler for item {:?}",
+                        stack.as_ref().map(|x| &x.proto.item_name)
+                    );
+                    ItemInteractionResult {
                         updated_tool: stack.clone(),
-                        obtained_items,
+                        obtained_items: vec![],
                     }
                 };
                 *stack = result.updated_tool;
@@ -1123,9 +1123,11 @@ impl InboundWorker {
 
                         let initiator = EventInitiator::Player(&self.context.player_context);
 
-                        let handler = stack
-                            .as_ref()
-                            .and_then(|x| self.context.game_state.item_manager().from_stack(x))
+                        let handler = self
+                            .context
+                            .game_state
+                            .item_manager()
+                            .from_stack(stack.as_ref())
                             .and_then(|x| x.place_handler.as_deref());
                         if let Some(handler) = handler {
                             let ctx = HandlerContext {

@@ -14,19 +14,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use cuberef_core::protocol::items::item_def::QuantityType;
+use rustc_hash::FxHashSet;
 
 use std::collections::HashMap;
+use std::time::Duration;
 
-use super::blocks::BlockTypeHandle;
+use super::blocks::BlockType;
 use super::event::HandlerContext;
 
 use cuberef_core::coordinates::BlockCoordinate;
 use cuberef_core::protocol::items as proto;
 
 /// Result of the dig_handler of an Item.
-pub struct DigResult {
+pub struct ItemInteractionResult {
     /// An updated version of the item (stack) that was used to dig.
     /// If None, the item disappears (e.g. a pickaxe breaks when its durability runs out)
     /// Does not need to be the same as the original item.
@@ -34,8 +36,8 @@ pub struct DigResult {
     /// Items that were obtained from digging and ought to be added to the player's inventory
     pub obtained_items: Vec<ItemStack>,
 }
-/// (handler context, coordinate of the block, the block seen on the map then, the item stack in use)
-pub type BlockInteractionHandler = dyn Fn(HandlerContext, BlockCoordinate, BlockTypeHandle, &ItemStack) -> Result<DigResult>
+/// (handler context, coordinate of the block, the item stack in use)
+pub type BlockInteractionHandler = dyn Fn(HandlerContext, BlockCoordinate, &ItemStack) -> Result<ItemInteractionResult>
     + Send
     + Sync;
 /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
@@ -70,17 +72,13 @@ pub struct Item {
     pub place_handler: Option<Box<PlaceHandler>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ItemStack {
-    pub proto: proto::ItemStack,
-}
-impl ItemStack {
+impl Item {
     /// Creates an ItemStack of the given item
-    pub fn new(item: &Item, quantity_or_wear: u32) -> ItemStack {
-        match item.proto.quantity_type {
+    pub fn make_stack(&self, quantity_or_wear: u32) -> ItemStack {
+        match self.proto.quantity_type {
             Some(QuantityType::Stack(x)) => ItemStack {
                 proto: proto::ItemStack {
-                    item_name: item.proto.short_name.clone(),
+                    item_name: self.proto.short_name.clone(),
                     quantity: quantity_or_wear,
                     current_wear: 1,
                     quantity_type: Some(proto::item_stack::QuantityType::Stack(x)),
@@ -88,7 +86,7 @@ impl ItemStack {
             },
             Some(QuantityType::Wear(x)) => ItemStack {
                 proto: proto::ItemStack {
-                    item_name: item.proto.short_name.clone(),
+                    item_name: self.proto.short_name.clone(),
                     quantity: 1,
                     current_wear: quantity_or_wear,
                     quantity_type: Some(proto::item_stack::QuantityType::Wear(x)),
@@ -96,7 +94,7 @@ impl ItemStack {
             },
             None => ItemStack {
                 proto: proto::ItemStack {
-                    item_name: item.proto.short_name.clone(),
+                    item_name: self.proto.short_name.clone(),
                     quantity: 1,
                     current_wear: 1,
                     quantity_type: None,
@@ -104,6 +102,63 @@ impl ItemStack {
             },
         }
     }
+
+    /// Creates a singleton itemstack of this item, i.e. one copy, at full wear if applicable
+    pub fn singleton_stack(&self) -> ItemStack {
+        match self.proto.quantity_type {
+            Some(QuantityType::Wear(x)) => ItemStack {
+                proto: proto::ItemStack {
+                    item_name: self.proto.short_name.clone(),
+                    quantity: 1,
+                    current_wear: x,
+                    quantity_type: Some(proto::item_stack::QuantityType::Wear(x)),
+                },
+            },
+            _ => self.make_stack(1),
+        }
+    }
+
+    /// Creates a maximal stack of this item, i.e. as many copies as possible if it's stackable
+    pub fn make_max_stack(&self) -> ItemStack {
+        match self.proto.quantity_type {
+            Some(QuantityType::Stack(x)) => ItemStack {
+                proto: proto::ItemStack {
+                    item_name: self.proto.short_name.clone(),
+                    quantity: x,
+                    current_wear: 1,
+                    quantity_type: Some(proto::item_stack::QuantityType::Stack(x)),
+                },
+            },
+            _ => self.singleton_stack(),
+        }
+    }
+
+    pub fn stackable(&self) -> bool {
+        matches!(
+            self.proto.quantity_type,
+            Some(proto::item_def::QuantityType::Stack(_))
+        )
+    }
+
+    pub fn get_interaction_rule(&self, block_type: &BlockType) -> Option<proto::InteractionRule> {
+        let block_groups = block_type
+            .client_info
+            .groups
+            .iter()
+            .collect::<FxHashSet<_>>();
+        self.proto
+            .interaction_rules
+            .iter()
+            .find(|rule| rule.block_group.iter().all(|x| block_groups.contains(x)))
+            .cloned()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ItemStack {
+    pub proto: proto::ItemStack,
+}
+impl ItemStack {
     pub(crate) fn from_proto(proto: &proto::ItemStack) -> Option<ItemStack> {
         if proto.item_name.is_empty() {
             None
@@ -188,6 +243,19 @@ impl ItemStack {
             }),
         }
     }
+
+    pub fn stackable(&self) -> bool {
+        matches!(
+            self.proto.quantity_type,
+            Some(proto::item_stack::QuantityType::Stack(_))
+        )
+    }
+    pub fn has_wear(&self) -> bool {
+        matches!(
+            self.proto.quantity_type,
+            Some(proto::item_stack::QuantityType::Wear(_))
+        )
+    }
 }
 
 pub trait MaybeStack {
@@ -254,6 +322,8 @@ impl MaybeStack for Option<ItemStack> {
                                 },
                             })
                         }
+                    } else if self_stack.proto.quantity == count {
+                        self.take()
                     } else {
                         None
                     }
@@ -286,6 +356,8 @@ impl MaybeStack for Option<ItemStack> {
                                 })
                             }
                         }
+                    } else if self_stack.proto.quantity == count {
+                        self.take()
                     } else {
                         None
                     }
@@ -302,13 +374,16 @@ pub struct ItemManager {
     items: HashMap<String, Item>,
 }
 impl ItemManager {
-    pub fn from_stack(&self, stack: &ItemStack) -> Option<&Item> {
-        self.get_item(&stack.proto.item_name)
+    pub fn from_stack(&self, stack: Option<&ItemStack>) -> Option<&Item> {
+        stack.and_then(|stack| self.get_item(&stack.proto.item_name))
     }
     pub fn get_item(&self, name: &str) -> Option<&Item> {
         self.items.get(name)
     }
     pub fn register_item(&mut self, item: Item) -> Result<()> {
+        if item.proto.short_name.is_empty() {
+            return Err(anyhow!("Item must have a non-empty short name"));
+        }
         match self.items.entry(item.proto.short_name.clone()) {
             std::collections::hash_map::Entry::Occupied(_) => {
                 Err(anyhow!("Item {} already registered", item.proto.short_name))
@@ -330,4 +405,97 @@ impl ItemManager {
     pub fn registered_items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
     }
+}
+
+pub trait InteractionRuleExt {
+    /// Returns true if the given rule matches the given block
+    fn matches(&self, block_type: &BlockType) -> bool;
+
+    /// Returns the time expected to dig this block, or None if it's not possible
+    fn dig_time(&self, block: &BlockType) -> Option<Duration>;
+
+    /// Returns the tool wear obtained from digging with this rule
+    fn tool_wear(&self, block: &BlockType) -> Result<u32>;
+}
+impl InteractionRuleExt for proto::InteractionRule {
+    fn matches(&self, block_type: &BlockType) -> bool {
+        self.block_group
+            .iter()
+            .all(|x| block_type.client_info.groups.contains(x))
+    }
+
+    fn dig_time(&self, block: &BlockType) -> Option<Duration> {
+        use proto::interaction_rule::DigBehavior::*;
+        match self.dig_behavior {
+            Some(ConstantTime(t)) => Some(Duration::from_secs_f64(t)),
+            Some(ScaledTime(t)) => {
+                Some(Duration::from_secs_f64(t * block.client_info.base_dig_time))
+            }
+            Some(InstantDig(_) | InstantDigOneshot(_)) => Some(Duration::ZERO),
+            Some(Undiggable(_)) | None => None,
+        }
+    }
+
+    fn tool_wear(&self, block: &BlockType) -> Result<u32> {
+        let product = self.tool_wear as f64 * block.client_info.wear_multiplier;
+        ensure!(
+            product.is_finite(),
+            "Tool wear must be finite (not NaN or inf)"
+        );
+        ensure!(product >= 0.0, "Tool wear cannot be negative");
+        ensure!(
+            product < u32::MAX as f64,
+            "Tool wear overflowed u32::MAX, was {}",
+            product
+        );
+        Ok(product as u32)
+    }
+}
+
+pub(crate) fn default_dig_handler(
+    ctx: HandlerContext,
+    coord: BlockCoordinate,
+    stack: &ItemStack,
+) -> Result<ItemInteractionResult> {
+    let dig_result = ctx
+        .game_map()
+        .dig_block(coord, ctx.initiator(), Some(stack))?;
+    let mut stack = stack.clone();
+    if stack.has_wear() {
+        stack.proto.current_wear = stack
+            .proto
+            .current_wear
+            .saturating_sub(dig_result.tool_wear)
+    }
+    Ok(ItemInteractionResult {
+        updated_tool: if stack.proto.current_wear > 0 {
+            Some(stack.clone())
+        } else {
+            None
+        },
+        obtained_items: dig_result.item_stacks,
+    })
+}
+
+pub(crate) fn default_tap_handler(
+    ctx: HandlerContext,
+    coord: BlockCoordinate,
+    stack: &ItemStack,
+) -> Result<ItemInteractionResult> {
+    let item = ctx.items().get_item(&stack.proto.item_name);
+    let dig_result = ctx
+        .game_map()
+        .tap_block(coord, ctx.initiator(), Some(stack))?;
+    let mut stack = stack.clone();
+    if stack.has_wear() {
+        stack.proto.quantity = stack.proto.quantity.saturating_sub(dig_result.tool_wear)
+    }
+    Ok(ItemInteractionResult {
+        updated_tool: if stack.proto.quantity > 0 {
+            Some(stack.clone())
+        } else {
+            None
+        },
+        obtained_items: dig_result.item_stacks,
+    })
 }

@@ -178,7 +178,7 @@ impl OutboundContext {
                         source_view: action.source_view,
                         source_slot: action.source_slot.try_into()?,
                         destination_view: action.destination_view,
-                        destnation_slot: action.destination_slot.try_into()?,
+                        destination_slot: action.destination_slot.try_into()?,
                         count: action.count,
                         swap: action.swap,
                     },

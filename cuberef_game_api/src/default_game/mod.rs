@@ -29,6 +29,8 @@ pub mod basic_blocks;
 pub mod game_behaviors;
 /// Recipes for crafting, smelting, etc
 pub mod recipes;
+/// Standard tools - pickaxes, shovels, axes
+pub mod tools;
 
 #[cfg(feature = "unstable_api")]
 /// Furnace implementation,
@@ -225,6 +227,7 @@ fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     basic_blocks::register_basic_blocks(&mut game_builder.inner)?;
     game_behaviors::register_game_behaviors(game_builder)?;
     recipes::register_test_recipes(game_builder);
+    tools::register_default_tools(game_builder)?;
     furnace::register_furnace(game_builder)?;
     Ok(())
 }

@@ -15,15 +15,52 @@ As this is a learning project, I may spend time on silly things that may not be 
 
 It's a silly pun related to Rust. Rust leans heavily on references, or refs for short, of various types (immutable refs, mutable refs, static refs, etc), and they are a fundamental aspect of the language.
 
+**Note:** The name is likely to change soon.
+
 ## What's the current state?
 
-It is possible to define blocks and dig them. Inventory support is underway.
+It is possible to define blocks and dig them. Inventory support is partially present.
 
 I intend to wrap the engine-specific behaviors in a lightweight API that makes it easier to define game logic. That API has not yet been designed or written.
 
+## What's on the near-term roadmap?
+
+Tons of stuff, in no particular order, and not yet prioritized:
+
+* Rendering and display:
+    * Rotating blocks based on item variants
+    * Non-cube blocks (e.g. torches, plants). Eventually custom geometry, but not there yet.
+    * Lighting
+* Game state and interactions:
+    * Chat
+    * Commands
+* Game map
+    * Support for falling blocks (e.g. sand)
+    * Further optimized APIs
+        * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
+* Entities
+    * Initial design of non-block entities (e.g. other player characters)
+    * TBD based on the initial design
+* Net code
+    * Caching images/resources
+    * Testing and optimization for slow WANs
+    * Player action validation
+* Content
+    * Mapgen
+        * Trees
+        * Sand and other surface material variety
+        * Ores
+        * Simple caves
+        * Slightly more interesting elevation profile
+    * Simple tools
+    * Locked chests
+    * Cobblestone, bricks, etc
+* Bugfixes for known issues
+    * Inconsistency with block ID assignment when unknown blocks are present
+
 ## What are the stability guarantees?
 
-None at the moment. The MSRV is the latest stable version. I test the client on Windows x86_64, and the server on Windows x86_64 and Linux x86_64.
+None at the moment. I test with either the latest or almost-latest stable Rust version, on Windows x64.
 
 cuberef_server's API can change in breaking ways. cuberef_game_api (as well as anything it re-exports by default) should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
 

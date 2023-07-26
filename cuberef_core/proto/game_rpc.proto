@@ -198,7 +198,7 @@ message InventoryAction {
     // ID for the view we're moving to
     uint64 destination_view = 3;
     // Index for the slot we're moving to
-    uint32 destnation_slot = 4;
+    uint32 destination_slot = 4;
     // How many items we're moving
     uint32 count = 5;
     // If true, swap the two stacks, and disregard count

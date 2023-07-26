@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use image::{DynamicImage, RgbImage};
 use texture_packer::{importer::ImageImporter, Rect};
 
 use anyhow::{Error, Result};
@@ -115,6 +116,19 @@ where
             ImageImporter::import_from_memory(include_bytes!("testonly_pickaxe.png")).unwrap(),
         )
         .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+
+    const COLOR_SCALE_R: [u8; 8] = [255, 255, 255, 255, 191, 128, 64, 0];
+    const COLOR_SCALE_G: [u8; 8] = [0, 64, 128, 191, 255, 255, 255, 255];
+    for i in 0..8 {
+        let mut image = RgbImage::new(1, 1);
+        image.put_pixel(0, 0, image::Rgb([COLOR_SCALE_R[i], COLOR_SCALE_G[i], 0]));
+        texture_packer
+            .pack_own(
+                String::from(format!("builtin:wear_{}", i)),
+                DynamicImage::ImageRgb8(image),
+            )
+            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+    }
 
     for (name, texture) in textures {
         texture_packer

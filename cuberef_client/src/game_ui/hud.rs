@@ -17,7 +17,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use cuberef_core::items::ItemStackExt;
+use cuberef_core::{items::ItemStackExt, protocol::items::item_stack::QuantityType};
 use texture_packer::Rect;
 
 use crate::{
@@ -173,17 +173,30 @@ impl GameHud {
                 builder.rect(item_rect, tex_coord, self.clone_atlas().dimensions());
 
                 let frame_topright = (frame0_corner.0 + offset + w - 2, frame0_corner.1 + 2);
+                let frame_bottomleft = (frame0_corner.0 + offset + 2, frame0_corner.1 + h - 8);
                 // todo handle items that have a wear bar
-                if stack.stackable() {
-                    if stack.quantity != 1 {
-                        render_number(
-                            frame_topright,
-                            stack.quantity,
-                            &mut builder,
-                            &self.texture_coords,
-                            &self.texture_atlas,
-                        );
+                match stack.quantity_type {
+                    Some(QuantityType::Stack(_)) => {
+                        if stack.quantity != 1 {
+                            render_number(
+                                frame_topright,
+                                stack.quantity,
+                                &mut builder,
+                                &self.texture_coords,
+                                &self.texture_atlas,
+                            );
+                        }
                     }
+                    Some(QuantityType::Wear(total_wear)) => render_wear_bar(
+                        frame_bottomleft,
+                        w - 4,
+                        stack.current_wear,
+                        total_wear,
+                        &mut builder,
+                        &self.texture_coords,
+                        &self.texture_atlas,
+                    ),
+                    None => {}
                 }
             }
 
@@ -237,6 +250,29 @@ impl GameHud {
     pub(crate) fn texture_atlas(&self) -> &Texture2DHolder {
         self.texture_atlas.as_ref()
     }
+}
+
+fn render_wear_bar(
+    frame_bottomleft: (u32, u32),
+    total_width: u32,
+    current_wear: u32,
+    max_wear: u32,
+    builder: &mut FlatTextureDrawBuilder,
+    texture_coords: &HashMap<String, Rect>,
+    texture_atlas: &Texture2DHolder,
+) {
+    let wear_level = ((current_wear as f32) / (max_wear as f32)).clamp(0.0, 1.0);
+    let draw_width = (wear_level * total_width as f32) as u32;
+
+    let wear_bucket = ((wear_level * 8.0) as u8).clamp(0, 7);
+    let wear_texture = format!("builtin:wear_{}", wear_bucket);
+    let wear_uv = texture_coords.get(&wear_texture).copied().unwrap();
+
+    builder.rect(
+        Rect::new(frame_bottomleft.0, frame_bottomleft.1, draw_width, 6),
+        wear_uv,
+        texture_atlas.dimensions(),
+    );
 }
 
 // Numbers are right-aligned, with pos being the rightmost point

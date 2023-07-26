@@ -28,8 +28,6 @@ pub mod player;
 #[cfg(test)]
 pub mod tests;
 
-pub mod testutils;
-
 use anyhow::{bail, Result};
 use integer_encoding::VarInt;
 use log::{info, warn};

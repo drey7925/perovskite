@@ -35,6 +35,7 @@ use crate::{
     game_state::inventory::Inventory,
 };
 
+use super::blocks::BlockInteractionResult;
 use super::{
     blocks::{
         self, BlockTypeHandle, BlockTypeManager, ExtDataHandling, ExtendedData, ExtendedDataHolder,
@@ -875,20 +876,35 @@ impl ServerGameMap {
     }
 
     /// Digs a block, running its on-dig event handler. The items it drops are returned.
-    /// Note that while tool is passed to this function, the tool's dig handler has *already*
-    /// run.
     pub fn dig_block(
         &self,
         coord: BlockCoordinate,
-        initiator: EventInitiator,
+        initiator: &EventInitiator,
         tool: Option<&ItemStack>,
-    ) -> Result<Vec<ItemStack>> {
+    ) -> Result<BlockInteractionResult> {
         self.run_block_interaction(
             coord,
             initiator,
             tool,
             |block| block.dig_handler_inline.as_deref(),
             |block| block.dig_handler_full.as_deref(),
+        )
+    }
+
+    
+    /// Taps a block, as if it were hit without being fully dug. The items it drops are returned.
+    pub fn tap_block(
+        &self,
+        coord: BlockCoordinate,
+        initiator: &EventInitiator,
+        tool: Option<&ItemStack>,
+    ) -> Result<BlockInteractionResult> {
+        self.run_block_interaction(
+            coord,
+            initiator,
+            tool,
+            |block| block.tap_handler_inline.as_deref(),
+            |block| block.tap_handler_full.as_deref(),
         )
     }
 
@@ -918,21 +934,20 @@ impl ServerGameMap {
     pub fn run_block_interaction<F, G>(
         &self,
         coord: BlockCoordinate,
-        initiator: EventInitiator,
+        initiator: &EventInitiator,
         tool: Option<&ItemStack>,
         get_block_inline_handler: F,
         get_block_full_handler: G,
-    ) -> Result<Vec<ItemStack>>
+    ) -> Result<BlockInteractionResult>
     where
         F: FnOnce(&blocks::BlockType) -> Option<&blocks::InlineHandler>,
         G: FnOnce(&blocks::BlockType) -> Option<&blocks::FullHandler>,
     {
         let game_state = self.game_state();
         let tick = game_state.tick();
-        let (blocktype, mut drops) = self.mutate_block_atomically(coord, |block, ext_data| {
+        let (blocktype, mut result) = self.mutate_block_atomically(coord, |block, ext_data| {
             let (blocktype, _) = self.block_type_manager().get_block(block)?;
 
-            let mut drops = Vec::new();
             if let Some(ref inline_handler) = get_block_inline_handler(blocktype) {
                 let ctx = InlineContext {
                     tick,
@@ -941,13 +956,16 @@ impl ServerGameMap {
                     block_types: self.block_type_manager(),
                     items: game_state.item_manager(),
                 };
-                drops.append(&mut run_handler!(
+                let result = run_handler!(
                     || (inline_handler)(ctx, block, ext_data, tool),
                     "block_inline",
                     initiator.clone(),
-                )?);
-            };
-            Ok((blocktype, drops))
+                )?;
+                Ok((blocktype, result))
+            } else {
+                Ok((blocktype, Default::default()))
+            }
+            
         })?;
         // we need this to happen outside of mutate_block_atomically (which holds a chunk lock) to avoid a deadlock.
         if let Some(full_handler) = get_block_full_handler(blocktype) {
@@ -956,14 +974,14 @@ impl ServerGameMap {
                 initiator: initiator.clone(),
                 game_state: self.game_state(),
             };
-            drops.append(&mut run_handler!(
+            result += run_handler!(
                 || (full_handler)(ctx, coord, tool),
                 "block_full",
                 initiator.clone(),
-            )?);
+            )?;
         }
 
-        Ok(drops)
+        Ok(result)
     }
 
     pub(crate) fn block_type_manager(&self) -> &BlockTypeManager {

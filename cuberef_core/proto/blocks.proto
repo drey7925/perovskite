@@ -21,103 +21,112 @@ package cuberef.protocol.blocks;
 import "render.proto";
 
 // Definition of a block type.
-// In the future, server-side code may be able to define custom properties for individual
-// instances of a block; the mechanism and structure for this is not defined yet.
+// In the future, server-side code may be able to define custom properties for
+// individual instances of a block; the mechanism and structure for this is not
+// defined yet.
 message BlockTypeDef {
-    // Identifier for the block. Lowest 12 bits are 0 here, since those bits are used
-    // for block variants.
-    // The values of this field are assigned by the cuberef server.
-    uint32 id = 1;
-    // Unique name used to refer to the block in scripts and commands, e.g. base:dirt
-    string short_name = 2;
-    
-    // How long the block should take to dig with a tool that uses scaled_time = 1.0
-    double base_dig_time = 3;
-    // Groups that this item pertains to
-    repeated string groups = 4;
-    // How the client should render the block
-    oneof render_info {
-        Empty empty = 10;
-        CubeRenderInfo cube = 11;
-        // This is still TBD and may be renamed/never used
-        CubeExRendererInfo cube_ex = 12;
-    };
-    // How the client should handle physics when interacting with the block
-    oneof physics_info {
-        Empty air = 20;
-        Empty solid = 21;
-        FluidPhysicsInfo fluid = 22;
-    }
+  // Identifier for the block. Lowest 12 bits are 0 here, since those bits are
+  // used for block variants. The values of this field are assigned by the
+  // cuberef server.
+  uint32 id = 1;
+  // Unique name used to refer to the block in scripts and commands, e.g.
+  // base:dirt
+  string short_name = 2;
+
+  // How long the block should take to dig with a tool that uses scaled_time
+  // = 1.0
+  double base_dig_time = 3;
+  // Groups that this item pertains to
+  repeated string groups = 4;
+  // When a tool is digging this block, multiply the effective wear by this
+  // amount.
+  double wear_multiplier = 5;
+  // How the client should render the block
+  oneof render_info {
+    Empty empty = 10;
+    CubeRenderInfo cube = 11;
+    // This is still TBD and may be renamed/never used
+    CubeExRendererInfo cube_ex = 12;
+  };
+  // How the client should handle physics when interacting with the block
+  oneof physics_info {
+    Empty air = 20;
+    Empty solid = 21;
+    FluidPhysicsInfo fluid = 22;
+  }
 }
 
 message Empty {}
 
 // Describes the way a cube-shaped block should be rendered.
 enum CubeRenderMode {
-    // Behavior is unspecified
-    CUBE_RENDER_MODE_UNSPECIFIED = 0;
-    // The textures are opaque everywhere. 
-    // Behavior is unspecified (graphical glitches may occur) if the texture contains transparent or translucent pixels.
-    CUBE_RENDER_MODE_SOLID_OPAQUE = 1;
-    // The textures contain both pixels with alpha=1 and pixels with alpha=0.
-    // This mode takes care of properly dealing with transparent pixels but not translucent pixels.
-    CUBE_RENDER_MODE_TRANSPARENT = 2;
-    // The textures contain translucent pixels.
-    // This mode's behavior is still TBD, and is subject to change.
-    CUBE_RENDER_MODE_TRANSLUCENT = 3;
+  // Behavior is unspecified
+  CUBE_RENDER_MODE_UNSPECIFIED = 0;
+  // The textures are opaque everywhere.
+  // Behavior is unspecified (graphical glitches may occur) if the texture
+  // contains transparent or translucent pixels.
+  CUBE_RENDER_MODE_SOLID_OPAQUE = 1;
+  // The textures contain both pixels with alpha=1 and pixels with alpha=0.
+  // This mode takes care of properly dealing with transparent pixels but not
+  // translucent pixels.
+  CUBE_RENDER_MODE_TRANSPARENT = 2;
+  // The textures contain translucent pixels.
+  // This mode's behavior is still TBD, and is subject to change.
+  CUBE_RENDER_MODE_TRANSLUCENT = 3;
 }
 
 message CubeRenderInfo {
-    cuberef.protocol.render.TextureReference tex_left = 1;
-    cuberef.protocol.render.TextureReference tex_right = 2;
-    cuberef.protocol.render.TextureReference tex_top = 3;
-    cuberef.protocol.render.TextureReference tex_bottom = 4;
-    cuberef.protocol.render.TextureReference tex_front = 5;
-    cuberef.protocol.render.TextureReference tex_back = 6;
+  cuberef.protocol.render.TextureReference tex_left = 1;
+  cuberef.protocol.render.TextureReference tex_right = 2;
+  cuberef.protocol.render.TextureReference tex_top = 3;
+  cuberef.protocol.render.TextureReference tex_bottom = 4;
+  cuberef.protocol.render.TextureReference tex_front = 5;
+  cuberef.protocol.render.TextureReference tex_back = 6;
 
-    CubeRenderMode render_mode = 7;
+  CubeRenderMode render_mode = 7;
 }
 
 message CubeExRendererInfo {
-    // todo define what CubeEx will include, if we ever need it
+  // todo define what CubeEx will include, if we ever need it
 }
 
 message FluidPhysicsInfo {
-    // Speed of movement when in the fluid, blocks/sec
-    double horizontal_speed = 1;
-    // Speed when not pressing jump or lower keys, blocks/sec. Positive means upward
-    double vertical_speed = 2;
-    // Speed when pressing jump. Positive means upward
-    double jump_speed = 3;
-    // Speed when pressing the lower key. Positive means upward.
-    double sink_speed = 4;
+  // Speed of movement when in the fluid, blocks/sec
+  double horizontal_speed = 1;
+  // Speed when not pressing jump or lower keys, blocks/sec. Positive means
+  // upward
+  double vertical_speed = 2;
+  // Speed when pressing jump. Positive means upward
+  double jump_speed = 3;
+  // Speed when pressing the lower key. Positive means upward.
+  double sink_speed = 4;
 
-    // How deep surface effects extend for, in blocks.
-    double surface_thickness = 5;
-    // Speed of movement when in the fluid, blocks/sec
-    double surf_horizontal_speed = 6;
-    // Speed when not pressing jump or lower keys, blocks/sec. Positive means upward
-    double surf_vertical_speed = 7;
-    // Speed when pressing jump. Positive means upward
-    double surf_jump_speed = 8;
-    // Speed when pressing the lower key. Positive means upward.
-    double surf_sink_speed = 9;
+  // How deep surface effects extend for, in blocks.
+  double surface_thickness = 5;
+  // Speed of movement when in the fluid, blocks/sec
+  double surf_horizontal_speed = 6;
+  // Speed when not pressing jump or lower keys, blocks/sec. Positive means
+  // upward
+  double surf_vertical_speed = 7;
+  // Speed when pressing jump. Positive means upward
+  double surf_jump_speed = 8;
+  // Speed when pressing the lower key. Positive means upward.
+  double surf_sink_speed = 9;
 }
 
 // Options available for the interact key when facing a block
 message InteractKeyOption {
-    // internal ID, assigned and managed by cuberef core
-    uint32 id = 1;
-    // human readable label in-game
-    string label = 2;
+  // internal ID, assigned and managed by cuberef core
+  uint32 id = 1;
+  // human readable label in-game
+  string label = 2;
 }
 
-
 message BlockTypeAssignment {
-    string short_name = 1;
-    uint32 id = 2;
+  string short_name = 1;
+  uint32 id = 2;
 }
 
 message ServerBlockTypeAssignments {
-    repeated BlockTypeAssignment block_type = 1;
+  repeated BlockTypeAssignment block_type = 1;
 }

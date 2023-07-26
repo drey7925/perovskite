@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicU32;
 
 use crate::{
     blocks::BlockBuilder,
-    game_builder::{include_texture_bytes, Block, GameBuilder, Tex},
+    game_builder::{include_texture_bytes, Block, GameBuilder, Texture},
 };
 use anyhow::Result;
 use cuberef_core::protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo};
@@ -39,14 +39,14 @@ pub const CHEST: Block = Block("default:chest");
 /// Stability note: not stable (liquids are TBD)
 pub const WATER: Block = Block("default:water");
 
-const DIRT_TEXTURE: Tex = Tex("default:dirt");
-const DIRT_GRASS_SIDE_TEXTURE: Tex = Tex("default:dirt_grass_side");
-const GRASS_TOP_TEXTURE: Tex = Tex("default:grass_top");
-const STONE_TEXTURE: Tex = Tex("default:stone");
-const GLASS_TEXTURE: Tex = Tex("default:glass");
-const WATER_TEXTURE: Tex = Tex("default:water");
+const DIRT_TEXTURE: Texture = Texture("default:dirt");
+const DIRT_GRASS_SIDE_TEXTURE: Texture = Texture("default:dirt_grass_side");
+const GRASS_TOP_TEXTURE: Texture = Texture("default:grass_top");
+const STONE_TEXTURE: Texture = Texture("default:stone");
+const GLASS_TEXTURE: Texture = Texture("default:glass");
+const WATER_TEXTURE: Texture = Texture("default:water");
 // TODO real chest texture
-const CHEST_TEXTURE: Tex = Tex("default:chest");
+const CHEST_TEXTURE: Texture = Texture("default:chest");
 
 pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     register_core_blocks(game_builder)?;

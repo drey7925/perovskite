@@ -49,7 +49,7 @@ pub(crate) fn select_physical_device(
         })
         .min_by_key(|(p, _)| {
             // TEST ONLY
-            if p.properties().device_name.starts_with("NVIDIA") {
+            if p.properties().device_name.starts_with("Intel") {
                 return -1;
             };
             match p.properties().device_type {

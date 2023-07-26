@@ -862,7 +862,9 @@ impl<T> InventoryView<T> {
                 }
             }
             ViewBacking::VirtualOutput(_) => {
-                // can't put into a virtualoutput
+                // can't put into a virtualoutput (yet)
+                // TODO allow returning an item to the virtualoutput it came from,
+                // if the settings for that view allow it
                 Ok(Some(stack))
             }
             ViewBacking::VirtualInput(_) => todo!(),

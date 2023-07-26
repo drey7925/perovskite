@@ -4,18 +4,18 @@ use anyhow::{Context, Result};
 use cuberef_core::{constants, protocol::game_rpc::MapChunkUnsubscribe};
 use cuberef_server::game_state::{
     blocks::{
-        BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData, ExtendedDataHolder,
-        InlineContext,
+        BlockInteractionResult, BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData,
+        ExtendedDataHolder, InlineContext,
     },
     client_ui::Popup,
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings},
-    items::{ItemStack, MaybeStack},
+    items::{BlockInteractionHandler, InteractionRuleExt, ItemStack, MaybeStack},
 };
 use prost::Message;
 
 use crate::{
     blocks::BlockBuilder,
-    game_builder::{Block, Tex},
+    game_builder::{Block, Texture},
     include_texture_bytes,
 };
 
@@ -31,9 +31,9 @@ pub const FURNACE: Block = Block("default:furnace");
 /// Furnace that's lit
 pub const FURNACE_ON: Block = Block("default:furnace_on");
 
-const FURNACE_TEXTURE: Tex = Tex("default:furnace");
-const FURNACE_FRONT_TEXTURE: Tex = Tex("default:furnace_front");
-const FURNACE_ON_FRONT_TEXTURE: Tex = Tex("default:furnace_on_front");
+const FURNACE_TEXTURE: Texture = Texture("default:furnace");
+const FURNACE_FRONT_TEXTURE: Texture = Texture("default:furnace_front");
+const FURNACE_ON_FRONT_TEXTURE: Texture = Texture("default:furnace_on_front");
 
 /// Extended data for a furnace. One tick is 0.25 seconds.
 #[derive(Clone, Message)]
@@ -330,7 +330,9 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                 item_name: DIRT.0.to_string(),
                 quantity: 1,
                 current_wear: 1,
-                quantity_type: Some(cuberef_core::protocol::items::item_stack::QuantityType::Stack(256))
+                quantity_type: Some(
+                    cuberef_core::protocol::items::item_stack::QuantityType::Stack(256),
+                ),
             },
         },
         shapeless: false,
@@ -343,7 +345,9 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                 item_name: STONE.0.to_string(),
                 quantity: 1,
                 current_wear: 1,
-                quantity_type: Some(cuberef_core::protocol::items::item_stack::QuantityType::Stack(256))
+                quantity_type: Some(
+                    cuberef_core::protocol::items::item_stack::QuantityType::Stack(256),
+                ),
             },
         },
         shapeless: false,
@@ -367,8 +371,8 @@ fn furnace_dig_handler(
     ctx: InlineContext,
     bt: &mut BlockTypeHandle,
     extended_data: &mut ExtendedDataHolder,
-    _dig_stack: Option<&ItemStack>,
-) -> Result<Vec<ItemStack>> {
+    tool: Option<&ItemStack>,
+) -> Result<BlockInteractionResult> {
     if extended_data
         .as_ref()
         .map(|e| {
@@ -382,18 +386,33 @@ fn furnace_dig_handler(
         // TODO: Send the user a chat message warning them about this.
         // TODO: Find a way to prevent the user's item from taking wear
         //    This would entail making server changes to return a second value from the on-dig handler.
-        return Ok(vec![]);
+        return Ok(BlockInteractionResult::default());
     }
     let air = ctx
         .block_types()
         .get_by_name(constants::blocks::AIR)
         .unwrap();
     extended_data.clear();
-    *bt = air;
-    Ok(vec![ItemStack::new(
-        ctx.items().get_item(FURNACE.0).unwrap(),
-        1,
-    )])
+
+    let block_type = ctx.block_types().get_block(&bt)?.0;
+    let rule = ctx
+        .items()
+        .from_stack(tool)
+        .and_then(|item| item.get_interaction_rule(block_type));
+    if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
+        *bt = air;
+        extended_data.clear();
+
+        Ok(BlockInteractionResult {
+            item_stacks: vec![ctx.items().get_item(FURNACE.0).unwrap().singleton_stack()],
+            tool_wear: match rule {
+                Some(rule) => rule.tool_wear(block_type)?,
+                None => 0,
+            },
+        })
+    } else {
+        Ok(Default::default())
+    }
 }
 
 const FURNACE_INPUT: &str = "furnace_input";

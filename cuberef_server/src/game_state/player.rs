@@ -180,12 +180,12 @@ impl PlayerState {
             if action.swap {
                 let taken_stack = source_view.take(action.source_slot as usize, None)?;
                 let other_taken_stack =
-                    destination_view.take(action.destnation_slot as usize, None)?;
+                    destination_view.take(action.destination_slot as usize, None)?;
 
                 if let Some(taken_stack) = taken_stack {
                     // verify no leftover
                     ensure!(destination_view
-                        .put(action.destnation_slot as usize, taken_stack)?
+                        .put(action.destination_slot as usize, taken_stack)?
                         .is_none());
                 }
 
@@ -200,7 +200,7 @@ impl PlayerState {
                     source_view.take(action.source_slot as usize, Some(action.count))?;
                 if let Some(taken_stack) = taken_stack {
                     let leftover =
-                        destination_view.put(action.destnation_slot as usize, taken_stack)?;
+                        destination_view.put(action.destination_slot as usize, taken_stack)?;
                     if let Some(leftover) = leftover {
                         let still_leftover =
                             source_view.put(action.source_slot as usize, leftover)?;

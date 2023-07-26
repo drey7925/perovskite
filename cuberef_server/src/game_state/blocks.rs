@@ -19,7 +19,7 @@ use std::{
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt::Debug,
-    ops::{Deref, DerefMut},
+    ops::{AddAssign, Deref, DerefMut},
     sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
@@ -54,18 +54,41 @@ pub struct ExtendedData {
     /// TODO: switch back to std hashmap once get_many_mut is stabilized
     pub inventories: hashbrown::HashMap<String, Inventory>,
 }
+
+/// The result of interacting with (e.g. digging/tapping) a block.
+pub struct BlockInteractionResult {
+    /// The item stacks obtained by the player
+    pub item_stacks: Vec<ItemStack>,
+    /// The wear of the tool that the player used
+    pub tool_wear: u32,
+}
+impl Default for BlockInteractionResult {
+    fn default() -> Self {
+        Self {
+            item_stacks: vec![],
+            tool_wear: 0,
+        }
+    }
+}
+impl AddAssign for BlockInteractionResult {
+    fn add_assign(&mut self, other: Self) {
+        self.item_stacks.extend(other.item_stacks);
+        self.tool_wear += other.tool_wear;
+    }
+}
+
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
-pub type FullHandler = dyn Fn(HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<Vec<ItemStack>>
+pub type FullHandler = dyn Fn(HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
     + Send
     + Sync;
-/// Takes (handler context, mutable reference to the block type in the map, 
+/// Takes (handler context, mutable reference to the block type in the map,
 /// mutable reference to the extended data holder, item stack used to dig), returns dropped item stacks.
 pub type InlineHandler = dyn Fn(
         InlineContext,
         &mut BlockTypeHandle,
         &mut ExtendedDataHolder,
         Option<&ItemStack>,
-    ) -> Result<Vec<ItemStack>>
+    ) -> Result<BlockInteractionResult>
     + Send
     + Sync;
 
@@ -267,7 +290,7 @@ impl Default for BlockType {
 }
 
 /// Represents extended data for a block on the map.
-/// 
+///
 /// **Data loss warning:** [ExtendedDataHolder::set_dirty()] *must* be called after making meaningful changes to the extended data
 pub struct ExtendedDataHolder<'a> {
     extended_data: &'a mut Option<ExtendedData>,
@@ -286,9 +309,10 @@ impl<'a> ExtendedDataHolder<'a> {
     }
 
     pub fn clear(&mut self) {
-        self.dirty = true;
+        if self.extended_data.is_some() {
+            self.dirty = true;
+        }
         *self.extended_data = None;
-        
     }
     /// Marks the extended data as needing to be written back to disk.
     /// **Data loss warning:** If this is not set, changes to the extended data may be lost.
@@ -629,6 +653,7 @@ fn make_unknown_block_server(
             physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(E)),
             groups: vec![],
             base_dig_time: 1.0,
+            wear_multiplier: 0.0,
         },
         extended_data_handling: ExtDataHandling::NoExtData,
         deserialize_extended_data_handler: None,
@@ -640,7 +665,7 @@ fn make_unknown_block_server(
                 .block_types()
                 .resolve_name(&air)
                 .context("Couldn't find air block")?;
-            Ok(vec![])
+            Ok(BlockInteractionResult::default())
         })),
         tap_handler_full: None,
         tap_handler_inline: None,

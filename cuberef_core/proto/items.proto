@@ -55,6 +55,12 @@ message InteractionRule {
   // applies to. If *all* groups for the block match any of the groups listed here,
   // the block can be dug
   repeated string block_group = 1;
+  // If this interaction rule applies while the current item has a durability counter, this
+  // value will be subtracted from the current durability in the *default* handler.
+  //
+  // Custom handlers have to account for this manually (TODO helper)
+  uint32 tool_wear = 2;
+
   // If None, not even selectable.
   oneof dig_behavior {
     // The tool digs in a single frame, and continues digging as long as the
@@ -68,7 +74,8 @@ message InteractionRule {
     double constant_time = 13;
     // scaled_time * block's dig_time_multiplier = time
     double scaled_time = 14;
-    // The tool interacts with the block as far as raycasting, but it can't dig it
+    // The tool interacts with the block for raycasting (including interact key,
+    // and replace-upon, blocking raycasts to blocks behind this one), but it can't dig it
     Empty undiggable = 15;
   }
 }
@@ -79,7 +86,7 @@ message ItemStack {
   string item_name = 1;
   // The quantity; interpretation depends on quantity_type
   uint32 quantity = 2;
-  
+
   uint32 current_wear = 5;
   // Copy of ItemDef.quantity_type
   oneof quantity_type {

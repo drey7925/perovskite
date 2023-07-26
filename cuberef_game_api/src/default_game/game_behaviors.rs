@@ -1,7 +1,6 @@
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::sync::Arc;
-
 use cuberef_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse},
     inventory::{InventoryKey, VirtualOutputCallbacks},
@@ -35,7 +34,7 @@ fn make_inventory_popup(
     let mut all_items = game_state
         .item_manager()
         .registered_items()
-        .map(|x| Some(ItemStack::new(x, 256)))
+        .map(|x| Some(x.make_max_stack()))
         .collect::<Vec<Option<ItemStack>>>();
 
     // TODO pagination
@@ -111,7 +110,13 @@ fn make_inventory_popup(
                             let mut all_items = game_state
                                 .item_manager()
                                 .registered_items()
-                                .map(|x| Some(ItemStack::new(x, count)))
+                                .map(|x| {
+                                    if x.stackable() {
+                                        Some(x.make_stack(count))
+                                    } else {
+                                        Some(x.singleton_stack())
+                                    }
+                                })
                                 .collect::<Vec<Option<ItemStack>>>();
                             all_items.resize_with(32, || None);
                             *all_items_for_update.write() = all_items;

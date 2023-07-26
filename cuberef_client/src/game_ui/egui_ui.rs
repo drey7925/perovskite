@@ -414,8 +414,50 @@ impl EguiUi {
                                 );
                             }
                         }
-                        QuantityType::Wear(_) => {
-                            warn!("TODO render wear bar");
+                        QuantityType::Wear(max_wear) => {
+                            // pass
+                            // todo replace temporary text with a wear bar
+                            let wear_bar_corner = drawing_rect.left_bottom() + vec2(0.0, -4.0);
+                            let wear_level =
+                                ((stack.current_wear as f32) / (max_wear as f32)).clamp(0.0, 1.0);
+                            let wear_bar_rectangle = egui::Rect::from_min_size(
+                                wear_bar_corner,
+                                vec2(wear_level * drawing_rect.width(), 2.0),
+                            );
+                            let wear_bucket = ((wear_level * 8.0) as u8).clamp(0, 7);
+                            let wear_texture = format!("builtin:wear_{}", wear_bucket);
+                            let texture_uv = self.pixel_rect_to_uv(
+                                *self.atlas_coords
+                                    .get(&wear_texture)
+                                    .expect(&format!("Missing texture {}", wear_texture)),
+                            );
+
+                            let wear_bar_image = egui::Image::new(
+                                atlas_texture,
+                                vec2(wear_bar_rectangle.width(), wear_bar_rectangle.height()),
+                            )
+                            .uv(texture_uv);
+                            ui.put(wear_bar_rectangle, wear_bar_image);
+
+                            // let mut text = stack.current_wear.to_string() + "W";
+                            // let label_rect = egui::Rect::from_min_size(
+                            //     min_corner + vec2(40.0, 2.0),
+                            //     frame_size - vec2(38.0, 42.0),
+                            // );
+                            // ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                            //     ui.style_mut().visuals.extreme_bg_color =
+                            //         Color32::from_rgba_unmultiplied(0, 0, 0, 128);
+                            //     ui.style_mut().visuals.window_stroke = Stroke::NONE;
+                            //     //ui.put(label_rect, Label::new(text));
+                            //     ui.put(
+                            //         label_rect,
+                            //         TextEdit::singleline(&mut text)
+                            //             .font(TextStyle::Heading)
+                            //             .text_color(Color32::GREEN)
+                            //             .interactive(false)
+                            //             .horizontal_align(egui::Align::Max),
+                            //     )
+                            // });
                         }
                     }
                 }
@@ -516,7 +558,7 @@ fn handle_moves(
         .unwrap();
     let clicked_stack = inventory.contents()[index].clone();
     let can_place = inventory.can_place;
-    let can_take = dbg!(inventory.can_take);
+    let can_take = inventory.can_take;
     let take_exact = inventory.take_exact;
 
     let carried_stack = match inventory_manager
@@ -538,7 +580,7 @@ fn handle_moves(
 
         if can_place
             && clicked_stack.item_name == carried_stack_ref.item_name
-            && carried_stack_ref.stackable()
+            && clicked_stack.stackable()
         {
             // You can place into the inventory, and you may or may not be able to take.
             // If the items match, place what you're holding
@@ -577,7 +619,7 @@ fn handle_moves(
             }
         } else if can_take
             && clicked_stack.item_name == carried_stack_ref.item_name
-            && clicked_stack.stackable()
+            && carried_stack_ref.stackable()
         {
             // You can take from the inventory, and your items match. Take from it.
 

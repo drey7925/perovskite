@@ -33,10 +33,11 @@ use cuberef_server::{
 use anyhow::Result;
 
 /// Type-safe newtype wrapper for a texture name
-pub struct Tex(pub &'static str);
+#[derive(Clone, Copy)]
+pub struct Texture(pub &'static str);
 
-impl From<Tex> for TextureReference {
-    fn from(value: Tex) -> Self {
+impl From<Texture> for TextureReference {
+    fn from(value: Texture) -> Self {
         TextureReference {
             texture_name: value.0.to_string(),
         }
@@ -109,6 +110,7 @@ impl GameBuilder {
             physics_info: Some(PhysicsInfo::Air(EMPTY)),
             base_dig_time: 1.0,
             groups: vec![],
+            wear_multiplier: 1.0,
         };
         let air_block = inner.blocks_mut().register_block(air_block)?;
         Ok(GameBuilder { inner, air_block })
@@ -128,7 +130,7 @@ impl GameBuilder {
     /// if it is a duplicate
     pub fn register_texture_file(
         &mut self,
-        tex_name: Tex,
+        tex_name: Texture,
         file_path: impl AsRef<Path>,
     ) -> Result<()> {
         self.inner.media_mut().register_from_file(tex_name.0, file_path)
@@ -137,7 +139,7 @@ impl GameBuilder {
     /// Adds a texture to the game with data passed as bytes.
     /// tex_name must be unique across all textures; an error will be returned
     /// if it is a duplicate
-    pub fn register_texture_bytes(&mut self, tex_name: Tex, data: &[u8]) -> Result<()> {
+    pub fn register_texture_bytes(&mut self, tex_name: Texture, data: &[u8]) -> Result<()> {
         self.inner.media_mut().register_from_memory(tex_name.0, data)
     }
 }
