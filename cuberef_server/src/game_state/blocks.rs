@@ -593,12 +593,12 @@ impl BlockTypeManager {
     pub fn resolve_name(&self, block_name: &BlockTypeName) -> Option<BlockTypeHandle> {
         // TODO relax these memory orderings. Relaxed *should* be fine, but
         // I'd like to be more sure.
-        let cached = block_name.base_id.load(Ordering::SeqCst);
+        let cached = block_name.base_id.load(Ordering::Relaxed);
         if cached == u32::MAX {
             // Need to fill the cache.
             // Multiple threads might race, but they should set the same value anyway
             if let Some(&id) = self.name_to_base_id_map.get(&block_name.name) {
-                block_name.base_id.store(id, Ordering::SeqCst);
+                block_name.base_id.store(id, Ordering::Relaxed);
                 Some(BlockTypeHandle {
                     manager_unique_id: self.unique_id,
                     id: id.into(),
@@ -688,7 +688,7 @@ pub trait TryAsHandle {
 /// The game map, and other APIs, use this as a value type to indicate the type of a block (e.g. at a certain location
 /// in the map). This struct implements Copy and has no lifetime requirements to make it easier to use in
 /// these contexts.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockTypeHandle {
     // Used to ensure that a BlockTypeHandle is used with the correct BlockTypeManager
     manager_unique_id: usize,

@@ -14,14 +14,14 @@
 
 use std::sync::Arc;
 
-use crate::game_builder::GameBuilder;
+use crate::game_builder::{GameBuilder, TextureName};
 
 use anyhow::Result;
 
-use cuberef_core::protocol::items as items_proto;
-use cuberef_server::game_state::items::ItemStack;
+use cuberef_core::protocol::items::{self as items_proto, ItemDef};
+use cuberef_server::game_state::items::{ItemStack, Item};
 
-use self::recipes::{RecipeBook, RecipeImpl, RecipeSlot};
+use self::{recipes::{RecipeBook, RecipeImpl, RecipeSlot}, mapgen::OreDefinition};
 
 /// Blocks defined in the default game.
 pub mod basic_blocks;
@@ -69,6 +69,8 @@ pub struct DefaultGameBuilder {
     // Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
     // Output item is ignored
     smelting_fuels: Arc<RecipeBook<1, u32>>,
+
+    ores: Vec<OreDefinition>
 }
 impl DefaultGameBuilder {
     /// Provides access to the [GameBuilder] that this DefaultGameBuilder is wrapping,
@@ -96,6 +98,7 @@ impl DefaultGameBuilder {
             crafting_recipes: Arc::new(RecipeBook::new()),
             smelting_recipes: Arc::new(RecipeBook::new()),
             smelting_fuels: Arc::new(RecipeBook::new()),
+            ores: Vec::new(),
         };
         register_defaults(&mut builder)?;
         Ok(builder)
@@ -105,8 +108,8 @@ impl DefaultGameBuilder {
     ///
     /// **API skeleton, unimplemented, parameters TBD**
     /// Will be made pub when finalized and implemented
-    fn register_ore(&mut self, _ore_block: &str) {
-        unimplemented!()
+    fn register_ore(&mut self, ore_definition: OreDefinition) {
+        self.ores.push(ore_definition);
     }
 
     /// Returns an Arc for the crafting recipes in this game.
@@ -155,76 +158,22 @@ impl DefaultGameBuilder {
         })
     }
 
+
     /// Starts a game based on this builder.
     pub fn build_and_run(mut self) -> Result<()> {
         self.crafting_recipes.sort();
         self.smelting_recipes.sort();
+
+        let ores = self.ores.drain(..).collect();
         self.game_builder()
             .inner
-            .set_mapgen(|blocks, seed| mapgen::build_mapgen(blocks, seed));
-        // let timer_settings = TimerSettings {
-        //     interval: Duration::from_secs(5),
-        //     shards: 4,
-        //     spreading: 0.2,
-        //     block_types: vec![
-        //         DIRT_WITH_GRASS.0.to_string(),
-        //         DIRT_WITH_GRASS2.0.to_string(),
-        //     ],
-        //     per_block_probability: 0.5,
-        //     ..Default::default()
-        // };
-
-        // struct TestTimerImpl(
-        //     Box<
-        //         dyn Fn(
-        //                 BlockCoordinate,
-        //                 u64,
-        //                 &mut BlockTypeHandle,
-        //                 &mut ExtendedDataHolder,
-        //             ) -> Result<()>
-        //             + Send
-        //             + Sync,
-        //     >,
-        // );
-        // impl TimerInlineCallback for TestTimerImpl {
-        //     fn inline_callback(
-        //         &self,
-        //         coordinate: cuberef_core::coordinates::BlockCoordinate,
-        //         missed_timers: u64,
-        //         block_type: &mut cuberef_server::game_state::blocks::BlockTypeHandle,
-        //         data: &mut cuberef_server::game_state::blocks::ExtendedDataHolder,
-        //     ) -> Result<()> {
-        //         self.0(coordinate, missed_timers, block_type, data)
-        //     }
-        // };
-
-        // let callback = {
-        //     let dwg1 = self.inner.get_block(DIRT_WITH_GRASS).unwrap();
-        //     let dwg2 = self.inner.get_block(DIRT_WITH_GRASS2).unwrap();
-        //     move |coordinate: BlockCoordinate,
-        //           missed_timers: u64,
-        //           block_type: &mut BlockTypeHandle,
-        //           data: &mut ExtendedDataHolder| {
-        //         if *block_type == dwg1 {
-        //             *block_type = dwg2;
-        //         } else {
-        //             *block_type = dwg1;
-        //         }
-        //         Ok(())
-        //     }
-        // };
-
-        // self.game_builder().inner.add_timer(
-        //     "test_timer",
-        //     timer_settings,
-        //     TimerCallback::InlineLocked(Box::new(TestTimerImpl(Box::new(callback)))),
-        // );
+            .set_mapgen(move |blocks, seed| mapgen::build_mapgen(blocks, seed, ores));
         self.inner.run_game_server()
     }
 }
 
 fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
-    basic_blocks::register_basic_blocks(&mut game_builder.inner)?;
+    basic_blocks::register_basic_blocks(game_builder)?;
     game_behaviors::register_game_behaviors(game_builder)?;
     recipes::register_test_recipes(game_builder);
     tools::register_default_tools(game_builder)?;

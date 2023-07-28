@@ -100,3 +100,8 @@ macro_rules! maybe_export {
         pub use $p as $i;
     }
 }
+
+/// Marker that a struct may be extended in the future
+/// 
+/// This cannot be constructed except with Default::default
+pub struct NonExhaustive(pub(crate) ());

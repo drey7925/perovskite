@@ -44,7 +44,7 @@ pub enum BlockError {
 }
 pub const BLOCK_VARIANT_MASK: u32 = 0xfff;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct BlockId(pub u32);
 impl BlockId {

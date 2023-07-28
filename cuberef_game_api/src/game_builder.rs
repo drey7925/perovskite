@@ -14,19 +14,22 @@
 
 use std::path::Path;
 
-
 use cuberef_core::{
-    constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE},
+    constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE, items::default_item_interaction_rules},
     protocol::{
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
             BlockTypeDef, Empty,
         },
+        items::ItemDef,
         render::TextureReference,
     },
 };
 use cuberef_server::{
-    game_state::blocks::{BlockType, BlockTypeHandle},
+    game_state::{
+        blocks::{BlockType, BlockTypeHandle},
+        items::Item,
+    },
     server::ServerBuilder,
 };
 
@@ -34,10 +37,10 @@ use anyhow::Result;
 
 /// Type-safe newtype wrapper for a texture name
 #[derive(Clone, Copy)]
-pub struct Texture(pub &'static str);
+pub struct TextureName(pub &'static str);
 
-impl From<Texture> for TextureReference {
-    fn from(value: Texture) -> Self {
+impl From<TextureName> for TextureReference {
+    fn from(value: TextureName) -> Self {
         TextureReference {
             texture_name: value.0.to_string(),
         }
@@ -45,7 +48,10 @@ impl From<Texture> for TextureReference {
 }
 
 /// Type-safe newtype wrapper for a block name
-pub struct Block(pub &'static str);
+pub struct BlockName(pub &'static str);
+
+/// Type-safe newtype wrapper for an item name
+pub struct ItemName(pub &'static str);
 
 #[cfg(feature = "unstable_api")]
 /// Unstable re-export of the raw gameserver API. This API is subject to
@@ -120,8 +126,33 @@ impl GameBuilder {
         block_builder.build_and_deploy_into(self)
     }
 
-    pub fn get_block(&self, block_name: Block) -> Option<BlockTypeHandle> {
+    pub fn get_block(&self, block_name: BlockName) -> Option<BlockTypeHandle> {
         self.inner.blocks().get_by_name(block_name.0)
+    }
+
+    /// Registers a simple item that cannot be placed, doesn't have a block automatically generated for it, and is not a tool
+    /// The item can be stacked in the inventory, but has no other behaviors. If used as a tool, it will behave the same as if
+    /// nothing were held in the hand.
+    pub fn register_basic_item(
+        &mut self,
+        short_name: ItemName,
+        display_name: impl Into<String>,
+        texture: TextureName,
+        groups: Vec<String>,
+    ) -> Result<()> {
+        self.inner.items_mut().register_item(Item {
+            proto: ItemDef {
+                short_name: short_name.0.to_string(),
+                display_name: display_name.into(),
+                inventory_texture: Some(texture.into()),
+                groups,
+                interaction_rules: default_item_interaction_rules(),
+                quantity_type: Some(cuberef_core::protocol::items::item_def::QuantityType::Stack(256)),
+            },
+            dig_handler: None,
+            tap_handler: None,
+            place_handler: None,
+        })
     }
 
     /// Adds a texture to the game by reading from a file.
@@ -130,17 +161,21 @@ impl GameBuilder {
     /// if it is a duplicate
     pub fn register_texture_file(
         &mut self,
-        tex_name: Texture,
+        tex_name: TextureName,
         file_path: impl AsRef<Path>,
     ) -> Result<()> {
-        self.inner.media_mut().register_from_file(tex_name.0, file_path)
+        self.inner
+            .media_mut()
+            .register_from_file(tex_name.0, file_path)
     }
 
     /// Adds a texture to the game with data passed as bytes.
     /// tex_name must be unique across all textures; an error will be returned
     /// if it is a duplicate
-    pub fn register_texture_bytes(&mut self, tex_name: Texture, data: &[u8]) -> Result<()> {
-        self.inner.media_mut().register_from_memory(tex_name.0, data)
+    pub fn register_texture_bytes(&mut self, tex_name: TextureName, data: &[u8]) -> Result<()> {
+        self.inner
+            .media_mut()
+            .register_from_memory(tex_name.0, data)
     }
 }
 

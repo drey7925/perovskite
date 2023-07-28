@@ -15,7 +15,7 @@ use prost::Message;
 
 use crate::{
     blocks::BlockBuilder,
-    game_builder::{Block, Texture},
+    game_builder::{BlockName, TextureName},
     include_texture_bytes,
 };
 
@@ -23,17 +23,17 @@ use super::{
     basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE},
     block_groups::BRITTLE,
     recipes::{RecipeBook, RecipeImpl, RecipeSlot},
-    DefaultGameBuilder,
+    DefaultGameBuilder, item_groups::HIDDEN_FROM_CREATIVE,
 };
 
 /// Furnace that's not current lit
-pub const FURNACE: Block = Block("default:furnace");
+pub const FURNACE: BlockName = BlockName("default:furnace");
 /// Furnace that's lit
-pub const FURNACE_ON: Block = Block("default:furnace_on");
+pub const FURNACE_ON: BlockName = BlockName("default:furnace_on");
 
-const FURNACE_TEXTURE: Texture = Texture("default:furnace");
-const FURNACE_FRONT_TEXTURE: Texture = Texture("default:furnace_front");
-const FURNACE_ON_FRONT_TEXTURE: Texture = Texture("default:furnace_on_front");
+const FURNACE_TEXTURE: TextureName = TextureName("default:furnace");
+const FURNACE_FRONT_TEXTURE: TextureName = TextureName("default:furnace_front");
+const FURNACE_ON_FRONT_TEXTURE: TextureName = TextureName("default:furnace_on_front");
 
 /// Extended data for a furnace. One tick is 0.25 seconds.
 #[derive(Clone, Message)]
@@ -276,6 +276,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
     let furnace_on_handle = game_builder.inner.add_block(
         BlockBuilder::new(FURNACE_ON)
             .add_block_group(BRITTLE)
+            .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_individual_textures(
                 FURNACE_TEXTURE,
                 FURNACE_TEXTURE,

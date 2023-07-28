@@ -47,15 +47,16 @@ use cuberef_server::game_state::{
 };
 
 use crate::{
-    game_builder::{Block, GameBuilder},
+    game_builder::{BlockName, GameBuilder, ItemName},
     maybe_export,
 };
 
 /// The item obtained when the block is dug.
+/// TODO stabilize item stack and expose a vec<itemstack> option
 enum DroppedItem {
     None,
     Fixed(String, u32),
-    Dynamic(Box<dyn Fn() -> (String, u32) + Sync + Send + 'static>),
+    Dynamic(Box<dyn Fn() -> (ItemName, u32) + Sync + Send + 'static>),
 }
 impl DroppedItem {
     fn build_dig_handler_inner<F>(closure: F, game_builder: &GameBuilder) -> Box<InlineHandler>
@@ -107,7 +108,7 @@ impl DroppedItem {
                     let (item, count) = closure();
                     vec![ItemStack {
                         proto: protocol::items::ItemStack {
-                            item_name: item.clone(),
+                            item_name: item.0.to_string(),
                             quantity: count,
                             current_wear: 1,
                             quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256)),
@@ -148,10 +149,16 @@ pub struct BlockTypeHandleWrapper(pub BlockTypeHandle);
 #[cfg(not(feature = "unstable_api"))]
 /// Opaque wrapper around BlockTypeHandle. Enabling the `unstable_api` feature will expose the underlying block type handle.
 pub struct BlockTypeHandleWrapper(pub(crate) BlockTypeHandle);
+impl From<BlockTypeHandle> for BlockTypeHandleWrapper {
+    fn from(handle: BlockTypeHandle) -> Self {
+        Self(handle)
+    }
+}
 
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
 /// [server_api::BlockType] (when used directly) can.
+#[must_use = "Builders do nothing unless used; set_foo will return a new builder"]
 pub struct BlockBuilder {
     block_name: String,
     block_groups: HashSet<String>,
@@ -168,7 +175,7 @@ pub struct BlockBuilder {
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
     /// item for it.
-    pub fn new(name: Block) -> BlockBuilder {
+    pub fn new(name: BlockName) -> BlockBuilder {
         let name = name.0;
         let item = Item {
             proto: ItemDef {
@@ -228,7 +235,7 @@ impl BlockBuilder {
     /// block being dug; this will be done in a non-API-breaking way.
     pub fn set_dropped_item_closure(
         mut self,
-        closure: impl Fn() -> (String, u32) + Send + Sync + 'static,
+        closure: impl Fn() -> (ItemName, u32) + Send + Sync + 'static,
     ) -> Self {
         self.dropped_item = DroppedItem::Dynamic(Box::new(closure));
         self
@@ -301,7 +308,7 @@ impl BlockBuilder {
     /// the map.
     ///
     /// See [crate::constants::block_groups] for useful values.
-    pub fn add_block_group(mut self, group: &str) -> Self {
+    pub fn add_block_group(mut self, group: impl Into<String>) -> Self {
         self.block_groups.insert(group.into());
         self
     }
@@ -310,7 +317,7 @@ impl BlockBuilder {
     /// These can affect crafting with this block (crafting API is TBD)
     ///
     /// See [crate::constants::block_groups] for useful values.
-    pub fn add_item_group(mut self, group: &str) -> Self {
+    pub fn add_item_group(mut self, group: impl Into<String>) -> Self {
         self.item.proto.groups.push(group.into());
         self
     }

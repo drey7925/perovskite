@@ -23,6 +23,8 @@ tracing-subscriber =  { version = "0.3", features = ["fmt", "env-filter", "std"]
 tracing-log = "0.1.3"
 tracing-tracy =  { version = "0.10.2", default-features = false, features = [ "system-tracing", "context-switch-tracing", "sampling", "code-transfer",
             "broadcast" ] }
+splines = "4.2.0"
+rand = "0.8.5"
 
 [features]
 default = ["default_game"]

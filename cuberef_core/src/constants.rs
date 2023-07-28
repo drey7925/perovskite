@@ -36,6 +36,8 @@ pub mod blocks {
 pub mod item_groups {
     /// Item group for all items that have a wear bar corresponding to physical wear (e.g. pickaxes)
     /// as opposed to e.g. electrical charge, which could be used in some game plugin
+    /// 
+    /// The default game doesn't do anything with this group.
     pub const TOOL_WEAR: &str = "default:tool_wear";
     
 }

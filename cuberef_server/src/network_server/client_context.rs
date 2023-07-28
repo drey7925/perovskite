@@ -1013,9 +1013,16 @@ impl InboundWorker {
                         "No item handler for item {:?}",
                         stack.as_ref().map(|x| &x.proto.item_name)
                     );
+                    let interaction_result = game_state.map().run_block_interaction(
+                        coord,
+                        &initiator,
+                        None,
+                        get_block_inline_handler,
+                        get_block_full_handler,
+                    )?;
                     ItemInteractionResult {
-                        updated_tool: stack.clone(),
-                        obtained_items: vec![],
+                        updated_tool: None,
+                        obtained_items: interaction_result.item_stacks,
                     }
                 };
                 *stack = result.updated_tool;
@@ -1409,9 +1416,9 @@ impl Drop for InboundWorker {
 // TODO tune these and make them adjustable via settings
 // Units of chunks
 // Chunks within this distance will be loaded into memory if not yet loaded
-const LOAD_EAGER_DISTANCE: i32 = 15;
+const LOAD_EAGER_DISTANCE: i32 = 20;
 // Chunks within this distance will be sent if they are already loaded into memory
-const LOAD_LAZY_DISTANCE: i32 = 20;
+const LOAD_LAZY_DISTANCE: i32 = 25;
 const UNLOAD_DISTANCE: i32 = 30;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
 const FORCE_LOAD_DISTANCE: i32 = 2;

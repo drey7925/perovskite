@@ -8,7 +8,7 @@ use cuberef_core::{
 };
 use cuberef_server::game_state::items::Item;
 
-use crate::{game_builder::Texture, include_texture_bytes};
+use crate::{game_builder::TextureName, include_texture_bytes};
 
 use super::block_groups::BRITTLE;
 
@@ -16,7 +16,7 @@ use super::block_groups::BRITTLE;
 /// **This API is subject to change.**
 pub(crate) fn register_pickaxe(
     game_builder: &mut super::DefaultGameBuilder,
-    texture: Texture,
+    texture: TextureName,
     name: impl Into<String>,
     display_name: impl Into<String>,
     durability: u32,
@@ -34,7 +34,7 @@ pub(crate) fn register_pickaxe(
                 InteractionRule {
                     block_group: vec![BRITTLE.to_string()],
                     tool_wear: 1,
-                    dig_behavior: Some(DigBehavior::ScaledTime(1.0)),
+                    dig_behavior: Some(DigBehavior::ScaledTime(0.25)),
                 },
                 InteractionRule {
                     block_group: vec![DEFAULT_SOLID.to_string()],
@@ -58,7 +58,7 @@ pub(crate) fn register_shovel() -> Result<()> {
 }
 
 pub(crate) fn register_default_tools(game_builder: &mut super::DefaultGameBuilder) -> Result<()> {
-    let test_pick_texture = Texture("textures/test_pickaxe.png");
+    let test_pick_texture = TextureName("textures/test_pickaxe.png");
     include_texture_bytes!(
         game_builder.inner,
         test_pick_texture,
@@ -69,7 +69,7 @@ pub(crate) fn register_default_tools(game_builder: &mut super::DefaultGameBuilde
         test_pick_texture,
         "default:test_pickaxe",
         "Test Pickaxe",
-        8,
+        256,
     )?;
     Ok(())
 }

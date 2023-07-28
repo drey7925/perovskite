@@ -49,9 +49,10 @@ pub(crate) fn select_physical_device(
         })
         .min_by_key(|(p, _)| {
             // TEST ONLY
-            if p.properties().device_name.starts_with("Intel") {
-                return -1;
-            };
+            // TODO make this a selectable preference
+            // if p.properties().device_name.starts_with("Intel") {
+            //     return -1;
+            // };
             match p.properties().device_type {
                 PhysicalDeviceType::DiscreteGpu => 0,
                 PhysicalDeviceType::IntegratedGpu => 1,
