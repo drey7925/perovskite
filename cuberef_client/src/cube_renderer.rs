@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
-use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero, SquareMatrix};
+use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 
 use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
@@ -49,7 +49,7 @@ use crate::vulkan::{Texture2DHolder, VulkanContext};
 
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
 
-// Given in game world coordinates (Y is up)
+/// Given in game world coordinates (Y is up)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
 pub(crate) enum CubeFace {
     XPlus,
@@ -108,11 +108,46 @@ impl ClientBlockTypeManager {
     }
 }
 
+/// The extents of a single axis-aligned cube.
+/// 
+/// ```ignore
+///    1      5
+///    +------+
+///   /|     /|
+///  / |    / |
+/// +------+4 |
+/// |0 |   |  |
+/// |  +---|--+
+/// | /3   | /7
+/// |/     |/
+/// +------+
+/// 2      6
+/// 
+///    Z
+///   /
+///  /
+/// +---X
+/// |
+/// |
+/// Y
+/// ```
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CubeExtents {
-    x: (f32, f32),
-    y: (f32, f32),
-    z: (f32, f32),
+pub struct CubeExtents {
+    v: [Vector3<f32>; 8],
+}
+impl CubeExtents {
+    pub const fn new(x: (f32, f32), y: (f32, f32), z: (f32, f32)) -> Self {
+        Self { v: [
+            vec3(x.0, y.0, z.0),
+            vec3(x.0, y.0, z.1),
+            vec3(x.0, y.1, z.0),
+            vec3(x.0, y.1, z.1),
+            vec3(x.1, y.0, z.0),
+            vec3(x.1, y.0, z.1),
+            vec3(x.1, y.1, z.0),
+            vec3(x.1, y.1, z.1),
+        ] }
+    }
 }
 
 #[derive(Clone)]
@@ -316,7 +351,6 @@ impl BlockRenderer {
                                 &mut vtx,
                                 &mut idx,
                                 cube_render_info,
-                                Matrix4::identity(),
                                 &suppress_face_when,
                             );
                         }
@@ -336,16 +370,15 @@ impl BlockRenderer {
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         render_info: &CubeRenderInfo,
-        transformation: Matrix4<f32>,
         suppress_face_when: F,
     ) where
         F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
     {
-        const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents {
-            x: (-0.5, 0.5),
-            y: (-0.5, 0.5),
-            z: (-0.5, 0.5),
-        };
+        const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new(
+            (-0.5, 0.5),
+            (-0.5, 0.5),
+            (-0.5, 0.5),
+        );
         let e = FULL_CUBE_EXTENTS;
 
         let chunk = coord.chunk();
@@ -492,11 +525,11 @@ impl BlockRenderer {
         let mut vtx = vec![];
         let mut idx = vec![];
         let frame = *self.texture_coords.get(SELECTION_RECTANGLE).unwrap();
-        const POINTEE_SELECTION_EXTENTS: CubeExtents = CubeExtents {
-            x: (-0.51, 0.51),
-            y: (-0.51, 0.51),
-            z: (-0.51, 0.51),
-        };
+        const POINTEE_SELECTION_EXTENTS: CubeExtents = CubeExtents::new(
+            (-0.51, 0.51),
+            (-0.51, 0.51),
+            (-0.51, 0.51),
+        );
         let e = POINTEE_SELECTION_EXTENTS;
         let vk_pos = Vector3::zero();
         emit_cube_face_vk(
@@ -706,18 +739,20 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
 #[inline]
 fn make_cgv(
     coord: Vector3<f32>,
-    x: f32,
-    y: f32,
-    z: f32,
     tex_uv: cgmath::Vector2<f32>,
 ) -> CubeGeometryVertex {
     CubeGeometryVertex {
-        position: [coord.x + x, -(coord.y) + y, coord.z + z],
+        position: [coord.x, coord.y, coord.z],
         uv_texcoord: tex_uv.into(),
         brightness: 1.0,
     }
 }
 
+/// Emits a single face of a cube into the given buffers.
+/// Arguments:
+///    coord: The center of the overall cube, in world space, with y-axis up (opposite Vulkan)
+///     This is the center of the cube body, not the current face.
+///    frame: The texture for the face.
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
     frame: Rect,
@@ -727,6 +762,8 @@ pub(crate) fn emit_cube_face_vk(
     idx_buf: &mut Vec<u32>,
     e: CubeExtents,
 ) {
+    // Flip the coordinate system to Vulkan
+    let coord = vec3(coord.x, -coord.y, coord.z);
     let width = (tex_dimension.0) as f32;
     let height = (tex_dimension.1) as f32;
     let l = frame.left() as f32 / width;
@@ -742,41 +779,44 @@ pub(crate) fn emit_cube_face_vk(
 
     let mut vertices = match face {
         CubeFace::ZMinus => vec![
-            make_cgv(coord, e.x.1, e.y.0, e.z.0, tl),
-            make_cgv(coord, e.x.1, e.y.1, e.z.0, bl),
-            make_cgv(coord, e.x.0, e.y.1, -e.z.1, br),
-            make_cgv(coord, e.x.0, e.y.0, -e.z.1, tr),
+            make_cgv(coord + e.v[0], tl),
+            make_cgv(coord + e.v[2], bl),
+            make_cgv(coord + e.v[6], br),
+            make_cgv(coord + e.v[4], tr),
         ],
         CubeFace::ZPlus => vec![
-            make_cgv(coord, e.x.0, e.y.0, e.z.1, tl),
-            make_cgv(coord, e.x.0, e.y.1, e.z.1, bl),
-            make_cgv(coord, e.x.1, e.y.1, e.z.1, br),
-            make_cgv(coord, e.x.1, e.y.0, e.z.1, tr),
-        ],
-        CubeFace::XPlus => vec![
-            make_cgv(coord, e.x.1, e.y.0, e.z.1, tl),
-            make_cgv(coord, e.x.1, e.y.1, e.z.1, bl),
-            make_cgv(coord, e.x.1, e.y.1, -e.z.1, br),
-            make_cgv(coord, e.x.1, e.y.0, -e.z.1, tr),
+            make_cgv(coord + e.v[5], tl),
+            make_cgv(coord + e.v[7], bl),
+            make_cgv(coord + e.v[3], br),
+            make_cgv(coord + e.v[1], tr),
         ],
         CubeFace::XMinus => vec![
-            make_cgv(coord, e.x.0, e.y.0, e.z.0, tl),
-            make_cgv(coord, e.x.0, e.y.1, e.z.0, bl),
-            make_cgv(coord, e.x.0, e.y.1, e.z.1, br),
-            make_cgv(coord, e.x.0, e.y.0, e.z.1, tr),
+            make_cgv(coord + e.v[1], tl),
+            make_cgv(coord + e.v[3], bl),
+            make_cgv(coord + e.v[2], br),
+            make_cgv(coord + e.v[0], tr),
+        ],
+        CubeFace::XPlus => vec![
+            make_cgv(coord + e.v[4], tl),
+            make_cgv(coord + e.v[6], bl),
+            make_cgv(coord + e.v[7], br),
+            make_cgv(coord + e.v[5], tr),
+        ],
+        // For Y+ and Y-, the top of the texture faces the front of the cube (prior to any rotations)
+        // Y- is the bottom face (opposite Vulkan), so it takes Y+ vulkan coordinates
+        CubeFace::YMinus => vec![
+            make_cgv(coord + e.v[2], tl),
+            make_cgv(coord + e.v[3], bl),
+            make_cgv(coord + e.v[7], br),
+            make_cgv(coord + e.v[6], tr),
         ],
         CubeFace::YPlus => vec![
-            make_cgv(coord, e.x.0, e.y.0, e.z.0, tl),
-            make_cgv(coord, e.x.0, e.y.0, e.z.1, bl),
-            make_cgv(coord, e.x.1, e.y.0, e.z.1, br),
-            make_cgv(coord, e.x.1, e.y.0, -e.z.1, tr),
+            make_cgv(coord + e.v[4], tl),
+            make_cgv(coord + e.v[5], bl),
+            make_cgv(coord + e.v[1], br),
+            make_cgv(coord + e.v[0], tr),
         ],
-        CubeFace::YMinus => vec![
-            make_cgv(coord, e.x.0, e.y.1, e.z.0, tl),
-            make_cgv(coord, e.x.1, e.y.1, e.z.0, bl),
-            make_cgv(coord, e.x.1, e.y.1, e.z.1, br),
-            make_cgv(coord, e.x.0, e.y.1, e.z.1, tr),
-        ],
+
     };
     let si: u32 = vert_buf.len().try_into().unwrap();
     if si > (u32::MAX - 8) {

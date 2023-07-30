@@ -202,7 +202,7 @@ impl ToolController {
         let (sin_el, cos_el) = Deg(el).sin_cos();
         let end = pos
             + (cgmath::vec3(
-                POINTEE_DISTANCE * cos_el * -sin_az,
+                POINTEE_DISTANCE * cos_el * sin_az,
                 POINTEE_DISTANCE * sin_el,
                 POINTEE_DISTANCE * cos_el * cos_az,
             ));

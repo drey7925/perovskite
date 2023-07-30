@@ -280,22 +280,7 @@ impl PhysicsState {
     ) -> (f64, Vector3<f64>) {
         // TODO stop using raw scancodes here
         // TODO make these configurable by the user
-        let mut target = pos;
-        if input.is_pressed(BoundAction::MoveForward) {
-            target.z += self.az.cos() * distance;
-            target.x -= self.az.sin() * distance;
-        } else if input.is_pressed(BoundAction::MoveBackward) {
-            target.z -= self.az.cos() * distance;
-            target.x += self.az.sin() * distance;
-        }
-
-        if input.is_pressed(BoundAction::MoveLeft) {
-            target.z += self.az.sin() * distance;
-            target.x += self.az.cos() * distance;
-        } else if input.is_pressed(BoundAction::MoveRight) {
-            target.z -= self.az.sin() * distance;
-            target.x -= self.az.cos() * distance;
-        }
+        let mut target = self.apply_movement_input(pos, input, distance);
         // velocity if unperturbed
         let mut new_yv = self.y_velocity - (time_delta.as_secs_f64() * GRAVITY_ACCEL)
             + (DAMPING * self.y_velocity.min(0.).powi(2) * time_delta.as_secs_f64());
@@ -306,6 +291,26 @@ impl PhysicsState {
         }
         target.y += new_yv * time_delta.as_secs_f64();
         (new_yv, target)
+    }
+
+    fn apply_movement_input(&self, pos: Vector3<f64>, input: &mut InputState, distance: f64) -> Vector3<f64> {
+        let mut target = pos;
+        if input.is_pressed(BoundAction::MoveForward) {
+            target.z += self.az.cos() * distance;
+            target.x += self.az.sin() * distance;
+        } else if input.is_pressed(BoundAction::MoveBackward) {
+            target.z -= self.az.cos() * distance;
+            target.x -= self.az.sin() * distance;
+        }
+
+        if input.is_pressed(BoundAction::MoveLeft) {
+            target.z += self.az.sin() * distance;
+            target.x -= self.az.cos() * distance;
+        } else if input.is_pressed(BoundAction::MoveRight) {
+            target.z -= self.az.sin() * distance;
+            target.x += self.az.cos() * distance;
+        }
+        target
     }
 
     fn update_target_fluid(
@@ -332,22 +337,7 @@ impl PhysicsState {
                 fluid_data.sink_speed,
             )
         };
-        let mut target = pos;
-        if input.is_pressed(BoundAction::MoveForward) {
-            target.z += self.az.cos() * horizontal_speed * delta;
-            target.x -= self.az.sin() * horizontal_speed * delta;
-        } else if input.is_pressed(BoundAction::MoveBackward) {
-            target.z -= self.az.cos() * horizontal_speed * delta;
-            target.x += self.az.sin() * horizontal_speed * delta;
-        }
-
-        if input.is_pressed(BoundAction::MoveLeft) {
-            target.z += self.az.sin() * horizontal_speed * delta;
-            target.x += self.az.cos() * horizontal_speed * delta;
-        } else if input.is_pressed(BoundAction::MoveRight) {
-            target.z -= self.az.sin() * horizontal_speed * delta;
-            target.x -= self.az.cos() * horizontal_speed * delta;
-        }
+        let mut target = self.apply_movement_input(pos, input, horizontal_speed * delta);
         let vy = if input.is_pressed(BoundAction::Jump) {
             jump_velocity
         } else if input.is_pressed(BoundAction::Descend) {
@@ -366,25 +356,9 @@ impl PhysicsState {
         collisions: bool,
         client_state: &ClientState,
     ) {
-        let distance = delta.as_secs_f64() * WALK_SPEED * 5.0;
+        let distance = delta.as_secs_f64() * WALK_SPEED * 4.0;
 
-        let mut new_pos = self.pos;
-
-        if input.is_pressed(BoundAction::MoveForward) {
-            new_pos.z += self.az.cos() * distance;
-            new_pos.x -= self.az.sin() * distance;
-        } else if input.is_pressed(BoundAction::MoveBackward) {
-            new_pos.z -= self.az.cos() * distance;
-            new_pos.x += self.az.sin() * distance;
-        }
-
-        if input.is_pressed(BoundAction::MoveLeft) {
-            new_pos.z += self.az.sin() * distance;
-            new_pos.x += self.az.cos() * distance;
-        } else if input.is_pressed(BoundAction::MoveRight) {
-            new_pos.z -= self.az.sin() * distance;
-            new_pos.x -= self.az.cos() * distance;
-        }
+        let mut new_pos = self.apply_movement_input(self.pos, input, distance);
         if input.is_pressed(BoundAction::Jump) {
             new_pos.y += distance;
         } else if input.is_pressed(BoundAction::Descend) {

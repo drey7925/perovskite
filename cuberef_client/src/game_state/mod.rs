@@ -276,9 +276,11 @@ impl ClientState {
                 .update_and_get(self, aspect_ratio, delta);
 
         let rotation = cgmath::Matrix4::from_angle_x(Deg(el))
-            * cgmath::Matrix4::from_angle_y(Deg(az) + Deg(180.));
+            * cgmath::Matrix4::from_angle_y(Deg(180.) - Deg(az));
+        // TODO figure out why this is needed
+        let coordinate_correction = cgmath::Matrix4::from_nonuniform_scale(-1., 1., 1.);
         let projection = cgmath::perspective(Deg(45.0), aspect_ratio, 0.01, 1000.);
-        let view_proj_matrix = (projection * rotation).cast().unwrap();
+        let view_proj_matrix = (projection * coordinate_correction * rotation).cast().unwrap();
 
         let mut tool_state = self.tool_controller.lock().update(self, delta);
         if let Some(action) = tool_state.action.take() {
