@@ -19,7 +19,7 @@ use crate::{
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
-use cuberef_core::protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo};
+use cuberef_core::{protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo}, constants::block_groups::TOOL_REQUIRED};
 use cuberef_server::game_state::blocks::ExtDataHandling;
 use splines::Spline;
 
@@ -177,6 +177,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         BlockBuilder::new(STONE)
             // TODO: make not-diggable-by-hand after tools are implemented
             .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
             .set_texture_all(STONE_TEXTURE)
             .set_inventory_display_name("Stone block"),
     )?;

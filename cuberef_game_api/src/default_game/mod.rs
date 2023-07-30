@@ -31,6 +31,8 @@ pub mod game_behaviors;
 pub mod recipes;
 /// Standard tools - pickaxes, shovels, axes
 pub mod tools;
+/// Trees
+pub mod trees;
 
 #[cfg(feature = "unstable_api")]
 /// Furnace implementation,

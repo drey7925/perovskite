@@ -171,7 +171,7 @@ impl ServerBuilder {
         let db = Arc::new(RocksDbBackend::new(db_dir)?);
 
         let blocks = BlockTypeManager::create_or_load(db.as_ref(), true)?;
-        let items = ItemManager::new();
+        let items = ItemManager::new()?;
         let media = MediaManager::new();
         Ok(ServerBuilder {
             runtime: tokio::runtime::Builder::new_multi_thread()

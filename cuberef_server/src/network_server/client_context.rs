@@ -35,6 +35,7 @@ use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
 use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
+use crate::game_state::items::make_fake_item_for_no_tool;
 use crate::game_state::items::Item;
 use crate::game_state::items::ItemInteractionResult;
 use crate::game_state::player::PlayerContext;
@@ -871,17 +872,10 @@ impl InboundWorker {
                     .as_ref()
                     .map(|x| x.into())
                     .with_context(|| "Missing block_coord")?;
-                self.run_map_handlers(
-                    coord,
-                    dig_message.item_slot,
-                    |item| {
-                        item.dig_handler
-                            .as_deref()
-                            .unwrap_or(&items::default_dig_handler)
-                    },
-                    |block| block.dig_handler_inline.as_deref(),
-                    |block| block.dig_handler_full.as_deref(),
-                )
+                self.run_map_handlers(coord, dig_message.item_slot, |item| {
+                    item.and_then(|x| x.dig_handler.as_deref())
+                        .unwrap_or(&items::default_dig_handler)
+                })
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::Tap(tap_message)) => {
@@ -890,17 +884,10 @@ impl InboundWorker {
                     .as_ref()
                     .map(|x| x.into())
                     .with_context(|| "Missing block_coord")?;
-                self.run_map_handlers(
-                    coord,
-                    tap_message.item_slot,
-                    |item| {
-                        item.tap_handler
-                            .as_deref()
-                            .unwrap_or(&items::default_tap_handler)
-                    },
-                    |block| block.tap_handler_inline.as_deref(),
-                    |block| block.tap_handler_full.as_deref(),
-                )
+                self.run_map_handlers(coord, tap_message.item_slot, |item| {
+                    item.and_then(|x| x.tap_handler.as_deref())
+                        .unwrap_or(&items::default_tap_handler)
+                })
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
@@ -938,47 +925,33 @@ impl InboundWorker {
     #[tracing::instrument(
         name = "map_handler",
         level = "trace",
-        skip(self, coord, selected_inv_slot, get_item_handler, get_block_inline_handler, get_block_full_handler),
+        skip(self, coord, selected_inv_slot, get_item_handler),
         fields(
             player_name = %self.context.player_context.name(),
         ),
     )]
-    async fn run_map_handlers<F, G, H>(
+    async fn run_map_handlers<F>(
         &mut self,
         coord: BlockCoordinate,
         selected_inv_slot: u32,
         get_item_handler: F,
-        get_block_inline_handler: G,
-        get_block_full_handler: H,
     ) -> Result<()>
     where
-        F: FnOnce(&Item) -> &items::BlockInteractionHandler,
-        G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
-        H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
+        F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
     {
         tokio::task::block_in_place(|| {
-            self.map_handler_sync(
-                selected_inv_slot,
-                get_item_handler,
-                coord,
-                get_block_inline_handler,
-                get_block_full_handler,
-            )
+            self.map_handler_sync(selected_inv_slot, get_item_handler, coord)
         })
     }
 
-    fn map_handler_sync<F, G, H>(
+    fn map_handler_sync<F>(
         &mut self,
         selected_inv_slot: u32,
         get_item_handler: F,
         coord: BlockCoordinate,
-        get_block_inline_handler: G,
-        get_block_full_handler: H,
     ) -> std::result::Result<(), anyhow::Error>
     where
-        F: FnOnce(&Item) -> &items::BlockInteractionHandler,
-        G: FnOnce(&BlockType) -> Option<&blocks::InlineHandler>,
-        H: FnOnce(&BlockType) -> Option<&blocks::FullHandler>,
+        F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
     {
         let game_state = &self.context.game_state;
 
@@ -992,38 +965,26 @@ impl InboundWorker {
 
                 let initiator = EventInitiator::Player(&self.context.player_context);
 
-                let item_dig_handler = game_state
-                    .item_manager()
-                    .from_stack(stack.as_ref())
-                    .map(get_item_handler);
+                let item_handler =
+                    get_item_handler(game_state.item_manager().from_stack(stack.as_ref()));
 
-                let result = if let Some(item_dig_handler) = item_dig_handler {
+                let result = {
                     let ctx = HandlerContext {
                         tick: game_state.tick(),
                         initiator: initiator.clone(),
                         game_state: game_state.clone(),
                     };
                     run_handler!(
-                        || { item_dig_handler(ctx, coord, stack.as_ref().unwrap(),) },
+                        || {
+                            item_handler(
+                                ctx,
+                                coord,
+                                stack.as_ref().unwrap_or_else(|| &items::NO_TOOL_STACK),
+                            )
+                        },
                         "item dig handler",
                         initiator.clone(),
                     )?
-                } else {
-                    tracing::warn!(
-                        "No item handler for item {:?}",
-                        stack.as_ref().map(|x| &x.proto.item_name)
-                    );
-                    let interaction_result = game_state.map().run_block_interaction(
-                        coord,
-                        &initiator,
-                        None,
-                        get_block_inline_handler,
-                        get_block_full_handler,
-                    )?;
-                    ItemInteractionResult {
-                        updated_tool: None,
-                        obtained_items: interaction_result.item_stacks,
-                    }
                 };
                 *stack = result.updated_tool;
                 let mut leftover = vec![];

@@ -15,7 +15,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, ensure, Result};
+use cuberef_core::constants::items::default_item_interaction_rules;
 use cuberef_core::protocol::items::item_def::QuantityType;
+use lazy_static::lazy_static;
 use rustc_hash::FxHashSet;
 
 use std::collections::HashMap;
@@ -374,6 +376,9 @@ pub struct ItemManager {
     items: HashMap<String, Item>,
 }
 impl ItemManager {
+    /// Gets the item corresponding to the given stack, if it is defined. Returns None if the stack was itself None,
+    /// or if the item was not defined (e.g. if the stack was created and then the server restarted with the item removed,
+    /// or if the stack contains a totally invalid item name)
     pub fn from_stack(&self, stack: Option<&ItemStack>) -> Option<&Item> {
         stack.and_then(|stack| self.get_item(&stack.proto.item_name))
     }
@@ -396,14 +401,33 @@ impl ItemManager {
         }
     }
 
-    pub(crate) fn new() -> ItemManager {
-        ItemManager {
+    pub(crate) fn new() -> Result<ItemManager> {
+        let mut manager = ItemManager {
             items: HashMap::new(),
-        }
+        };
+        manager.register_defaults()?;
+        Ok(manager)
     }
 
     pub fn registered_items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
+    }
+
+    fn register_defaults(&mut self) -> Result<()> {
+        self.register_item(Item {
+            proto: proto::ItemDef {
+                short_name: NO_TOOL.to_string(),
+                display_name: "No Tool (you should never see this)".to_string(),
+                inventory_texture: None,
+                groups: vec![],
+                interaction_rules: default_item_interaction_rules(),
+                quantity_type: None,
+            },
+            dig_handler: None,
+            tap_handler: None,
+            place_handler: None,
+        })?;
+        Ok(())
     }
 }
 
@@ -477,12 +501,29 @@ pub(crate) fn default_dig_handler(
     })
 }
 
+pub(crate) const NO_TOOL: &str = "internal:no_tool";
+
+// This is a small hack, allowing item handlers to take an ItemStack rather than an Option<ItemStack>
+pub(crate) fn make_fake_item_for_no_tool() -> ItemStack {
+    ItemStack {
+        proto: proto::ItemStack {
+            item_name: NO_TOOL.to_string(),
+            quantity: 0,
+            current_wear: 0,
+            quantity_type: None,
+        },
+    }
+}
+
+lazy_static! {
+    pub(crate) static ref NO_TOOL_STACK: ItemStack = make_fake_item_for_no_tool();
+}
+
 pub(crate) fn default_tap_handler(
     ctx: HandlerContext,
     coord: BlockCoordinate,
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
-    let item = ctx.items().get_item(&stack.proto.item_name);
     let dig_result = ctx
         .game_map()
         .tap_block(coord, ctx.initiator(), Some(stack))?;
