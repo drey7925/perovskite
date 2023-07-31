@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use cuberef_core::{constants, protocol::game_rpc::MapChunkUnsubscribe};
+use cuberef_core::{constants::{self, item_groups::HIDDEN_FROM_CREATIVE}, protocol::game_rpc::MapChunkUnsubscribe};
 use cuberef_server::game_state::{
     blocks::{
         BlockInteractionResult, BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData,
@@ -23,7 +23,7 @@ use super::{
     basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE},
     block_groups::BRITTLE,
     recipes::{RecipeBook, RecipeImpl, RecipeSlot},
-    DefaultGameBuilder, item_groups::HIDDEN_FROM_CREATIVE,
+    DefaultGameBuilder,
 };
 
 /// Furnace that's not current lit

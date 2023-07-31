@@ -158,7 +158,7 @@ impl From<BlockTypeHandle> for BlockTypeHandleWrapper {
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
 /// [server_api::BlockType] (when used directly) can.
-#[must_use = "Builders do nothing unless used; set_foo will return a new builder"]
+#[must_use = "Builders do nothing unless used; set_foo will return a new builder."]
 pub struct BlockBuilder {
     block_name: String,
     block_groups: HashSet<String>,

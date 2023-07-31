@@ -39,6 +39,11 @@ pub mod item_groups {
     /// 
     /// The default game doesn't do anything with this group.
     pub const TOOL_WEAR: &str = "default:tool_wear";
+
+    /// Items that should not be shown in the creative inventory
+    /// The default game's creative inventory respects this group, and other plugins should
+    /// do the same, unless they intentionally want to expose internal items for development/testing/curiosity
+    pub const HIDDEN_FROM_CREATIVE: &str = "default:hidden_from_creative";
     
 }
 

@@ -31,12 +31,13 @@ pub mod game_behaviors;
 pub mod recipes;
 /// Standard tools - pickaxes, shovels, axes
 pub mod tools;
-/// Trees
-pub mod trees;
+/// Trees, plants, etc
+pub mod foliage;
 
 #[cfg(feature = "unstable_api")]
 /// Furnace implementation,
 pub mod furnace;
+#[cfg(not(feature = "unstable_api"))]
 mod furnace;
 
 /// Common block groups that are defined in the default game and integrate with its tools
@@ -50,11 +51,7 @@ pub mod block_groups {
     /// Woody blocks that are best removed with an axe, e.g. wood
     pub const FIBROUS: &str = "default:fibrous";
 }
-/// Common item groups that are defined in the default game and integrate with its mechanisms
-pub mod item_groups {
-    /// Items that should not be shown in the creative inventory
-    pub const HIDDEN_FROM_CREATIVE: &str = "default:hidden_from_creative";
-}
+
 /// Control of the map generator.
 pub mod mapgen;
 
@@ -180,5 +177,6 @@ fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     recipes::register_test_recipes(game_builder);
     tools::register_default_tools(game_builder)?;
     furnace::register_furnace(game_builder)?;
+    foliage::register_foliage(game_builder)?;
     Ok(())
 }

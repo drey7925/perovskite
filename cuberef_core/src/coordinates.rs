@@ -157,6 +157,9 @@ impl Debug for ChunkOffset {
 }
 
 /// Represents a location of a map chunk.
+/// 
+/// Each coordinate spans 16 blocks, covering the range [chunk_coord.x * 16, chunk_coord.x * 16 + 15].
+/// e.g. chunk 0,1,2 covers x:[0, 15], y:[16, 31], z:[32, 47]
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct ChunkCoordinate {
@@ -166,7 +169,9 @@ pub struct ChunkCoordinate {
 }
 impl ChunkCoordinate {
     pub fn new(x: i32, y: i32, z: i32) -> Self {
-        Self { x, y, z }
+        let result = Self { x, y, z };
+        assert!(result.is_in_bounds());
+        result
     }
 
     /// Returns a new block coordinate with the given offset within this chunk.
