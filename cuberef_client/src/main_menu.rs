@@ -20,6 +20,9 @@ pub(crate) struct MainMenu {
     host_field: String,
     user_field: String,
     pass_field: String,
+    register_host_field: String,
+    register_user_field: String,
+    register_pass_field: String,
     confirm_pass_field: String,
     show_register_popup: bool,
     settings: Arc<ArcSwap<GameSettings>>,
@@ -49,6 +52,9 @@ impl MainMenu {
             host_field: settings.load().last_hostname.clone(),
             user_field: settings.load().last_username.clone(),
             pass_field: "".to_string(),
+            register_host_field: "".to_string(),
+            register_user_field: "".to_string(),
+            register_pass_field: "".to_string(),
             confirm_pass_field: "".to_string(),
             show_register_popup: false,
             settings,
@@ -104,6 +110,8 @@ impl MainMenu {
             let register_button = egui::Button::new("Register New Account");
 
             if ui.add(register_button).clicked() {
+                self.register_host_field = self.host_field.clone();
+                self.register_user_field = self.user_field.clone();
                 self.show_register_popup = true;
             }
         });
@@ -149,11 +157,27 @@ impl MainMenu {
             egui::Window::new("Register new account: ").show(&self.egui_gui.egui_ctx, |ui| {
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                 ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
+                    let label = ui.label("Server address: ");
+                    let editor = TextEdit::singleline(&mut self.register_host_field);
+                    ui.add(editor).labelled_by(label.id);
+                });
+                ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
+                    let label = ui.label("Username: ");
+                    let editor = TextEdit::singleline(&mut self.register_user_field);
+                    ui.add(editor).labelled_by(label.id);
+                });
+
+                ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
+                    let label = ui.label("Password: ");
+                    let editor = TextEdit::singleline(&mut self.register_pass_field).password(true);
+                    ui.add(editor).labelled_by(label.id);
+                });
+                ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                     let label = ui.label("Confirm password: ");
                     let editor = TextEdit::singleline(&mut self.confirm_pass_field).password(true);
                     ui.add(editor).labelled_by(label.id);
                 });
-                if password_has_special_chars(self.pass_field.trim()) {
+                if password_has_special_chars(self.register_pass_field.trim()) {
                     ui.colored_label(Color32::LIGHT_RED, textwrap::dedent("
                     Warning: Password contains special characters.
                     This is not recommended because special characters might be encoded inconsistently on different systems.").trim());
@@ -161,28 +185,31 @@ impl MainMenu {
                 let register_button = egui::Button::new("Register");
                 if ui.add(register_button).clicked() {
                     self.show_register_popup = false;
-                    if self.pass_field != self.confirm_pass_field {
+                    if self.register_pass_field != self.confirm_pass_field {
                         *game_state =
                             GameState::ConnectError("Passwords did not match".to_string());
-                    } else if self.pass_field.trim().is_empty() {
+                    } else if self.register_pass_field.trim().is_empty() {
                         *game_state = GameState::ConnectError(
                             "Please specify a non-empty password".to_string(),
                         );
                     } else {
                         let (state, settings) = make_connection(
-                            self.host_field.trim().to_string(),
-                            self.user_field.trim().to_string(),
-                            self.pass_field.trim().to_string(),
+                            self.register_host_field.trim().to_string(),
+                            self.register_user_field.trim().to_string(),
+                            self.register_pass_field.trim().to_string(),
                             true,
                         );
                         *game_state = GameState::Connecting(state);
                         result = Some(settings);
                     }
                     self.pass_field.clear();
+                    self.register_pass_field.clear();
+                    self.confirm_pass_field.clear();
                 }
                 let cancel_button = egui::Button::new("Cancel");
-                if ui.add(cancel_button).clicked() {
+                if ui.add(cancel_button).clicked() || ui.input(|x| x.key_pressed(egui::Key::Escape)) {
                     self.show_register_popup = false;
+                    self.register_pass_field.clear();
                     self.confirm_pass_field.clear();
                 }
             });

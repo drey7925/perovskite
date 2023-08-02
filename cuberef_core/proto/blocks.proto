@@ -84,6 +84,15 @@ message CubeRenderInfo {
   cuberef.protocol.render.TextureReference tex_back = 6;
 
   CubeRenderMode render_mode = 7;
+  CubeVariantEffect variant_effect = 8;
+}
+
+enum CubeVariantEffect {
+  // The variant has no effect on rendering
+  CUBE_VARIANT_EFFECT_NONE = 0;
+  // Variants 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
+  // The top and bottom textures are rotated to line up.
+  CUBE_VARIANT_EFFECT_ROTATE_NESW = 1;
 }
 
 message CubeExRendererInfo {

@@ -82,11 +82,11 @@ message StreamToServer {
         // Keepalive/testing
         Nop nop = 81;
         // Client wants to dig
-        DigAction dig = 82;
+        DigTapAction dig = 82;
         // Client is updating realtime position (and also animation state, in the future)
         ClientUpdate position_update = 83;
         // Client wants to tap an item without digging it
-        TapAction tap = 84;
+        DigTapAction tap = 84;
         // Client is placing a block
         PlaceAction place = 85;
 
@@ -156,23 +156,17 @@ message StreamToClient {
 // Empty message, for keepalive/timeout detection
 message Nop {}
 
-message DigAction {
-    // The block coordinate which was dug
+message DigTapAction {
+    // The block coordinate which was dug/tapped
     cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
-    // The block coordinate on the face that was dug into (i.e. in raycasting just before we hit the target block)
+    // The block coordinate on the face that was dug into/tapped (i.e. in raycasting just before we hit the target block)
     cuberef.protocol.coordinates.BlockCoordinate prev_coord = 2;
     // zero-indexed slot for the tool in the player's hotbar/primary inventory
     uint32 item_slot = 3;
+    // the position of the player when the action was performed
+    PlayerPosition position = 4;
 }
 
-message TapAction {
-    // The block coordinate that was tapped
-    cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
-    // The block coordinate on the face that was tapped (i.e. in raycasting just before we hit the target block)
-    cuberef.protocol.coordinates.BlockCoordinate prev_coord = 2;
-    // zero-indexed slot for the tool in the player's hotbar/primary inventory
-    uint32 item_slot = 3;
-}
 
 message PlaceAction {
     // The block coordinate where the block is being placed
@@ -180,13 +174,20 @@ message PlaceAction {
 
     // The block coordinate onto which the placement is happening (i.e. the block just *after* block_coord in raycasting order)
     cuberef.protocol.coordinates.BlockCoordinate anchor = 2;
-
+    
+    // zero-indexed slot for the item in the player's hotbar/primary inventory
     uint32 item_slot = 3;
+
+    // the position of the player when the action was performed
+    PlayerPosition position = 4;
 }
 
 message InteractKeyAction {
     // The block coordinate that was interacted with
     cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
+    // the position of the player when the action was performed
+    PlayerPosition position = 2;
+    
     // More fields may be added in the future to support multiple interactions per block
 }
 
@@ -237,11 +238,11 @@ message ClientPacing {
 }
 
 message ClientUpdate {
-    PositionUpdate position = 1;
+    PlayerPosition position = 1;
     ClientPacing pacing = 2;
 }
 
-message PositionUpdate {
+message PlayerPosition {
     cuberef.protocol.coordinates.Vec3D position = 1;
     cuberef.protocol.coordinates.Vec3D velocity = 2;
     cuberef.protocol.coordinates.Angles face_direction = 3;
@@ -258,7 +259,7 @@ message InventoryUpdate {
 }
 
 message SetClientState {
-    PositionUpdate position = 1;
+    PlayerPosition position = 1;
     // A stored inventory view showing the main inventory. Client will render the top row of it
     // and use that set of items to let the player interact with the world.
     uint64 hotbar_inventory_view = 2;

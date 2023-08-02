@@ -18,7 +18,8 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
-use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
+use cgmath::num_traits::Num;
+use cgmath::{vec3, ElementWise, Matrix3, Matrix4, Vector2, Vector3, Zero};
 
 use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
@@ -43,7 +44,7 @@ use vulkano::memory::allocator::{
 };
 
 use crate::game_state::chunk::ClientChunk;
-use crate::game_state::{ChunkManagerView, make_fallback_blockdef};
+use crate::game_state::{make_fallback_blockdef, ChunkManagerView};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
@@ -109,7 +110,7 @@ impl ClientBlockTypeManager {
 }
 
 /// The extents of a single axis-aligned cube.
-/// 
+///
 /// ```ignore
 ///    1      5
 ///    +------+
@@ -122,7 +123,7 @@ impl ClientBlockTypeManager {
 /// |/     |/
 /// +------+
 /// 2      6
-/// 
+///
 ///    Z
 ///   /
 ///  /
@@ -134,21 +135,68 @@ impl ClientBlockTypeManager {
 #[derive(Clone, Copy, Debug)]
 pub struct CubeExtents {
     v: [Vector3<f32>; 8],
+    /// Given in the same order as [`CubeFace`].
+    neighbor: [(i8, i8, i8); 6],
 }
 impl CubeExtents {
     pub const fn new(x: (f32, f32), y: (f32, f32), z: (f32, f32)) -> Self {
-        Self { v: [
-            vec3(x.0, y.0, z.0),
-            vec3(x.0, y.0, z.1),
-            vec3(x.0, y.1, z.0),
-            vec3(x.0, y.1, z.1),
-            vec3(x.1, y.0, z.0),
-            vec3(x.1, y.0, z.1),
-            vec3(x.1, y.1, z.0),
-            vec3(x.1, y.1, z.1),
-        ] }
+        Self {
+            v: [
+                vec3(x.0, y.0, z.0),
+                vec3(x.0, y.0, z.1),
+                vec3(x.0, y.1, z.0),
+                vec3(x.0, y.1, z.1),
+                vec3(x.1, y.0, z.0),
+                vec3(x.1, y.0, z.1),
+                vec3(x.1, y.1, z.0),
+                vec3(x.1, y.1, z.1),
+            ],
+            neighbor: [
+                (1, 0, 0),
+                (-1, 0, 0),
+                (0, 1, 0),
+                (0, -1, 0),
+                (0, 0, 1),
+                (0, 0, -1),
+            ],
+        }
+    }
+
+    pub fn rotate_y(self, variant: u16) -> CubeExtents {
+        let mut v = self.v;
+        let mut neighbor = self.neighbor;
+        for i in 0..8 {
+            v[i] = Vector3::from(rotate_y((v[i].x, v[i].y, v[i].z), variant));
+        }
+        for i in 0..6 {
+            neighbor[i] = rotate_y(neighbor[i], variant);
+        }
+        Self { v, neighbor }
     }
 }
+
+#[inline]
+fn rotate_y<T: Num + std::ops::Neg<Output = T>>(
+    c: (T, T, T),
+    angle_90_deg_units: u16,
+) -> (T, T, T) {
+    match angle_90_deg_units % 4 {
+        0 => c,
+        1 => (c.2, c.1, -c.0),
+        2 => (-c.0, c.1, -c.2),
+        3 => (-c.2, c.1, c.0),
+        _ => unreachable!(),
+    }
+}
+
+const CUBE_EXTENTS_FACE_ORDER: [CubeFace; 6] = [
+    CubeFace::XPlus,
+    CubeFace::XMinus,
+    CubeFace::YPlus,
+    CubeFace::YMinus,
+    CubeFace::ZPlus,
+    CubeFace::ZMinus,
+];
 
 #[derive(Clone)]
 pub(crate) struct VkChunkPass {
@@ -340,11 +388,12 @@ impl BlockRenderer {
                     let offset = ChunkOffset { x, y, z };
 
                     let block_ids = current_chunk.block_ids();
-                    let block = self.get_block(&block_ids, offset);
+                    let (block, variant) = self.get_block(&block_ids, offset);
                     if let Some(RenderInfo::Cube(cube_render_info)) = &block.render_info {
                         if include_block_when(block) {
                             self.emit_full_cube(
                                 block,
+                                variant,
                                 chunk_data,
                                 current_chunk.coord().with_offset(offset),
                                 &current_chunk.block_ids(),
@@ -364,6 +413,7 @@ impl BlockRenderer {
     fn emit_full_cube<F>(
         &self,
         block: &BlockTypeDef,
+        variant: u16,
         chunk_data: &ChunkManagerView,
         coord: BlockCoordinate,
         own_ids: &[BlockId; 4096],
@@ -374,130 +424,155 @@ impl BlockRenderer {
     ) where
         F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
     {
-        const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new(
-            (-0.5, 0.5),
-            (-0.5, 0.5),
-            (-0.5, 0.5),
-        );
-        let e = FULL_CUBE_EXTENTS;
+        let e = get_cube_extents(render_info, variant);
 
         let chunk = coord.chunk();
         let offset = coord.offset();
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
-        if !suppress_face_when(
-            block,
-            coord.try_delta(-1, 0, 0).and_then(|neighbor| {
-                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
-            }),
-        ) {
-            let frame = self.get_texture(render_info.tex_left.tex_name());
+        let textures = [
+            self.get_texture(render_info.tex_right.tex_name()),
+            self.get_texture(render_info.tex_left.tex_name()),
+            self.get_texture(render_info.tex_top.tex_name()),
+            self.get_texture(render_info.tex_bottom.tex_name()),
+            self.get_texture(render_info.tex_back.tex_name()),
+            self.get_texture(render_info.tex_front.tex_name()),
+        ];
+        for i in 0..6 {
+            let (n_x, n_y, n_z) = e.neighbor[i];
+            if suppress_face_when(
+                block,
+                coord.try_delta(n_x.into(), n_y.into(), n_z.into()).and_then(|neighbor| {
+                    self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+                }),
+            ) {
+                continue;
+            };
+            
             emit_cube_face_vk(
                 pos,
-                frame,
+                textures[i],
                 self.texture_atlas.dimensions(),
-                CubeFace::XMinus,
+                CUBE_EXTENTS_FACE_ORDER[i],
                 vtx,
                 idx,
                 e,
             );
         }
 
-        if !suppress_face_when(
-            block,
-            coord.try_delta(1, 0, 0).and_then(|neighbor| {
-                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
-            }),
-        ) {
-            let frame = self.get_texture(render_info.tex_left.tex_name());
-            emit_cube_face_vk(
-                pos,
-                frame,
-                self.texture_atlas.dimensions(),
-                CubeFace::XPlus,
-                vtx,
-                idx,
-                e,
-            );
-        }
-        if !suppress_face_when(
-            block,
-            coord.try_delta(0, -1, 0).and_then(|neighbor| {
-                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
-            }),
-        ) {
-            let frame = self.get_texture(render_info.tex_bottom.tex_name());
-            emit_cube_face_vk(
-                pos,
-                frame,
-                self.texture_atlas.dimensions(),
-                CubeFace::YMinus,
-                vtx,
-                idx,
-                e,
-            );
-        }
-        if !suppress_face_when(
-            block,
-            coord.try_delta(0, 1, 0).and_then(|neighbor| {
-                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
-            }),
-        ) {
-            let frame = self.get_texture(render_info.tex_top.tex_name());
-            emit_cube_face_vk(
-                pos,
-                frame,
-                self.texture_atlas.dimensions(),
-                CubeFace::YPlus,
-                vtx,
-                idx,
-                e,
-            );
-        }
-        if !suppress_face_when(
-            block,
-            coord.try_delta(0, 0, -1).and_then(|neighbor| {
-                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
-            }),
-        ) {
-            let frame = self.get_texture(render_info.tex_front.tex_name());
-            emit_cube_face_vk(
-                pos,
-                frame,
-                self.texture_atlas.dimensions(),
-                CubeFace::ZMinus,
-                vtx,
-                idx,
-                e,
-            );
-        }
-        if !suppress_face_when(
-            block,
-            coord.try_delta(0, 0, 1).and_then(|neighbor| {
-                self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
-            }),
-        ) {
-            let frame = self.get_texture(render_info.tex_back.tex_name());
-            emit_cube_face_vk(
-                pos,
-                frame,
-                self.texture_atlas.dimensions(),
-                CubeFace::ZPlus,
-                vtx,
-                idx,
-                e,
-            );
-        }
+        // if !suppress_face_when(
+        //     block,
+        //     coord.try_delta(-1, 0, 0).and_then(|neighbor| {
+        //         self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+        //     }),
+        // ) {
+        //     let frame = self.get_texture(render_info.tex_left.tex_name());
+        //     emit_cube_face_vk(
+        //         pos,
+        //         frame,
+        //         self.texture_atlas.dimensions(),
+        //         CubeFace::XMinus,
+        //         vtx,
+        //         idx,
+        //         e,
+        //     );
+        // }
+
+        // if !suppress_face_when(
+        //     block,
+        //     coord.try_delta(1, 0, 0).and_then(|neighbor| {
+        //         self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+        //     }),
+        // ) {
+        //     let frame = self.get_texture(render_info.tex_left.tex_name());
+        //     emit_cube_face_vk(
+        //         pos,
+        //         frame,
+        //         self.texture_atlas.dimensions(),
+        //         CubeFace::XPlus,
+        //         vtx,
+        //         idx,
+        //         e,
+        //     );
+        // }
+        // if !suppress_face_when(
+        //     block,
+        //     coord.try_delta(0, -1, 0).and_then(|neighbor| {
+        //         self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+        //     }),
+        // ) {
+        //     let frame = self.get_texture(render_info.tex_bottom.tex_name());
+        //     emit_cube_face_vk(
+        //         pos,
+        //         frame,
+        //         self.texture_atlas.dimensions(),
+        //         CubeFace::YMinus,
+        //         vtx,
+        //         idx,
+        //         e,
+        //     );
+        // }
+        // if !suppress_face_when(
+        //     block,
+        //     coord.try_delta(0, 1, 0).and_then(|neighbor| {
+        //         self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+        //     }),
+        // ) {
+        //     let frame = self.get_texture(render_info.tex_top.tex_name());
+        //     emit_cube_face_vk(
+        //         pos,
+        //         frame,
+        //         self.texture_atlas.dimensions(),
+        //         CubeFace::YPlus,
+        //         vtx,
+        //         idx,
+        //         e,
+        //     );
+        // }
+        // if !suppress_face_when(
+        //     block,
+        //     coord.try_delta(0, 0, -1).and_then(|neighbor| {
+        //         self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+        //     }),
+        // ) {
+        //     let frame = self.get_texture(render_info.tex_front.tex_name());
+        //     emit_cube_face_vk(
+        //         pos,
+        //         frame,
+        //         self.texture_atlas.dimensions(),
+        //         CubeFace::ZMinus,
+        //         vtx,
+        //         idx,
+        //         e,
+        //     );
+        // }
+        // if !suppress_face_when(
+        //     block,
+        //     coord.try_delta(0, 0, 1).and_then(|neighbor| {
+        //         self.get_block_maybe_neighbor(chunk_data, own_ids, chunk, neighbor)
+        //     }),
+        // ) {
+        //     let frame = self.get_texture(render_info.tex_back.tex_name());
+        //     emit_cube_face_vk(
+        //         pos,
+        //         frame,
+        //         self.texture_atlas.dimensions(),
+        //         CubeFace::ZPlus,
+        //         vtx,
+        //         idx,
+        //         e,
+        //     );
+        // }
     }
 
-    fn get_block(&self, ids: &[BlockId; 4096], coord: ChunkOffset) -> &BlockTypeDef {
+    fn get_block(&self, ids: &[BlockId; 4096], coord: ChunkOffset) -> (&BlockTypeDef, u16) {
         let block_id = ids[coord.as_index()];
 
         let def = self
             .block_defs
             .get_blockdef(block_id)
             .unwrap_or_else(|| self.block_defs.get_fallback_blockdef());
-        def
+        (def, block_id.variant())
     }
 
     fn get_block_maybe_neighbor(
@@ -509,11 +584,11 @@ impl BlockRenderer {
     ) -> Option<&BlockTypeDef> {
         let target_chunk = target.chunk();
         if target_chunk == own_chunk {
-            Some(self.get_block(own_ids, target.offset()))
+            Some(self.get_block(own_ids, target.offset()).0)
         } else {
             all_chunks
                 .get(&target_chunk)
-                .map(|x| self.get_block(&x.block_ids(), target.offset()))
+                .map(|x| self.get_block(&x.block_ids(), target.offset()).0)
         }
     }
 
@@ -525,11 +600,8 @@ impl BlockRenderer {
         let mut vtx = vec![];
         let mut idx = vec![];
         let frame = *self.texture_coords.get(SELECTION_RECTANGLE).unwrap();
-        const POINTEE_SELECTION_EXTENTS: CubeExtents = CubeExtents::new(
-            (-0.51, 0.51),
-            (-0.51, 0.51),
-            (-0.51, 0.51),
-        );
+        const POINTEE_SELECTION_EXTENTS: CubeExtents =
+            CubeExtents::new((-0.51, 0.51), (-0.51, 0.51), (-0.51, 0.51));
         let e = POINTEE_SELECTION_EXTENTS;
         let vk_pos = Vector3::zero();
         emit_cube_face_vk(
@@ -641,6 +713,14 @@ impl BlockRenderer {
     }
 }
 
+fn get_cube_extents(render_info: &CubeRenderInfo, variant: u16) -> CubeExtents {
+    const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5));
+    match render_info.variant_effect() {
+        blocks_proto::CubeVariantEffect::None => FULL_CUBE_EXTENTS,
+        blocks_proto::CubeVariantEffect::RotateNesw => FULL_CUBE_EXTENTS.rotate_y(variant),
+    }
+}
+
 async fn build_texture_atlas<T: AsyncTextureLoader>(
     block_defs: &ClientBlockTypeManager,
     mut texture_loader: T,
@@ -737,10 +817,7 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
 }
 
 #[inline]
-fn make_cgv(
-    coord: Vector3<f32>,
-    tex_uv: cgmath::Vector2<f32>,
-) -> CubeGeometryVertex {
+fn make_cgv(coord: Vector3<f32>, tex_uv: cgmath::Vector2<f32>) -> CubeGeometryVertex {
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
         uv_texcoord: tex_uv.into(),
@@ -816,7 +893,6 @@ pub(crate) fn emit_cube_face_vk(
             make_cgv(coord + e.v[1], br),
             make_cgv(coord + e.v[0], tr),
         ],
-
     };
     let si: u32 = vert_buf.len().try_into().unwrap();
     if si > (u32::MAX - 8) {

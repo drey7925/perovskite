@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
-use cgmath::{vec3};
-use cuberef_core::coordinates::BlockCoordinate;
+use cgmath::{vec3, Vector3, Zero};
+use cuberef_core::coordinates::{BlockCoordinate, PlayerPositionUpdate};
 use rand::{self, Rng};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
@@ -87,6 +87,11 @@ impl Loadtester {
                     target: BlockCoordinate::new(pos.x as i32, pos.y as i32, pos.z as i32),
                     prev: None,
                     item_slot: 0,
+                    player_pos: PlayerPositionUpdate {
+                        position: pos,
+                        velocity: Vector3::zero(),
+                        face_direction: (0., 0.),
+                    },
                 })).await.unwrap();
             }
             panic!();

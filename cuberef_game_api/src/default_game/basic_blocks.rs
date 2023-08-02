@@ -19,7 +19,10 @@ use crate::{
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
-use cuberef_core::{protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo}, constants::block_groups::TOOL_REQUIRED};
+use cuberef_core::{
+    constants::block_groups::TOOL_REQUIRED,
+    protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
+};
 use cuberef_server::game_state::blocks::ExtDataHandling;
 use splines::Spline;
 
@@ -58,7 +61,10 @@ pub mod ores {
     use cuberef_server::game_state::items::ItemStack;
     use rand::Rng;
 
-    use crate::{game_builder::ItemName, default_game::recipes::{RecipeImpl, RecipeSlot}};
+    use crate::{
+        default_game::recipes::{RecipeImpl, RecipeSlot},
+        game_builder::ItemName,
+    };
 
     use super::*;
 
@@ -109,9 +115,7 @@ pub mod ores {
             noise_scale: (4., 0.25, 4.),
         });
         game_builder.smelting_fuels.register_recipe(RecipeImpl {
-            slots: [
-                RecipeSlot::Exact(COAL_PIECE.0.to_string()),
-            ],
+            slots: [RecipeSlot::Exact(COAL_PIECE.0.to_string())],
             result: ItemStack {
                 proto: Default::default(),
             },
@@ -231,7 +235,12 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                                 false,
                             )?
                             .label("Player inventory:")
-                            .inventory_view_stored("player_inv", p.main_inventory(), true, true))?,
+                            .inventory_view_stored(
+                                "player_inv",
+                                p.player.main_inventory(),
+                                true,
+                                true,
+                            ))?,
                     )),
                 }))
             })),

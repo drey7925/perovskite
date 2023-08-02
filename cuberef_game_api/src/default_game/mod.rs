@@ -63,7 +63,7 @@ pub struct DefaultGameBuilder {
     inner: GameBuilder,
 
     crafting_recipes: Arc<RecipeBook<9, ()>>,
-    // Metadata is number of furnace timer ticks (period tbd) that it takes to smelt this recipe
+    /// Metadata is number of furnace timer ticks (period given by [`furnace::FURNACE_TICK_DURATION`]) that it takes to smelt this recipe
     smelting_recipes: Arc<RecipeBook<1, u32>>,
     // Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
     // Output item is ignored
@@ -149,7 +149,7 @@ impl DefaultGameBuilder {
                     } else {
                         1
                     },
-                    quantity_type: quantity_type,
+                    quantity_type,
                 },
             },
             shapeless: false,

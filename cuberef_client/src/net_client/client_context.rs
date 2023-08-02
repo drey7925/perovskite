@@ -124,14 +124,7 @@ impl OutboundContext {
         let sequence = self
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
                 rpc::ClientUpdate {
-                    position: Some(rpc::PositionUpdate {
-                        position: Some(pos.position.try_into()?),
-                        velocity: Some(pos.velocity.try_into()?),
-                        face_direction: Some(Angles {
-                            deg_azimuth: pos.face_direction.0,
-                            deg_elevation: pos.face_direction.1,
-                        }),
-                    }),
+                    position: Some(pos.to_proto()?),
                     pacing: Some(rpc::ClientPacing { pending_chunks }),
                 },
             ))
@@ -144,20 +137,22 @@ impl OutboundContext {
         match action {
             GameAction::Dig(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Dig(
-                    rpc::DigAction {
+                    rpc::DigTapAction {
                         block_coord: Some(action.target.into()),
                         prev_coord: action.prev.map(|x| x.into()),
                         item_slot: action.item_slot,
+                        position: Some(action.player_pos.to_proto()?),
                     },
                 ))
                 .await?;
             }
             GameAction::Tap(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Tap(
-                    rpc::TapAction {
+                    rpc::DigTapAction {
                         block_coord: Some(action.target.into()),
                         prev_coord: action.prev.map(|x| x.into()),
                         item_slot: action.item_slot,
+                        position: Some(action.player_pos.to_proto()?),
                     },
                 ))
                 .await?;
@@ -168,6 +163,7 @@ impl OutboundContext {
                         block_coord: Some(action.target.into()),
                         anchor: action.anchor.map(|x| x.into()),
                         item_slot: action.item_slot,
+                        position: Some(action.player_pos.to_proto()?),
                     },
                 ))
                 .await?;
@@ -191,10 +187,11 @@ impl OutboundContext {
                 ))
                 .await?;
             }
-            GameAction::InteractKey(block_coord) => {
+            GameAction::InteractKey(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::InteractKey(
                     InteractKeyAction {
-                        block_coord: Some(block_coord.into()),
+                        block_coord: Some(action.target.into()),
+                        position: Some(action.player_pos.to_proto()?),
                     },
                 ))
                 .await?;

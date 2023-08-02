@@ -14,9 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fmt::Debug, ops::RangeInclusive, hash::{Hash, Hasher}};
+use std::{
+    fmt::Debug,
+    hash::{Hash, Hasher},
+    ops::RangeInclusive,
+};
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use rustc_hash::FxHasher;
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -157,7 +161,7 @@ impl Debug for ChunkOffset {
 }
 
 /// Represents a location of a map chunk.
-/// 
+///
 /// Each coordinate spans 16 blocks, covering the range [chunk_coord.x * 16, chunk_coord.x * 16 + 15].
 /// e.g. chunk 0,1,2 covers x:[0, 15], y:[16, 31], z:[32, 47]
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -299,12 +303,42 @@ impl TryFrom<crate::protocol::coordinates::Vec3D> for cgmath::Vector3<f64> {
 
 #[derive(Copy, Clone, Debug)]
 pub struct PlayerPositionUpdate {
-    // The client-side tick for this position
-    pub tick: u64,
     // The position, blocks
     pub position: cgmath::Vector3<f64>,
     // The velocity, blocks per second
     pub velocity: cgmath::Vector3<f64>,
     // The facing direction, normalized
     pub face_direction: (f64, f64),
+}
+impl PlayerPositionUpdate {
+    pub fn to_proto(&self) -> Result<crate::protocol::game_rpc::PlayerPosition> {
+        Ok(crate::protocol::game_rpc::PlayerPosition {
+            position: Some(self.position.try_into()?),
+            velocity: Some(self.velocity.try_into()?),
+            face_direction: Some(crate::protocol::coordinates::Angles {
+                deg_azimuth: self.face_direction.0,
+                deg_elevation: self.face_direction.1,
+            }),
+        })
+    }
+}
+impl TryFrom<&crate::protocol::game_rpc::PlayerPosition> for PlayerPositionUpdate {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &crate::protocol::game_rpc::PlayerPosition) -> Result<Self> {
+        let angles = value.face_direction.as_ref().context("missing angles")?;
+        Ok(PlayerPositionUpdate {
+            position: value
+                .position
+                .as_ref()
+                .context("Missing position")?
+                .try_into()?,
+            velocity: value
+                .velocity
+                .as_ref()
+                .context("Missing velocity")?
+                .try_into()?,
+            face_direction: (angles.deg_azimuth, angles.deg_elevation),
+        })
+    }
 }

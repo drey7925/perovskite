@@ -44,3 +44,10 @@ macro_rules! run_handler {
         }
     };
 }
+
+/// A thread-local context used for event handlers.
+/// This is set by the server when an event is received from a client, and propagated
+/// when handlers call each other.
+pub struct EventContext {
+
+}

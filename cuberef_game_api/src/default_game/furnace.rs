@@ -1,7 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use cuberef_core::{constants::{self, item_groups::HIDDEN_FROM_CREATIVE}, protocol::game_rpc::MapChunkUnsubscribe};
+use cuberef_core::{
+    constants::{self, item_groups::HIDDEN_FROM_CREATIVE},
+    protocol::game_rpc::MapChunkUnsubscribe,
+};
 use cuberef_server::game_state::{
     blocks::{
         BlockInteractionResult, BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData,
@@ -30,6 +33,8 @@ use super::{
 pub const FURNACE: BlockName = BlockName("default:furnace");
 /// Furnace that's lit
 pub const FURNACE_ON: BlockName = BlockName("default:furnace_on");
+/// How long a single furnace tick takes.
+pub const FURNACE_TICK_DURATION: Duration = Duration::from_millis(250);
 
 const FURNACE_TEXTURE: TextureName = TextureName("default:furnace");
 const FURNACE_FRONT_TEXTURE: TextureName = TextureName("default:furnace_front");
@@ -265,6 +270,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                 FURNACE_ON_FRONT_TEXTURE,
             )
             .set_inventory_display_name("Furnace")
+            .set_rotate_laterally()
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
@@ -287,6 +293,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                 FURNACE_ON_FRONT_TEXTURE,
             )
             .set_inventory_display_name("Lit furnace (should not see this)")
+            .set_rotate_laterally()
             .set_dropped_item(FURNACE.0, 1)
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
@@ -306,7 +313,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
     game_builder.inner.inner.add_timer(
         "default:furnace_timer",
         TimerSettings {
-            interval: Duration::from_millis(250),
+            interval: FURNACE_TICK_DURATION,
             shards: 32,
             spreading: 1.0,
             block_types: vec![furnace_off_handle.0, furnace_on_handle.0],
@@ -459,7 +466,7 @@ fn make_furnace_popup(
                     true,
                     false,
                 )?
-                .inventory_view_stored("player_inv", p.main_inventory(), true, true)?,
+                .inventory_view_stored("player_inv", p.player.main_inventory(), true, true)?,
         )),
     }
 }

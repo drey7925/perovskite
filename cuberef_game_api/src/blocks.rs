@@ -27,7 +27,7 @@ use cuberef_core::{
         self,
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
-            BlockTypeDef, CubeRenderInfo, CubeRenderMode, Empty,
+            BlockTypeDef, CubeRenderInfo, CubeRenderMode, CubeVariantEffect, Empty,
         },
         items as items_proto,
         items::{item_def::QuantityType, ItemDef},
@@ -155,6 +155,11 @@ impl From<BlockTypeHandle> for BlockTypeHandleWrapper {
     }
 }
 
+enum VariantEffect {
+    None,
+    RotateNesw,
+}
+
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
 /// [server_api::BlockType] (when used directly) can.
@@ -171,6 +176,7 @@ pub struct BlockBuilder {
     /// Same parameters as [cuberef_server::game_state::items::PlaceHandler]
     extended_data_initializer: Option<ExtendedDataInitializer>,
     wear_multiplier: f64,
+    variant_effect: VariantEffect,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -206,12 +212,14 @@ impl BlockBuilder {
                 tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                 // todo autodetect this
                 render_mode: CubeRenderMode::SolidOpaque.into(),
+                variant_effect: CubeVariantEffect::None.into(),
             },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
             physics_info: PhysicsInfo::Solid(Empty {}),
             modifier: None,
             extended_data_initializer: None,
             wear_multiplier: 1.0,
+            variant_effect: VariantEffect::None,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -327,6 +335,13 @@ impl BlockBuilder {
         self
     }
 
+    /// Makes the block able to point in the four lateral directions, rotating it when placed
+    pub fn set_rotate_laterally(mut self) -> Self {
+        self.block_render_info.variant_effect = CubeVariantEffect::RotateNesw.into();
+        self.variant_effect = VariantEffect::RotateNesw;
+        self
+    }
+
     maybe_export!(
         /// Run arbitrary changes on the block definition just before it's registered
         fn set_modifier(mut self, modifier: Box<dyn FnOnce(&mut BlockType)>) -> Self {
@@ -378,11 +393,24 @@ impl BlockBuilder {
                 Some(x) => (x)(ctx.clone(), coord, anchor, stack)?,
                 None => None,
             };
-
+            let variant = match self.variant_effect {
+                VariantEffect::None => 0,
+                VariantEffect::RotateNesw => ctx
+                    .initiator()
+                    .position()
+                    .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
+                    .unwrap_or(0),
+            };
             match ctx
                 .game_map()
                 // TODO be more flexible with placement (e.g. water)
-                .compare_and_set_block(coord, air_block, block_handle, extended_data, false)?
+                .compare_and_set_block(
+                    coord,
+                    air_block,
+                    block_handle.with_variant(variant)?,
+                    extended_data,
+                    false,
+                )?
                 .0
             {
                 CasOutcome::Match => Ok(stack.decrement()),
@@ -398,4 +426,21 @@ fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: tex_name,
     })
+}
+
+/// Contains utilities for block variant schemes that are built into the game engine
+pub mod variants {
+    /// Given an azimuth angle of a player (in degrees), returns the variant that makes the block face the player
+    /// when placed.
+    pub fn rotate_nesw_azimuth_to_variant(azimuth: f64) -> u16 {
+        let azimuth = azimuth.rem_euclid(360.);
+        match azimuth {
+            x if x < 45.0 => 0,
+            x if x < 135.0 => 1,
+            x if x < 225.0 => 2,
+            x if x < 315.0 => 3,
+            x if x < 360.0 => 0,
+            _ => 0,
+        }
+    }
 }

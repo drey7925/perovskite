@@ -85,7 +85,6 @@ impl Player {
             main_inventory_key,
             state: Mutex::new(PlayerState {
                 last_position: PlayerPositionUpdate {
-                    tick: game_state.tick(),
                     position: proto
                         .last_position
                         .as_ref()
@@ -127,7 +126,6 @@ impl Player {
             main_inventory_key,
             state: PlayerState {
                 last_position: PlayerPositionUpdate {
-                    tick: game_state.tick(),
                     position: vec3(5., 10., 5.),
                     velocity: Vector3::zero(),
                     face_direction: (0., 0.),

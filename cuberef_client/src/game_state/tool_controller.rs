@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use cgmath::{Angle, Deg};
-use cuberef_core::block_id::BlockId;
+use cuberef_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 
 use cuberef_core::constants::items::default_item_interaction_rules;
 use cuberef_core::coordinates::BlockCoordinate;
@@ -82,14 +82,21 @@ impl ToolController {
 
     // Compute a new selected block.
     pub(crate) fn update(&mut self, client_state: &ClientState, delta: Duration) -> ToolState {
-        let (pointee, neighbor, block_def) = match self.compute_pointee(client_state) {
+        let player_pos = client_state.last_position();
+        let (pointee, neighbor, block_def) = match self.compute_pointee(client_state, &player_pos) {
             Some(x) => x,
             None => {
+                // Ensure that we don't leave pending input events that fire when we finally do get a pointee                
+                let mut input = client_state.input.lock();
+                input.take_just_released(BoundAction::Dig);
+                input.take_just_released(BoundAction::Place);
+                input.take_just_released(BoundAction::Interact);
                 self.dig_progress = None;
                 return ToolState {
                     pointee: None,
                     neighbor: None,
                     action: None,
+                    
                 };
             }
         };
@@ -108,6 +115,7 @@ impl ToolController {
                     target: pointee,
                     prev: neighbor,
                     item_slot: self.current_slot,
+                    player_pos
                 }));
             }
             self.dig_progress = behavior.map(|behavior| DigState {
@@ -129,6 +137,7 @@ impl ToolController {
                                 target: pointee,
                                 prev: neighbor,
                                 item_slot: self.current_slot,
+                                player_pos
                             }));
                         }
                         0.
@@ -139,9 +148,7 @@ impl ToolController {
                     Some(DigBehavior::ScaledTime(scale)) => {
                         delta.as_secs_f64() / (scale * dig_progress.base_durability)
                     }
-                    Some(DigBehavior::Undiggable(_)) => {
-                        0.
-                    }
+                    Some(DigBehavior::Undiggable(_)) => 0.,
                 };
 
                 dig_progress.progress += delta_progress;
@@ -152,6 +159,7 @@ impl ToolController {
                         target: pointee,
                         prev: neighbor,
                         item_slot: self.current_slot,
+                        player_pos
                     }));
                 }
             }
@@ -160,15 +168,21 @@ impl ToolController {
                 target: pointee,
                 prev: neighbor,
                 item_slot: self.current_slot,
+                player_pos,
             }))
         } else if input.take_just_pressed(BoundAction::Place) && neighbor.is_some() {
             action = Some(GameAction::Place(super::PlaceAction {
                 target: neighbor.unwrap(),
                 anchor: Some(pointee),
                 item_slot: self.current_slot,
+                player_pos
             }))
         } else if input.take_just_pressed(BoundAction::Interact) {
-            action = Some(GameAction::InteractKey(pointee))
+            action = Some(GameAction::InteractKey(super::InteractKeyAction {
+                target: pointee,
+                item_slot: self.current_slot,
+                player_pos
+            }))
         }
 
         if let Some(action) = &action {
@@ -193,10 +207,10 @@ impl ToolController {
     fn compute_pointee<'a>(
         &'a self,
         client_state: &'a ClientState,
+        last_pos: &PlayerPositionUpdate,
     ) -> Option<(BlockCoordinate, Option<BlockCoordinate>, &'a BlockTypeDef)> {
-        let last_state = client_state.last_position();
-        let pos = last_state.position;
-        let (az, el) = last_state.face_direction;
+        let pos = last_pos.position;
+        let (az, el) = last_pos.face_direction;
 
         let (sin_az, cos_az) = Deg(az).sin_cos();
         let (sin_el, cos_el) = Deg(el).sin_cos();

@@ -53,6 +53,7 @@ pub(crate) struct DigTapAction {
     pub(crate) target: BlockCoordinate,
     pub(crate) prev: Option<BlockCoordinate>,
     pub(crate) item_slot: u32,
+    pub(crate) player_pos: PlayerPositionUpdate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +61,7 @@ pub(crate) struct PlaceAction {
     pub(crate) target: BlockCoordinate,
     pub(crate) anchor: Option<BlockCoordinate>,
     pub(crate) item_slot: u32,
+    pub(crate) player_pos: PlayerPositionUpdate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +74,13 @@ pub(crate) struct InventoryAction {
     pub(crate) swap: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InteractKeyAction {
+    pub(crate) target: BlockCoordinate,
+    pub(crate) item_slot: u32,
+    pub(crate) player_pos: PlayerPositionUpdate,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum GameAction {
     Dig(DigTapAction),
@@ -79,7 +88,7 @@ pub(crate) enum GameAction {
     Place(PlaceAction),
     Inventory(InventoryAction),
     PopupResponse(cuberef_core::protocol::ui::PopupResponse),
-    InteractKey(BlockCoordinate),
+    InteractKey(InteractKeyAction),
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
@@ -245,7 +254,6 @@ impl ClientState {
         let lock = self.physics_state.lock();
         PlayerPositionUpdate {
             // TODO tick, velocity
-            tick: 0,
             position: lock.pos(),
             velocity: cgmath::Vector3::zero(),
             face_direction: lock.angle(),
@@ -308,7 +316,7 @@ pub(crate) struct FrameState {
     pub(crate) tool_state: ToolState,
 }
 
-use cuberef_core::protocol::blocks as blocks_proto;
+use cuberef_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {
     blocks_proto::BlockTypeDef {
@@ -321,6 +329,7 @@ pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {
                 tex_front: fallback_texture(),
                 tex_back: fallback_texture(),
                 render_mode: blocks_proto::CubeRenderMode::SolidOpaque.into(),
+                variant_effect: CubeVariantEffect::None.into(),
             },
         )),
         groups: vec![DEFAULT_SOLID.to_string()],

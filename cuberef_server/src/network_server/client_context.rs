@@ -28,6 +28,7 @@ use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
+use crate::game_state::event::PlayerInitiator;
 use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::game_map::CACHE_CLEAN_MIN_AGE;
 use crate::game_state::inventory::InventoryKey;
@@ -53,7 +54,7 @@ use cuberef_core::protocol::coordinates::Angles;
 use cuberef_core::protocol::game_rpc as proto;
 use cuberef_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use cuberef_core::protocol::game_rpc::MapDeltaUpdateBatch;
-use cuberef_core::protocol::game_rpc::PositionUpdate;
+use cuberef_core::protocol::game_rpc::PlayerPosition;
 use cuberef_core::protocol::game_rpc::StreamToClient;
 use itertools::iproduct;
 use log::error;
@@ -117,7 +118,6 @@ pub(crate) async fn make_client_contexts(
     let id = CLIENT_CONTEXT_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     let initial_position = PlayerPositionUpdate {
-        tick: game_state.tick(),
         position: player_context.last_position().position,
         velocity: cgmath::Vector3::zero(),
         face_direction: (0., 0.),
@@ -202,7 +202,6 @@ async fn initialize_protocol_state(
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<()> {
     let initial_position = PlayerPositionUpdate {
-        tick: context.game_state.tick(),
         position: context.player_context.last_position().position,
         velocity: cgmath::Vector3::zero(),
         face_direction: (0., 0.),
@@ -229,7 +228,7 @@ async fn initialize_protocol_state(
             tick: context.game_state.tick(),
             server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                 proto::SetClientState {
-                    position: Some(PositionUpdate {
+                    position: Some(PlayerPosition {
                         position: Some(initial_position.position.try_into()?),
                         velocity: Some(Vector3::zero().try_into()?),
                         face_direction: Some(Angles {
@@ -663,7 +662,7 @@ impl BlockEventSender {
                 tick: self.context.game_state.tick(),
                 server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                     proto::SetClientState {
-                        position: Some(PositionUpdate {
+                        position: Some(PlayerPosition {
                             position: Some(location.try_into()?),
                             velocity: Some(Vector3::zero().try_into()?),
                             face_direction: Some(Angles {
@@ -871,11 +870,20 @@ impl InboundWorker {
                     .block_coord
                     .as_ref()
                     .map(|x| x.into())
-                    .with_context(|| "Missing block_coord")?;
-                self.run_map_handlers(coord, dig_message.item_slot, |item| {
-                    item.and_then(|x| x.dig_handler.as_deref())
-                        .unwrap_or(&items::default_dig_handler)
-                })
+                    .context("Missing block_coord")?;
+                self.run_map_handlers(
+                    coord,
+                    dig_message.item_slot,
+                    |item| {
+                        item.and_then(|x| x.dig_handler.as_deref())
+                            .unwrap_or(&items::default_dig_handler)
+                    },
+                    dig_message
+                        .position
+                        .as_ref()
+                        .context("Missing player position")?
+                        .try_into()?,
+                )
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::Tap(tap_message)) => {
@@ -883,11 +891,20 @@ impl InboundWorker {
                     .block_coord
                     .as_ref()
                     .map(|x| x.into())
-                    .with_context(|| "Missing block_coord")?;
-                self.run_map_handlers(coord, tap_message.item_slot, |item| {
-                    item.and_then(|x| x.tap_handler.as_deref())
-                        .unwrap_or(&items::default_tap_handler)
-                })
+                    .context("Missing block_coord")?;
+                self.run_map_handlers(
+                    coord,
+                    tap_message.item_slot,
+                    |item| {
+                        item.and_then(|x| x.tap_handler.as_deref())
+                            .unwrap_or(&items::default_tap_handler)
+                    },
+                    tap_message
+                        .position
+                        .as_ref()
+                        .context("Missing player position")?
+                        .try_into()?,
+                )
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
@@ -935,12 +952,13 @@ impl InboundWorker {
         coord: BlockCoordinate,
         selected_inv_slot: u32,
         get_item_handler: F,
+        player_position: PlayerPositionUpdate,
     ) -> Result<()>
     where
         F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
     {
         tokio::task::block_in_place(|| {
-            self.map_handler_sync(selected_inv_slot, get_item_handler, coord)
+            self.map_handler_sync(selected_inv_slot, get_item_handler, coord, player_position)
         })
     }
 
@@ -949,6 +967,7 @@ impl InboundWorker {
         selected_inv_slot: u32,
         get_item_handler: F,
         coord: BlockCoordinate,
+        player_position: PlayerPositionUpdate,
     ) -> std::result::Result<(), anyhow::Error>
     where
         F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
@@ -963,7 +982,10 @@ impl InboundWorker {
                     .get_mut(selected_inv_slot as usize)
                     .with_context(|| "Item slot was out of bounds")?;
 
-                let initiator = EventInitiator::Player(&self.context.player_context);
+                let initiator = EventInitiator::Player(PlayerInitiator {
+                    player: &self.context.player_context,
+                    position: player_position,
+                });
 
                 let item_handler =
                     get_item_handler(game_state.item_manager().from_stack(stack.as_ref()));
@@ -1032,16 +1054,15 @@ impl InboundWorker {
                     }
                 };
                 let pos = PlayerPositionUpdate {
-                    tick,
                     position: pos_update
                         .position
                         .as_ref()
-                        .with_context(|| "Missing position")?
+                        .context("Missing position")?
                         .try_into()?,
                     velocity: pos_update
                         .velocity
                         .as_ref()
-                        .with_context(|| "Missing velocity")?
+                        .context("Missing velocity")?
                         .try_into()?,
                     face_direction: (az, el),
                 };
@@ -1089,7 +1110,14 @@ impl InboundWorker {
                             .get_mut(place_message.item_slot as usize)
                             .with_context(|| "Item slot was out of bounds")?;
 
-                        let initiator = EventInitiator::Player(&self.context.player_context);
+                        let initiator = EventInitiator::Player(PlayerInitiator {
+                            player: &self.context.player_context,
+                            position: place_message
+                                .position
+                                .as_ref()
+                                .context("Missing position")?
+                                .try_into()?,
+                        });
 
                         let handler = self
                             .context
@@ -1321,9 +1349,13 @@ impl InboundWorker {
             .as_ref()
             .map(|x| x.into())
             .with_context(|| "Missing block_coord")?;
+        let initiator = EventInitiator::Player(PlayerInitiator {
+            player: &self.context.player_context,
+            position: interact_message.position.as_ref().context("Missing position")?.try_into()?,
+        });
         let ctx = HandlerContext {
             tick: self.context.game_state.tick(),
-            initiator: EventInitiator::Player(&self.context.player_context),
+            initiator: initiator.clone(),
             game_state: self.context.game_state.clone(),
         };
         let block = self.context.game_state.map().get_block(coord)?;
@@ -1341,7 +1373,7 @@ impl InboundWorker {
             if let Some(popup) = run_handler!(
                 || (handler)(ctx, coord),
                 "interact_key",
-                EventInitiator::Player(&self.context.player_context.player),
+                initiator,
             )? {
                 messages.push(StreamToClient {
                     tick: self.context.game_state.tick(),
