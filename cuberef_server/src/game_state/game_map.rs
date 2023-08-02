@@ -542,11 +542,6 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
 pub struct ServerGameMap {
     game_state: Weak<GameState>,
     database: Arc<dyn GameDatabase>,
-    // Initial unoptimized version: A global mutex for the whole map.
-    // Possible optimizations:
-    // * Sharding
-    // * DashMap
-    // * Inner vs outer locks https://gist.github.com/drey7925/c4b89ff1d15c635875619ce19a749914
     live_chunks: RwLock<FxHashMap<ChunkCoordinate, MapChunkHolder>>,
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
