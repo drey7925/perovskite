@@ -27,7 +27,7 @@ use cuberef_core::{
 
 use tracy_client::{plot, span};
 
-use crate::cube_renderer::ClientBlockTypeManager;
+use crate::block_renderer::ClientBlockTypeManager;
 
 use super::{
     input::{BoundAction, InputState},

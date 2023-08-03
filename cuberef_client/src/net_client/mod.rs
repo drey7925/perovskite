@@ -43,7 +43,7 @@ use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Reque
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
-    cube_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
+    block_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
     game_state::{
         items::ClientItemManager,
         settings::GameSettings,

@@ -26,7 +26,7 @@ use anyhow::{ensure, Context, Result};
 use parking_lot::{RwLock, Mutex, RwLockReadGuard};
 use tracy_client::span;
 
-use crate::cube_renderer::{BlockRenderer, VkChunkVertexData};
+use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
 use super::ChunkManagerView;

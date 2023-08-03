@@ -9,7 +9,7 @@ use texture_packer::{importer::ImageImporter, Rect};
 use anyhow::{Error, Result};
 
 use crate::{
-    cube_renderer::AsyncTextureLoader,
+    block_renderer::AsyncTextureLoader,
     game_state::items::ClientItemManager,
     vulkan::{Texture2DHolder, VulkanContext},
 };

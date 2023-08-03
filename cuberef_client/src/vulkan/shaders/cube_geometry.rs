@@ -39,7 +39,7 @@ use vulkano::{
 };
 
 use crate::{
-    cube_renderer::VkChunkVertexData,
+    block_renderer::VkChunkVertexData,
     vulkan::{
         shaders::{frag_lighting, vert_3d::ModelMatrix},
         CommandBufferBuilder, Texture2DHolder, VulkanContext,

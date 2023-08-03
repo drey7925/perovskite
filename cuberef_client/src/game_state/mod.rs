@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tracy_client::span;
 use winit::event::Event;
 
-use crate::cube_renderer::{BlockRenderer, ClientBlockTypeManager, fallback_texture};
+use crate::block_renderer::{BlockRenderer, ClientBlockTypeManager, fallback_texture};
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
