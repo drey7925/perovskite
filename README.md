@@ -68,6 +68,19 @@ The only supported feature is `--features=tracy`, with similar behavior to the s
 
 To reach a client on the local machine, use `grpc://localhost:28273` as the server address.
 
+### Default keybinds
+
+* move with WASD
+* space to go up
+* left-click to dig
+* right-click to place
+* F to interact with a block (e.g. furnace/chest).
+* I for inventory
+* P to toggle between normal physics, flying, and noclip. This is useful if you spawn underground.
+* Escape for menu
+
+These can be adjusted in the settings file, whose filename is printed in the log when the client starts up.
+
 ## What's on the near-term roadmap?
 
 Tons of stuff, in no particular order, and not yet prioritized:
