@@ -23,6 +23,7 @@ impl Default for GameBehaviors {
 
 mod defaults {
     use super::*;
+    /// A very minimal implementation of the inventory popup.
     pub(crate) fn make_inventory_popup(
         game_state: Arc<GameState>,
         _player_name: String,

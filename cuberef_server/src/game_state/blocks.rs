@@ -497,7 +497,7 @@ impl BlockTypeManager {
 
         for i in 0..=max_index {
             let unknown_block_name = format!("by_id:0x{:x}", i << 12);
-            manager.block_types.push(make_unknown_block_server(
+            manager.block_types.push(make_unknown_block_serverside(
                 &manager,
                 BlockId((i as u32) << 12),
                 unknown_block_name.clone(),
@@ -528,13 +528,11 @@ impl BlockTypeManager {
 
     pub(crate) fn to_proto(&self) -> blocks_proto::ServerBlockTypeAssignments {
         let mut result = Vec::new();
-        for block in self.block_types.iter() {
-            if !block.is_unknown_block {
-                result.push(blocks_proto::BlockTypeAssignment {
-                    short_name: block.short_name().to_string(),
-                    id: block.client_info.id,
-                });
-            }
+        for (name, &id) in self.name_to_base_id_map.iter() {
+            result.push(blocks_proto::BlockTypeAssignment {
+                short_name: name.clone(),
+                id,
+            })
         }
         blocks_proto::ServerBlockTypeAssignments { block_type: result }
     }
@@ -631,7 +629,32 @@ const BLOCK_MANAGER_META_KEY: &[u8] = b"block_types";
 
 const E: blocks_proto::Empty = blocks_proto::Empty {};
 
-fn make_unknown_block_server(
+struct UnknownBlockExtDataPassthrough {
+    data: Vec<u8>,
+}
+
+fn unknown_block_serialize_data_passthrough(
+    _: InlineContext,
+    data: &CustomData,
+) -> Result<Option<Vec<u8>>> {
+    Ok(Some(
+        data.downcast_ref::<UnknownBlockExtDataPassthrough>()
+            .context("Unknown block UnknownBlockExtDataPassthrough downcast failed")?
+            .data
+            .clone(),
+    ))
+}
+
+fn unknown_block_deserialize_data_passthrough(
+    _: InlineContext,
+    data: &[u8],
+) -> Result<Option<CustomData>> {
+    Ok(Some(Box::new(UnknownBlockExtDataPassthrough {
+        data: data.to_vec(),
+    })))
+}
+
+fn make_unknown_block_serverside(
     manager: &BlockTypeManager,
     id: BlockId,
     short_name: String,
@@ -655,9 +678,9 @@ fn make_unknown_block_server(
             base_dig_time: 1.0,
             wear_multiplier: 0.0,
         },
-        extended_data_handling: ExtDataHandling::NoExtData,
-        deserialize_extended_data_handler: None,
-        serialize_extended_data_handler: None,
+        extended_data_handling: ExtDataHandling::ServerSide,
+        deserialize_extended_data_handler: Some(Box::new(unknown_block_deserialize_data_passthrough)),
+        serialize_extended_data_handler: Some(Box::new(unknown_block_serialize_data_passthrough)),
         extended_data_to_client_side: None,
         dig_handler_full: None,
         dig_handler_inline: Some(Box::new(move |ctx, block, _, _| {

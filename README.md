@@ -73,7 +73,6 @@ To reach a client on the local machine, use `grpc://localhost:28273` as the serv
 Tons of stuff, in no particular order, and not yet prioritized:
 
 * Rendering and display:
-    * Rotating blocks based on item variants
     * Non-cube blocks (e.g. torches, plants). Eventually custom geometry, but not there yet.
     * Lighting
 * Block types

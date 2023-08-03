@@ -24,7 +24,6 @@ use cuberef_core::{
     protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
 };
 use cuberef_server::game_state::blocks::ExtDataHandling;
-use splines::Spline;
 
 use super::{
     block_groups::{BRITTLE, GRANULAR},
