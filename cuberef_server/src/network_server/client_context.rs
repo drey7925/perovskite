@@ -158,8 +158,8 @@ pub(crate) async fn make_client_contexts(
             val: INITIAL_CHUNKS_PER_UPDATE as f64,
             floor: 0.,
             ceiling: MAX_CHUNKS_PER_UPDATE as f64,
-            additive_increase: 16.,
-            multiplicative_decrease: 0.5,
+            additive_increase: 32.,
+            multiplicative_decrease: 0.75,
         },
     };
     let chunk_sender = MapChunkSender {

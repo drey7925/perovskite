@@ -34,9 +34,11 @@ pub(crate) mod vert_3d {
                 layout(location = 0) in vec3 position;
                 layout(location = 1) in vec2 uv_texcoord;
                 layout(location = 2) in float brightness;
+                layout(location = 3) in float global_brightness_contribution;
 
                 layout(set = 1, binding = 0) uniform UniformData { 
                     mat4 vp_matrix;
+                    float global_brightness;
                 };
                 // 64 bytes of push constants :(
                 layout(push_constant) uniform ModelMatrix {
@@ -49,7 +51,7 @@ pub(crate) mod vert_3d {
                 void main() {
                     gl_Position = vp_matrix * model_matrix * vec4(position, 1.0);
                     uv_texcoord_out = uv_texcoord;
-                    brightness_out = brightness;
+                    brightness_out = brightness + (global_brightness * global_brightness_contribution);
                 }
             "
             },
@@ -79,8 +81,8 @@ pub(crate) mod frag_lighting {
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
-        // todo use brightness data
-        f_color = texture(tex, uv_texcoord);
+        vec4 color = texture(tex, uv_texcoord);
+        f_color = vec4(brightness * color.x, brightness * color.y, brightness * color.z, 1.0);
     }
     "
     }
@@ -100,8 +102,8 @@ pub(crate) mod frag_lighting_sparse {
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
-        // todo brightness
-        f_color = texture(tex, uv_texcoord);
+        vec4 color = texture(tex, uv_texcoord);
+        f_color = vec4(brightness * color.r, brightness * color.g, brightness * color.b, color.a);
         if (f_color.a < 0.5) {
             discard;
         } else {
@@ -128,7 +130,6 @@ pub(crate) mod vert_2d {
                 };
 
                 layout(location = 0) out vec2 uv_texcoord_out;
-                layout(location = 1) out float brightness_out;
 
                 void main() {
                     // pixel -> normalized device coordinates
@@ -153,7 +154,7 @@ pub(crate) mod frag_simple {
     layout(location = 0) in vec2 uv_texcoord;
 
     layout(location = 0) out vec4 f_color;
-    layout(set = 0, binding = 1) uniform sampler2D tex;
+    layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
         f_color = texture(tex, uv_texcoord);

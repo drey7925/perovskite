@@ -1,0 +1,1 @@
+//! Server-side implementation of *global* lighting.

@@ -1823,6 +1823,8 @@ pub mod fuzz {
     }
 }
 
+pub(crate) mod lighting;
+
 #[cfg(test)]
 mod tests {
     use super::*;

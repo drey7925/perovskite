@@ -17,7 +17,7 @@ use cuberef_server::game_state::{
 use prost::Message;
 
 use crate::{
-    blocks::BlockBuilder,
+    blocks::{BlockBuilder, CubeAppearanceBuilder},
     game_builder::{BlockName, TextureName},
     include_texture_bytes,
 };
@@ -260,17 +260,20 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
     let furnace_off_handle = game_builder.inner.add_block(
         BlockBuilder::new(FURNACE)
             .add_block_group(BRITTLE)
-            .set_individual_textures(
-                FURNACE_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_FRONT_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_ON_FRONT_TEXTURE,
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_individual_textures(
+                        FURNACE_TEXTURE,
+                        FURNACE_TEXTURE,
+                        FURNACE_TEXTURE,
+                        FURNACE_TEXTURE,
+                        FURNACE_FRONT_TEXTURE,
+                        FURNACE_TEXTURE,
+                    )
+                    .set_rotate_laterally(),
             )
+            .set_inventory_texture(FURNACE_ON_FRONT_TEXTURE)
             .set_inventory_display_name("Furnace")
-            .set_rotate_laterally()
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
@@ -283,17 +286,20 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
         BlockBuilder::new(FURNACE_ON)
             .add_block_group(BRITTLE)
             .add_item_group(HIDDEN_FROM_CREATIVE)
-            .set_individual_textures(
-                FURNACE_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_ON_FRONT_TEXTURE,
-                FURNACE_TEXTURE,
-                FURNACE_ON_FRONT_TEXTURE,
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_individual_textures(
+                        FURNACE_TEXTURE,
+                        FURNACE_TEXTURE,
+                        FURNACE_TEXTURE,
+                        FURNACE_TEXTURE,
+                        FURNACE_ON_FRONT_TEXTURE,
+                        FURNACE_TEXTURE,
+                    )
+                    .set_rotate_laterally(),
             )
+            .set_inventory_texture(FURNACE_ON_FRONT_TEXTURE)
             .set_inventory_display_name("Lit furnace (should not see this)")
-            .set_rotate_laterally()
             .set_dropped_item(FURNACE.0, 1)
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;

@@ -43,6 +43,7 @@ toml = "0.7.5"
 directories = "5.0.1"
 arc-swap = "1.6.0"
 ron = "0.8.0"
+futures = "0.3.28"
 
 [features]
 default = []

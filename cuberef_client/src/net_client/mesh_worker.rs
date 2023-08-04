@@ -42,9 +42,9 @@ impl MeshWorker {
                 // Prioritize the closest chunks
                 chunks.sort_by_key(|x| {
                     let center = x.with_offset(ChunkOffset { x: 8, y: 8, z: 8 });
-                    let distance =
+                    let offset =
                         cgmath::vec3(center.x as f64, center.y as f64, center.z as f64) - pos;
-                    distance.magnitude2() as i64
+                    offset.magnitude2() as u64
                 });
                 chunks.shrink_to(MESH_BATCH_SIZE);
                 for coord in chunks.iter() {
@@ -58,7 +58,7 @@ impl MeshWorker {
                 for coord in chunks {
                     maybe_mesh_chunk(
                         coord,
-                        &self.client_state.chunks.read_lock(),
+                        &self.client_state.chunks.cloned_neighbors(coord),
                         &self.client_state.block_renderer,
                     )?;
                 }

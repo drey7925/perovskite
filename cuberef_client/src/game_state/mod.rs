@@ -156,6 +156,25 @@ impl ChunkManager {
             }
         }
     }
+
+    pub(crate) fn cloned_neighbors(&self, chunk: ChunkCoordinate) -> ChunkManagerClonedView {
+        let lock = self.chunks.read();
+        let mut data = ChunkMap::default();
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for k in -1..=1 {
+                    if let Some(delta) = chunk.try_delta(i, j, k) {
+                        if let Some(chunk) = lock.get(&delta) {
+                            data.insert(delta, chunk.clone());
+                        }
+                    }
+                }
+            }
+        }
+        ChunkManagerClonedView {
+            data,
+        }
+    }
 }
 pub(crate) struct ChunkManagerView<'a> {
     guard: RwLockReadGuard<'a, ChunkMap>,

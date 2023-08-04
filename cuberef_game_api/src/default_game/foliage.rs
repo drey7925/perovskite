@@ -2,7 +2,7 @@ use anyhow::Result;
 use cuberef_server::game_state::items::ItemStack;
 
 use crate::{
-    blocks::BlockBuilder,
+    blocks::{BlockBuilder, CubeAppearanceBuilder},
     game_builder::{BlockName, TextureName},
     include_texture_bytes,
 };
@@ -31,22 +31,18 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
         MAPLE_TREE_SIDE_TEX,
         "textures/maple_tree_side.png"
     )?;
-    include_texture_bytes!(
-        builder.inner,
-        MAPLE_LEAVES_TEX,
-        "textures/maple_leaves.png"
-    )?;
+    include_texture_bytes!(builder.inner, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
     BlockBuilder::new(MAPLE_TREE)
         .add_block_group(FIBROUS)
-        .set_individual_textures(
+        .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
             MAPLE_TREE_SIDE_TEX,
             MAPLE_TREE_SIDE_TEX,
             MAPLE_TREE_TOP_TEX,
             MAPLE_TREE_TOP_TEX,
             MAPLE_TREE_SIDE_TEX,
             MAPLE_TREE_SIDE_TEX,
-            MAPLE_TREE_TOP_TEX,
-        )
+        ))
+        .set_inventory_texture(MAPLE_TREE_TOP_TEX)
         .build_and_deploy_into(builder.game_builder())?;
     builder.smelting_fuels.register_recipe(recipes::Recipe {
         slots: [RecipeSlot::Exact(MAPLE_TREE.0.to_string())],
@@ -66,8 +62,9 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
     });
     BlockBuilder::new(MAPLE_LEAVES)
         .add_block_group(FIBROUS)
-        .set_texture_all(MAPLE_LEAVES_TEX)
-        .set_needs_transparency()
+        .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(MAPLE_LEAVES_TEX)
+        .set_needs_transparency())
+        .set_inventory_texture(MAPLE_LEAVES_TEX)
         .build_and_deploy_into(builder.game_builder())?;
     Ok(())
 }

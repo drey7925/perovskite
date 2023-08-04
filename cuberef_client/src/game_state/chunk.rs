@@ -29,9 +29,9 @@ use tracy_client::span;
 use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
-use super::ChunkManagerView;
+use super::{ChunkManagerView, ChunkManagerClonedView};
 
-pub(crate) struct BlockIdView<'a>(RwLockReadGuard<'a, Vec<BlockId>>);
+pub(crate) struct BlockIdView<'a>(RwLockReadGuard<'a, Box<[BlockId; 4096]>>);
 impl Deref for BlockIdView<'_> {
     type Target = [BlockId; 4096];
 
@@ -43,7 +43,8 @@ impl Deref for BlockIdView<'_> {
 
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
-    block_ids: RwLock<Vec<BlockId>>,
+    block_ids: RwLock<Box<[BlockId; 4096]>>,
+    lighting: RwLock<Box<[u8; 4096]>>,
     cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
 }
 impl ClientChunk {
@@ -69,7 +70,8 @@ impl ClientChunk {
         };
         Ok(ClientChunk {
             coord,
-            block_ids: RwLock::new(block_ids),
+            block_ids: RwLock::new(block_ids.try_into().unwrap()),
+            lighting: RwLock::new(Box::new([0; 4096])),
             cached_vertex_data: Mutex::new(None),
         })
     }
@@ -102,7 +104,8 @@ impl ClientChunk {
                     .collect::<Vec<_>>()
             }
         };
-        *self.block_ids.write() = block_ids;
+        // unwrap is safe: we verified the length
+        *self.block_ids.write() = Box::new(block_ids.try_into().unwrap());
         Ok(())
     }
 
@@ -162,7 +165,7 @@ impl ClientChunk {
 
 pub(crate) fn maybe_mesh_chunk(
     chunk_coord: ChunkCoordinate,
-    chunk_data: &ChunkManagerView,
+    chunk_data: &ChunkManagerClonedView,
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
     if chunk_data.contains_key(&chunk_coord) {
@@ -174,7 +177,7 @@ pub(crate) fn maybe_mesh_chunk(
 
 pub(crate) fn mesh_chunk(
     chunk_coord: ChunkCoordinate,
-    chunk_data: &ChunkManagerView,
+    chunk_data: &ChunkManagerClonedView,
     cube_renderer: &BlockRenderer,
 ) -> Result<()> {
     let _span = span!("meshing");

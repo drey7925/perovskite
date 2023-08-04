@@ -117,6 +117,8 @@ impl GameBuilder {
             base_dig_time: 1.0,
             groups: vec![],
             wear_multiplier: 1.0,
+            light_emission: 0,
+            allow_light_propagation: true,
         };
         let air_block = inner.blocks_mut().register_block(air_block)?;
         Ok(GameBuilder { inner, air_block })

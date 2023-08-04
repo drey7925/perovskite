@@ -5,11 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::game_state::{
-    chunk::{mesh_chunk},
-    items::ClientInventory,
-    ClientState, GameAction,
-};
+use crate::game_state::{chunk::mesh_chunk, items::ClientInventory, ClientState, GameAction};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
@@ -18,6 +14,7 @@ use cuberef_core::{
         game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
     },
 };
+use futures::StreamExt;
 use parking_lot::{Condvar, Mutex};
 use rustc_hash::FxHashSet;
 use tokio::{sync::mpsc, task::spawn_blocking};
@@ -36,20 +33,22 @@ pub(crate) async fn make_contexts(
     let cancellation = client_state.shutdown.clone();
 
     let ack_map = Arc::new(Mutex::new(HashMap::new()));
-    // TODO (low-value optimization): multiple mesh workers for high render distances?
-    let mesh_worker = Arc::new(MeshWorker {
-        client_state: client_state.clone(),
-        queue: Mutex::new(HashSet::new()),
-        cond: Condvar::new(),
-        shutdown: cancellation.clone(),
-    });
+    let mut mesh_workers = vec![];
+    for _ in 0..client_state.settings.load().render.experimental_num_mesh_workers {
+        mesh_workers.push(Arc::new(MeshWorker {
+            client_state: client_state.clone(),
+            queue: Mutex::new(HashSet::new()),
+            cond: Condvar::new(),
+            shutdown: cancellation.clone(),
+        }));
+    }
     let inbound = InboundContext {
         outbound_tx: tx_send.clone(),
         inbound_rx: stream,
         client_state: client_state.clone(),
         cancellation: cancellation.clone(),
         ack_map: ack_map.clone(),
-        mesh_worker: mesh_worker.clone(),
+        mesh_workers: mesh_workers.clone(),
     };
 
     let outbound = OutboundContext {
@@ -60,7 +59,7 @@ pub(crate) async fn make_contexts(
         ack_map,
         action_receiver,
         last_pos_update_seq: None,
-        mesh_worker,
+        mesh_workers,
     };
 
     Ok((inbound, outbound))
@@ -78,7 +77,7 @@ pub(crate) struct OutboundContext {
     last_pos_update_seq: Option<u64>,
 
     // Used only for pacing
-    mesh_worker: Arc<MeshWorker>,
+    mesh_workers: Vec<Arc<MeshWorker>>,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
@@ -120,7 +119,13 @@ impl OutboundContext {
         }
 
         // If this overflows, the client is severely behind (by 4 billion chunks!) and may as well crash
-        let pending_chunks = self.mesh_worker.queue.lock().len().try_into().unwrap();
+        let pending_chunks = self
+            .mesh_workers
+            .iter()
+            .map(|worker| worker.queue.lock().len())
+            .sum::<usize>()
+            .try_into()
+            .unwrap();
         let sequence = self
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
                 rpc::ClientUpdate {
@@ -250,12 +255,16 @@ pub(crate) struct InboundContext {
     pub(crate) cancellation: CancellationToken,
 
     ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
-    mesh_worker: Arc<MeshWorker>,
+    mesh_workers: Vec<Arc<MeshWorker>>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
-        let mesh_worker_clone = self.mesh_worker.clone();
-        let mut mesh_worker_handle = spawn_blocking(move || mesh_worker_clone.run_mesh_worker());
+        let mut mesh_worker_handles = futures::stream::FuturesUnordered::new();
+        for worker in self.mesh_workers.iter() {
+            let worker = worker.clone();
+            let future = spawn_blocking(move || worker.run_mesh_worker());
+            mesh_worker_handles.push(future);
+        }
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -284,25 +293,30 @@ impl InboundContext {
                     log::info!("Inbound stream context detected cancellation and shutting down")
                     // pass
                 },
-                result = &mut mesh_worker_handle => {
+                result = &mut mesh_worker_handles.next() => {
                     match &result {
-                        Err(e) => {
+                        Some(Err(e)) => {
                             log::error!("Error awaiting mesh worker: {e:?}");
                         }
-                        Ok(Err(e)) => {
+                        Some(Ok(Err(e))) => {
                             log::error!("Mesh worker crashed: {e:?}");
                         }
-                        Ok(_) => {
+                        Some(Ok(_)) => {
                             log::info!("Mesh worker exiting");
                         }
+                        None => {
+                            log::error!("Mesh worker exited unexpectedly");
+                        }
                     }
-                    return result?;
+                    return result.unwrap()?;
                 }
             };
         }
         log::warn!("Exiting inbound loop");
         // Notify the mesh worker so it can exit soon
-        self.mesh_worker.cond.notify_all();
+        for worker in self.mesh_workers.iter() {
+            worker.cond.notify_all();
+        }
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
@@ -340,9 +354,10 @@ impl InboundContext {
     }
 
     fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
-        let mut lock = self.mesh_worker.queue.lock();
+        let shard = (coord.hash_u64() % self.mesh_workers.len() as u64) as usize; 
+        let mut lock = self.mesh_workers[shard].queue.lock();
         lock.insert(coord);
-        self.mesh_worker.cond.notify_one();
+        self.mesh_workers[shard].cond.notify_one();
     }
 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
@@ -429,9 +444,11 @@ impl InboundContext {
                     bad_coords.push(coord.clone());
                 }
             }
-            tokio::task::block_in_place(|| {
-                self.mesh_worker.queue.lock().remove(&coord.into());
-            });
+
+            // TODO - do we need to do this?
+            // tokio::task::block_in_place(|| {
+            //     self.mesh_worker.queue.lock().remove(&coord.into());
+            // });
         }
         if !bad_coords.is_empty() {
             self.send_bugcheck(format!(
@@ -519,17 +536,17 @@ impl InboundContext {
                 }
             }
         }
+        drop(chunk_manager_read_lock);
         {
             let _span = span!("remesh for delta");
             for chunk in needs_remesh {
                 mesh_chunk(
                     chunk,
-                    &chunk_manager_read_lock,
+                    &self.client_state.chunks.cloned_neighbors(chunk),
                     &self.client_state.block_renderer,
                 )?;
             }
         }
-        drop(chunk_manager_read_lock);
         Ok((missing_coord, unknown_coords))
     }
 

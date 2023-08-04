@@ -166,16 +166,13 @@ enum VariantEffect {
 #[must_use = "Builders do nothing unless used; set_foo will return a new builder."]
 pub struct BlockBuilder {
     block_name: String,
-    block_groups: HashSet<String>,
     item: Item,
-    block_render_info: CubeRenderInfo,
     dropped_item: DroppedItem,
-    // Temporarily exposed for water until the API is stabilized.
-    pub(crate) physics_info: PhysicsInfo,
     modifier: Option<Box<dyn FnOnce(&mut BlockType)>>,
     /// Same parameters as [cuberef_server::game_state::items::PlaceHandler]
     extended_data_initializer: Option<ExtendedDataInitializer>,
-    wear_multiplier: f64,
+    // Exposed within the crate while not all APIs are complete
+    pub(crate) client_info: BlockTypeDef,
     variant_effect: VariantEffect,
 }
 impl BlockBuilder {
@@ -201,24 +198,31 @@ impl BlockBuilder {
 
         BlockBuilder {
             block_name: name.into(),
-            block_groups: HashSet::from_iter([DEFAULT_SOLID.to_string()].into_iter()),
             item,
-            block_render_info: CubeRenderInfo {
-                tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
-                tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
-                tex_top: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
-                tex_bottom: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
-                tex_front: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
-                tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
-                // todo autodetect this
-                render_mode: CubeRenderMode::SolidOpaque.into(),
-                variant_effect: CubeVariantEffect::None.into(),
-            },
             dropped_item: DroppedItem::Fixed(name.into(), 1),
-            physics_info: PhysicsInfo::Solid(Empty {}),
             modifier: None,
             extended_data_initializer: None,
-            wear_multiplier: 1.0,
+            client_info: BlockTypeDef {
+                id: 0,
+                short_name: name.into(),
+                base_dig_time: 1.0,
+                groups: vec![DEFAULT_SOLID.to_string()],
+                wear_multiplier: 1.0,
+                light_emission: 0,
+                allow_light_propagation: false,
+                render_info: Some(RenderInfo::Cube(CubeRenderInfo {
+                    tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                    tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                    tex_top: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                    tex_bottom: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                    tex_front: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                    tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                    // todo autodetect this
+                    render_mode: CubeRenderMode::SolidOpaque.into(),
+                    variant_effect: CubeVariantEffect::None.into(),
+                })),
+                physics_info: Some(PhysicsInfo::Solid(Empty {})),
+            },
             variant_effect: VariantEffect::None,
         }
     }
@@ -253,63 +257,6 @@ impl BlockBuilder {
         self.dropped_item = DroppedItem::None;
         self
     }
-    /// Sets the texture for all six faces of this block as well as the item, all to the same value
-    pub fn set_texture_all<T>(mut self, texture: T) -> Self
-    where
-        T: Into<TextureReference>,
-    {
-        let tex = Some(texture.into());
-        self.block_render_info.tex_left = tex.clone();
-        self.block_render_info.tex_right = tex.clone();
-        self.block_render_info.tex_top = tex.clone();
-        self.block_render_info.tex_bottom = tex.clone();
-        self.block_render_info.tex_front = tex.clone();
-        self.block_render_info.tex_back = tex.clone();
-        self.item.proto.inventory_texture = tex;
-        self
-    }
-    /// Sets the texture for all six faces of this block as well as the inventory item, one by one
-    pub fn set_individual_textures<T>(
-        mut self,
-        left: T,
-        right: T,
-        top: T,
-        bottom: T,
-        front: T,
-        back: T,
-        inventory: T,
-    ) -> Self
-    where
-        T: Into<TextureReference>,
-    {
-        self.block_render_info.tex_left = Some(left.into());
-        self.block_render_info.tex_right = Some(right.into());
-        self.block_render_info.tex_top = Some(top.into());
-        self.block_render_info.tex_bottom = Some(bottom.into());
-        self.block_render_info.tex_front = Some(front.into());
-        self.block_render_info.tex_back = Some(back.into());
-        self.item.proto.inventory_texture = Some(inventory.into());
-        self
-    }
-    /// Indicates that the textures may have transparent pixels. This does not support translucency.
-    ///
-    /// Stability note: It's possible that we may start autodetecting transparent pixels in texture files.
-    /// If that happens, this method will become a deprecated no-op.
-    pub fn set_needs_transparency(mut self) -> Self {
-        self.block_render_info
-            .set_render_mode(CubeRenderMode::Transparent);
-        self
-    }
-
-    /// Indicates that the textures may have translucent pixels. The behavior of this is still TBD.
-    ///
-    /// Stability note: The signature of this method will likely remain the same, but the render behavior may change.
-    /// Additional controls might be added in the future (as separate methods)
-    pub fn set_needs_translucency(mut self) -> Self {
-        self.block_render_info
-            .set_render_mode(CubeRenderMode::Translucent);
-        self
-    }
 
     /// Adds a group to the list of groups for this block.
     /// These can affect diggability, dig speed, and other behavior in
@@ -317,7 +264,10 @@ impl BlockBuilder {
     ///
     /// See [crate::constants::block_groups] for useful values.
     pub fn add_block_group(mut self, group: impl Into<String>) -> Self {
-        self.block_groups.insert(group.into());
+        let group = group.into();
+        if !self.client_info.groups.contains(&group) {
+            self.client_info.groups.push(group);
+        }
         self
     }
 
@@ -332,13 +282,6 @@ impl BlockBuilder {
     /// Set the display name visible when hovering in the inventory.
     pub fn set_inventory_display_name(mut self, display_name: &str) -> Self {
         self.item.proto.display_name = display_name.into();
-        self
-    }
-
-    /// Makes the block able to point in the four lateral directions, rotating it when placed
-    pub fn set_rotate_laterally(mut self) -> Self {
-        self.block_render_info.variant_effect = CubeVariantEffect::RotateNesw.into();
-        self.variant_effect = VariantEffect::RotateNesw;
         self
     }
 
@@ -360,21 +303,35 @@ impl BlockBuilder {
             self
         }
     );
+    /// Set the appearance of the block to that specified by the given builder
+    pub fn set_cube_appearance(mut self, appearance: CubeAppearanceBuilder) -> Self {
+        self.variant_effect = match appearance.render_info.variant_effect() {
+            CubeVariantEffect::None => VariantEffect::None,
+            CubeVariantEffect::RotateNesw => VariantEffect::RotateNesw,
+        };
+        self.client_info.render_info = Some(RenderInfo::Cube(appearance.render_info));
+        self.client_info.light_emission = appearance.light_emission;
+        self.client_info.allow_light_propagation = appearance.allow_light_propagation;
+        self
+    }
+    /// Sets the texture shown for this block's item in the inventory.
+    pub fn set_inventory_texture(mut self, texture: impl Into<TextureReference>) -> Self {
+        self.item.proto.inventory_texture = Some(texture.into());
+        self
+    }
+    /// Convenience method that sets this block to a simple appearance as a cube with the same texture on all faces,
+    /// no transparency/translucency, no light propagation or emission, and no additional appearance settings
+    /// (which may be added in the future)
+    pub fn set_cube_single_texture(mut self, texture: impl Into<TextureReference>) -> Self {
+        self.set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(texture))
+    }
 
     pub(crate) fn build_and_deploy_into(
         mut self,
         game_builder: &mut GameBuilder,
     ) -> Result<BlockTypeHandleWrapper> {
         let mut block = BlockType::default();
-        block.client_info = BlockTypeDef {
-            id: 0,
-            short_name: self.block_name.clone(),
-            base_dig_time: 1.0,
-            groups: self.block_groups.into_iter().collect(),
-            render_info: Some(RenderInfo::Cube(self.block_render_info)),
-            physics_info: Some(self.physics_info),
-            wear_multiplier: self.wear_multiplier,
-        };
+        block.client_info = self.client_info;
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
         if let Some(modifier) = self.modifier {
             (modifier)(&mut block);
@@ -422,6 +379,117 @@ impl BlockBuilder {
     }
 }
 
+pub struct CubeAppearanceBuilder {
+    render_info: CubeRenderInfo,
+    light_emission: u32,
+    allow_light_propagation: bool,
+}
+impl CubeAppearanceBuilder {
+    pub fn new() -> Self {
+        Self {
+            render_info: CubeRenderInfo {
+                tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_top: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_bottom: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_front: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                tex_back: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                render_mode: CubeRenderMode::SolidOpaque.into(),
+                variant_effect: CubeVariantEffect::None.into(),
+            },
+            light_emission: 0,
+            allow_light_propagation: false,
+        }
+    }
+
+    /// Sets this block to render as a cube and applies the same texture for all six faces.
+    pub fn set_single_texture<T>(self, texture: T) -> Self
+    where
+        T: Into<TextureReference>,
+    {
+        let tex = texture.into();
+        self.set_individual_textures(
+            tex.clone(),
+            tex.clone(),
+            tex.clone(),
+            tex.clone(),
+            tex.clone(),
+            tex,
+        )
+    }
+
+    
+    /// Sets the light emission of this block, causing it to glow and illuminate other blocks.
+    /// The meaningful range of light emission is 0-16.
+    ///
+    /// Moving one block causes light emission to fall off by one.
+    pub fn set_light_emission(mut self, light_emission: u32) -> Self {
+        self.light_emission = light_emission;
+        self
+    }
+
+    /// Sets whether the block allows light to propagate through it.
+    /// 
+    /// This is separate from set_needs_transparency and/or set_needs_translucency; those affect
+    /// how the block is rasterized on the GPU, but not how map lighting is calculated.
+    pub fn set_allow_light_propagation(mut self, allow_light_propagation: bool) -> Self {
+        self.allow_light_propagation = allow_light_propagation;
+        self
+    }
+
+    /// Sets the texture for all six faces of this block as well as the inventory item, one by one
+    pub fn set_individual_textures<T>(
+        mut self,
+        left: T,
+        right: T,
+        top: T,
+        bottom: T,
+        front: T,
+        back: T,
+    ) -> Self
+    where
+        T: Into<TextureReference>,
+    {
+        self.render_info.tex_left = Some(left.into());
+        self.render_info.tex_right = Some(right.into());
+        self.render_info.tex_top = Some(top.into());
+        self.render_info.tex_bottom = Some(bottom.into());
+        self.render_info.tex_front = Some(front.into());
+        self.render_info.tex_back = Some(back.into());
+
+        self
+    }
+
+    /// Indicates that the textures may have transparent pixels. This does not support translucency.
+    ///
+    /// This does not cause in-game light to propagate through the block; use set_allow_light_propagation for that.
+    /// 
+    /// Stability note: It's possible that we may start autodetecting transparent pixels in texture files.
+    /// If that happens, this method will become a deprecated no-op.
+    pub fn set_needs_transparency(mut self) -> Self {
+        self.render_info
+            .set_render_mode(CubeRenderMode::Transparent);
+        self
+    }
+
+    /// Indicates that the textures may have translucent pixels. The behavior of this is still TBD.
+    /// 
+    /// This does not cause in-game light to propagate through the block; use set_allow_light_propagation for that.
+    ///
+    /// Stability note: The signature of this method will likely remain the same, but the render behavior may change.
+    /// Additional controls might be added in the future (as separate methods)
+    pub fn set_needs_translucency(mut self) -> Self {
+        self.render_info
+            .set_render_mode(CubeRenderMode::Translucent);
+        self
+    }
+
+    /// Makes the block able to point in the four lateral directions, rotating it when placed
+    pub fn set_rotate_laterally(mut self) -> Self {
+        self.render_info.variant_effect = CubeVariantEffect::RotateNesw.into();
+        self
+    }
+}
 fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: tex_name,

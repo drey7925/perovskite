@@ -21,6 +21,7 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
+use cgmath::{Deg, Angle};
 use rustc_hash::FxHasher;
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -320,6 +321,15 @@ impl PlayerPositionUpdate {
                 deg_elevation: self.face_direction.1,
             }),
         })
+    }
+    pub fn face_unit_vector(&self) -> cgmath::Vector3<f64> {
+        let (sin_az, cos_az) = Deg(self.face_direction.0).sin_cos();
+        let (sin_el, cos_el) = Deg(self.face_direction.1).sin_cos();
+        cgmath::vec3(
+                cos_el * sin_az,
+                sin_el,
+                cos_el * cos_az,
+            )
     }
 }
 impl TryFrom<&crate::protocol::game_rpc::PlayerPosition> for PlayerPositionUpdate {

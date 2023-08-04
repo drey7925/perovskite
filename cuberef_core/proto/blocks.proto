@@ -41,6 +41,12 @@ message BlockTypeDef {
   // When a tool is digging this block, multiply the effective wear by this
   // amount.
   double wear_multiplier = 5;
+  
+  // How much light the block emits
+  uint32 light_emission = 6;
+  // Whether the block allows light to propagate through it
+  bool allow_light_propagation = 7;
+
   // How the client should render the block
   oneof render_info {
     Empty empty = 10;

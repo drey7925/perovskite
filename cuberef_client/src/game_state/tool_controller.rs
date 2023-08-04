@@ -86,7 +86,7 @@ impl ToolController {
         let (pointee, neighbor, block_def) = match self.compute_pointee(client_state, &player_pos) {
             Some(x) => x,
             None => {
-                // Ensure that we don't leave pending input events that fire when we finally do get a pointee                
+                // Ensure that we don't leave pending input events that fire when we finally do get a pointee
                 let mut input = client_state.input.lock();
                 input.take_just_released(BoundAction::Dig);
                 input.take_just_released(BoundAction::Place);
@@ -96,7 +96,6 @@ impl ToolController {
                     pointee: None,
                     neighbor: None,
                     action: None,
-                    
                 };
             }
         };
@@ -115,7 +114,7 @@ impl ToolController {
                     target: pointee,
                     prev: neighbor,
                     item_slot: self.current_slot,
-                    player_pos
+                    player_pos,
                 }));
             }
             self.dig_progress = behavior.map(|behavior| DigState {
@@ -137,7 +136,7 @@ impl ToolController {
                                 target: pointee,
                                 prev: neighbor,
                                 item_slot: self.current_slot,
-                                player_pos
+                                player_pos,
                             }));
                         }
                         0.
@@ -159,7 +158,7 @@ impl ToolController {
                         target: pointee,
                         prev: neighbor,
                         item_slot: self.current_slot,
-                        player_pos
+                        player_pos,
                     }));
                 }
             }
@@ -175,13 +174,13 @@ impl ToolController {
                 target: neighbor.unwrap(),
                 anchor: Some(pointee),
                 item_slot: self.current_slot,
-                player_pos
+                player_pos,
             }))
         } else if input.take_just_pressed(BoundAction::Interact) {
             action = Some(GameAction::InteractKey(super::InteractKeyAction {
                 target: pointee,
                 item_slot: self.current_slot,
-                player_pos
+                player_pos,
             }))
         }
 
@@ -210,16 +209,7 @@ impl ToolController {
         last_pos: &PlayerPositionUpdate,
     ) -> Option<(BlockCoordinate, Option<BlockCoordinate>, &'a BlockTypeDef)> {
         let pos = last_pos.position;
-        let (az, el) = last_pos.face_direction;
-
-        let (sin_az, cos_az) = Deg(az).sin_cos();
-        let (sin_el, cos_el) = Deg(el).sin_cos();
-        let end = pos
-            + (cgmath::vec3(
-                POINTEE_DISTANCE * cos_el * sin_az,
-                POINTEE_DISTANCE * sin_el,
-                POINTEE_DISTANCE * cos_el * cos_az,
-            ));
+        let end = pos + (POINTEE_DISTANCE * last_pos.face_unit_vector());
         let chunks = client_state.chunks.read_lock();
         let mut prev = None;
         for (x, y, z) in WalkVoxels::<f64, i64>::new(

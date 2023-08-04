@@ -677,6 +677,8 @@ fn make_unknown_block_serverside(
             groups: vec![],
             base_dig_time: 1.0,
             wear_multiplier: 0.0,
+            light_emission: 0,
+            allow_light_propagation: false,
         },
         extended_data_handling: ExtDataHandling::ServerSide,
         deserialize_extended_data_handler: Some(Box::new(unknown_block_deserialize_data_passthrough)),

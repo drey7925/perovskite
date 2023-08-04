@@ -6,12 +6,29 @@ use serde::{Deserialize, Serialize};
 
 const SETTINGS_RON_FILE: &str = "settings.ron";
 
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub(crate) struct RenderSettings {
+    pub(crate) experimental_num_mesh_workers: usize,
+}
+
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            experimental_num_mesh_workers: 1,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub(crate) struct GameSettings {
     pub(crate) input: KeybindSettings,
+    pub(crate) render: RenderSettings,
     pub(crate) last_hostname: String,
     pub(crate) last_username: String,
+
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {

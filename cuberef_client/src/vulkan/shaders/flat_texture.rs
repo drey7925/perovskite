@@ -40,7 +40,7 @@ use crate::vulkan::{
     CommandBufferBuilder, Texture2DHolder, VulkanContext,
 };
 
-use super::vert_2d::UniformData;
+use super::{vert_2d::UniformData, frag_simple};
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
@@ -204,7 +204,7 @@ pub(crate) struct FlatTexPipelineProvider {
 impl FlatTexPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<Self> {
         let vs = vert_2d::load_flat_tex(device.clone())?;
-        let fs = frag_lighting::load(device.clone())?;
+        let fs = frag_simple::load(device.clone())?;
         Ok(FlatTexPipelineProvider { device, vs, fs })
     }
 }

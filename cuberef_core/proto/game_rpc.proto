@@ -135,7 +135,6 @@ message StreamToClient {
         // before sending delta updates)
         MapChunkUnsubscribe map_chunk_unsubscribe = 84;
         // An inventory is being updated, and we think the client cares about this inventory.
-        // For now, this is only the player's own main inventory.
         InventoryUpdate inventory_update = 85;
         // Client state needs to be set (either during game startup or because the
         // player is being teleported

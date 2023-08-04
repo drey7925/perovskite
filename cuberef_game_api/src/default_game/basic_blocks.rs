@@ -15,7 +15,7 @@
 use std::sync::atomic::AtomicU32;
 
 use crate::{
-    blocks::BlockBuilder,
+    blocks::{BlockBuilder, CubeAppearanceBuilder},
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
@@ -61,6 +61,7 @@ pub mod ores {
     use rand::Rng;
 
     use crate::{
+        blocks::CubeAppearanceBuilder,
         default_game::recipes::{RecipeImpl, RecipeSlot},
         game_builder::ItemName,
     };
@@ -91,7 +92,8 @@ pub mod ores {
             vec![],
         )?;
         let coal_ore_builder = BlockBuilder::new(COAL_ORE)
-            .set_texture_all(COAL_ORE_TEXTURE)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(COAL_ORE_TEXTURE))
+            .set_inventory_texture(COAL_ORE_TEXTURE)
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2)));
@@ -149,21 +151,22 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
-            .set_texture_all(DIRT_TEXTURE)
+            .set_cube_single_texture(DIRT_TEXTURE)
+            .set_inventory_texture(DIRT_TEXTURE)
             .set_inventory_display_name("Dirt block"),
     )?;
     game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_GRASS)
             .add_block_group(GRANULAR)
-            .set_individual_textures(
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
                 GRASS_TOP_TEXTURE,
                 DIRT_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
-                DIRT_GRASS_SIDE_TEXTURE,
-            )
+            ))
+            .set_inventory_texture(DIRT_GRASS_SIDE_TEXTURE)
             .set_dropped_item(DIRT.0, 1)
             // testonly
             .set_dropped_item_closure(|| {
@@ -181,24 +184,35 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             // TODO: make not-diggable-by-hand after tools are implemented
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
-            .set_texture_all(STONE_TEXTURE)
+            .set_cube_single_texture(STONE_TEXTURE)
+            .set_inventory_texture(STONE_TEXTURE)
             .set_inventory_display_name("Stone block"),
     )?;
     game_builder.add_block(
         BlockBuilder::new(GLASS)
             .add_block_group(BRITTLE)
-            .set_texture_all(GLASS_TEXTURE)
-            .set_needs_transparency()
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(GLASS_TEXTURE)
+                    .set_allow_light_propagation(true)
+                    .set_needs_transparency(),
+            )
+            .set_inventory_texture(GLASS_TEXTURE)
             .set_inventory_display_name("Glass block"),
     )?;
     // TODO: implement actual water
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(BRITTLE)
         .add_item_group("testonly_wet")
-        .set_texture_all(WATER_TEXTURE)
-        .set_inventory_display_name("Water block")
-        .set_needs_translucency();
-    water_builder.physics_info = PhysicsInfo::Fluid(FluidPhysicsInfo {
+        .set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(WATER_TEXTURE)
+                .set_allow_light_propagation(true)
+                .set_needs_translucency(),
+        )
+        .set_inventory_texture(WATER_TEXTURE)
+        .set_inventory_display_name("Water block");
+    water_builder.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
         horizontal_speed: 1.5,
         vertical_speed: -0.5,
         jump_speed: 1.0,
@@ -208,13 +222,14 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         surf_vertical_speed: -0.5,
         surf_jump_speed: 1.0,
         surf_sink_speed: -0.5,
-    });
+    }));
     game_builder.add_block(water_builder)?;
 
     // testonly
     game_builder.add_block(
         BlockBuilder::new(CHEST)
-            .set_texture_all(CHEST_TEXTURE)
+            .set_cube_single_texture(CHEST_TEXTURE)
+            .set_inventory_texture(CHEST_TEXTURE)
             .set_inventory_display_name("Unlocked chest")
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;

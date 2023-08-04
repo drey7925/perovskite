@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cgmath::num_traits::Num;
-use cgmath::{vec3, ElementWise, Matrix3, Matrix4, Vector2, Vector3, Zero};
+use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 
 use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
@@ -44,7 +44,7 @@ use vulkano::memory::allocator::{
 };
 
 use crate::game_state::chunk::ClientChunk;
-use crate::game_state::{make_fallback_blockdef, ChunkManagerView};
+use crate::game_state::{make_fallback_blockdef, ChunkManagerView, ChunkManagerClonedView};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
@@ -302,7 +302,7 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk(
         &self,
-        chunk_data: &ChunkManagerView,
+        chunk_data: &ChunkManagerClonedView,
         current_chunk: &ClientChunk,
     ) -> Result<VkChunkVertexData> {
         Ok(VkChunkVertexData {
@@ -368,7 +368,7 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk_subpass<F, G>(
         &self,
-        chunk_data: &ChunkManagerView,
+        chunk_data: &ChunkManagerClonedView,
         current_chunk: &ClientChunk,
         // closure taking a block and returning whether this subpass should render it
         include_block_when: F,
@@ -414,7 +414,7 @@ impl BlockRenderer {
         &self,
         block: &BlockTypeDef,
         variant: u16,
-        chunk_data: &ChunkManagerView,
+        chunk_data: &ChunkManagerClonedView,
         coord: BlockCoordinate,
         own_ids: &[BlockId; 4096],
         vtx: &mut Vec<CubeGeometryVertex>,
@@ -577,7 +577,7 @@ impl BlockRenderer {
 
     fn get_block_maybe_neighbor(
         &self,
-        all_chunks: &ChunkManagerView,
+        all_chunks: &ChunkManagerClonedView,
         own_ids: &[BlockId; 4096],
         own_chunk: ChunkCoordinate,
         target: BlockCoordinate,
@@ -822,6 +822,7 @@ fn make_cgv(coord: Vector3<f32>, tex_uv: cgmath::Vector2<f32>) -> CubeGeometryVe
         position: [coord.x, coord.y, coord.z],
         uv_texcoord: tex_uv.into(),
         brightness: 1.0,
+        global_brightness_contribution: 0.0,
     }
 }
 

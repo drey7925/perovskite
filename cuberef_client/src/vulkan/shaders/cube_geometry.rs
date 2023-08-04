@@ -63,9 +63,12 @@ pub(crate) struct CubeGeometryVertex {
     // Texture coordinate in tex space (0-1)
     #[format(R32G32_SFLOAT)]
     pub(crate) uv_texcoord: [f32; 2],
-    // TODO design lighting, and add it to the shader
+    // The local brightness (from nearby sources, unchanging as the global lighting varies)
     #[format(R32_SFLOAT)]
     pub(crate) brightness: f32,
+    #[format(R32_SFLOAT)]
+    // How much the global brightness should affect the brightness of this vertex
+    pub(crate) global_brightness_contribution: f32,
 }
 pub(crate) struct CubeGeometryDrawCall {
     pub(crate) models: VkChunkVertexData,
@@ -228,6 +231,8 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
             },
             UniformData {
                 vp_matrix: per_frame_config.into(),
+                // TODO set this
+                global_brightness: 1.0,
             },
         )?;
 
