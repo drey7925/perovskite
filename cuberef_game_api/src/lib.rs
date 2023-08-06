@@ -29,6 +29,8 @@ pub mod game_builder;
 /// Contains utilities for defining items.
 pub mod items;
 
+pub use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
+
 /// Provides a default set of game content centered around exploring a natural
 /// procedurally-generated world, collecting resources through mining, converting
 /// resources to useful materials, building structures out of them, etc.

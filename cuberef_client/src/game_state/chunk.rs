@@ -14,7 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::Deref;
+use std::ops::{Deref, RangeInclusive};
+use std::sync::atomic::AtomicBool;
 
 use cgmath::{ElementWise, Matrix4, Vector3};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
@@ -23,28 +24,93 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
 
-use parking_lot::{RwLock, Mutex, RwLockReadGuard};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
 
 use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
-use super::{ChunkManagerView, ChunkManagerClonedView};
+use super::{ChunkManagerClonedView, ChunkManagerView};
 
-pub(crate) struct BlockIdView<'a>(RwLockReadGuard<'a, Box<[BlockId; 4096]>>);
-impl Deref for BlockIdView<'_> {
-    type Target = [BlockId; 4096];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_slice().try_into().unwrap()
+pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
+impl ChunkDataView<'_> {
+    pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
+        &self.0.block_ids
     }
 
+    pub(crate) fn lightmap(&self) -> &Box<[u8; 18 * 18 * 18]> {
+        &self.0.lightmap
+    }
+    
+    pub(crate) fn get(&self, offset: ChunkOffset) -> BlockId {
+        self.0.block_ids[offset.as_extended_index()]
+    }
 }
 
+pub(crate) struct ChunkDataViewMut<'a>(RwLockWriteGuard<'a, ChunkData>);
+impl ChunkDataViewMut<'_> {
+    pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
+        &self.0.block_ids
+    }
+    pub(crate) fn block_ids_mut(&mut self) -> &mut[BlockId; 18 * 18 * 18] {
+        &mut self.0.block_ids
+    }
+    pub(crate) fn lightmap_mut(&mut self) -> &mut[u8; 18 * 18 * 18] {
+        &mut self.0.lightmap        
+    }
+    pub(crate) fn set_state(&mut self, state: BlockIdState) {
+        self.0.data_state = state;
+    }
+}
+
+pub(crate) enum BlockIdState {
+    /// We don't have this chunk's neighbors yet. It's not ready to render.
+    BlockIdsNeedProcessing,
+    /// We processed the chunk's neighbors, but we don't have anything to render.
+    BlockIdsNoRender,
+
+    /// We expect the chunk to have something to render, and we've prepared its neighbors.
+    BlockIdsReadyToRender,
+    /// We don't expect the chunk to have anything to render, but the renderer should verify this and
+    /// use a bright error texture + log an error message if it renders anything.
+    BlockIdsWithNeighborsAuditNoRender,
+}
+
+/// Holds a cache of data that's used to actually turn a chunk into a mesh
+pub(crate) struct ChunkData {
+    /// Block_ids within this chunk *and* its neighbors.
+    /// Future memory optimization - None if the chunk is all-air
+    pub(crate) block_ids: Box<[BlockId; 18 * 18 * 18]>,
+    /// The calculated lightmap for this chunk + immediate neighbor blocks. The data is encoded as follows:
+    /// Bottom four bits: local lighting
+    /// Top four bits: global lighting
+    /// TODO assess whether to optimize for time or memory
+    /// If None, then this chunk doesn't contain any light
+    ///
+    /// This is stored separate from the block_ids because it might be used for lighting non-chunk meshes, such as
+    /// players, entities, etc. If None, not calculated yet.
+    pub(crate) lightmap: Box<[u8; 18 * 18 * 18]>,
+
+    data_state: BlockIdState,
+}
+
+/// State of a chunk on the client
+///
+/// Data flow and locking are as follows:
+/// * Chunk updates acquire a global write lock on the chunk data for all chunks
+/// * Neighbor propagation (run after chunk updates) acquires a global read lock, a local write lock on the chunk data for the chunk
+///     being processed, and local read locks on neighboring chunks as needed. This is the only layer that needs to take neigbor locks.
+///     * Note that if there are multiple neighbor propagation workers (and hence multiple writers), then this data structure needs to be split up
+///         further, with locks for input and output data. Otherwise, a deadlock would be possible where two workers have write locks and need
+///         read locks on each other's write-locked chunk.
+/// * Mesh generation acquires a local read lock on the chunk data. It doesn't need a recursive lock, and hence multiple mesh generator threads
+///     shouldn't lead to write starvation.
+///
+/// To prevent deadlocks, the lock order is as follows:
+/// * Chunk updates acquire the global chunk lock first
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
-    block_ids: RwLock<Box<[BlockId; 4096]>>,
-    lighting: RwLock<Box<[u8; 4096]>>,
+    chunk_data: RwLock<ChunkData>,
     cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
 }
 impl ClientChunk {
@@ -58,29 +124,40 @@ impl ClientChunk {
             .with_context(|| "chunk_data missing")?
             .chunk_data
             .with_context(|| "inner chunk_data missing")?;
-        let block_ids = match data {
+        let block_ids: &[u32; 4096] = match &data {
             cuberef_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
                 ensure!(v1_data.block_ids.len() == 4096);
-                v1_data
-                    .block_ids
-                    .iter()
-                    .map(|&x| BlockId::from(x))
-                    .collect::<Vec<_>>()
+                v1_data.block_ids.deref().try_into().unwrap()
             }
         };
         Ok(ClientChunk {
             coord,
-            block_ids: RwLock::new(block_ids.try_into().unwrap()),
-            lighting: RwLock::new(Box::new([0; 4096])),
+            chunk_data: RwLock::new(ChunkData {
+                block_ids: Self::expand_ids(block_ids),
+                data_state: BlockIdState::BlockIdsNeedProcessing,
+                lightmap: Box::new([0; 18 * 18 * 18]),
+            }),
             cached_vertex_data: Mutex::new(None),
         })
     }
 
-    pub(crate) fn block_ids(&self) -> BlockIdView<'_> {
-        // Recursive lock acquisition with RwLock::read() can lead to deadlock
-        // This is more writer-unfair but does not have a deadlock risk
-        // The mesh worker will eventually leave this chunk alone and allow a writer to get access
-        BlockIdView(self.block_ids.read_recursive())
+    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<()> {
+        let vertex_data = renderer.mesh_chunk(self.deref())?;
+        *self.cached_vertex_data.lock() = Some(vertex_data);
+        Ok(())
+    }
+
+    fn expand_ids(ids: &[u32; 16 * 16 * 16]) -> Box<[BlockId; 18 * 18 * 18]> {
+        let mut result = Box::new([BlockId::from(u32::MAX); 18 * 18 * 18]);
+        for i in 0..16 {
+            for j in 0..16 {
+                for k in 0..16 {
+                    result[(i + 1) * 18 * 18 + (j + 1) * 18 + (k + 1)] =
+                        BlockId::from(ids[i * 16 * 16 + j * 16 + k]);
+                }
+            }
+        }
+        result
     }
 
     pub(crate) fn update_from(&self, proto: rpc_proto::MapChunk) -> Result<()> {
@@ -94,18 +171,16 @@ impl ClientChunk {
             .with_context(|| "chunk_data missing")?
             .chunk_data
             .with_context(|| "inner chunk_data missing")?;
-        let block_ids = match data {
+        let block_ids: &[u32; 4096] = match &data {
             cuberef_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
                 ensure!(v1_data.block_ids.len() == 4096);
-                v1_data
-                    .block_ids
-                    .iter()
-                    .map(|&x| BlockId::from(x))
-                    .collect::<Vec<_>>()
+                v1_data.block_ids.deref().try_into().unwrap()
             }
         };
         // unwrap is safe: we verified the length
-        *self.block_ids.write() = Box::new(block_ids.try_into().unwrap());
+        let mut data_guard = self.chunk_data.write();
+        data_guard.block_ids = Self::expand_ids(block_ids);
+        data_guard.data_state = BlockIdState::BlockIdsNeedProcessing;
         Ok(())
     }
 
@@ -117,13 +192,14 @@ impl ClientChunk {
             .into();
         ensure!(block_coord.chunk() == self.coord);
 
-        let mut block_ids = self.block_ids.write();
-        let old_id = block_ids[block_coord.offset().as_index()];
+        let mut chunk_data = self.chunk_data.write();
+        let old_id = chunk_data.block_ids[block_coord.offset().as_extended_index()];
         let new_id = BlockId::from(proto.new_id);
         // TODO future optimization: check whether a change in variant actually requires
         // a redraw
         if old_id != new_id {
-            block_ids[block_coord.offset().as_index()] = new_id;
+            chunk_data.data_state = BlockIdState::BlockIdsNeedProcessing;
+            chunk_data.block_ids[block_coord.offset().as_extended_index()] = new_id;
         }
 
         Ok(old_id != new_id)
@@ -154,36 +230,47 @@ impl ClientChunk {
         })
     }
 
-    pub(crate) fn get(&self, offset: ChunkOffset) -> BlockId {
-        self.block_ids.read()[offset.as_index()]
+    pub(crate) fn get_single(&self, offset: ChunkOffset) -> BlockId {
+        self.chunk_data.read().block_ids[offset.as_extended_index()]
     }
 
     pub(crate) fn coord(&self) -> ChunkCoordinate {
         self.coord
     }
+
+    pub(crate) fn chunk_data(&self) -> ChunkDataView<'_> {
+        ChunkDataView(self.chunk_data.read())
+    }
+
+    pub(crate) fn chunk_data_mut(&self) -> ChunkDataViewMut<'_> {
+        ChunkDataViewMut(self.chunk_data.write())
+    }
+
 }
 
-pub(crate) fn maybe_mesh_chunk(
-    chunk_coord: ChunkCoordinate,
-    chunk_data: &ChunkManagerClonedView,
-    cube_renderer: &BlockRenderer,
-) -> Result<()> {
-    if chunk_data.contains_key(&chunk_coord) {
-        mesh_chunk(chunk_coord, chunk_data, cube_renderer)
-    } else {
-        Ok(())
+pub(crate) trait ChunkOffsetExt {
+    fn as_extended_index(&self) -> usize;
+}
+impl ChunkOffsetExt for ChunkOffset {
+    fn as_extended_index(&self) -> usize {
+        (self.z as usize + 1) * 18 * 18 + (self.y as usize + 1) * 18 + (self.x as usize + 1)
     }
 }
-
-pub(crate) fn mesh_chunk(
-    chunk_coord: ChunkCoordinate,
-    chunk_data: &ChunkManagerClonedView,
-    cube_renderer: &BlockRenderer,
-) -> Result<()> {
-    let _span = span!("meshing");
-    if let Some(current_chunk) = chunk_data.get(&chunk_coord) {
-        let vertex_data = cube_renderer.mesh_chunk(chunk_data, current_chunk.deref())?;
-        *current_chunk.cached_vertex_data.lock() = Some(vertex_data);
+impl ChunkOffsetExt for (i32, i32, i32) {
+    fn as_extended_index(&self) -> usize {
+        const VALID_RANGE: RangeInclusive<i32> = -1..=16;
+        assert!(VALID_RANGE.contains(&self.0));
+        assert!(VALID_RANGE.contains(&self.1));
+        assert!(VALID_RANGE.contains(&self.2));
+        ((self.2 + 1) as usize) * 18 * 18 + ((self.1 + 1) as usize) * 18 + ((self.0 + 1) as usize)
     }
-    Ok(())
+}
+impl ChunkOffsetExt for (i8, i8, i8) {
+    fn as_extended_index(&self) -> usize {
+        const VALID_RANGE: RangeInclusive<i8> = -1..=16;
+        assert!(VALID_RANGE.contains(&self.0));
+        assert!(VALID_RANGE.contains(&self.1));
+        assert!(VALID_RANGE.contains(&self.2));
+        ((self.2 + 1) as usize) * 18 * 18 + ((self.1 + 1) as usize) * 18 + ((self.0 + 1) as usize)
+    }
 }

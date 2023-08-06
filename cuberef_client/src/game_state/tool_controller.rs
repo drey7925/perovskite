@@ -103,29 +103,29 @@ impl ToolController {
 
         let mut input = client_state.input.lock();
 
-        if self.dig_progress.as_ref().map_or(true, |x: &DigState| {
-            x.coord != pointee || !x.id.equals_ignore_variant(BlockId(block_def.id))
-        }) {
-            // The pointee changed
-            let behavior = Self::compute_dig_behavior(&self.current_item, block_def);
-            if let Some(DigBehavior::InstantDig(_)) = behavior {
-                // Only do this when the pointee changes
-                action = Some(GameAction::Dig(super::DigTapAction {
-                    target: pointee,
-                    prev: neighbor,
-                    item_slot: self.current_slot,
-                    player_pos,
-                }));
-            }
-            self.dig_progress = behavior.map(|behavior| DigState {
-                progress: 0.,
-                coord: pointee,
-                id: BlockId(block_def.id),
-                item_dig_behavior: Some(behavior),
-                base_durability: block_def.base_dig_time,
-            });
-        } else if input.is_pressed(BoundAction::Dig) {
-            if let Some(dig_progress) = &mut self.dig_progress {
+        if input.is_pressed(BoundAction::Dig) {
+            if self.dig_progress.as_ref().map_or(true, |x: &DigState| {
+                x.coord != pointee || !x.id.equals_ignore_variant(BlockId(block_def.id))
+            }) {
+                // The pointee changed
+                let behavior = Self::compute_dig_behavior(&self.current_item, block_def);
+                if let Some(DigBehavior::InstantDig(_)) = behavior {
+                    // Only do this when the pointee changes
+                    action = Some(GameAction::Dig(super::DigTapAction {
+                        target: pointee,
+                        prev: neighbor,
+                        item_slot: self.current_slot,
+                        player_pos,
+                    }));
+                }
+                self.dig_progress = behavior.map(|behavior| DigState {
+                    progress: 0.,
+                    coord: pointee,
+                    id: BlockId(block_def.id),
+                    item_dig_behavior: Some(behavior),
+                    base_durability: block_def.base_dig_time,
+                });
+            } else if let Some(dig_progress) = &mut self.dig_progress {
                 // The pointee is the same, update dig progress
                 let delta_progress = match dig_progress.item_dig_behavior {
                     None => 0.,
@@ -162,7 +162,11 @@ impl ToolController {
                     }));
                 }
             }
-        } else if input.take_just_released(BoundAction::Dig) {
+        } else {
+            self.dig_progress = None;
+        }
+        
+        if input.take_just_released(BoundAction::Dig) {
             action = Some(GameAction::Tap(super::DigTapAction {
                 target: pointee,
                 prev: neighbor,
@@ -224,7 +228,7 @@ impl ToolController {
             };
             let chunk = chunks.get(&coord.chunk());
             if let Some(chunk) = chunk {
-                let id = chunk.get(coord.offset());
+                let id = chunk.get_single(coord.offset());
                 let block_def = client_state
                     .block_types
                     .get_blockdef(id)

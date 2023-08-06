@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::game_state::{chunk::mesh_chunk, items::ClientInventory, ClientState, GameAction};
+use crate::game_state::{items::ClientInventory, ClientState, GameAction};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
 
-use super::mesh_worker::MeshWorker;
+use super::mesh_worker::{MeshWorker, propagate_neighbor_data};
 
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
@@ -37,7 +37,7 @@ pub(crate) async fn make_contexts(
     for _ in 0..client_state.settings.load().render.experimental_num_mesh_workers {
         mesh_workers.push(Arc::new(MeshWorker {
             client_state: client_state.clone(),
-            queue: Mutex::new(HashSet::new()),
+            queue: Mutex::new(FxHashSet::default()),
             cond: Condvar::new(),
             shutdown: cancellation.clone(),
         }));
@@ -539,12 +539,17 @@ impl InboundContext {
         drop(chunk_manager_read_lock);
         {
             let _span = span!("remesh for delta");
-            for chunk in needs_remesh {
-                mesh_chunk(
-                    chunk,
-                    &self.client_state.chunks.cloned_neighbors(chunk),
-                    &self.client_state.block_renderer,
-                )?;
+            let mut scratchpad = Box::new([0; 48 * 48 * 48]);
+            for coord in needs_remesh {
+                // todo this needs neighbor propagation
+                self.enqueue_for_meshing(coord);
+                // This is prone to deadlock
+                // let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
+                // propagate_neighbor_data(&self.client_state.block_types, &neighbors, &mut scratchpad)?;
+                // if let Some(chunk) = neighbors.get((0, 0, 0)) {
+                //     chunk.mesh_with(&self.client_state.block_renderer)?;
+                // }
+
             }
         }
         Ok((missing_coord, unknown_coords))

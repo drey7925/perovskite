@@ -14,7 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::{Deref};
+use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -31,11 +32,12 @@ use tokio::sync::mpsc;
 use tracy_client::span;
 use winit::event::Event;
 
-use crate::block_renderer::{BlockRenderer, ClientBlockTypeManager, fallback_texture};
+use crate::block_renderer::{fallback_texture, BlockRenderer, ClientBlockTypeManager};
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
+use self::chunk::ChunkDataView;
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::settings::GameSettings;
@@ -171,19 +173,31 @@ impl ChunkManager {
                 }
             }
         }
-        ChunkManagerClonedView {
-            data,
+        ChunkManagerClonedView { data }
+    }
+
+    pub(crate) fn cloned_neighbors_fast(&self, chunk: ChunkCoordinate) -> FastChunkNeighbors {
+        let lock = self.chunks.read();
+        let mut data =
+            std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for k in -1..=1 {
+                    if let Some(delta) = chunk.try_delta(i, j, k) {
+                        data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
+                            lock.get(&delta).cloned();
+                    }
+                }
+            }
         }
+        FastChunkNeighbors { data }
     }
 }
 pub(crate) struct ChunkManagerView<'a> {
     guard: RwLockReadGuard<'a, ChunkMap>,
 }
 impl<'a> ChunkManagerView<'a> {
-    pub(crate) fn get(
-        &'a self,
-        coord: &ChunkCoordinate,
-    ) -> Option<&'a Arc<ClientChunk>> {
+    pub(crate) fn get(&'a self, coord: &ChunkCoordinate) -> Option<&'a Arc<ClientChunk>> {
         self.guard.get(coord)
     }
     pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
@@ -191,14 +205,52 @@ impl<'a> ChunkManagerView<'a> {
     }
 }
 
+pub(crate) struct FastNeighborLockCache<'a> {
+    backing: PhantomData<&'a FastChunkNeighbors>,
+    data: [[[Option<ChunkDataView<'a>>; 3]; 3]; 3],
+}
+impl FastNeighborLockCache<'_> {
+    pub(crate) fn new(backing: &FastChunkNeighbors) -> FastNeighborLockCache {
+        let mut data =
+            std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for k in -1..=1 {
+                    if i != 0 || j != 0 || k != 0 {
+                        if let Some(chunk) = backing.get((i, j, k)) {
+                            data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] = Some(chunk.chunk_data());
+                        }
+                    }
+                }
+            }
+        }
+        FastNeighborLockCache { backing: PhantomData, data }
+    }
+
+    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&ChunkDataView> {
+        self.data[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize][(coord_xyz.0 + 1) as usize].as_ref()
+    }
+}
+
+pub(crate) struct FastChunkNeighbors {
+    data: [[[Option<Arc<ClientChunk>>; 3]; 3]; 3],
+}
+impl FastChunkNeighbors {
+    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&Arc<ClientChunk>> {
+        assert!((-1..=1).contains(&coord_xyz.0));
+        assert!((-1..=1).contains(&coord_xyz.1));
+        assert!((-1..=1).contains(&coord_xyz.2));
+        self.data[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
+            [(coord_xyz.0 + 1) as usize]
+            .as_ref()
+    }
+}
+
 pub(crate) struct ChunkManagerClonedView {
     data: ChunkMap,
 }
 impl ChunkManagerClonedView {
-    pub(crate) fn get(
-        &self,
-        coord: &ChunkCoordinate,
-    ) -> Option<&Arc<ClientChunk>> {
+    pub(crate) fn get(&self, coord: &ChunkCoordinate) -> Option<&Arc<ClientChunk>> {
         self.data.get(coord)
     }
 }
@@ -307,7 +359,9 @@ impl ClientState {
         // TODO figure out why this is needed
         let coordinate_correction = cgmath::Matrix4::from_nonuniform_scale(-1., 1., 1.);
         let projection = cgmath::perspective(Deg(45.0), aspect_ratio, 0.01, 1000.);
-        let view_proj_matrix = (projection * coordinate_correction * rotation).cast().unwrap();
+        let view_proj_matrix = (projection * coordinate_correction * rotation)
+            .cast()
+            .unwrap();
 
         let mut tool_state = self.tool_controller.lock().update(self, delta);
         if let Some(action) = tool_state.action.take() {

@@ -62,8 +62,12 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
     });
     BlockBuilder::new(MAPLE_LEAVES)
         .add_block_group(FIBROUS)
-        .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(MAPLE_LEAVES_TEX)
-        .set_needs_transparency())
+        .set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(MAPLE_LEAVES_TEX)
+                .set_needs_transparency()
+                .set_allow_light_propagation(true),
+        )
         .set_inventory_texture(MAPLE_LEAVES_TEX)
         .build_and_deploy_into(builder.game_builder())?;
     Ok(())

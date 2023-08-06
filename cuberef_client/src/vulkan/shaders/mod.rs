@@ -82,7 +82,7 @@ pub(crate) mod frag_lighting {
 
     void main() {
         vec4 color = texture(tex, uv_texcoord);
-        f_color = vec4(brightness * color.x, brightness * color.y, brightness * color.z, 1.0);
+        f_color = vec4(brightness * color.r, brightness * color.g, brightness * color.b, color.a);
     }
     "
     }

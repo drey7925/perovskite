@@ -420,10 +420,11 @@ impl CubeAppearanceBuilder {
 
     
     /// Sets the light emission of this block, causing it to glow and illuminate other blocks.
-    /// The meaningful range of light emission is 0-16.
+    /// The meaningful range of light emission is 0-15.
     ///
-    /// Moving one block causes light emission to fall off by one.
+    /// Moving one block causes light to fall off by one.
     pub fn set_light_emission(mut self, light_emission: u32) -> Self {
+        assert!(light_emission < 16);
         self.light_emission = light_emission;
         self
     }

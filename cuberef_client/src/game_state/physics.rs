@@ -550,7 +550,7 @@ fn get_block<'a>(
 ) -> Option<&'a BlockTypeDef> {
     chunks
         .get(&coord.chunk())
-        .and_then(|chunk| block_types.get_blockdef(chunk.get(coord.offset())))
+        .and_then(|chunk| block_types.get_blockdef(chunk.get_single(coord.offset())))
 }
 
 #[inline]
