@@ -148,7 +148,7 @@ impl ClientChunk {
     }
 
     fn expand_ids(ids: &[u32; 16 * 16 * 16]) -> Box<[BlockId; 18 * 18 * 18]> {
-        let mut result = Box::new([BlockId::from(u32::MAX); 18 * 18 * 18]);
+        let mut result = Box::new([BlockId(u32::MAX); 18 * 18 * 18]);
         for i in 0..16 {
             for j in 0..16 {
                 for k in 0..16 {

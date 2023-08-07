@@ -1,32 +1,73 @@
-use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
+use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
 
 use anyhow::Result;
 use cgmath::InnerSpace;
-use cuberef_core::{
-    block_id::BlockId,
-    coordinates::{ChunkCoordinate, ChunkOffset},
-};
-use parking_lot::{Condvar, Mutex};
+use cuberef_core::coordinates::{ChunkCoordinate, ChunkOffset};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
 use crate::{
-    block_renderer::{BlockRenderer, ClientBlockTypeManager},
-    game_state::{
-        chunk::{self, ChunkOffsetExt, ClientChunk},
-        ChunkManagerClonedView, ClientState, FastChunkNeighbors, FastNeighborLockCache,
-    },
+    block_renderer::ClientBlockTypeManager,
+    game_state::{chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors, FastNeighborLockCache},
 };
 
 // Responsible for reconciling a chunk with data from other nearby chunks (e.g. lighting, neighbor calculations)
 pub(crate) struct NeighborPropagator {
-    pub(crate) client_state: Arc<ClientState>,
-    pub(crate) queue: Mutex<FxHashSet<ChunkCoordinate>>,
-    pub(crate) cond: Condvar,
-    pub(crate) shutdown: CancellationToken,
+    client_state: Arc<ClientState>,
+    queue: Mutex<FxHashSet<ChunkCoordinate>>,
+    queue_len: AtomicUsize,
+    token: Mutex<()>,
+    cond: Condvar,
+    shutdown: CancellationToken,
+    mesh_workers: Vec<Arc<MeshWorker>>,
 }
 impl NeighborPropagator {
+    pub(crate) fn new(client_state: Arc<ClientState>, mesh_workers: Vec<Arc<MeshWorker>>) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+        let worker = Arc::new(Self {
+            client_state,
+            queue: Mutex::new(FxHashSet::default()),
+            queue_len: AtomicUsize::new(0),
+            token: Mutex::new(()),
+            cond: Condvar::new(),
+            shutdown: CancellationToken::new(),
+            mesh_workers
+        });
+        let handle = {
+            let worker_clone = worker.clone();
+            tokio::task::spawn_blocking(move || {
+                worker_clone.run_neighbor_propagator()
+            })
+        };
+        (worker, handle)
+    }
+
+    /// Estimates how many tasks are left in the queue. This is a rough estimate suitable
+    /// for flow control, but may be stale or approximate.
+    pub(crate) fn queue_len(&self) -> usize {
+        self.queue_len.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn enqueue(&self, coord: ChunkCoordinate) {
+        self.queue.lock().insert(coord);
+        self.cond.notify_one();
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.shutdown.cancel();
+        self.cond.notify_one();
+    }
+
+    /// Pauses this neighbor propagator and borrows its token. Once the token is dropped,
+    /// this neighbor propagator will resume.
+    /// This can be used to preempt the neighbor propagator thread's work to allow a higher-priority
+    /// neighbor propagation to run inline in a message handler.
+    pub(crate) fn borrow_token<'a>(&'a self) -> NeighborPropagationToken<'a> {
+        let _span = span!("mesh_worker borrow_token");
+        NeighborPropagationToken(self.token.lock())
+    }
+
     pub(crate) fn run_neighbor_propagator(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_neighbor_propagator");
         let mut scratchpad = Box::new([0u8; 48 * 48 * 48]);
@@ -52,6 +93,7 @@ impl NeighborPropagator {
                 let mut chunks: Vec<_> = lock.iter().copied().collect();
 
                 plot!("nprop_queue_length", chunks.len() as f64);
+                self.queue_len.store(chunks.len(), Ordering::Relaxed);
 
                 // Prioritize the closest chunks
                 chunks.sort_by_key(|x| {
@@ -69,12 +111,16 @@ impl NeighborPropagator {
             };
             {
                 let _span = span!("nprop_work");
+                let mut token = NeighborPropagationToken(self.token.lock());
                 for coord in chunks {
                     propagate_neighbor_data(
                         &self.client_state.block_types,
                         &self.client_state.chunks.cloned_neighbors_fast(coord),
                         &mut scratchpad,
+                        &mut token
                     )?;
+                    let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
+                    self.mesh_workers[index as usize].enqueue(coord);
                 }
             }
         }
@@ -82,16 +128,53 @@ impl NeighborPropagator {
     }
 }
 
+/// An opaque token allowing the neighbor propagation algorithm to run.
+/// It's used to ensure that two threads don't attempt neighbor propagation at the same time,
+/// which could lead to deadlocks.
+pub(crate) struct NeighborPropagationToken<'a>(MutexGuard<'a, ()>);
+
 // Responsible for turning a single chunk into a mesh
 pub(crate) struct MeshWorker {
-    pub(crate) client_state: Arc<ClientState>,
-    pub(crate) queue: Mutex<FxHashSet<ChunkCoordinate>>,
-    pub(crate) cond: Condvar,
-    pub(crate) shutdown: CancellationToken,
+    client_state: Arc<ClientState>,
+    queue: Mutex<FxHashSet<ChunkCoordinate>>,
+    queue_len: AtomicUsize,
+    cond: Condvar,
+    shutdown: CancellationToken,
+    // There is no run token, because these workers can be run in parallel
 }
 impl MeshWorker {
+    pub(crate) fn new(client_state: Arc<ClientState>) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+        let worker = Arc::new(Self {
+            client_state,
+            queue: Mutex::new(FxHashSet::default()),
+            queue_len: AtomicUsize::new(0),
+            cond: Condvar::new(),
+            shutdown: CancellationToken::new(),
+        });
+        let handle = {
+            let worker_clone = worker.clone();
+            tokio::task::spawn_blocking(move || {
+                worker_clone.run_mesh_worker()
+            })
+        };
+        (worker, handle)
+    }
+
+    pub(crate) fn enqueue(&self, coord: ChunkCoordinate) {
+        self.queue.lock().insert(coord);
+        self.cond.notify_one();
+    }
+
+    pub(crate) fn queue_len(&self) -> usize {
+        self.queue_len.load(Ordering::Relaxed)
+    }
+    
+    pub(crate) fn cancel(&self) {
+        self.shutdown.cancel();
+        self.cond.notify_one();
+    }
+
     pub(crate) fn run_mesh_worker(self: Arc<Self>) -> Result<()> {
-        let mut scratchpad = Box::new([0u8; 48 * 48 * 48]);
         tracy_client::set_thread_name!("async_mesh_worker");
         while !self.shutdown.is_cancelled() {
             let chunks = {
@@ -111,7 +194,8 @@ impl MeshWorker {
 
                 let _span = span!("mesh_worker sort");
                 let mut chunks: Vec<_> = lock.iter().copied().collect();
-
+                // This doesn't have any hard atomicity guarantees
+                self.queue_len.store(chunks.len(), Ordering::Relaxed);
                 plot!("mesh_queue_length", chunks.len() as f64);
 
                 // Prioritize the closest chunks
@@ -121,7 +205,7 @@ impl MeshWorker {
                         cgmath::vec3(center.x as f64, center.y as f64, center.z as f64) - pos;
                     offset.magnitude2() as u64
                 });
-                chunks.shrink_to(MESH_BATCH_SIZE);
+                chunks.shrink_to(NPROP_BATCH_SIZE);
                 for coord in chunks.iter() {
                     assert!(lock.remove(coord), "Task should have been in the queue");
                 }
@@ -132,11 +216,6 @@ impl MeshWorker {
                 let _span = span!("mesh_worker work");
                 for coord in chunks {
                     let neighbors = &self.client_state.chunks.cloned_neighbors_fast(coord);
-                    propagate_neighbor_data(
-                        &self.client_state.block_types,
-                        neighbors,
-                        &mut scratchpad,
-                    )?;
                     if let Some(chunk) = neighbors.get((0, 0, 0)) {
                         chunk.mesh_with(&self.client_state.block_renderer)?;
                     }
@@ -147,11 +226,13 @@ impl MeshWorker {
     }
 }
 const MESH_BATCH_SIZE: usize = 16;
+const NPROP_BATCH_SIZE: usize = 16;
 
 pub(crate) fn propagate_neighbor_data(
     block_manager: &ClientBlockTypeManager,
     neighbors: &FastChunkNeighbors,
     scratchpad: &mut [u8; 48 * 48 * 48],
+    token: &mut NeighborPropagationToken
 ) -> Result<()> {
     let neighbor_cache = FastNeighborLockCache::new(neighbors);
     if let Some(current_chunk) = neighbors.get((0, 0, 0)) {
@@ -164,51 +245,51 @@ pub(crate) fn propagate_neighbor_data(
 
             let own_view = current_chunk.chunk_data();
 
-            let mut queue = vec![];
             // First, scan through the neighborhood looking for light sources
-            for i in -16i32..32 {
-                for j in -16i32..32 {
-                    for k in -16i32..32 {
-                        // Check if we have lighting for this block
-                        let light_level =
-                            if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k)
-                            {
-                                block_manager.light_emission(own_view.get(ChunkOffset { x: i as u8, y: j as u8, z: k as u8 }))
-                            } else {
-                                neighbor_cache
-                                    .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
-                                    .map(|x| {
-                                        block_manager.light_emission(x.get(ChunkOffset {
-                                            x: i.rem_euclid(16) as u8,
-                                            y: j.rem_euclid(16) as u8,
-                                            z: k.rem_euclid(16) as u8,
-                                        }))
-                                    })
-                                    .unwrap_or(0)
-                            };
-                        if light_level > 0 {
-                            // We have some light. Check if it could possibly reach our own block
-                            queue.push((i, j, k, light_level));
-
-                            if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k)
-                            {
-                                // temporary
-                                println!("lighting!");
-                                for p in -3..=3 {
-                                    for q in -3..=3 {
-                                        for r in -3..=3 {
-                                            scratchpad[(i + p + 16) as usize * 48 * 48
-                                                + (j + q + 16) as usize * 48
-                                                + (k + r + 16) as usize] = light_level;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            cuberef_core::lighting::do_lighting_pass(
+                scratchpad,
+                |i, j, k| {
+                    if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
+                        block_manager.light_emission(own_view.get(ChunkOffset {
+                            x: i as u8,
+                            y: j as u8,
+                            z: k as u8,
+                        }))
+                    } else {
+                        neighbor_cache
+                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
+                            .map(|x| {
+                                block_manager.light_emission(x.get(ChunkOffset {
+                                    x: i.rem_euclid(16) as u8,
+                                    y: j.rem_euclid(16) as u8,
+                                    z: k.rem_euclid(16) as u8,
+                                }))
+                            })
+                            .unwrap_or(0)
                     }
-                }
-            }
-            // Then, 
+                },
+                |i, j, k| {
+                    if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
+                        block_manager.propagates_light(own_view.get(ChunkOffset {
+                            x: i as u8,
+                            y: j as u8,
+                            z: k as u8,
+                        }))
+                    } else {
+                        neighbor_cache
+                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
+                            .map(|x| {
+                                block_manager.propagates_light(x.get(ChunkOffset {
+                                    x: i.rem_euclid(16) as u8,
+                                    y: j.rem_euclid(16) as u8,
+                                    z: k.rem_euclid(16) as u8,
+                                }))
+                            })
+                            // empty chunks propagate light
+                            .unwrap_or(true)
+                    }
+                },
+            );
 
             // We can't have this write-lock until after we've finished propagating light
             // We do want to keep the lock, so we return it from the scope.
@@ -237,7 +318,7 @@ pub(crate) fn propagate_neighbor_data(
                         if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
                             // This isn't a neighbor, and we don't need to fill it in.
                             // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
-                            // get the necessary lock because buf already has a write lock.
+                            // get the read lock because buf already has a write lock.
                             continue;
                         }
                         let neighbor = neighbor_cache
@@ -254,6 +335,7 @@ pub(crate) fn propagate_neighbor_data(
                     }
                 }
             }
+            chunk_data.set_state(crate::game_state::chunk::BlockIdState::BlockIdsReadyToRender);
         }
     }
     Ok(())

@@ -286,6 +286,8 @@ pub(crate) struct ClientState {
 
     pub(crate) pending_error: Mutex<Option<String>>,
     pub(crate) wants_exit_from_game: Mutex<bool>,
+    // This is a leaf mutex - consider using some sort of atomic instead
+    pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>
 }
 impl ClientState {
     pub(crate) fn new(
@@ -314,6 +316,11 @@ impl ClientState {
             egui: Arc::new(Mutex::new(egui)),
             pending_error: Mutex::new(None),
             wants_exit_from_game: Mutex::new(false),
+            last_position_weak: Mutex::new(PlayerPositionUpdate {
+                position: cgmath::Vector3::zero(),
+                velocity: cgmath::Vector3::zero(),
+                face_direction: (0.0, 0.0),
+            }),
         }
     }
 
@@ -330,6 +337,14 @@ impl ClientState {
             face_direction: lock.angle(),
         }
     }
+
+    /// Returns the player's last position without requiring any locks 
+    /// This may be a frame behind
+    pub(crate) fn weakly_ordered_last_position(&self) -> PlayerPositionUpdate {
+        let lock = self.physics_state.lock();
+        *self.last_position_weak.lock()
+    }
+
     pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
         {
             let mut input = self.input.lock();
@@ -370,6 +385,12 @@ impl ClientState {
                 Err(e) => warn!("Failure sending action: {e:?}"),
             }
         }
+
+        *self.last_position_weak.lock() = PlayerPositionUpdate {
+            position: player_position,
+            velocity: cgmath::Vector3::zero(),
+            face_direction: (az, el),
+        };
 
         FrameState {
             view_proj_matrix,

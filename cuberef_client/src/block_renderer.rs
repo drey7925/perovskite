@@ -167,6 +167,7 @@ impl ClientBlockTypeManager {
         if id.index() < self.light_propagators.len() {
             self.light_propagators[id.index()]
         } else {
+            // unknown blocks don't propagate light
             false
         }
     }

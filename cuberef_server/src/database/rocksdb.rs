@@ -17,7 +17,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rocksdb::{Options, DB};
+use rocksdb::{Options, DB, ReadOptions};
 use tracy_client::span;
 
 use super::database_engine::GameDatabase;
@@ -51,6 +51,13 @@ impl GameDatabase for RocksDbBackend {
     fn get(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
         let _span = span!("db get");
         self.db.get(key).with_context(|| "RocksDB get failed")
+    }
+
+    fn get_nontemporal(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let _span = span!("db get nontemporal");
+        let mut opts = ReadOptions::default();
+        opts.fill_cache(false);
+        self.db.get_opt(key, &opts).with_context(|| "RocksDB get failed")
     }
 
     fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {

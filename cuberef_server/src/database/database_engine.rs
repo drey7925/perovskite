@@ -67,6 +67,12 @@ pub(crate) enum StoreDurability {
 
 pub(crate) trait GameDatabase: Send + Sync {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    /// Same as get, but does not keep the value cached in memory.
+    /// 
+    /// Default impl will just call get
+    fn get_nontemporal(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.get(key)
+    }
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
     fn flush(&self) -> Result<()>;
 }

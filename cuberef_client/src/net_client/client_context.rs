@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
 
-use super::mesh_worker::{MeshWorker, propagate_neighbor_data};
+use super::mesh_worker::{MeshWorker, NeighborPropagator, propagate_neighbor_data};
 
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
@@ -34,14 +34,21 @@ pub(crate) async fn make_contexts(
 
     let ack_map = Arc::new(Mutex::new(HashMap::new()));
     let mut mesh_workers = vec![];
-    for _ in 0..client_state.settings.load().render.experimental_num_mesh_workers {
-        mesh_workers.push(Arc::new(MeshWorker {
-            client_state: client_state.clone(),
-            queue: Mutex::new(FxHashSet::default()),
-            cond: Condvar::new(),
-            shutdown: cancellation.clone(),
-        }));
+    let mesh_worker_handles = futures::stream::FuturesUnordered::new();
+    for _ in 0..client_state
+        .settings
+        .load()
+        .render
+        .experimental_num_mesh_workers
+    {
+        let (worker, handle) = MeshWorker::new(client_state.clone());
+        mesh_workers.push(worker);
+        mesh_worker_handles.push(handle);
     }
+
+    let (neighbor_propagator, neighbor_propagator_handle) =
+        NeighborPropagator::new(client_state.clone(), mesh_workers.clone());
+
     let inbound = InboundContext {
         outbound_tx: tx_send.clone(),
         inbound_rx: stream,
@@ -49,6 +56,9 @@ pub(crate) async fn make_contexts(
         cancellation: cancellation.clone(),
         ack_map: ack_map.clone(),
         mesh_workers: mesh_workers.clone(),
+        mesh_worker_handles,
+        neighbor_propagator,
+        neighbor_propagator_handle,
     };
 
     let outbound = OutboundContext {
@@ -122,7 +132,7 @@ impl OutboundContext {
         let pending_chunks = self
             .mesh_workers
             .iter()
-            .map(|worker| worker.queue.lock().len())
+            .map(|worker| worker.queue_len() * 0)
             .sum::<usize>()
             .try_into()
             .unwrap();
@@ -256,15 +266,12 @@ pub(crate) struct InboundContext {
 
     ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
     mesh_workers: Vec<Arc<MeshWorker>>,
+    mesh_worker_handles: futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
+    neighbor_propagator: Arc<NeighborPropagator>,
+    neighbor_propagator_handle: tokio::task::JoinHandle<Result<()>>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
-        let mut mesh_worker_handles = futures::stream::FuturesUnordered::new();
-        for worker in self.mesh_workers.iter() {
-            let worker = worker.clone();
-            let future = spawn_blocking(move || worker.run_mesh_worker());
-            mesh_worker_handles.push(future);
-        }
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -293,7 +300,7 @@ impl InboundContext {
                     log::info!("Inbound stream context detected cancellation and shutting down")
                     // pass
                 },
-                result = &mut mesh_worker_handles.next() => {
+                result = &mut self.mesh_worker_handles.next() => {
                     match &result {
                         Some(Err(e)) => {
                             log::error!("Error awaiting mesh worker: {e:?}");
@@ -310,13 +317,28 @@ impl InboundContext {
                     }
                     return result.unwrap()?;
                 }
+                result = &mut self.neighbor_propagator_handle => {
+                    match &result {
+                        Err(e) => {
+                            log::error!("Error awaiting neighbor propagation worker: {e:?}");
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Neighbor propagation worker crashed: {e:?}");
+                        }
+                        Ok(_) => {
+                            log::info!("Neighbor propagation worker exiting");
+                        }
+                    }
+                    return result?;
+                }
             };
         }
         log::warn!("Exiting inbound loop");
         // Notify the mesh worker so it can exit soon
         for worker in self.mesh_workers.iter() {
-            worker.cond.notify_all();
+            worker.cancel();
         }
+        self.neighbor_propagator.cancel();
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
@@ -354,10 +376,7 @@ impl InboundContext {
     }
 
     fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
-        let shard = (coord.hash_u64() % self.mesh_workers.len() as u64) as usize; 
-        let mut lock = self.mesh_workers[shard].queue.lock();
-        lock.insert(coord);
-        self.mesh_workers[shard].cond.notify_one();
+        self.neighbor_propagator.enqueue(coord);
     }
 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
@@ -540,16 +559,14 @@ impl InboundContext {
         {
             let _span = span!("remesh for delta");
             let mut scratchpad = Box::new([0; 48 * 48 * 48]);
+            let mut token = self.neighbor_propagator.borrow_token();
             for coord in needs_remesh {
                 // todo this needs neighbor propagation
-                self.enqueue_for_meshing(coord);
-                // This is prone to deadlock
-                // let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
-                // propagate_neighbor_data(&self.client_state.block_types, &neighbors, &mut scratchpad)?;
-                // if let Some(chunk) = neighbors.get((0, 0, 0)) {
-                //     chunk.mesh_with(&self.client_state.block_renderer)?;
-                // }
-
+                let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
+                propagate_neighbor_data(&self.client_state.block_types, &neighbors, &mut scratchpad, &mut token)?;
+                if let Some(chunk) = neighbors.get((0, 0, 0)) {
+                    chunk.mesh_with(&self.client_state.block_renderer)?;
+                }
             }
         }
         Ok((missing_coord, unknown_coords))
