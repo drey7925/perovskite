@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::game_state::{items::ClientInventory, ClientState, GameAction};
+use crate::game_state::{items::ClientInventory, ClientState, FastNeighborLockCache, GameAction};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
 
-use super::mesh_worker::{MeshWorker, NeighborPropagator, propagate_neighbor_data};
+use super::mesh_worker::{propagate_neighbor_data, MeshWorker, NeighborPropagator};
 
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
@@ -563,7 +563,12 @@ impl InboundContext {
             for coord in needs_remesh {
                 // todo this needs neighbor propagation
                 let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
-                propagate_neighbor_data(&self.client_state.block_types, &neighbors, &mut scratchpad, &mut token)?;
+                propagate_neighbor_data(
+                    &self.client_state.block_types,
+                    &neighbors,
+                    &mut scratchpad,
+                    &mut token,
+                )?;
                 if let Some(chunk) = neighbors.get((0, 0, 0)) {
                     chunk.mesh_with(&self.client_state.block_renderer)?;
                 }

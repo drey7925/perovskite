@@ -71,6 +71,7 @@ pub(crate) struct ClientBlockTypeManager {
     air_block: BlockId,
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
+    solid_opaque_blocks: bv::BitVec,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(
@@ -87,6 +88,9 @@ impl ClientBlockTypeManager {
 
         let mut light_propagators = bv::BitVec::new();
         light_propagators.resize(BlockId(max_id).index() + 1, false);
+
+        let mut solid_opaque_blocks = bv::BitVec::new();
+        solid_opaque_blocks.resize(BlockId(max_id).index() + 1, false);
 
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
@@ -112,6 +116,11 @@ impl ClientBlockTypeManager {
             } else {
                 def.light_emission as u8
             };
+            if let Some(RenderInfo::Cube(render_info)) = &def.render_info {
+                if render_info.render_mode() == CubeRenderMode::SolidOpaque {
+                    solid_opaque_blocks.set(id.index(), true);
+                }
+            }
             light_emitters[id.index()] = light_emission;
             block_defs[id.index()] = Some(def);
         }
@@ -125,6 +134,7 @@ impl ClientBlockTypeManager {
             air_block,
             light_propagators,
             light_emitters,
+            solid_opaque_blocks,
         })
     }
 
@@ -177,6 +187,15 @@ impl ClientBlockTypeManager {
             self.light_emitters[id.index()]
         } else {
             0
+        }
+    }
+
+    pub(crate) fn is_solid_opaque(&self, id: BlockId) -> bool {
+        if id.index() < self.solid_opaque_blocks.len() {
+            self.solid_opaque_blocks[id.index()]
+        } else {
+            // unknown blocks are solid opaque
+            true
         }
     }
 }
@@ -372,11 +391,11 @@ impl BlockRenderer {
         &self.allocator
     }
 
-    pub(crate) fn mesh_chunk(&self, current_chunk: &ClientChunk) -> Result<VkChunkVertexData> {
+    pub(crate) fn mesh_chunk(&self, chunk_data: &ChunkDataView) -> Result<VkChunkVertexData> {
         let _span = span!("meshing");
         Ok(VkChunkVertexData {
             solid_opaque: self.mesh_chunk_subpass(
-                current_chunk,
+                chunk_data,
                 |block| match block.render_info {
                     Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
                         x == CubeRenderMode::SolidOpaque.into()
@@ -393,7 +412,7 @@ impl BlockRenderer {
                 },
             )?,
             transparent: self.mesh_chunk_subpass(
-                current_chunk,
+                chunk_data,
                 |block| match block.render_info {
                     Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
                         x == CubeRenderMode::Transparent.into()
@@ -407,7 +426,7 @@ impl BlockRenderer {
                 },
             )?,
             translucent: self.mesh_chunk_subpass(
-                current_chunk,
+                chunk_data,
                 |block| match block.render_info {
                     Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
                         x == CubeRenderMode::Translucent.into()
@@ -434,7 +453,7 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk_subpass<F, G>(
         &self,
-        current_chunk: &ClientChunk,
+        chunk_data: &ChunkDataView,
         // closure taking a block and returning whether this subpass should render it
         include_block_when: F,
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
@@ -447,7 +466,6 @@ impl BlockRenderer {
         let _span = span!("mesh subpass");
         let mut vtx = Vec::new();
         let mut idx = Vec::new();
-        let chunk_data = current_chunk.chunk_data();
         for x in 0..16 {
             for y in 0..16 {
                 for z in 0..16 {

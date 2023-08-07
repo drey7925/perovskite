@@ -50,14 +50,23 @@ pub fn do_lighting_pass<F, G>(
 
     let mut queue = vec![];
     // First, scan through the neighborhood looking for light sources
-    for i in -16i32..32 {
+    // Indices are reversed in order to achieve better cache locality
+    // i is the minor index, j is intermediate, and k is the major index
+    for k in -16i32..32 {
         for j in -16i32..32 {
-            for k in -16i32..32 {
+            let mut light_levels = [0; 48];
+            for i in 0i32..48 {
                 // Check if we have lighting for this block
-                let light_level = light_emission(i, j, k);
-                if light_level > 0 {
+                // Even with inlining, there's a *lot* of CPU time attributed to this
+                // Let's load all sixteen into memory and then compare them
+                
+                light_levels[i as usize] = light_emission(i - 16, j, k);
+                
+            }
+            for i in 0..48 {
+                if light_levels[i as usize] > 0 {
                     // We have some light. Check if it could possibly reach our own block
-                    maybe_push(&mut queue, i, j, k, light_level);
+                    maybe_push(&mut queue, i - 16, j, k, light_levels[i as usize]);
                 }
             }
         }

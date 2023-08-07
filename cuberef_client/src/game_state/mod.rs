@@ -24,6 +24,7 @@ use cgmath::{Deg, Zero};
 use cuberef_core::constants::block_groups::DEFAULT_SOLID;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
+use cuberef_core::block_id::BlockId;
 use cuberef_core::protocol;
 use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
@@ -207,28 +208,72 @@ impl<'a> ChunkManagerView<'a> {
 
 pub(crate) struct FastNeighborLockCache<'a> {
     backing: PhantomData<&'a FastChunkNeighbors>,
-    data: [[[Option<ChunkDataView<'a>>; 3]; 3]; 3],
+    // does NOT contain (0,0,0)
+    neighbors: [[[Option<ChunkDataView<'a>>; 3]; 3]; 3],
 }
-impl FastNeighborLockCache<'_> {
+impl<'a> FastNeighborLockCache<'a> {
     pub(crate) fn new(backing: &FastChunkNeighbors) -> FastNeighborLockCache {
-        let mut data =
+        let mut neighbors =
             std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
         for i in -1..=1 {
             for j in -1..=1 {
                 for k in -1..=1 {
                     if i != 0 || j != 0 || k != 0 {
                         if let Some(chunk) = backing.get((i, j, k)) {
-                            data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] = Some(chunk.chunk_data());
+                            neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
+                                Some(chunk.chunk_data());
                         }
                     }
                 }
             }
         }
-        FastNeighborLockCache { backing: PhantomData, data }
+        FastNeighborLockCache {
+            backing: PhantomData,
+            neighbors,
+        }
     }
 
     pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&ChunkDataView> {
-        self.data[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize][(coord_xyz.0 + 1) as usize].as_ref()
+        self.neighbors[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
+            [(coord_xyz.0 + 1) as usize]
+            .as_ref()
+    }
+}
+
+pub(crate) struct FastNeighborSliceCache<'a, 'b> {
+    backing: PhantomData<&'a FastNeighborLockCache<'b>>,
+    // does NOT contain (0,0,0)
+    neighbors: [Option<&'a [BlockId; 18 * 18 * 18]>; 27],
+}
+impl<'a, 'b> FastNeighborSliceCache<'a, 'b> {
+    pub(crate) fn new(backing: &'a FastNeighborLockCache<'b>) -> FastNeighborSliceCache<'a, 'b> {
+        let mut neighbors = [None; 27];
+        for i in -1..=1 {
+            for j in -1..=1 {
+                for k in -1..=1 {
+                    if i != 0 || j != 0 || k != 0 {
+                        if let Some(chunk) = backing.get((i, j, k)) {
+                            neighbors[((k + 1) * 9) as usize
+                                + ((j + 1) * 3) as usize
+                                + (i + 1) as usize] = Some(chunk.block_ids());
+                        }
+                    }
+                }
+            }
+        }
+        FastNeighborSliceCache {
+            backing: PhantomData,
+            neighbors,
+        }
+    }
+
+    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&'a [BlockId; 18 * 18 * 18]> {
+        assert!((-1..=1).contains(&coord_xyz.0));
+        assert!((-1..=1).contains(&coord_xyz.1));
+        assert!((-1..=1).contains(&coord_xyz.2));
+        self.neighbors[((coord_xyz.2 + 1) * 9) as usize
+            + ((coord_xyz.1 + 1) * 3) as usize
+            + (coord_xyz.0 + 1) as usize]
     }
 }
 
@@ -287,7 +332,7 @@ pub(crate) struct ClientState {
     pub(crate) pending_error: Mutex<Option<String>>,
     pub(crate) wants_exit_from_game: Mutex<bool>,
     // This is a leaf mutex - consider using some sort of atomic instead
-    pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>
+    pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -338,7 +383,7 @@ impl ClientState {
         }
     }
 
-    /// Returns the player's last position without requiring any locks 
+    /// Returns the player's last position without requiring any locks
     /// This may be a frame behind
     pub(crate) fn weakly_ordered_last_position(&self) -> PlayerPositionUpdate {
         let lock = self.physics_state.lock();

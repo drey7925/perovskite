@@ -1,4 +1,10 @@
-use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
 use cgmath::InnerSpace;
@@ -10,7 +16,10 @@ use tracy_client::{plot, span};
 
 use crate::{
     block_renderer::ClientBlockTypeManager,
-    game_state::{chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors, FastNeighborLockCache},
+    game_state::{
+        chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors, FastNeighborLockCache,
+        FastNeighborSliceCache,
+    },
 };
 
 // Responsible for reconciling a chunk with data from other nearby chunks (e.g. lighting, neighbor calculations)
@@ -24,7 +33,10 @@ pub(crate) struct NeighborPropagator {
     mesh_workers: Vec<Arc<MeshWorker>>,
 }
 impl NeighborPropagator {
-    pub(crate) fn new(client_state: Arc<ClientState>, mesh_workers: Vec<Arc<MeshWorker>>) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+    pub(crate) fn new(
+        client_state: Arc<ClientState>,
+        mesh_workers: Vec<Arc<MeshWorker>>,
+    ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
         let worker = Arc::new(Self {
             client_state,
             queue: Mutex::new(FxHashSet::default()),
@@ -32,13 +44,11 @@ impl NeighborPropagator {
             token: Mutex::new(()),
             cond: Condvar::new(),
             shutdown: CancellationToken::new(),
-            mesh_workers
+            mesh_workers,
         });
         let handle = {
             let worker_clone = worker.clone();
-            tokio::task::spawn_blocking(move || {
-                worker_clone.run_neighbor_propagator()
-            })
+            tokio::task::spawn_blocking(move || worker_clone.run_neighbor_propagator())
         };
         (worker, handle)
     }
@@ -102,7 +112,11 @@ impl NeighborPropagator {
                         cgmath::vec3(center.x as f64, center.y as f64, center.z as f64) - pos;
                     offset.magnitude2() as u64
                 });
-                chunks.shrink_to(MESH_BATCH_SIZE);
+
+                if chunks.len() > MESH_BATCH_SIZE {
+                    chunks.resize_with(MESH_BATCH_SIZE, || unreachable!());
+                }
+
                 for coord in chunks.iter() {
                     assert!(lock.remove(coord), "Task should have been in the queue");
                 }
@@ -113,14 +127,17 @@ impl NeighborPropagator {
                 let _span = span!("nprop_work");
                 let mut token = NeighborPropagationToken(self.token.lock());
                 for coord in chunks {
-                    propagate_neighbor_data(
-                        &self.client_state.block_types,
-                        &self.client_state.chunks.cloned_neighbors_fast(coord),
-                        &mut scratchpad,
-                        &mut token
-                    )?;
-                    let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
-                    self.mesh_workers[index as usize].enqueue(coord);
+                    // test only
+                    for i in 0..16 {
+                        propagate_neighbor_data(
+                            &self.client_state.block_types,
+                            &self.client_state.chunks.cloned_neighbors_fast(coord),
+                            &mut scratchpad,
+                            &mut token,
+                        )?;
+                        let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
+                        self.mesh_workers[index as usize].enqueue(coord);
+                    }
                 }
             }
         }
@@ -143,7 +160,9 @@ pub(crate) struct MeshWorker {
     // There is no run token, because these workers can be run in parallel
 }
 impl MeshWorker {
-    pub(crate) fn new(client_state: Arc<ClientState>) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+    pub(crate) fn new(
+        client_state: Arc<ClientState>,
+    ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
         let worker = Arc::new(Self {
             client_state,
             queue: Mutex::new(FxHashSet::default()),
@@ -153,9 +172,7 @@ impl MeshWorker {
         });
         let handle = {
             let worker_clone = worker.clone();
-            tokio::task::spawn_blocking(move || {
-                worker_clone.run_mesh_worker()
-            })
+            tokio::task::spawn_blocking(move || worker_clone.run_mesh_worker())
         };
         (worker, handle)
     }
@@ -168,7 +185,7 @@ impl MeshWorker {
     pub(crate) fn queue_len(&self) -> usize {
         self.queue_len.load(Ordering::Relaxed)
     }
-    
+
     pub(crate) fn cancel(&self) {
         self.shutdown.cancel();
         self.cond.notify_one();
@@ -205,7 +222,10 @@ impl MeshWorker {
                         cgmath::vec3(center.x as f64, center.y as f64, center.z as f64) - pos;
                     offset.magnitude2() as u64
                 });
-                chunks.shrink_to(NPROP_BATCH_SIZE);
+                if chunks.len() > NPROP_BATCH_SIZE {
+                    chunks.resize_with(NPROP_BATCH_SIZE, || unreachable!());
+                }
+
                 for coord in chunks.iter() {
                     assert!(lock.remove(coord), "Task should have been in the queue");
                 }
@@ -214,6 +234,8 @@ impl MeshWorker {
             };
             {
                 let _span = span!("mesh_worker work");
+
+                plot!("mesh_queue work size", chunks.len() as f64);
                 for coord in chunks {
                     let neighbors = &self.client_state.chunks.cloned_neighbors_fast(coord);
                     if let Some(chunk) = neighbors.get((0, 0, 0)) {
@@ -225,65 +247,134 @@ impl MeshWorker {
         Ok(())
     }
 }
-const MESH_BATCH_SIZE: usize = 16;
-const NPROP_BATCH_SIZE: usize = 16;
+const MESH_BATCH_SIZE: usize = 32;
+const NPROP_BATCH_SIZE: usize = 128;
+
+#[inline]
+fn rem_euclid_16(i: i32) -> u8 {
+    // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
+    (i & 0xf) as u8
+}
+
+#[test]
+pub fn test_rem_euclid() {
+    for i in i32::MIN..=i32::MAX {
+        assert_eq!(rem_euclid_16(i) as i32, i.rem_euclid(16));
+    }
+}
 
 pub(crate) fn propagate_neighbor_data(
     block_manager: &ClientBlockTypeManager,
     neighbors: &FastChunkNeighbors,
     scratchpad: &mut [u8; 48 * 48 * 48],
-    token: &mut NeighborPropagationToken
+    _token: &mut NeighborPropagationToken,
 ) -> Result<()> {
-    let neighbor_cache = FastNeighborLockCache::new(neighbors);
+    let neighbor_cache = FastNeighborLockCache::new(&neighbors);
+    let slice_cache = FastNeighborSliceCache::new(&neighbor_cache);
+
     if let Some(current_chunk) = neighbors.get((0, 0, 0)) {
-        let mut chunk_data = {
+        let mut current_chunk = current_chunk.chunk_data_mut();
+        {
+            let _span = span!("chunk precheck");
+            // Fast-pass checks
+            let air = block_manager.air_block();
+            if current_chunk.block_ids().iter().all(|&x| x == air) {
+                current_chunk.set_state(
+                    crate::game_state::chunk::BlockIdState::BlockIdsWithNeighborsAuditNoRender,
+                );
+                return Ok(());
+            }
+        }
+
+        {
+            let _span = span!("nprop");
+            for i in -1i32..17 {
+                for j in -1i32..17 {
+                    for k in -1i32..17 {
+                        if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
+                            // This isn't a neighbor, and we don't need to fill it in (it's already present)
+                            // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
+                            // get the read lock because buf already has a write lock.
+                            continue;
+                        }
+                        let neighbor = slice_cache
+                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
+                            .map(|x| {
+                                x[ChunkOffset {
+                                    x: rem_euclid_16(i),
+                                    y: rem_euclid_16(j),
+                                    z: rem_euclid_16(k),
+                                }
+                                .as_extended_index()]
+                            })
+                            .unwrap_or(block_manager.air_block());
+
+                        current_chunk.block_ids_mut()[(i, j, k).as_extended_index()] = neighbor;
+                    }
+                }
+            }
+            if current_chunk
+                .block_ids()
+                .iter()
+                .all(|&x| block_manager.is_solid_opaque(x))
+            {
+                current_chunk.set_state(
+                    crate::game_state::chunk::BlockIdState::BlockIdsWithNeighborsAuditNoRender,
+                );
+                return Ok(());
+            }
+        }
+
+        {
             let _span = span!("lighting");
             // We use a caller-provided scratchpad to avoid reallocating
             scratchpad.fill(0);
             // Search through the entire neighborhood, looking for any light sources
             // i, j, k are offsets from `base`
-
-            let own_view = current_chunk.chunk_data();
-
-            // First, scan through the neighborhood looking for light sources
             cuberef_core::lighting::do_lighting_pass(
                 scratchpad,
                 |i, j, k| {
                     if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                        block_manager.light_emission(own_view.get(ChunkOffset {
+                        block_manager.light_emission(current_chunk.get_block(ChunkOffset {
                             x: i as u8,
                             y: j as u8,
                             z: k as u8,
                         }))
                     } else {
-                        neighbor_cache
+                        slice_cache
                             .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
                             .map(|x| {
-                                block_manager.light_emission(x.get(ChunkOffset {
-                                    x: i.rem_euclid(16) as u8,
-                                    y: j.rem_euclid(16) as u8,
-                                    z: k.rem_euclid(16) as u8,
-                                }))
+                                block_manager.light_emission(
+                                    x[ChunkOffset {
+                                        x: rem_euclid_16(i),
+                                        y: rem_euclid_16(j),
+                                        z: rem_euclid_16(k),
+                                    }
+                                    .as_extended_index()],
+                                )
                             })
                             .unwrap_or(0)
                     }
                 },
                 |i, j, k| {
                     if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                        block_manager.propagates_light(own_view.get(ChunkOffset {
+                        block_manager.propagates_light(current_chunk.get_block(ChunkOffset {
                             x: i as u8,
                             y: j as u8,
                             z: k as u8,
                         }))
                     } else {
-                        neighbor_cache
+                        slice_cache
                             .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
                             .map(|x| {
-                                block_manager.propagates_light(x.get(ChunkOffset {
-                                    x: i.rem_euclid(16) as u8,
-                                    y: j.rem_euclid(16) as u8,
-                                    z: k.rem_euclid(16) as u8,
-                                }))
+                                block_manager.propagates_light(
+                                    x[ChunkOffset {
+                                        x: rem_euclid_16(i),
+                                        y: rem_euclid_16(j),
+                                        z: rem_euclid_16(k),
+                                    }
+                                    .as_extended_index()],
+                                )
                             })
                             // empty chunks propagate light
                             .unwrap_or(true)
@@ -291,11 +382,7 @@ pub(crate) fn propagate_neighbor_data(
                 },
             );
 
-            // We can't have this write-lock until after we've finished propagating light
-            // We do want to keep the lock, so we return it from the scope.
-            drop(own_view);
-            let mut chunk_data = current_chunk.chunk_data_mut();
-            let lightmap = chunk_data.lightmap_mut();
+            let lightmap = current_chunk.lightmap_mut();
             for i in -1i32..17 {
                 for j in -1i32..17 {
                     for k in -1i32..17 {
@@ -306,37 +393,9 @@ pub(crate) fn propagate_neighbor_data(
                     }
                 }
             }
-
-            chunk_data
-        };
-
-        {
-            let _span = span!("nprop");
-            for i in -1i32..17 {
-                for j in -1i32..17 {
-                    for k in -1i32..17 {
-                        if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                            // This isn't a neighbor, and we don't need to fill it in.
-                            // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
-                            // get the read lock because buf already has a write lock.
-                            continue;
-                        }
-                        let neighbor = neighbor_cache
-                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
-                            .map(|x| {
-                                x.get(ChunkOffset {
-                                    x: i.rem_euclid(16) as u8,
-                                    y: j.rem_euclid(16) as u8,
-                                    z: k.rem_euclid(16) as u8,
-                                })
-                            })
-                            .unwrap_or(block_manager.air_block());
-                        chunk_data.block_ids_mut()[(i, j, k).as_extended_index()] = neighbor;
-                    }
-                }
-            }
-            chunk_data.set_state(crate::game_state::chunk::BlockIdState::BlockIdsReadyToRender);
         }
+
+        current_chunk.set_state(crate::game_state::chunk::BlockIdState::BlockIdsReadyToRender);
     }
     Ok(())
 }

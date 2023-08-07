@@ -41,8 +41,8 @@ impl ChunkDataView<'_> {
     pub(crate) fn lightmap(&self) -> &Box<[u8; 18 * 18 * 18]> {
         &self.0.lightmap
     }
-    
-    pub(crate) fn get(&self, offset: ChunkOffset) -> BlockId {
+
+    pub(crate) fn get_block(&self, offset: ChunkOffset) -> BlockId {
         self.0.block_ids[offset.as_extended_index()]
     }
 }
@@ -52,14 +52,18 @@ impl ChunkDataViewMut<'_> {
     pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
         &self.0.block_ids
     }
-    pub(crate) fn block_ids_mut(&mut self) -> &mut[BlockId; 18 * 18 * 18] {
+    pub(crate) fn block_ids_mut(&mut self) -> &mut [BlockId; 18 * 18 * 18] {
         &mut self.0.block_ids
     }
-    pub(crate) fn lightmap_mut(&mut self) -> &mut[u8; 18 * 18 * 18] {
-        &mut self.0.lightmap        
+    pub(crate) fn lightmap_mut(&mut self) -> &mut [u8; 18 * 18 * 18] {
+        &mut self.0.lightmap
     }
     pub(crate) fn set_state(&mut self, state: BlockIdState) {
         self.0.data_state = state;
+    }
+    
+    pub(crate) fn get_block(&self, offset: ChunkOffset) -> BlockId {
+        self.0.block_ids[offset.as_extended_index()]
     }
 }
 
@@ -142,8 +146,27 @@ impl ClientChunk {
     }
 
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<()> {
-        let vertex_data = renderer.mesh_chunk(self.deref())?;
-        *self.cached_vertex_data.lock() = Some(vertex_data);
+        let data = self.chunk_data();
+        let vertex_data = match data.0.data_state {
+            BlockIdState::BlockIdsNeedProcessing => {
+                log::warn!("BlockIdsNeedProcessing for {:?}", self.coord);
+                None
+                //Some(renderer.mesh_chunk(&data)?)
+            }
+            BlockIdState::BlockIdsNoRender => None,
+            BlockIdState::BlockIdsReadyToRender => Some(renderer.mesh_chunk(&data)?),
+            BlockIdState::BlockIdsWithNeighborsAuditNoRender => {
+                let result = renderer.mesh_chunk(&data)?;
+                if result.solid_opaque.is_some()
+                    || result.transparent.is_some()
+                    || result.translucent.is_some()
+                {
+                    log::warn!("Failed no-render audit for {:?}", self.coord);
+                }
+                Some(result)
+            }
+        };
+        *self.cached_vertex_data.lock() = vertex_data;
         Ok(())
     }
 
@@ -245,7 +268,6 @@ impl ClientChunk {
     pub(crate) fn chunk_data_mut(&self) -> ChunkDataViewMut<'_> {
         ChunkDataViewMut(self.chunk_data.write())
     }
-
 }
 
 pub(crate) trait ChunkOffsetExt {
