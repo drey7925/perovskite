@@ -391,23 +391,14 @@ impl InboundContext {
 
                     self.enqueue_for_meshing(coord);
 
-                    if let Some(neighbor) = coord.try_delta(-1, 0, 0) {
-                        self.enqueue_for_meshing(neighbor);
-                    }
-                    if let Some(neighbor) = coord.try_delta(1, 0, 0) {
-                        self.enqueue_for_meshing(neighbor);
-                    }
-                    if let Some(neighbor) = coord.try_delta(0, -1, 0) {
-                        self.enqueue_for_meshing(neighbor);
-                    }
-                    if let Some(neighbor) = coord.try_delta(0, 1, 0) {
-                        self.enqueue_for_meshing(neighbor);
-                    }
-                    if let Some(neighbor) = coord.try_delta(0, 0, -1) {
-                        self.enqueue_for_meshing(neighbor);
-                    }
-                    if let Some(neighbor) = coord.try_delta(0, 0, 1) {
-                        self.enqueue_for_meshing(neighbor);
+                    for i in -1..=1 {
+                        for j in -1..=1 {
+                            for k in -1..=1 {
+                                if let Some(neighbor) = coord.try_delta(i, j, k) {
+                                    self.enqueue_for_meshing(neighbor);
+                                }
+                            }
+                        }
                     }
                     Ok::<(), anyhow::Error>(())
                 })?;
@@ -522,35 +513,15 @@ impl InboundContext {
             };
             // unwrap because we expect all errors to be internal.
             if has_delta {
-                needs_remesh.insert(block_coord.chunk());
-                if let Some(neighbor) = block_coord.try_delta(-1, 0, 0) {
-                    if neighbor.chunk() != block_coord.chunk() {
-                        needs_remesh.insert(neighbor.chunk());
-                    }
-                }
-                if let Some(neighbor) = block_coord.try_delta(1, 0, 0) {
-                    if neighbor.chunk() != block_coord.chunk() {
-                        needs_remesh.insert(neighbor.chunk());
-                    }
-                }
-                if let Some(neighbor) = block_coord.try_delta(0, -1, 0) {
-                    if neighbor.chunk() != block_coord.chunk() {
-                        needs_remesh.insert(neighbor.chunk());
-                    }
-                }
-                if let Some(neighbor) = block_coord.try_delta(0, 1, 0) {
-                    if neighbor.chunk() != block_coord.chunk() {
-                        needs_remesh.insert(neighbor.chunk());
-                    }
-                }
-                if let Some(neighbor) = block_coord.try_delta(0, 0, -1) {
-                    if neighbor.chunk() != block_coord.chunk() {
-                        needs_remesh.insert(neighbor.chunk());
-                    }
-                }
-                if let Some(neighbor) = block_coord.try_delta(0, 0, 1) {
-                    if neighbor.chunk() != block_coord.chunk() {
-                        needs_remesh.insert(neighbor.chunk());
+                let chunk = block_coord.chunk();
+                needs_remesh.insert(chunk);
+                for i in -1..=1 {
+                    for j in -1..=1 {
+                        for k in -1..=1 {
+                            if let Some(neighbor) = chunk.try_delta(i, j, k) {
+                                needs_remesh.insert(neighbor);
+                            }
+                        }
                     }
                 }
             }
@@ -560,8 +531,7 @@ impl InboundContext {
             let _span = span!("remesh for delta");
             let mut scratchpad = Box::new([0; 48 * 48 * 48]);
             let mut token = self.neighbor_propagator.borrow_token();
-            for coord in needs_remesh {
-                // todo this needs neighbor propagation
+            for &coord in needs_remesh.iter() {
                 let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
                 propagate_neighbor_data(
                     &self.client_state.block_types,
@@ -569,8 +539,15 @@ impl InboundContext {
                     &mut scratchpad,
                     &mut token,
                 )?;
+            }
+            // Let the neighbor propagator get back to work
+            drop(token);
+            for coord in needs_remesh {
+                let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
                 if let Some(chunk) = neighbors.get((0, 0, 0)) {
                     chunk.mesh_with(&self.client_state.block_renderer)?;
+                } else {
+                    log::error!("Missing chunk at {:?}, but we're doing an update for it.", coord);
                 }
             }
         }

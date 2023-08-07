@@ -127,14 +127,13 @@ impl NeighborPropagator {
                 let _span = span!("nprop_work");
                 let mut token = NeighborPropagationToken(self.token.lock());
                 for coord in chunks {
-                    // test only
-                    for i in 0..16 {
-                        propagate_neighbor_data(
-                            &self.client_state.block_types,
-                            &self.client_state.chunks.cloned_neighbors_fast(coord),
-                            &mut scratchpad,
-                            &mut token,
-                        )?;
+                    let should_enqueue = propagate_neighbor_data(
+                        &self.client_state.block_types,
+                        &self.client_state.chunks.cloned_neighbors_fast(coord),
+                        &mut scratchpad,
+                        &mut token,
+                    )?;
+                    if should_enqueue {
                         let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
                         self.mesh_workers[index as usize].enqueue(coord);
                     }
@@ -251,15 +250,20 @@ const MESH_BATCH_SIZE: usize = 32;
 const NPROP_BATCH_SIZE: usize = 128;
 
 #[inline]
-fn rem_euclid_16(i: i32) -> u8 {
+fn rem_euclid_16_u8(i: i32) -> u8 {
     // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
     (i & 0xf) as u8
+}
+#[inline]
+fn rem_euclid_16_i32(i: i32) -> i32 {
+    // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
+    i & 0xf
 }
 
 #[test]
 pub fn test_rem_euclid() {
     for i in i32::MIN..=i32::MAX {
-        assert_eq!(rem_euclid_16(i) as i32, i.rem_euclid(16));
+        assert_eq!(rem_euclid_16_u8(i) as i32, i.rem_euclid(16));
     }
 }
 
@@ -268,7 +272,7 @@ pub(crate) fn propagate_neighbor_data(
     neighbors: &FastChunkNeighbors,
     scratchpad: &mut [u8; 48 * 48 * 48],
     _token: &mut NeighborPropagationToken,
-) -> Result<()> {
+) -> Result<bool> {
     let neighbor_cache = FastNeighborLockCache::new(&neighbors);
     let slice_cache = FastNeighborSliceCache::new(&neighbor_cache);
 
@@ -282,7 +286,7 @@ pub(crate) fn propagate_neighbor_data(
                 current_chunk.set_state(
                     crate::game_state::chunk::BlockIdState::BlockIdsWithNeighborsAuditNoRender,
                 );
-                return Ok(());
+                return Ok(true);
             }
         }
 
@@ -301,9 +305,9 @@ pub(crate) fn propagate_neighbor_data(
                             .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
                             .map(|x| {
                                 x[ChunkOffset {
-                                    x: rem_euclid_16(i),
-                                    y: rem_euclid_16(j),
-                                    z: rem_euclid_16(k),
+                                    x: rem_euclid_16_u8(i),
+                                    y: rem_euclid_16_u8(j),
+                                    z: rem_euclid_16_u8(k),
                                 }
                                 .as_extended_index()]
                             })
@@ -321,63 +325,56 @@ pub(crate) fn propagate_neighbor_data(
                 current_chunk.set_state(
                     crate::game_state::chunk::BlockIdState::BlockIdsWithNeighborsAuditNoRender,
                 );
-                return Ok(());
+                return Ok(true);
             }
         }
 
         {
             let _span = span!("lighting");
             // We use a caller-provided scratchpad to avoid reallocating
-            scratchpad.fill(0);
             // Search through the entire neighborhood, looking for any light sources
             // i, j, k are offsets from `base`
             cuberef_core::lighting::do_lighting_pass(
                 scratchpad,
+                |block| block_manager.light_emission(block),
+                |block| block_manager.propagates_light(block),
                 |i, j, k| {
-                    if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                        block_manager.light_emission(current_chunk.get_block(ChunkOffset {
-                            x: i as u8,
-                            y: j as u8,
-                            z: k as u8,
-                        }))
+                    // i needs special handling - it's -1..=1, rather than -16..32
+                    if i == 0 && (0..16).contains(&j) && (0..16).contains(&k) {
+                        let start = (0, j, k).as_extended_index();
+                        let finish = start + 16;
+                        current_chunk.block_ids()[start..finish].try_into().unwrap()
                     } else {
                         slice_cache
-                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
+                            .get((i, j.div_euclid(16), k.div_euclid(16)))
                             .map(|x| {
-                                block_manager.light_emission(
-                                    x[ChunkOffset {
-                                        x: rem_euclid_16(i),
-                                        y: rem_euclid_16(j),
-                                        z: rem_euclid_16(k),
-                                    }
-                                    .as_extended_index()],
-                                )
+                                let start = (0, rem_euclid_16_i32(j), rem_euclid_16_i32(k))
+                                    .as_extended_index();
+                                let finish = start + 16;
+                                x[start..finish].try_into().unwrap()
                             })
-                            .unwrap_or(0)
+                            .unwrap_or([block_manager.air_block(); 16])
                     }
                 },
                 |i, j, k| {
                     if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                        block_manager.propagates_light(current_chunk.get_block(ChunkOffset {
+                        current_chunk.get_block(ChunkOffset {
                             x: i as u8,
                             y: j as u8,
                             z: k as u8,
-                        }))
+                        })
                     } else {
                         slice_cache
                             .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
                             .map(|x| {
-                                block_manager.propagates_light(
-                                    x[ChunkOffset {
-                                        x: rem_euclid_16(i),
-                                        y: rem_euclid_16(j),
-                                        z: rem_euclid_16(k),
-                                    }
-                                    .as_extended_index()],
-                                )
+                                x[ChunkOffset {
+                                    x: rem_euclid_16_u8(i),
+                                    y: rem_euclid_16_u8(j),
+                                    z: rem_euclid_16_u8(k),
+                                }
+                                .as_extended_index()]
                             })
-                            // empty chunks propagate light
-                            .unwrap_or(true)
+                            .unwrap_or(block_manager.air_block())
                     }
                 },
             );
@@ -396,6 +393,9 @@ pub(crate) fn propagate_neighbor_data(
         }
 
         current_chunk.set_state(crate::game_state::chunk::BlockIdState::BlockIdsReadyToRender);
+
+        Ok(true)
+    } else {
+        Ok(false)
     }
-    Ok(())
 }
