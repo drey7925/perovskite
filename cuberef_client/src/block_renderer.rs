@@ -35,6 +35,7 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkOffset};
 use anyhow::{ensure, Context, Error, Result};
 use image::DynamicImage;
 
+use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 use tonic::async_trait;
@@ -353,14 +354,14 @@ impl VkChunkVertexData {
 /// for the game.
 pub(crate) struct BlockRenderer {
     block_defs: Arc<ClientBlockTypeManager>,
-    texture_coords: HashMap<String, Rect>,
+    texture_coords: FxHashMap<String, Rect>,
     texture_atlas: Arc<Texture2DHolder>,
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
     fn get_texture(&self, id: &str) -> Rect {
         self.texture_coords
-            .get(&id.to_string())
+            .get(id)
             .copied()
             .unwrap_or_else(|| *self.texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap())
     }
@@ -625,7 +626,7 @@ fn get_cube_extents(render_info: &CubeRenderInfo, variant: u16) -> CubeExtents {
 async fn build_texture_atlas<T: AsyncTextureLoader>(
     block_defs: &ClientBlockTypeManager,
     mut texture_loader: T,
-) -> Result<(DynamicImage, HashMap<String, Rect>), Error> {
+) -> Result<(DynamicImage, FxHashMap<String, Rect>)> {
     let mut all_texture_names = HashSet::new();
     for def in block_defs.all_block_defs() {
         match &def.render_info {
@@ -662,7 +663,7 @@ async fn build_texture_atlas<T: AsyncTextureLoader>(
         }
     }
 
-    let mut all_textures = HashMap::new();
+    let mut all_textures = FxHashMap::default();
     for x in all_texture_names {
         let texture = texture_loader.load_texture(&x).await?;
         all_textures.insert(x, texture);

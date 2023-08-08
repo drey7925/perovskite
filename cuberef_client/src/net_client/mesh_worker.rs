@@ -84,49 +84,49 @@ impl NeighborPropagator {
         while !self.shutdown.is_cancelled() {
             // This is duplicated in MeshWorker to allow the two to use different strategies, and also
             // report different span and plot names.
-            let chunks = {
-                // This is really ugly and deadlock-prone. Figure out whether we need this or not.
-                // The big deadlock risk is if this line happens under the queue lock:
-                //   our thread waits for physics_state to unlock
-                //   physics_state waits for mapchunks to unlock
-                //   network thread is holding chunks and waiting for queue to unlock
-                //
-                // At the moment, the deadlocks are removed, but this still seems brittle.
-                let pos = self.client_state.last_position().position;
-                let mut lock = self.queue.lock();
-                if lock.is_empty() {
-                    plot!("nprop_queue_length", 0.);
-                    self.cond.wait_for(&mut lock, Duration::from_secs(1));
-                }
+            // This is really ugly and deadlock-prone. Figure out whether we need this or not.
+            // The big deadlock risk is if this line happens under the queue lock:
+            //   our thread waits for physics_state to unlock
+            //   physics_state waits for mapchunks to unlock
+            //   network thread is holding chunks and waiting for queue to unlock
+            //
+            // At the moment, the deadlocks are removed, but this still seems brittle.
+            let pos = self.client_state.last_position().position;
+            let mut lock = self.queue.lock();
+            if lock.is_empty() {
+                plot!("nprop_queue_length", 0.);
+                self.cond.wait_for(&mut lock, Duration::from_secs(1));
+            }
 
-                let _span = span!("mesh_worker sort");
-                let mut chunks: Vec<_> = lock.iter().copied().collect();
+            let sort_span = span!("nprop sort");
+            let mut chunks: Vec<_> = lock.iter().copied().collect();
 
-                plot!("nprop_queue_length", chunks.len() as f64);
-                self.queue_len.store(chunks.len(), Ordering::Relaxed);
+            plot!("nprop_queue_length", chunks.len() as f64);
+            self.queue_len.store(chunks.len(), Ordering::Relaxed);
 
-                // Prioritize the closest chunks
-                chunks.sort_by_key(|x| {
+            // Prioritize the closest chunks
+            let chunks = if chunks.len() > MESH_BATCH_SIZE {
+                let (before, _, _) = chunks.select_nth_unstable_by_key(MESH_BATCH_SIZE, |x| {
                     let center = x.with_offset(ChunkOffset { x: 8, y: 8, z: 8 });
                     let offset =
                         cgmath::vec3(center.x as f64, center.y as f64, center.z as f64) - pos;
                     offset.magnitude2() as u64
                 });
-
-                if chunks.len() > MESH_BATCH_SIZE {
-                    chunks.resize_with(MESH_BATCH_SIZE, || unreachable!());
-                }
-
-                for coord in chunks.iter() {
-                    assert!(lock.remove(coord), "Task should have been in the queue");
-                }
-                drop(lock);
-                chunks
+                &*before
+            } else {
+                &chunks
             };
+
+            for coord in chunks.iter() {
+                assert!(lock.remove(coord), "Task should have been in the queue");
+            }
+            drop(lock);
+            drop(sort_span);
+
             {
                 let _span = span!("nprop_work");
                 let mut token = NeighborPropagationToken(self.token.lock());
-                for coord in chunks {
+                for &coord in chunks {
                     let should_enqueue = propagate_neighbor_data(
                         &self.client_state.block_types,
                         &self.client_state.chunks.cloned_neighbors_fast(coord),
@@ -259,11 +259,23 @@ fn rem_euclid_16_i32(i: i32) -> i32 {
     // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
     i & 0xf
 }
+#[inline]
+fn div_euclid_16_i32(i: i32) -> i32 {
+    // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
+    i >> 4
+}
 
 #[test]
 pub fn test_rem_euclid() {
     for i in i32::MIN..=i32::MAX {
         assert_eq!(rem_euclid_16_u8(i) as i32, i.rem_euclid(16));
+    }
+}
+
+#[test]
+pub fn test_div_euclid() {
+    for i in i32::MIN..=i32::MAX {
+        assert_eq!(div_euclid_16_i32(i), i.div_euclid(16));
     }
 }
 
@@ -298,11 +310,15 @@ pub(crate) fn propagate_neighbor_data(
                         if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
                             // This isn't a neighbor, and we don't need to fill it in (it's already present)
                             // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
-                            // get the read lock because buf already has a write lock.
+                            // get the read lock because buf already has a write lock. It is not merely an optimization
                             continue;
                         }
                         let neighbor = slice_cache
-                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
+                            .get((
+                                div_euclid_16_i32(i),
+                                div_euclid_16_i32(j),
+                                div_euclid_16_i32(k),
+                            ))
                             .map(|x| {
                                 x[ChunkOffset {
                                     x: rem_euclid_16_u8(i),
@@ -331,53 +347,181 @@ pub(crate) fn propagate_neighbor_data(
 
         {
             let _span = span!("lighting");
-            // We use a caller-provided scratchpad to avoid reallocating
-            // Search through the entire neighborhood, looking for any light sources
-            // i, j, k are offsets from `base`
-            cuberef_core::lighting::do_lighting_pass(
-                scratchpad,
-                |block| block_manager.light_emission(block),
-                |block| block_manager.propagates_light(block),
-                |i, j, k| {
-                    // i needs special handling - it's -1..=1, rather than -16..32
-                    if i == 0 && (0..16).contains(&j) && (0..16).contains(&k) {
-                        let start = (0, j, k).as_extended_index();
-                        let finish = start + 16;
-                        current_chunk.block_ids()[start..finish].try_into().unwrap()
-                    } else {
-                        slice_cache
-                            .get((i, j.div_euclid(16), k.div_euclid(16)))
-                            .map(|x| {
-                                let start = (0, rem_euclid_16_i32(j), rem_euclid_16_i32(k))
-                                    .as_extended_index();
-                                let finish = start + 16;
-                                x[start..finish].try_into().unwrap()
-                            })
-                            .unwrap_or([block_manager.air_block(); 16])
-                    }
-                },
-                |i, j, k| {
-                    if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                        current_chunk.get_block(ChunkOffset {
-                            x: i as u8,
-                            y: j as u8,
-                            z: k as u8,
-                        })
-                    } else {
-                        slice_cache
-                            .get((i.div_euclid(16), j.div_euclid(16), k.div_euclid(16)))
-                            .map(|x| {
-                                x[ChunkOffset {
-                                    x: rem_euclid_16_u8(i),
-                                    y: rem_euclid_16_u8(j),
-                                    z: rem_euclid_16_u8(k),
+
+            #[inline]
+            fn maybe_push(
+                queue: &mut Vec<(i32, i32, i32, u8)>,
+                i: i32,
+                j: i32,
+                k: i32,
+                light_level: u8,
+            ) {
+                if i < -16 || j < -16 || k < -16 || i >= 32 || j >= 32 || k >= 32 {
+                    return;
+                }
+                let i_dist = (-1 - i).max(i - 16);
+                let j_dist = (-1 - j).max(j - 16);
+                let k_dist = (-1 - k).max(k - 16);
+                let dist = i_dist + j_dist + k_dist;
+                if dist < (light_level as i32) {
+                    queue.push((i, j, k, light_level));
+                }
+            }
+
+            #[inline]
+            fn check_propagation_and_push<F>(
+                queue: &mut Vec<(i32, i32, i32, u8)>,
+                i: i32,
+                j: i32,
+                k: i32,
+                light_level: u8,
+                light_propagation: F,
+            ) where
+                F: Fn(i32, i32, i32) -> bool,
+            {
+                if i < -16 || j < -16 || k < -16 || i >= 32 || j >= 32 || k >= 32 {
+                    return;
+                }
+                if !light_propagation(i, j, k) {
+                    return;
+                }
+                let i_dist = (-1 - i).max(i - 16);
+                let j_dist = (-1 - j).max(j - 16);
+                let k_dist = (-1 - k).max(k - 16);
+                let dist = i_dist + j_dist + k_dist;
+                if dist < (light_level as i32) {
+                    queue.push((i, j, k, light_level));
+                }
+            }
+
+            scratchpad.fill(0);
+
+            let mut queue = vec![];
+            // First, scan through the neighborhood looking for light sources
+            // Indices are reversed in order to achieve better cache locality
+            // i is the minor index, j is intermediate, and k is the major index
+
+            for k_coarse in -1i32..=1 {
+                for j_coarse in -1i32..=1 {
+                    for i_coarse in -1i32..=1 {
+                        let slice = if k_coarse == 0 && j_coarse == 0 && i_coarse == 0 {
+                            // The center chunk is not in the slice cache
+                            Some(current_chunk.block_ids())
+                        } else {
+                            slice_cache.get((i_coarse, j_coarse, k_coarse))
+                        };
+                        if let Some(slice) = slice {
+                            for k in 0..16 {
+                                for j in 0..16 {
+                                    let min_index = (0, j, k).as_extended_index();
+                                    let max_index = min_index + 16;
+                                    let subslice = &slice[min_index..max_index];
+                                    // consider unrolling this loop
+                                    for i in 0..16 {
+                                        let block_id = subslice[i];
+                                        let light_emission = block_manager.light_emission(block_id);
+                                        if light_emission > 0 {
+                                            maybe_push(
+                                                &mut queue,
+                                                i_coarse * 16 + (i as i32),
+                                                j_coarse * 16 + j,
+                                                k_coarse * 16 + k,
+                                                light_emission,
+                                            );
+                                        }
+                                    }
                                 }
-                                .as_extended_index()]
-                            })
-                            .unwrap_or(block_manager.air_block())
+                            }
+                        }
                     }
-                },
-            );
+                }
+            }
+
+            // Then, while the queue is non-empty, attempt to propagate light
+            while !queue.is_empty() {
+                let (i, j, k, light_level) = queue.pop().unwrap();
+                let old_level = scratchpad
+                    [(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize];
+                if old_level >= light_level {
+                    continue;
+                }
+                // Set the queued light value
+                scratchpad
+                    [(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize] =
+                    light_level;
+                let ccbi = current_chunk.block_ids();
+                let light_propagate_for_coord = |i: i32, j: i32, k: i32| {
+                    if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
+                        block_manager.propagates_light(ccbi[(i, j, k).as_extended_index()])
+                    } else {
+                        let i_coarse = div_euclid_16_i32(i);
+                        let j_coarse = div_euclid_16_i32(j);
+                        let k_coarse = div_euclid_16_i32(k);
+                        slice_cache
+                            .get((i_coarse, j_coarse, k_coarse))
+                            .map(|x| {
+                                block_manager.propagates_light(
+                                    x[(
+                                        rem_euclid_16_i32(i),
+                                        rem_euclid_16_i32(j),
+                                        rem_euclid_16_i32(k),
+                                    )
+                                        .as_extended_index()],
+                                )
+                            })
+                            .unwrap_or(true)
+                    }
+                };
+
+                check_propagation_and_push(
+                    &mut queue,
+                    i - 1,
+                    j,
+                    k,
+                    light_level - 1,
+                    &light_propagate_for_coord,
+                );
+                check_propagation_and_push(
+                    &mut queue,
+                    i + 1,
+                    j,
+                    k,
+                    light_level - 1,
+                    &light_propagate_for_coord,
+                );
+                check_propagation_and_push(
+                    &mut queue,
+                    i,
+                    j - 1,
+                    k,
+                    light_level - 1,
+                    &light_propagate_for_coord,
+                );
+                check_propagation_and_push(
+                    &mut queue,
+                    i,
+                    j + 1,
+                    k,
+                    light_level - 1,
+                    &light_propagate_for_coord,
+                );
+                check_propagation_and_push(
+                    &mut queue,
+                    i,
+                    j,
+                    k - 1,
+                    light_level - 1,
+                    &light_propagate_for_coord,
+                );
+                check_propagation_and_push(
+                    &mut queue,
+                    i,
+                    j,
+                    k + 1,
+                    light_level - 1,
+                    &light_propagate_for_coord,
+                );
+            }
 
             let lightmap = current_chunk.lightmap_mut();
             for i in -1i32..17 {

@@ -1,5 +1,6 @@
 //! Implementation details of light propagation that need to be shared between the client and server
-
+// TODO - this is unused now, because making it generic destroyed the performance
+// Get rid of it, or turn it into a slow refernece impl for unit testing
 use crate::block_id::BlockId;
 #[doc(hidden)]
 pub fn do_lighting_pass<F, G, H, I>(
