@@ -36,7 +36,7 @@ use vulkano::{
 };
 
 use crate::vulkan::{
-    shaders::{frag_lighting, vert_2d, PipelineProvider, PipelineWrapper},
+    shaders::{vert_2d, PipelineProvider, PipelineWrapper},
     CommandBufferBuilder, Texture2DHolder, VulkanContext,
 };
 

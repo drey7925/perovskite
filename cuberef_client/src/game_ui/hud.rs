@@ -17,7 +17,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use cuberef_core::{items::ItemStackExt, protocol::items::item_stack::QuantityType};
+use cuberef_core::{protocol::items::item_stack::QuantityType};
 use texture_packer::Rect;
 
 use crate::{

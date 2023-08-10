@@ -14,9 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
 
-use anyhow::{Context, Result};
+
+use anyhow::{Result};
 use cuberef_core::{
     constants::{
         block_groups::DEFAULT_SOLID, items::default_item_interaction_rules,
@@ -322,7 +322,7 @@ impl BlockBuilder {
     /// Convenience method that sets this block to a simple appearance as a cube with the same texture on all faces,
     /// no transparency/translucency, no light propagation or emission, and no additional appearance settings
     /// (which may be added in the future)
-    pub fn set_cube_single_texture(mut self, texture: impl Into<TextureReference>) -> Self {
+    pub fn set_cube_single_texture(self, texture: impl Into<TextureReference>) -> Self {
         self.set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(texture))
     }
 

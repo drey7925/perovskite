@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::{Deref, RangeInclusive};
-use std::sync::atomic::AtomicBool;
+
 
 use cgmath::{ElementWise, Matrix4, Vector3};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
@@ -25,12 +25,12 @@ use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 use anyhow::{ensure, Context, Result};
 
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tracy_client::span;
+
 
 use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
-use super::{ChunkManagerClonedView, ChunkManagerView};
+
 
 pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView<'_> {

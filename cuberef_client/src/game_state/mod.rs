@@ -386,7 +386,7 @@ impl ClientState {
     /// Returns the player's last position without requiring any locks
     /// This may be a frame behind
     pub(crate) fn weakly_ordered_last_position(&self) -> PlayerPositionUpdate {
-        let lock = self.physics_state.lock();
+        let _lock = self.physics_state.lock();
         *self.last_position_weak.lock()
     }
 

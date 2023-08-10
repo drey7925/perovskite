@@ -1,5 +1,4 @@
 use std::{
-    hash::{Hash, Hasher},
     ops::BitXor,
     sync::Arc,
 };
@@ -9,14 +8,14 @@ use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
 use cuberef_server::game_state::{
-    blocks::{BlockTypeHandle, BlockTypeManager, BlockTypeName},
+    blocks::{BlockTypeHandle, BlockTypeManager},
     game_map::MapChunk,
     mapgen::MapgenInterface,
 };
 use noise::{MultiFractal, NoiseFn};
-use rustc_hash::{FxHashMap, FxHasher};
 
-use crate::{blocks::BlockTypeHandleWrapper, NonExhaustive};
+
+use crate::{blocks::BlockTypeHandleWrapper};
 
 use super::{
     basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE, WATER},

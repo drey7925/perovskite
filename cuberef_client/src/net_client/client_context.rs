@@ -1,23 +1,22 @@
 use std::{
     backtrace,
-    collections::{HashMap, HashSet},
+    collections::{HashMap},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use crate::game_state::{items::ClientInventory, ClientState, FastNeighborLockCache, GameAction};
+use crate::game_state::{items::ClientInventory, ClientState, GameAction};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
     protocol::{
-        coordinates::Angles,
         game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
     },
 };
 use futures::StreamExt;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Mutex};
 use rustc_hash::FxHashSet;
-use tokio::{sync::mpsc, task::spawn_blocking};
+use tokio::{sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};

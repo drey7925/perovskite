@@ -14,12 +14,12 @@
 
 use std::sync::Arc;
 
-use crate::game_builder::{GameBuilder, TextureName};
+use crate::game_builder::{GameBuilder};
 
 use anyhow::Result;
 
-use cuberef_core::protocol::items::{self as items_proto, ItemDef};
-use cuberef_server::game_state::items::{ItemStack, Item};
+use cuberef_core::protocol::items::{self as items_proto};
+use cuberef_server::game_state::items::{ItemStack};
 
 use self::{recipes::{RecipeBook, RecipeImpl, RecipeSlot}, mapgen::OreDefinition};
 

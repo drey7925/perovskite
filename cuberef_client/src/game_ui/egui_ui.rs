@@ -1,10 +1,10 @@
 use anyhow::Result;
 use cuberef_core::items::ItemStackExt;
-use cuberef_core::protocol::items::{self as items_proto, ItemStack};
+use cuberef_core::protocol::items::{ItemStack};
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
-use log::warn;
+
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;

@@ -14,9 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 
-use std::ops::RangeInclusive;
+
 use std::sync::Arc;
 
 use cgmath::num_traits::Num;
@@ -24,7 +24,7 @@ use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 
 use cuberef_core::constants::blocks::AIR;
 use cuberef_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
-use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate};
+
 use cuberef_core::protocol::blocks::block_type_def::RenderInfo;
 use cuberef_core::protocol::blocks::{
     self as blocks_proto, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
@@ -46,7 +46,7 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
-use crate::game_state::chunk::{ChunkOffsetExt, ClientChunk, ChunkDataView};
+use crate::game_state::chunk::{ChunkOffsetExt, ChunkDataView};
 use crate::game_state::make_fallback_blockdef;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};

@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use cgmath::{Angle, Deg};
+
 use cuberef_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 
 use cuberef_core::constants::items::default_item_interaction_rules;

@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::game_state::blocks;
-use crate::game_state::blocks::BlockType;
+
+
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::event::EventInitiator;
@@ -36,9 +36,9 @@ use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
 use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
-use crate::game_state::items::make_fake_item_for_no_tool;
+
 use crate::game_state::items::Item;
-use crate::game_state::items::ItemInteractionResult;
+
 use crate::game_state::player::PlayerContext;
 use crate::game_state::GameState;
 use crate::run_handler;
@@ -1043,7 +1043,7 @@ impl InboundWorker {
         Ok(())
     }
 
-    fn handle_pos_update(&mut self, tick: u64, update: &proto::ClientUpdate) -> Result<()> {
+    fn handle_pos_update(&mut self, _tick: u64, update: &proto::ClientUpdate) -> Result<()> {
         match &update.position {
             Some(pos_update) => {
                 let (az, el) = match &pos_update.face_direction {

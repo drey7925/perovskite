@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use cuberef_core::{
     constants::{self, item_groups::HIDDEN_FROM_CREATIVE},
-    protocol::game_rpc::MapChunkUnsubscribe,
 };
 use cuberef_server::game_state::{
     blocks::{
@@ -12,7 +11,7 @@ use cuberef_server::game_state::{
     },
     client_ui::Popup,
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings},
-    items::{BlockInteractionHandler, InteractionRuleExt, ItemStack, MaybeStack},
+    items::{InteractionRuleExt, ItemStack, MaybeStack},
 };
 use prost::Message;
 
