@@ -44,7 +44,7 @@ use crate::{
 
 use super::{
     shaders::{
-        cube_geometry::{self, BlockRenderPass},
+        cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
         egui_adapter::{self, EguiAdapter},
         flat_texture, PipelineProvider, PipelineWrapper,
     },
@@ -61,6 +61,8 @@ pub(crate) struct ActiveGame {
     egui_adapter: Option<egui_adapter::EguiAdapter>,
 
     client_state: Arc<ClientState>,
+    // Held across frames to avoid constant reallocations
+    cube_draw_calls: Vec<CubeGeometryDrawCall>,
 }
 
 impl ActiveGame {
@@ -81,9 +83,9 @@ impl ActiveGame {
         } = self
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
-        let mut cube_draw_calls = vec![];
+        self.cube_draw_calls.clear();
         if let Some(pointee) = tool_state.pointee {
-            cube_draw_calls.push(
+            self.cube_draw_calls.push(
                 self.client_state
                     .block_renderer
                     .make_pointee_cube(player_position, pointee)
@@ -92,12 +94,20 @@ impl ActiveGame {
         }
         // test only
         if let Some(neighbor) = tool_state.neighbor {
-            cube_draw_calls.push(
-                self.client_state
-                    .block_renderer
-                    .make_pointee_cube(player_position, neighbor)
-                    .unwrap(),
-            );
+            if self
+                .client_state
+                .settings
+                .load()
+                .render
+                .show_placement_guide
+            {
+                self.cube_draw_calls.push(
+                    self.client_state
+                        .block_renderer
+                        .make_pointee_cube(player_position, neighbor)
+                        .unwrap(),
+                );
+            }
         }
 
         let chunk_lock = {
@@ -105,17 +115,17 @@ impl ActiveGame {
             self.client_state.chunks.cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
-        cube_draw_calls.extend(
+        self.cube_draw_calls.extend(
             chunk_lock
                 .values()
                 .filter_map(|chunk| chunk.make_draw_call(player_position)),
         );
         plot!(
             "chunk_rate",
-            cube_draw_calls.len() as f64 / chunk_lock.len() as f64
+            self.cube_draw_calls.len() as f64 / chunk_lock.len() as f64
         );
 
-        if !cube_draw_calls.is_empty() {
+        if !self.cube_draw_calls.is_empty() {
             self.cube_pipeline
                 .bind(
                     ctx,
@@ -127,7 +137,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &cube_draw_calls,
+                    &self.cube_draw_calls,
                     BlockRenderPass::Opaque,
                 )
                 .unwrap();
@@ -142,7 +152,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &cube_draw_calls,
+                    &self.cube_draw_calls,
                     BlockRenderPass::Transparent,
                 )
                 .unwrap();
@@ -157,7 +167,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &cube_draw_calls,
+                    &self.cube_draw_calls,
                     BlockRenderPass::Translucent,
                 )
                 .unwrap();
@@ -579,6 +589,7 @@ async fn connect_impl(
         flat_pipeline,
         client_state,
         egui_adapter: None,
+        cube_draw_calls: vec![],
     };
 
     Ok(game)

@@ -15,6 +15,11 @@
 // SPDX-License-Identifier: Apache-2.0
 use cuberef_client::client_main;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     client_main::run_client().unwrap();

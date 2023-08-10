@@ -158,7 +158,7 @@ pub(crate) async fn make_client_contexts(
             val: INITIAL_CHUNKS_PER_UPDATE as f64,
             floor: 0.,
             ceiling: MAX_CHUNKS_PER_UPDATE as f64,
-            additive_increase: 16.,
+            additive_increase: 64.,
             multiplicative_decrease: 0.5,
         },
     };
@@ -1068,9 +1068,9 @@ impl InboundWorker {
                 };
 
                 if let Some(pacing) = &update.pacing {
-                    if pacing.pending_chunks < 16 {
+                    if pacing.pending_chunks < 256 {
                         self.chunk_pacing.increase();
-                    } else if pacing.pending_chunks > 64 {
+                    } else if pacing.pending_chunks > 1024 {
                         self.chunk_pacing.decrease();
                     }
                 }
@@ -1414,12 +1414,12 @@ const LOAD_EAGER_DISTANCE: i32 = 20;
 const LOAD_LAZY_DISTANCE: i32 = 25;
 const UNLOAD_DISTANCE: i32 = 30;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
-const FORCE_LOAD_DISTANCE: i32 = 2;
+const FORCE_LOAD_DISTANCE: i32 = 3;
 
 const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
-const INITIAL_CHUNKS_PER_UPDATE: usize = 16;
-const MAX_CHUNKS_PER_UPDATE: usize = 512;
+const INITIAL_CHUNKS_PER_UPDATE: usize = 128;
+const MAX_CHUNKS_PER_UPDATE: usize = 256;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {
@@ -1430,6 +1430,7 @@ lazy_static::lazy_static! {
         }
         v
     };
+
 }
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_SORTED_COORDS: Vec<(i32, i32, i32)> = {
@@ -1437,7 +1438,8 @@ lazy_static::lazy_static! {
         for (&x, &y, &z) in iproduct!(LOAD_LAZY_ZIGZAG_VEC.iter(), LOAD_LAZY_ZIGZAG_VEC.iter(), LOAD_LAZY_ZIGZAG_VEC.iter()) {
             v.push((x, y, z));
         }
-        v.sort_by_key(|(x, y, z)| x.abs() + y.abs() + z.abs());
+        v.sort_by_key(|(x, y, z)| x.abs() + (4 * y.abs()) + z.abs());
+        v.retain(|x| (x.0 + x.1 + x.2) <= LOAD_LAZY_DISTANCE);
         v
     };
 }

@@ -11,12 +11,14 @@ const SETTINGS_RON_FILE: &str = "settings.ron";
 #[serde(default)]
 pub(crate) struct RenderSettings {
     pub(crate) experimental_num_mesh_workers: usize,
+    pub(crate) show_placement_guide: bool
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
             experimental_num_mesh_workers: 1,
+            show_placement_guide: false
         }
     }
 }

@@ -57,7 +57,7 @@ pub(crate) async fn make_contexts(
         ack_map: ack_map.clone(),
         mesh_workers: mesh_workers.clone(),
         mesh_worker_handles,
-        neighbor_propagator,
+        neighbor_propagator: neighbor_propagator.clone(),
         neighbor_propagator_handle,
     };
 
@@ -70,6 +70,7 @@ pub(crate) async fn make_contexts(
         action_receiver,
         last_pos_update_seq: None,
         mesh_workers,
+        neighbor_propagator
     };
 
     Ok((inbound, outbound))
@@ -88,6 +89,7 @@ pub(crate) struct OutboundContext {
 
     // Used only for pacing
     mesh_workers: Vec<Arc<MeshWorker>>,
+    neighbor_propagator: Arc<NeighborPropagator>,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
@@ -132,8 +134,9 @@ impl OutboundContext {
         let pending_chunks = self
             .mesh_workers
             .iter()
-            .map(|worker| worker.queue_len() * 0)
+            .map(|worker| worker.queue_len())
             .sum::<usize>()
+            .max(self.neighbor_propagator.queue_len())
             .try_into()
             .unwrap();
         let sequence = self
