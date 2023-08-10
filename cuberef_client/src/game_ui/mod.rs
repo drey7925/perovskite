@@ -124,7 +124,7 @@ where
         image.put_pixel(0, 0, image::Rgb([COLOR_SCALE_R[i], COLOR_SCALE_G[i], 0]));
         texture_packer
             .pack_own(
-                String::from(format!("builtin:wear_{}", i)),
+                format!("builtin:wear_{}", i),
                 DynamicImage::ImageRgb8(image),
             )
             .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;

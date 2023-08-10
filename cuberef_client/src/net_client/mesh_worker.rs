@@ -73,7 +73,7 @@ impl NeighborPropagator {
     /// this neighbor propagator will resume.
     /// This can be used to preempt the neighbor propagator thread's work to allow a higher-priority
     /// neighbor propagation to run inline in a message handler.
-    pub(crate) fn borrow_token<'a>(&'a self) -> NeighborPropagationToken<'a> {
+    pub(crate) fn borrow_token(&self) -> NeighborPropagationToken<'_> {
         let _span = span!("mesh_worker borrow_token");
         NeighborPropagationToken(self.token.lock())
     }
@@ -285,7 +285,7 @@ pub(crate) fn propagate_neighbor_data(
     scratchpad: &mut [u8; 48 * 48 * 48],
     _token: &mut NeighborPropagationToken,
 ) -> Result<bool> {
-    let neighbor_cache = FastNeighborLockCache::new(&neighbors);
+    let neighbor_cache = FastNeighborLockCache::new(neighbors);
     let slice_cache = FastNeighborSliceCache::new(&neighbor_cache);
 
     if let Some(current_chunk) = neighbors.get((0, 0, 0)) {
@@ -296,7 +296,7 @@ pub(crate) fn propagate_neighbor_data(
             let air = block_manager.air_block();
             if current_chunk.block_ids().iter().all(|&x| x == air) {
                 current_chunk.set_state(
-                    crate::game_state::chunk::BlockIdState::BlockIdsWithNeighborsAuditNoRender,
+                    crate::game_state::chunk::BlockIdState::NoRender,
                 );
                 return Ok(true);
             }
@@ -339,7 +339,7 @@ pub(crate) fn propagate_neighbor_data(
                 .all(|&x| block_manager.is_solid_opaque(x))
             {
                 current_chunk.set_state(
-                    crate::game_state::chunk::BlockIdState::BlockIdsWithNeighborsAuditNoRender,
+                    crate::game_state::chunk::BlockIdState::NoRender,
                 );
                 return Ok(true);
             }
@@ -417,8 +417,7 @@ pub(crate) fn propagate_neighbor_data(
                                     let max_index = min_index + 16;
                                     let subslice = &slice[min_index..max_index];
                                     // consider unrolling this loop
-                                    for i in 0..16 {
-                                        let block_id = subslice[i];
+                                    for (i, &block_id) in subslice.iter().enumerate().take(16) {
                                         let light_emission = block_manager.light_emission(block_id);
                                         if light_emission > 0 {
                                             maybe_push(
@@ -438,8 +437,7 @@ pub(crate) fn propagate_neighbor_data(
             }
 
             // Then, while the queue is non-empty, attempt to propagate light
-            while !queue.is_empty() {
-                let (i, j, k, light_level) = queue.pop().unwrap();
+            while let Some((i, j, k, light_level)) = queue.pop() {
                 let old_level = scratchpad
                     [(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize];
                 if old_level >= light_level {
@@ -479,7 +477,7 @@ pub(crate) fn propagate_neighbor_data(
                     j,
                     k,
                     light_level - 1,
-                    &light_propagate_for_coord,
+                    light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
@@ -487,7 +485,7 @@ pub(crate) fn propagate_neighbor_data(
                     j,
                     k,
                     light_level - 1,
-                    &light_propagate_for_coord,
+                    light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
@@ -495,7 +493,7 @@ pub(crate) fn propagate_neighbor_data(
                     j - 1,
                     k,
                     light_level - 1,
-                    &light_propagate_for_coord,
+                    light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
@@ -503,7 +501,7 @@ pub(crate) fn propagate_neighbor_data(
                     j + 1,
                     k,
                     light_level - 1,
-                    &light_propagate_for_coord,
+                    light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
@@ -511,7 +509,7 @@ pub(crate) fn propagate_neighbor_data(
                     j,
                     k - 1,
                     light_level - 1,
-                    &light_propagate_for_coord,
+                    light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
@@ -519,7 +517,7 @@ pub(crate) fn propagate_neighbor_data(
                     j,
                     k + 1,
                     light_level - 1,
-                    &light_propagate_for_coord,
+                    light_propagate_for_coord,
                 );
             }
 
@@ -536,7 +534,7 @@ pub(crate) fn propagate_neighbor_data(
             }
         }
 
-        current_chunk.set_state(crate::game_state::chunk::BlockIdState::BlockIdsReadyToRender);
+        current_chunk.set_state(crate::game_state::chunk::BlockIdState::ReadyToRender);
 
         Ok(true)
     } else {

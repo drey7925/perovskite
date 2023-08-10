@@ -62,6 +62,8 @@ pub struct BlockInteractionResult {
     /// The wear of the tool that the player used
     pub tool_wear: u32,
 }
+// We want to make the default value explicit, and it may not always be derivable
+#[allow(clippy::derivable_impls)]
 impl Default for BlockInteractionResult {
     fn default() -> Self {
         Self {

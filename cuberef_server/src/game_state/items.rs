@@ -206,7 +206,7 @@ impl ItemStack {
             }
         } else {
             // we aren't stackable
-            return Some(other);
+            Some(other)
         }
     }
 

@@ -65,7 +65,7 @@ impl DroppedItem {
     {
         let air_block = game_builder.air_block;
         Box::new(move |ctx, target_block, ext_data, stack| {
-            let block_type = ctx.block_types().get_block(&target_block)?.0;
+            let block_type = ctx.block_types().get_block(target_block)?.0;
             let rule = ctx
                 .items()
                 .from_stack(stack)
@@ -89,7 +89,7 @@ impl DroppedItem {
 
     fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
         match self {
-            DroppedItem::None => Self::build_dig_handler_inner(|| vec![], game_builder),
+            DroppedItem::None => Self::build_dig_handler_inner(Vec::new, game_builder),
             DroppedItem::Fixed(item, count) => Self::build_dig_handler_inner(
                 move || {
                     vec![ItemStack {
@@ -491,6 +491,13 @@ impl CubeAppearanceBuilder {
         self
     }
 }
+
+impl Default for CubeAppearanceBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: tex_name,

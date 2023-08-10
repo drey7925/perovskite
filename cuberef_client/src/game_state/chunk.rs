@@ -38,7 +38,7 @@ impl ChunkDataView<'_> {
         &self.0.block_ids
     }
 
-    pub(crate) fn lightmap(&self) -> &Box<[u8; 18 * 18 * 18]> {
+    pub(crate) fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
         &self.0.lightmap
     }
 
@@ -69,15 +69,15 @@ impl ChunkDataViewMut<'_> {
 
 pub(crate) enum BlockIdState {
     /// We don't have this chunk's neighbors yet. It's not ready to render.
-    BlockIdsNeedProcessing,
+    NeedProcessing,
     /// We processed the chunk's neighbors, but we don't have anything to render.
-    BlockIdsNoRender,
+    NoRender,
 
     /// We expect the chunk to have something to render, and we've prepared its neighbors.
-    BlockIdsReadyToRender,
+    ReadyToRender,
     /// We don't expect the chunk to have anything to render, but the renderer should verify this and
     /// use a bright error texture + log an error message if it renders anything.
-    BlockIdsWithNeighborsAuditNoRender,
+    AuditNoRender,
 }
 
 /// Holds a cache of data that's used to actually turn a chunk into a mesh
@@ -138,7 +138,7 @@ impl ClientChunk {
             coord,
             chunk_data: RwLock::new(ChunkData {
                 block_ids: Self::expand_ids(block_ids),
-                data_state: BlockIdState::BlockIdsNeedProcessing,
+                data_state: BlockIdState::NeedProcessing,
                 lightmap: Box::new([0; 18 * 18 * 18]),
             }),
             cached_vertex_data: Mutex::new(None),
@@ -148,14 +148,14 @@ impl ClientChunk {
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<()> {
         let data = self.chunk_data();
         let vertex_data = match data.0.data_state {
-            BlockIdState::BlockIdsNeedProcessing => {
+            BlockIdState::NeedProcessing => {
                 log::warn!("BlockIdsNeedProcessing for {:?}", self.coord);
                 None
                 //Some(renderer.mesh_chunk(&data)?)
             }
-            BlockIdState::BlockIdsNoRender => None,
-            BlockIdState::BlockIdsReadyToRender => Some(renderer.mesh_chunk(&data)?),
-            BlockIdState::BlockIdsWithNeighborsAuditNoRender => {
+            BlockIdState::NoRender => None,
+            BlockIdState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
+            BlockIdState::AuditNoRender => {
                 let result = renderer.mesh_chunk(&data)?;
                 if result.solid_opaque.is_some()
                     || result.transparent.is_some()
@@ -203,7 +203,7 @@ impl ClientChunk {
         // unwrap is safe: we verified the length
         let mut data_guard = self.chunk_data.write();
         data_guard.block_ids = Self::expand_ids(block_ids);
-        data_guard.data_state = BlockIdState::BlockIdsNeedProcessing;
+        data_guard.data_state = BlockIdState::NeedProcessing;
         Ok(())
     }
 
@@ -221,7 +221,7 @@ impl ClientChunk {
         // TODO future optimization: check whether a change in variant actually requires
         // a redraw
         if old_id != new_id {
-            chunk_data.data_state = BlockIdState::BlockIdsNeedProcessing;
+            chunk_data.data_state = BlockIdState::NeedProcessing;
             chunk_data.block_ids[block_coord.offset().as_extended_index()] = new_id;
         }
 

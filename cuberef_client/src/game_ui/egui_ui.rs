@@ -1,6 +1,6 @@
 use anyhow::Result;
 use cuberef_core::items::ItemStackExt;
-use cuberef_core::protocol::items::{ItemStack};
+use cuberef_core::protocol::items::ItemStack;
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
@@ -280,16 +280,14 @@ impl EguiUi {
             builder.rect(position_rect, texture_rect, self.texture_atlas.dimensions());
             let frame_topright = (position_rect.right(), position_rect.top());
             // todo unify this with hud.rs
-            if stack.stackable() {
-                if stack.quantity != 1 {
-                    render_number(
-                        frame_topright,
-                        stack.quantity,
-                        &mut builder,
-                        &self.atlas_coords,
-                        &self.texture_atlas,
-                    )
-                }
+            if stack.stackable() && stack.quantity != 1 {
+                render_number(
+                    frame_topright,
+                    stack.quantity,
+                    &mut builder,
+                    &self.atlas_coords,
+                    &self.texture_atlas,
+                )
             }
 
             Ok(Some(builder.build(vk_ctx)?))
@@ -427,9 +425,10 @@ impl EguiUi {
                             let wear_bucket = ((wear_level * 8.0) as u8).clamp(0, 7);
                             let wear_texture = format!("builtin:wear_{}", wear_bucket);
                             let texture_uv = self.pixel_rect_to_uv(
-                                *self.atlas_coords
+                                *self
+                                    .atlas_coords
                                     .get(&wear_texture)
-                                    .expect(&format!("Missing texture {}", wear_texture)),
+                                    .unwrap_or_else(|| panic!("Missing texture {}", wear_texture)),
                             );
 
                             let wear_bar_image = egui::Image::new(

@@ -81,8 +81,7 @@ pub fn do_lighting_pass<F, G, H, I>(
         }
     }
     // Then, while the queue is non-empty, attempt to propagate light
-    while !queue.is_empty() {
-        let (i, j, k, light_level) = queue.pop().unwrap();
+    while let Some((i, j, k, light_level)) = queue.pop() {
         let old_level =
             scratchpad[(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize];
         if old_level >= light_level {
@@ -100,7 +99,7 @@ pub fn do_lighting_pass<F, G, H, I>(
             j,
             k,
             light_level - 1,
-            &light_propagate_for_coord,
+            light_propagate_for_coord,
         );
         check_propagation_and_push(
             &mut queue,
@@ -108,7 +107,7 @@ pub fn do_lighting_pass<F, G, H, I>(
             j,
             k,
             light_level - 1,
-            &light_propagate_for_coord,
+            light_propagate_for_coord,
         );
         check_propagation_and_push(
             &mut queue,
@@ -116,7 +115,7 @@ pub fn do_lighting_pass<F, G, H, I>(
             j - 1,
             k,
             light_level - 1,
-            &light_propagate_for_coord,
+            light_propagate_for_coord,
         );
         check_propagation_and_push(
             &mut queue,
@@ -124,7 +123,7 @@ pub fn do_lighting_pass<F, G, H, I>(
             j + 1,
             k,
             light_level - 1,
-            &light_propagate_for_coord,
+            light_propagate_for_coord,
         );
         check_propagation_and_push(
             &mut queue,
@@ -132,7 +131,7 @@ pub fn do_lighting_pass<F, G, H, I>(
             j,
             k - 1,
             light_level - 1,
-            &light_propagate_for_coord,
+            light_propagate_for_coord,
         );
         check_propagation_and_push(
             &mut queue,
@@ -140,7 +139,7 @@ pub fn do_lighting_pass<F, G, H, I>(
             j,
             k + 1,
             light_level - 1,
-            &light_propagate_for_coord,
+            light_propagate_for_coord,
         );
     }
 }

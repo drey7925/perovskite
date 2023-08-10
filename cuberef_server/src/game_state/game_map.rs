@@ -804,15 +804,13 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get()?;
 
-        let result = self.mutate_block_atomically_locked(
+        self.mutate_block_atomically_locked(
             &chunk_guard,
             &mut chunk,
             coord.offset(),
             mutator,
             self,
-        );
-
-        result
+        )
     }
 
     /// Internal impl detail of mutate_block_atomically and timers

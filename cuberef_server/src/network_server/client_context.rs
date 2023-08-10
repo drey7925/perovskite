@@ -1001,7 +1001,7 @@ impl InboundWorker {
                             item_handler(
                                 ctx,
                                 coord,
-                                stack.as_ref().unwrap_or_else(|| &items::NO_TOOL_STACK),
+                                stack.as_ref().unwrap_or(&items::NO_TOOL_STACK),
                             )
                         },
                         "item dig handler",

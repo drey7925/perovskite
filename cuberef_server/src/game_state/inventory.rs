@@ -113,7 +113,7 @@ impl Inventory {
             .iter()
             .map(|x| {
                 x.as_ref()
-                    .map_or_else(|| make_empty_stack(), |x| x.proto.clone())
+                    .map_or_else(make_empty_stack, |x| x.proto.clone())
             })
             .collect();
         items_proto::Inventory {
