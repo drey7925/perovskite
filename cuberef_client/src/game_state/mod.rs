@@ -209,16 +209,7 @@ impl ChunkManager {
         // use of chunks is likewise scoped to the physics code)
         let src = self.chunks.read();
         if let Some(chunk) = src.get(&coord) {
-            if chunk.mesh_with(renderer)? {
-                // We take the lock after mesh_with to keep the lock scope as short as possible
-                // and avoid blocking the render thread
-                let mut dst = self.renderable_chunks.write();
-                dst.insert(coord, chunk.clone());
-            } else {
-                // Likewise.
-                let mut dst = self.renderable_chunks.write();
-                dst.remove(&coord);
-            }
+            chunk.mesh_with(renderer)?;
             Ok(true)
         } else {
             Ok(false)

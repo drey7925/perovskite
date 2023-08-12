@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::{Deref, RangeInclusive};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
@@ -26,7 +27,7 @@ use anyhow::{ensure, Context, Result};
 
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
+use crate::block_renderer::{BlockRenderer, MeshedGeometry};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 
 pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
@@ -113,7 +114,8 @@ pub(crate) struct ChunkData {
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
     chunk_data: RwLock<ChunkData>,
-    cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
+    pub(crate) cached_vertex_data: Mutex<Option<MeshedGeometry>>,
+    pub(crate) assigned_buffer: AtomicUsize,
 }
 impl ClientChunk {
     pub(crate) fn from_proto(proto: rpc_proto::MapChunk) -> Result<ClientChunk> {
@@ -140,37 +142,21 @@ impl ClientChunk {
                 lightmap: Box::new([0; 18 * 18 * 18]),
             }),
             cached_vertex_data: Mutex::new(None),
+            assigned_buffer: AtomicUsize::new(usize::MAX),
         })
     }
 
-    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<bool> {
+    pub(crate) fn mesh_with(self: &Arc<Self>, renderer: &BlockRenderer) -> Result<()> {
         let data = self.chunk_data();
-        let vertex_data = match data.0.data_state {
+        match data.0.data_state {
             BlockIdState::NeedProcessing => {
                 log::warn!("BlockIdsNeedProcessing for {:?}", self.coord);
-                None
-                //Some(renderer.mesh_chunk(&data)?)
             }
-            BlockIdState::NoRender => None,
-            BlockIdState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
-            BlockIdState::AuditNoRender => {
-                let result = renderer.mesh_chunk(&data)?;
-                if result.solid_opaque.is_some()
-                    || result.transparent.is_some()
-                    || result.translucent.is_some()
-                {
-                    log::warn!("Failed no-render audit for {:?}", self.coord);
-                }
-                Some(result)
-            }
+            BlockIdState::NoRender => {}
+            BlockIdState::ReadyToRender => renderer.mesh_chunk(self)?,
+            BlockIdState::AuditNoRender => renderer.mesh_chunk(self)?,
         };
-        if let Some(vertex_data) = vertex_data {
-            *self.cached_vertex_data.lock() = Some(vertex_data);
-            Ok(true)
-        } else {
-            *self.cached_vertex_data.lock() = None;
-            Ok(false)
-        }
+        Ok(())
     }
 
     fn expand_ids(ids: &[u32; 16 * 16 * 16]) -> Box<[BlockId; 18 * 18 * 18]> {
@@ -230,48 +216,24 @@ impl ClientChunk {
 
         Ok(old_id != new_id)
     }
-    pub(crate) fn make_draw_call(
-        &self,
-        coord: ChunkCoordinate,
-        player_position: Vector3<f64>,
-        view_proj_matrix: Matrix4<f32>,
-    ) -> Option<CubeGeometryDrawCall> {
-        // We calculate the transform in f64, and *then* narrow to f32
-        // Otherwise, we get catastrophic cancellation when far from the origin
 
-        // Relative origin in player-relative coordinates, where the player is at 0,0,0 and
-        // the X/Y/Z axes are aligned with the global axes (i.e. NOT rotated)
-        //
-        // player_position is in game coordinates (+Y up) and the result should be in Vulkan
-        // coordinates (+Y down)
-        let relative_origin = (Vector3::new(
-            // For some reason, using self.coord causes a ton of cache misses and
-            // measurably worse performance on my machine, even though we're about to access
-            // the vertex data.
-            16. * coord.x as f64,
-            16. * coord.y as f64,
-            16. * coord.z as f64,
-        ) - player_position)
-            .mul_element_wise(Vector3::new(1., -1., 1.));
-        let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
-        if Self::check_frustum(view_proj_matrix * translation) {
-            self.cached_vertex_data.lock().as_ref().and_then(|x| {
-                Some(CubeGeometryDrawCall {
-                    models: x.clone_if_nonempty()?,
-                    model_matrix: translation,
-                })
-            })
-        } else {
-            None
-        }
+    /// Returns the position in *vulkan* space (+Y down)
+    pub(crate) fn origin(&self) -> Vector3<f64> {
+        Vector3::new(
+            16. * self.coord.x as f64,
+            -16. * self.coord.y as f64,
+            16. * self.coord.z as f64,
+        )
     }
 
     fn check_frustum(transformation: Matrix4<f32>) -> bool {
-
         #[inline]
         fn mvmul4(matrix: Matrix4<f32>, vector: Vector4<f32>) -> Vector4<f32> {
             // This is the implementation hidden behind the simd feature gate
-            matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2] + matrix[3] * vector[3]
+            matrix[0] * vector[0]
+                + matrix[1] * vector[1]
+                + matrix[2] * vector[2]
+                + matrix[3] * vector[3]
         }
 
         #[inline]
@@ -295,7 +257,7 @@ impl ClientChunk {
             f32::NEG_INFINITY,
             f32::NEG_INFINITY,
         );
-        
+
         for corner in CORNERS {
             let mut ndc = mvmul4(transformation, corner);
             let ndcw = ndc.w;

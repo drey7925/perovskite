@@ -449,16 +449,15 @@ impl InboundContext {
         let mut bad_coords = vec![];
         for coord in unsub.chunk_coord.iter() {
             match self.client_state.chunks.remove(&coord.into()) {
-                Some(_x) => {}
+                Some(removed) => {
+                    self.client_state.block_renderer.batched_meshes_opaque.remove(&removed)?;
+                    self.client_state.block_renderer.batched_meshes_transparent.remove(&removed)?;
+                    self.client_state.block_renderer.batched_meshes_translucent.remove(&removed)?;
+                }
                 None => {
                     bad_coords.push(coord.clone());
                 }
             }
-
-            // TODO - do we need to do this?
-            // tokio::task::block_in_place(|| {
-            //     self.mesh_worker.queue.lock().remove(&coord.into());
-            // });
         }
         if !bad_coords.is_empty() {
             self.send_bugcheck(format!(
@@ -552,6 +551,9 @@ impl InboundContext {
                     }
             }
         }
+        self.client_state.block_renderer.batched_meshes_opaque.flush()?;
+        self.client_state.block_renderer.batched_meshes_translucent.flush()?;
+        self.client_state.block_renderer.batched_meshes_transparent.flush()?;
         Ok((missing_coord, unknown_coords))
     }
 

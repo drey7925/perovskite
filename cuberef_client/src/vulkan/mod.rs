@@ -17,6 +17,7 @@
 pub mod game_renderer;
 pub(crate) mod shaders;
 pub(crate) mod util;
+pub(crate) mod batched_buffer;
 
 use std::sync::Arc;
 

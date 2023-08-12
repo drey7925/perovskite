@@ -39,7 +39,7 @@ use vulkano::{
 };
 
 use crate::{
-    block_renderer::VkChunkVertexData,
+    block_renderer::{MeshedGeometry, VkChunkPass, VkChunkVertexData},
     vulkan::{
         shaders::{frag_lighting, vert_3d::ModelMatrix},
         CommandBufferBuilder, Texture2DHolder, VulkanContext,
@@ -71,7 +71,7 @@ pub(crate) struct CubeGeometryVertex {
     pub(crate) global_brightness_contribution: f32,
 }
 pub(crate) struct CubeGeometryDrawCall {
-    pub(crate) models: VkChunkVertexData,
+    pub(crate) models: VkChunkPass,
     pub(crate) model_matrix: Matrix4<f32>,
 }
 
@@ -114,21 +114,14 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipeline
         builder.bind_pipeline_graphics(pipeline);
         let mut effective_calls = 0;
         for call in draw_calls.iter_mut() {
-            let pass_data = match pass {
-                BlockRenderPass::Opaque => call.models.solid_opaque.take(),
-                BlockRenderPass::Transparent => call.models.transparent.take(),
-                BlockRenderPass::Translucent => call.models.translucent.take(),
-            };
-            if let Some(pass_data) = pass_data {
-                effective_calls += 1;
+            effective_calls += 1;
 
-                let push_data: ModelMatrix = call.model_matrix.into();
-                builder
-                    .push_constants(layout.clone(), 0, push_data)
-                    .bind_vertex_buffers(0, pass_data.vtx.clone())
-                    .bind_index_buffer(pass_data.idx.clone())
-                    .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
-            }
+            let push_data: ModelMatrix = call.model_matrix.into();
+            builder
+                .push_constants(layout.clone(), 0, push_data)
+                .bind_vertex_buffers(0, call.models.vtx.clone())
+                .bind_index_buffer(call.models.idx.clone())
+                .draw_indexed(call.models.idx.len().try_into()?, 1, 0, 0, 0)?;
         }
         plot!("total_calls", draw_calls.len() as f64);
         let draw_rate = effective_calls as f64 / (draw_calls.len() as f64);

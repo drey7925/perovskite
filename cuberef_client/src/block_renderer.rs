@@ -16,7 +16,6 @@
 
 use std::collections::HashSet;
 
-
 use std::sync::Arc;
 
 use cgmath::num_traits::Num;
@@ -46,10 +45,12 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
-use crate::game_state::chunk::{ChunkOffsetExt, ChunkDataView};
+use crate::game_state::chunk::{ChunkDataView, ChunkOffsetExt, ClientChunk};
 use crate::game_state::make_fallback_blockdef;
-use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
-use crate::vulkan::{Texture2DHolder, VulkanContext};
+use crate::vulkan::shaders::cube_geometry::{
+    BlockRenderPass, CubeGeometryDrawCall, CubeGeometryVertex,
+};
+use crate::vulkan::{batched_buffer, Texture2DHolder, VulkanContext};
 
 use bitvec::prelude as bv;
 
@@ -257,13 +258,16 @@ impl CubeExtents {
     pub fn rotate_y(self, variant: u16) -> CubeExtents {
         let mut vertices = self.vertices;
         let mut neighbors = self.neighbors;
-        for vtx in &mut vertices{
+        for vtx in &mut vertices {
             *vtx = Vector3::from(rotate_y((vtx.x, vtx.y, vtx.z), variant));
         }
         for neighbor in &mut neighbors {
             *neighbor = rotate_y(*neighbor, variant);
         }
-        Self { vertices, neighbors }
+        Self {
+            vertices,
+            neighbors,
+        }
     }
 }
 
@@ -295,43 +299,30 @@ pub(crate) struct VkChunkPass {
     pub(crate) vtx: Subbuffer<[CubeGeometryVertex]>,
     pub(crate) idx: Subbuffer<[u32]>,
 }
-impl VkChunkPass {
+
+#[derive(Clone)]
+pub(crate) struct IndexedVertexBuffer {
+    pub(crate) vtx: Vec<CubeGeometryVertex>,
+    pub(crate) idx: Vec<u32>,
+}
+impl IndexedVertexBuffer {
     pub(crate) fn from_buffers(
         vtx: Vec<CubeGeometryVertex>,
         idx: Vec<u32>,
-        allocator: &StandardMemoryAllocator,
-    ) -> Result<Option<VkChunkPass>> {
+    ) -> Option<IndexedVertexBuffer> {
         if vtx.is_empty() {
-            Ok(None)
+            None
         } else {
-            Ok(Some(VkChunkPass {
-                vtx: Buffer::from_iter(
-                    allocator,
-                    BufferCreateInfo {
-                        usage: BufferUsage::VERTEX_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        usage: MemoryUsage::Upload,
-                        ..Default::default()
-                    },
-                    vtx.into_iter(),
-                )?,
-                idx: Buffer::from_iter(
-                    allocator,
-                    BufferCreateInfo {
-                        usage: BufferUsage::INDEX_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        usage: MemoryUsage::Upload,
-                        ..Default::default()
-                    },
-                    idx.into_iter(),
-                )?,
-            }))
+            Some(IndexedVertexBuffer { vtx, idx })
         }
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct MeshedGeometry {
+    pub(crate) solid_opaque: Option<IndexedVertexBuffer>,
+    pub(crate) transparent: Option<IndexedVertexBuffer>,
+    pub(crate) translucent: Option<IndexedVertexBuffer>,
 }
 
 #[derive(Clone)]
@@ -350,13 +341,16 @@ impl VkChunkVertexData {
     }
 }
 
-/// Manages the block type definitions, and their underlying textures,
-/// for the game.
+/// Manages meshed chunk data, block type definitions, and their underlying textures, for the game.
 pub(crate) struct BlockRenderer {
     block_defs: Arc<ClientBlockTypeManager>,
     texture_coords: FxHashMap<String, Rect>,
     texture_atlas: Arc<Texture2DHolder>,
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
+
+    pub(crate) batched_meshes_opaque: batched_buffer::BufferManager,
+    pub(crate) batched_meshes_transparent: batched_buffer::BufferManager,
+    pub(crate) batched_meshes_translucent: batched_buffer::BufferManager,
 }
 impl BlockRenderer {
     fn get_texture(&self, id: &str) -> Rect {
@@ -381,6 +375,18 @@ impl BlockRenderer {
             texture_coords,
             texture_atlas,
             allocator: ctx.allocator(),
+            batched_meshes_opaque: batched_buffer::BufferManager::new(
+                ctx.allocator(),
+                BlockRenderPass::Opaque,
+            ),
+            batched_meshes_transparent: batched_buffer::BufferManager::new(
+                ctx.allocator(),
+                BlockRenderPass::Transparent,
+            ),
+            batched_meshes_translucent: batched_buffer::BufferManager::new(
+                ctx.allocator(),
+                BlockRenderPass::Translucent,
+            ),
         })
     }
 
@@ -392,9 +398,30 @@ impl BlockRenderer {
         &self.allocator
     }
 
-    pub(crate) fn mesh_chunk(&self, chunk_data: &ChunkDataView) -> Result<VkChunkVertexData> {
+    pub(crate) fn mesh_chunk(&self, chunk: &Arc<ClientChunk>) -> Result<()> {
+        let chunk_data = chunk.chunk_data();
+        let geometry = self.build_meshes(&chunk_data)?;
+        let has_opaque = geometry.solid_opaque.is_some();
+        let has_transparent = geometry.transparent.is_some();
+        let has_translucent = geometry.translucent.is_some();
+
+        // todo clean up all the redundant lock steps
+        *chunk.cached_vertex_data.lock() = Some(geometry);
+        if has_opaque {
+            self.batched_meshes_opaque.add_chunk(chunk)?;
+        }
+        // if has_transparent {
+        //     self.batched_meshes_transparent.add_chunk(chunk)?;
+        // }
+        // if has_translucent {
+        //     self.batched_meshes_translucent.add_chunk(chunk)?;
+        // }
+        Ok(())
+    }
+
+    fn build_meshes(&self, chunk_data: &ChunkDataView) -> Result<MeshedGeometry> {
         let _span = span!("meshing");
-        Ok(VkChunkVertexData {
+        Ok(MeshedGeometry {
             solid_opaque: self.mesh_chunk_subpass(
                 chunk_data,
                 |block| match block.render_info {
@@ -459,7 +486,7 @@ impl BlockRenderer {
         include_block_when: F,
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
         suppress_face_when: G,
-    ) -> Result<Option<VkChunkPass>>
+    ) -> Result<Option<IndexedVertexBuffer>>
     where
         F: Fn(&BlockTypeDef) -> bool,
         G: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
@@ -489,7 +516,7 @@ impl BlockRenderer {
                 }
             }
         }
-        VkChunkPass::from_buffers(vtx, idx, self.allocator())
+        Ok(IndexedVertexBuffer::from_buffers(vtx, idx))
     }
 
     fn emit_full_cube<F>(
@@ -525,7 +552,11 @@ impl BlockRenderer {
                 offset.z as i8 + n_z,
             )
                 .as_extended_index();
-            if suppress_face_when(block, self.block_defs.get_blockdef(chunk_data.block_ids()[neighbor_index])) {
+            if suppress_face_when(
+                block,
+                self.block_defs
+                    .get_blockdef(chunk_data.block_ids()[neighbor_index]),
+            ) {
                 continue;
             };
 
@@ -606,11 +637,7 @@ impl BlockRenderer {
             .mul_element_wise(Vector3::new(1., -1., 1.));
         Ok(CubeGeometryDrawCall {
             model_matrix: Matrix4::from_translation(offset.cast().unwrap()),
-            models: VkChunkVertexData {
-                solid_opaque: None,
-                transparent: Some(VkChunkPass { vtx, idx }),
-                translucent: None,
-            },
+            models: VkChunkPass { vtx, idx },
         })
     }
 }
@@ -718,12 +745,19 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
     })
 }
 
-const BRIGHTNESS_TABLE: [f32; 16] = [0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.00];
+const BRIGHTNESS_TABLE: [f32; 16] = [
+    0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
+    0.875, 0.9375, 1.00,
+];
 // TODO enable global brightness
 const GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = [0.0; 16];
 
 #[inline]
-fn make_cgv(coord: Vector3<f32>, tex_uv: cgmath::Vector2<f32>, brightness: u8) -> CubeGeometryVertex {
+fn make_cgv(
+    coord: Vector3<f32>,
+    tex_uv: cgmath::Vector2<f32>,
+    brightness: u8,
+) -> CubeGeometryVertex {
     let brightness_upper = (brightness >> 4) as usize;
     let brightness_lower = (brightness & 0x0F) as usize;
     CubeGeometryVertex {

@@ -83,16 +83,34 @@ impl ActiveGame {
         } = self
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
-        self.cube_draw_calls.clear();
+
+        let mut transparent = self.client_state.block_renderer.batched_meshes_opaque.get_for_rendering(player_position);
+        if !transparent.is_empty() {
+            self.cube_pipeline
+                .bind(
+                    ctx,
+                    view_proj_matrix,
+                    &mut command_buf_builder,
+                    BlockRenderPass::Opaque,
+                )
+                .unwrap();
+            self.cube_pipeline
+                .draw(
+                    &mut command_buf_builder,
+                    &mut transparent,
+                    BlockRenderPass::Opaque,
+                )
+                .unwrap();
+        }
+        let mut translucent = self.client_state.block_renderer.batched_meshes_transparent.get_for_rendering(player_position);
         if let Some(pointee) = tool_state.pointee {
-            self.cube_draw_calls.push(
+            transparent.push(
                 self.client_state
                     .block_renderer
                     .make_pointee_cube(player_position, pointee)
                     .unwrap(),
             );
         }
-        // test only
         if let Some(neighbor) = tool_state.neighbor {
             if self
                 .client_state
@@ -101,7 +119,7 @@ impl ActiveGame {
                 .render
                 .show_placement_guide
             {
-                self.cube_draw_calls.push(
+                transparent.push(
                     self.client_state
                         .block_renderer
                         .make_pointee_cube(player_position, neighbor)
@@ -109,38 +127,7 @@ impl ActiveGame {
                 );
             }
         }
-
-        let chunk_lock = {
-            let _span = span!("Waiting for chunk_lock");
-            self.client_state.chunks.renderable_chunks_cloned_view()
-        };
-        plot!("total_chunks", chunk_lock.len() as f64);
-        self.cube_draw_calls.extend(
-            chunk_lock
-                .iter()
-                .filter_map(|(&coord, chunk)| chunk.make_draw_call(coord, player_position, view_proj_matrix)),
-        );
-        plot!(
-            "chunk_rate",
-            self.cube_draw_calls.len() as f64 / chunk_lock.len() as f64
-        );
-
-        if !self.cube_draw_calls.is_empty() {
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    view_proj_matrix,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Opaque,
-                )
-                .unwrap();
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Opaque,
-                )
-                .unwrap();
+        if !translucent.is_empty() {
             self.cube_pipeline
                 .bind(
                     ctx,
@@ -152,10 +139,13 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
+                    &mut translucent,
                     BlockRenderPass::Transparent,
                 )
                 .unwrap();
+        }
+        let mut opaque = self.client_state.block_renderer.batched_meshes_translucent.get_for_rendering(player_position);
+        if !opaque.is_empty() {
             self.cube_pipeline
                 .bind(
                     ctx,
@@ -167,7 +157,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
+                    &mut opaque,
                     BlockRenderPass::Translucent,
                 )
                 .unwrap();
