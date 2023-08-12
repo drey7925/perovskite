@@ -88,9 +88,10 @@ impl ToolController {
             None => {
                 // Ensure that we don't leave pending input events that fire when we finally do get a pointee
                 let mut input = client_state.input.lock();
+                input.take_just_pressed(BoundAction::Dig);
                 input.take_just_released(BoundAction::Dig);
-                input.take_just_released(BoundAction::Place);
-                input.take_just_released(BoundAction::Interact);
+                input.take_just_pressed(BoundAction::Place);
+                input.take_just_pressed(BoundAction::Interact);
                 self.dig_progress = None;
                 return ToolState {
                     pointee: None,
