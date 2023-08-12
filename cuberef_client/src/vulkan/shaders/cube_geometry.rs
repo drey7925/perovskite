@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::{vec3, vec4, Matrix4, Vector4, Zero};
+use cgmath::Matrix4;
 use std::sync::Arc;
 use tracy_client::{plot, span};
 use vulkano::{
@@ -82,49 +82,6 @@ pub(crate) struct CubePipelineWrapper {
     solid_descriptor: Arc<PersistentDescriptorSet>,
     sparse_descriptor: Arc<PersistentDescriptorSet>,
     translucent_descriptor: Arc<PersistentDescriptorSet>,
-    bound_projection: Matrix4<f32>,
-}
-impl CubePipelineWrapper {
-    fn check_frustum(&self, pass_data: &CubeGeometryDrawCall) -> bool {
-        let transformation = self.bound_projection * pass_data.model_matrix;
-        const CORNERS: [Vector4<f32>; 8] = [
-            vec4(0., 0., 0., 1.),
-            vec4(16., 0., 0., 1.),
-            vec4(0., -16., 0., 1.),
-            vec4(16., -16., 0., 1.),
-            vec4(0., 0., 16., 1.),
-            vec4(16., 0., 16., 1.),
-            vec4(0., -16., 16., 1.),
-            vec4(16., -16., 16., 1.),
-        ];
-        let mut ndc_min = vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-        let mut ndc_max = vec3(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-        for corner in CORNERS {
-            let mut ndc = transformation * corner;
-            ndc /= ndc.w;
-            ndc_min = vec3(
-                ndc_min.x.min(ndc.x),
-                ndc_min.y.min(ndc.y),
-                ndc_min.z.min(ndc.z),
-            );
-            ndc_max = vec3(
-                ndc_max.x.max(ndc.x),
-                ndc_max.y.max(ndc.y),
-                ndc_max.z.max(ndc.z),
-            );
-        }
-        overlaps(ndc_min.x, ndc_max.x, -1., 1.)
-            && overlaps(ndc_min.y, ndc_max.y, -1., 1.)
-            && overlaps(ndc_min.z, ndc_max.z, 0., 1.)
-    }
-}
-
-#[inline]
-fn overlaps(min1: f32, max1: f32, min2: f32, max2: f32) -> bool {
-    (min1 <= min2 && max1 >= max2)
-        || (min2 <= min1 && max2 >= max1)
-        || (min1 <= max2 && min1 >= min2)
-        || (min2 <= max1 && min2 >= min1)
 }
 
 /// Which render step we are rendering in this renderer.
@@ -135,12 +92,12 @@ pub(crate) enum BlockRenderPass {
     Translucent,
 }
 
-impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper {
+impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipelineWrapper {
     type PassIdentifier = BlockRenderPass;
     fn draw<L>(
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
-        draw_calls: &[CubeGeometryDrawCall],
+        draw_calls: &mut [CubeGeometryDrawCall],
         pass: BlockRenderPass,
     ) -> Result<()> {
         let _span = match pass {
@@ -155,35 +112,29 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
         };
         let layout = pipeline.layout().clone();
         builder.bind_pipeline_graphics(pipeline);
-        let mut pre_frustum = 0;
-        let mut post_frustum = 0;
-        for call in draw_calls.iter() {
+        let mut effective_calls = 0;
+        for call in draw_calls.iter_mut() {
             let pass_data = match pass {
-                BlockRenderPass::Opaque => &call.models.solid_opaque,
-                BlockRenderPass::Transparent => &call.models.transparent,
-                BlockRenderPass::Translucent => &call.models.translucent,
+                BlockRenderPass::Opaque => call.models.solid_opaque.take(),
+                BlockRenderPass::Transparent => call.models.transparent.take(),
+                BlockRenderPass::Translucent => call.models.translucent.take(),
             };
             if let Some(pass_data) = pass_data {
-                pre_frustum += 1;
-                if self.check_frustum(call) {
-                    post_frustum += 1;
+                effective_calls += 1;
 
-                    let push_data: ModelMatrix = call.model_matrix.into();
-                    builder
-                        .push_constants(layout.clone(), 0, push_data)
-                        .bind_vertex_buffers(0, pass_data.vtx.clone())
-                        .bind_index_buffer(pass_data.idx.clone())
-                        .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
-                }
+                let push_data: ModelMatrix = call.model_matrix.into();
+                builder
+                    .push_constants(layout.clone(), 0, push_data)
+                    .bind_vertex_buffers(0, pass_data.vtx.clone())
+                    .bind_index_buffer(pass_data.idx.clone())
+                    .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
             }
         }
         plot!("total_calls", draw_calls.len() as f64);
-        let draw_rate = pre_frustum as f64 / (draw_calls.len() as f64);
-        let draw_rate_frustum = post_frustum as f64 / pre_frustum as f64;
+        let draw_rate = effective_calls as f64 / (draw_calls.len() as f64);
         match pass {
             BlockRenderPass::Opaque => {
                 plot!("opaque_rate", draw_rate);
-                plot!("opaque_rate_frustum", draw_rate_frustum);
             }
             BlockRenderPass::Transparent => {
                 plot!("transparent_rate", draw_rate);
@@ -207,7 +158,6 @@ impl PipelineWrapper<CubeGeometryDrawCall, Matrix4<f32>> for CubePipelineWrapper
             BlockRenderPass::Transparent => span!("bind transparent"),
             BlockRenderPass::Translucent => span!("bind translucent"),
         };
-        self.bound_projection = per_frame_config;
         let layout = match pass {
             BlockRenderPass::Opaque => self.solid_pipeline.layout().clone(),
             BlockRenderPass::Transparent => self.sparse_pipeline.layout().clone(),
@@ -357,11 +307,10 @@ impl PipelineProvider for CubePipelineProvider {
             solid_descriptor,
             sparse_descriptor,
             translucent_descriptor,
-            bound_projection: Matrix4::zero(),
         })
     }
 
-    type DrawCall = CubeGeometryDrawCall;
+    type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];
     type PerFrameConfig = Matrix4<f32>;
     type PipelineWrapperImpl = CubePipelineWrapper;
     type PerPipelineConfig<'a> = &'a Texture2DHolder;

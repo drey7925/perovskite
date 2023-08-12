@@ -169,7 +169,7 @@ pub(crate) trait PipelineWrapper<T, U> {
     fn draw<L>(
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
-        draw_calls: &[T],
+        draw_calls: T,
         pass: Self::PassIdentifier,
     ) -> Result<()>;
     /// Bind the pipeline. Must be called each frame before draw
@@ -186,12 +186,12 @@ pub(crate) trait PipelineProvider
 where
     Self: Sized,
 {
-    type DrawCall;
+    type DrawCall<'a> where Self: 'a;
     type PerPipelineConfig<'a>
     where
         Self: 'a;
     type PerFrameConfig;
-    type PipelineWrapperImpl: PipelineWrapper<Self::DrawCall, Self::PerFrameConfig>;
+    type PipelineWrapperImpl: for<'a> PipelineWrapper<Self::DrawCall<'a>, Self::PerFrameConfig>;
     fn make_pipeline(
         &self,
         ctx: &VulkanContext,

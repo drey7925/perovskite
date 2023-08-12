@@ -236,10 +236,9 @@ impl MeshWorker {
 
                 plot!("mesh_queue work size", chunks.len() as f64);
                 for coord in chunks {
-                    let neighbors = &self.client_state.chunks.cloned_neighbors_fast(coord);
-                    if let Some(chunk) = neighbors.get((0, 0, 0)) {
-                        chunk.mesh_with(&self.client_state.block_renderer)?;
-                    }
+                    self.client_state
+                        .chunks
+                        .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?;
                 }
             }
         }
@@ -295,9 +294,7 @@ pub(crate) fn propagate_neighbor_data(
             // Fast-pass checks
             let air = block_manager.air_block();
             if current_chunk.block_ids().iter().all(|&x| x == air) {
-                current_chunk.set_state(
-                    crate::game_state::chunk::BlockIdState::NoRender,
-                );
+                current_chunk.set_state(crate::game_state::chunk::BlockIdState::NoRender);
                 return Ok(true);
             }
         }
@@ -338,9 +335,7 @@ pub(crate) fn propagate_neighbor_data(
                 .iter()
                 .all(|&x| block_manager.is_solid_opaque(x))
             {
-                current_chunk.set_state(
-                    crate::game_state::chunk::BlockIdState::NoRender,
-                );
+                current_chunk.set_state(crate::game_state::chunk::BlockIdState::NoRender);
                 return Ok(true);
             }
         }

@@ -40,7 +40,7 @@ use crate::vulkan::{
     CommandBufferBuilder, Texture2DHolder, VulkanContext,
 };
 
-use super::{vert_2d::UniformData, frag_simple};
+use super::{frag_simple, vert_2d::UniformData};
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
@@ -151,17 +151,17 @@ pub(crate) struct FlatTexPipelineWrapper {
     buffer: Subbuffer<UniformData>,
     texture_descriptor_set: Arc<PersistentDescriptorSet>,
 }
-impl PipelineWrapper<FlatTextureDrawCall, ()> for FlatTexPipelineWrapper {
+impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapper {
     type PassIdentifier = ();
     fn draw<L>(
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
-        draw_calls: &[FlatTextureDrawCall],
+        calls: &'a [FlatTextureDrawCall],
         _pass: (),
     ) -> anyhow::Result<()> {
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone());
-        for call in draw_calls.iter() {
+        for call in calls {
             builder
                 .bind_vertex_buffers(0, call.vertex_buffer.clone())
                 .draw(call.vertex_buffer.len() as u32, 1, 0, 0)?;
@@ -209,7 +209,7 @@ impl FlatTexPipelineProvider {
     }
 }
 impl PipelineProvider for FlatTexPipelineProvider {
-    type DrawCall = FlatTextureDrawCall;
+    type DrawCall<'a> = &'a [FlatTextureDrawCall];
     type PerFrameConfig = ();
     type PipelineWrapperImpl = FlatTexPipelineWrapper;
     // texture atlas, subpass number

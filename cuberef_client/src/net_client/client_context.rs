@@ -1,6 +1,6 @@
 use std::{
     backtrace,
-    collections::{HashMap},
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -9,14 +9,12 @@ use crate::game_state::{items::ClientInventory, ClientState, GameAction};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
-    protocol::{
-        game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
-    },
+    protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
 use futures::StreamExt;
-use parking_lot::{Mutex};
+use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
-use tokio::{sync::mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
@@ -69,7 +67,7 @@ pub(crate) async fn make_contexts(
         action_receiver,
         last_pos_update_seq: None,
         mesh_workers,
-        neighbor_propagator
+        neighbor_propagator,
     };
 
     Ok((inbound, outbound))
@@ -502,6 +500,7 @@ impl InboundContext {
             let block_coord: BlockCoordinate = match &update.block_coord {
                 Some(x) => x.into(),
                 None => {
+                    log::warn!("Got delta with missing block_coord {:?}", update);
                     missing_coord = true;
                     continue;
                 }
@@ -509,6 +508,7 @@ impl InboundContext {
             let has_delta = match chunk_manager_read_lock.get(&block_coord.chunk()) {
                 Some(x) => x.apply_delta(update).unwrap(),
                 None => {
+                    log::warn!("Got delta for unknown chunk {:?}", block_coord);
                     unknown_coords.push(block_coord);
                     false
                 }
@@ -545,12 +545,11 @@ impl InboundContext {
             // Let the neighbor propagator get back to work
             drop(token);
             for coord in needs_remesh {
-                let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
-                if let Some(chunk) = neighbors.get((0, 0, 0)) {
-                    chunk.mesh_with(&self.client_state.block_renderer)?;
-                } else {
-                    log::error!("Missing chunk at {:?}, but we're doing an update for it.", coord);
-                }
+                if !(self.client_state
+                    .chunks
+                    .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?) {
+                        log::warn!("Failed to remesh {:?} because it wasn't in the main map", coord);
+                    }
             }
         }
         Ok((missing_coord, unknown_coords))

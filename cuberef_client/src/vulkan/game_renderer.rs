@@ -112,13 +112,13 @@ impl ActiveGame {
 
         let chunk_lock = {
             let _span = span!("Waiting for chunk_lock");
-            self.client_state.chunks.cloned_view()
+            self.client_state.chunks.renderable_chunks_cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
         self.cube_draw_calls.extend(
             chunk_lock
-                .values()
-                .filter_map(|chunk| chunk.make_draw_call(player_position)),
+                .iter()
+                .filter_map(|(&coord, chunk)| chunk.make_draw_call(coord, player_position, view_proj_matrix)),
         );
         plot!(
             "chunk_rate",
@@ -137,7 +137,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &self.cube_draw_calls,
+                    &mut self.cube_draw_calls,
                     BlockRenderPass::Opaque,
                 )
                 .unwrap();
@@ -152,7 +152,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &self.cube_draw_calls,
+                    &mut self.cube_draw_calls,
                     BlockRenderPass::Transparent,
                 )
                 .unwrap();
@@ -167,7 +167,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &self.cube_draw_calls,
+                    &mut self.cube_draw_calls,
                     BlockRenderPass::Translucent,
                 )
                 .unwrap();

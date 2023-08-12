@@ -1409,10 +1409,10 @@ impl Drop for InboundWorker {
 // TODO tune these and make them adjustable via settings
 // Units of chunks
 // Chunks within this distance will be loaded into memory if not yet loaded
-const LOAD_EAGER_DISTANCE: i32 = 20;
+const LOAD_EAGER_DISTANCE: i32 = 40;
 // Chunks within this distance will be sent if they are already loaded into memory
-const LOAD_LAZY_DISTANCE: i32 = 25;
-const UNLOAD_DISTANCE: i32 = 30;
+const LOAD_LAZY_DISTANCE: i32 = 45;
+const UNLOAD_DISTANCE: i32 = 50;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
 const FORCE_LOAD_DISTANCE: i32 = 3;
 

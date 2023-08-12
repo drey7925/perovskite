@@ -19,6 +19,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{Deg, Zero};
 use cuberef_core::constants::block_groups::DEFAULT_SOLID;
@@ -97,11 +98,13 @@ pub(crate) enum GameAction {
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
 pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
+    renderable_chunks: parking_lot::RwLock<ChunkMap>,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
         ChunkManager {
             chunks: parking_lot::RwLock::new(FxHashMap::default()),
+            renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -123,6 +126,13 @@ impl ChunkManager {
             data: self.chunks.read().clone(),
         }
     }
+
+    pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkManagerClonedView {
+        ChunkManagerClonedView {
+            data: self.renderable_chunks.read().clone(),
+        }
+    }
+
     pub(crate) fn insert(
         &self,
         coord: ChunkCoordinate,
@@ -135,10 +145,16 @@ impl ChunkManager {
         lock.insert(coord, Arc::new(chunk))
     }
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
+        // Lock order: chunks -> renderable_chunks
         let mut lock = {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
+        let mut lock2 = {
+            let _span = span!("Acquire global renderable chunk lock");
+            self.renderable_chunks.write()
+        };
+        lock2.remove(coord);
         lock.remove(coord)
     }
 
@@ -160,23 +176,6 @@ impl ChunkManager {
         }
     }
 
-    pub(crate) fn cloned_neighbors(&self, chunk: ChunkCoordinate) -> ChunkManagerClonedView {
-        let lock = self.chunks.read();
-        let mut data = ChunkMap::default();
-        for i in -1..=1 {
-            for j in -1..=1 {
-                for k in -1..=1 {
-                    if let Some(delta) = chunk.try_delta(i, j, k) {
-                        if let Some(chunk) = lock.get(&delta) {
-                            data.insert(delta, chunk.clone());
-                        }
-                    }
-                }
-            }
-        }
-        ChunkManagerClonedView { data }
-    }
-
     pub(crate) fn cloned_neighbors_fast(&self, chunk: ChunkCoordinate) -> FastChunkNeighbors {
         let lock = self.chunks.read();
         let mut data =
@@ -192,6 +191,38 @@ impl ChunkManager {
             }
         }
         FastChunkNeighbors { data }
+    }
+
+    /// If the chunk is present, meshes it. If any geometry was generated, inserts it into
+    /// the renderable chunks. If no geometry was generated, removes it from the renderable chunks.
+    /// Returns true if the chunk was present in the *main* list of chunks, false otherwise.
+    pub(crate) fn maybe_mesh_and_maybe_promote(
+        &self,
+        coord: ChunkCoordinate,
+        renderer: &BlockRenderer,
+    ) -> Result<bool> {
+        // Lock order notes: self.chunks -> self.renderable_chunks
+        // Neighbor propagation and mesh generation only need self.chunks
+        // Rendering only needs self.renderable_chunks, and that lock is limited in scope
+        // to Self::cloned_view_renderable. The render thread should never end up needing
+        // both chunks and renderable_chunks locked at the same time (and the render thread's
+        // use of chunks is likewise scoped to the physics code)
+        let src = self.chunks.read();
+        if let Some(chunk) = src.get(&coord) {
+            if chunk.mesh_with(renderer)? {
+                // We take the lock after mesh_with to keep the lock scope as short as possible
+                // and avoid blocking the render thread
+                let mut dst = self.renderable_chunks.write();
+                dst.insert(coord, chunk.clone());
+            } else {
+                // Likewise.
+                let mut dst = self.renderable_chunks.write();
+                dst.remove(&coord);
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 pub(crate) struct ChunkManagerView<'a> {
@@ -383,7 +414,7 @@ impl ClientState {
         }
     }
 
-    /// Returns the player's last position without requiring any locks
+    /// Returns the player's last position without requiring the physics lock (which could cause a lock order violation)
     /// This may be a frame behind
     pub(crate) fn weakly_ordered_last_position(&self) -> PlayerPositionUpdate {
         let _lock = self.physics_state.lock();
