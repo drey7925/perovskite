@@ -15,19 +15,20 @@
 use std::sync::atomic::AtomicU32;
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder},
+    blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
 use cuberef_core::{
-    constants::block_groups::TOOL_REQUIRED,
-    protocol::blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
+    constants::block_groups::{TOOL_REQUIRED, self},
+    protocol::{blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo}, self, items::item_stack::QuantityType},
 };
-use cuberef_server::game_state::blocks::ExtDataHandling;
+use cuberef_server::game_state::{blocks::ExtDataHandling, items::ItemStack};
 
 use super::{
     block_groups::{BRITTLE, GRANULAR},
     mapgen::OreDefinition,
+    recipes::RecipeSlot,
     DefaultGameBuilder,
 };
 
@@ -42,6 +43,9 @@ pub const GLASS: BlockName = BlockName("default:glass");
 /// Unlocked chest.
 pub const CHEST: BlockName = BlockName("default:chest");
 
+/// Torch
+pub const TORCH: BlockName = BlockName("default:torch");
+
 /// Water
 /// Stability note: not stable (liquids are TBD)
 pub const WATER: BlockName = BlockName("default:water");
@@ -54,6 +58,7 @@ const GLASS_TEXTURE: TextureName = TextureName("default:glass");
 const WATER_TEXTURE: TextureName = TextureName("default:water");
 // TODO real chest texture
 const CHEST_TEXTURE: TextureName = TextureName("default:chest");
+const TORCH_TEXTURE: TextureName = TextureName("default:torch");
 
 pub mod ores {
     use cuberef_core::constants::block_groups::TOOL_REQUIRED;
@@ -130,6 +135,33 @@ pub mod ores {
 pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     register_core_blocks(&mut game_builder.inner)?;
     ores::register_ores(game_builder)?;
+
+    game_builder
+        .crafting_recipes
+        .register_recipe(super::recipes::RecipeImpl {
+            slots: [
+                RecipeSlot::Exact("default:stick".to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact("default:coal_piece".to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+            ],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: "default:torch".to_string(),
+                    quantity: 4,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
+                },
+            },
+            shapeless: false,
+            metadata: (),
+        });
+
     Ok(())
 }
 
@@ -148,6 +180,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
     include_texture_bytes!(game_builder, CHEST_TEXTURE, "textures/chest_side.png")?;
+    include_texture_bytes!(game_builder, TORCH_TEXTURE, "textures/torch.png")?;
     game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
@@ -194,9 +227,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_appearance(
                 CubeAppearanceBuilder::new()
                     .set_single_texture(GLASS_TEXTURE)
-                    .set_allow_light_propagation(true)
                     .set_needs_transparency(),
             )
+            .set_allow_light_propagation(true)
             .set_inventory_texture(GLASS_TEXTURE)
             .set_inventory_display_name("Glass block"),
     )?;
@@ -207,9 +240,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
                 .set_single_texture(WATER_TEXTURE)
-                .set_allow_light_propagation(true)
                 .set_needs_translucency(),
         )
+        .set_allow_light_propagation(true)
         .set_inventory_texture(WATER_TEXTURE)
         .set_inventory_display_name("Water block");
     water_builder.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
@@ -224,6 +257,21 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         surf_sink_speed: -0.5,
     }));
     game_builder.add_block(water_builder)?;
+
+    game_builder.add_block(
+        BlockBuilder::new(TORCH)
+            .set_plant_like_appearance(
+                // todo more suitable render-mode
+                PlantLikeAppearanceBuilder::new()
+                    .set_wave_effect_scale(0.0)
+                    .set_texture(TORCH_TEXTURE),
+            )
+            .add_block_group(block_groups::INSTANT_DIG)
+            .set_allow_light_propagation(true)
+            .set_inventory_texture(TORCH_TEXTURE)
+            .set_inventory_display_name("Torch")
+            .set_light_emission(8),
+    )?;
 
     // testonly
     game_builder.add_block(

@@ -2,7 +2,7 @@ use anyhow::Result;
 use cuberef_server::game_state::items::ItemStack;
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder},
+    blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
     game_builder::{BlockName, TextureName},
     include_texture_bytes,
 };
@@ -20,6 +20,9 @@ pub const MAPLE_TREE_SIDE_TEX: TextureName = TextureName("default:maple_tree_sid
 pub const MAPLE_LEAVES: BlockName = BlockName("default:maple_leaves");
 pub const MAPLE_LEAVES_TEX: TextureName = TextureName("default:maple_leaves");
 
+pub const TALL_GRASS: BlockName = BlockName("default:tall_grass");
+pub const TALL_GRASS_TEX: TextureName = TextureName("default:tall_grass");
+
 pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
     include_texture_bytes!(
         builder.inner,
@@ -32,6 +35,7 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
         "textures/maple_tree_side.png"
     )?;
     include_texture_bytes!(builder.inner, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
+    include_texture_bytes!(builder.inner, TALL_GRASS_TEX, "textures/tall_grass.png")?;
     BlockBuilder::new(MAPLE_TREE)
         .add_block_group(FIBROUS)
         .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
@@ -43,6 +47,13 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
             MAPLE_TREE_SIDE_TEX,
         ))
         .set_inventory_texture(MAPLE_TREE_TOP_TEX)
+        .build_and_deploy_into(builder.game_builder())?;
+    BlockBuilder::new(TALL_GRASS)
+        .set_plant_like_appearance(PlantLikeAppearanceBuilder::new().set_texture(TALL_GRASS_TEX))
+        .set_inventory_display_name("Tall grass")
+        .set_inventory_texture(TALL_GRASS_TEX)
+        .set_allow_light_propagation(true)
+        .set_no_drops()
         .build_and_deploy_into(builder.game_builder())?;
     builder.smelting_fuels.register_recipe(recipes::Recipe {
         slots: [RecipeSlot::Exact(MAPLE_TREE.0.to_string())],
@@ -65,9 +76,9 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
                 .set_single_texture(MAPLE_LEAVES_TEX)
-                .set_needs_transparency()
-                .set_allow_light_propagation(true),
+                .set_needs_transparency(),
         )
+        .set_allow_light_propagation(true)
         .set_inventory_texture(MAPLE_LEAVES_TEX)
         .build_and_deploy_into(builder.game_builder())?;
     Ok(())

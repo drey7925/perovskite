@@ -27,6 +27,8 @@ pub mod block_groups {
     /// Blocks that cannot be dug under any circumstances (other than admon intervention)
     /// Tools available to normal users should specify a dig_behavior of None for this block.
     pub const NOT_DIGGABLE: &str = "default:not_diggable";
+    /// Can be instantly dug
+    pub const INSTANT_DIG: &str = "default:instant_dig";
 }
 
 pub mod blocks {
@@ -36,7 +38,7 @@ pub mod blocks {
 pub mod item_groups {
     /// Item group for all items that have a wear bar corresponding to physical wear (e.g. pickaxes)
     /// as opposed to e.g. electrical charge, which could be used in some game plugin
-    /// 
+    ///
     /// The default game doesn't do anything with this group.
     pub const TOOL_WEAR: &str = "default:tool_wear";
 
@@ -44,7 +46,6 @@ pub mod item_groups {
     /// The default game's creative inventory respects this group, and other plugins should
     /// do the same, unless they intentionally want to expose internal items for development/testing/curiosity
     pub const HIDDEN_FROM_CREATIVE: &str = "default:hidden_from_creative";
-    
 }
 
 pub mod items {
@@ -63,6 +64,13 @@ pub mod items {
             InteractionRule {
                 block_group: vec![TOOL_REQUIRED.to_string()],
                 dig_behavior: None,
+                tool_wear: 0,
+            },
+            InteractionRule {
+                block_group: vec![INSTANT_DIG.to_string()],
+                dig_behavior: Some(DigBehavior::InstantDigOneshot(
+                    crate::protocol::items::Empty {},
+                )),
                 tool_wear: 0,
             },
             InteractionRule {

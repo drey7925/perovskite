@@ -16,7 +16,6 @@
 
 use std::collections::HashSet;
 
-
 use std::sync::Arc;
 
 use cgmath::num_traits::Num;
@@ -46,7 +45,7 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
-use crate::game_state::chunk::{ChunkOffsetExt, ChunkDataView};
+use crate::game_state::chunk::{ChunkDataView, ChunkOffsetExt};
 use crate::game_state::make_fallback_blockdef;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
@@ -64,6 +63,10 @@ pub(crate) enum CubeFace {
     YMinus,
     ZPlus,
     ZMinus,
+    PlantXPlusZPlus,
+    PlantXPlusZMinus,
+    PlantXMinusZPlus,
+    PlantXMinusZMinus,
 }
 
 pub(crate) struct ClientBlockTypeManager {
@@ -257,13 +260,16 @@ impl CubeExtents {
     pub fn rotate_y(self, variant: u16) -> CubeExtents {
         let mut vertices = self.vertices;
         let mut neighbors = self.neighbors;
-        for vtx in &mut vertices{
+        for vtx in &mut vertices {
             *vtx = Vector3::from(rotate_y((vtx.x, vtx.y, vtx.z), variant));
         }
         for neighbor in &mut neighbors {
             *neighbor = rotate_y(*neighbor, variant);
         }
-        Self { vertices, neighbors }
+        Self {
+            vertices,
+            neighbors,
+        }
     }
 }
 
@@ -288,6 +294,12 @@ const CUBE_EXTENTS_FACE_ORDER: [CubeFace; 6] = [
     CubeFace::YMinus,
     CubeFace::ZPlus,
     CubeFace::ZMinus,
+];
+const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
+    CubeFace::PlantXPlusZPlus,
+    CubeFace::PlantXPlusZMinus,
+    CubeFace::PlantXMinusZPlus,
+    CubeFace::PlantXMinusZMinus,
 ];
 
 #[derive(Clone)]
@@ -418,6 +430,8 @@ impl BlockRenderer {
                     Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
                         x == CubeRenderMode::Transparent.into()
                     }
+                    // plant-like blocks always include a transparent pass
+                    Some(RenderInfo::PlantLike(_)) => true,
                     Some(_) | None => false,
                 },
                 |block, neighbor| {
@@ -458,6 +472,7 @@ impl BlockRenderer {
         // closure taking a block and returning whether this subpass should render it
         include_block_when: F,
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
+        // This only applies to cube blocks.
         suppress_face_when: G,
     ) -> Result<Option<VkChunkPass>>
     where
@@ -472,18 +487,32 @@ impl BlockRenderer {
                 for x in 0..16 {
                     let offset = ChunkOffset { x, y, z };
                     let (block, variant) = self.get_block(chunk_data.block_ids(), offset);
-                    if let Some(RenderInfo::Cube(cube_render_info)) = &block.render_info {
-                        if include_block_when(block) {
-                            self.emit_full_cube(
-                                block,
-                                variant,
-                                offset,
-                                chunk_data,
-                                &mut vtx,
-                                &mut idx,
-                                cube_render_info,
-                                &suppress_face_when,
-                            );
+
+                    if include_block_when(block) {
+                        match &block.render_info {
+                            Some(RenderInfo::Cube(cube_render_info)) => {
+                                self.emit_full_cube(
+                                    block,
+                                    variant,
+                                    offset,
+                                    chunk_data,
+                                    &mut vtx,
+                                    &mut idx,
+                                    cube_render_info,
+                                    &suppress_face_when,
+                                );
+                            }
+                            Some(RenderInfo::PlantLike(plantlike_render_info)) => self
+                                .emit_plantlike(
+                                    block,
+                                    variant,
+                                    offset,
+                                    chunk_data,
+                                    &mut vtx,
+                                    &mut idx,
+                                    plantlike_render_info,
+                                ),
+                            _ => (),
                         }
                     }
                 }
@@ -525,7 +554,11 @@ impl BlockRenderer {
                 offset.z as i8 + n_z,
             )
                 .as_extended_index();
-            if suppress_face_when(block, self.block_defs.get_blockdef(chunk_data.block_ids()[neighbor_index])) {
+            if suppress_face_when(
+                block,
+                self.block_defs
+                    .get_blockdef(chunk_data.block_ids()[neighbor_index]),
+            ) {
                 continue;
             };
 
@@ -538,6 +571,37 @@ impl BlockRenderer {
                 idx,
                 e,
                 chunk_data.lightmap()[neighbor_index],
+                0.0
+            );
+        }
+    }
+
+    fn emit_plantlike(
+        &self,
+        _block: &BlockTypeDef,
+        _variant: u16,
+        offset: ChunkOffset,
+        chunk_data: &ChunkDataView<'_>,
+        vtx: &mut Vec<CubeGeometryVertex>,
+        idx: &mut Vec<u32>,
+        plantlike_render_info: &blocks_proto::PlantLikeRenderInfo,
+    ) {
+        let e = FULL_CUBE_EXTENTS;
+        let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
+        let tex = self.get_texture(plantlike_render_info.tex.tex_name());
+        vtx.reserve(8);
+        idx.reserve(24);
+        for i in 0..4 {
+            emit_cube_face_vk(
+                pos,
+                tex,
+                self.texture_atlas.dimensions(),
+                PLANTLIKE_FACE_ORDER[i],
+                vtx,
+                idx,
+                e,
+                chunk_data.lightmap()[offset.as_extended_index()],
+                plantlike_render_info.wave_effect_scale
             );
         }
     }
@@ -575,6 +639,7 @@ impl BlockRenderer {
                 &mut idx,
                 e,
                 255,
+                0.0
             );
         }
 
@@ -615,8 +680,8 @@ impl BlockRenderer {
     }
 }
 
+const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5));
 fn get_cube_extents(render_info: &CubeRenderInfo, variant: u16) -> CubeExtents {
-    const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5));
     match render_info.variant_effect() {
         blocks_proto::CubeVariantEffect::None => FULL_CUBE_EXTENTS,
         blocks_proto::CubeVariantEffect::RotateNesw => FULL_CUBE_EXTENTS.rotate_y(variant),
@@ -650,11 +715,10 @@ async fn build_texture_atlas<T: AsyncTextureLoader>(
                     all_texture_names.insert(tex.texture_name.clone());
                 }
             }
-            Some(RenderInfo::CubeEx(_)) => {
-                log::warn!(
-                    "Got a CubeEx block {} which we can't render or put in the atlas",
-                    def.short_name
-                );
+            Some(RenderInfo::PlantLike(plant_like)) => {
+                if let Some(tex) = &plant_like.tex {
+                    all_texture_names.insert(tex.texture_name.clone());
+                }
             }
             Some(RenderInfo::Empty(_)) => {}
             None => {
@@ -718,12 +782,20 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
     })
 }
 
-const BRIGHTNESS_TABLE: [f32; 16] = [0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.00];
+const BRIGHTNESS_TABLE: [f32; 16] = [
+    0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
+    0.875, 0.9375, 1.00,
+];
 // TODO enable global brightness
 const GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = [0.0; 16];
 
 #[inline]
-fn make_cgv(coord: Vector3<f32>, tex_uv: cgmath::Vector2<f32>, brightness: u8) -> CubeGeometryVertex {
+fn make_cgv(
+    coord: Vector3<f32>,
+    tex_uv: cgmath::Vector2<f32>,
+    brightness: u8,
+    wave_horizontal: f32,
+) -> CubeGeometryVertex {
     let brightness_upper = (brightness >> 4) as usize;
     let brightness_lower = (brightness & 0x0F) as usize;
     CubeGeometryVertex {
@@ -731,6 +803,7 @@ fn make_cgv(coord: Vector3<f32>, tex_uv: cgmath::Vector2<f32>, brightness: u8) -
         uv_texcoord: tex_uv.into(),
         brightness: BRIGHTNESS_TABLE[brightness_lower],
         global_brightness_contribution: GLOBAL_BRIGHTNESS_TABLE[brightness_upper],
+        wave_horizontal
     }
 }
 
@@ -748,6 +821,7 @@ pub(crate) fn emit_cube_face_vk(
     idx_buf: &mut Vec<u32>,
     e: CubeExtents,
     brightness: u8,
+    horizontal_wave: f32,
 ) {
     // Flip the coordinate system to Vulkan
     let coord = vec3(coord.x, -coord.y, coord.z);
@@ -766,42 +840,66 @@ pub(crate) fn emit_cube_face_vk(
 
     let mut vertices = match face {
         CubeFace::ZMinus => vec![
-            make_cgv(coord + e.vertices[0], tl, brightness),
-            make_cgv(coord + e.vertices[2], bl, brightness),
-            make_cgv(coord + e.vertices[6], br, brightness),
-            make_cgv(coord + e.vertices[4], tr, brightness),
+            make_cgv(coord + e.vertices[0], tl, brightness, 0.0),
+            make_cgv(coord + e.vertices[2], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[6], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[4], tr, brightness, 0.0),
         ],
         CubeFace::ZPlus => vec![
-            make_cgv(coord + e.vertices[5], tl, brightness),
-            make_cgv(coord + e.vertices[7], bl, brightness),
-            make_cgv(coord + e.vertices[3], br, brightness),
-            make_cgv(coord + e.vertices[1], tr, brightness),
+            make_cgv(coord + e.vertices[5], tl, brightness, 0.0),
+            make_cgv(coord + e.vertices[7], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[3], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[1], tr, brightness, 0.0),
         ],
         CubeFace::XMinus => vec![
-            make_cgv(coord + e.vertices[1], tl, brightness),
-            make_cgv(coord + e.vertices[3], bl, brightness),
-            make_cgv(coord + e.vertices[2], br, brightness),
-            make_cgv(coord + e.vertices[0], tr, brightness),
+            make_cgv(coord + e.vertices[1], tl, brightness, 0.0),
+            make_cgv(coord + e.vertices[3], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[2], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[0], tr, brightness, 0.0),
         ],
         CubeFace::XPlus => vec![
-            make_cgv(coord + e.vertices[4], tl, brightness),
-            make_cgv(coord + e.vertices[6], bl, brightness),
-            make_cgv(coord + e.vertices[7], br, brightness),
-            make_cgv(coord + e.vertices[5], tr, brightness),
+            make_cgv(coord + e.vertices[4], tl, brightness, 0.0),
+            make_cgv(coord + e.vertices[6], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[7], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[5], tr, brightness, 0.0),
         ],
         // For Y+ and Y-, the top of the texture faces the front of the cube (prior to any rotations)
         // Y- is the bottom face (opposite Vulkan), so it takes Y+ vulkan coordinates
         CubeFace::YMinus => vec![
-            make_cgv(coord + e.vertices[2], tl, brightness),
-            make_cgv(coord + e.vertices[3], bl, brightness),
-            make_cgv(coord + e.vertices[7], br, brightness),
-            make_cgv(coord + e.vertices[6], tr, brightness),
+            make_cgv(coord + e.vertices[2], tl, brightness, 0.0),
+            make_cgv(coord + e.vertices[3], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[7], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[6], tr, brightness, 0.0),
         ],
         CubeFace::YPlus => vec![
-            make_cgv(coord + e.vertices[4], tl, brightness),
-            make_cgv(coord + e.vertices[5], bl, brightness),
-            make_cgv(coord + e.vertices[1], br, brightness),
-            make_cgv(coord + e.vertices[0], tr, brightness),
+            make_cgv(coord + e.vertices[4], tl, brightness, 0.0),
+            make_cgv(coord + e.vertices[5], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[1], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[0], tr, brightness, 0.0),
+        ],
+        CubeFace::PlantXMinusZMinus => vec![
+            make_cgv(coord + e.vertices[1], tl, brightness, horizontal_wave),
+            make_cgv(coord + e.vertices[3], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[6], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[4], tr, brightness, horizontal_wave),
+        ],
+        CubeFace::PlantXPlusZPlus => vec![
+            make_cgv(coord + e.vertices[4], tl, brightness, horizontal_wave),
+            make_cgv(coord + e.vertices[6], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[3], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[1], tr, brightness, horizontal_wave),
+        ],
+        CubeFace::PlantXMinusZPlus => vec![
+            make_cgv(coord + e.vertices[5], tl, brightness, horizontal_wave),
+            make_cgv(coord + e.vertices[7], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[2], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[0], tr, brightness, horizontal_wave),
+        ],
+        CubeFace::PlantXPlusZMinus => vec![
+            make_cgv(coord + e.vertices[0], tl, brightness, horizontal_wave),
+            make_cgv(coord + e.vertices[2], bl, brightness, 0.0),
+            make_cgv(coord + e.vertices[7], br, brightness, 0.0),
+            make_cgv(coord + e.vertices[5], tr, brightness, horizontal_wave),
         ],
     };
     let si: u32 = vert_buf.len().try_into().unwrap();

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use cuberef_core::{
-    constants::{block_groups::DEFAULT_SOLID, item_groups::TOOL_WEAR},
+    constants::{block_groups::{DEFAULT_SOLID, INSTANT_DIG}, item_groups::TOOL_WEAR},
     protocol::{
-        items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule},
+        items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule, Empty},
         render::TextureReference,
     },
 };
@@ -35,6 +35,13 @@ pub(crate) fn register_pickaxe(
                     block_group: vec![BRITTLE.to_string()],
                     tool_wear: 1,
                     dig_behavior: Some(DigBehavior::ScaledTime(0.25)),
+                },
+                InteractionRule {
+                    block_group: vec![INSTANT_DIG.to_string()],
+                    dig_behavior: Some(DigBehavior::InstantDigOneshot(
+                        Empty {},
+                    )),
+                    tool_wear: 0,
                 },
                 InteractionRule {
                     block_group: vec![DEFAULT_SOLID.to_string()],

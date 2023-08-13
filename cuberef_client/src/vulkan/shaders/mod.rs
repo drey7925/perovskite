@@ -35,9 +35,11 @@ pub(crate) mod vert_3d {
                 layout(location = 1) in vec2 uv_texcoord;
                 layout(location = 2) in float brightness;
                 layout(location = 3) in float global_brightness_contribution;
+                layout(location = 4) in float wave_horizontal;
 
                 layout(set = 1, binding = 0) uniform UniformData { 
                     mat4 vp_matrix;
+                    vec2 plant_wave_vector;
                     float global_brightness;
                 };
                 // 64 bytes of push constants :(
@@ -49,7 +51,10 @@ pub(crate) mod vert_3d {
                 layout(location = 1) out float brightness_out;
 
                 void main() {
-                    gl_Position = vp_matrix * model_matrix * vec4(position, 1.0);
+                    float wave_x = wave_horizontal * plant_wave_vector.x;
+                    float wave_z = wave_horizontal * plant_wave_vector.y;
+                    vec3 position_with_wave = vec3(position.x + wave_x, position.y, position.z + wave_z);
+                    gl_Position = vp_matrix * model_matrix * vec4(position_with_wave, 1.0);
                     uv_texcoord_out = uv_texcoord;
                     brightness_out = brightness + (global_brightness * global_brightness_contribution);
                 }

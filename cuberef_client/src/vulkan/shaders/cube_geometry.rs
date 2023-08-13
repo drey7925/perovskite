@@ -15,8 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::Matrix4;
-use std::sync::Arc;
+use cgmath::{Matrix4, Rad, Angle};
+use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
@@ -56,19 +56,26 @@ use super::frag_lighting_sparse;
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
 pub(crate) struct CubeGeometryVertex {
-    #[format(R32G32B32_SFLOAT)]
     /// Position, given relative to the origin of the chunk.
     /// Not transformed into camera space via a view matrix yet
+    #[format(R32G32B32_SFLOAT)]
     pub(crate) position: [f32; 3],
+
     // Texture coordinate in tex space (0-1)
     #[format(R32G32_SFLOAT)]
     pub(crate) uv_texcoord: [f32; 2],
+
     // The local brightness (from nearby sources, unchanging as the global lighting varies)
     #[format(R32_SFLOAT)]
     pub(crate) brightness: f32,
-    #[format(R32_SFLOAT)]
+
     // How much the global brightness should affect the brightness of this vertex
+    #[format(R32_SFLOAT)]
     pub(crate) global_brightness_contribution: f32,
+
+    // How much this vertex should wave with wavy input
+    #[format(R32_SFLOAT)]
+    pub(crate) wave_horizontal: f32,
 }
 pub(crate) struct CubeGeometryDrawCall {
     pub(crate) models: VkChunkVertexData,
@@ -82,6 +89,16 @@ pub(crate) struct CubePipelineWrapper {
     solid_descriptor: Arc<PersistentDescriptorSet>,
     sparse_descriptor: Arc<PersistentDescriptorSet>,
     translucent_descriptor: Arc<PersistentDescriptorSet>,
+    start_time: Instant
+}
+const PLANT_WAVE_FREQUENCY_HZ: f64 = 0.25;
+impl CubePipelineWrapper {
+    fn get_plant_wave_vector(&self) -> [f32; 2] {
+        // f64 has enough bits of precision that we shouldn't worry about floating-point error here.
+        let time = self.start_time.elapsed().as_secs_f64();
+        let sin_cos = Rad(PLANT_WAVE_FREQUENCY_HZ * time * 2.0 * std::f64::consts::PI).sin_cos();
+        [sin_cos.0 as f32, sin_cos.1 as f32]
+    }
 }
 
 /// Which render step we are rendering in this renderer.
@@ -181,6 +198,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipeline
             },
             UniformData {
                 vp_matrix: per_frame_config.into(),
+                plant_wave_vector: self.get_plant_wave_vector(),
                 // TODO set this
                 global_brightness: 1.0,
             },
@@ -307,6 +325,7 @@ impl PipelineProvider for CubePipelineProvider {
             solid_descriptor,
             sparse_descriptor,
             translucent_descriptor,
+            start_time: Instant::now(),
         })
     }
 

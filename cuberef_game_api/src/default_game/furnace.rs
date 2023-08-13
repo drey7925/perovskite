@@ -295,9 +295,9 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                         FURNACE_ON_FRONT_TEXTURE,
                         FURNACE_TEXTURE,
                     )
-                    .set_rotate_laterally()
-                    .set_light_emission(8),
+                    .set_rotate_laterally(),
             )
+            .set_light_emission(8)
             .set_inventory_texture(FURNACE_ON_FRONT_TEXTURE)
             .set_inventory_display_name("Lit furnace (should not see this)")
             .set_dropped_item(FURNACE.0, 1)

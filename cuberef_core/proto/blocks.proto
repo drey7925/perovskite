@@ -50,9 +50,10 @@ message BlockTypeDef {
   // How the client should render the block
   oneof render_info {
     Empty empty = 10;
+    // The block is a solid cube
     CubeRenderInfo cube = 11;
-    // This is still TBD and may be renamed/never used
-    CubeExRendererInfo cube_ex = 12;
+    // The block is a plant-like object, with transparency; the texture is applied as an X shape.
+    PlantLikeRenderInfo plant_like = 12;
   };
   // How the client should handle physics when interacting with the block
   oneof physics_info {
@@ -91,6 +92,14 @@ message CubeRenderInfo {
 
   CubeRenderMode render_mode = 7;
   CubeVariantEffect variant_effect = 8;
+}
+
+message PlantLikeRenderInfo {
+  // The texture for this block.
+  cuberef.protocol.render.TextureReference tex = 1;
+  // (not yet implemented) how much the top of the block should wave over time
+  // This will be the amplitude, given in units of 1.0 = entire width of block.
+  float wave_effect_scale = 2;
 }
 
 enum CubeVariantEffect {

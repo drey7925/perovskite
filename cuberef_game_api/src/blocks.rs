@@ -14,9 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-
-use anyhow::{Result};
+use anyhow::Result;
 use cuberef_core::{
     constants::{
         block_groups::DEFAULT_SOLID, items::default_item_interaction_rules,
@@ -28,6 +26,7 @@ use cuberef_core::{
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
             BlockTypeDef, CubeRenderInfo, CubeRenderMode, CubeVariantEffect, Empty,
+            PlantLikeRenderInfo,
         },
         items as items_proto,
         items::{item_def::QuantityType, ItemDef},
@@ -310,8 +309,6 @@ impl BlockBuilder {
             CubeVariantEffect::RotateNesw => VariantEffect::RotateNesw,
         };
         self.client_info.render_info = Some(RenderInfo::Cube(appearance.render_info));
-        self.client_info.light_emission = appearance.light_emission;
-        self.client_info.allow_light_propagation = appearance.allow_light_propagation;
         self
     }
     /// Sets the texture shown for this block's item in the inventory.
@@ -325,6 +322,35 @@ impl BlockBuilder {
     pub fn set_cube_single_texture(self, texture: impl Into<TextureReference>) -> Self {
         self.set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(texture))
     }
+    /// Sets the block to have a plant-like appearance
+    pub fn set_plant_like_appearance(mut self, appearance: PlantLikeAppearanceBuilder) -> Self {
+        self.client_info.render_info = Some(RenderInfo::PlantLike(appearance.render_info));
+        // TODO: this should be separated out into its own control. For now, this is a reasonable default
+        self.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
+        self
+    }
+
+    /// Sets the light emission of this block, causing it to glow and illuminate other blocks.
+    /// The meaningful range of light emission is 0-15.
+    ///
+    /// Moving one block causes light to fall off by one.
+    pub fn set_light_emission(mut self, light_emission: u32) -> Self {
+        assert!(light_emission < 16);
+        self.client_info.light_emission = light_emission;
+        self
+    }
+
+    /// Sets whether the block allows light to propagate through it.
+    ///
+    /// This is separate from appearance builder calls like set_needs_transparency and/or
+    /// set_needs_translucency; those affect how the block is rasterized on the GPU, but
+    /// not how map lighting is calculated.
+    pub fn set_allow_light_propagation(mut self, allow_light_propagation: bool) -> Self {
+        self.client_info.allow_light_propagation = allow_light_propagation;
+        self
+    }
+
+    /// Set the appearance of the block to that specified by the given builder
 
     pub(crate) fn build_and_deploy_into(
         mut self,
@@ -381,8 +407,6 @@ impl BlockBuilder {
 
 pub struct CubeAppearanceBuilder {
     render_info: CubeRenderInfo,
-    light_emission: u32,
-    allow_light_propagation: bool,
 }
 impl CubeAppearanceBuilder {
     pub fn new() -> Self {
@@ -397,8 +421,6 @@ impl CubeAppearanceBuilder {
                 render_mode: CubeRenderMode::SolidOpaque.into(),
                 variant_effect: CubeVariantEffect::None.into(),
             },
-            light_emission: 0,
-            allow_light_propagation: false,
         }
     }
 
@@ -416,26 +438,6 @@ impl CubeAppearanceBuilder {
             tex.clone(),
             tex,
         )
-    }
-
-    
-    /// Sets the light emission of this block, causing it to glow and illuminate other blocks.
-    /// The meaningful range of light emission is 0-15.
-    ///
-    /// Moving one block causes light to fall off by one.
-    pub fn set_light_emission(mut self, light_emission: u32) -> Self {
-        assert!(light_emission < 16);
-        self.light_emission = light_emission;
-        self
-    }
-
-    /// Sets whether the block allows light to propagate through it.
-    /// 
-    /// This is separate from set_needs_transparency and/or set_needs_translucency; those affect
-    /// how the block is rasterized on the GPU, but not how map lighting is calculated.
-    pub fn set_allow_light_propagation(mut self, allow_light_propagation: bool) -> Self {
-        self.allow_light_propagation = allow_light_propagation;
-        self
     }
 
     /// Sets the texture for all six faces of this block as well as the inventory item, one by one
@@ -464,7 +466,7 @@ impl CubeAppearanceBuilder {
     /// Indicates that the textures may have transparent pixels. This does not support translucency.
     ///
     /// This does not cause in-game light to propagate through the block; use set_allow_light_propagation for that.
-    /// 
+    ///
     /// Stability note: It's possible that we may start autodetecting transparent pixels in texture files.
     /// If that happens, this method will become a deprecated no-op.
     pub fn set_needs_transparency(mut self) -> Self {
@@ -474,7 +476,7 @@ impl CubeAppearanceBuilder {
     }
 
     /// Indicates that the textures may have translucent pixels. The behavior of this is still TBD.
-    /// 
+    ///
     /// This does not cause in-game light to propagate through the block; use set_allow_light_propagation for that.
     ///
     /// Stability note: The signature of this method will likely remain the same, but the render behavior may change.
@@ -495,6 +497,35 @@ impl CubeAppearanceBuilder {
 impl Default for CubeAppearanceBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct PlantLikeAppearanceBuilder {
+    render_info: PlantLikeRenderInfo,
+}
+impl PlantLikeAppearanceBuilder {
+    /// Constructs a new plant-like appearance builder, with a dummy texture and reasonable defaults.
+    pub fn new() -> Self {
+        Self {
+            render_info: PlantLikeRenderInfo {
+                tex: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                wave_effect_scale: 0.1,
+            },
+        }
+    }
+    /// Sets the block's texture.
+    pub fn set_texture<T>(mut self, texture: T) -> Self
+    where
+        T: Into<TextureReference>,
+    {
+        let tex = texture.into();
+        self.render_info.tex = Some(tex);
+        self
+    }
+    /// Sets the magnitude of the waving animation effect on the top of the block.
+    pub fn set_wave_effect_scale(mut self, scale: f32) -> Self {
+        self.render_info.wave_effect_scale = scale;
+        self
     }
 }
 
