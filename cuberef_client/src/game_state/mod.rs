@@ -127,10 +127,8 @@ impl ChunkManager {
         }
     }
 
-    pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkManagerClonedView {
-        ChunkManagerClonedView {
-            data: self.renderable_chunks.read().clone(),
-        }
+    pub(crate) fn renderable_chunks(&self) -> Vec<Arc<ClientChunk>> {
+        self.renderable_chunks.read().values().cloned().collect()
     }
 
     pub(crate) fn insert(

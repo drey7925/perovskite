@@ -4,7 +4,7 @@ use anyhow::Context;
 use arc_swap::ArcSwap;
 use egui::{Color32, Layout, ProgressBar, TextEdit};
 use tokio::sync::{oneshot, watch};
-use vulkano::{image::SampleCount, render_pass::Subpass};
+use vulkano::{image::SampleCount, render_pass::Subpass, command_buffer::SecondaryAutoCommandBuffer};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
 use crate::{
@@ -42,7 +42,7 @@ impl MainMenu {
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_queue(),
-            Subpass::from(ctx.clone_render_pass(), 1)
+            Subpass::from(ctx.clone_render_pass(), 0)
                 .context("Could not find subpass 0")
                 .unwrap(),
             gui_config,
@@ -218,23 +218,19 @@ impl MainMenu {
         result
     }
 
-    pub(crate) fn draw<L>(
+    pub(crate) fn draw(
         &mut self,
         ctx: &VulkanContext,
         game_state: &mut GameState,
-        builder: &mut crate::vulkan::CommandBufferBuilder<L>,
-    ) -> Option<ConnectionSettings> {
+    ) -> (Option<ConnectionSettings>, SecondaryAutoCommandBuffer) {
         self.egui_gui.begin_frame();
         let result = self.draw_ui(game_state);
-        builder
-            .next_subpass(vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers)
-            .unwrap();
+
         let secondary = self
             .egui_gui
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
 
-        builder.execute_commands(secondary).unwrap();
-        result
+        (result, secondary)
     }
     pub(crate) fn update(&mut self, event: &WindowEvent) {
         self.egui_gui.update(event);

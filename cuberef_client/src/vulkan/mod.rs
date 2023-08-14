@@ -26,8 +26,9 @@ use log::warn;
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
+        CommandBufferInheritanceInfo, CommandBufferInheritanceRenderPassInfo,
         PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderPassBeginInfo,
-        SubpassContents,
+        SubpassContents, SecondaryAutoCommandBuffer,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -40,7 +41,7 @@ use vulkano::{
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{FreeListAllocator, GenericMemoryAllocator, StandardMemoryAllocator},
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
-    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
+    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
     sampler::{Filter, Sampler, SamplerCreateInfo},
     swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
     sync::GpuFuture,
@@ -187,11 +188,11 @@ impl VulkanContext {
                     depth_stencil: {depth},
                     input: [],
                 },
-                {
-                    color: [color],
-                    depth_stencil: {},
-                    input: []
-                },
+                // {
+                //     color: [color],
+                //     depth_stencil: {},
+                //     input: []
+                // },
             ]
         )?;
 
@@ -259,19 +260,31 @@ impl VulkanContext {
         Ok(builder)
     }
 
-    fn start_render_pass(
+    fn start_secondary_command_buffer(
         &self,
-        builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
         framebuffer: Arc<Framebuffer>,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some((1.0, 0).into())],
-                ..RenderPassBeginInfo::framebuffer(framebuffer)
-            },
-            SubpassContents::Inline,
+        subpass: Subpass,
+    ) -> Result<CommandBufferBuilder<SecondaryAutoCommandBuffer>> {
+        let render_pass_info = CommandBufferInheritanceRenderPassInfo {
+            subpass,
+            framebuffer: Some(framebuffer),
+        };
+
+        let mut inheritance_info = CommandBufferInheritanceInfo::default();
+        inheritance_info.render_pass = Some(
+            vulkano::command_buffer::CommandBufferInheritanceRenderPassType::BeginRenderPass(
+                render_pass_info,
+            ),
+        );
+
+        let builder = AutoCommandBufferBuilder::secondary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+            inheritance_info,
         )?;
-        Ok(())
+
+        Ok(builder)
     }
 
     pub(crate) fn window_size(&self) -> (u32, u32) {

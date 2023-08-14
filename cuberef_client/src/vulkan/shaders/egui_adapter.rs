@@ -4,7 +4,7 @@ use egui::TextureId;
 use egui_winit_vulkano::{Gui, GuiConfig};
 use parking_lot::Mutex;
 use vulkano::{
-    command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents},
+    command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents, SecondaryAutoCommandBuffer},
     image::SampleCount,
     render_pass::Subpass,
 };
@@ -59,7 +59,7 @@ impl EguiAdapter {
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.queue.clone(),
-            Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
+            Subpass::from(ctx.render_pass.clone(), 0).context("Could not find subpass 0")?,
             config,
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
@@ -67,7 +67,7 @@ impl EguiAdapter {
 
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_overlay_pipeline =
-            flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
+            flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 0))?;
         Ok(EguiAdapter {
             gui_adapter,
             egui_ui,
@@ -78,12 +78,11 @@ impl EguiAdapter {
         })
     }
 
-    pub(crate) fn draw<L>(
+    pub(crate) fn draw(
         &mut self,
         ctx: &VulkanContext,
-        builder: &mut crate::vulkan::CommandBufferBuilder<L>,
         client_state: &ClientState,
-    ) -> Result<()> {
+    ) -> Result<Vec<SecondaryAutoCommandBuffer>> {
         let mut egui = self.egui_ui.lock();
         if egui.wants_draw() {
             self.gui_adapter.begin_frame();
@@ -92,46 +91,43 @@ impl EguiAdapter {
                 self.atlas_texture_id,
                 client_state,
             );
-            let cmdbuf = self
+            let egui_cmdbuf = self
                 .gui_adapter
                 .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
-            builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
-            builder.execute_commands(cmdbuf)?;
+            
 
             if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
-                let mut secondary_builder = AutoCommandBufferBuilder::secondary(
+                let mut overlay_builder = AutoCommandBufferBuilder::secondary(
                     &ctx.command_buffer_allocator,
                     ctx.queue.queue_family_index(),
                     vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                     CommandBufferInheritanceInfo {
                         render_pass: Some(
-                            Subpass::from(ctx.render_pass.clone(), 1)
-                                .with_context(|| "Render subpass 1 not found")?
+                            Subpass::from(ctx.render_pass.clone(), 0)
+                                .with_context(|| "Render subpass 0 not found")?
                                 .into(),
                         ),
                         ..Default::default()
                     },
                 )?;
                 self.flat_overlay_pipeline
-                    .bind(ctx, (), &mut secondary_builder, ())
+                    .bind(ctx, (), &mut overlay_builder, ())
                     .unwrap();
                 self.flat_overlay_pipeline
-                    .draw(&mut secondary_builder, &[draw_call], ())?;
-                builder.execute_commands(secondary_builder.build()?)?;
+                    .draw(&mut overlay_builder, &[draw_call], ())?;
+                Ok(vec![egui_cmdbuf, overlay_builder.build()?])
+            } else {
+                Ok(vec![egui_cmdbuf])
             }
-
-            Ok(())
         } else {
-            // We still need to advance to the next subpass, even if we aren't drawing anything
-            builder.next_subpass(SubpassContents::Inline)?;
-            Ok(())
+            Ok(vec![])
         }
     }
 
     pub(crate) fn notify_resize(&mut self, ctx: &VulkanContext) -> Result<()> {
         self.flat_overlay_pipeline = self
             .flat_overlay_provider
-            .make_pipeline(ctx, (self.atlas.as_ref(), 1))?;
+            .make_pipeline(ctx, (self.atlas.as_ref(), 0))?;
         Ok(())
     }
 }

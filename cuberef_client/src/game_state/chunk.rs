@@ -232,7 +232,6 @@ impl ClientChunk {
     }
     pub(crate) fn make_draw_call(
         &self,
-        coord: ChunkCoordinate,
         player_position: Vector3<f64>,
         view_proj_matrix: Matrix4<f32>,
     ) -> Option<CubeGeometryDrawCall> {
@@ -248,9 +247,9 @@ impl ClientChunk {
             // For some reason, using self.coord causes a ton of cache misses and
             // measurably worse performance on my machine, even though we're about to access
             // the vertex data.
-            16. * coord.x as f64,
-            16. * coord.y as f64,
-            16. * coord.z as f64,
+            16. * self.coord.x as f64,
+            16. * self.coord.y as f64,
+            16. * self.coord.z as f64,
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         let translation = Matrix4::from_translation(relative_origin.cast().unwrap());

@@ -19,13 +19,17 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use arc_swap::ArcSwap;
+use cuberef_core::protocol::render;
 use log::info;
 
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::{
-    command_buffer::PrimaryAutoCommandBuffer,
+    command_buffer::{
+        PrimaryAutoCommandBuffer, RenderPassBeginInfo, SecondaryAutoCommandBuffer, SubpassContents,
+    },
+    render_pass::{Framebuffer, Subpass},
     swapchain::{self, AcquireError, SwapchainPresentInfo},
     sync::{future::FenceSignalFuture, FlushError, GpuFuture},
 };
@@ -61,8 +65,8 @@ pub(crate) struct ActiveGame {
     egui_adapter: Option<egui_adapter::EguiAdapter>,
 
     client_state: Arc<ClientState>,
-    // Held across frames to avoid constant reallocations
-    cube_draw_calls: Vec<CubeGeometryDrawCall>,
+
+    thread_pool: rayon::ThreadPool,
 }
 
 impl ActiveGame {
@@ -70,12 +74,23 @@ impl ActiveGame {
         &mut self,
         window_size: PhysicalSize<u32>,
         ctx: &VulkanContext,
-        mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
-            PrimaryAutoCommandBuffer,
-            Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
-        >,
-    ) -> PrimaryAutoCommandBuffer {
+        framebuffer: Arc<Framebuffer>,
+    ) -> Vec<SecondaryAutoCommandBuffer> {
         let _span = span!("build renderer buffers");
+
+        let mut main_buffer_builder = ctx
+            .start_secondary_command_buffer(
+                framebuffer.clone(),
+                Subpass::from(ctx.render_pass.clone(), 0).expect("Failed to find subpass 0"),
+            )
+            .expect("Failed to create secondary command buffer");
+        let mut end_buffer_builder = ctx
+            .start_secondary_command_buffer(
+                framebuffer.clone(),
+                Subpass::from(ctx.render_pass.clone(), 0).expect("Failed to find subpass 0"),
+            )
+            .expect("Failed to create secondary command buffer");
+
         let FrameState {
             view_proj_matrix,
             player_position,
@@ -83,9 +98,9 @@ impl ActiveGame {
         } = self
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
-        self.cube_draw_calls.clear();
+        let mut cube_draw_calls = vec![];
         if let Some(pointee) = tool_state.pointee {
-            self.cube_draw_calls.push(
+            cube_draw_calls.push(
                 self.client_state
                     .block_renderer
                     .make_pointee_cube(player_position, pointee)
@@ -101,7 +116,7 @@ impl ActiveGame {
                 .render
                 .show_placement_guide
             {
-                self.cube_draw_calls.push(
+                cube_draw_calls.push(
                     self.client_state
                         .block_renderer
                         .make_pointee_cube(player_position, neighbor)
@@ -110,75 +125,184 @@ impl ActiveGame {
             }
         }
 
-        let chunk_lock = {
+        let renderable_chunks = {
             let _span = span!("Waiting for chunk_lock");
-            self.client_state.chunks.renderable_chunks_cloned_view()
+            self.client_state.chunks.renderable_chunks()
         };
-        plot!("total_chunks", chunk_lock.len() as f64);
-        self.cube_draw_calls.extend(
-            chunk_lock
-                .iter()
-                .filter_map(|(&coord, chunk)| chunk.make_draw_call(coord, player_position, view_proj_matrix)),
-        );
+        plot!("total_chunks", renderable_chunks.len() as f64);
+
         plot!(
             "chunk_rate",
-            self.cube_draw_calls.len() as f64 / chunk_lock.len() as f64
+            cube_draw_calls.len() as f64 / renderable_chunks.len() as f64
         );
 
-        if !self.cube_draw_calls.is_empty() {
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    view_proj_matrix,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Opaque,
-                )
-                .unwrap();
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Opaque,
-                )
-                .unwrap();
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    view_proj_matrix,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Transparent,
-                )
-                .unwrap();
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Transparent,
-                )
-                .unwrap();
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    view_proj_matrix,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Translucent,
-                )
-                .unwrap();
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Translucent,
-                )
-                .unwrap();
-        }
+        let mut results = Vec::new();
+
+        let num_threads = self.thread_pool.current_num_threads();
+        let batch_size = renderable_chunks.len() / (num_threads - 1);
+
+        let batches = renderable_chunks.chunks_exact(batch_size.max(1));
+        results.resize_with(num_threads, || (None, None));
+
+        let pipeline = self.cube_pipeline.clone();
+        let framebuffer = framebuffer.clone();
+        let results_chunks = results.iter_mut();
+        cube_draw_calls.extend(
+            batches
+                .remainder()
+                .iter()
+                .flat_map(|x| x.make_draw_call(player_position, view_proj_matrix)),
+        );
+
+        let (secondary, translucent_secondary) = self.thread_pool.scope(move |scope| {
+            for (chunk, dst) in batches.zip(results_chunks) {
+                let mut pipeline = pipeline.clone();
+                let framebuffer = framebuffer.clone();
+                scope.spawn(move |_| {
+                    let _span = span!("render batch");
+                    if chunk.is_empty() {
+                        return;
+                    }
+                    let mut draw_calls = chunk
+                        .iter()
+                        .flat_map(|x| x.make_draw_call(player_position, view_proj_matrix))
+                        .collect::<Vec<_>>();
+                    let mut secondary = ctx
+                        .start_secondary_command_buffer(
+                            framebuffer.clone(),
+                            Subpass::from(ctx.render_pass.clone(), 0)
+                                .expect("Failed to find subpass 0"),
+                        )
+                        .expect("Failed to create secondary command buffer");
+                    let mut translucent_secondary = ctx
+                        .start_secondary_command_buffer(
+                            framebuffer,
+                            Subpass::from(ctx.render_pass.clone(), 0)
+                                .expect("Failed to find subpass 0"),
+                        )
+                        .expect("Failed to create secondary command buffer");
+                    pipeline
+                        .bind(
+                            ctx,
+                            view_proj_matrix,
+                            &mut secondary,
+                            BlockRenderPass::Opaque,
+                        )
+                        .unwrap();
+                    pipeline
+                        .draw(&mut secondary, &mut draw_calls, BlockRenderPass::Opaque)
+                        .unwrap();
+                    pipeline
+                        .bind(
+                            ctx,
+                            view_proj_matrix,
+                            &mut secondary,
+                            BlockRenderPass::Transparent,
+                        )
+                        .unwrap();
+                    pipeline
+                        .draw(
+                            &mut secondary,
+                            &mut draw_calls,
+                            BlockRenderPass::Transparent,
+                        )
+                        .unwrap();
+                    pipeline
+                        .bind(
+                            ctx,
+                            view_proj_matrix,
+                            &mut translucent_secondary,
+                            BlockRenderPass::Translucent,
+                        )
+                        .unwrap();
+                    pipeline
+                        .draw(
+                            &mut translucent_secondary,
+                            &mut draw_calls,
+                            BlockRenderPass::Translucent,
+                        )
+                        .unwrap();
+                    *dst = (
+                        Some(secondary.build().unwrap()),
+                        Some(translucent_secondary.build().unwrap()),
+                    );
+                });
+            }
+
+            if !cube_draw_calls.is_empty() {
+                let _span = span!("catchup");
+                let mut pipeline = pipeline.clone();
+                let mut secondary = ctx
+                        .start_secondary_command_buffer(
+                            framebuffer.clone(),
+                            Subpass::from(ctx.render_pass.clone(), 0)
+                                .expect("Failed to find subpass 0"),
+                        )
+                        .expect("Failed to create secondary command buffer");
+                    let mut translucent_secondary = ctx
+                        .start_secondary_command_buffer(
+                            framebuffer,
+                            Subpass::from(ctx.render_pass.clone(), 0)
+                                .expect("Failed to find subpass 0"),
+                        )
+                        .expect("Failed to create secondary command buffer");
+                pipeline
+                    .bind(
+                        ctx,
+                        view_proj_matrix,
+                        &mut secondary,
+                        BlockRenderPass::Opaque,
+                    )
+                    .unwrap();
+                pipeline
+                    .draw(
+                        &mut secondary,
+                        &mut cube_draw_calls,
+                        BlockRenderPass::Opaque,
+                    )
+                    .unwrap();
+                pipeline
+                    .bind(
+                        ctx,
+                        view_proj_matrix,
+                        &mut secondary,
+                        BlockRenderPass::Transparent,
+                    )
+                    .unwrap();
+                pipeline
+                    .draw(
+                        &mut secondary,
+                        &mut cube_draw_calls,
+                        BlockRenderPass::Transparent,
+                    )
+                    .unwrap();
+                pipeline
+                    .bind(
+                        ctx,
+                        view_proj_matrix,
+                        &mut translucent_secondary,
+                        BlockRenderPass::Translucent,
+                    )
+                    .unwrap();
+                pipeline
+                    .draw(
+                        &mut translucent_secondary,
+                        &mut cube_draw_calls,
+                        BlockRenderPass::Translucent,
+                    )
+                    .unwrap();
+                (Some(secondary.build().unwrap()), Some(translucent_secondary.build().unwrap()))
+            } else {
+                (None, None)
+            }
+        });
 
         self.flat_pipeline
-            .bind(ctx, (), &mut command_buf_builder, ())
+            .bind(ctx, (), &mut end_buffer_builder, ())
             .unwrap();
         self.flat_pipeline
             .draw(
-                &mut command_buf_builder,
+                &mut end_buffer_builder,
                 &self
                     .client_state
                     .hud
@@ -188,13 +312,30 @@ impl ActiveGame {
                 (),
             )
             .unwrap();
-        self.egui_adapter
+
+        let mut all_buffers = vec![];
+
+        let egui_buffers = self
+            .egui_adapter
             .as_mut()
             .unwrap()
-            .draw(ctx, &mut command_buf_builder, &self.client_state)
+            .draw(ctx, &self.client_state)
             .unwrap();
-
-        finish_command_buffer(command_buf_builder).unwrap()
+        for (main, _) in &mut results {
+            all_buffers.extend(main.take());
+        }
+        if let Some(secondary) = secondary {
+            all_buffers.push(secondary);
+        }
+        for (_, translucent) in &mut results {
+            all_buffers.extend(translucent.take());
+        }
+        if let Some(translucent_secondary) = translucent_secondary {
+            all_buffers.push(translucent_secondary);
+        }
+        all_buffers.push(end_buffer_builder.build().unwrap());
+        all_buffers.extend(egui_buffers);
+        all_buffers
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanContext) -> Result<()> {
@@ -443,37 +584,49 @@ impl GameRenderer {
                     drop(_swapchain_span);
                     let window_size = self.ctx.window.inner_size();
 
-                    // From https://vulkano.rs/compute_pipeline/descriptor_sets.html:
-                    // Once you have created a descriptor set, you may also use it with other pipelines,
-                    // as long as the bindings' types match those the pipelines' shaders expect.
-                    // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
-                    // you cannot create one independently of any particular pipeline.
-                    let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
-                    self.ctx
-                        .start_render_pass(
-                            &mut command_buf_builder,
-                            self.ctx.framebuffers[image_i as usize].clone(),
+                    let mut primary_buf_builder = self.ctx.start_command_buffer().unwrap();
+
+                    primary_buf_builder
+                        .begin_render_pass(
+                            RenderPassBeginInfo {
+                                clear_values: vec![
+                                    Some([0.25, 0.9, 1.0, 1.0].into()),
+                                    Some((1.0, 0).into()),
+                                ],
+                                ..RenderPassBeginInfo::framebuffer(
+                                    self.ctx.framebuffers[image_i as usize].clone(),
+                                )
+                            },
+                            SubpassContents::SecondaryCommandBuffers,
                         )
                         .unwrap();
-                    let command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut()
-                    {
-                        game.build_command_buffers(window_size, &self.ctx, command_buf_builder)
-                    } else {
-                        if let Some(connection_settings) = self.main_menu.lock().draw(
+
+                    if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                        let secondaries = game.build_command_buffers(
+                            window_size,
                             &self.ctx,
-                            &mut game_lock,
-                            &mut command_buf_builder,
-                        ) {
+                            self.ctx.framebuffers[image_i as usize].clone(),
+                        );
+                        let _span = span!("coalesce command buffers");
+                        for secondary in secondaries {
+                            primary_buf_builder.execute_commands(secondary).unwrap();
+                        }
+                    } else {
+                        let (menu_result, secondary) =
+                            self.main_menu.lock().draw(&self.ctx, &mut game_lock);
+                        if let Some(connection_settings) = menu_result {
                             self.start_connection(connection_settings);
                         }
-                        finish_command_buffer(command_buf_builder).unwrap()
+                        primary_buf_builder.execute_commands(secondary).unwrap();
                     };
+
+                    let primary_buffer = finish_command_buffer(primary_buf_builder).unwrap();
 
                     {
                         let _span = span!("submit to Vulkan");
                         let future = previous_future
                             .join(acquire_future)
-                            .then_execute(self.ctx.queue.clone(), command_buffers)
+                            .then_execute(self.ctx.queue.clone(), primary_buffer)
                             .unwrap()
                             .then_swapchain_present(
                                 self.ctx.queue.clone(),
@@ -589,7 +742,10 @@ async fn connect_impl(
         flat_pipeline,
         client_state,
         egui_adapter: None,
-        cube_draw_calls: vec![],
+        thread_pool: rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .thread_name(|i| format!("render-worker-{}", i))
+            .build()?,
     };
 
     Ok(game)

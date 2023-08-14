@@ -888,6 +888,7 @@ dependencies = [
  "opaque-ke",
  "parking_lot",
  "rand 0.8.5",
+ "rayon",
  "ron 0.8.0",
  "rustc-hash",
  "serde",

@@ -82,6 +82,7 @@ pub(crate) struct CubeGeometryDrawCall {
     pub(crate) model_matrix: Matrix4<f32>,
 }
 
+#[derive(Clone)]
 pub(crate) struct CubePipelineWrapper {
     solid_pipeline: Arc<GraphicsPipeline>,
     sparse_pipeline: Arc<GraphicsPipeline>,
@@ -112,7 +113,7 @@ pub(crate) enum BlockRenderPass {
 impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipelineWrapper {
     type PassIdentifier = BlockRenderPass;
     fn draw<L>(
-        &mut self,
+        &self,
         builder: &mut CommandBufferBuilder<L>,
         draw_calls: &mut [CubeGeometryDrawCall],
         pass: BlockRenderPass,

@@ -155,7 +155,7 @@ pub struct MapChunk {
     own_coord: ChunkCoordinate,
     // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
     // more calls similar to mutate_block_atomically
-    pub(crate) block_ids: Vec<u32>,
+    pub(crate) block_ids: Box<[u32; 4096]>,
     extended_data: FxHashMap<u16, ExtendedData>,
 
     game_state: Weak<GameState>,
@@ -166,7 +166,7 @@ impl MapChunk {
         let extended_data = FxHashMap::default();
         Self {
             own_coord,
-            block_ids: vec![0; 4096],
+            block_ids: Box::new([0; 4096]),
             extended_data,
             game_state: Arc::downgrade(&game_state),
             dirty: false,
@@ -381,7 +381,8 @@ fn parse_v1(
     }
     Ok(MapChunk {
         own_coord: coordinate,
-        block_ids: chunk_data.block_ids,
+        // unwrap should be safe - we verified the length to be 4096 previously
+        block_ids: chunk_data.block_ids.try_into().unwrap(),
         extended_data,
         game_state: Arc::downgrade(&game_state),
         dirty: false,
@@ -436,6 +437,7 @@ struct MapChunkHolder {
     condition: Condvar,
     last_accessed: Mutex<Instant>,
     block_bloom_filter: cbloom::Filter,
+    // The following members are weakly ordered, do not synchronize with the chunk mutex, and may be stale
 }
 impl MapChunkHolder {
     fn new_empty() -> Self {

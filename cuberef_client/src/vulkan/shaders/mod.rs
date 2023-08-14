@@ -172,7 +172,7 @@ pub(crate) trait PipelineWrapper<T, U> {
     type PassIdentifier;
     /// Actually draw. The pipeline must have been bound using bind.
     fn draw<L>(
-        &mut self,
+        &self,
         builder: &mut CommandBufferBuilder<L>,
         draw_calls: T,
         pass: Self::PassIdentifier,
