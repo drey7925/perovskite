@@ -23,6 +23,7 @@ pub struct Loadtester {
 }
 impl Loadtester {
     pub fn new() -> Self {
+        let settings = GameSettings::default();
         Self {
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -34,10 +35,7 @@ impl Loadtester {
                     .unwrap(),
             ),
             settings: Arc::new(ArcSwap::new(
-                GameSettings::load_from_disk()
-                    .unwrap()
-                    .unwrap_or_default()
-                    .into(),
+                settings.into(),
             )),
             cancel: CancellationToken::new(),
         }

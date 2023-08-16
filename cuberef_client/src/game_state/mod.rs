@@ -39,7 +39,7 @@ use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
-use self::chunk::ChunkDataView;
+use self::chunk::{ChunkDataView, SnappyDecodeHelper};
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::settings::GameSettings;
@@ -99,12 +99,14 @@ pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
 pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
+    snappy_helper: SnappyDecodeHelper,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
         ChunkManager {
             chunks: parking_lot::RwLock::new(FxHashMap::default()),
             renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
+            snappy_helper: SnappyDecodeHelper::new(),
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -162,15 +164,21 @@ impl ChunkManager {
         &self,
         coord: ChunkCoordinate,
         proto: protocol::game_rpc::MapChunk,
+        snappy_helper: &mut SnappyDecodeHelper,
     ) -> anyhow::Result<()> {
         let mut lock = {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
         match lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(x) => x.get().update_from(proto),
+            std::collections::hash_map::Entry::Occupied(x) => {
+                x.get().update_from(proto, snappy_helper)
+            }
             std::collections::hash_map::Entry::Vacant(x) => {
-                x.insert(Arc::new(ClientChunk::from_proto(proto)?));
+                x.insert(Arc::new(ClientChunk::from_proto(
+                    proto,
+                    snappy_helper,
+                )?));
                 Ok(())
             }
         }

@@ -234,6 +234,13 @@ impl ChunkCoordinate {
         self.hash(&mut hasher);
         hasher.finish()
     }
+    pub fn coarse_hash(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        (self.x >> 4).hash(&mut hasher);
+        (self.y >> 4).hash(&mut hasher);
+        (self.z >> 4).hash(&mut hasher);
+        hasher.finish()
+    }
 }
 impl Debug for ChunkCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

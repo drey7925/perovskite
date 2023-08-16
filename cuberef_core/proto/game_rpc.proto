@@ -20,7 +20,6 @@ package cuberef.protocol.game_rpc;
 
 import "coordinates.proto";
 import "blocks.proto";
-import "mapchunk.proto";
 import "items.proto";
 import "ui.proto";
 
@@ -218,7 +217,7 @@ message MapDeltaUpdate {
 message MapChunk {
     // x/y/z are chunk coordinates
     cuberef.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
-    cuberef.protocol.map.StoredChunk chunk_data = 4;
+    bytes snappy_encoded_bytes = 2;
 }
 
 message MapChunkUnsubscribe {

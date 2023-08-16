@@ -81,6 +81,13 @@ impl NeighborPropagator {
     pub(crate) fn run_neighbor_propagator(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_neighbor_propagator");
         let mut scratchpad = Box::new([0u8; 48 * 48 * 48]);
+        if self.client_state.settings.load().render.testonly_noop_meshing {
+            while !self.shutdown.is_cancelled() {
+                let mut lock = self.queue.lock();
+                lock.clear();
+                self.cond.wait_for(&mut lock, Duration::from_secs(1));
+            }
+        }
         while !self.shutdown.is_cancelled() {
             // This is duplicated in MeshWorker to allow the two to use different strategies, and also
             // report different span and plot names.
@@ -193,7 +200,11 @@ impl MeshWorker {
     pub(crate) fn run_mesh_worker(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_mesh_worker");
         while !self.shutdown.is_cancelled() {
-            let chunks = {
+            let chunks = if self.client_state.settings.load().render.testonly_noop_meshing {
+                self.queue.lock().clear();
+                self.cond.wait_for(&mut self.queue.lock(), Duration::from_secs(1));
+                vec![]
+            } else {
                 // This is really ugly and deadlock-prone. Figure out whether we need this or not.
                 // The big deadlock risk is if this line happens under the queue lock:
                 //   our thread waits for physics_state to unlock

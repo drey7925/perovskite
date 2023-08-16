@@ -110,9 +110,7 @@ impl Server {
 
         let cuberef_service = CuberefGameServer::new(CuberefGameServerImpl::new(
             self.game_state.clone(),
-        ))
-        .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        ));
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(cuberef_core::protocol::DESCRIPTOR_SET)
             .build()

@@ -76,9 +76,7 @@ pub(crate) async fn connect_game(
     log::info!("Connecting to {}...", &server_addr);
     let mut connection = connect_grpc(server_addr.clone())
         .await?
-        .max_decoding_message_size(1024 * 1024 * 256)
-        .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        .max_decoding_message_size(1024 * 1024 * 256);
 
     // todo tune depth
     let (tx_send, tx_recv) = mpsc::channel(4);

@@ -16,6 +16,7 @@
 
 use std::collections::HashSet;
 use std::iter::once;
+use std::ops::DerefMut;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,6 +47,8 @@ use crate::run_handler;
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
+use anyhow::bail;
+use cgmath::InnerSpace;
 use cgmath::Vector3;
 use cgmath::Zero;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
@@ -61,6 +64,7 @@ use log::error;
 use log::info;
 use log::warn;
 use parking_lot::RwLock;
+use prost::Message;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -166,7 +170,12 @@ pub(crate) async fn make_client_contexts(
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
         chunk_tracker: chunk_tracker.clone(),
-        position: pos_recv,
+        player_position: pos_recv,
+        skip_if_near: Vector3::zero(),
+        elements_to_skip: 0,
+        snappy_encoder: snap::raw::Encoder::new(),
+        snappy_input_buffer: vec![],
+        snappy_output_buffer: vec![],
     };
     let block_event_sender = BlockEventSender {
         context: context.clone(),
@@ -366,7 +375,13 @@ pub(crate) struct MapChunkSender {
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
     chunk_tracker: Arc<ChunkTracker>,
 
-    position: watch::Receiver<PositionAndPacing>,
+    player_position: watch::Receiver<PositionAndPacing>,
+    skip_if_near: cgmath::Vector3<f64>,
+    elements_to_skip: usize,
+
+    snappy_encoder: snap::raw::Encoder,
+    snappy_input_buffer: Vec<u8>,
+    snappy_output_buffer: Vec<u8>,
 }
 const ACCESS_TIME_BUMP_SHARDS: u32 = 32;
 impl MapChunkSender {
@@ -383,9 +398,9 @@ impl MapChunkSender {
         let mut access_time_bump_idx = 0;
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
-                _ = self.position.changed() => {
+                _ = self.player_position.changed() => {
                     access_time_bump_idx = (access_time_bump_idx + 1) % ACCESS_TIME_BUMP_SHARDS;
-                    let update = *self.position.borrow_and_update();
+                    let update = *self.player_position.borrow_and_update();
                     self.handle_position_update(update, access_time_bump_idx).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {
@@ -400,6 +415,21 @@ impl MapChunkSender {
         }
         Ok(())
     }
+
+    fn snappy_encode<T>(&mut self, msg: &T) -> Result<Vec<u8>> where T: Message {
+        self.snappy_input_buffer.clear();
+        msg.encode(&mut self.snappy_input_buffer)?;
+        let compressed_len_bound = snap::raw::max_compress_len(self.snappy_input_buffer.len());
+        if compressed_len_bound == 0 {
+            bail!("Input is too long to compress");
+        }
+        if self.snappy_output_buffer.len() < compressed_len_bound {
+            self.snappy_output_buffer.resize(compressed_len_bound, 0);
+        }
+        let actual_compressed_len = self.snappy_encoder.compress(&mut self.snappy_input_buffer, &mut self.snappy_output_buffer)?;
+        Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
+    }
+
     #[tracing::instrument(
         name = "HandlePositionUpdate",
         level = "trace",
@@ -460,7 +490,15 @@ impl MapChunkSender {
         // Phase 2: Load chunks that are close enough.
         // Chunks are expensive to load and send, so we keep track of
         let mut sent_chunks = 0;
-        for &(dx, dy, dz) in LOAD_LAZY_SORTED_COORDS.iter() {
+
+        let skip = if (self.skip_if_near - position.position).magnitude2() > 256.0 {
+            self.elements_to_skip
+        } else {
+            0
+        };
+
+        let start_time = Instant::now();
+        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate().skip(skip) {
             let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
@@ -470,7 +508,7 @@ impl MapChunkSender {
             if !coord.is_in_bounds() {
                 continue;
             }
-            if self.position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE {
+            if self.player_position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE {
                 // If we already have a new position update, restart the process with the new position
                 tracing::event!(
                     tracing::Level::TRACE,
@@ -496,22 +534,26 @@ impl MapChunkSender {
                 self.context
                     .game_state
                     .map()
-                    .get_chunk_client_proto(coord, should_load)
+                    .serialize_for_client(coord, should_load)
             })?;
             if let Some(chunk_data) = chunk_data {
+                let chunk_bytes = self.snappy_encode(&chunk_data)?;
                 let message = proto::StreamToClient {
                     tick: self.context.game_state.tick(),
                     server_message: Some(proto::stream_to_client::ServerMessage::MapChunk(
                         proto::MapChunk {
                             chunk_coord: Some(coord.into()),
-                            chunk_data: Some(chunk_data),
+                            snappy_encoded_bytes: chunk_bytes,
                         },
                     )),
                 };
                 self.outbound_tx
                     .send(Ok(message))
                     .await
-                    .map_err(|_| Error::msg("Could not send outbound message (full mapchunk)"))?;
+                    .map_err(|_| {
+                        self.context.cancellation.cancel();
+                        Error::msg("Could not send outbound message (full mapchunk)")
+                    })?;
                 self.chunk_tracker.mark_chunk_loaded(coord);
                 sent_chunks += 1;
                 if sent_chunks > update.chunks_to_send {
@@ -1038,7 +1080,10 @@ impl InboundWorker {
         self.outbound_tx
             .send(Ok(message))
             .await
-            .map_err(|_| Error::msg("Could not send outbound message (sequence ack)"))?;
+            .map_err(|_| {
+                self.context.cancellation.cancel();
+                Error::msg("Could not send outbound message (sequence ack)")
+            } )?;
 
         Ok(())
     }
@@ -1409,9 +1454,9 @@ impl Drop for InboundWorker {
 // TODO tune these and make them adjustable via settings
 // Units of chunks
 // Chunks within this distance will be loaded into memory if not yet loaded
-const LOAD_EAGER_DISTANCE: i32 = 40;
+const LOAD_EAGER_DISTANCE: i32 = 20;
 // Chunks within this distance will be sent if they are already loaded into memory
-const LOAD_LAZY_DISTANCE: i32 = 45;
+const LOAD_LAZY_DISTANCE: i32 = 25;
 const UNLOAD_DISTANCE: i32 = 50;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
 const FORCE_LOAD_DISTANCE: i32 = 3;

@@ -116,9 +116,9 @@ impl ActiveGame {
         };
         plot!("total_chunks", chunk_lock.len() as f64);
         self.cube_draw_calls.extend(
-            chunk_lock
-                .iter()
-                .filter_map(|(&coord, chunk)| chunk.make_draw_call(coord, player_position, view_proj_matrix)),
+            chunk_lock.values().filter_map(|chunk| {
+                chunk.make_draw_call(player_position, view_proj_matrix)
+            }),
         );
         plot!(
             "chunk_rate",

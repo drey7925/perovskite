@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
 use cuberef_core::protocol::game_rpc as rpc_proto;
+use cuberef_core::protocol::map::StoredChunk;
 use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
@@ -28,6 +29,7 @@ use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
+use prost::Message;
 
 pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView<'_> {
@@ -96,6 +98,29 @@ pub(crate) struct ChunkData {
     data_state: BlockIdState,
 }
 
+pub(crate) struct SnappyDecodeHelper {
+    
+    snappy_decoder: snap::raw::Decoder,
+    snappy_output_buffer: Vec<u8>,
+}
+impl SnappyDecodeHelper {
+    fn decode<T>(&mut self, data: &[u8]) -> Result<T> where T: Message + Default {
+        let decode_len = snap::raw::decompress_len(data)?;
+        if self.snappy_output_buffer.len() < decode_len {
+            self.snappy_output_buffer.resize(decode_len, 0);
+        }
+        let decompressed_len = self.snappy_decoder.decompress(data, &mut self.snappy_output_buffer)?;
+        Ok(T::decode(&self.snappy_output_buffer[0..decompressed_len])?)
+    }
+
+    pub(crate) fn new() -> SnappyDecodeHelper {
+        SnappyDecodeHelper {
+            snappy_decoder: snap::raw::Decoder::new(),
+            snappy_output_buffer: Vec::new(),
+        }
+    }
+}
+
 /// State of a chunk on the client
 ///
 /// Data flow and locking are as follows:
@@ -116,14 +141,12 @@ pub(crate) struct ClientChunk {
     cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
 }
 impl ClientChunk {
-    pub(crate) fn from_proto(proto: rpc_proto::MapChunk) -> Result<ClientChunk> {
+    pub(crate) fn from_proto(proto: rpc_proto::MapChunk, snappy_helper: &mut SnappyDecodeHelper) -> Result<ClientChunk> {
         let coord = proto
             .chunk_coord
             .with_context(|| "Missing chunk_coord")?
             .into();
-        let data = proto
-            .chunk_data
-            .with_context(|| "chunk_data missing")?
+        let data = snappy_helper.decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
             .chunk_data
             .with_context(|| "inner chunk_data missing")?;
         let block_ids: &[u32; 4096] = match &data {
@@ -186,16 +209,14 @@ impl ClientChunk {
         result
     }
 
-    pub(crate) fn update_from(&self, proto: rpc_proto::MapChunk) -> Result<()> {
+    pub(crate) fn update_from(&self, proto: rpc_proto::MapChunk, snappy_helper: &mut SnappyDecodeHelper) -> Result<()> {
         let coord: ChunkCoordinate = proto
             .chunk_coord
             .with_context(|| "Missing chunk_coord")?
             .into();
         ensure!(coord == self.coord);
-        let data = proto
-            .chunk_data
-            .with_context(|| "chunk_data missing")?
-            .chunk_data
+        let data =snappy_helper.decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
+        .chunk_data
             .with_context(|| "inner chunk_data missing")?;
         let block_ids: &[u32; 4096] = match &data {
             cuberef_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
@@ -232,7 +253,6 @@ impl ClientChunk {
     }
     pub(crate) fn make_draw_call(
         &self,
-        coord: ChunkCoordinate,
         player_position: Vector3<f64>,
         view_proj_matrix: Matrix4<f32>,
     ) -> Option<CubeGeometryDrawCall> {
@@ -248,9 +268,9 @@ impl ClientChunk {
             // For some reason, using self.coord causes a ton of cache misses and
             // measurably worse performance on my machine, even though we're about to access
             // the vertex data.
-            16. * coord.x as f64,
-            16. * coord.y as f64,
-            16. * coord.z as f64,
+            16. * self.coord.x as f64,
+            16. * self.coord.y as f64,
+            16. * self.coord.z as f64,
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         let translation = Matrix4::from_translation(relative_origin.cast().unwrap());

@@ -155,7 +155,7 @@ pub struct MapChunk {
     own_coord: ChunkCoordinate,
     // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
     // more calls similar to mutate_block_atomically
-    pub(crate) block_ids: Vec<u32>,
+    pub(crate) block_ids: Box<[u32; 4096]>,
     extended_data: FxHashMap<u16, ExtendedData>,
 
     game_state: Weak<GameState>,
@@ -166,7 +166,7 @@ impl MapChunk {
         let extended_data = FxHashMap::default();
         Self {
             own_coord,
-            block_ids: vec![0; 4096],
+            block_ids: Box::new([0; 4096]),
             extended_data,
             game_state: Arc::downgrade(&game_state),
             dirty: false,
@@ -177,11 +177,11 @@ impl MapChunk {
         let _span = span!("serialize chunk");
         let mut extended_data = Vec::new();
 
-        for index in 0..4096 {
-            let offset = ChunkOffset::from_index(index);
-            let block_coord = self.own_coord.with_offset(offset);
+        if usage == ChunkUsage::Server {
+            for index in 0..4096 {
+                let offset = ChunkOffset::from_index(index);
+                let block_coord = self.own_coord.with_offset(offset);
 
-            if usage == ChunkUsage::Server {
                 if let Some(ext_data) = self.extended_data.get(&index.try_into().unwrap()) {
                     if let Some(ext_data_proto) =
                         self.extended_data_to_proto(index, block_coord, ext_data)?
@@ -381,7 +381,8 @@ fn parse_v1(
     }
     Ok(MapChunk {
         own_coord: coordinate,
-        block_ids: chunk_data.block_ids,
+        // Unwrap is safe - this should only fail if the length is wrong, but we checked the length above.
+        block_ids: chunk_data.block_ids.try_into().unwrap(),
         extended_data,
         game_state: Arc::downgrade(&game_state),
         dirty: false,
@@ -535,6 +536,11 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
     }
 }
 
+const NUM_LOCK_SHARDS: usize = 16;
+fn shard_id(coord: ChunkCoordinate) -> usize {
+    (coord.coarse_hash() % NUM_LOCK_SHARDS as u64) as usize
+}
+
 /// Represents the entire map of the world.
 /// This struct provides safe interior mutability - a shared reference
 /// is sufficient to read and write it. Locking is done at an implementation-defined
@@ -542,14 +548,14 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
 pub struct ServerGameMap {
     game_state: Weak<GameState>,
     database: Arc<dyn GameDatabase>,
-    live_chunks: RwLock<FxHashMap<ChunkCoordinate, MapChunkHolder>>,
+    // sharded 16 ways based on the coarse hash of the chunk
+    live_chunks: [RwLock<FxHashMap<ChunkCoordinate, MapChunkHolder>>; NUM_LOCK_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
-    writeback_sender: mpsc::Sender<WritebackReq>,
+    writeback_senders: [mpsc::Sender<WritebackReq>; NUM_LOCK_SHARDS],
     shutdown: CancellationToken,
-    timer_handle: Mutex<Option<JoinHandle<Result<()>>>>,
-    writeback_handle: Mutex<Option<JoinHandle<Result<()>>>>,
-    cleanup_handle: Mutex<Option<JoinHandle<Result<()>>>>,
+    writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_LOCK_SHARDS],
+    cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_LOCK_SHARDS],
     timer_controller: Mutex<Option<TimerController>>,
 }
 impl ServerGameMap {
@@ -559,41 +565,51 @@ impl ServerGameMap {
         block_type_manager: Arc<BlockTypeManager>,
     ) -> Result<Arc<ServerGameMap>> {
         let (block_update_sender, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-        let (writeback_sender, writeback_receiver) = mpsc::channel(WRITEBACK_QUEUE_SIZE);
+        let mut writeback_senders = vec![];
+        let mut writeback_receivers = vec![];
+        for _ in 0..NUM_LOCK_SHARDS {
+            let (sender, receiver) = mpsc::channel(WRITEBACK_QUEUE_SIZE);
+            writeback_senders.push(sender);
+            writeback_receivers.push(receiver);
+        }
 
         let cancellation = CancellationToken::new();
 
         let result = Arc::new(ServerGameMap {
             game_state: game_state.clone(),
             database,
-            live_chunks: RwLock::new(FxHashMap::default()),
+            live_chunks: std::array::from_fn(|_| RwLock::new(FxHashMap::default())),
             block_type_manager,
             block_update_sender,
-            writeback_sender,
+            writeback_senders: writeback_senders.try_into().unwrap(),
             shutdown: cancellation.clone(),
-            timer_handle: None.into(),
-            writeback_handle: None.into(),
-            cleanup_handle: None.into(),
+            writeback_handles: std::array::from_fn(|_| Mutex::new(None)),
+            cleanup_handles: std::array::from_fn(|_| Mutex::new(None)),
             timer_controller: None.into(),
         });
+        for (i, receiver) in writeback_receivers.into_iter().enumerate() {
+            let mut writeback = GameMapWriteback {
+                map: result.clone(),
+                receiver,
+                cancellation: cancellation.clone(),
+                shard_id: i,
+            };
+            let writeback_handle = crate::spawn_async(&format!("map_cleanup_{}", i), async move {
+                writeback.run_loop().await
+            })?;
+            *result.writeback_handles[i].lock() = Some(writeback_handle);
 
-        let mut writeback = GameMapWriteback {
-            map: result.clone(),
-            receiver: writeback_receiver,
-            cancellation: cancellation.clone(),
-        };
+            let mut cache_cleanup = MapCacheCleanup {
+                map: result.clone(),
+                cancellation: cancellation.clone(),
+                shard_id: i,
+            };
 
-        let mut cache_cleanup = MapCacheCleanup {
-            map: result.clone(),
-            cancellation: cancellation.clone(),
-        };
-
-        let writeback_handle =
-            crate::spawn_async("map_writeback", async move { writeback.run_loop().await })?;
-        *result.writeback_handle.lock() = Some(writeback_handle);
-        let cleanup_handle =
-            crate::spawn_async("map_cleanup", async move { cache_cleanup.run_loop().await })?;
-        *result.cleanup_handle.lock() = Some(cleanup_handle);
+            let cleanup_handle = crate::spawn_async(&format!("map_cleanup_{}", i), async move {
+                cache_cleanup.run_loop().await
+            })?;
+            *result.cleanup_handles[i].lock() = Some(cleanup_handle);
+        }
 
         let timer_controller = TimerController {
             map: result.clone(),
@@ -608,7 +624,7 @@ impl ServerGameMap {
 
     pub(crate) fn bump_access_time(&self, coord: ChunkCoordinate) {
         let _span = span!("game_map read lock");
-        if let Some(chunk) = self.live_chunks.read().get(&coord) {
+        if let Some(chunk) = self.live_chunks[shard_id(coord)].read().get(&coord) {
             chunk.bump_access_time();
         }
     }
@@ -804,13 +820,7 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get()?;
 
-        self.mutate_block_atomically_locked(
-            &chunk_guard,
-            &mut chunk,
-            coord.offset(),
-            mutator,
-            self,
-        )
+        self.mutate_block_atomically_locked(&chunk_guard, &mut chunk, coord.offset(), mutator, self)
     }
 
     /// Internal impl detail of mutate_block_atomically and timers
@@ -884,7 +894,6 @@ impl ServerGameMap {
         )
     }
 
-    
     /// Taps a block, as if it were hit without being fully dug. The items it drops are returned.
     pub fn tap_block(
         &self,
@@ -958,7 +967,6 @@ impl ServerGameMap {
             } else {
                 Ok((blocktype, Default::default()))
             }
-            
         })?;
         // we need this to happen outside of mutate_block_atomically (which holds a chunk lock) to avoid a deadlock.
         if let Some(full_handler) = get_block_full_handler(blocktype) {
@@ -984,13 +992,13 @@ impl ServerGameMap {
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
     fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
-        let writeback_permit = self.get_writeback_permit()?;
-
+        let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
+        let shard = shard_id(coord);
         let mut load_chunk_tries = 0;
         let result = loop {
             let read_guard = {
                 let _span = span!("acquire game_map read lock");
-                self.live_chunks.read()
+                self.live_chunks[shard].read()
             };
             // All good. The chunk is loaded.
             if read_guard.contains_key(&coord) {
@@ -1009,7 +1017,7 @@ impl ServerGameMap {
             // This can't be done with an upgradable lock due to a deadlock risk.
             let mut write_guard = {
                 let _span = span!("acquire game_map write lock");
-                self.live_chunks.write()
+                self.live_chunks[shard].write()
             };
             if write_guard.contains_key(&coord) {
                 // Someone raced with us. Try looping again.
@@ -1052,13 +1060,16 @@ impl ServerGameMap {
         result
     }
 
-    fn get_writeback_permit(&self) -> Result<mpsc::Permit<'_, WritebackReq>> {
+    fn get_writeback_permit(&self, shard: usize) -> Result<mpsc::Permit<'_, WritebackReq>> {
         let _span = span!("get writeback permit");
-        Ok(tokio::runtime::Handle::current().block_on(self.writeback_sender.reserve())?)
+        Ok(tokio::runtime::Handle::current().block_on(self.writeback_senders[shard].reserve())?)
     }
 
-    fn try_get_writeback_permit(&self) -> Result<Option<mpsc::Permit<'_, WritebackReq>>> {
-        match self.writeback_sender.try_reserve() {
+    fn try_get_writeback_permit(
+        &self,
+        shard: usize,
+    ) -> Result<Option<mpsc::Permit<'_, WritebackReq>>> {
+        match self.writeback_senders[shard].try_reserve() {
             Ok(permit) => Ok(Some(permit)),
             Err(mpsc::error::TrySendError::Full(_)) => Ok(None),
             Err(e) => Err(e.into()),
@@ -1142,7 +1153,7 @@ impl ServerGameMap {
         }
         plot!(
             "writeback queue capacity",
-            self.writeback_sender.capacity() as f64
+            self.writeback_senders[shard_id(chunk.coord)].capacity() as f64
         );
         chunk.write_back_inner();
         Ok(())
@@ -1156,7 +1167,7 @@ impl ServerGameMap {
 
     /// Get a chunk from the map and return its client proto if either load_if_missing is true, or
     /// the chunk is already cached in memory. If this loads a chunk, the chunk will stay in memory.
-    pub(crate) fn get_chunk_client_proto(
+    pub(crate) fn serialize_for_client(
         &self,
         coord: ChunkCoordinate,
         load_if_missing: bool,
@@ -1167,19 +1178,6 @@ impl ServerGameMap {
             Ok(Some(chunk.serialize(ChunkUsage::Client)?))
         } else {
             Ok(None)
-            // let guard = {
-            //     let _span = span!("acquire gamemap read lock");
-            //     self.live_chunks.read()
-            // };
-            // let chunk_holder = guard.get(&coord);
-            // if let Some(chunk_holder) = chunk_holder {
-            //     match chunk_holder.try_get()? {
-            //         Some(x) => Ok(Some(x.serialize(ChunkUsage::Client)?)),
-            //         None => Ok(None),
-            //     }
-            // } else {
-            //     Ok(None)
-            // }
         }
     }
 
@@ -1188,27 +1186,32 @@ impl ServerGameMap {
     }
 
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        let writeback_handle = self.writeback_handle.lock().take();
-        writeback_handle.unwrap().await??;
+        for i in 0..NUM_LOCK_SHARDS {
+            let writeback_handle = self.writeback_handles[i].lock().take();
+            writeback_handle.unwrap().await??;
 
-        let cleanup_handle = self.cleanup_handle.lock().take();
-        cleanup_handle.unwrap().await??;
+            let cleanup_handle = self.cleanup_handles[i].lock().take();
+            cleanup_handle.unwrap().await??;
+        }
+
         self.flush();
         Ok(())
     }
 
     pub(crate) fn flush(&self) {
-        let mut lock = self.live_chunks.write();
-        let coords: Vec<_> = lock.keys().copied().collect();
-        log::info!(
-            "ServerGameMap being flushed: Writing back {} chunks",
-            coords.len()
-        );
-        for coord in coords {
-            match self.unload_chunk_locked(&mut lock, coord) {
-                Ok(_) => { /* pass */ }
-                Err(e) => {
-                    log::error!("Writeback error for {:?}: {:?}", coord, e);
+        for shard in 0..NUM_LOCK_SHARDS {
+            let mut lock = self.live_chunks[shard].write();
+            let coords: Vec<_> = lock.keys().copied().collect();
+            log::info!(
+                "ServerGameMap being flushed: Writing back {} chunks",
+                coords.len()
+            );
+            for coord in coords {
+                match self.unload_chunk_locked(&mut lock, coord) {
+                    Ok(_) => { /* pass */ }
+                    Err(e) => {
+                        log::error!("Writeback error for {:?}: {:?}", coord, e);
+                    }
                 }
             }
         }
@@ -1222,7 +1225,12 @@ impl ServerGameMap {
 
     /// Rudimentary backpressure/flow control.
     pub(crate) fn in_pushback(&self) -> bool {
-        self.writeback_sender.capacity() < (WRITEBACK_QUEUE_SIZE / 2)
+        self.writeback_senders
+            .iter()
+            .map(mpsc::Sender::capacity)
+            .max()
+            .unwrap()
+            < (WRITEBACK_QUEUE_SIZE / 2)
     }
 }
 impl Drop for ServerGameMap {
@@ -1245,6 +1253,7 @@ const CACHE_CLEANUP_RELOCK_EVERY_N: usize = 32;
 struct MapCacheCleanup {
     map: Arc<ServerGameMap>,
     cancellation: CancellationToken,
+    shard_id: usize,
 }
 impl MapCacheCleanup {
     async fn run_loop(&mut self) -> Result<()> {
@@ -1270,7 +1279,7 @@ impl MapCacheCleanup {
             let now = Instant::now();
             let mut lock = {
                 let _span = span!("game_map cleanup write lock");
-                self.map.live_chunks.write()
+                self.map.live_chunks[self.shard_id].write()
             };
             if lock.len() <= CACHE_CLEANUP_KEEP_N_RECENTLY_USED {
                 return Ok(());
@@ -1288,6 +1297,7 @@ impl MapCacheCleanup {
                 .skip(CACHE_CLEANUP_KEEP_N_RECENTLY_USED)
                 .take(CACHE_CLEANUP_RELOCK_EVERY_N)
             {
+                assert!(self.shard_id == shard_id(entry.1));
                 self.map.unload_chunk_locked(&mut lock, entry.1)?;
             }
             if num_entries > (CACHE_CLEANUP_RELOCK_EVERY_N + CACHE_CLEANUP_KEEP_N_RECENTLY_USED) {
@@ -1309,6 +1319,7 @@ struct GameMapWriteback {
     map: Arc<ServerGameMap>,
     receiver: mpsc::Receiver<WritebackReq>,
     cancellation: CancellationToken,
+    shard_id: usize,
 }
 impl GameMapWriteback {
     async fn run_loop(&mut self) -> Result<()> {
@@ -1332,9 +1343,10 @@ impl GameMapWriteback {
             let _span = span!("acquire game_map read lock for writeback");
             // This lock needs to barge ahead of writers to avoid starvation.
             // If writeback is overloaded, writers may as well wait a bit.
-            self.map.live_chunks.read_recursive()
+            self.map.live_chunks[self.shard_id].read_recursive()
         };
         for coord in writebacks {
+            assert!(self.shard_id == shard_id(coord));
             match lock.get(&coord) {
                 Some(chunk_holder) => {
                     if let Some(mut chunk) = chunk_holder.try_get()? {
@@ -1513,7 +1525,7 @@ pub struct TimerSettings {
     /// The time between ticks of the timer
     pub interval: Duration,
     /// The number of shards
-    pub shards: u32,
+    pub shards: usize,
     /// How strongly to stagger the shards.
     /// 0.0 - fire all shards at approximately the same time
     /// 1.0 - spread the shards as far apart as possible
@@ -1550,36 +1562,50 @@ struct GameMapTimer {
     tasks: tokio::sync::Mutex<Vec<JoinHandle<Result<()>>>>,
 }
 impl GameMapTimer {
-    fn spawn_shards(self: &Arc<Self>, game_state: Arc<GameState>, shard_count: u32) -> Result<()> {
+    fn spawn_shards(
+        self: &Arc<Self>,
+        game_state: Arc<GameState>,
+        fine_shards_per_coarse: usize,
+    ) -> Result<()> {
         ensure!(!self.cancellation.is_cancelled());
         let mut tasks = self.tasks.blocking_lock();
         // Hacky: Delay 0.1 seconds to allow shards to start up
         let first_run = Instant::now() + Duration::from_millis(100);
-        for shard_id in 0..shard_count {
-            let start_time = first_run
-                + (self
-                    .settings
-                    .interval
-                    .mul_f64(self.settings.spreading * shard_id as f64 / shard_count as f64));
-            {
-                let cloned_self = self.clone();
-                let cloned_game_state = game_state.clone();
-                tasks.push(crate::spawn_async(
-                    &format!("timer_{}_shard_{}", self.name, shard_id),
-                    async move {
-                        cloned_self
-                            .run_shard(start_time, shard_id, shard_count, cloned_game_state)
-                            .await
-                    },
-                )?);
+        for coarse_shard in 0..NUM_LOCK_SHARDS {
+            for fine_shard in 0..fine_shards_per_coarse {
+                let start_time = first_run
+                    + (self.settings.interval.mul_f64(
+                        self.settings.spreading
+                            * (fine_shard + fine_shards_per_coarse * coarse_shard) as f64
+                            / (fine_shards_per_coarse * NUM_LOCK_SHARDS) as f64,
+                    ));
+                {
+                    let cloned_self = self.clone();
+                    let cloned_game_state = game_state.clone();
+                    tasks.push(crate::spawn_async(
+                        &format!("timer_{}_shard_{}", self.name, fine_shard),
+                        async move {
+                            cloned_self
+                                .run_shard(
+                                    start_time,
+                                    coarse_shard,
+                                    fine_shard,
+                                    fine_shards_per_coarse,
+                                    cloned_game_state,
+                                )
+                                .await
+                        },
+                    )?);
+                }
             }
         }
+
         Ok(())
     }
     #[tracing::instrument(
         name = "timer_shard",
         level = "trace",
-        skip(self, shard_id, total_shards, game_state),
+        skip(self, fine_shard, fine_shards_per_coarse, game_state),
         fields(
             timer_name = %self.name,
         )
@@ -1587,8 +1613,9 @@ impl GameMapTimer {
     async fn run_shard(
         &self,
         start_time: Instant,
-        shard_id: u32,
-        total_shards: u32,
+        coarse_shard: usize,
+        fine_shard: usize,
+        fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
     ) -> Result<()> {
         let block_types =
@@ -1600,7 +1627,7 @@ impl GameMapTimer {
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 _ = interval.tick() => {
-                    tokio::task::block_in_place(|| self.do_tick(shard_id, total_shards, game_state.clone(), &block_types))?;
+                    tokio::task::block_in_place(|| self.do_tick(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types))?;
                 }
             }
         }
@@ -1609,16 +1636,17 @@ impl GameMapTimer {
 
     fn do_tick(
         &self,
-        shard_id: u32,
-        total_shards: u32,
+        coarse_shard: usize,
+        fine_shard: usize,
+        fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         block_types: &FxHashSet<u32>,
     ) -> Result<()> {
         let _span = span!("timer tick");
-        let mut writeback_permit = Some(game_state.map().get_writeback_permit()?);
+        let mut writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
         let mut read_lock = {
             let _span = span!("acquire game_map read lock");
-            game_state.map().live_chunks.read()
+            game_state.map().live_chunks[coarse_shard].read()
         };
         let coords = read_lock.keys().cloned().collect::<Vec<_>>();
         plot!("timer tick coords", coords.len() as f64);
@@ -1626,23 +1654,25 @@ impl GameMapTimer {
             if writeback_permit.is_none() {
                 // A chunk used our writeback permit. Get a new one.
                 // Fast path - if we can get a permit without blocking, take it
-                if let Some(permit) = game_state.map().try_get_writeback_permit()? {
+                if let Some(permit) = game_state.map().try_get_writeback_permit(coarse_shard)? {
                     writeback_permit = Some(permit);
                 } else {
+                    // We need to release the read lock to get a permit, as the writeback thread needs to get a write lock
+                    // to make progress.
                     drop(read_lock);
 
-                    writeback_permit = Some(game_state.map().get_writeback_permit()?);
+                    writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
 
                     read_lock = {
                         let _span = span!("reacquire game_map read lock (need permit)");
-                        game_state.map().live_chunks.read()
+                        game_state.map().live_chunks[coarse_shard].read()
                     };
                 }
             } else if i % 100 == 0 {
                 let _span = span!("timer bumping");
                 RwLockReadGuard::bump(&mut read_lock);
             }
-            if coord.hash_u64() % total_shards as u64 == shard_id as u64 {
+            if coord.hash_u64() % fine_shards_per_coarse as u64 == fine_shard as u64 {
                 if let Some(chunk) = read_lock.get(&coord) {
                     if self.settings.block_types.iter().any(|x| {
                         chunk
@@ -1793,7 +1823,7 @@ impl ServerGameMap {
     ) -> Result<()> {
         let mut guard = self.timer_controller.lock();
         let timer_controller = guard.as_mut().unwrap();
-        let shards = settings.shards;
+        let shards = (settings.shards - 1) / NUM_LOCK_SHARDS + 1;
         let timer = Arc::new(GameMapTimer {
             name: name.clone(),
             callback,

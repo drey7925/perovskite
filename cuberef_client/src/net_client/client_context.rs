@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::game_state::{items::ClientInventory, ClientState, GameAction};
+use crate::game_state::{items::ClientInventory, ClientState, GameAction, chunk::SnappyDecodeHelper};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
@@ -56,6 +56,7 @@ pub(crate) async fn make_contexts(
         mesh_worker_handles,
         neighbor_propagator: neighbor_propagator.clone(),
         neighbor_propagator_handle,
+        snappy_helper: SnappyDecodeHelper::new(),
     };
 
     let outbound = OutboundContext {
@@ -269,6 +270,8 @@ pub(crate) struct InboundContext {
     mesh_worker_handles: futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
     neighbor_propagator: Arc<NeighborPropagator>,
     neighbor_propagator_handle: tokio::task::JoinHandle<Result<()>>,
+
+    snappy_helper: SnappyDecodeHelper,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
@@ -387,7 +390,7 @@ impl InboundContext {
                     let coord = coord.into();
                     self.client_state
                         .chunks
-                        .insert_or_update(coord, chunk.clone())?;
+                        .insert_or_update(coord, chunk.clone(), &mut self.snappy_helper)?;
 
                     self.enqueue_for_meshing(coord);
 

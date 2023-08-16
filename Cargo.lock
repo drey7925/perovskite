@@ -887,10 +887,12 @@ dependencies = [
  "mimalloc",
  "opaque-ke",
  "parking_lot",
+ "prost",
  "rand 0.8.5",
  "ron 0.8.0",
  "rustc-hash",
  "serde",
+ "snap",
  "texture_packer",
  "textwrap",
  "tokio",
@@ -978,6 +980,7 @@ dependencies = [
  "rocksdb",
  "rustc-hash",
  "sha2",
+ "snap",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -3292,6 +3295,12 @@ dependencies = [
  "smithay-client-toolkit",
  "wayland-client",
 ]
+
+[[package]]
+name = "snap"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e9f0ab6ef7eb7353d9119c170a436d1bf248eea575ac42d19d12f4e34130831"
 
 [[package]]
 name = "socket2"
