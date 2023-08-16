@@ -74,6 +74,7 @@ pub(crate) trait GameDatabase: Send + Sync {
         self.get(key)
     }
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
+    fn delete(&self, key: &[u8]) -> Result<()>;
     fn flush(&self) -> Result<()>;
 }
 
@@ -95,6 +96,11 @@ impl GameDatabase for InMemGameDabase {
 
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.data.lock().insert(key.to_vec(), value.to_vec());
+        Ok(())
+    }
+
+    fn delete(&self, key: &[u8]) -> Result<()> {
+        self.data.lock().remove(key);
         Ok(())
     }
 

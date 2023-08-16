@@ -27,10 +27,12 @@ use crate::{
 use anyhow::{bail, ensure, Context, Result};
 use cuberef_core::{coordinates::BlockCoordinate, protocol::items as items_proto};
 
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use prost::Message;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::broadcast;
 use tracing::trace;
+use tracy_client::span;
 
 use super::{blocks::ExtendedData, GameState};
 
@@ -157,24 +159,74 @@ impl Inventory {
     }
 }
 
+pub struct InventoryLockGuard<'a> {
+    parent: &'a InventoryManager,
+    key: InventoryKey,
+}
+impl Drop for InventoryLockGuard<'_> {
+    fn drop(&mut self) {
+        let mut lock = self.parent.locked.lock();
+        lock.remove(&self.key);
+        self.parent.unlock_condvar.notify_all();
+    }
+}
+impl InventoryLockGuard<'_> {
+    pub fn key(&self) -> InventoryKey {
+        self.key
+    }
+    pub fn get(&self) -> Result<Option<Inventory>> {
+        let bytes = self.parent.db.get(&self.key.to_db_key())?;
+        match bytes {
+            Some(x) => {
+                let inv_proto = items_proto::Inventory::decode(x.borrow())?;
+                Ok(Some(Inventory::from_proto(inv_proto, Some(self.key))?))
+            }
+            None => Ok(None),
+        }
+    }
+    pub fn put(&self, inventory: Inventory) -> Result<()> {
+        self.parent
+            .db
+            .put(&self.key.to_db_key(), &inventory.to_proto().encode_to_vec())
+    }
+
+    fn delete(&self) -> Result<()> {
+        self.parent.db.delete(&self.key.to_db_key())?;
+        Ok(())
+    }
+}
+
 /// Game component that manages access to inventories of items
 pub struct InventoryManager {
     // For now, just throw a mutex around an (already thread-safe) DB for basic
     // atomicity/mutual exclusion
     //
     // This whole lock is a massive hack, but it works well enough
-    db: RwLock<Arc<dyn GameDatabase>>,
+    db: Arc<dyn GameDatabase>,
     update_sender: broadcast::Sender<UpdatedInventory>,
+
+    // Performance note - a system similar to game_map would likely be more performant.
+    // In the interest of learning Rust and exploring a wider range of techniques, I'll use
+    // this approach here.
+    locked: Mutex<FxHashSet<InventoryKey>>,
+    unlock_condvar: Condvar,
 }
 impl InventoryManager {
+    fn lock(&self, key: InventoryKey) -> InventoryLockGuard {
+        let _span = span!("Inventory lock");
+        let mut lock_set = self.locked.lock();
+        while lock_set.contains(&key) {
+            self.unlock_condvar.wait(&mut lock_set);
+        }
+        lock_set.insert(key);
+        InventoryLockGuard { parent: &self, key }
+    }
+
     /// Create a new, empty inventory
     pub fn make_inventory(&self, height: u32, width: u32) -> Result<InventoryKey> {
         let inventory = Inventory::new((height, width))?;
-        let db = {
-            let _span = tracy_client::span!("inventory lock");
-            self.db.write()
-        };
-        db.put(
+
+        self.db.put(
             // unwrap OK because we just generated an inventory with a key
             &inventory.key.unwrap().to_db_key(),
             &inventory.to_proto().encode_to_vec(),
@@ -183,15 +235,8 @@ impl InventoryManager {
     }
     /// Get a readonly copy of an inventory.
     pub fn get(&self, key: &InventoryKey) -> Result<Option<Inventory>> {
-        let db = self.db.read();
-        let bytes = db.get(&key.to_db_key())?;
-        match bytes {
-            Some(x) => {
-                let inv_proto = items_proto::Inventory::decode(x.borrow())?;
-                Ok(Some(Inventory::from_proto(inv_proto, Some(*key))?))
-            }
-            None => Ok(None),
-        }
+        let guard = self.lock(*key);
+        guard.get()
     }
 
     /// Run the given mutator on the indicated inventory.
@@ -201,24 +246,10 @@ impl InventoryManager {
     where
         F: FnOnce(&mut Inventory) -> Result<T>,
     {
-        let db = {
-            let _span = tracy_client::span!("inventory lock");
-            self.db.write()
-        };
-        let db_key = key.to_db_key();
-        let bytes = db.get(&db_key)?;
-        let mut inv = match bytes {
-            Some(x) => {
-                let inv_proto = items_proto::Inventory::decode(x.borrow())?;
-                Inventory::from_proto(inv_proto, Some(*key))?
-            }
-            None => {
-                bail!("Inventory ID not found")
-            }
-        };
+        let lock = self.lock(*key);
+        let mut inv = lock.get()?.context("Inventory ID not found")?;
         let result = mutator(&mut inv);
-        let new_bytes = inv.to_proto().encode_to_vec();
-        db.put(&db_key, &new_bytes)?;
+        lock.put(inv)?;
         self.broadcast_update(*key);
         result
     }
@@ -227,6 +258,9 @@ impl InventoryManager {
     /// The function may mutate the data, or leave it as-is, and it may return a value to the caller
     /// through its own return value.
     ///
+    /// The callback will be called with inventories given in the same order as `keys`. Duplicates
+    /// are forbidden.
+    ///
     /// See mutate_inventory_atomically for warnings regarding deadlock safety
     pub fn mutate_inventories_atomically<F, T>(
         &self,
@@ -234,32 +268,31 @@ impl InventoryManager {
         mutator: F,
     ) -> Result<T>
     where
-        F: FnOnce(&mut [Inventory]) -> Result<T>,
+        F: FnOnce(&mut [Option<Inventory>]) -> Result<T>,
     {
-        let db = {
-            let _span = tracy_client::span!("inventory lock");
-            self.db.write()
-        };
-        let mut inventories = Vec::with_capacity(keys.len());
-        for key in keys {
-            let bytes = db.get(&key.to_db_key())?;
-            let inv = match bytes {
-                Some(x) => {
-                    let inv_proto = items_proto::Inventory::decode(x.borrow())?;
-                    Inventory::from_proto(inv_proto, Some(*key))?
-                }
-                None => {
-                    bail!("Inventory ID not found")
-                }
-            };
-            inventories.push(inv);
+        // Deadlock safety: This needs to acquire keys in a sorted order,
+        // and must not contain duplicate keys.
+        let mut locks = FxHashMap::default();
+        let mut sorted_keys = keys.to_vec();
+        sorted_keys.sort();
+        for key in sorted_keys {
+            if locks.contains_key(&key) {
+                bail!("Duplicate inventory key");
+            }
+            locks.insert(key, self.lock(key));
         }
-
+        let mut inventories = keys
+            .iter()
+            // Unwrap is safe - we inserted every key we encountered.
+            .map(|key| locks.get(key).unwrap().get())
+            .collect::<Result<Vec<_>>>()?;
+        
         let result = mutator(&mut inventories);
-        for inv in inventories {
-            let new_bytes = inv.to_proto().encode_to_vec();
-            db.put(&inv.key.unwrap().to_db_key(), &new_bytes)?;
-            self.broadcast_update(inv.key.unwrap())
+        for (key, new_inventory) in keys.iter().zip(inventories.into_iter()) {
+            match new_inventory {
+                Some(new_inventory) => locks.get_mut(key).unwrap().put(new_inventory)?,
+                None => locks.get_mut(key).unwrap().delete()?,
+            }
         }
         result
     }
@@ -269,6 +302,8 @@ impl InventoryManager {
         InventoryManager {
             db: db.into(),
             update_sender: sender,
+            locked: Mutex::new(FxHashSet::default()),
+            unlock_condvar: Condvar::new(),
         }
     }
 

@@ -67,6 +67,11 @@ impl GameDatabase for RocksDbBackend {
             .with_context(|| "RocksDB put failed")
     }
 
+    fn delete(&self, key: &[u8]) -> anyhow::Result<()> {
+        let _span = span!("db delete");
+        self.db.delete(key).with_context(|| "RocksDB delete failed")
+    }
+
     fn flush(&self) -> Result<()> {
         self.db.flush().with_context(|| "RocksDB flush failed")
     }
