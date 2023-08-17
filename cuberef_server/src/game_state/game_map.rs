@@ -474,9 +474,16 @@ impl MapChunkHolder {
     }
     /// Set the chunk, and notify any threads waiting in wait_and_get
     fn fill(&self, chunk: MapChunk) {
+        let mut seen_blocks = FxHashSet::default();
         for block_id in chunk.block_ids.iter() {
-            self.block_bloom_filter
+            if seen_blocks.insert(*block_id) {
+                // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
+                // on x86_64.
+                // Only insert unique block ids (still need to test this optimization)
+                // TODO fork the bloom filter library and extend it to support constant lengths
+                self.block_bloom_filter
                 .insert(BlockId::from(*block_id).base_id() as u64);
+            }
         }
         let _span = span!("game_map waiting to fill chunk");
         let mut guard = self.chunk.lock();
