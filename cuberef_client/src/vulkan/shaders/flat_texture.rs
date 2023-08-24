@@ -118,8 +118,8 @@ impl FlatTextureDrawBuilder {
         let h = tex_coord.h * scale;
         self.rect(
             Rect {
-                x: pos.0 - (w / 2),
-                y: pos.1 - (h / 2),
+                x: pos.0.saturating_sub(w / 2),
+                y: pos.1.saturating_sub(h / 2),
                 w,
                 h,
             },

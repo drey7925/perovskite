@@ -26,6 +26,7 @@ use cuberef_core::constants::block_groups::DEFAULT_SOLID;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use cuberef_core::block_id::BlockId;
+use cuberef_core::lighting::ChunkColumn;
 use cuberef_core::protocol;
 use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
@@ -81,6 +82,7 @@ pub(crate) struct InventoryAction {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InteractKeyAction {
     pub(crate) target: BlockCoordinate,
+    #[allow(unused)]
     pub(crate) item_slot: u32,
     pub(crate) player_pos: PlayerPositionUpdate,
 }
@@ -96,17 +98,18 @@ pub(crate) enum GameAction {
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
+pub(crate) type LightColumnMap = FxHashMap<(i32, i32), ChunkColumn>;
 pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
-    snappy_helper: SnappyDecodeHelper,
+    light_columns: parking_lot::RwLock<LightColumnMap>,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
         ChunkManager {
             chunks: parking_lot::RwLock::new(FxHashMap::default()),
             renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
-            snappy_helper: SnappyDecodeHelper::new(),
+            light_columns: parking_lot::RwLock::new(FxHashMap::default()),
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -116,72 +119,83 @@ impl ChunkManager {
         let guard = self.chunks.read();
         ChunkManagerView { guard }
     }
+
     /// Clones the chunk manager and returns a clone with the following properties:
     /// * The clone does not hold any locks on the data in this chunk manager (i.e. insertions and deletions)
     ///   are possible while the cloned view is live.
     /// * The clone does not track any insertions/deletions of this chunk manager.
     ///    * it will not show chunks inserted after cloned_view returned
     ///    * if chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
-    ///      memory will not be released until the cloned view is dropped.
-    pub(crate) fn cloned_view(&self) -> ChunkManagerClonedView {
-        ChunkManagerClonedView {
-            data: self.chunks.read().clone(),
-        }
-    }
-
+    ///      memory will not be released until the cloned view is dropped, due to Arcs owned by the cloned view.
     pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkManagerClonedView {
         ChunkManagerClonedView {
             data: self.renderable_chunks.read().clone(),
         }
     }
 
-    pub(crate) fn insert(
-        &self,
-        coord: ChunkCoordinate,
-        chunk: ClientChunk,
-    ) -> Option<Arc<ClientChunk>> {
-        let mut lock = {
-            let _span = span!("Acquire global chunk lock");
-            self.chunks.write()
-        };
-        lock.insert(coord, Arc::new(chunk))
-    }
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
-        // Lock order: chunks -> renderable_chunks
-        let mut lock = {
+        // Lock order: chunks -> renderable_chunks -> light_columns
+        let mut chunks_lock = {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
-        let mut lock2 = {
+        let mut render_chunks_lock = {
             let _span = span!("Acquire global renderable chunk lock");
             self.renderable_chunks.write()
         };
-        lock2.remove(coord);
-        lock.remove(coord)
+        let mut light_columns_lock = {
+            let _span = span!("Acquire global light column lock");
+            self.light_columns.write()
+        };
+        // The column should be present, so we unwrap.
+        let column = light_columns_lock.get_mut(&(coord.x, coord.z)).unwrap();
+        column.remove(coord.y);
+        if column.is_empty() {
+            light_columns_lock.remove(&(coord.x, coord.z));
+        }
+        render_chunks_lock.remove(coord);
+        chunks_lock.remove(coord)
     }
-
+    // Returns the number of additional chunks below the given chunk that need lighting updates.
     pub(crate) fn insert_or_update(
         &self,
         coord: ChunkCoordinate,
         proto: protocol::game_rpc::MapChunk,
         snappy_helper: &mut SnappyDecodeHelper,
-    ) -> anyhow::Result<()> {
-        let mut lock = {
+        block_types: &ClientBlockTypeManager,
+    ) -> anyhow::Result<usize> {
+        // Lock order: chunks -> [renderable_chunks] -> light_columns
+        let mut chunks_lock = {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
-        match lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(x) => {
-                x.get().update_from(proto, snappy_helper)
+        let mut light_columns_lock = {
+            let _span = span!("Acquire global light column lock");
+            self.light_columns.write()
+        };
+        let light_column = light_columns_lock
+            .entry((coord.x, coord.z))
+            .or_insert_with(ChunkColumn::empty);
+        let occlusion = match chunks_lock.entry(coord) {
+            std::collections::hash_map::Entry::Occupied(chunk_entry) => {
+                chunk_entry
+                    .get()
+                    .update_from(proto, snappy_helper, block_types)?                
             }
             std::collections::hash_map::Entry::Vacant(x) => {
-                x.insert(Arc::new(ClientChunk::from_proto(
-                    proto,
-                    snappy_helper,
-                )?));
-                Ok(())
+                let (chunk, occlusion) =
+                    ClientChunk::from_proto(proto, snappy_helper, block_types)?;
+                light_column.insert_empty(coord.y);
+                x.insert(Arc::new(chunk));
+                occlusion
             }
-        }
+        };
+        
+        let mut light_cursor = light_column.cursor_into(coord.y);
+        *light_cursor.current_occlusion_mut() = occlusion;
+        light_cursor.mark_valid();
+        let extra_chunks = light_cursor.propagate_lighting();
+        Ok(extra_chunks)
     }
 
     pub(crate) fn cloned_neighbors_fast(&self, chunk: ChunkCoordinate) -> FastChunkNeighbors {
@@ -332,11 +346,6 @@ impl FastChunkNeighbors {
 
 pub(crate) struct ChunkManagerClonedView {
     data: ChunkMap,
-}
-impl ChunkManagerClonedView {
-    pub(crate) fn get(&self, coord: &ChunkCoordinate) -> Option<&Arc<ClientChunk>> {
-        self.data.get(coord)
-    }
 }
 impl Deref for ChunkManagerClonedView {
     type Target = ChunkMap;

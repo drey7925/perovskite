@@ -156,7 +156,7 @@ impl GameHud {
         // Top left corner of the frames
         let frame0_corner = (
             (window_size.0 / 2).saturating_sub(left_offset as u32),
-            window_size.1 - h,
+            window_size.1.saturating_sub(h),
         );
 
         for i in 0..hotbar_slots {

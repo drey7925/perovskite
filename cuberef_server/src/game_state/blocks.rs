@@ -389,6 +389,9 @@ pub struct BlockTypeManager {
     block_types: Vec<BlockType>,
     name_to_base_id_map: HashMap<String, u32>,
     unique_id: usize,
+    // Separate copy of BlockType.client_info.allow_light_propagation, packed densely in order
+    // to be more cache friendly
+    light_propagation: bitvec::vec::BitVec,
 }
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
@@ -396,6 +399,7 @@ impl BlockTypeManager {
             block_types: Vec::new(),
             name_to_base_id_map: HashMap::new(),
             unique_id: BLOCK_TYPE_MANAGER_ID.fetch_add(1, Ordering::Relaxed),
+            light_propagation: bitvec::vec::BitVec::new(),
         }
     }
 
@@ -425,12 +429,13 @@ impl BlockTypeManager {
         Ok((block_type, id.variant()))
     }
 
-    fn borrow_block(&self, id: BlockId) -> &BlockType {
-        let index = id.index();
-        if index > self.block_types.len() {
-            panic!("Block type {:?} out of bounds", id);
+    #[inline]
+    pub(crate) fn allows_light_propagation(&self, id: BlockId) -> bool {
+        if id.index() < self.light_propagation.len() {
+            self.light_propagation[id.index()]
         } else {
-            &self.block_types[index]
+            // unknown blocks don't propagate light
+            false
         }
     }
 
@@ -452,6 +457,7 @@ impl BlockTypeManager {
 
                 block.client_info.id = id.base_id();
                 info!("Registering block {} as {:?}", block.short_name(), id);
+                self.light_propagation.set(id.index(), block.client_info.allow_light_propagation);
                 *existing = block;
                 id
             }
@@ -486,6 +492,7 @@ impl BlockTypeManager {
             block_types: Vec::new(),
             name_to_base_id_map: HashMap::new(),
             unique_id: BLOCK_TYPE_MANAGER_ID.fetch_add(1, Ordering::Relaxed),
+            light_propagation: bitvec::vec::BitVec::new(),
         };
         let max_index = block_proto
             .block_type
@@ -496,7 +503,7 @@ impl BlockTypeManager {
 
         let present_indices: HashSet<usize> =
             HashSet::from_iter(block_proto.block_type.iter().map(|x| BlockId(x.id).index()));
-
+        manager.light_propagation.resize(max_index + 1, false);
         for i in 0..=max_index {
             let unknown_block_name = format!("by_id:0x{:x}", i << 12);
             manager.block_types.push(make_unknown_block_serverside(

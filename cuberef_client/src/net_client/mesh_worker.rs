@@ -81,7 +81,13 @@ impl NeighborPropagator {
     pub(crate) fn run_neighbor_propagator(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_neighbor_propagator");
         let mut scratchpad = Box::new([0u8; 48 * 48 * 48]);
-        if self.client_state.settings.load().render.testonly_noop_meshing {
+        if self
+            .client_state
+            .settings
+            .load()
+            .render
+            .testonly_noop_meshing
+        {
             while !self.shutdown.is_cancelled() {
                 let mut lock = self.queue.lock();
                 lock.clear();
@@ -134,13 +140,13 @@ impl NeighborPropagator {
                 let _span = span!("nprop_work");
                 let mut token = NeighborPropagationToken(self.token.lock());
                 for &coord in chunks {
-                    let should_enqueue = propagate_neighbor_data(
+                    let should_mesh = propagate_neighbor_data(
                         &self.client_state.block_types,
                         &self.client_state.chunks.cloned_neighbors_fast(coord),
                         &mut scratchpad,
                         &mut token,
                     )?;
-                    if should_enqueue {
+                    if should_mesh {
                         let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
                         self.mesh_workers[index as usize].enqueue(coord);
                     }
@@ -200,9 +206,16 @@ impl MeshWorker {
     pub(crate) fn run_mesh_worker(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_mesh_worker");
         while !self.shutdown.is_cancelled() {
-            let chunks = if self.client_state.settings.load().render.testonly_noop_meshing {
+            let chunks = if self
+                .client_state
+                .settings
+                .load()
+                .render
+                .testonly_noop_meshing
+            {
                 self.queue.lock().clear();
-                self.cond.wait_for(&mut self.queue.lock(), Duration::from_secs(1));
+                self.cond
+                    .wait_for(&mut self.queue.lock(), Duration::from_secs(1));
                 vec![]
             } else {
                 // This is really ugly and deadlock-prone. Figure out whether we need this or not.
@@ -312,10 +325,10 @@ pub(crate) fn propagate_neighbor_data(
 
         {
             let _span = span!("nprop");
-            for i in -1i32..17 {
-                for j in -1i32..17 {
-                    for k in -1i32..17 {
-                        if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
+            for x in -1i32..17 {
+                for z in -1i32..17 {
+                    for y in -1i32..17 {
+                        if (0..16).contains(&x) && (0..16).contains(&y) && (0..16).contains(&z) {
                             // This isn't a neighbor, and we don't need to fill it in (it's already present)
                             // Note: This check is important for deadlock safety - if we try to do the lookup, we'll fail to
                             // get the read lock because buf already has a write lock. It is not merely an optimization
@@ -323,21 +336,21 @@ pub(crate) fn propagate_neighbor_data(
                         }
                         let neighbor = slice_cache
                             .get((
-                                div_euclid_16_i32(i),
-                                div_euclid_16_i32(j),
-                                div_euclid_16_i32(k),
+                                div_euclid_16_i32(x),
+                                div_euclid_16_i32(y),
+                                div_euclid_16_i32(z),
                             ))
-                            .map(|x| {
-                                x[ChunkOffset {
-                                    x: rem_euclid_16_u8(i),
-                                    y: rem_euclid_16_u8(j),
-                                    z: rem_euclid_16_u8(k),
+                            .map(|block_ids| {
+                                block_ids[ChunkOffset {
+                                    x: rem_euclid_16_u8(x),
+                                    y: rem_euclid_16_u8(y),
+                                    z: rem_euclid_16_u8(z),
                                 }
                                 .as_extended_index()]
                             })
                             .unwrap_or(block_manager.air_block());
 
-                        current_chunk.block_ids_mut()[(i, j, k).as_extended_index()] = neighbor;
+                        current_chunk.block_ids_mut()[(x, y, z).as_extended_index()] = neighbor;
                     }
                 }
             }
@@ -407,30 +420,30 @@ pub(crate) fn propagate_neighbor_data(
             // Indices are reversed in order to achieve better cache locality
             // i is the minor index, j is intermediate, and k is the major index
 
-            for k_coarse in -1i32..=1 {
-                for j_coarse in -1i32..=1 {
-                    for i_coarse in -1i32..=1 {
-                        let slice = if k_coarse == 0 && j_coarse == 0 && i_coarse == 0 {
+            for x_coarse in -1i32..=1 {
+                for z_coarse in -1i32..=1 {
+                    for y_coarse in -1i32..=1 {
+                        let slice = if z_coarse == 0 && y_coarse == 0 && x_coarse == 0 {
                             // The center chunk is not in the slice cache
                             Some(current_chunk.block_ids())
                         } else {
-                            slice_cache.get((i_coarse, j_coarse, k_coarse))
+                            slice_cache.get((x_coarse, y_coarse, z_coarse))
                         };
                         if let Some(slice) = slice {
-                            for k in 0..16 {
-                                for j in 0..16 {
-                                    let min_index = (0, j, k).as_extended_index();
+                            for x in 0..16 {
+                                for z in 0..16 {
+                                    let min_index = (x, 0, z).as_extended_index();
                                     let max_index = min_index + 16;
                                     let subslice = &slice[min_index..max_index];
                                     // consider unrolling this loop
-                                    for (i, &block_id) in subslice.iter().enumerate().take(16) {
+                                    for (y, &block_id) in subslice.iter().enumerate().take(16) {
                                         let light_emission = block_manager.light_emission(block_id);
                                         if light_emission > 0 {
                                             maybe_push(
                                                 &mut queue,
-                                                i_coarse * 16 + (i as i32),
-                                                j_coarse * 16 + j,
-                                                k_coarse * 16 + k,
+                                                x_coarse * 16 + x,
+                                                y_coarse * 16 + (y as i32),
+                                                z_coarse * 16 + z,
                                                 light_emission,
                                             );
                                         }
@@ -443,32 +456,32 @@ pub(crate) fn propagate_neighbor_data(
             }
 
             // Then, while the queue is non-empty, attempt to propagate light
-            while let Some((i, j, k, light_level)) = queue.pop() {
+            while let Some((x, y, z, light_level)) = queue.pop() {
                 let old_level = scratchpad
-                    [(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize];
+                    [(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize];
                 if old_level >= light_level {
                     continue;
                 }
                 // Set the queued light value
                 scratchpad
-                    [(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize] =
+                    [(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize] =
                     light_level;
                 let ccbi = current_chunk.block_ids();
-                let light_propagate_for_coord = |i: i32, j: i32, k: i32| {
-                    if (0..16).contains(&i) && (0..16).contains(&j) && (0..16).contains(&k) {
-                        block_manager.propagates_light(ccbi[(i, j, k).as_extended_index()])
+                let light_propagate_for_coord = |x: i32, y: i32, z: i32| {
+                    if (0..16).contains(&x) && (0..16).contains(&y) && (0..16).contains(&z) {
+                        block_manager.propagates_light(ccbi[(x, y, z).as_extended_index()])
                     } else {
-                        let i_coarse = div_euclid_16_i32(i);
-                        let j_coarse = div_euclid_16_i32(j);
-                        let k_coarse = div_euclid_16_i32(k);
+                        let x_coarse = div_euclid_16_i32(x);
+                        let y_coarse = div_euclid_16_i32(y);
+                        let z_coarse = div_euclid_16_i32(z);
                         slice_cache
-                            .get((i_coarse, j_coarse, k_coarse))
-                            .map(|x| {
+                            .get((x_coarse, y_coarse, z_coarse))
+                            .map(|blocks| {
                                 block_manager.propagates_light(
-                                    x[(
-                                        rem_euclid_16_i32(i),
-                                        rem_euclid_16_i32(j),
-                                        rem_euclid_16_i32(k),
+                                    blocks[(
+                                        rem_euclid_16_i32(x),
+                                        rem_euclid_16_i32(y),
+                                        rem_euclid_16_i32(z),
                                     )
                                         .as_extended_index()],
                                 )
@@ -479,62 +492,62 @@ pub(crate) fn propagate_neighbor_data(
 
                 check_propagation_and_push(
                     &mut queue,
-                    i - 1,
-                    j,
-                    k,
+                    x - 1,
+                    y,
+                    z,
                     light_level - 1,
                     light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
-                    i + 1,
-                    j,
-                    k,
+                    x + 1,
+                    y,
+                    z,
                     light_level - 1,
                     light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
-                    i,
-                    j - 1,
-                    k,
+                    x,
+                    y - 1,
+                    z,
                     light_level - 1,
                     light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
-                    i,
-                    j + 1,
-                    k,
+                    x,
+                    y + 1,
+                    z,
                     light_level - 1,
                     light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
-                    i,
-                    j,
-                    k - 1,
+                    x,
+                    y,
+                    z - 1,
                     light_level - 1,
                     light_propagate_for_coord,
                 );
                 check_propagation_and_push(
                     &mut queue,
-                    i,
-                    j,
-                    k + 1,
+                    x,
+                    y,
+                    z + 1,
                     light_level - 1,
                     light_propagate_for_coord,
                 );
             }
 
             let lightmap = current_chunk.lightmap_mut();
-            for i in -1i32..17 {
-                for j in -1i32..17 {
-                    for k in -1i32..17 {
-                        lightmap[(i, j, k).as_extended_index()] =
-                            scratchpad[(i + 16) as usize * 48 * 48
-                                + (j + 16) as usize * 48
-                                + (k + 16) as usize];
+            for x in -1i32..17 {
+                for z in -1i32..17 {
+                    for y in -1i32..17 {
+                        lightmap[(x, y, z).as_extended_index()] =
+                            scratchpad[(x + 16) as usize * 48 * 48
+                                + (z + 16) as usize * 48
+                                + (y + 16) as usize];
                     }
                 }
             }

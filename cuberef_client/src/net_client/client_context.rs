@@ -5,7 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::game_state::{items::ClientInventory, ClientState, GameAction, chunk::SnappyDecodeHelper};
+use crate::game_state::{
+    chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
+};
 use anyhow::Result;
 use cuberef_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
@@ -378,7 +380,7 @@ impl InboundContext {
         Ok(())
     }
 
-    fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
+    fn enqueue_for_nprop(&self, coord: ChunkCoordinate) {
         self.neighbor_propagator.enqueue(coord);
     }
 
@@ -388,17 +390,20 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
-                    self.client_state
-                        .chunks
-                        .insert_or_update(coord, chunk.clone(), &mut self.snappy_helper)?;
+                    let extra_chunks = self.client_state.chunks.insert_or_update(
+                        coord,
+                        chunk.clone(),
+                        &mut self.snappy_helper,
+                        &self.client_state.block_types,
+                    )?;
 
-                    self.enqueue_for_meshing(coord);
+                    self.enqueue_for_nprop(coord);
 
                     for i in -1..=1 {
-                        for j in -1..=1 {
+                        for j in -1..=(1 + extra_chunks as i32) {
                             for k in -1..=1 {
                                 if let Some(neighbor) = coord.try_delta(i, j, k) {
-                                    self.enqueue_for_meshing(neighbor);
+                                    self.enqueue_for_nprop(neighbor);
                                 }
                             }
                         }
@@ -548,11 +553,16 @@ impl InboundContext {
             // Let the neighbor propagator get back to work
             drop(token);
             for coord in needs_remesh {
-                if !(self.client_state
+                if !(self
+                    .client_state
                     .chunks
-                    .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?) {
-                        log::warn!("Failed to remesh {:?} because it wasn't in the main map", coord);
-                    }
+                    .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?)
+                {
+                    log::warn!(
+                        "Failed to remesh {:?} because it wasn't in the main map",
+                        coord
+                    );
+                }
             }
         }
         Ok((missing_coord, unknown_coords))

@@ -8,8 +8,10 @@ description = "Multiplayer voxel game written in Rust - Core code shared between
 [dependencies]
 anyhow = "1.0.70"
 argon2 = "0.4.1"
+bitvec = "1.0.1"
 cgmath = "0.18.0"
 opaque-ke = { version = "2.0.0", features = ["argon2"] }
+parking_lot = "0.12.1"
 prost = "0.11"
 prost-types = "0.11"
 rand = "0.8.5"

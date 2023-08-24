@@ -1,145 +1,284 @@
 //! Implementation details of light propagation that need to be shared between the client and server
-// TODO - this is unused now, because making it generic destroyed the performance
-// Get rid of it, or turn it into a slow refernece impl for unit testing
-use crate::block_id::BlockId;
-#[doc(hidden)]
-pub fn do_lighting_pass<F, G, H, I>(
-    scratchpad: &mut [u8; 48 * 48 * 48],
-    light_emission: F,
-    light_propagation: G,
-    // Reads an entire row of blocks. TODO consider if we want to batch reads of an entire chunk
-    read_row: H,
-    read_single: I,
-) where
-    F: Fn(BlockId) -> u8,
-    G: Fn(BlockId) -> bool,
-    // (i / 16, j, k), e.g. (-1, -5, 21)
-    H: Fn(i32, i32, i32) -> [BlockId; 16],
-    I: Fn(i32, i32, i32) -> BlockId,
-{
-    #[inline]
-    fn maybe_push(queue: &mut Vec<(i32, i32, i32, u8)>, i: i32, j: i32, k: i32, light_level: u8) {
-        if i < -16 || j < -16 || k < -16 || i >= 32 || j >= 32 || k >= 32 {
-            return;
-        }
-        let i_dist = (-1 - i).max(i - 16);
-        let j_dist = (-1 - j).max(j - 16);
-        let k_dist = (-1 - k).max(k - 16);
-        let dist = i_dist + j_dist + k_dist;
-        if dist < (light_level as i32) {
-            queue.push((i, j, k, light_level));
+use std::ops::{BitOr, BitAnd, BitOrAssign, BitAndAssign, Not, BitXor, BitXorAssign};
+
+use bitvec::prelude as bv;
+use bitvec::field::BitField;
+
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
+
+/// A 256-bit bitfield indicating what XZ positions within a chunk. This requires mutable
+/// access to modify, but does not entail atomic or mutex operations.
+#[derive(Clone, Copy)]
+pub struct Lightfield {
+    // usize should match the native register size which will make it easier to
+    // translate this to atomics in the future, if necessary.
+    data: bitvec::array::BitArray<[u32; 8], bitvec::order::Lsb0>,
+}
+
+impl Lightfield {
+    pub const fn zero() -> Self {
+        Lightfield {
+            data: bv::BitArray::ZERO,
         }
     }
-
-    #[inline]
-    fn check_propagation_and_push<F>(
-        queue: &mut Vec<(i32, i32, i32, u8)>,
-        i: i32,
-        j: i32,
-        k: i32,
-        light_level: u8,
-        light_propagation: F,
-    ) where
-        F: Fn(i32, i32, i32) -> bool,
-    {
-        if i < -16 || j < -16 || k < -16 || i >= 32 || j >= 32 || k >= 32 {
-            return;
-        }
-        if !light_propagation(i, j, k) {
-            return;
-        }
-        let i_dist = (-1 - i).max(i - 16);
-        let j_dist = (-1 - j).max(j - 16);
-        let k_dist = (-1 - k).max(k - 16);
-        let dist = i_dist + j_dist + k_dist;
-        if dist < (light_level as i32) {
-            queue.push((i, j, k, light_level));
+    pub fn all_on() -> Self {
+        !Lightfield {
+            data: bv::BitArray::ZERO,
         }
     }
-    
-    scratchpad.fill(0);
+    pub fn any_set(&self) -> bool {
+        self.data.any()
+    }
+    pub fn serialize(&self) -> [u32; 8] {
+        [
+            self.data[0..31].load_le(),
+            self.data[32..63].load_le(),
+            self.data[64..95].load_le(),
+            self.data[96..127].load_le(),
+            self.data[128..159].load_le(),
+            self.data[160..191].load_le(),
+            self.data[192..223].load_le(),
+            self.data[224..255].load_le(),
+        ]
+    }
+    pub fn deserialize(arr: [u32; 8]) -> Self {
+        let mut data = bv::BitArray::ZERO;
+        data[0..31].store_le(arr[0]);
+        data[32..63].store_le(arr[1]);
+        data[64..95].store_le(arr[2]);
+        data[96..127].store_le(arr[3]);
+        data[128..159].store_le(arr[4]);
+        data[160..191].store_le(arr[5]);
+        data[192..223].store_le(arr[6]);
+        data[224..255].store_le(arr[7]);
 
-    let mut queue = vec![];
-    // First, scan through the neighborhood looking for light sources
-    // Indices are reversed in order to achieve better cache locality
-    // i is the minor index, j is intermediate, and k is the major index
-    let mut light_levels = [0; 48];
-    for k in -16i32..32 {
-        for j in -16i32..32 {
-            for i in -1..=1 {
-                let row = read_row(i, j, k);
-                for x in 0..16 {
-                    light_levels[((i + 1) * 16) as usize + x] = light_emission(row[x]);
+        Lightfield { data }
+    }
+
+    pub fn set(&mut self, x: u8, z: u8, arg: bool) {
+        self.data.set((x as usize) * 16 + (z as usize), arg);
+    }
+    pub fn get(&self, x: u8, z: u8) -> bool {
+        self.data[(x as usize) * 16 + (z as usize)]
+    }
+}
+
+
+macro_rules! delegate_bin_op {
+    ($trait:ident, $method:ident) => {
+        impl $trait for Lightfield {
+            type Output = Self;
+            #[inline]
+            fn $method(self, rhs: Self) -> Self::Output {
+                Lightfield {
+                    data: self.data.$method(rhs.data),
                 }
             }
-            for i in 0..48 {
-                if light_levels[i as usize] > 0 {
-                    // We have some light. Check if it could possibly reach our own block
-                    maybe_push(&mut queue, i - 16, j, k, light_levels[i as usize]);
-                }
+        }
+    };
+}
+macro_rules! delegate_bin_op_assign {
+    ($trait:ident, $method:ident) => {
+        impl $trait for Lightfield {
+            #[inline]
+            fn $method(&mut self, rhs: Self) {
+                self.data.$method(rhs.data);
             }
         }
+    };
+}
+delegate_bin_op!(BitOr, bitor);
+delegate_bin_op!(BitAnd, bitand);
+delegate_bin_op!(BitXor, bitxor);
+delegate_bin_op_assign!(BitOrAssign, bitor_assign);
+delegate_bin_op_assign!(BitAndAssign, bitand_assign);
+delegate_bin_op_assign!(BitXorAssign, bitxor_assign);
+
+impl Not for Lightfield {
+    type Output = Self;
+    #[inline]
+    fn not(self) -> Self::Output {
+        Lightfield { data: !self.data }
     }
-    // Then, while the queue is non-empty, attempt to propagate light
-    while let Some((i, j, k, light_level)) = queue.pop() {
-        let old_level =
-            scratchpad[(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize];
-        if old_level >= light_level {
-            continue;
+}
+
+/// Representation of the lighting for a column of chunks within the map.
+pub struct ChunkColumn {
+    // *Chunk* coordinate y-values that are loaded in memory.
+    // Locking order: key1 > key2 (key1 is geometrically above key2) => lock-for-key1 is taken first
+    present: BTreeMap<i32, RwLock<ChunkLightingState>>,
+    generation: AtomicUsize,
+}
+impl ChunkColumn {
+    pub fn empty() -> Self {
+        Self {
+            present: BTreeMap::new(),
+            generation: AtomicUsize::new(0),
         }
-        // Set the queued light value
-        scratchpad[(i + 16) as usize * 48 * 48 + (j + 16) as usize * 48 + (k + 16) as usize] =
-            light_level;
+    }
+    /// Inserts an empty chunk lighting state for the given chunk.
+    /// Panics if the chunk is already present.
+    pub fn insert_empty(&mut self, chunk_y: i32) {
+        assert!(self
+            .present
+            .insert(chunk_y, RwLock::new(ChunkLightingState::empty()))
+            .is_none());
+    }
 
-        let light_propagate_for_coord = |i, j, k| light_propagation(read_single(i, j, k));
+    pub fn is_empty(&self) -> bool {
+        self.present.is_empty()
+    }
 
-        check_propagation_and_push(
-            &mut queue,
-            i - 1,
-            j,
-            k,
-            light_level - 1,
-            light_propagate_for_coord,
-        );
-        check_propagation_and_push(
-            &mut queue,
-            i + 1,
-            j,
-            k,
-            light_level - 1,
-            light_propagate_for_coord,
-        );
-        check_propagation_and_push(
-            &mut queue,
-            i,
-            j - 1,
-            k,
-            light_level - 1,
-            light_propagate_for_coord,
-        );
-        check_propagation_and_push(
-            &mut queue,
-            i,
-            j + 1,
-            k,
-            light_level - 1,
-            light_propagate_for_coord,
-        );
-        check_propagation_and_push(
-            &mut queue,
-            i,
-            j,
-            k - 1,
-            light_level - 1,
-            light_propagate_for_coord,
-        );
-        check_propagation_and_push(
-            &mut queue,
-            i,
-            j,
-            k + 1,
-            light_level - 1,
-            light_propagate_for_coord,
-        );
+    /// Removes an entry, panics if the chunk is not present.
+    pub fn remove(&mut self, chunk_y: i32) {
+        assert!(self.present.remove(&chunk_y).is_some());
+    }
+
+    /// Returns an immutable reference to the chunk lighting state for the given chunk.
+    /// Panics if the chunk is not present.
+    pub fn lock_for_read(&self, chunk_y: i32) -> RwLockReadGuard<'_, ChunkLightingState> {
+        self.present.get(&chunk_y).unwrap().read()
+    }
+    /// Returns a cursor that starts in a state where it can propagate light *into* the given chunk
+    /// from the previous chunk above it.
+    pub fn cursor_into(&self, chunk_y: i32) -> ChunkColumnCursor<'_> {
+        // Lock ordering: predecessor read() is called before current write()
+        let predecessor = self
+            .present
+            .range((chunk_y + 1)..)
+            .next()
+            .map(|(_, guard)| guard.read());
+        let current = self.present.get(&chunk_y).unwrap().write();
+        ChunkColumnCursor {
+            generation: self
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            map: &self.present,
+            current_pos: chunk_y,
+            previous: predecessor,
+            current,
+        }
+    }
+    /// Returns a cursor that starts in a state where it can propagate light *out* of the given chunk
+    /// into the next chunk below it.
+    pub fn cursor_out_of(&self, chunk_y: i32) -> Option<ChunkColumnCursor<'_>> {
+        // Lock ordering: current read() is called before successor write()
+        let current = self.present.get(&chunk_y).unwrap().read();
+        let successor = self.present.range(..chunk_y).next_back()?;
+        Some(ChunkColumnCursor {
+            generation: self
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            map: &self.present,
+            current_pos: *successor.0,
+            previous: Some(current),
+            current: successor.1.write(),
+        })
+    }
+}
+
+/// A cursor that can be used to perform light propagation in the column.
+pub struct ChunkColumnCursor<'a> {
+    generation: usize,
+    map: &'a BTreeMap<i32, RwLock<ChunkLightingState>>,
+    current_pos: i32,
+    pub(crate) previous: Option<RwLockReadGuard<'a, ChunkLightingState>>,
+    pub(crate) current: RwLockWriteGuard<'a, ChunkLightingState>,
+}
+impl<'a> ChunkColumnCursor<'a> {
+    pub fn current_occlusion_mut(&mut self) -> &mut Lightfield {
+        &mut self.current.occlusion
+    }
+
+    pub fn current_valid(&self) -> bool {
+        self.current.valid
+    }
+
+    pub fn advance(self) -> Option<Self> {
+        // Lock order: drop the previous lock, downgrade the current, and then take the successor
+        drop(self.previous);
+        let new_previous = RwLockWriteGuard::downgrade(self.current);
+        let new_current = self.map.range(..self.current_pos).next_back()?;
+        Some(ChunkColumnCursor {
+            generation: self.generation,
+            map: self.map,
+            current_pos: *new_current.0,
+            previous: Some(new_previous),
+            current: new_current.1.write(),
+        })
+    }
+
+    pub fn propagate_lighting(mut self) -> usize {
+        // prev_diff is used only for checking an invariant; we can remove it once we're sure that the
+        // algorithm is correct
+        let mut prev_diff = Lightfield::all_on();
+
+        let mut counter = 0;
+        // The light being transferred from one chunk to the next
+        let mut prev_outgoing = self
+            .previous
+            .as_ref()
+            .map_or(Lightfield::all_on(), |x| x.outgoing());
+        loop {
+            // We should have advanced into a chunk with valid lighting.
+            assert!(self.current.valid);
+            
+            let old_outgoing = self.current.outgoing();
+            self.current.incoming = prev_outgoing;
+            let new_outgoing = self.current.outgoing();
+
+            let outgoing_diffs = new_outgoing ^ old_outgoing;
+
+            // If the outbound light we calculated is the same as the previous outbound light
+            // for this chunk, we're done.
+            // The first chunk is a special case - its inbound light isn't changing, and we
+            // just updated its occlusion.
+            if counter > 0 && !outgoing_diffs.any_set() {
+                break;
+            }
+            assert!((outgoing_diffs & !prev_diff).any_set() == false);
+            prev_diff = if counter > 0 {
+                outgoing_diffs
+            } else {
+                Lightfield::all_on()
+            };
+            prev_outgoing = new_outgoing;
+            
+            self = match self.advance() {
+                Some(x) => x,
+                None => {
+                    break;
+                }
+            };
+            counter += 1;
+        }
+        counter
+    }
+
+    pub fn mark_valid(&mut self) {
+        self.current.valid = true;
+    }
+}
+
+/// The lighting state of a chunk
+pub struct ChunkLightingState {
+    pub(crate) valid: bool,
+    /// xz coordinates that have light coming from above
+    pub(crate) incoming: Lightfield,
+    /// xz coordinates where some block in the chunk stops light from passing
+    pub(crate) occlusion: Lightfield,
+}
+impl ChunkLightingState {
+    pub(crate) fn empty() -> Self {
+        Self {
+            valid: false,
+            incoming: Lightfield::zero(),
+            occlusion: Lightfield::zero(),
+        }
+    }
+    pub(crate) fn outgoing(&self) -> Lightfield {
+        self.incoming & !self.occlusion
     }
 }

@@ -221,6 +221,7 @@ impl VulkanContext {
     }
 
     fn recreate_swapchain(&mut self, size: PhysicalSize<u32>) -> Result<()> {
+        let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent: size.into(),
             ..self.swapchain.create_info()

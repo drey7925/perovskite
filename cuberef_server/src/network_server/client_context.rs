@@ -16,7 +16,6 @@
 
 use std::collections::HashSet;
 use std::iter::once;
-use std::ops::DerefMut;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,6 +62,7 @@ use itertools::iproduct;
 use log::error;
 use log::info;
 use log::warn;
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use prost::Message;
 use rustc_hash::FxHashMap;
@@ -166,6 +166,13 @@ pub(crate) async fn make_client_contexts(
             multiplicative_decrease: 0.5,
         },
     };
+    let chunk_limit_aimd = Arc::new(Mutex::new(Aimd {
+        val: LOAD_LAZY_SORTED_COORDS.len() as f64,
+        floor: 1024.0,
+        ceiling: LOAD_LAZY_SORTED_COORDS.len() as f64,
+        additive_increase: 256.0,
+        multiplicative_decrease: 0.75,
+    }));
     let chunk_sender = MapChunkSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
@@ -176,12 +183,14 @@ pub(crate) async fn make_client_contexts(
         snappy_encoder: snap::raw::Encoder::new(),
         snappy_input_buffer: vec![],
         snappy_output_buffer: vec![],
+        chunk_limit_aimd: chunk_limit_aimd.clone(),
     };
     let block_event_sender = BlockEventSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
         block_events,
         chunk_tracker,
+        chunk_limit_aimd,
     };
     let inventory_event_sender = InventoryEventSender {
         context: context.clone(),
@@ -382,6 +391,8 @@ pub(crate) struct MapChunkSender {
     snappy_encoder: snap::raw::Encoder,
     snappy_input_buffer: Vec<u8>,
     snappy_output_buffer: Vec<u8>,
+
+    chunk_limit_aimd: Arc<Mutex<Aimd>>,
 }
 const ACCESS_TIME_BUMP_SHARDS: u32 = 32;
 impl MapChunkSender {
@@ -433,9 +444,9 @@ impl MapChunkSender {
     #[tracing::instrument(
         name = "HandlePositionUpdate",
         level = "trace",
-        skip(self, update),
+        skip(self, update, bump_index),
         fields(
-            player_name = %self.context.player_context.name(),
+        player_name = %self.context.player_context.name(),
             budget = %update.chunks_to_send,
             player_chunk
         ),
@@ -529,7 +540,9 @@ impl MapChunkSender {
             let should_load = distance <= LOAD_EAGER_DISTANCE
                 && (distance <= FORCE_LOAD_DISTANCE
                     || !self.context.game_state.map().in_pushback());
-
+            if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
+                self.elements_to_skip = i;
+            }
             let chunk_data = tokio::task::block_in_place(|| {
                 self.context
                     .game_state
@@ -561,7 +574,7 @@ impl MapChunkSender {
                 }
             }
         }
-
+        self.chunk_limit_aimd.lock().increase();
         Ok(())
     }
 
@@ -581,6 +594,9 @@ pub(crate) struct BlockEventSender {
     // responsible for filtering)
     block_events: broadcast::Receiver<BlockUpdate>,
     chunk_tracker: Arc<ChunkTracker>,
+
+    // AIMD tracker used to control chunks to be sent to the client
+    chunk_limit_aimd: Arc<Mutex<Aimd>>,
 }
 impl BlockEventSender {
     #[tracing::instrument(
@@ -688,7 +704,10 @@ impl BlockEventSender {
         Ok(())
     }
 
-    async fn handle_block_update_lagged(&mut self) -> Result<()> {
+    async fn handle_block_update_lagged(&mut self) -> Result<()> {        
+        // Decrease the number of chunks we're willing to send
+        self.chunk_limit_aimd.lock().decrease();
+
         // this ends up racy. resubscribe first, so we get duplicate/pointless events after the
         // resubscribe, rather than missing events if we resubscribe to the broadcast after sending current
         // chunk states

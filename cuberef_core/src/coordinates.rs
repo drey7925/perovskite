@@ -132,15 +132,18 @@ impl ChunkOffset {
     #[inline]
     pub fn as_index(&self) -> usize {
         self.debug_check();
-        256 * (self.z as usize) + 16 * (self.y as usize) + (self.x as usize)
+        // The unusual order here is to provide a cache-friendly iteration order
+        // for innermost loops that traverse vertically (since that is a common pattern for
+        // lighting calculations).
+        256 * (self.x as usize) + 16 * (self.z as usize) + (self.y as usize)
     }
     #[inline]
     pub fn from_index(index: usize) -> ChunkOffset {
         assert!(index < 4096);
         ChunkOffset {
-            x: (index % 16) as u8,
-            y: ((index / 16) % 16) as u8,
-            z: ((index / 256) % 16) as u8,
+            y: (index % 16) as u8,
+            z: ((index / 16) % 16) as u8,
+            x: ((index / 256) % 16) as u8,
         }
     }
     pub fn try_delta(&self, x: i8, y: i8, z: i8) -> Option<ChunkOffset> {
@@ -234,10 +237,13 @@ impl ChunkCoordinate {
         self.hash(&mut hasher);
         hasher.finish()
     }
-    pub fn coarse_hash(&self) -> u64 {
+    /// A hash function for ChunkCoordinate that keeps close coordinates together,
+    /// and does not consider the y coordinate. All chunks in a vertical stack are
+    /// guaranteed to have the same hash *within a process*. No guarantees are made
+    /// for serialized hashes.
+    pub fn coarse_hash_no_y(&self) -> u64 {
         let mut hasher = FxHasher::default();
         (self.x >> 4).hash(&mut hasher);
-        (self.y >> 4).hash(&mut hasher);
         (self.z >> 4).hash(&mut hasher);
         hasher.finish()
     }

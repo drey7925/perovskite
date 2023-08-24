@@ -482,9 +482,9 @@ impl BlockRenderer {
         let _span = span!("mesh subpass");
         let mut vtx = Vec::new();
         let mut idx = Vec::new();
-        for z in 0..16 {
-            for y in 0..16 {
-                for x in 0..16 {
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 0..16 {
                     let offset = ChunkOffset { x, y, z };
                     let (block, variant) = self.get_block(chunk_data.block_ids(), offset);
 

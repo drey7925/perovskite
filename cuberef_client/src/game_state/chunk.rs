@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4};
 use cuberef_core::coordinates::{BlockCoordinate, ChunkOffset};
+use cuberef_core::lighting::Lightfield;
 use cuberef_core::protocol::game_rpc as rpc_proto;
 use cuberef_core::protocol::map::StoredChunk;
 use cuberef_core::{block_id::BlockId, coordinates::ChunkCoordinate};
@@ -27,9 +28,11 @@ use anyhow::{ensure, Context, Result};
 
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::block_renderer::{BlockRenderer, VkChunkVertexData};
+use crate::block_renderer::{BlockRenderer, ClientBlockTypeManager, VkChunkVertexData};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use prost::Message;
+
+use super::LightColumnMap;
 
 pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView<'_> {
@@ -99,17 +102,21 @@ pub(crate) struct ChunkData {
 }
 
 pub(crate) struct SnappyDecodeHelper {
-    
     snappy_decoder: snap::raw::Decoder,
     snappy_output_buffer: Vec<u8>,
 }
 impl SnappyDecodeHelper {
-    fn decode<T>(&mut self, data: &[u8]) -> Result<T> where T: Message + Default {
+    fn decode<T>(&mut self, data: &[u8]) -> Result<T>
+    where
+        T: Message + Default,
+    {
         let decode_len = snap::raw::decompress_len(data)?;
         if self.snappy_output_buffer.len() < decode_len {
             self.snappy_output_buffer.resize(decode_len, 0);
         }
-        let decompressed_len = self.snappy_decoder.decompress(data, &mut self.snappy_output_buffer)?;
+        let decompressed_len = self
+            .snappy_decoder
+            .decompress(data, &mut self.snappy_output_buffer)?;
         Ok(T::decode(&self.snappy_output_buffer[0..decompressed_len])?)
     }
 
@@ -141,12 +148,17 @@ pub(crate) struct ClientChunk {
     cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
 }
 impl ClientChunk {
-    pub(crate) fn from_proto(proto: rpc_proto::MapChunk, snappy_helper: &mut SnappyDecodeHelper) -> Result<ClientChunk> {
+    pub(crate) fn from_proto(
+        proto: rpc_proto::MapChunk,
+        snappy_helper: &mut SnappyDecodeHelper,
+        block_types: &ClientBlockTypeManager
+    ) -> Result<(ClientChunk, Lightfield)> {
         let coord = proto
             .chunk_coord
             .with_context(|| "Missing chunk_coord")?
             .into();
-        let data = snappy_helper.decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
+        let data = snappy_helper
+            .decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
             .chunk_data
             .with_context(|| "inner chunk_data missing")?;
         let block_ids: &[u32; 4096] = match &data {
@@ -155,7 +167,8 @@ impl ClientChunk {
                 v1_data.block_ids.deref().try_into().unwrap()
             }
         };
-        Ok(ClientChunk {
+        let occlusion = get_occlusion(block_ids, block_types);
+        Ok((ClientChunk {
             coord,
             chunk_data: RwLock::new(ChunkData {
                 block_ids: Self::expand_ids(block_ids),
@@ -163,7 +176,7 @@ impl ClientChunk {
                 lightmap: Box::new([0; 18 * 18 * 18]),
             }),
             cached_vertex_data: Mutex::new(None),
-        })
+        }, occlusion))
     }
 
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<bool> {
@@ -209,14 +222,20 @@ impl ClientChunk {
         result
     }
 
-    pub(crate) fn update_from(&self, proto: rpc_proto::MapChunk, snappy_helper: &mut SnappyDecodeHelper) -> Result<()> {
+    pub(crate) fn update_from(
+        &self,
+        proto: rpc_proto::MapChunk,
+        snappy_helper: &mut SnappyDecodeHelper,
+        block_types: &ClientBlockTypeManager,
+    ) -> Result<Lightfield> {
         let coord: ChunkCoordinate = proto
             .chunk_coord
             .with_context(|| "Missing chunk_coord")?
             .into();
         ensure!(coord == self.coord);
-        let data =snappy_helper.decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
-        .chunk_data
+        let data = snappy_helper
+            .decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
+            .chunk_data
             .with_context(|| "inner chunk_data missing")?;
         let block_ids: &[u32; 4096] = match &data {
             cuberef_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
@@ -224,11 +243,12 @@ impl ClientChunk {
                 v1_data.block_ids.deref().try_into().unwrap()
             }
         };
+        let occlusion = get_occlusion(block_ids, block_types);
         // unwrap is safe: we verified the length
         let mut data_guard = self.chunk_data.write();
         data_guard.block_ids = Self::expand_ids(block_ids);
         data_guard.data_state = BlockIdState::NeedProcessing;
-        Ok(())
+        Ok(occlusion)
     }
 
     pub(crate) fn apply_delta(&self, proto: &rpc_proto::MapDeltaUpdate) -> Result<bool> {
@@ -287,11 +307,13 @@ impl ClientChunk {
     }
 
     fn check_frustum(transformation: Matrix4<f32>) -> bool {
-
         #[inline]
         fn mvmul4(matrix: Matrix4<f32>, vector: Vector4<f32>) -> Vector4<f32> {
             // This is the implementation hidden behind the simd feature gate
-            matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2] + matrix[3] * vector[3]
+            matrix[0] * vector[0]
+                + matrix[1] * vector[1]
+                + matrix[2] * vector[2]
+                + matrix[3] * vector[3]
         }
 
         #[inline]
@@ -315,7 +337,7 @@ impl ClientChunk {
             f32::NEG_INFINITY,
             f32::NEG_INFINITY,
         );
-        
+
         for corner in CORNERS {
             let mut ndc = mvmul4(transformation, corner);
             let ndcw = ndc.w;
@@ -363,12 +385,30 @@ impl ClientChunk {
     }
 }
 
+fn get_occlusion(block_ids: &[u32; 4096], block_types: &ClientBlockTypeManager) -> Lightfield {
+    let mut occlusion = Lightfield::zero();
+    for x in 0..16 {
+        for z in 0..16 {
+            'inner: for y in 0..16 {
+                let id = block_ids[(ChunkOffset { x, y, z }).as_index()];
+                if !block_types.propagates_light(id.into()) {
+                    occlusion.set(x, z, true);
+                    break 'inner;
+                }
+            }
+        }
+    }
+    occlusion
+}
+
 pub(crate) trait ChunkOffsetExt {
     fn as_extended_index(&self) -> usize;
 }
 impl ChunkOffsetExt for ChunkOffset {
     fn as_extended_index(&self) -> usize {
-        (self.z as usize + 1) * 18 * 18 + (self.y as usize + 1) * 18 + (self.x as usize + 1)
+        // This unusual order matches that in coordinates.rs and is designed to be cache-friendly for
+        // vertical iteration, which are commonly used in global lighting.
+        (self.x as usize + 1) * 18 * 18 + (self.z as usize + 1) * 18 + (self.y as usize + 1)
     }
 }
 impl ChunkOffsetExt for (i32, i32, i32) {
@@ -377,7 +417,8 @@ impl ChunkOffsetExt for (i32, i32, i32) {
         assert!(VALID_RANGE.contains(&self.0));
         assert!(VALID_RANGE.contains(&self.1));
         assert!(VALID_RANGE.contains(&self.2));
-        ((self.2 + 1) as usize) * 18 * 18 + ((self.1 + 1) as usize) * 18 + ((self.0 + 1) as usize)
+        // See comment in ChunkOffsetExt for ChunkOffset
+        ((self.0 + 1) as usize) * 18 * 18 + ((self.2 + 1) as usize) * 18 + ((self.1 + 1) as usize)
     }
 }
 impl ChunkOffsetExt for (i8, i8, i8) {
@@ -386,6 +427,7 @@ impl ChunkOffsetExt for (i8, i8, i8) {
         assert!(VALID_RANGE.contains(&self.0));
         assert!(VALID_RANGE.contains(&self.1));
         assert!(VALID_RANGE.contains(&self.2));
-        ((self.2 + 1) as usize) * 18 * 18 + ((self.1 + 1) as usize) * 18 + ((self.0 + 1) as usize)
+        // See comment in ChunkOffsetExt for ChunkOffset
+        ((self.0 + 1) as usize) * 18 * 18 + ((self.2 + 1) as usize) * 18 + ((self.1 + 1) as usize)
     }
 }

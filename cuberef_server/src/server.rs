@@ -24,16 +24,15 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cuberef_core::protocol::game_rpc::cuberef_game_server::CuberefGameServer;
-use tonic::codegen::CompressionEncoding;
 
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
         blocks::BlockTypeManager, game_behaviors::GameBehaviors, items::ItemManager,
-        mapgen::MapgenInterface, GameState, game_map::{TimerSettings, TimerCallback},
+        mapgen::MapgenInterface, GameState, game_map::{TimerSettings, TimerCallback, MapChunk},
     },
     media::MediaManager,
-    network_server::{grpc_service::CuberefGameServerImpl},
+    network_server::grpc_service::CuberefGameServerImpl,
 };
 
 #[derive(Parser, Debug, Clone)]

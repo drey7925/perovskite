@@ -915,8 +915,10 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "argon2",
+ "bitvec",
  "cgmath",
  "opaque-ke",
+ "parking_lot",
  "prost",
  "prost-types",
  "rand 0.8.5",
@@ -958,6 +960,7 @@ dependencies = [
  "anyhow",
  "argfile",
  "argon2",
+ "bitvec",
  "cbloom",
  "cgmath",
  "clap",
