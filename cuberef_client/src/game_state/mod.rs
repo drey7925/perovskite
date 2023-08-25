@@ -26,11 +26,12 @@ use cuberef_core::constants::block_groups::DEFAULT_SOLID;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use cuberef_core::block_id::BlockId;
-use cuberef_core::lighting::ChunkColumn;
+use cuberef_core::lighting::{ChunkColumn, Lightfield};
 use cuberef_core::protocol;
+use cuberef_core::protocol::game_rpc::{MapDeltaUpdate, MapDeltaUpdateBatch};
 use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracy_client::span;
 use winit::event::Event;
@@ -177,11 +178,9 @@ impl ChunkManager {
             .entry((coord.x, coord.z))
             .or_insert_with(ChunkColumn::empty);
         let occlusion = match chunks_lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(chunk_entry) => {
-                chunk_entry
-                    .get()
-                    .update_from(proto, snappy_helper, block_types)?                
-            }
+            std::collections::hash_map::Entry::Occupied(chunk_entry) => chunk_entry
+                .get()
+                .update_from(proto, snappy_helper, block_types)?,
             std::collections::hash_map::Entry::Vacant(x) => {
                 let (chunk, occlusion) =
                     ClientChunk::from_proto(proto, snappy_helper, block_types)?;
@@ -190,7 +189,7 @@ impl ChunkManager {
                 occlusion
             }
         };
-        
+
         let mut light_cursor = light_column.cursor_into(coord.y);
         *light_cursor.current_occlusion_mut() = occlusion;
         light_cursor.mark_valid();
@@ -198,21 +197,94 @@ impl ChunkManager {
         Ok(extra_chunks)
     }
 
-    pub(crate) fn cloned_neighbors_fast(&self, chunk: ChunkCoordinate) -> FastChunkNeighbors {
-        let lock = self.chunks.read();
-        let mut data =
-            std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
-        for i in -1..=1 {
-            for j in -1..=1 {
-                for k in -1..=1 {
-                    if let Some(delta) = chunk.try_delta(i, j, k) {
-                        data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
-                            lock.get(&delta).cloned();
+    pub(crate) fn apply_delta_batch(
+        &self,
+        batch: &MapDeltaUpdateBatch,
+        block_types: &ClientBlockTypeManager,
+    ) -> Result<(FxHashSet<ChunkCoordinate>, Vec<BlockCoordinate>, bool)> {
+        let mut needs_remesh = FxHashSet::default();
+        let mut unknown_coords = vec![];
+        let mut missing_coord = false;
+
+        let chunk_lock = self.chunks.read();
+        let light_lock = self.light_columns.read();
+        for update in batch.updates.iter() {
+            let block_coord: BlockCoordinate = match &update.block_coord {
+                Some(x) => x.into(),
+                None => {
+                    log::warn!("Got delta with missing block_coord {:?}", update);
+                    missing_coord = true;
+                    continue;
+                }
+            };
+            let chunk_coord = block_coord.chunk();
+            let extra_chunks = match chunk_lock.get(&chunk_coord) {
+                Some(x) => {
+                    if !x.apply_delta(update).unwrap() {
+                        None
+                    } else {
+                        let occlusion = x.get_occlusion(block_types);
+                        let light_column = light_lock.get(&(chunk_coord.x, chunk_coord.z)).unwrap();
+                        let mut light_cursor = light_column.cursor_into(chunk_coord.y);
+                        *light_cursor.current_occlusion_mut() = occlusion;
+                        light_cursor.mark_valid();
+                        let extra_chunks = light_cursor.propagate_lighting();
+                        Some(extra_chunks as i32)
+                    }
+                }
+                None => {
+                    log::warn!("Got delta for unknown chunk {:?}", block_coord);
+                    unknown_coords.push(block_coord);
+                    None
+                }
+            };
+            // unwrap because we expect all errors to be internal.
+            if let Some(extra_chunks) = extra_chunks {
+                let chunk = block_coord.chunk();
+                needs_remesh.insert(chunk);
+                for i in -1..=1 {
+                    for j in (-1 - extra_chunks as i32)..=1 {
+                        for k in -1..=1 {
+                            if let Some(neighbor) = chunk.try_delta(i, j, k) {
+                                needs_remesh.insert(neighbor);
+                            }
+                        }
                     }
                 }
             }
         }
-        FastChunkNeighbors { data }
+        Ok((needs_remesh, unknown_coords, missing_coord))
+    }
+
+    pub(crate) fn cloned_neighbors_fast(&self, chunk: ChunkCoordinate) -> FastChunkNeighbors {
+        let chunk_lock = self.chunks.read();
+        let lights_lock = self.light_columns.read();
+        let mut data =
+            std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
+        let mut inbound_lights = [[[Lightfield::zero(); 3]; 3]; 3];
+        for i in -1..=1 {
+            for k in -1..=1 {
+                let light_column = chunk
+                    .try_delta(i, 0, k)
+                    .and_then(|delta| lights_lock.get(&(delta.x, delta.z)));
+                for j in -1..=1 {
+                    if let Some(delta) = chunk.try_delta(i, j, k) {
+                        data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
+                            chunk_lock.get(&delta).cloned();
+                        if let Some(light_column) = light_column {
+                            inbound_lights[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
+                                light_column
+                                    .get_incoming_light(delta.y)
+                                    .unwrap_or_else(|| Lightfield::zero());
+                        }
+                    }
+                }
+            }
+        }
+        FastChunkNeighbors {
+            data,
+            inbound_lights,
+        }
     }
 
     /// If the chunk is present, meshes it. If any geometry was generated, inserts it into
@@ -332,6 +404,7 @@ impl<'a, 'b> FastNeighborSliceCache<'a, 'b> {
 
 pub(crate) struct FastChunkNeighbors {
     data: [[[Option<Arc<ClientChunk>>; 3]; 3]; 3],
+    inbound_lights: [[[Lightfield; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
     pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&Arc<ClientChunk>> {
@@ -341,6 +414,13 @@ impl FastChunkNeighbors {
         self.data[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
             [(coord_xyz.0 + 1) as usize]
             .as_ref()
+    }
+    pub(crate) fn inbound_light(&self, coord_xyz: (i32, i32, i32)) -> Lightfield {
+        assert!((-1..=1).contains(&coord_xyz.0));
+        assert!((-1..=1).contains(&coord_xyz.1));
+        assert!((-1..=1).contains(&coord_xyz.2));
+        self.inbound_lights[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
+            [(coord_xyz.0 + 1) as usize]
     }
 }
 

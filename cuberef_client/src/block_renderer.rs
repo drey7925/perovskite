@@ -782,12 +782,15 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
     })
 }
 
+const GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = [
+    0., 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
+    0.875, 0.9375,
+];
+// TODO enable global brightness
 const BRIGHTNESS_TABLE: [f32; 16] = [
     0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
     0.875, 0.9375, 1.00,
 ];
-// TODO enable global brightness
-const GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = [0.0; 16];
 
 #[inline]
 fn make_cgv(

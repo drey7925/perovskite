@@ -151,7 +151,7 @@ impl ClientChunk {
     pub(crate) fn from_proto(
         proto: rpc_proto::MapChunk,
         snappy_helper: &mut SnappyDecodeHelper,
-        block_types: &ClientBlockTypeManager
+        block_types: &ClientBlockTypeManager,
     ) -> Result<(ClientChunk, Lightfield)> {
         let coord = proto
             .chunk_coord
@@ -167,16 +167,19 @@ impl ClientChunk {
                 v1_data.block_ids.deref().try_into().unwrap()
             }
         };
-        let occlusion = get_occlusion(block_ids, block_types);
-        Ok((ClientChunk {
-            coord,
-            chunk_data: RwLock::new(ChunkData {
-                block_ids: Self::expand_ids(block_ids),
-                data_state: BlockIdState::NeedProcessing,
-                lightmap: Box::new([0; 18 * 18 * 18]),
-            }),
-            cached_vertex_data: Mutex::new(None),
-        }, occlusion))
+        let occlusion = get_occlusion_for_proto(block_ids, block_types);
+        Ok((
+            ClientChunk {
+                coord,
+                chunk_data: RwLock::new(ChunkData {
+                    block_ids: Self::expand_ids(block_ids),
+                    data_state: BlockIdState::NeedProcessing,
+                    lightmap: Box::new([0; 18 * 18 * 18]),
+                }),
+                cached_vertex_data: Mutex::new(None),
+            },
+            occlusion,
+        ))
     }
 
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<bool> {
@@ -243,7 +246,7 @@ impl ClientChunk {
                 v1_data.block_ids.deref().try_into().unwrap()
             }
         };
-        let occlusion = get_occlusion(block_ids, block_types);
+        let occlusion = get_occlusion_for_proto(block_ids, block_types);
         // unwrap is safe: we verified the length
         let mut data_guard = self.chunk_data.write();
         data_guard.block_ids = Self::expand_ids(block_ids);
@@ -304,6 +307,23 @@ impl ClientChunk {
         } else {
             None
         }
+    }
+
+    pub(crate) fn get_occlusion(&self, block_types: &ClientBlockTypeManager) -> Lightfield {
+        let data = self.chunk_data.read();
+        let mut occlusion = Lightfield::zero();
+        for x in 0..16 {
+            for z in 0..16 {
+                'inner: for y in 0..16 {
+                    let id = data.block_ids[(ChunkOffset { x, y, z }).as_extended_index()];
+                    if !block_types.propagates_light(id.into()) {
+                        occlusion.set(x, z, true);
+                        break 'inner;
+                    }
+                }
+            }
+        }
+        occlusion
     }
 
     fn check_frustum(transformation: Matrix4<f32>) -> bool {
@@ -385,7 +405,10 @@ impl ClientChunk {
     }
 }
 
-fn get_occlusion(block_ids: &[u32; 4096], block_types: &ClientBlockTypeManager) -> Lightfield {
+fn get_occlusion_for_proto(
+    block_ids: &[u32; 4096],
+    block_types: &ClientBlockTypeManager,
+) -> Lightfield {
     let mut occlusion = Lightfield::zero();
     for x in 0..16 {
         for z in 0..16 {

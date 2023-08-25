@@ -1,8 +1,8 @@
 //! Implementation details of light propagation that need to be shared between the client and server
-use std::ops::{BitOr, BitAnd, BitOrAssign, BitAndAssign, Not, BitXor, BitXorAssign};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
-use bitvec::prelude as bv;
 use bitvec::field::BitField;
+use bitvec::prelude as bv;
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
 /// A 256-bit bitfield indicating what XZ positions within a chunk. This requires mutable
 /// access to modify, but does not entail atomic or mutex operations.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Lightfield {
     // usize should match the native register size which will make it easier to
     // translate this to atomics in the future, if necessary.
@@ -64,7 +64,6 @@ impl Lightfield {
         self.data[(x as usize) * 16 + (z as usize)]
     }
 }
-
 
 macro_rules! delegate_bin_op {
     ($trait:ident, $method:ident) => {
@@ -177,6 +176,11 @@ impl ChunkColumn {
             current: successor.1.write(),
         })
     }
+    /// Returns the incoming light for the given chunk.
+    /// Takes a short-lived read lock.
+    pub fn get_incoming_light(&self, y: i32) -> Option<Lightfield> {
+        self.present.get(&y).map(|x| x.read().incoming)
+    }
 }
 
 /// A cursor that can be used to perform light propagation in the column.
@@ -224,7 +228,7 @@ impl<'a> ChunkColumnCursor<'a> {
         loop {
             // We should have advanced into a chunk with valid lighting.
             assert!(self.current.valid);
-            
+
             let old_outgoing = self.current.outgoing();
             self.current.incoming = prev_outgoing;
             let new_outgoing = self.current.outgoing();
@@ -245,7 +249,7 @@ impl<'a> ChunkColumnCursor<'a> {
                 Lightfield::all_on()
             };
             prev_outgoing = new_outgoing;
-            
+
             self = match self.advance() {
                 Some(x) => x,
                 None => {

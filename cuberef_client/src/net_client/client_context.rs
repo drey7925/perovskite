@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::game_state::{
-    chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
+    self, chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
 };
 use anyhow::Result;
 use cuberef_core::{
@@ -400,7 +400,7 @@ impl InboundContext {
                     self.enqueue_for_nprop(coord);
 
                     for i in -1..=1 {
-                        for j in -1..=(1 + extra_chunks as i32) {
+                        for j in (-1 - extra_chunks as i32)..=1 {
                             for k in -1..=1 {
                                 if let Some(neighbor) = coord.try_delta(i, j, k) {
                                     self.enqueue_for_nprop(neighbor);
@@ -500,43 +500,11 @@ impl InboundContext {
         &mut self,
         batch: &rpc::MapDeltaUpdateBatch,
     ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
-        let chunk_manager_read_lock = self.client_state.chunks.read_lock();
-        let mut missing_coord = false;
-        let mut unknown_coords = Vec::new();
-        let mut needs_remesh = FxHashSet::default();
-        for update in batch.updates.iter() {
-            let block_coord: BlockCoordinate = match &update.block_coord {
-                Some(x) => x.into(),
-                None => {
-                    log::warn!("Got delta with missing block_coord {:?}", update);
-                    missing_coord = true;
-                    continue;
-                }
-            };
-            let has_delta = match chunk_manager_read_lock.get(&block_coord.chunk()) {
-                Some(x) => x.apply_delta(update).unwrap(),
-                None => {
-                    log::warn!("Got delta for unknown chunk {:?}", block_coord);
-                    unknown_coords.push(block_coord);
-                    false
-                }
-            };
-            // unwrap because we expect all errors to be internal.
-            if has_delta {
-                let chunk = block_coord.chunk();
-                needs_remesh.insert(chunk);
-                for i in -1..=1 {
-                    for j in -1..=1 {
-                        for k in -1..=1 {
-                            if let Some(neighbor) = chunk.try_delta(i, j, k) {
-                                needs_remesh.insert(neighbor);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        drop(chunk_manager_read_lock);
+        let (needs_remesh, unknown_coords, missing_coord) = self
+            .client_state
+            .chunks
+            .apply_delta_batch(batch, &self.client_state.block_types)?;
+
         {
             let _span = span!("remesh for delta");
             let mut scratchpad = Box::new([0; 48 * 48 * 48]);

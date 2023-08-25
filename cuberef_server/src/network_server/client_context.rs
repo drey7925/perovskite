@@ -168,7 +168,7 @@ pub(crate) async fn make_client_contexts(
     };
     let chunk_limit_aimd = Arc::new(Mutex::new(Aimd {
         val: LOAD_LAZY_SORTED_COORDS.len() as f64,
-        floor: 1024.0,
+        floor: 1024.0f64.min(LOAD_LAZY_SORTED_COORDS.len() as f64),
         ceiling: LOAD_LAZY_SORTED_COORDS.len() as f64,
         additive_increase: 256.0,
         multiplicative_decrease: 0.75,
