@@ -42,7 +42,7 @@ use cuberef_core::{
 };
 use prost::Message;
 
-pub type CustomData = Box<dyn Any + Send + 'static>;
+pub type CustomData = Box<dyn Any + Send + Sync + 'static>;
 pub struct ExtendedData {
     /// In-memory extended data that may be associated with a block at a
     /// particular location. Use `downcast_ref` to try to get the inner data
@@ -598,8 +598,6 @@ impl BlockTypeManager {
     /// Tries to resolve a BlockTypeName from `make_block_name()`. If a block with a matching
     /// name was registered, returns a handle to it. Otherwise, returns None.
     pub fn resolve_name(&self, block_name: &BlockTypeName) -> Option<BlockTypeHandle> {
-        // TODO relax these memory orderings. Relaxed *should* be fine, but
-        // I'd like to be more sure.
         let cached = block_name.base_id.load(Ordering::Relaxed);
         if cached == u32::MAX {
             // Need to fill the cache.

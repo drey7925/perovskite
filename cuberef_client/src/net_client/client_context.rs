@@ -347,7 +347,6 @@ impl InboundContext {
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
-        // todo (microoptimization) take the message by value
         match &message.server_message {
             None => {
                 log::warn!("Got empty message from server");

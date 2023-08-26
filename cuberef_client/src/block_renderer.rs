@@ -173,7 +173,7 @@ impl ClientBlockTypeManager {
         //
         // Todo: actually benchmark and optimize this. (this comment only provides rationale, but the code hasn't been optimized yet)
         // A typical cacheline on x86 has a size of 64 bytes == 512 bits. A typical l1d cache size is on the order of double-digit KiB -> triple digit kilobits
-        // Therefore, triple digit block types.
+        // This is plenty of space to fit the bitvecs, although there will still be some cache misses since the chunk won't fit in a typical L1$.
         // Hence, a bitvec is the initial, and likely the fastest, approach. I can't imagine that bloom filtering would be cheap compared to bit reads, even if
         // we do have some caches misses along the way.
         //

@@ -114,8 +114,7 @@ impl TryFrom<cgmath::Vector3<f64>> for BlockCoordinate {
 
 /// Represents an offset of a block within a chunk.
 /// 
-/// Warning: Due to a past design decision that's now part of the serialization format,
-/// the most cache-friendly iteration order has z in the outer loop and x in the innermost loop.
+/// The most cache-friendly iteration order has x in the outer loop, z in the middle loop, and y in the innermost loop
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct ChunkOffset {
     pub x: u8,

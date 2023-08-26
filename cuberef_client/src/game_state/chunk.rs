@@ -92,7 +92,6 @@ pub(crate) struct ChunkData {
     /// Bottom four bits: local lighting
     /// Top four bits: global lighting
     /// TODO assess whether to optimize for time or memory
-    /// If None, then this chunk doesn't contain any light
     ///
     /// This is stored separate from the block_ids because it might be used for lighting non-chunk meshes, such as
     /// players, entities, etc. If None, not calculated yet.
