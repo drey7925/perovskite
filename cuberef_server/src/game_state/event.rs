@@ -13,7 +13,7 @@
 // limitations under the License.
 //
 // SPDX-License-Identifier: Apache-2.0
-
+use std::fmt::Debug;
 use std::{num::NonZeroU64, sync::Arc};
 
 use cuberef_core::coordinates::PlayerPositionUpdate;
@@ -30,18 +30,26 @@ pub(crate) struct ClientEventContext {
 }
 
 /// Who initiated an event
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum EventInitiator<'a> {
     /// Event was not initiated by a player
     Engine,
     /// Event was initiated by a player, and a reference to that player is provided
     Player(PlayerInitiator<'a>),
+    /// Event was initiated by a plugin, and the plugin wants to indicate that it
+    /// was the originator. The exact semantics of this variant are still TBD, and
+    /// a plugin can still set Engine without being incorrect
+    /// 
+    /// So far, this is mostly used for error messages and indicating what plugin
+    /// sent a chat message to a user.
+    Plugin(String)
 }
 impl EventInitiator<'_> {
     pub fn position(&self) -> Option<PlayerPositionUpdate> {
         match self {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(p.position),
+            EventInitiator::Plugin(_) => None
         }
     }
 }
@@ -55,6 +63,14 @@ pub struct PlayerInitiator<'a> {
     /// Note that this is not necessarily the same as the player's current position, or as any position reported
     /// by the player's periodic position updates.
     pub position: PlayerPositionUpdate,
+}
+impl Debug for PlayerInitiator<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerInitiator")
+            .field("player", &self.player.name())
+            .field("position", &self.position)
+            .finish()
+    }
 }
 
 /// Common details for all events that are passed to event handlers.

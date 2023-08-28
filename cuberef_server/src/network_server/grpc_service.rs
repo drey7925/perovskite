@@ -67,12 +67,12 @@ impl CuberefGame for CuberefGameServerImpl {
         let (outbound_tx, outbound_rx) = mpsc::channel(4);
         let game_state = self.game_state.clone();
         crate::spawn_async("game_stream", async move {
-            match game_stream_impl(game_state, req.into_inner(), outbound_tx)
-                .await {
-                    Ok(()) => (),
-                    Err(e) => tracing::error!("Error running game stream: {:?}", e),
-                }
-        }).map_err(|e| Status::internal(e.to_string()))?;
+            match game_stream_impl(game_state, req.into_inner(), outbound_tx).await {
+                Ok(()) => (),
+                Err(e) => tracing::error!("Error running game stream: {:?}", e),
+            }
+        })
+        .map_err(|e| Status::internal(e.to_string()))?;
 
         Result::Ok(Response::new(Box::pin(ReceiverStream::new(outbound_rx))))
     }
@@ -164,7 +164,7 @@ async fn game_stream_impl(
                 .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
         }
     };
-    let player_context = game_state
+    let (player_context, player_event_receiver) = game_state
         .player_manager()
         .clone()
         .connect(&username)
@@ -207,6 +207,7 @@ async fn game_stream_impl(
     match make_client_contexts(
         game_state.clone(),
         player_context,
+        player_event_receiver,
         inbound_rx,
         outbound_tx.clone(),
     )
@@ -223,7 +224,6 @@ async fn game_stream_impl(
                 .map_err(|_| anyhow::Error::msg("Failed to send context setup error"));
         }
     };
-
 
     Ok(())
 }

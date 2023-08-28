@@ -282,7 +282,6 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
-                    cuberef_server::game_state::event::EventInitiator::Engine => Ok(None),
                     cuberef_server::game_state::event::EventInitiator::Player(p) => Ok(Some(
                         (ctx.new_popup()
                             .title("Chest")
@@ -304,6 +303,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                                 true,
                             ))?,
                     )),
+                    _ => Ok(None),
                 }))
             })),
     )?;

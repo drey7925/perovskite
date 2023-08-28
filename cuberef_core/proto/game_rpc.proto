@@ -24,253 +24,272 @@ import "items.proto";
 import "ui.proto";
 
 service CuberefGame {
-    // Represents a stream carrying game events.
-    // In the future, multiple parallel streams may be used to separate bulk vs low-latency
-    // events.
-    rpc GameStream(stream StreamToServer) returns (stream StreamToClient);
+  // Represents a stream carrying game events.
+  // In the future, multiple parallel streams may be used to separate bulk vs
+  // low-latency events.
+  rpc GameStream(stream StreamToServer) returns (stream StreamToClient);
 
-    // Get all the blocks defined in the game.
-    rpc GetBlockDefs(GetBlockDefsRequest) returns (GetBlockDefsResponse);
+  // Get all the blocks defined in the game.
+  rpc GetBlockDefs(GetBlockDefsRequest) returns (GetBlockDefsResponse);
 
-    // Get all the items defined in the game.
-    rpc GetItemDefs(GetItemDefsRequest) returns (GetItemDefsResponse);
+  // Get all the items defined in the game.
+  rpc GetItemDefs(GetItemDefsRequest) returns (GetItemDefsResponse);
 
-    // List all media that would be needed by the client
-    rpc ListMedia(ListMediaRequest) returns (ListMediaResponse);
+  // List all media that would be needed by the client
+  rpc ListMedia(ListMediaRequest) returns (ListMediaResponse);
 
-    // Fetch media
-    rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
+  // Fetch media
+  rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
 }
 
 message GetBlockDefsRequest {}
 message GetBlockDefsResponse {
-    repeated cuberef.protocol.blocks.BlockTypeDef block_types = 1;
+  repeated cuberef.protocol.blocks.BlockTypeDef block_types = 1;
 }
 
 message GetItemDefsRequest {}
 message GetItemDefsResponse {
-    repeated cuberef.protocol.items.ItemDef item_defs = 1;
+  repeated cuberef.protocol.items.ItemDef item_defs = 1;
 }
 
-message GetMediaRequest {
-    string media_name = 1;
-}
-message GetMediaResponse {
-    bytes media = 1;
-}
+message GetMediaRequest { string media_name = 1; }
+message GetMediaResponse { bytes media = 1; }
 
 message ListMediaRequest {}
 message ListMediaEntry {
-    string media_name = 1;
-    bytes sha256 = 2;
+  string media_name = 1;
+  bytes sha256 = 2;
 }
-message ListMediaResponse {
-    repeated ListMediaEntry media = 1;
-}
+message ListMediaResponse { repeated ListMediaEntry media = 1; }
 
 message StreamToServer {
-    uint64 sequence = 1;
-    uint64 client_tick = 2;
+  uint64 sequence = 1;
+  uint64 client_tick = 2;
 
-    oneof client_message {
-        // Flow control messages
+  oneof client_message {
+    // Flow control messages
 
-        // Client is finished initializing and is ready to play!
-        Nop client_initial_ready = 40;
+    // Client is finished initializing and is ready to play!
+    Nop client_initial_ready = 40;
 
-        // Keepalive/testing
-        Nop nop = 81;
-        // Client wants to dig
-        DigTapAction dig = 82;
-        // Client is updating realtime position (and also animation state, in the future)
-        ClientUpdate position_update = 83;
-        // Client wants to tap an item without digging it
-        DigTapAction tap = 84;
-        // Client is placing a block
-        PlaceAction place = 85;
+    // Keepalive/testing
+    Nop nop = 81;
+    // Client wants to dig
+    DigTapAction dig = 82;
+    // Client is updating realtime position (and also animation state, in the
+    // future)
+    ClientUpdate position_update = 83;
+    // Client wants to tap an item without digging it
+    DigTapAction tap = 84;
+    // Client is placing a block
+    PlaceAction place = 85;
 
-        // Client is moving a stack from one inventory slot to another
-        InventoryAction inventory = 86;
-        
-        // User responded to, or closed, a popup
-        cuberef.protocol.ui.PopupResponse popup_response = 87;
+    // Client is moving a stack from one inventory slot to another
+    InventoryAction inventory = 86;
 
-        // User pressed the interact key while pointing at a block
-        InteractKeyAction interact_key = 88;
+    // User responded to, or closed, a popup
+    cuberef.protocol.ui.PopupResponse popup_response = 87;
 
-        // Something went wrong in the client/server state machine and the client detected an inconsistency
-        // Send a backtrace and other useful info to the server.
-        //
-        // e.g., server sent a delta update, but the client didn't have the block in memory
-        ClientBugCheck bug_check = 127;
+    // User pressed the interact key while pointing at a block
+    InteractKeyAction interact_key = 88;
+    // User sent a chat message (or a command)
+    string chat_message = 89;
 
-        // Indicates the client wants to authenticate. Must be the first message sent.
-        StartAuth start_authentication = 150;
+    // Something went wrong in the client/server state machine and the client
+    // detected an inconsistency Send a backtrace and other useful info to the
+    // server.
+    //
+    // e.g., server sent a delta update, but the client didn't have the block in
+    // memory
+    ClientBugCheck bug_check = 127;
 
-        // The second client->server message of the OPAQUE protocol in the registration flow
-        bytes client_registration_upload = 151;
+    // Indicates the client wants to authenticate. Must be the first message
+    // sent.
+    StartAuth start_authentication = 150;
 
-        // The second client->server message of the OPAQUE protocol in the login flow
-        bytes client_login_credential = 152;
-    };
+    // The second client->server message of the OPAQUE protocol in the
+    // registration flow
+    bytes client_registration_upload = 151;
+
+    // The second client->server message of the OPAQUE protocol in the login
+    // flow
+    bytes client_login_credential = 152;
+  };
 }
 
 message StreamToClient {
-    uint64 tick = 1;
+  uint64 tick = 1;
 
-    oneof server_message {
-        // We've finished handling a request from the server->client stream,
-        // and this was the sequence number of it.
-        uint64 handled_sequence = 80; 
-        // Empty keepalive/testing message
-        Nop nop = 81;
-        // A block is being changed on a chunk
-        MapDeltaUpdateBatch map_delta_update = 82;
-        // Server gives client a chunk. Client should cache it, render it if desired,
-        // and keep up with map_delta_updates for it
-        MapChunk map_chunk = 83;
-        // Server will stop sending these chunks. Client may keep them cached if memory
-        // is plentiful, but it may also drop them (server will refresh any chunks that were dropped
-        // before sending delta updates)
-        MapChunkUnsubscribe map_chunk_unsubscribe = 84;
-        // An inventory is being updated, and we think the client cares about this inventory.
-        InventoryUpdate inventory_update = 85;
-        // Client state needs to be set (either during game startup or because the
-        // player is being teleported
-        SetClientState client_state = 86;
-        // Client should show a popup
-        cuberef.protocol.ui.PopupDescription show_popup = 87;
-
-
-        // The server->client message sent as part of registration in the OPAQUE protocol
-        bytes server_registration_response = 150;
-        // The server->client message sent as part of login in the OPAQUE protocol
-        bytes server_login_response = 151;
-        // Indicates that authentication is successful
-        Nop auth_success = 152;
-    };
+  oneof server_message {
+    // We've finished handling a request from the server->client stream,
+    // and this was the sequence number of it.
+    uint64 handled_sequence = 80;
+    // Empty keepalive/testing message
+    Nop nop = 81;
+    // A block is being changed on a chunk
+    MapDeltaUpdateBatch map_delta_update = 82;
+    // Server gives client a chunk. Client should cache it, render it if
+    // desired, and keep up with map_delta_updates for it
+    MapChunk map_chunk = 83;
+    // Server will stop sending these chunks. Client may keep them cached if
+    // memory is plentiful, but it may also drop them (server will refresh any
+    // chunks that were dropped before sending delta updates)
+    MapChunkUnsubscribe map_chunk_unsubscribe = 84;
+    // An inventory is being updated, and we think the client cares about this
+    // inventory.
+    InventoryUpdate inventory_update = 85;
+    // Client state needs to be set (either during game startup or because the
+    // player is being teleported
+    SetClientState client_state = 86;
+    // Client should show a popup
+    cuberef.protocol.ui.PopupDescription show_popup = 87;
+    // Client should display a chat message
+    ChatMessage chat_message = 88;
+    // The server->client message sent as part of registration in the OPAQUE
+    // protocol
+    bytes server_registration_response = 150;
+    // The server->client message sent as part of login in the OPAQUE protocol
+    bytes server_login_response = 151;
+    // Indicates that authentication is successful
+    Nop auth_success = 152;
+  };
 }
 
 // Empty message, for keepalive/timeout detection
 message Nop {}
 
 message DigTapAction {
-    // The block coordinate which was dug/tapped
-    cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
-    // The block coordinate on the face that was dug into/tapped (i.e. in raycasting just before we hit the target block)
-    cuberef.protocol.coordinates.BlockCoordinate prev_coord = 2;
-    // zero-indexed slot for the tool in the player's hotbar/primary inventory
-    uint32 item_slot = 3;
-    // the position of the player when the action was performed
-    PlayerPosition position = 4;
+  // The block coordinate which was dug/tapped
+  cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
+  // The block coordinate on the face that was dug into/tapped (i.e. in
+  // raycasting just before we hit the target block)
+  cuberef.protocol.coordinates.BlockCoordinate prev_coord = 2;
+  // zero-indexed slot for the tool in the player's hotbar/primary inventory
+  uint32 item_slot = 3;
+  // the position of the player when the action was performed
+  PlayerPosition position = 4;
 }
 
-
 message PlaceAction {
-    // The block coordinate where the block is being placed
-    cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
+  // The block coordinate where the block is being placed
+  cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
 
-    // The block coordinate onto which the placement is happening (i.e. the block just *after* block_coord in raycasting order)
-    cuberef.protocol.coordinates.BlockCoordinate anchor = 2;
-    
-    // zero-indexed slot for the item in the player's hotbar/primary inventory
-    uint32 item_slot = 3;
+  // The block coordinate onto which the placement is happening (i.e. the block
+  // just *after* block_coord in raycasting order)
+  cuberef.protocol.coordinates.BlockCoordinate anchor = 2;
 
-    // the position of the player when the action was performed
-    PlayerPosition position = 4;
+  // zero-indexed slot for the item in the player's hotbar/primary inventory
+  uint32 item_slot = 3;
+
+  // the position of the player when the action was performed
+  PlayerPosition position = 4;
 }
 
 message InteractKeyAction {
-    // The block coordinate that was interacted with
-    cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
-    // the position of the player when the action was performed
-    PlayerPosition position = 2;
-    
-    // More fields may be added in the future to support multiple interactions per block
+  // The block coordinate that was interacted with
+  cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
+  // the position of the player when the action was performed
+  PlayerPosition position = 2;
+
+  // More fields may be added in the future to support multiple interactions per
+  // block
 }
 
 message InventoryAction {
-    // ID for the view we're moving from
-    uint64 source_view = 1;
-    // Index for the slot we're moving from
-    uint32 source_slot = 2;
-    // ID for the view we're moving to
-    uint64 destination_view = 3;
-    // Index for the slot we're moving to
-    uint32 destination_slot = 4;
-    // How many items we're moving
-    uint32 count = 5;
-    // If true, swap the two stacks, and disregard count
-    bool swap = 6;
+  // ID for the view we're moving from
+  uint64 source_view = 1;
+  // Index for the slot we're moving from
+  uint32 source_slot = 2;
+  // ID for the view we're moving to
+  uint64 destination_view = 3;
+  // Index for the slot we're moving to
+  uint32 destination_slot = 4;
+  // How many items we're moving
+  uint32 count = 5;
+  // If true, swap the two stacks, and disregard count
+  bool swap = 6;
 }
 
-message MapDeltaUpdateBatch {
-    repeated MapDeltaUpdate updates = 1;
-}
+message MapDeltaUpdateBatch { repeated MapDeltaUpdate updates = 1; }
 
 message MapDeltaUpdate {
-    cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
-    uint32 new_id = 2;
+  cuberef.protocol.coordinates.BlockCoordinate block_coord = 1;
+  uint32 new_id = 2;
 }
 
-
 message MapChunk {
-    // x/y/z are chunk coordinates
-    cuberef.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
-    bytes snappy_encoded_bytes = 2;
+  // x/y/z are chunk coordinates
+  cuberef.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
+  bytes snappy_encoded_bytes = 2;
 }
 
 message MapChunkUnsubscribe {
-    repeated cuberef.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
+  repeated cuberef.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
 }
 
 message ClientBugCheck {
-    string description = 1;
-    string backtrace = 2;
+  string description = 1;
+  string backtrace = 2;
 }
 
 message ClientPacing {
-    // How many chunks the client has not processed yet.
-    // Affects whether the server sends chunks.
-    uint32 pending_chunks = 1;
+  // How many chunks the client has not processed yet.
+  // Affects whether the server sends chunks.
+  uint32 pending_chunks = 1;
 }
 
 message ClientUpdate {
-    PlayerPosition position = 1;
-    ClientPacing pacing = 2;
+  PlayerPosition position = 1;
+  ClientPacing pacing = 2;
 }
 
 message PlayerPosition {
-    cuberef.protocol.coordinates.Vec3D position = 1;
-    cuberef.protocol.coordinates.Vec3D velocity = 2;
-    cuberef.protocol.coordinates.Angles face_direction = 3;
+  cuberef.protocol.coordinates.Vec3D position = 1;
+  cuberef.protocol.coordinates.Vec3D velocity = 2;
+  cuberef.protocol.coordinates.Angles face_direction = 3;
 }
 
 message InventoryUpdate {
-    uint64 view_id = 1;
-    cuberef.protocol.items.Inventory inventory = 2;
-    bool can_place = 3;
-    bool can_take = 4;
-    // If true, the user can only take exactly the amount shown
-    // in a stack (e.g. for crafting)
-    bool take_exact = 5;
+  uint64 view_id = 1;
+  cuberef.protocol.items.Inventory inventory = 2;
+  bool can_place = 3;
+  bool can_take = 4;
+  // If true, the user can only take exactly the amount shown
+  // in a stack (e.g. for crafting)
+  bool take_exact = 5;
 }
 
 message SetClientState {
-    PlayerPosition position = 1;
-    // A stored inventory view showing the main inventory. Client will render the top row of it
-    // and use that set of items to let the player interact with the world.
-    uint64 hotbar_inventory_view = 2;
-    cuberef.protocol.ui.PopupDescription inventory_popup = 3;
-    // A 1x1 transient view used for the item that the player clicked and is moving around.
-    uint64 inventory_manipulation_view = 4;
+  PlayerPosition position = 1;
+  // A stored inventory view showing the main inventory. Client will render the
+  // top row of it and use that set of items to let the player interact with the
+  // world.
+  uint64 hotbar_inventory_view = 2;
+  cuberef.protocol.ui.PopupDescription inventory_popup = 3;
+  // A 1x1 transient view used for the item that the player clicked and is
+  // moving around.
+  uint64 inventory_manipulation_view = 4;
 }
 
 message StartAuth {
-    string username = 1;
-    // If true, register for a new account. If false, log into an existing account.
-    bool register = 2;
-    // If register is true, the first client->server message in the OPAQUE registration flow.
-    // Otherwise, the first client->server message in the OPAQUE login flow.
-    bytes opaque_request = 3;
+  string username = 1;
+  // If true, register for a new account. If false, log into an existing
+  // account.
+  bool register = 2;
+  // If register is true, the first client->server message in the OPAQUE
+  // registration flow. Otherwise, the first client->server message in the
+  // OPAQUE login flow.
+  bytes opaque_request = 3;
+}
+
+// Chat message to be shown on the client.
+message ChatMessage {
+  // Who sent the message, e.g. <playername> or [server]
+  string origin = 1;
+  // The color to use to highlight the message's origin (e.g. for errors, system
+  // messages, admin/moderator users, etc)
+  fixed32 color_argb = 2;
+
+  // The actual text to display
+  string message = 3;
 }

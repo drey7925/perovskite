@@ -41,6 +41,7 @@ use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
+use self::chat::ChatState;
 use self::chunk::{ChunkDataView, SnappyDecodeHelper};
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
@@ -53,6 +54,7 @@ pub(crate) mod items;
 pub(crate) mod physics;
 pub(crate) mod settings;
 pub(crate) mod tool_controller;
+pub(crate) mod chat;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DigTapAction {
@@ -96,6 +98,7 @@ pub(crate) enum GameAction {
     Inventory(InventoryAction),
     PopupResponse(cuberef_core::protocol::ui::PopupResponse),
     InteractKey(InteractKeyAction),
+    ChatMessage(String),
 }
 
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
@@ -450,6 +453,8 @@ pub(crate) struct ClientState {
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) actions: mpsc::Sender<GameAction>,
 
+    pub(crate) chat: Arc<Mutex<ChatState>>,
+
     // block_renderer doesn't currently need a mutex because it's stateless
     // and keeps its cached geometry data in the chunks themselves
     pub(crate) block_renderer: Arc<BlockRenderer>,
@@ -484,6 +489,7 @@ impl ClientState {
             tool_controller: Mutex::new(ToolController::new()),
             shutdown: tokio_util::sync::CancellationToken::new(),
             actions: action_sender,
+            chat: Arc::new(Mutex::new(ChatState::new())),
             block_renderer: Arc::new(block_renderer),
             hud: Arc::new(Mutex::new(hud)),
             egui: Arc::new(Mutex::new(egui)),
@@ -521,11 +527,15 @@ impl ClientState {
     pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
         {
             let mut input = self.input.lock();
-            input.set_modal_active(self.egui.lock().wants_draw());
+            input.set_modal_active(self.egui.lock().wants_user_events());
             if input.take_just_pressed(BoundAction::Inventory) {
                 self.egui.lock().open_inventory();
             } else if input.take_just_pressed(BoundAction::Menu) {
                 self.egui.lock().open_pause_menu();
+            } else if input.take_just_pressed(BoundAction::Chat) {
+                self.egui.lock().open_chat();
+            } else if input.take_just_pressed(BoundAction::ChatSlash) {
+                self.egui.lock().open_chat_slash();
             }
         }
 

@@ -20,7 +20,9 @@ pub(crate) enum BoundAction {
     Place,
     MouseCapture,
     Inventory,
-    Menu
+    Menu,
+    Chat,
+    ChatSlash,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -43,7 +45,10 @@ pub(crate) struct KeybindSettings {
 
     pub(crate) mouse_capture: Keybind,
     pub(crate) inventory: Keybind,
-    pub(crate) menu: Keybind
+    pub(crate) menu: Keybind,
+
+    pub(crate) chat: Keybind,
+    pub(crate) chat_slash: Keybind
 }
 impl KeybindSettings {
     pub(crate) fn get(&self, action: BoundAction) -> Keybind {
@@ -60,7 +65,9 @@ impl KeybindSettings {
             BoundAction::MouseCapture => self.mouse_capture,
             BoundAction::Inventory => self.inventory,
             BoundAction::TogglePhysics => self.toggle_physics,
-            BoundAction::Menu => self.menu
+            BoundAction::Menu => self.menu,
+            BoundAction::Chat => self.chat,
+            BoundAction::ChatSlash => self.chat_slash
         }
     }
 }
@@ -82,7 +89,9 @@ impl Default for KeybindSettings {
             place: MouseButton(winit::event::MouseButton::Right),
             mouse_capture: ScanCode(0x38),
             inventory: ScanCode(0x17),
-            menu: ScanCode(0x1)
+            menu: ScanCode(0x1),
+            chat: ScanCode(0x14),
+            chat_slash: ScanCode(0x35),
         }
     }
 }

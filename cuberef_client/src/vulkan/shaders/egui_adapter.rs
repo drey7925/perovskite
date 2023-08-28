@@ -8,10 +8,7 @@ use vulkano::{
     image::SampleCount,
     render_pass::Subpass,
 };
-use winit::{
-    event::WindowEvent,
-    event_loop::{EventLoopWindowTarget},
-};
+use winit::{event::WindowEvent, event_loop::EventLoopWindowTarget};
 
 use crate::{
     game_state::ClientState,
@@ -37,7 +34,7 @@ pub(crate) struct EguiAdapter {
 }
 impl EguiAdapter {
     pub(crate) fn window_event(&mut self, event: &WindowEvent) -> bool {
-        if self.egui_ui.lock().wants_draw() {
+        if self.egui_ui.lock().wants_user_events() {
             self.gui_adapter.update(event)
         } else {
             // egui isn't drawing; don't try to interact with it
@@ -85,47 +82,41 @@ impl EguiAdapter {
         client_state: &ClientState,
     ) -> Result<()> {
         let mut egui = self.egui_ui.lock();
-        if egui.wants_draw() {
-            self.gui_adapter.begin_frame();
-            egui.draw_all_uis(
-                &self.gui_adapter.egui_ctx,
-                self.atlas_texture_id,
-                client_state,
-            );
-            let cmdbuf = self
-                .gui_adapter
-                .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
-            builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
-            builder.execute_commands(cmdbuf)?;
+        self.gui_adapter.begin_frame();
+        egui.draw_all_uis(
+            &self.gui_adapter.egui_ctx,
+            self.atlas_texture_id,
+            client_state,
+        );
+        let cmdbuf = self
+            .gui_adapter
+            .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
+        builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
+        builder.execute_commands(cmdbuf)?;
 
-            if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
-                let mut secondary_builder = AutoCommandBufferBuilder::secondary(
-                    &ctx.command_buffer_allocator,
-                    ctx.queue.queue_family_index(),
-                    vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-                    CommandBufferInheritanceInfo {
-                        render_pass: Some(
-                            Subpass::from(ctx.render_pass.clone(), 1)
-                                .with_context(|| "Render subpass 1 not found")?
-                                .into(),
-                        ),
-                        ..Default::default()
-                    },
-                )?;
-                self.flat_overlay_pipeline
-                    .bind(ctx, (), &mut secondary_builder, ())
-                    .unwrap();
-                self.flat_overlay_pipeline
-                    .draw(&mut secondary_builder, &[draw_call], ())?;
-                builder.execute_commands(secondary_builder.build()?)?;
-            }
-
-            Ok(())
-        } else {
-            // We still need to advance to the next subpass, even if we aren't drawing anything
-            builder.next_subpass(SubpassContents::Inline)?;
-            Ok(())
+        if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
+            let mut secondary_builder = AutoCommandBufferBuilder::secondary(
+                &ctx.command_buffer_allocator,
+                ctx.queue.queue_family_index(),
+                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+                CommandBufferInheritanceInfo {
+                    render_pass: Some(
+                        Subpass::from(ctx.render_pass.clone(), 1)
+                            .with_context(|| "Render subpass 1 not found")?
+                            .into(),
+                    ),
+                    ..Default::default()
+                },
+            )?;
+            self.flat_overlay_pipeline
+                .bind(ctx, (), &mut secondary_builder, ())
+                .unwrap();
+            self.flat_overlay_pipeline
+                .draw(&mut secondary_builder, &[draw_call], ())?;
+            builder.execute_commands(secondary_builder.build()?)?;
         }
+
+        Ok(())
     }
 
     pub(crate) fn notify_resize(&mut self, ctx: &VulkanContext) -> Result<()> {

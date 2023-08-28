@@ -24,6 +24,7 @@ pub mod inventory;
 pub mod items;
 pub mod mapgen;
 pub mod player;
+pub mod chat;
 
 #[cfg(test)]
 pub mod tests;
@@ -44,6 +45,7 @@ use crate::media::MediaManager;
 use crate::network_server::auth::AuthService;
 
 use self::blocks::BlockTypeManager;
+use self::chat::ChatState;
 use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
@@ -57,6 +59,7 @@ pub struct GameState {
     item_manager: Arc<ItemManager>,
     player_manager: Arc<PlayerManager>,
     media_resources: Arc<MediaManager>,
+    chat: Arc<ChatState>,
     early_shutdown: CancellationToken,
     mapgen_seed: u32,
     game_behaviors: GameBehaviors,
@@ -83,6 +86,7 @@ impl GameState {
             item_manager: Arc::new(items),
             player_manager: PlayerManager::new(weak.clone(), db.clone()).unwrap(),
             media_resources: Arc::new(media),
+            chat: Arc::new(ChatState::new()),
             early_shutdown: CancellationToken::new(),
             mapgen_seed,
             game_behaviors,
@@ -146,6 +150,10 @@ impl GameState {
 
     pub fn game_behaviors(&self) -> &GameBehaviors {
         &self.game_behaviors
+    }
+
+    pub fn chat(&self) -> &ChatState {
+        &self.chat
     }
 
     pub(crate) fn auth(&self) -> &AuthService {

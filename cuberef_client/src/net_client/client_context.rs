@@ -10,6 +10,7 @@ use crate::game_state::{
 };
 use anyhow::Result;
 use cuberef_core::{
+    chat::ChatMessage,
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
@@ -214,6 +215,12 @@ impl OutboundContext {
                 ))
                 .await?;
             }
+            GameAction::ChatMessage(message) => {
+                self.send_sequenced_message(rpc::stream_to_server::ClientMessage::ChatMessage(
+                    message,
+                ))
+                .await?;
+            }
         }
         Ok(())
     }
@@ -371,6 +378,12 @@ impl InboundContext {
             }
             Some(rpc::stream_to_client::ServerMessage::ShowPopup(popup_desc)) => {
                 self.client_state.egui.lock().show_popup(popup_desc);
+            }
+            Some(rpc::stream_to_client::ServerMessage::ChatMessage(message)) => {
+                self.client_state.chat.lock().message_history.push(
+                    ChatMessage::new(&message.origin, &message.message)
+                        .with_color_fixed32(message.color_argb),
+                )
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);

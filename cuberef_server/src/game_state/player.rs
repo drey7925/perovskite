@@ -24,12 +24,13 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
 use cuberef_core::{
+    chat::ChatMessage,
     coordinates::PlayerPositionUpdate,
     protocol::{game_rpc::InventoryAction, players::StoredPlayer},
 };
 
 use log::warn;
-use parking_lot::{Mutex};
+use parking_lot::Mutex;
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -40,11 +41,9 @@ use crate::{
 };
 
 use super::{
-    client_ui::{Popup},
-    inventory::{
-        InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView,
-    },
-    GameState,
+    client_ui::Popup,
+    inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
+    GameState, event::{EventInitiator, PlayerInitiator},
 };
 
 pub struct Player {
@@ -55,6 +54,8 @@ pub struct Player {
     pub(crate) main_inventory_key: InventoryKey,
     // Mutable state of the player
     pub(crate) state: Mutex<PlayerState>,
+    // Sends events for that player; the corresponding receiver will send them over the network to the client.
+    sender: PlayerEventSender,
 }
 
 impl Player {
@@ -77,7 +78,11 @@ impl Player {
             main_inventory: self.main_inventory_key.as_bytes().to_vec(),
         }
     }
-    fn from_server_proto(game_state: Arc<GameState>, proto: &StoredPlayer) -> Result<Player> {
+    fn from_server_proto(
+        game_state: Arc<GameState>,
+        proto: &StoredPlayer,
+        sender: PlayerEventSender,
+    ) -> Result<Player> {
         let main_inventory_key = InventoryKey::parse_bytes(&proto.main_inventory)?;
 
         Ok(Player {
@@ -114,10 +119,15 @@ impl Player {
                     false,
                 )?,
             }),
+            sender,
         })
     }
 
-    fn new_player(name: &str, game_state: Arc<GameState>) -> Result<Player> {
+    fn new_player(
+        name: &str,
+        game_state: Arc<GameState>,
+        sender: PlayerEventSender,
+    ) -> Result<Player> {
         let main_inventory_key = game_state.inventory_manager().make_inventory(4, 8)?;
         // TODO provide hooks here
         // TODO custom spawn location
@@ -152,9 +162,15 @@ impl Player {
                 )?,
             }
             .into(),
+            sender,
         };
 
         Ok(player)
+    }
+
+    pub async fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
+        self.sender.chat_messages.send(message).await?;
+        Ok(())
     }
 }
 
@@ -269,6 +285,12 @@ impl PlayerContext {
     pub fn name(&self) -> &str {
         &self.player.name
     }
+    pub fn make_initiator(&self) -> EventInitiator<'_> {
+        EventInitiator::Player(PlayerInitiator {
+            player: &self.player,
+            position: self.last_position(),
+        })
+    }
 }
 impl Deref for PlayerContext {
     type Target = Player;
@@ -281,6 +303,26 @@ impl Drop for PlayerContext {
     fn drop(&mut self) {
         self.manager.drop_disconnect(&self.player.name)
     }
+}
+
+struct PlayerEventSender {
+    chat_messages: tokio::sync::mpsc::Sender<ChatMessage>,
+}
+pub(crate) struct PlayerEventReceiver {
+    pub(crate) chat_messages: tokio::sync::mpsc::Receiver<ChatMessage>,
+}
+
+fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
+    const CHAT_BUFFER_SIZE: usize = 128;
+    let (chat_sender, chat_receiver) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
+    (
+        PlayerEventSender {
+            chat_messages: chat_sender,
+        },
+        PlayerEventReceiver {
+            chat_messages: chat_receiver,
+        },
+    )
 }
 
 /// Manages players and provides access to them and their data.
@@ -304,19 +346,23 @@ impl PlayerManager {
     fn game_state(&self) -> Arc<GameState> {
         self.game_state.upgrade().unwrap()
     }
-    pub(crate) fn connect(self: Arc<Self>, name: &str) -> Result<PlayerContext> {
+    pub(crate) fn connect(self: Arc<Self>, name: &str) -> Result<(PlayerContext, PlayerEventReceiver)> {
         let mut lock = self.active_players.lock();
         if lock.contains_key(name) {
             bail!("Player {name} already connected");
         }
+
+        let (sender, receiver) = make_event_channels();
+
         let player = match self.db.get(&Self::db_key(name))? {
             Some(player_proto) => Player::from_server_proto(
                 self.game_state(),
                 &StoredPlayer::decode(player_proto.as_slice())?,
+                sender,
             )?,
             None => {
                 log::info!("New player {name} joining");
-                let player = Player::new_player(name, self.game_state())?;
+                let player = Player::new_player(name, self.game_state(), sender)?;
                 self.write_back(&player)?;
                 player
             }
@@ -324,10 +370,10 @@ impl PlayerManager {
         let player = Arc::new(player);
         lock.insert(name.to_string(), player.clone());
 
-        Ok(PlayerContext {
+        Ok((PlayerContext {
             player,
             manager: self.clone(),
-        })
+        }, receiver))
     }
     fn drop_disconnect(&self, name: &str) {
         match self.active_players.lock().entry(name.to_string()) {
@@ -394,7 +440,9 @@ impl PlayerManager {
 
     fn start_writeback(self: &Arc<Self>) -> Result<()> {
         let clone = self.clone();
-        *(self.writeback.lock()) = Some(crate::spawn_async("player_writeback", async { clone.writeback_loop().await })?);
+        *(self.writeback.lock()) = Some(crate::spawn_async("player_writeback", async {
+            clone.writeback_loop().await
+        })?);
         Ok(())
     }
 

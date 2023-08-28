@@ -21,8 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-
-
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::event::EventInitiator;
@@ -40,16 +38,18 @@ use crate::game_state::items;
 use crate::game_state::items::Item;
 
 use crate::game_state::player::PlayerContext;
+use crate::game_state::player::PlayerEventReceiver;
 use crate::game_state::GameState;
 use crate::run_handler;
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
-use anyhow::bail;
 use cgmath::InnerSpace;
 use cgmath::Vector3;
 use cgmath::Zero;
+use cuberef_core::chat::ChatMessage;
 use cuberef_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use cuberef_core::protocol::coordinates::Angles;
@@ -76,11 +76,12 @@ use tracy_client::span;
 static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 pub(crate) struct PlayerCoroutinePack {
-    pub(crate) context: Arc<SharedContext>,
+    context: Arc<SharedContext>,
     chunk_sender: MapChunkSender,
     block_event_sender: BlockEventSender,
     inventory_event_sender: InventoryEventSender,
     inbound_worker: InboundWorker,
+    misc_outbound_worker: MiscOutboundWorker,
 }
 impl PlayerCoroutinePack {
     pub(crate) async fn run_all(mut self) -> Result<()> {
@@ -108,6 +109,11 @@ impl PlayerCoroutinePack {
                 log::error!("Error running inventory event sender loop: {:?}", e);
             }
         })?;
+        crate::spawn_async(&format!("misc_outbound_worker_{}", username), async move {
+            if let Err(e) = self.misc_outbound_worker.run_outbound_loop().await {
+                log::error!("Error running misc outbound worker loop: {:?}", e);
+            }
+        })?;
 
         Ok(())
     }
@@ -116,6 +122,7 @@ impl PlayerCoroutinePack {
 pub(crate) async fn make_client_contexts(
     game_state: Arc<GameState>,
     player_context: PlayerContext,
+    player_event_receiver: PlayerEventReceiver,
     inbound_rx: tonic::Streaming<proto::StreamToServer>,
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<PlayerCoroutinePack> {
@@ -199,12 +206,19 @@ pub(crate) async fn make_client_contexts(
         interested_inventories,
     };
 
+    let misc_outbound_worker = MiscOutboundWorker {
+        context: context.clone(),
+        player_event_receiver,
+        outbound_tx: outbound_tx.clone(),
+    };
+
     Ok(PlayerCoroutinePack {
         context,
         chunk_sender,
         block_event_sender,
         inventory_event_sender,
         inbound_worker,
+        misc_outbound_worker,
     })
 }
 
@@ -427,7 +441,10 @@ impl MapChunkSender {
         Ok(())
     }
 
-    fn snappy_encode<T>(&mut self, msg: &T) -> Result<Vec<u8>> where T: Message {
+    fn snappy_encode<T>(&mut self, msg: &T) -> Result<Vec<u8>>
+    where
+        T: Message,
+    {
         self.snappy_input_buffer.clear();
         msg.encode(&mut self.snappy_input_buffer)?;
         let compressed_len_bound = snap::raw::max_compress_len(self.snappy_input_buffer.len());
@@ -437,7 +454,10 @@ impl MapChunkSender {
         if self.snappy_output_buffer.len() < compressed_len_bound {
             self.snappy_output_buffer.resize(compressed_len_bound, 0);
         }
-        let actual_compressed_len = self.snappy_encoder.compress(&mut self.snappy_input_buffer, &mut self.snappy_output_buffer)?;
+        let actual_compressed_len = self.snappy_encoder.compress(
+            &mut self.snappy_input_buffer,
+            &mut self.snappy_output_buffer,
+        )?;
         Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
     }
 
@@ -519,7 +539,8 @@ impl MapChunkSender {
             if !coord.is_in_bounds() {
                 continue;
             }
-            if self.player_position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE {
+            if self.player_position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE
+            {
                 // If we already have a new position update, restart the process with the new position
                 tracing::event!(
                     tracing::Level::TRACE,
@@ -560,13 +581,10 @@ impl MapChunkSender {
                         },
                     )),
                 };
-                self.outbound_tx
-                    .send(Ok(message))
-                    .await
-                    .map_err(|_| {
-                        self.context.cancellation.cancel();
-                        Error::msg("Could not send outbound message (full mapchunk)")
-                    })?;
+                self.outbound_tx.send(Ok(message)).await.map_err(|_| {
+                    self.context.cancellation.cancel();
+                    Error::msg("Could not send outbound message (full mapchunk)")
+                })?;
                 self.chunk_tracker.mark_chunk_loaded(coord);
                 sent_chunks += 1;
                 if sent_chunks > update.chunks_to_send {
@@ -704,7 +722,7 @@ impl BlockEventSender {
         Ok(())
     }
 
-    async fn handle_block_update_lagged(&mut self) -> Result<()> {        
+    async fn handle_block_update_lagged(&mut self) -> Result<()> {
         // Decrease the number of chunks we're willing to send
         self.chunk_limit_aimd.lock().decrease();
 
@@ -986,6 +1004,12 @@ impl InboundWorker {
             Some(proto::stream_to_server::ClientMessage::InteractKey(interact_key)) => {
                 self.handle_interact_key(interact_key).await?;
             }
+            Some(proto::stream_to_server::ClientMessage::ChatMessage(message)) => {
+                self.context.game_state.chat().handle_inbound_chat_message(
+                    self.context.player_context.make_initiator(),
+                    message,
+                ).await?;
+            }
             Some(_) => {
                 warn!(
                     "Unimplemented client->server message {:?} on context {}",
@@ -1096,13 +1120,10 @@ impl InboundWorker {
             )),
         };
 
-        self.outbound_tx
-            .send(Ok(message))
-            .await
-            .map_err(|_| {
-                self.context.cancellation.cancel();
-                Error::msg("Could not send outbound message (sequence ack)")
-            } )?;
+        self.outbound_tx.send(Ok(message)).await.map_err(|_| {
+            self.context.cancellation.cancel();
+            Error::msg("Could not send outbound message (sequence ack)")
+        })?;
 
         Ok(())
     }
@@ -1415,7 +1436,11 @@ impl InboundWorker {
             .with_context(|| "Missing block_coord")?;
         let initiator = EventInitiator::Player(PlayerInitiator {
             player: &self.context.player_context,
-            position: interact_message.position.as_ref().context("Missing position")?.try_into()?,
+            position: interact_message
+                .position
+                .as_ref()
+                .context("Missing position")?
+                .try_into()?,
         });
         let ctx = HandlerContext {
             tick: self.context.game_state.tick(),
@@ -1434,11 +1459,8 @@ impl InboundWorker {
             .0
             .interact_key_handler
         {
-            if let Some(popup) = run_handler!(
-                || (handler)(ctx, coord),
-                "interact_key",
-                initiator,
-            )? {
+            if let Some(popup) = run_handler!(|| (handler)(ctx, coord), "interact_key", initiator,)?
+            {
                 messages.push(StreamToClient {
                     tick: self.context.game_state.tick(),
                     server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
@@ -1467,6 +1489,73 @@ impl InboundWorker {
 impl Drop for InboundWorker {
     fn drop(&mut self) {
         self.context.cancellation.cancel();
+    }
+}
+
+/// Handles non-performance-critical messages that don't require a dedicated
+/// coroutine, e.g. chat
+struct MiscOutboundWorker {
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    player_event_receiver: PlayerEventReceiver,
+    context: Arc<SharedContext>,
+}
+impl MiscOutboundWorker {
+    async fn run_outbound_loop(&mut self) -> Result<()> {
+        let mut broadcast_messages = self.context.game_state.chat().subscribe();
+        while !self.context.cancellation.is_cancelled() {
+            tokio::select! {
+                message = self.player_event_receiver.chat_messages.recv() => {
+                    match message {
+                        Some(message) => {
+                            self.transmit_chat_message(message).await?;
+                        },
+                        None => {
+                            tracing::warn!("Chat message sender disconnected")
+                        }
+                    }
+                },
+                message = broadcast_messages.recv() => {
+                    match message {
+                        Ok(message) => {
+                            self.transmit_chat_message(message).await?;
+                        },
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            self.transmit_chat_message(ChatMessage::new("[system]", "Your chat connection is lagging severely. Some chat messages may be lost").with_color((255, 0, 0))).await?;
+                            broadcast_messages = broadcast_messages.resubscribe();
+                        },
+                        Err(broadcast::error::RecvError::Closed) => {
+                            self.transmit_chat_message(ChatMessage::new("[system]", "Internal error - chat connection closed").with_color((255, 0, 0))).await?;
+                            tracing::error!("Chat broadcast channel closed");
+                            break
+                        }
+                    }
+                }
+                _ = self.context.game_state.await_start_shutdown() => {
+                    info!("Game shutting down, disconnecting {}", self.context.id);
+                    self.transmit_chat_message(ChatMessage::new("[system]", "Server is shutting down").with_color((255, 128, 0))).await?;
+                    // cancel the inbound context as well
+                    self.context.cancellation.cancel();
+                },
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Client misc outbound context {} detected cancellation and shutting down", self.context.id)
+                    // pass
+                }
+            }
+        }
+        Ok(())
+    }
+    async fn transmit_chat_message(&mut self, message: ChatMessage) -> Result<()> {
+        self.outbound_tx
+            .send(Ok(StreamToClient {
+                tick: self.context.game_state.tick(),
+                server_message: Some(ServerMessage::ChatMessage(proto::ChatMessage {
+                    origin: message.origin().to_string(),
+                    color_argb: message.origin_color_fixed32(),
+                    message: message.text().to_string(),
+                })),
+            }))
+            .await?;
+        Ok(())
     }
 }
 

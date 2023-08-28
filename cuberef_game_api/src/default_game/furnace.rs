@@ -1,9 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use cuberef_core::{
-    constants::{self, item_groups::HIDDEN_FROM_CREATIVE},
-};
+use cuberef_core::constants::{self, item_groups::HIDDEN_FROM_CREATIVE};
 use cuberef_server::game_state::{
     blocks::{
         BlockInteractionResult, BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData,
@@ -438,7 +436,6 @@ fn make_furnace_popup(
     coord: cuberef_core::coordinates::BlockCoordinate,
 ) -> Result<Option<Popup>> {
     match ctx.initiator() {
-        cuberef_server::game_state::event::EventInitiator::Engine => Ok(None),
         cuberef_server::game_state::event::EventInitiator::Player(p) => Ok(Some(
             ctx.new_popup()
                 .title("Furnace")
@@ -474,5 +471,6 @@ fn make_furnace_popup(
                 )?
                 .inventory_view_stored("player_inv", p.player.main_inventory(), true, true)?,
         )),
+        _ => Ok(None),
     }
 }

@@ -1,15 +1,17 @@
 use anyhow::Result;
+use cuberef_core::chat::ChatMessage;
 use cuberef_core::items::ItemStackExt;
 use cuberef_core::protocol::items::ItemStack;
 use cuberef_core::protocol::ui::{self as proto, PopupResponse};
 use cuberef_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 
-use parking_lot::MutexGuard;
+use parking_lot::{Mutex, MutexGuard};
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
 
+use crate::game_state::chat::ChatState;
 use crate::game_state::items::InventoryViewManager;
 use crate::game_state::{GameAction, InventoryAction};
 use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};
@@ -35,6 +37,7 @@ pub(crate) struct EguiUi {
 
     inventory_open: bool,
     pause_menu_open: bool,
+    chat_open: bool,
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
@@ -45,6 +48,8 @@ pub(crate) struct EguiUi {
     pub(crate) inventory_manipulation_view_id: Option<u64>,
     last_mouse_position: egui::Pos2,
     stack_carried_by_mouse_offset: (f32, f32),
+
+    chat_message_input: String,
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -58,6 +63,7 @@ impl EguiUi {
             item_defs,
             inventory_open: false,
             pause_menu_open: false,
+            chat_open: false,
             inventory_view: None,
             scale: 1.0,
             visible_popups: vec![],
@@ -65,16 +71,25 @@ impl EguiUi {
             inventory_manipulation_view_id: None,
             last_mouse_position: egui::Pos2 { x: 0., y: 0. },
             stack_carried_by_mouse_offset: (0., 0.),
+
+            chat_message_input: String::new(),
         }
     }
-    pub(crate) fn wants_draw(&self) -> bool {
-        self.inventory_open || !self.visible_popups.is_empty() || self.pause_menu_open
+    pub(crate) fn wants_user_events(&self) -> bool {
+        self.inventory_open || !self.visible_popups.is_empty() || self.pause_menu_open || self.chat_open
     }
     pub(crate) fn open_inventory(&mut self) {
         self.inventory_open = true;
     }
     pub(crate) fn open_pause_menu(&mut self) {
         self.pause_menu_open = true;
+    }
+    pub(crate) fn open_chat(&mut self) {
+        self.chat_open = true;
+    }
+    pub(crate) fn open_chat_slash(&mut self) {
+        self.chat_open = true;
+        self.chat_message_input = "/".to_string();
     }
     pub(crate) fn draw_all_uis(
         &mut self,
@@ -83,7 +98,6 @@ impl EguiUi {
         client_state: &ClientState,
     ) {
         self.scale = ctx.input(|i| i.pixels_per_point);
-
         if !self.visible_popups.is_empty() {
             for popup in self
                 .visible_popups
@@ -135,6 +149,8 @@ impl EguiUi {
         if self.pause_menu_open {
             self.draw_pause_menu(ctx, client_state);
         }
+        // this renders a TopBottomPanel, so it needs to be last
+        self.render_chat_history(ctx, client_state);
     }
 
     fn get_text_fields(&self, popup_id: u64) -> HashMap<String, String> {
@@ -437,26 +453,6 @@ impl EguiUi {
                             )
                             .uv(texture_uv);
                             ui.put(wear_bar_rectangle, wear_bar_image);
-
-                            // let mut text = stack.current_wear.to_string() + "W";
-                            // let label_rect = egui::Rect::from_min_size(
-                            //     min_corner + vec2(40.0, 2.0),
-                            //     frame_size - vec2(38.0, 42.0),
-                            // );
-                            // ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                            //     ui.style_mut().visuals.extreme_bg_color =
-                            //         Color32::from_rgba_unmultiplied(0, 0, 0, 128);
-                            //     ui.style_mut().visuals.window_stroke = Stroke::NONE;
-                            //     //ui.put(label_rect, Label::new(text));
-                            //     ui.put(
-                            //         label_rect,
-                            //         TextEdit::singleline(&mut text)
-                            //             .font(TextStyle::Heading)
-                            //             .text_color(Color32::GREEN)
-                            //             .interactive(false)
-                            //             .horizontal_align(egui::Align::Max),
-                            //     )
-                            // });
                         }
                     }
                 }
@@ -531,6 +527,103 @@ impl EguiUi {
                 }
             });
     }
+
+    fn render_chat_history(&mut self, ctx: &egui::Context, client_state: &ClientState) {
+        let chat = client_state.chat.lock();
+        if self.chat_open {
+            egui::TopBottomPanel::top("chat_panel")
+                .max_height(260.0)
+                .show(ctx, |ui| {
+                    let scroll_area = egui::ScrollArea::vertical()
+                        .auto_shrink([false, true])
+                        .min_scrolled_height(240.0)
+                        .max_height(240.0);
+                    let messages = &chat.message_history;
+                    scroll_area.show(ui, |ui| {
+                        for message in messages {
+                            ui.horizontal_top(|ui| {
+                                let formatted_message = format_chat(message);
+                                ui.label(formatted_message.0);
+                                ui.add(egui::Label::new(formatted_message.1).wrap(true));
+                            });
+                        }
+                        ui.scroll_to_cursor(Some(egui::Align::Max));
+                    });
+                    let editor = ui.add(
+                        egui::TextEdit::singleline(&mut self.chat_message_input)
+                            .hint_text("Type a message; press Enter to send or Escape to close.")
+                            .lock_focus(true)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.memory_mut(|m| m.request_focus(editor.id));
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        && !self.chat_message_input.trim().is_empty()
+                    {
+                        // If this is failing to unwrap, we have pretty serious problems and may as well crash
+                        client_state.actions.blocking_send(GameAction::ChatMessage(self.chat_message_input.clone())).unwrap();
+                        
+                        self.chat_message_input.clear();
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.chat_message_input.clear();
+                        self.chat_open = false;
+                    }
+                });
+        } else {
+            const SHORT_MESSAGE_HISTORY_LEN: usize = 8;
+            const SHORT_MESSAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+            let messages = &chat
+                .message_history
+                .iter()
+                .rev()
+                .take(SHORT_MESSAGE_HISTORY_LEN)
+                .rev()
+                .filter(|x| x.timestamp().elapsed() < SHORT_MESSAGE_TIMEOUT)
+                .collect::<Vec<_>>();
+            if !messages.is_empty() {
+                egui::TopBottomPanel::top("chat_panel")
+                    .max_height(240.0)
+                    .frame(egui::Frame {
+                        fill: Color32::from_black_alpha(63),
+                        stroke: egui::Stroke {
+                            width: 0.0,
+                            color: Color32::TRANSPARENT,
+                        },
+                        ..Default::default()
+                    })
+                    .show(ctx, |ui| {
+                        let scroll_area = egui::ScrollArea::vertical()
+                            .auto_shrink([false, true])
+                            .min_scrolled_height(240.0)
+                            .max_height(240.0);
+
+                        scroll_area.show(ui, |ui| {
+                            for message in &messages
+                                [messages.len().saturating_sub(SHORT_MESSAGE_HISTORY_LEN)..]
+                            {
+                                ui.horizontal_top(|ui| {
+                                    let formatted_message = format_chat(message);
+                                    ui.label(formatted_message.0);
+                                    ui.add(egui::Label::new(formatted_message.1).wrap(true));
+                                });
+                            }
+                            ui.scroll_to_cursor(Some(egui::Align::Max));
+                        });
+                    });
+            }
+        }
+    }
+}
+
+fn format_chat(message: &ChatMessage) -> (egui::RichText, egui::RichText) {
+    let color = message.origin_color();
+    (
+        egui::RichText::new(format!(
+            "[{} seconds ago] {}",
+            message.timestamp().elapsed().as_secs(),
+            message.origin()
+        )).color(Color32::from_rgb(color.0, color.1, color.2)).size(16.0),
+        egui::RichText::strong(message.text().into()).size(16.0),
+    )
 }
 
 // Allow unnecessary_unwrap until https://github.com/rust-lang/rust/issues/53667 is stabilized

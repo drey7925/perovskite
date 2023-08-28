@@ -17,7 +17,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use cuberef_core::{protocol::items::item_stack::QuantityType};
+use cuberef_core::protocol::items::item_stack::QuantityType;
 use texture_packer::Rect;
 
 use crate::{
@@ -90,7 +90,7 @@ impl GameHud {
         let mut fps_builder = FlatTextureDrawBuilder::new();
         let fps = self.fps_counter.tick() as u32;
         render_number(
-            (128, 0),
+            (window_size.0, 0),
             fps,
             &mut fps_builder,
             &self.texture_coords,
