@@ -583,7 +583,7 @@ impl EguiUi {
                 egui::TopBottomPanel::top("chat_panel")
                     .max_height(240.0)
                     .frame(egui::Frame {
-                        fill: Color32::from_black_alpha(63),
+                        fill: Color32::from_black_alpha(192),
                         stroke: egui::Stroke {
                             width: 0.0,
                             color: Color32::TRANSPARENT,
