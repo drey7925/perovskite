@@ -16,9 +16,10 @@
 
 use perovskite_core::coordinates::ChunkCoordinate;
 
-use super::game_map::MapChunk;
+use super::game_map::MapChunkStronglyConsistentData;
+
 
 pub trait MapgenInterface: Send + Sync {
     // todo figure this interface out and document it
-    fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk);
+    fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut (Box<[u32; 4096]>, MapChunkStronglyConsistentData));
 }

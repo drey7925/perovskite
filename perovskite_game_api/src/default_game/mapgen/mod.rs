@@ -9,8 +9,7 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     blocks::{BlockTypeHandle, BlockTypeManager},
-    game_map::MapChunk,
-    mapgen::MapgenInterface,
+    mapgen::MapgenInterface, game_map::MapChunkStronglyConsistentData,
 };
 use noise::{MultiFractal, NoiseFn};
 
@@ -91,158 +90,158 @@ struct DefaultMapgen {
     seed: u32,
 }
 impl MapgenInterface for DefaultMapgen {
-    fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut MapChunk) {
+    fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut (Box<[u32; 4096]>, MapChunkStronglyConsistentData)) {
         // todo subdivide by surface vs underground, etc. This is a very minimal MVP
-        let mut height_map = Box::new([[0i32; 16]; 16]);
-        for x in 0..16 {
-            for z in 0..16 {
-                let xg = 16 * chunk_coord.x + (x as i32);
-                let zg = 16 * chunk_coord.z + (z as i32);
+        // let mut height_map = Box::new([[0i32; 16]; 16]);
+        // for x in 0..16 {
+        //     for z in 0..16 {
+        //         let xg = 16 * chunk_coord.x + (x as i32);
+        //         let zg = 16 * chunk_coord.z + (z as i32);
 
-                let elevation = self.elevation_noise.get(xg, zg);
-                height_map[x as usize][z as usize] = elevation;
-                for y in 0..16 {
-                    let offset = ChunkOffset { x, y, z };
-                    let block_coord = chunk_coord.with_offset(offset);
+        //         let elevation = self.elevation_noise.get(xg, zg);
+        //         height_map[x as usize][z as usize] = elevation;
+        //         for y in 0..16 {
+        //             let offset = ChunkOffset { x, y, z };
+        //             let block_coord = chunk_coord.with_offset(offset);
 
-                    let vert_offset = block_coord.y - elevation;
-                    let block = if vert_offset > 0 {
-                        if block_coord.y > 0 {
-                            self.air
-                        } else {
-                            self.water
-                        }
-                    } else if vert_offset == 0 && block_coord.y >= 0 {
-                        self.dirt_grass
-                    } else if vert_offset > -3 {
-                        // todo variable depth of dirt
-                        self.dirt
-                    } else {
-                        self.generate_ore(block_coord)
-                    };
-                    chunk.set_block(offset, block, None);
-                }
-            }
-        }
-        self.generate_vegetation(chunk_coord, chunk, &height_map);
+        //             let vert_offset = block_coord.y - elevation;
+        //             let block = if vert_offset > 0 {
+        //                 if block_coord.y > 0 {
+        //                     self.air
+        //                 } else {
+        //                     self.water
+        //                 }
+        //             } else if vert_offset == 0 && block_coord.y >= 0 {
+        //                 self.dirt_grass
+        //             } else if vert_offset > -3 {
+        //                 // todo variable depth of dirt
+        //                 self.dirt
+        //             } else {
+        //                 self.generate_ore(block_coord)
+        //             };
+        //             //chunk.0[offset.as_index()] = (offset, block, None);
+        //         }
+        //     }
+        // }
+        // self.generate_vegetation(chunk_coord, chunk, &height_map);
     }
 }
 
-impl DefaultMapgen {
-    #[inline]
-    fn generate_ore(&self, coord: BlockCoordinate) -> BlockTypeHandle {
-        for (ore, noise) in &self.ores {
-            let cutoff = ore
-                .noise_cutoff
-                .clamped_sample(-(coord.y as f64))
-                .unwrap_or(0.);
-            let noise_coord = [
-                coord.x as f64 / ore.noise_scale.0,
-                coord.y as f64 / ore.noise_scale.1,
-                coord.z as f64 / ore.noise_scale.2,
-            ];
-            let sample = noise.get(noise_coord);
-            if sample < cutoff {
-                return ore.block.0;
-            }
-        }
+// impl DefaultMapgen {
+//     #[inline]
+//     fn generate_ore(&self, coord: BlockCoordinate) -> BlockTypeHandle {
+//         for (ore, noise) in &self.ores {
+//             let cutoff = ore
+//                 .noise_cutoff
+//                 .clamped_sample(-(coord.y as f64))
+//                 .unwrap_or(0.);
+//             let noise_coord = [
+//                 coord.x as f64 / ore.noise_scale.0,
+//                 coord.y as f64 / ore.noise_scale.1,
+//                 coord.z as f64 / ore.noise_scale.2,
+//             ];
+//             let sample = noise.get(noise_coord);
+//             if sample < cutoff {
+//                 return ore.block.0;
+//             }
+//         }
 
-        self.stone
-    }
+//         self.stone
+//     }
 
-    #[inline]
-    fn fast_uniform_2d(&self, x: i32, z: i32, seed: u32) -> f64 {
-        // Ugly, awful RNG. However, it's stable and passes enough simple correlation tests
-        // to be useful for putting trees into a voxel game.
-        const K: u64 = 0x517cc1b727220a95;
-        const M: u64 = 0x72c07af023017001;
+//     #[inline]
+//     fn fast_uniform_2d(&self, x: i32, z: i32, seed: u32) -> f64 {
+//         // Ugly, awful RNG. However, it's stable and passes enough simple correlation tests
+//         // to be useful for putting trees into a voxel game.
+//         const K: u64 = 0x517cc1b727220a95;
+//         const M: u64 = 0x72c07af023017001;
 
-        let mut hash = seed as u64;
-        hash = hash
-            .rotate_left(5)
-            .bitxor((x as u64).wrapping_mul(M))
-            .swap_bytes()
-            .wrapping_mul(K);
-        hash = hash
-            .rotate_left(5)
-            .bitxor((z as u64).wrapping_mul(M))
-            .swap_bytes()
-            .wrapping_mul(K);
-        hash = hash
-            .rotate_left(5)
-            .bitxor((seed as u64).wrapping_mul(M))
-            .swap_bytes()
-            .wrapping_mul(K);
-        (hash as f64) / (u64::MAX as f64)
-    }
+//         let mut hash = seed as u64;
+//         hash = hash
+//             .rotate_left(5)
+//             .bitxor((x as u64).wrapping_mul(M))
+//             .swap_bytes()
+//             .wrapping_mul(K);
+//         hash = hash
+//             .rotate_left(5)
+//             .bitxor((z as u64).wrapping_mul(M))
+//             .swap_bytes()
+//             .wrapping_mul(K);
+//         hash = hash
+//             .rotate_left(5)
+//             .bitxor((seed as u64).wrapping_mul(M))
+//             .swap_bytes()
+//             .wrapping_mul(K);
+//         (hash as f64) / (u64::MAX as f64)
+//     }
 
-    fn generate_vegetation(
-        &self,
-        chunk_coord: ChunkCoordinate,
-        chunk: &mut MapChunk,
-        heightmap: &[[i32; 16]; 16],
-    ) {
+//     fn generate_vegetation(
+//         &self,
+//         chunk_coord: ChunkCoordinate,
+//         chunk: &mut MapChunk,
+//         heightmap: &[[i32; 16]; 16],
+//     ) {
 
-        for i in -3..18 {
-            for j in -3..18 {
-                let block_xz = (chunk_coord.x * 16)
-                    .checked_add(i)
-                    .zip((chunk_coord.z * 16).checked_add(j));
-                if let Some((x, z)) = block_xz {
-                    let y = if x.div_euclid(16) == chunk_coord.x && z.div_euclid(16) == chunk_coord.z {
-                        heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize]
-                    } else {
-                        self.elevation_noise.get(x, z)
-                    };
-                    if y <= 0 {
-                        continue;
-                    }
-                    let tree_value = self.fast_uniform_2d(x, z, self.seed);
-                    let tree_cutoff = self.tree_density_noise.get([
-                        (x as f64) * TREE_DENSITY_INPUT_SCALE,
-                        (z as f64) * TREE_DENSITY_INPUT_SCALE,
-                    ]) * TREE_DENSITY_OUTPUT_SCALE
-                        + TREE_DENSITY_OUTPUT_OFFSET;
-                    if tree_value < tree_cutoff {
-                        self.make_tree(chunk_coord, chunk, x, y, z);
-                    }
-                }
-            }
-        }
-    }
+//         for i in -3..18 {
+//             for j in -3..18 {
+//                 let block_xz = (chunk_coord.x * 16)
+//                     .checked_add(i)
+//                     .zip((chunk_coord.z * 16).checked_add(j));
+//                 if let Some((x, z)) = block_xz {
+//                     let y = if x.div_euclid(16) == chunk_coord.x && z.div_euclid(16) == chunk_coord.z {
+//                         heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize]
+//                     } else {
+//                         self.elevation_noise.get(x, z)
+//                     };
+//                     if y <= 0 {
+//                         continue;
+//                     }
+//                     let tree_value = self.fast_uniform_2d(x, z, self.seed);
+//                     let tree_cutoff = self.tree_density_noise.get([
+//                         (x as f64) * TREE_DENSITY_INPUT_SCALE,
+//                         (z as f64) * TREE_DENSITY_INPUT_SCALE,
+//                     ]) * TREE_DENSITY_OUTPUT_SCALE
+//                         + TREE_DENSITY_OUTPUT_OFFSET;
+//                     if tree_value < tree_cutoff {
+//                         self.make_tree(chunk_coord, chunk, x, y, z);
+//                     }
+//                 }
+//             }
+//         }
+//     }
 
 
-    // Generate a tree at the given location. The y coordinate represents the dirt block just below the tree.
-    fn make_tree(
-        &self,
-        chunk_coord: ChunkCoordinate,
-        chunk: &mut MapChunk,
-        x: i32,
-        y: i32,
-        z: i32,
-    ) {
+//     // Generate a tree at the given location. The y coordinate represents the dirt block just below the tree.
+//     fn make_tree(
+//         &self,
+//         chunk_coord: ChunkCoordinate,
+//         chunk: &mut MapChunk,
+//         x: i32,
+//         y: i32,
+//         z: i32,
+//     ) {
 
-        for h in 1..=4 {
-            let coord = BlockCoordinate::new(x, y + h, z);
-            if coord.chunk() == chunk_coord {
-                chunk.set_block(coord.offset(), self.maple_tree, None);
-            }
-        }
-        for h in 3..=5 {
-            for i in -2..=2 {
-                for j in -2..=2 {
-                    if i == 0 && j == 0 && h <= 4 {
-                        continue;
-                    }
-                    let coord = BlockCoordinate::new(x + i, y + h, z + j);
-                    if coord.chunk() == chunk_coord {
-                        chunk.set_block(coord.offset(), self.maple_leaves, None);
-                    }
-                }
-            }
-        }
-    }
-}
+//         for h in 1..=4 {
+//             let coord = BlockCoordinate::new(x, y + h, z);
+//             if coord.chunk() == chunk_coord {
+//                 chunk.set_block(coord.offset(), self.maple_tree, None);
+//             }
+//         }
+//         for h in 3..=5 {
+//             for i in -2..=2 {
+//                 for j in -2..=2 {
+//                     if i == 0 && j == 0 && h <= 4 {
+//                         continue;
+//                     }
+//                     let coord = BlockCoordinate::new(x + i, y + h, z + j);
+//                     if coord.chunk() == chunk_coord {
+//                         chunk.set_block(coord.offset(), self.maple_leaves, None);
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
 
 pub(crate) fn build_mapgen(
     blocks: Arc<BlockTypeManager>,

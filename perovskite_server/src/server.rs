@@ -29,7 +29,7 @@ use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
         blocks::BlockTypeManager, game_behaviors::GameBehaviors, items::ItemManager,
-        mapgen::MapgenInterface, GameState, game_map::{TimerSettings, TimerCallback, MapChunk},
+        mapgen::MapgenInterface, GameState, game_map::{TimerSettings, TimerCallback},
     },
     media::MediaManager,
     network_server::grpc_service::PerovskiteGameServerImpl,

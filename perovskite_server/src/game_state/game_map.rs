@@ -21,6 +21,7 @@ use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -47,11 +48,11 @@ use super::{
     GameState,
 };
 
+use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use perovskite_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::map as mapchunk_proto,
 };
-use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use prost::Message;
 
 use log::{error, info, warn};
@@ -62,6 +63,48 @@ use tokio::{
     sync::{broadcast, mpsc},
     task::JoinHandle,
 };
+
+type BlockIdArray = [u32; 4096];
+type AtomicBlockIdArray = [AtomicU32; 4096];
+trait BlockIdReadStorage {
+    fn get_block(self, offset: ChunkOffset) -> BlockId;
+}
+impl BlockIdReadStorage for &BlockIdArray {
+    fn get_block(self, offset: ChunkOffset) -> BlockId {
+        self[offset.as_index()].into()
+    }
+}
+impl BlockIdReadStorage for &AtomicBlockIdArray {
+    #[inline]
+    fn get_block(self, offset: ChunkOffset) -> BlockId {
+        // Relaxed is fine here. We only either read via a strongly consistent view,
+        // which holds a mutex (which will then do a Release-ordered write before the mutex is released),
+        // or from a weakly consistent view which provides no guarantees anyway.
+        self[offset.as_index()].load(Ordering::Relaxed).into()
+    }
+}
+
+trait BlockIdWriteStorage {
+    fn set_block(self, offset: ChunkOffset, block: BlockId);
+}
+impl BlockIdWriteStorage for &mut BlockIdArray {
+    #[inline]
+    fn set_block(self, offset: ChunkOffset, block: BlockId) {
+        self[offset.as_index()] = block.into();
+    }
+}
+impl BlockIdWriteStorage for &AtomicBlockIdArray {
+    #[inline]
+    fn set_block(self, offset: ChunkOffset, block: BlockId) {
+        self[offset.as_index()].store(block.into(), Ordering::Relaxed);
+    }
+}
+impl BlockIdWriteStorage for &mut AtomicBlockIdArray {
+    #[inline]
+    fn set_block(self, offset: ChunkOffset, block: BlockId) {
+        self[offset.as_index()].store(block.into(), Ordering::Relaxed);
+    }
+}
 
 trait AsDbKey
 where
@@ -152,161 +195,35 @@ pub(crate) enum ChunkUsage {
 ///
 /// This class is meant for use by map generators and bulk map accesses that would be inefficient when done
 /// block-by-block.
-pub struct MapChunk {
+pub struct MapChunkStronglyConsistentData {
     coord: ChunkCoordinate,
-    // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
-    // more calls similar to mutate_block_atomically
-    pub(crate) block_ids: Box<[u32; 4096]>,
     extended_data: Box<FxHashMap<u16, ExtendedData>>,
     dirty: bool,
 }
-impl MapChunk {
+impl MapChunkStronglyConsistentData {
     fn new(coord: ChunkCoordinate) -> Self {
         let extended_data = Box::new(FxHashMap::default());
         Self {
             coord,
-            block_ids: Box::new([0; 4096]),
             extended_data,
             dirty: false,
         }
     }
+}
 
-    fn serialize(
-        &self,
-        usage: ChunkUsage,
-        game_state: &GameState,
-    ) -> Result<mapchunk_proto::StoredChunk> {
-        let _span = span!("serialize chunk");
-        let mut extended_data = Vec::new();
-
-        if usage == ChunkUsage::Server {
-            for index in 0..4096 {
-                let offset = ChunkOffset::from_index(index);
-                let block_coord = self.coord.with_offset(offset);
-
-                if let Some(ext_data) = self.extended_data.get(&index.try_into().unwrap()) {
-                    if let Some(ext_data_proto) =
-                        self.extended_data_to_proto(index, block_coord, ext_data, game_state)?
-                    {
-                        extended_data.push(ext_data_proto);
-                    }
-                }
-            }
+fn deserialize(
+    coordinate: ChunkCoordinate,
+    bytes: &[u8],
+    game_state: Arc<GameState>,
+) -> Result<(Box<BlockIdArray>, MapChunkStronglyConsistentData)> {
+    let _span = span!("parse chunk");
+    let proto = mapchunk_proto::StoredChunk::decode(bytes)
+        .with_context(|| "MapChunk proto serialization failed")?;
+    match proto.chunk_data {
+        Some(mapchunk_proto::stored_chunk::ChunkData::V1(chunk_data)) => {
+            parse_v1(chunk_data, coordinate, game_state)
         }
-
-        let proto = mapchunk_proto::StoredChunk {
-            chunk_data: Some(mapchunk_proto::stored_chunk::ChunkData::V1(
-                mapchunk_proto::ChunkV1 {
-                    block_ids: self.block_ids.to_vec(),
-                    extended_data,
-                },
-            )),
-        };
-
-        Ok(proto)
-    }
-
-    fn extended_data_to_proto(
-        &self,
-        block_index: usize,
-        block_coord: BlockCoordinate,
-        ext_data: &ExtendedData,
-        game_state: &GameState,
-    ) -> Result<Option<mapchunk_proto::ExtendedData>> {
-        let id = self.block_ids[block_index];
-        let (block_type, _) = game_state
-            .map()
-            .block_type_manager()
-            .get_block_by_id(id.into())?;
-        if block_type.extended_data_handling == ExtDataHandling::NoExtData
-            && ext_data.custom_data.is_some()
-        {
-            error!(
-            "Found extended data, but block {} doesn't support extended data, while serializing {:?}, ",
-            block_type.client_info.short_name, block_coord,
-        );
-        }
-
-        if ext_data.custom_data.is_some() || !ext_data.inventories.is_empty() {
-            let serialized_custom_data = match ext_data.custom_data.as_ref() {
-                Some(x) => match &block_type.serialize_extended_data_handler {
-                    Some(serializer) => {
-                        let handler_context = InlineContext {
-                            tick: game_state.tick(),
-                            initiator: EventInitiator::Engine,
-                            location: block_coord,
-                            block_types: game_state.map().block_type_manager(),
-                            items: game_state.item_manager(),
-                        };
-
-                        (serializer)(handler_context, x)?
-                    }
-                    None => {
-                        if ext_data.custom_data.is_some() {
-                            error!(
-                                    "Block at {:?}, type {} indicated extended data, but had no serialize handler",
-                                    block_coord, block_type.client_info.short_name
-                                );
-                        }
-                        None
-                    }
-                },
-                None => None,
-            };
-            let inventories = ext_data
-                .inventories
-                .iter()
-                .map(|(k, v)| (k.clone(), v.to_proto()))
-                .collect();
-
-            Ok(Some(mapchunk_proto::ExtendedData {
-                offset_in_chunk: block_index.try_into().unwrap(),
-                serialized_data: serialized_custom_data.unwrap_or_default(),
-                inventories,
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn deserialize(
-        coordinate: ChunkCoordinate,
-        bytes: &[u8],
-        game_state: Arc<GameState>,
-    ) -> Result<MapChunk> {
-        let _span = span!("parse chunk");
-        let proto = mapchunk_proto::StoredChunk::decode(bytes)
-            .with_context(|| "MapChunk proto serialization failed")?;
-        match proto.chunk_data {
-            Some(mapchunk_proto::stored_chunk::ChunkData::V1(chunk_data)) => {
-                parse_v1(chunk_data, coordinate, game_state)
-            }
-            None => bail!("Missing chunk_data or unrecognized format"),
-        }
-    }
-    /// Sets the block at the given coordinate within the chunk.
-    /// This function is intended to be used from map generators, and may
-    /// lead to data loss or inconsistency when used elsewhere
-    ///
-    /// TODO refactor and fix
-    pub fn set_block(
-        &mut self,
-        coordinate: ChunkOffset,
-        block: BlockTypeHandle,
-        extended_data: Option<ExtendedData>,
-    ) {
-        self.block_ids[coordinate.as_index()] = block.id().into();
-        if let Some(extended_data) = extended_data {
-            self.extended_data
-                .insert(coordinate.as_index().try_into().unwrap(), extended_data);
-        } else {
-            self.extended_data
-                .remove(&coordinate.as_index().try_into().unwrap());
-        }
-    }
-    #[inline]
-    fn get_block(&self, coordinate: ChunkOffset) -> BlockId {
-        BlockId(self.block_ids[coordinate.as_index()])
+        None => bail!("Missing chunk_data or unrecognized format"),
     }
 }
 
@@ -314,7 +231,7 @@ fn parse_v1(
     chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
     game_state: Arc<GameState>,
-) -> std::result::Result<MapChunk, anyhow::Error> {
+) -> std::result::Result<(Box<BlockIdArray>, MapChunkStronglyConsistentData), anyhow::Error> {
     let mut extended_data = FxHashMap::default();
     ensure!(
         chunk_data.block_ids.len() == 4096,
@@ -382,13 +299,16 @@ fn parse_v1(
             );
         }
     }
-    Ok(MapChunk {
-        coord: coordinate,
-        // Unwrap is safe - this should only fail if the length is wrong, but we checked the length above.
-        block_ids: chunk_data.block_ids.try_into().unwrap(),
-        extended_data: Box::new(extended_data),
-        dirty: false,
-    })
+    // Unwrap is safe - this should only fail if the length is wrong, but we checked the length above
+    let block_ids = chunk_data.block_ids.try_into().unwrap();
+    Ok((
+        block_ids,
+        MapChunkStronglyConsistentData {
+            coord: coordinate,
+            extended_data: Box::new(extended_data),
+            dirty: false,
+        },
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -397,35 +317,165 @@ pub(crate) struct BlockUpdate {
     pub(crate) new_value: BlockTypeHandle,
 }
 
-struct MapChunkInnerGuard<'a> {
+struct MapChunkStrongGuard<'a> {
     guard: MutexGuard<'a, HolderState>,
+    block_ids: &'a AtomicBlockIdArray,
 }
-impl<'a> Deref for MapChunkInnerGuard<'a> {
-    type Target = MapChunk;
+impl<'a> Deref for MapChunkStrongGuard<'a> {
+    type Target = MapChunkStronglyConsistentData;
     fn deref(&self) -> &Self::Target {
         self.guard.unwrap()
     }
 }
-impl<'a> DerefMut for MapChunkInnerGuard<'a> {
+impl<'a> DerefMut for MapChunkStrongGuard<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.guard.unwrap_mut()
     }
 }
+impl<'a> MapChunkStrongGuard<'a> {
+    fn serialize(
+        &self,
+        usage: ChunkUsage,
+        game_state: &GameState,
+    ) -> Result<mapchunk_proto::StoredChunk> {
+        let _span = span!("serialize chunk");
+        let mut extended_data = Vec::new();
 
+        if usage == ChunkUsage::Server {
+            for index in 0..4096 {
+                let offset = ChunkOffset::from_index(index);
+                let block_coord = self.coord.with_offset(offset);
+
+                if let Some(ext_data) = self.extended_data.get(&index.try_into().unwrap()) {
+                    if let Some(ext_data_proto) =
+                        self.extended_data_to_proto(index, block_coord, ext_data, game_state)?
+                    {
+                        extended_data.push(ext_data_proto);
+                    }
+                }
+            }
+        }
+
+        let proto = mapchunk_proto::StoredChunk {
+            chunk_data: Some(mapchunk_proto::stored_chunk::ChunkData::V1(
+                mapchunk_proto::ChunkV1 {
+                    block_ids: self
+                        .block_ids
+                        .iter()
+                        .map(|x| x.load(Ordering::Relaxed))
+                        .collect(),
+                    extended_data,
+                },
+            )),
+        };
+
+        Ok(proto)
+    }
+
+    fn extended_data_to_proto(
+        &self,
+        block_index: usize,
+        block_coord: BlockCoordinate,
+        ext_data: &ExtendedData,
+        game_state: &GameState,
+    ) -> Result<Option<mapchunk_proto::ExtendedData>> {
+        let id = self.block_ids[block_index].load(Ordering::Relaxed);
+        let (block_type, _) = game_state
+            .map()
+            .block_type_manager()
+            .get_block_by_id(id.into())?;
+        if block_type.extended_data_handling == ExtDataHandling::NoExtData
+            && ext_data.custom_data.is_some()
+        {
+            error!(
+            "Found extended data, but block {} doesn't support extended data, while serializing {:?}, ",
+            block_type.client_info.short_name, block_coord,
+        );
+        }
+
+        if ext_data.custom_data.is_some() || !ext_data.inventories.is_empty() {
+            let serialized_custom_data = match ext_data.custom_data.as_ref() {
+                Some(x) => match &block_type.serialize_extended_data_handler {
+                    Some(serializer) => {
+                        let handler_context = InlineContext {
+                            tick: game_state.tick(),
+                            initiator: EventInitiator::Engine,
+                            location: block_coord,
+                            block_types: game_state.map().block_type_manager(),
+                            items: game_state.item_manager(),
+                        };
+
+                        (serializer)(handler_context, x)?
+                    }
+                    None => {
+                        if ext_data.custom_data.is_some() {
+                            error!(
+                                    "Block at {:?}, type {} indicated extended data, but had no serialize handler",
+                                    block_coord, block_type.client_info.short_name
+                                );
+                        }
+                        None
+                    }
+                },
+                None => None,
+            };
+            let inventories = ext_data
+                .inventories
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_proto()))
+                .collect();
+
+            Ok(Some(mapchunk_proto::ExtendedData {
+                offset_in_chunk: block_index.try_into().unwrap(),
+                serialized_data: serialized_custom_data.unwrap_or_default(),
+                inventories,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Sets the block at the given coordinate within the chunk.
+    /// This function is intended to be used from map generators, and may
+    /// lead to data loss or inconsistency when used elsewhere
+    ///
+    /// TODO refactor and fix
+    pub fn set_block(
+        &mut self,
+        coordinate: ChunkOffset,
+        block: BlockTypeHandle,
+        extended_data: Option<ExtendedData>,
+    ) {
+        self.block_ids[coordinate.as_index()].store(block.id().into(), Ordering::Relaxed);
+        if let Some(extended_data) = extended_data {
+            self.extended_data
+                .insert(coordinate.as_index().try_into().unwrap(), extended_data);
+        } else {
+            self.extended_data
+                .remove(&coordinate.as_index().try_into().unwrap());
+        }
+    }
+    #[inline]
+    fn get_block(&self, coordinate: ChunkOffset) -> BlockId {
+        BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed))
+    }
+}
+
+// State for the slow path of filling a chunk.
 enum HolderState {
     Empty,
     Err(anyhow::Error),
-    Ok(MapChunk),
+    Ok(MapChunkStronglyConsistentData),
 }
 impl HolderState {
-    fn unwrap_mut(&mut self) -> &mut MapChunk {
+    fn unwrap_mut(&mut self) -> &mut MapChunkStronglyConsistentData {
         if let HolderState::Ok(x) = self {
             x
         } else {
             panic!("HolderState is not Ok");
         }
     }
-    fn unwrap(&self) -> &MapChunk {
+    fn unwrap(&self) -> &MapChunkStronglyConsistentData {
         if let HolderState::Ok(x) = self {
             x
         } else {
@@ -435,15 +485,32 @@ impl HolderState {
 }
 
 struct MapChunkHolder {
-    chunk: Mutex<HolderState>,
+    coord: ChunkCoordinate,
+    // The map chunk holder uses a double-checked locking approach to
+    // improve performance for inconsistent readers or atomic writers
+    // accessing a chunk once it's loaded.
+    //
+    // If fast_path_ready is true, the chunk is guaranteed to be loaded
+    // and we don't need to actually lock the holder state or wait for
+    // the condition variable to be notified.
+    fast_path_ready: AtomicBool,
+    // This is used for the slow and consistent path.
+    chunk_state: Mutex<HolderState>,
+
+    block_ids: Box<[AtomicU32; 4096]>,
+
     condition: Condvar,
     last_accessed: Mutex<Instant>,
     block_bloom_filter: cbloom::Filter,
 }
 impl MapChunkHolder {
-    fn new_empty() -> Self {
+    fn new_empty(coord: ChunkCoordinate) -> Self {
+        const ATOMIC_ZERO: AtomicU32 = AtomicU32::new(0);
         Self {
-            chunk: Mutex::new(HolderState::Empty),
+            coord,
+            fast_path_ready: AtomicBool::new(false),
+            chunk_state: Mutex::new(HolderState::Empty),
+            block_ids: Box::new([ATOMIC_ZERO; 4096]),
             condition: Condvar::new(),
             last_accessed: Mutex::new(Instant::now()),
             // TODO: make bloom filter configurable or adaptive
@@ -454,50 +521,59 @@ impl MapChunkHolder {
     }
 
     /// Get the chunk, blocking until it's loaded
-    fn wait_and_get(&self) -> Result<MapChunkInnerGuard<'_>> {
-        let mut guard = self.chunk.lock();
+    fn get_strongly_consistent(&self) -> Result<MapChunkStrongGuard<'_>> {
+        let mut guard = self.chunk_state.lock();
         let _span = span!("wait_and_get");
         loop {
             match &*guard {
                 HolderState::Empty => self.condition.wait(&mut guard),
                 HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => return Ok(MapChunkInnerGuard { guard }),
+                HolderState::Ok(_) => {
+                    return Ok(MapChunkStrongGuard {
+                        guard,
+                        block_ids: &self.block_ids,
+                    })
+                }
             }
         }
     }
     /// Get the chunk, returning None if it's not loaded yet
-    fn try_get(&self) -> Result<Option<MapChunkInnerGuard<'_>>> {
-        let guard = self.chunk.lock();
+    fn try_get_strongly_consistent(&self) -> Result<Option<MapChunkStrongGuard<'_>>> {
+        let guard = self.chunk_state.lock();
         match &*guard {
             HolderState::Empty => Ok(None),
             HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-            HolderState::Ok(_) => Ok(Some(MapChunkInnerGuard { guard })),
+            HolderState::Ok(_) => Ok(Some(MapChunkStrongGuard {
+                guard,
+                block_ids: &self.block_ids,
+            })),
         }
     }
     /// Set the chunk, and notify any threads waiting in wait_and_get
     fn fill(
         &self,
-        chunk: MapChunk,
+        block_ids: Box<BlockIdArray>,
+        strongly_consistent_data: MapChunkStronglyConsistentData,
         light_columns: &FxHashMap<(i32, i32), ChunkColumn>,
         block_types: &BlockTypeManager,
     ) {
         let mut seen_blocks = FxHashSet::default();
-        for block_id in chunk.block_ids.iter() {
+        for block_id in block_ids.iter() {
             if seen_blocks.insert(*block_id) {
                 // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
                 // on x86_64.
                 // Only insert unique block ids (still need to test this optimization)
-                // TODO fork the bloom filter library and extend it to support constant lengths
                 self.block_bloom_filter
                     .insert(BlockId::from(*block_id).base_id() as u64);
             }
         }
         let _span = span!("game_map waiting to fill chunk");
-        let mut guard = self.chunk.lock();
+        let mut guard = self.chunk_state.lock();
         assert!(matches!(*guard, HolderState::Empty));
 
-        self.fill_lighting_for_load(&chunk, light_columns, block_types);
-        *guard = HolderState::Ok(chunk);
+        self.fill_lighting_for_load(&block_ids, light_columns, block_types);
+        *guard = HolderState::Ok(strongly_consistent_data);
+        self.fast_path_ready.store(true, Ordering::Release);
 
         self.condition.notify_all();
     }
@@ -505,18 +581,18 @@ impl MapChunkHolder {
     fn update_lighting_after_edit(
         &self,
         outer_guard: &MapChunkOuterGuard,
-        chunk: &MapChunk,
+        block_ids: impl BlockIdReadStorage + Copy,
         offset: ChunkOffset,
         block_types: &BlockTypeManager,
     ) {
         let light_column = outer_guard
             .read_guard
             .light_columns
-            .get(&(chunk.coord.x, chunk.coord.z))
+            .get(&(self.coord.x, self.coord.z))
             .unwrap();
         let mut occluded = false;
         for y in 0..16 {
-            let id = chunk.get_block(ChunkOffset {
+            let id = block_ids.get_block(ChunkOffset {
                 x: offset.x,
                 y,
                 z: offset.z,
@@ -527,7 +603,7 @@ impl MapChunkHolder {
             }
         }
 
-        let mut cursor = light_column.cursor_into(chunk.coord.y);
+        let mut cursor = light_column.cursor_into(self.coord.y);
         assert!(cursor.current_valid());
         cursor
             .current_occlusion_mut()
@@ -537,12 +613,12 @@ impl MapChunkHolder {
 
     fn fill_lighting_for_load(
         &self,
-        chunk: &MapChunk,
+        chunk: &BlockIdArray,
         light_columns: &FxHashMap<(i32, i32), ChunkColumn>,
         block_types: &BlockTypeManager,
     ) {
         // Unwrap is ok - the light column should exist by the time the chunk was inserted.
-        let light_column = light_columns.get(&(chunk.coord.x, chunk.coord.z)).unwrap();
+        let light_column = light_columns.get(&(self.coord.x, self.coord.z)).unwrap();
 
         let mut occlusion = Lightfield::zero();
         for x in 0..16 {
@@ -557,7 +633,7 @@ impl MapChunkHolder {
             }
         }
 
-        let mut cursor = light_column.cursor_into(chunk.coord.y);
+        let mut cursor = light_column.cursor_into(self.coord.y);
         *cursor.current_occlusion_mut() = occlusion;
         // We need to set this before the loop, since the cursor will advance. Technically, the
         // lighting state isn't valid until the incoming light is updated, but we will do so before
@@ -568,7 +644,7 @@ impl MapChunkHolder {
 
     /// Set the chunk to an error, and notify any waiting threads so they can propagate the error
     fn set_err(&self, err: anyhow::Error) {
-        let mut guard = self.chunk.lock();
+        let mut guard = self.chunk_state.lock();
         assert!(matches!(*guard, HolderState::Empty));
         *guard = HolderState::Err(err);
         self.condition.notify_all();
@@ -741,9 +817,9 @@ impl ServerGameMap {
         F: FnOnce(&ExtendedData) -> Option<T>,
     {
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let chunk = chunk_guard.wait_and_get()?;
+        let chunk = chunk_guard.get_strongly_consistent()?;
 
-        let id = chunk.block_ids[coord.offset().as_index()];
+        let id = chunk.block_ids.get_block(coord.offset());
         let ext_data = match chunk
             .extended_data
             .get(&coord.offset().as_index().try_into().unwrap())
@@ -761,9 +837,9 @@ impl ServerGameMap {
     /// Gets a block + variant without its extended data
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockTypeHandle> {
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let chunk = chunk_guard.wait_and_get()?;
+        let chunk = chunk_guard.get_strongly_consistent()?;
 
-        let id = chunk.block_ids[coord.offset().as_index()];
+        let id = chunk.block_ids.get_block(coord.offset());
 
         self.block_type_manager().make_blockref(id.into())
     }
@@ -781,9 +857,9 @@ impl ServerGameMap {
             .with_context(|| "Block not found")?;
 
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get()?;
+        let mut chunk = chunk_guard.get_strongly_consistent()?;
 
-        let old_id = chunk.block_ids[coord.offset().as_index()];
+        let old_id = chunk.block_ids.get_block(coord.offset());
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
         let old_data = match new_data {
             Some(new_data) => chunk
@@ -794,7 +870,7 @@ impl ServerGameMap {
                 .remove(&coord.offset().as_index().try_into().unwrap()),
         };
         let new_id = block.id();
-        chunk.block_ids[coord.offset().as_index()] = new_id.into();
+        chunk.block_ids.set_block(coord.offset(), new_id);
         chunk.dirty = true;
         let light_change = self
             .block_type_manager()
@@ -803,7 +879,7 @@ impl ServerGameMap {
         if light_change {
             chunk_guard.update_lighting_after_edit(
                 &chunk_guard,
-                &chunk,
+                chunk.block_ids,
                 coord.offset(),
                 self.block_type_manager(),
             );
@@ -873,9 +949,9 @@ impl ServerGameMap {
             .with_context(|| "Block not found")?;
 
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get()?;
+        let mut chunk = chunk_guard.get_strongly_consistent()?;
 
-        let old_id = chunk.block_ids[coord.offset().as_index()];
+        let old_id = chunk.block_ids.get_block(coord.offset());
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
         if !predicate(
             old_block,
@@ -895,7 +971,7 @@ impl ServerGameMap {
         };
 
         let new_id = block.id();
-        chunk.block_ids[coord.offset().as_index()] = new_id.into();
+        chunk.block_ids.set_block(coord.offset(), new_id);
         chunk.dirty = true;
 
         let light_change = self
@@ -905,7 +981,7 @@ impl ServerGameMap {
         if light_change {
             chunk_guard.update_lighting_after_edit(
                 &chunk_guard,
-                &chunk,
+                chunk.block_ids,
                 coord.offset(),
                 self.block_type_manager(),
             );
@@ -939,7 +1015,7 @@ impl ServerGameMap {
         F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
     {
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get()?;
+        let mut chunk = chunk_guard.get_strongly_consistent()?;
 
         let (result, block_changed) = self.mutate_block_atomically_locked(
             &chunk_guard,
@@ -952,7 +1028,7 @@ impl ServerGameMap {
             // mutate_block_atomically_locked already sent a broadcast.
             chunk_guard.update_lighting_after_edit(
                 &chunk_guard,
-                &chunk,
+                chunk.block_ids,
                 coord.offset(),
                 self.block_type_manager(),
             );
@@ -966,7 +1042,7 @@ impl ServerGameMap {
     fn mutate_block_atomically_locked<F, T>(
         &self,
         holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerGuard<'_>,
+        chunk: &mut MapChunkStrongGuard<'_>,
         offset: ChunkOffset,
         mutator: F,
         game_map: &ServerGameMap,
@@ -980,7 +1056,7 @@ impl ServerGameMap {
 
         let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
 
-        let old_id = chunk.block_ids[offset.as_index()].into();
+        let old_id = chunk.block_ids.get_block(offset);
         let mut block_type = game_map.block_type_manager().make_blockref(old_id)?;
         let closure_result = mutator(&mut block_type, &mut data_holder);
 
@@ -993,7 +1069,7 @@ impl ServerGameMap {
 
         let new_id = block_type.id();
         if new_id != old_id {
-            chunk.block_ids[offset.as_index()] = new_id.into();
+            chunk.block_ids.set_block(offset, new_id);
             chunk.dirty = true;
             holder.block_bloom_filter.insert(new_id.base_id() as u64)
         }
@@ -1168,7 +1244,7 @@ impl ServerGameMap {
             // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
             write_guard
                 .chunks
-                .insert(coord, MapChunkHolder::new_empty());
+                .insert(coord, MapChunkHolder::new_empty(coord));
             write_guard
                 .light_columns
                 .entry((coord.x, coord.z))
@@ -1183,8 +1259,13 @@ impl ServerGameMap {
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
             let chunk_holder = read_guard.chunks.get(&coord).unwrap();
             match self.load_uncached_or_generate_chunk(coord) {
-                Ok((chunk, force_writeback)) => {
-                    chunk_holder.fill(chunk, &read_guard.light_columns, &self.block_type_manager());
+                Ok(((block_ids, strongly_consistent_data), force_writeback)) => {
+                    chunk_holder.fill(
+                        block_ids,
+                        strongly_consistent_data,
+                        &read_guard.light_columns,
+                        &self.block_type_manager(),
+                    );
                     let outer_guard = MapChunkOuterGuard {
                         read_guard,
                         coord,
@@ -1228,19 +1309,21 @@ impl ServerGameMap {
     // from the DB/mapgen
     // Returns the chunk and a boolean - if true, the chunk was generated and should be written
     // back unconditionally.
-    fn load_uncached_or_generate_chunk(&self, coord: ChunkCoordinate) -> Result<(MapChunk, bool)> {
+    fn load_uncached_or_generate_chunk(
+        &self,
+        coord: ChunkCoordinate,
+    ) -> Result<((Box<BlockIdArray>, MapChunkStronglyConsistentData), bool)> {
         let data = self
             .database
             .get(&KeySpace::MapchunkData.make_key(&coord.as_bytes()))?;
         if let Some(data) = data {
-            return Ok((
-                MapChunk::deserialize(coord, &data, self.game_state())?,
-                false,
-            ));
+            return Ok((deserialize(coord, &data, self.game_state())?, false));
         }
 
-        let mut chunk = MapChunk::new(coord);
-        chunk.dirty = true;
+        let mut chunk = (
+            Box::new([0; 4096]),
+            MapChunkStronglyConsistentData::new(coord),
+        );
         {
             let _span = span!("mapgen running");
             run_handler!(
@@ -1252,7 +1335,7 @@ impl ServerGameMap {
                 EventInitiator::Engine
             )?;
         }
-        Ok((chunk, true))
+        Ok(((chunk), true))
     }
 
     pub fn game_state(&self) -> Arc<GameState> {
@@ -1265,34 +1348,42 @@ impl ServerGameMap {
         coord: ChunkCoordinate,
     ) -> Result<()> {
         let _span = span!("unload single chunk");
-        let chunk = lock.chunks.remove(&coord);
-        if let Some(chunk) = chunk {
-            match &*chunk.chunk.lock() {
+        let chunk_holder = lock.chunks.remove(&coord);
+        if let Some(chunk_holder) = chunk_holder {
+            let guard = chunk_holder.chunk_state.lock();
+            match &*guard {
                 HolderState::Empty => {
                     panic!("chunk unload got a chunk with an empty holder. This should never happen - please file a bug");
                 }
                 HolderState::Err(e) => {
                     log::warn!("chunk unload trying to unload a chunk with an error: {e:?}");
+                    return Ok(());
                 }
                 HolderState::Ok(chunk) => {
-                    if chunk.dirty {
-                        self.database.put(
-                            &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
-                            &chunk
-                                .serialize(ChunkUsage::Server, &self.game_state())?
-                                .encode_to_vec(),
-                        )?;
-                    }
-                    let light_column = lock.light_columns.get_mut(&(coord.x, coord.z)).unwrap();
-                    light_column.remove(coord.y);
-                    if light_column.is_empty() {
-                        lock.light_columns.remove(&(coord.x, coord.z));
-                    }
-
-                    // TODO(lighting) caller should recalc lighting from just above the chunk that was removed
-                    // (this should be batched)
+                    // pass
                 }
             }
+                let strong_guard = MapChunkStrongGuard {
+                    guard,
+                    block_ids: &chunk_holder.block_ids,
+                };
+
+                // TODO add a dirty bit
+                if true {
+                    self.database.put(
+                        &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
+                        &strong_guard
+                            .serialize(ChunkUsage::Server, &self.game_state())?
+                            .encode_to_vec(),
+                    )?;
+                }
+                let light_column = lock.light_columns.get_mut(&(coord.x, coord.z)).unwrap();
+                light_column.remove(coord.y);
+                if light_column.is_empty() {
+                    lock.light_columns.remove(&(coord.x, coord.z));
+                }
+
+            
         }
         Ok(())
     }
@@ -1331,7 +1422,7 @@ impl ServerGameMap {
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
         if load_if_missing {
             let chunk_guard = self.get_chunk(coord)?;
-            let chunk = chunk_guard.wait_and_get()?;
+            let chunk = chunk_guard.get_strongly_consistent()?;
             Ok(Some(
                 chunk.serialize(ChunkUsage::Client, &self.game_state())?,
             ))
@@ -1510,7 +1601,7 @@ impl GameMapWriteback {
             assert!(self.shard_id == shard_id(coord));
             match lock.chunks.get(&coord) {
                 Some(chunk_holder) => {
-                    if let Some(mut chunk) = chunk_holder.try_get()? {
+                    if let Some(mut chunk) = chunk_holder.try_get_strongly_consistent()? {
                         if !chunk.dirty {
                             warn!("Writeback thread got chunk {:?} but it wasn't dirty", coord);
                         }
@@ -1868,10 +1959,10 @@ impl GameMapTimer {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
         let map = game_state.map();
-        if let Some(mut chunk) = holder.try_get()? {
+        if let Some(mut chunk) = holder.try_get_strongly_consistent()? {
             assert!(chunk.block_ids.len() == 4096);
             for i in 0..4096 {
-                let block_id = BlockId(chunk.block_ids[i]);
+                let block_id = BlockId(chunk.block_ids[i].load(Ordering::Relaxed));
                 assert!(holder
                     .block_bloom_filter
                     .maybe_contains(block_id.base_id() as u64));
@@ -1907,7 +1998,7 @@ impl GameMapTimer {
     fn run_callback(
         &self,
         holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerGuard<'_>,
+        chunk: &mut MapChunkStrongGuard<'_>,
         offset: ChunkOffset,
         map: &ServerGameMap,
         coord: ChunkCoordinate,
