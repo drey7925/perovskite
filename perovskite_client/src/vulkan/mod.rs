@@ -90,7 +90,9 @@ impl VulkanContext {
             },
         )?;
 
-        let surface = WindowBuilder::new().build_vk_surface(event_loop, instance.clone())?;
+        let surface = WindowBuilder::new()
+            .with_title("Perovskite Game Client")
+            .build_vk_surface(event_loop, instance.clone())?;
 
         let window = surface
             .object()
