@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "cuberef_server",
-    "cuberef_client",
-    "cuberef_core",
-    "cuberef_game_api"
+    "perovskite_server",
+    "perovskite_client",
+    "perovskite_core",
+    "perovskite_game_api"
 ]
 resolver = "2"
 

@@ -1,6 +1,6 @@
-# &🧊 Cuberef
+# &🧊 Perovskite
 
-Cuberef is a 3D voxel game engine inspired by [Minetest](https://minetest.net).
+Perovskite is a 3D voxel game engine inspired by [Minetest](https://minetest.net).
 
 It is written in Rust, with two goals:
 
@@ -13,9 +13,9 @@ As this is a learning project, I may spend time on silly things that may not be 
 
 ## Why the name?
 
-It's a silly pun related to Rust. Rust leans heavily on references, or refs for short, of various types (immutable refs, mutable refs, static refs, etc), and they are a fundamental aspect of the language.
+Naming Rust projects after oxide minerals is fun. Unfortunately, all the cool oxide minerals are already used for really cool rust projects, or could otherwise cause confusion.
 
-**Note:** The name is likely to change soon.
+[Perovskite](https://en.wikipedia.org/wiki/Perovskite) is a cool mineral that inspired artificial structures with a bunch of cool [aspirational applications](https://en.wikipedia.org/wiki/Perovskite_(structure)#Aspirational_applications).
 
 ## What's the current state?
 
@@ -33,8 +33,8 @@ The intent is to stabilize the API to a reasonable extent later on, but having a
 First, build and run the server:
 
 ```
-$ cargo build  --features= --bin cuberef_game_api --release
-$ target/release/cuberef_game_api --data-dir /path/to/data-directory
+$ cargo build  --features= --bin perovskite_game_api --release
+$ target/release/perovskite_game_api --data-dir /path/to/data-directory
 ```
 
 The default server port is 28273.
@@ -60,8 +60,8 @@ graceful shutdown to hang.
 Then, build and run the client:
 
 ```
-$ cargo build --features= --bin cuberef_client --release
-$ target/release/cuberef_client
+$ cargo build --features= --bin perovskite_client --release
+$ target/release/perovskite_client
 ```
 
 The only supported feature is `--features=tracy`, with similar behavior to the same feature on the server.
@@ -126,7 +126,7 @@ Tons of stuff, in no particular order, and not yet prioritized:
 
 None at the moment. I test with either the latest or almost-latest stable Rust version, on Windows x64.
 
-cuberef_server's API can change in breaking ways. cuberef_game_api (as well as anything it re-exports by default) should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
+perovskite_server's API can change in breaking ways. perovskite_game_api (as well as anything it re-exports by default) should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
 
 ## Who is behind this?
 

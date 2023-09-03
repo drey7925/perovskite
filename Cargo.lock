@@ -862,142 +862,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cuberef_client"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "argon2",
- "bitvec",
- "cbloom",
- "cgmath",
- "clap",
- "cuberef_core",
- "directories",
- "egui",
- "egui_winit_vulkano",
- "env_logger",
- "fps_counter",
- "futures",
- "hex",
- "image",
- "line_drawing",
- "log",
- "microbench",
- "mimalloc",
- "opaque-ke",
- "parking_lot",
- "prost",
- "rand 0.8.5",
- "ron 0.8.0",
- "rustc-hash",
- "serde",
- "snap",
- "texture_packer",
- "textwrap",
- "tokio",
- "tokio-scoped",
- "tokio-stream",
- "tokio-util",
- "toml 0.7.5",
- "tonic",
- "tracy-client",
- "unicode-normalization",
- "vulkano",
- "vulkano-shaders",
- "vulkano-win",
- "winit",
-]
-
-[[package]]
-name = "cuberef_core"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "argon2",
- "bitvec",
- "cgmath",
- "opaque-ke",
- "parking_lot",
- "prost",
- "prost-types",
- "rand 0.8.5",
- "rustc-hash",
- "thiserror",
- "tonic",
- "tonic-build",
- "vec3D",
-]
-
-[[package]]
-name = "cuberef_game_api"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "console-subscriber",
- "cuberef_core",
- "cuberef_server",
- "dhat",
- "env_logger",
- "hashbrown 0.14.0",
- "log",
- "noise",
- "parking_lot",
- "prost",
- "rand 0.8.5",
- "rustc-hash",
- "splines",
- "tracing",
- "tracing-log",
- "tracing-subscriber",
- "tracing-tracy",
-]
-
-[[package]]
-name = "cuberef_server"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "argfile",
- "argon2",
- "bitvec",
- "cbloom",
- "cgmath",
- "clap",
- "config",
- "ctor",
- "cuberef_core",
- "env_logger",
- "hashbrown 0.14.0",
- "hex",
- "integer-encoding",
- "itertools",
- "lazy_static",
- "log",
- "microbench",
- "opaque-ke",
- "parking_lot",
- "polonius-the-crab",
- "prost",
- "rand 0.8.5",
- "rocksdb",
- "rustc-hash",
- "sha2",
- "snap",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-reflection",
- "tracing",
- "tracing-subscriber",
- "tracy-client",
- "uuid",
- "vec3D",
-]
-
-[[package]]
 name = "curve25519-dalek"
 version = "4.0.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2554,6 +2418,142 @@ name = "percent-encoding"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
+
+[[package]]
+name = "perovskite_client"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "argon2",
+ "bitvec",
+ "cbloom",
+ "cgmath",
+ "clap",
+ "directories",
+ "egui",
+ "egui_winit_vulkano",
+ "env_logger",
+ "fps_counter",
+ "futures",
+ "hex",
+ "image",
+ "line_drawing",
+ "log",
+ "microbench",
+ "mimalloc",
+ "opaque-ke",
+ "parking_lot",
+ "perovskite_core",
+ "prost",
+ "rand 0.8.5",
+ "ron 0.8.0",
+ "rustc-hash",
+ "serde",
+ "snap",
+ "texture_packer",
+ "textwrap",
+ "tokio",
+ "tokio-scoped",
+ "tokio-stream",
+ "tokio-util",
+ "toml 0.7.5",
+ "tonic",
+ "tracy-client",
+ "unicode-normalization",
+ "vulkano",
+ "vulkano-shaders",
+ "vulkano-win",
+ "winit",
+]
+
+[[package]]
+name = "perovskite_core"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "bitvec",
+ "cgmath",
+ "opaque-ke",
+ "parking_lot",
+ "prost",
+ "prost-types",
+ "rand 0.8.5",
+ "rustc-hash",
+ "thiserror",
+ "tonic",
+ "tonic-build",
+ "vec3D",
+]
+
+[[package]]
+name = "perovskite_game_api"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "console-subscriber",
+ "dhat",
+ "env_logger",
+ "hashbrown 0.14.0",
+ "log",
+ "noise",
+ "parking_lot",
+ "perovskite_core",
+ "perovskite_server",
+ "prost",
+ "rand 0.8.5",
+ "rustc-hash",
+ "splines",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+ "tracing-tracy",
+]
+
+[[package]]
+name = "perovskite_server"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "argfile",
+ "argon2",
+ "bitvec",
+ "cbloom",
+ "cgmath",
+ "clap",
+ "config",
+ "ctor",
+ "env_logger",
+ "hashbrown 0.14.0",
+ "hex",
+ "integer-encoding",
+ "itertools",
+ "lazy_static",
+ "log",
+ "microbench",
+ "opaque-ke",
+ "parking_lot",
+ "perovskite_core",
+ "polonius-the-crab",
+ "prost",
+ "rand 0.8.5",
+ "rocksdb",
+ "rustc-hash",
+ "sha2",
+ "snap",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "tracy-client",
+ "uuid",
+ "vec3D",
+]
 
 [[package]]
 name = "pest"
