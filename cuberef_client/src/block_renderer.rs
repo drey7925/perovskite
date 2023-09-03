@@ -685,6 +685,11 @@ fn get_cube_extents(render_info: &CubeRenderInfo, variant: u16) -> CubeExtents {
     match render_info.variant_effect() {
         blocks_proto::CubeVariantEffect::None => FULL_CUBE_EXTENTS,
         blocks_proto::CubeVariantEffect::RotateNesw => FULL_CUBE_EXTENTS.rotate_y(variant),
+        blocks_proto::CubeVariantEffect::Liquid => {
+            let height = ((variant as f32) / 7.0).clamp(0.05, 1.0);
+            // todo actually skew it based on neighbors...
+            CubeExtents::new((-0.5, 0.5), (0.5 - height, 0.5), (-0.5, 0.5))
+        },
     }
 }
 

@@ -157,6 +157,7 @@ impl From<BlockTypeHandle> for BlockTypeHandleWrapper {
 enum VariantEffect {
     None,
     RotateNesw,
+    Liquid
 }
 
 /// Builder for simple blocks.
@@ -307,6 +308,7 @@ impl BlockBuilder {
         self.variant_effect = match appearance.render_info.variant_effect() {
             CubeVariantEffect::None => VariantEffect::None,
             CubeVariantEffect::RotateNesw => VariantEffect::RotateNesw,
+            CubeVariantEffect::Liquid => VariantEffect::Liquid,
         };
         self.client_info.render_info = Some(RenderInfo::Cube(appearance.render_info));
         self
@@ -383,6 +385,7 @@ impl BlockBuilder {
                     .position()
                     .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
                     .unwrap_or(0),
+                VariantEffect::Liquid => 0xfff,
             };
             match ctx
                 .game_map()
@@ -490,6 +493,14 @@ impl CubeAppearanceBuilder {
     /// Makes the block able to point in the four lateral directions, rotating it when placed
     pub fn set_rotate_laterally(mut self) -> Self {
         self.render_info.variant_effect = CubeVariantEffect::RotateNesw.into();
+        self
+    }
+
+    /// Makes the block act like a liquid during meshing. Variants 0-7 are partial (flowing)
+    /// liquid, 0xfff is liquid source. Other values are undefined (but may be given a meaning
+    /// in the future).
+    pub(crate) fn set_liquid_shape(mut self) -> Self {
+        self.render_info.variant_effect = CubeVariantEffect::Liquid.into();
         self
     }
 }

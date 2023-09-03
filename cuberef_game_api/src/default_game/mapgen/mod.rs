@@ -15,7 +15,7 @@ use cuberef_server::game_state::{
 use noise::{MultiFractal, NoiseFn};
 
 
-use crate::{blocks::BlockTypeHandleWrapper};
+use crate::blocks::BlockTypeHandleWrapper;
 
 use super::{
     basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE, WATER},
@@ -254,7 +254,8 @@ pub(crate) fn build_mapgen(
         dirt: blocks.get_by_name(DIRT.0).expect("dirt"),
         dirt_grass: blocks.get_by_name(DIRT_WITH_GRASS.0).expect("dirt_grass"),
         stone: blocks.get_by_name(STONE.0).expect("stone"),
-        water: blocks.get_by_name(WATER.0).expect("water"),
+        // TODO 0xfff is a magic number, give it a real constant definition
+        water: blocks.get_by_name(WATER.0).expect("water").with_variant(0xfff).unwrap(),
         maple_tree: blocks.get_by_name(MAPLE_TREE.0).expect("maple_tree"),
         maple_leaves: blocks.get_by_name(MAPLE_LEAVES.0).expect("maple_leaves"),
 

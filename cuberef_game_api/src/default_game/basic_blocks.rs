@@ -240,6 +240,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
                 .set_single_texture(WATER_TEXTURE)
+                .set_liquid_shape()
                 .set_needs_translucency(),
         )
         .set_allow_light_propagation(true)
