@@ -572,7 +572,11 @@ impl MapChunkHolder {
         assert!(matches!(*guard, HolderState::Empty));
 
         self.fill_lighting_for_load(&block_ids, light_columns, block_types);
+        for i in 0..4096 {
+            self.block_ids[i].store(block_ids[i], Ordering::Relaxed);
+        }
         *guard = HolderState::Ok(strongly_consistent_data);
+    
         self.fast_path_ready.store(true, Ordering::Release);
 
         self.condition.notify_all();
