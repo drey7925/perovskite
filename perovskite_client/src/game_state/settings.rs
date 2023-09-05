@@ -10,7 +10,8 @@ const SETTINGS_RON_FILE: &str = "settings.ron";
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub(crate) struct RenderSettings {
-    pub(crate) experimental_num_mesh_workers: usize,
+    pub(crate) num_mesh_workers: usize,
+    pub(crate) num_neighbor_propagators: usize,
     pub(crate) show_placement_guide: bool,
     pub(crate) testonly_noop_meshing: bool
 }
@@ -18,7 +19,8 @@ pub(crate) struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            experimental_num_mesh_workers: 1,
+            num_mesh_workers: 2,
+            num_neighbor_propagators: 1,
             show_placement_guide: false,
             testonly_noop_meshing: false
         }

@@ -9,13 +9,13 @@ use crate::game_state::{
     self, chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
 };
 use anyhow::Result;
+use futures::StreamExt;
+use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
-use futures::StreamExt;
-use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -35,19 +35,18 @@ pub(crate) async fn make_contexts(
     let ack_map = Arc::new(Mutex::new(HashMap::new()));
     let mut mesh_workers = vec![];
     let mesh_worker_handles = futures::stream::FuturesUnordered::new();
-    for _ in 0..client_state
-        .settings
-        .load()
-        .render
-        .experimental_num_mesh_workers
-    {
+    for _ in 0..client_state.settings.load().render.num_mesh_workers {
         let (worker, handle) = MeshWorker::new(client_state.clone());
         mesh_workers.push(worker);
         mesh_worker_handles.push(handle);
     }
-
-    let (neighbor_propagator, neighbor_propagator_handle) =
-        NeighborPropagator::new(client_state.clone(), mesh_workers.clone());
+    let mut neighbor_propagators = vec![];
+    let neighbor_propagator_handles = futures::stream::FuturesUnordered::new();
+    for _ in 0..client_state.settings.load().render.num_neighbor_propagators {
+        let (worker, handle) = NeighborPropagator::new(client_state.clone(), mesh_workers.clone());
+        neighbor_propagators.push(worker);
+        neighbor_propagator_handles.push(handle);
+    }
 
     let inbound = InboundContext {
         outbound_tx: tx_send.clone(),
@@ -57,8 +56,8 @@ pub(crate) async fn make_contexts(
         ack_map: ack_map.clone(),
         mesh_workers: mesh_workers.clone(),
         mesh_worker_handles,
-        neighbor_propagator: neighbor_propagator.clone(),
-        neighbor_propagator_handle,
+        neighbor_propagators: neighbor_propagators.clone(),
+        neighbor_propagator_handles: neighbor_propagator_handles,
         snappy_helper: SnappyDecodeHelper::new(),
     };
 
@@ -71,7 +70,7 @@ pub(crate) async fn make_contexts(
         action_receiver,
         last_pos_update_seq: None,
         mesh_workers,
-        neighbor_propagator,
+        neighbor_propagators,
     };
 
     Ok((inbound, outbound))
@@ -90,7 +89,7 @@ pub(crate) struct OutboundContext {
 
     // Used only for pacing
     mesh_workers: Vec<Arc<MeshWorker>>,
-    neighbor_propagator: Arc<NeighborPropagator>,
+    neighbor_propagators: Vec<Arc<NeighborPropagator>>,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
@@ -137,7 +136,12 @@ impl OutboundContext {
             .iter()
             .map(|worker| worker.queue_len())
             .sum::<usize>()
-            .max(self.neighbor_propagator.queue_len())
+            .max(
+                self.neighbor_propagators
+                    .iter()
+                    .map(|x| x.queue_len())
+                    .sum::<usize>(),
+            )
             .try_into()
             .unwrap();
         let sequence = self
@@ -277,8 +281,9 @@ pub(crate) struct InboundContext {
     ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
     mesh_workers: Vec<Arc<MeshWorker>>,
     mesh_worker_handles: futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
-    neighbor_propagator: Arc<NeighborPropagator>,
-    neighbor_propagator_handle: tokio::task::JoinHandle<Result<()>>,
+    neighbor_propagators: Vec<Arc<NeighborPropagator>>,
+    neighbor_propagator_handles:
+        futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
 
     snappy_helper: SnappyDecodeHelper,
 }
@@ -329,19 +334,22 @@ impl InboundContext {
                     }
                     return result.unwrap()?;
                 }
-                result = &mut self.neighbor_propagator_handle => {
+                result = &mut self.neighbor_propagator_handles.next() => {
                     match &result {
-                        Err(e) => {
-                            log::error!("Error awaiting neighbor propagation worker: {e:?}");
+                        Some(Err(e)) => {
+                            log::error!("Error awaiting neighbor propagator: {e:?}");
                         }
-                        Ok(Err(e)) => {
-                            log::error!("Neighbor propagation worker crashed: {e:?}");
+                        Some(Ok(Err(e))) => {
+                            log::error!("Neighbor propagator crashed: {e:?}");
                         }
-                        Ok(_) => {
-                            log::info!("Neighbor propagation worker exiting");
+                        Some(Ok(_)) => {
+                            log::info!("Neighbor propagator exiting");
+                        }
+                        None => {
+                            log::error!("Neighbor propagator exited unexpectedly");
                         }
                     }
-                    return result?;
+                    return result.unwrap()?;
                 }
             };
         }
@@ -350,7 +358,9 @@ impl InboundContext {
         for worker in self.mesh_workers.iter() {
             worker.cancel();
         }
-        self.neighbor_propagator.cancel();
+        for worker in self.neighbor_propagators.iter() {
+            worker.cancel();
+        }
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
@@ -393,9 +403,9 @@ impl InboundContext {
     }
 
     fn enqueue_for_nprop(&self, coord: ChunkCoordinate) {
-        self.neighbor_propagator.enqueue(coord);
+        self.neighbor_propagators[coord.hash_u64() as usize % self.neighbor_propagators.len()].enqueue(coord);
     }
-
+ 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
         match &chunk.chunk_coord {
             Some(coord) => {
@@ -520,18 +530,14 @@ impl InboundContext {
         {
             let _span = span!("remesh for delta");
             let mut scratchpad = Box::new([0; 48 * 48 * 48]);
-            let mut token = self.neighbor_propagator.borrow_token();
             for &coord in needs_remesh.iter() {
                 let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
                 propagate_neighbor_data(
                     &self.client_state.block_types,
                     &neighbors,
                     &mut scratchpad,
-                    &mut token,
                 )?;
             }
-            // Let the neighbor propagator get back to work
-            drop(token);
             for coord in needs_remesh {
                 if !(self
                     .client_state
@@ -590,7 +596,9 @@ impl InboundContext {
             .as_ref()
             .and_then(|x| x.position.clone());
         let Some(pos_vector) = x else {
-            return self.send_bugcheck("Missing position in ClientState update".to_string()).await;
+            return self
+                .send_bugcheck("Missing position in ClientState update".to_string())
+                .await;
         };
         self.client_state
             .physics_state

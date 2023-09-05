@@ -273,7 +273,7 @@ impl ChunkManager {
                 for j in -1..=1 {
                     if let Some(delta) = chunk.try_delta(i, j, k) {
                         data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
-                            chunk_lock.get(&delta).cloned();
+                            chunk_lock.get(&delta).map(|x| Box::new(x.chunk_data().block_ids().clone()));
                         if let Some(light_column) = light_column {
                             inbound_lights[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
                                 light_column
@@ -285,7 +285,8 @@ impl ChunkManager {
             }
         }
         FastChunkNeighbors {
-            data,
+            neighbors: data,
+            center: chunk_lock.get(&chunk).cloned(),
             inbound_lights,
         }
     }
@@ -334,89 +335,22 @@ impl<'a> ChunkManagerView<'a> {
     }
 }
 
-pub(crate) struct FastNeighborLockCache<'a> {
-    backing: PhantomData<&'a FastChunkNeighbors>,
-    // does NOT contain (0,0,0)
-    neighbors: [[[Option<ChunkDataView<'a>>; 3]; 3]; 3],
-}
-impl<'a> FastNeighborLockCache<'a> {
-    pub(crate) fn new(backing: &FastChunkNeighbors) -> FastNeighborLockCache {
-        let mut neighbors =
-            std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
-        for i in -1..=1 {
-            for j in -1..=1 {
-                for k in -1..=1 {
-                    if i != 0 || j != 0 || k != 0 {
-                        if let Some(chunk) = backing.get((i, j, k)) {
-                            neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
-                                Some(chunk.chunk_data());
-                        }
-                    }
-                }
-            }
-        }
-        FastNeighborLockCache {
-            backing: PhantomData,
-            neighbors,
-        }
-    }
-
-    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&ChunkDataView> {
-        self.neighbors[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
-            [(coord_xyz.0 + 1) as usize]
-            .as_ref()
-    }
-}
-
-pub(crate) struct FastNeighborSliceCache<'a, 'b> {
-    backing: PhantomData<&'a FastNeighborLockCache<'b>>,
-    // does NOT contain (0,0,0)
-    neighbors: [Option<&'a [BlockId; 18 * 18 * 18]>; 27],
-}
-impl<'a, 'b> FastNeighborSliceCache<'a, 'b> {
-    pub(crate) fn new(backing: &'a FastNeighborLockCache<'b>) -> FastNeighborSliceCache<'a, 'b> {
-        let mut neighbors = [None; 27];
-        for i in -1..=1 {
-            for j in -1..=1 {
-                for k in -1..=1 {
-                    if i != 0 || j != 0 || k != 0 {
-                        if let Some(chunk) = backing.get((i, j, k)) {
-                            neighbors[((k + 1) * 9) as usize
-                                + ((j + 1) * 3) as usize
-                                + (i + 1) as usize] = Some(chunk.block_ids());
-                        }
-                    }
-                }
-            }
-        }
-        FastNeighborSliceCache {
-            backing: PhantomData,
-            neighbors,
-        }
-    }
-
-    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&'a [BlockId; 18 * 18 * 18]> {
-        assert!((-1..=1).contains(&coord_xyz.0));
-        assert!((-1..=1).contains(&coord_xyz.1));
-        assert!((-1..=1).contains(&coord_xyz.2));
-        self.neighbors[((coord_xyz.2 + 1) * 9) as usize
-            + ((coord_xyz.1 + 1) * 3) as usize
-            + (coord_xyz.0 + 1) as usize]
-    }
-}
-
 pub(crate) struct FastChunkNeighbors {
-    data: [[[Option<Arc<ClientChunk>>; 3]; 3]; 3],
+    center: Option<Arc<ClientChunk>>,
+    neighbors: [[[Option<Box<[BlockId; 18 * 18 * 18]>>; 3]; 3]; 3],
     inbound_lights: [[[Lightfield; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
-    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&Arc<ClientChunk>> {
+    pub(crate) fn get(&self, coord_xyz: (i32, i32, i32)) -> Option<&[BlockId; 18 * 18 * 18]> {
         assert!((-1..=1).contains(&coord_xyz.0));
         assert!((-1..=1).contains(&coord_xyz.1));
         assert!((-1..=1).contains(&coord_xyz.2));
-        self.data[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
+        self.neighbors[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
             [(coord_xyz.0 + 1) as usize]
-            .as_ref()
+            .as_deref()
+    }
+    pub(crate) fn center(&self) -> Option<&ClientChunk> {
+        self.center.as_deref()
     }
     pub(crate) fn inbound_light(&self, coord_xyz: (i32, i32, i32)) -> Lightfield {
         assert!((-1..=1).contains(&coord_xyz.0));

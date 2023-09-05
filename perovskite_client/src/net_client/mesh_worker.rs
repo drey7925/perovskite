@@ -17,8 +17,7 @@ use tracy_client::{plot, span};
 use crate::{
     block_renderer::ClientBlockTypeManager,
     game_state::{
-        chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors, FastNeighborLockCache,
-        FastNeighborSliceCache,
+        chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors
     },
 };
 
@@ -27,7 +26,6 @@ pub(crate) struct NeighborPropagator {
     client_state: Arc<ClientState>,
     queue: Mutex<FxHashSet<ChunkCoordinate>>,
     queue_len: AtomicUsize,
-    token: Mutex<()>,
     cond: Condvar,
     shutdown: CancellationToken,
     mesh_workers: Vec<Arc<MeshWorker>>,
@@ -41,7 +39,6 @@ impl NeighborPropagator {
             client_state,
             queue: Mutex::new(FxHashSet::default()),
             queue_len: AtomicUsize::new(0),
-            token: Mutex::new(()),
             cond: Condvar::new(),
             shutdown: CancellationToken::new(),
             mesh_workers,
@@ -67,15 +64,6 @@ impl NeighborPropagator {
     pub(crate) fn cancel(&self) {
         self.shutdown.cancel();
         self.cond.notify_one();
-    }
-
-    /// Pauses this neighbor propagator and borrows its token. Once the token is dropped,
-    /// this neighbor propagator will resume.
-    /// This can be used to preempt the neighbor propagator thread's work to allow a higher-priority
-    /// neighbor propagation to run inline in a message handler.
-    pub(crate) fn borrow_token(&self) -> NeighborPropagationToken<'_> {
-        let _span = span!("mesh_worker borrow_token");
-        NeighborPropagationToken(self.token.lock())
     }
 
     pub(crate) fn run_neighbor_propagator(self: Arc<Self>) -> Result<()> {
@@ -138,13 +126,11 @@ impl NeighborPropagator {
 
             {
                 let _span = span!("nprop_work");
-                let mut token = NeighborPropagationToken(self.token.lock());
                 for &coord in chunks {
                     let should_mesh = propagate_neighbor_data(
                         &self.client_state.block_types,
                         &self.client_state.chunks.cloned_neighbors_fast(coord),
                         &mut scratchpad,
-                        &mut token,
                     )?;
                     if should_mesh {
                         let index = coord.hash_u64() % (self.mesh_workers.len() as u64);
@@ -156,11 +142,6 @@ impl NeighborPropagator {
         Ok(())
     }
 }
-
-/// An opaque token allowing the neighbor propagation algorithm to run.
-/// It's used to ensure that two threads don't attempt neighbor propagation at the same time,
-/// which could lead to deadlocks.
-pub(crate) struct NeighborPropagationToken<'a>(MutexGuard<'a, ()>);
 
 // Responsible for turning a single chunk into a mesh
 pub(crate) struct MeshWorker {
@@ -306,12 +287,8 @@ pub(crate) fn propagate_neighbor_data(
     block_manager: &ClientBlockTypeManager,
     neighbors: &FastChunkNeighbors,
     scratchpad: &mut [u8; 48 * 48 * 48],
-    _token: &mut NeighborPropagationToken,
 ) -> Result<bool> {
-    let neighbor_cache = FastNeighborLockCache::new(neighbors);
-    let slice_cache = FastNeighborSliceCache::new(&neighbor_cache);
-
-    if let Some(current_chunk) = neighbors.get((0, 0, 0)) {
+        if let Some(current_chunk) = neighbors.center() {
         let mut current_chunk = current_chunk.chunk_data_mut();
         {
             let _span = span!("chunk precheck");
@@ -334,7 +311,7 @@ pub(crate) fn propagate_neighbor_data(
                             // get the read lock because buf already has a write lock. It is not merely an optimization
                             continue;
                         }
-                        let neighbor = slice_cache
+                        let neighbor = neighbors
                             .get((
                                 div_euclid_16_i32(x),
                                 div_euclid_16_i32(y),
@@ -423,7 +400,7 @@ pub(crate) fn propagate_neighbor_data(
                             // The center chunk is not in the slice cache
                             Some(current_chunk.block_ids())
                         } else {
-                            slice_cache.get((x_coarse, y_coarse, z_coarse))
+                            neighbors.get((x_coarse, y_coarse, z_coarse))
                         };
 
                         let global_inbound_lights =
