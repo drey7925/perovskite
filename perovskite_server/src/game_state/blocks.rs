@@ -742,7 +742,7 @@ impl BlockTypeHandle {
     pub fn variant(&self) -> u16 {
         self.id.variant()
     }
-    pub(crate) fn id(&self) -> BlockId {
+    pub fn id(&self) -> BlockId {
         self.id
     }
     pub fn equals_ignore_variant(&self, other: BlockTypeHandle) -> bool {

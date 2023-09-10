@@ -1,4 +1,5 @@
 /target
 rust-toolchain.toml
 /.vscode
-*/dhat-heap.json
+dhat-heap.json
+*.log

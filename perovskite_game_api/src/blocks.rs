@@ -14,13 +14,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::{sync::Arc, time::Duration};
+
 use anyhow::Result;
 use perovskite_core::{
     constants::{
-        block_groups::DEFAULT_SOLID, items::default_item_interaction_rules,
+        block_groups::{self, DEFAULT_SOLID, DEFAULT_LIQUID, DEFAULT_GAS},
+        items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
-    coordinates::BlockCoordinate,
+    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::{
         self,
         blocks::{
@@ -41,8 +44,11 @@ pub use perovskite_server::game_state::blocks as server_api;
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
-    game_map::CasOutcome,
+    game_map::{
+        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings,
+    },
     items::{InteractionRuleExt, Item, ItemStack},
+    GameState,
 };
 
 use crate::{
@@ -56,6 +62,7 @@ enum DroppedItem {
     None,
     Fixed(String, u32),
     Dynamic(Box<dyn Fn() -> (ItemName, u32) + Sync + Send + 'static>),
+    NotDiggable,
 }
 impl DroppedItem {
     fn build_dig_handler_inner<F>(closure: F, game_builder: &GameBuilder) -> Box<InlineHandler>
@@ -116,6 +123,14 @@ impl DroppedItem {
                 },
                 game_builder,
             ),
+            DroppedItem::NotDiggable => Box::new(|ctx, block, _, _| {
+                tracing::warn!(
+                    "Block {:?} is not diggable, but {:?} tried to dig it",
+                    block,
+                    ctx.initiator()
+                );
+                Ok(Default::default())
+            }),
         }
     }
 }
@@ -154,15 +169,27 @@ impl From<BlockTypeHandle> for BlockTypeHandleWrapper {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 enum VariantEffect {
     None,
     RotateNesw,
-    Liquid
+    Liquid,
+}
+
+pub enum MatterType {
+    /// Most tools target this block, and can try to dig it.
+    Solid,
+    /// Most tools target *through* this block, and most placed blocks can displace this block (removing it if the placed block occupies the same space).
+    /// Buckets can target this block.
+    Liquid,
+    /// Most tools target *through* this block, and most placed blocks can displace this block (removing it if the placed block occupies the same space).
+    /// The item interactions of this block are not yet well-defined, but will likely follow game content/plugins that are created in the future.
+    Gas,
 }
 
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
-/// [server_api::BlockType] (when used directly) can.
+/// [crate::server_api::BlockType] (when used directly via the unstable API) can.
 #[must_use = "Builders do nothing unless used; set_foo will return a new builder."]
 pub struct BlockBuilder {
     block_name: String,
@@ -174,6 +201,8 @@ pub struct BlockBuilder {
     // Exposed within the crate while not all APIs are complete
     pub(crate) client_info: BlockTypeDef,
     variant_effect: VariantEffect,
+    liquid_flow_period: Option<Duration>,
+    matter_type: MatterType,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -206,7 +235,7 @@ impl BlockBuilder {
                 id: 0,
                 short_name: name.into(),
                 base_dig_time: 1.0,
-                groups: vec![DEFAULT_SOLID.to_string()],
+                groups: vec![],
                 wear_multiplier: 1.0,
                 light_emission: 0,
                 allow_light_propagation: false,
@@ -224,6 +253,8 @@ impl BlockBuilder {
                 physics_info: Some(PhysicsInfo::Solid(Empty {})),
             },
             variant_effect: VariantEffect::None,
+            liquid_flow_period: None,
+            matter_type: MatterType::Solid,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -268,6 +299,12 @@ impl BlockBuilder {
         if !self.client_info.groups.contains(&group) {
             self.client_info.groups.push(group);
         }
+        self
+    }
+
+    /// Sets that this block should not be diggable
+    pub fn set_not_diggable(mut self) -> Self {
+        self.dropped_item = DroppedItem::NotDiggable;
         self
     }
 
@@ -352,6 +389,21 @@ impl BlockBuilder {
         self
     }
 
+    /// Makes the block flow as a liquid on a regular basis. Setting period to None disables flow
+    /// Note that you should also call set_matter_type(Liquid) if you want the block to interact
+    /// as a liquid (e.g. tools/blocks point through it/can replace it when placing, buckets point at it/fill it)
+    pub fn set_liquid_flow(mut self, period: Option<Duration>) -> Self {
+        self.liquid_flow_period = period;
+        self
+    }
+
+    /// Sets the matter type of this block for tool interactions, and adds the corresponding block groun (see [crate::constants::block_groups]).
+    /// The default is Solid
+    pub fn set_matter_type(mut self, matter_type: MatterType) -> Self {
+        self.matter_type = matter_type;
+        self
+    }
+
     /// Set the appearance of the block to that specified by the given builder
 
     pub(crate) fn build_and_deploy_into(
@@ -360,6 +412,13 @@ impl BlockBuilder {
     ) -> Result<BlockTypeHandleWrapper> {
         let mut block = BlockType::default();
         block.client_info = self.client_info;
+        block.client_info.groups.push(match self.matter_type {
+            MatterType::Solid => DEFAULT_SOLID.to_string(),
+            MatterType::Liquid => DEFAULT_LIQUID.to_string(),
+            MatterType::Gas => DEFAULT_GAS.to_string(),
+        });
+        block.client_info.groups.sort();
+        block.client_info.groups.dedup();
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
         if let Some(modifier) = self.modifier {
             (modifier)(&mut block);
@@ -389,13 +448,20 @@ impl BlockBuilder {
             };
             match ctx
                 .game_map()
-                // TODO be more flexible with placement (e.g. water)
-                .compare_and_set_block(
+                .compare_and_set_block_predicate(
                     coord,
-                    air_block,
+                    |block, _, block_types| {
+                        // fast path
+                        if block == air_block {
+                            return Ok(true);
+                        };
+                        let block_type = block_types.get_block(&block)?.0;
+                        Ok(block_type.client_info.groups.iter().any(|g| {
+                            g == block_groups::DEFAULT_LIQUID || g == block_groups::DEFAULT_GAS
+                        }))
+                    },
                     block_handle.with_variant(variant)?,
                     extended_data,
-                    false,
                 )?
                 .0
             {
@@ -404,6 +470,31 @@ impl BlockBuilder {
             }
         }));
         game_builder.inner.items_mut().register_item(item)?;
+
+        if let Some(period) = self.liquid_flow_period {
+            if !matches!(self.variant_effect, VariantEffect::None) {
+                tracing::warn!(
+                    "Liquid flow is only supported for blocks with a liquid variant effect"
+                );
+            }
+            game_builder.inner.add_timer(
+                format!("liquid_flow_{}", self.block_name),
+                TimerSettings {
+                    interval: period,
+                    shards: 16,
+                    spreading: 1.0,
+                    block_types: vec![block_handle],
+                    per_block_probability: 1.0,
+                    ignore_block_type_presence_check: true,
+                    ..Default::default()
+                },
+                TimerCallback::BulkUpdateWithNeighbors(Box::new(LiquidPropagator {
+                    this_liquid: block_handle,
+                    air: air_block,
+                })),
+            )
+        }
+
         Ok(BlockTypeHandleWrapper(block_handle))
     }
 }
@@ -559,6 +650,112 @@ pub mod variants {
             x if x < 315.0 => 3,
             x if x < 360.0 => 0,
             _ => 0,
+        }
+    }
+}
+
+struct LiquidPropagator {
+    this_liquid: BlockTypeHandle,
+    air: BlockTypeHandle,
+}
+impl BulkUpdateCallback for LiquidPropagator {
+    fn bulk_update_callback(
+        &self,
+        chunk_coordinate: ChunkCoordinate,
+        _missed_timers: u64,
+        _game_state: &Arc<GameState>,
+        chunk: &mut MapChunk,
+        neighbors: Option<&ChunkNeighbors>,
+    ) -> Result<()> {
+        let neighbors = neighbors.unwrap();
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 0..16 {
+                    let offset = ChunkOffset { x, y, z };
+                    let coord = chunk_coordinate.with_offset(offset);
+                    let block = chunk.get_block(offset);
+                    if self.this_liquid.id().equals_ignore_variant(block.into())
+                        && block.variant() == 0xfff
+                    {
+                        // liquid sources are invariant.
+                        continue;
+                    }
+                    if self.air.id().equals_ignore_variant(block)
+                        || self.this_liquid.id().equals_ignore_variant(block.into())
+                    {
+                        let mut new_variant = match block.variant() {
+                            // By default, decay one liquid level.
+                            // Zero becomes air
+                            0 => -1,
+                            // Source stays source
+                            0xfff => 0xfff,
+                            // and flowing water drops by a level
+                            x => (x.saturating_sub(1)).min(7) as i32,
+                        };
+                        if coord
+                            .try_delta(0, 1, 0)
+                            .and_then(|x| neighbors.get_block(x))
+                            .is_some_and(|x| x.equals_ignore_variant(self.this_liquid.id()))
+                        {
+                            // If there's liquid above, let it flow into here.
+                            new_variant = 7;
+                        }
+                        for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)] {
+                            if let Some(neighbor_liquid) = coord
+                                .try_delta(dx, dy, dz)
+                                .and_then(|x| neighbors.get_block(x))
+                            {
+                                // if there's a matching liquid at the neighbor...
+                                if self
+                                    .this_liquid
+                                    .id()
+                                    .equals_ignore_variant(neighbor_liquid.into())
+                                {
+                                    // and the material below it causes it to spread...
+                                    if let Some(neighbor_below) = coord
+                                        .try_delta(dx, dy - 1, dz)
+                                        .and_then(|x| neighbors.get_block(x))
+                                    {
+                                        if self.can_flow_laterally_over(neighbor_below) {
+                                            new_variant = new_variant
+                                                .max((neighbor_liquid.variant() as i32) - 1)
+                                                .min(7);
+                                        }
+                                        if neighbor_liquid.variant() == 0xfff {
+                                            // Let a source spread out one block, even if the source is not over a solid surface
+                                            new_variant = new_variant.max(0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let new_block = if new_variant < 0 {
+                            self.air
+                        } else {
+                            self.this_liquid.with_variant(new_variant as u16).unwrap()
+                        };
+
+                        chunk.set_block(coord.offset(), new_block, None);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LiquidPropagator {
+    fn can_flow_laterally_over(&self, x: perovskite_core::block_id::BlockId) -> bool {
+        if x.equals_ignore_variant(self.air.id()) {
+            // if it's air below, don't let it flow laterally
+            false
+        } else if x.equals_ignore_variant(self.this_liquid.id()) {
+            // if it's a flowing liquid below, don't let it flow laterally unless it's a source
+            x.variant() == 0xfff
+        } else {
+            // It's a different block
+            true
         }
     }
 }

@@ -185,9 +185,7 @@ impl ClientChunk {
         let data = self.chunk_data();
         let vertex_data = match data.0.data_state {
             BlockIdState::NeedProcessing => {
-                log::warn!("BlockIdsNeedProcessing for {:?}", self.coord);
-                None
-                //Some(renderer.mesh_chunk(&data)?)
+                Some(renderer.mesh_chunk(&data)?)
             }
             BlockIdState::NoRender => None,
             BlockIdState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),

@@ -22,6 +22,10 @@ use tracing_subscriber::{prelude::*, registry::LookupSpan};
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+#[cfg(not(feature = "dhat-heap"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(not(feature = "tracy"))]
 pub fn tracy_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
 where
@@ -62,9 +66,7 @@ where
 
 fn main() {
     #[cfg(feature = "dhat-heap")]
-    {
-        let _profiler = dhat::Profiler::new_heap();
-    }
+    let _profiler = dhat::Profiler::new_heap();
 
     tracing_subscriber::registry()
         .with(tokio_console_layer())

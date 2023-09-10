@@ -12,18 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicU32;
+use std::{sync::atomic::AtomicU32, time::Duration};
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
+    blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder, MatterType},
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
 use perovskite_core::{
-    constants::block_groups::{TOOL_REQUIRED, self},
-    protocol::{blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo}, self, items::item_stack::QuantityType},
+    constants::block_groups::{self, TOOL_REQUIRED, DEFAULT_LIQUID},
+    coordinates::ChunkOffset,
+    protocol::{
+        self,
+        blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
+        items::item_stack::QuantityType,
+    },
 };
-use perovskite_server::game_state::{blocks::ExtDataHandling, items::ItemStack};
+use perovskite_server::game_state::{
+    blocks::{BlockTypeHandle, ExtDataHandling},
+    game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
+    items::ItemStack,
+};
 
 use super::{
     block_groups::{BRITTLE, GRANULAR},
@@ -181,7 +190,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
     include_texture_bytes!(game_builder, CHEST_TEXTURE, "textures/chest_side.png")?;
     include_texture_bytes!(game_builder, TORCH_TEXTURE, "textures/torch.png")?;
-    game_builder.add_block(
+    let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
             .set_cube_single_texture(DIRT_TEXTURE)
@@ -212,7 +221,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 }
             }),
     )?;
-    game_builder.add_block(
+    let stone = game_builder.add_block(
         BlockBuilder::new(STONE)
             // TODO: make not-diggable-by-hand after tools are implemented
             .add_block_group(BRITTLE)
@@ -233,9 +242,8 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_inventory_texture(GLASS_TEXTURE)
             .set_inventory_display_name("Glass block"),
     )?;
-    // TODO: implement actual water
     let mut water_builder = BlockBuilder::new(WATER)
-        .add_block_group(BRITTLE)
+        .add_block_group(DEFAULT_LIQUID)
         .add_item_group("testonly_wet")
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
@@ -243,9 +251,12 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 .set_liquid_shape()
                 .set_needs_translucency(),
         )
+        .set_not_diggable()
         .set_allow_light_propagation(true)
         .set_inventory_texture(WATER_TEXTURE)
-        .set_inventory_display_name("Water block");
+        .set_inventory_display_name("Water block")
+        .set_liquid_flow(Some(Duration::from_millis(500)))
+        .set_matter_type(MatterType::Liquid);
     water_builder.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
         horizontal_speed: 1.5,
         vertical_speed: -0.5,
@@ -309,5 +320,49 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             })),
     )?;
 
+    // game_builder.inner.add_timer(
+    //     "testonly_spam",
+    //     TimerSettings {
+    //         interval: Duration::from_secs(5),
+    //         shards: 16,
+    //         spreading: 1.0,
+    //         block_types: vec![dirt.0, stone.0],
+    //         per_block_probability: 1.0,
+    //         ..Default::default()
+    //     },
+    //     TimerCallback::BulkUpdate(Box::new(TestSpamDirtStoneCallback {
+    //         dirt: dirt.0,
+    //         stone: stone.0,
+    //     })),
+    // );
+
     Ok(())
+}
+
+struct TestSpamDirtStoneCallback {
+    dirt: BlockTypeHandle,
+    stone: BlockTypeHandle,
+}
+impl BulkUpdateCallback for TestSpamDirtStoneCallback {
+    fn bulk_update_callback(
+        &self,
+        _chunk_coordinate: perovskite_core::coordinates::ChunkCoordinate,
+        _missed_timers: u64,
+        _game_state: &std::sync::Arc<perovskite_server::game_state::GameState>,
+        chunk: &mut perovskite_server::game_state::game_map::MapChunk,
+        _neighbors: Option<&perovskite_server::game_state::game_map::ChunkNeighbors>,
+    ) -> Result<()> {
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 0..16 {
+                    if chunk.get_block(ChunkOffset { x, y, z }) == self.dirt.id() {
+                        chunk.set_block(ChunkOffset { x, y, z }, self.stone, None);
+                    } else if chunk.get_block(ChunkOffset { x, y, z }) == self.stone.id() {
+                        chunk.set_block(ChunkOffset { x, y, z }, self.dirt, None);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }

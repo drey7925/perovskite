@@ -1,7 +1,9 @@
-use perovskite_core::chat::ChatMessage;
-use tokio::sync::broadcast;
+use std::sync::Arc;
 
-use super::event::EventInitiator;
+use perovskite_core::chat::ChatMessage;
+use tokio::{sync::broadcast, task::block_in_place};
+
+use super::{event::EventInitiator, GameState};
 use anyhow::Result;
 pub struct ChatState {
     pub(crate) broadcast_messages: broadcast::Sender<ChatMessage>,
@@ -16,10 +18,12 @@ impl ChatState {
     pub(crate) async fn handle_inbound_chat_message(
         &self,
         initiator: EventInitiator<'_>,
+        game_state: Arc<GameState>,
         message: &str,
     ) -> Result<()> {
         if message.starts_with('/') {
-            self.handle_slash_command(initiator, message).await
+            self.handle_slash_command(initiator, game_state, message)
+                .await
         } else {
             let origin = match initiator {
                 EventInitiator::Player(p) => format!("<{}>", p.player.name()),
@@ -37,10 +41,25 @@ impl ChatState {
     async fn handle_slash_command(
         &self,
         initiator: EventInitiator<'_>,
+        game_state: Arc<GameState>,
         message: &str,
     ) -> Result<()> {
         match initiator {
             EventInitiator::Player(p) => {
+                if message.starts_with("/mapdebug") {
+                    p.player
+                        .send_chat_message(ChatMessage::new("[server]", "Map debug: ")).await?;
+                    let shard_sizes = block_in_place(|| game_state.map().debug_shard_sizes());
+                    for (shard, size) in shard_sizes.iter().enumerate() {
+                        p.player.send_chat_message(
+                            ChatMessage::new(
+                                "[server]",
+                                format!("shard {} has {} chunks", shard, size),
+                            )
+                        ).await?;
+                    }
+                }
+
                 p.player
                     .send_chat_message(
                         ChatMessage::new(

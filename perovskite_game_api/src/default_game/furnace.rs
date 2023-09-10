@@ -324,7 +324,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
             per_block_probability: 1.0,
             ..Default::default()
         },
-        TimerCallback::InlineLocked(Box::new(timer_handler)),
+        TimerCallback::PerBlockLocked(Box::new(timer_handler)),
     );
     // testonly
     game_builder.smelting_fuels.register_recipe(RecipeImpl {

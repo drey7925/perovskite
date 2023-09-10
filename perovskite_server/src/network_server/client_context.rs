@@ -522,14 +522,14 @@ impl MapChunkSender {
         // Chunks are expensive to load and send, so we keep track of
         let mut sent_chunks = 0;
 
-        let skip = if (self.skip_if_near - position.position).magnitude2() > 256.0 {
+        let skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
             self.elements_to_skip
         } else {
             0
         };
 
         let start_time = Instant::now();
-        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate().skip(skip) {
+        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate().skip(0) {
             let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
@@ -549,9 +549,9 @@ impl MapChunkSender {
                 break;
             }
 
-            if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
+            //if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
                 self.context.game_state.map().bump_access_time(coord);
-            }
+            //}
             if self.chunk_tracker.is_loaded(coord) {
                 continue;
             }
@@ -592,6 +592,7 @@ impl MapChunkSender {
                 }
             }
         }
+        self.skip_if_near = position.position;
         self.chunk_limit_aimd.lock().increase();
         Ok(())
     }
@@ -701,7 +702,7 @@ impl BlockEventSender {
         for update in updates.values() {
             update_protos.push(proto::MapDeltaUpdate {
                 block_coord: Some(update.location.into()),
-                new_id: update.new_value.id().into(),
+                new_id: update.new_value.into(),
             })
         }
 
@@ -1007,6 +1008,7 @@ impl InboundWorker {
             Some(proto::stream_to_server::ClientMessage::ChatMessage(message)) => {
                 self.context.game_state.chat().handle_inbound_chat_message(
                     self.context.player_context.make_initiator(),
+                    self.context.game_state.clone(),
                     message,
                 ).await?;
             }

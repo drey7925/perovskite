@@ -9,6 +9,7 @@ use crate::game_state::{
     self, chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
 };
 use anyhow::Result;
+use cgmath::{vec3, InnerSpace};
 use futures::StreamExt;
 use parking_lot::Mutex;
 use perovskite_core::{
@@ -403,9 +404,15 @@ impl InboundContext {
     }
 
     fn enqueue_for_nprop(&self, coord: ChunkCoordinate) {
-        self.neighbor_propagators[coord.hash_u64() as usize % self.neighbor_propagators.len()].enqueue(coord);
+        self.neighbor_propagators[coord.hash_u64() as usize % self.neighbor_propagators.len()]
+            .enqueue(coord);
     }
- 
+    fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
+        self.mesh_workers[coord.hash_u64() as usize % self.mesh_workers.len()]
+            .enqueue(coord);
+    }
+
+
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
         match &chunk.chunk_coord {
             Some(coord) => {
@@ -530,24 +537,38 @@ impl InboundContext {
         {
             let _span = span!("remesh for delta");
             let mut scratchpad = Box::new([0; 48 * 48 * 48]);
+
+            // Only do inline meshing for chunks within 3 chunks of the current player location
+            // Otherwise, we tie up the network thread for too long
+            let current_position = self.client_state.last_position().position;
+            let eligible_for_inline = |coord: ChunkCoordinate| {
+                let base = vec3(
+                    coord.x as f64 * 16.0 + 8.0,
+                    coord.y as f64 * 16.0 + 8.0,
+                    coord.z as f64 * 16.0 + 8.0,
+                );
+                (base - current_position).magnitude2() < (48.0 * 48.0)
+            };
             for &coord in needs_remesh.iter() {
-                let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
-                propagate_neighbor_data(
-                    &self.client_state.block_types,
-                    &neighbors,
-                    &mut scratchpad,
-                )?;
+                if eligible_for_inline(coord) {
+                    let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
+                    propagate_neighbor_data(
+                        &self.client_state.block_types,
+                        &neighbors,
+                        &mut scratchpad,
+                    )?;
+                } else {
+                    self.enqueue_for_nprop(coord);
+                }
             }
             for coord in needs_remesh {
-                if !(self
-                    .client_state
+                if eligible_for_inline(coord) {
+                    self.client_state
                     .chunks
-                    .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?)
-                {
-                    log::warn!(
-                        "Failed to remesh {:?} because it wasn't in the main map",
-                        coord
-                    );
+                    .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?;    
+                }
+                else {
+                    self.enqueue_for_meshing(coord);
                 }
             }
         }

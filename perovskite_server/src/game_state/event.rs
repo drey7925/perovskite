@@ -18,6 +18,7 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use perovskite_core::coordinates::PlayerPositionUpdate;
 
+use super::blocks::BlockTypeManager;
 use super::{game_map::ServerGameMap, items::ItemManager, player::Player, GameState, client_ui::Popup};
 
 // Private, lightweight representation of who initiated an event.
@@ -93,6 +94,9 @@ impl<'a> HandlerContext<'a> {
     }
     pub fn game_map(&self) -> &ServerGameMap {
         self.game_state.map()
+    }
+    pub fn blocks(&self) -> &BlockTypeManager {
+        self.game_state.map.block_type_manager()
     }
     pub fn items(&self) -> &ItemManager {
         self.game_state.item_manager()

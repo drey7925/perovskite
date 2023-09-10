@@ -230,8 +230,9 @@ impl ClientBlockTypeManager {
 #[derive(Clone, Copy, Debug)]
 pub struct CubeExtents {
     vertices: [Vector3<f32>; 8],
-    /// Given in the same order as [`CubeFace`].
+    /// Given in the same order as the first six members of [`CubeFace`].
     neighbors: [(i8, i8, i8); 6],
+    force: [bool; 6],
 }
 impl CubeExtents {
     pub const fn new(x: (f32, f32), y: (f32, f32), z: (f32, f32)) -> Self {
@@ -254,6 +255,7 @@ impl CubeExtents {
                 (0, 0, 1),
                 (0, 0, -1),
             ],
+            force: [false; 6],
         }
     }
 
@@ -266,10 +268,53 @@ impl CubeExtents {
         for neighbor in &mut neighbors {
             *neighbor = rotate_y(*neighbor, variant);
         }
+        /*    XPlus,
+        XMinus,
+        YPlus,
+        YMinus,
+        ZPlus,
+        ZMinus, */
+        let force_swizzled = match variant % 4 {
+            0 => self.force,
+            // todo double-check these
+            // also look into how to encourage this to be vectorized as an AVX/SSE shuffle on x86
+            1 => [
+                self.force[5],
+                self.force[4],
+                self.force[2],
+                self.force[3],
+                self.force[0],
+                self.force[1],
+            ],
+            2 => [
+                self.force[1],
+                self.force[0],
+                self.force[2],
+                self.force[3],
+                self.force[5],
+                self.force[4],
+            ],
+            3 => [
+                self.force[4],
+                self.force[5],
+                self.force[2],
+                self.force[3],
+                self.force[1],
+                self.force[0],
+            ],
+            _ => unreachable!(),
+        };
+
         Self {
             vertices,
             neighbors,
+            force: force_swizzled,
         }
+    }
+
+    #[inline]
+    fn force_face(&self, i: usize) -> bool {
+        self.force[i]
     }
 }
 
@@ -534,7 +579,7 @@ impl BlockRenderer {
     ) where
         F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
     {
-        let e = get_cube_extents(render_info, variant);
+        let e = get_cube_extents(render_info, variant, chunk_data, offset);
 
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
@@ -554,25 +599,25 @@ impl BlockRenderer {
                 offset.z as i8 + n_z,
             )
                 .as_extended_index();
-            if suppress_face_when(
-                block,
-                self.block_defs
-                    .get_blockdef(chunk_data.block_ids()[neighbor_index]),
-            ) {
-                continue;
-            };
-
-            emit_cube_face_vk(
-                pos,
-                textures[i],
-                self.texture_atlas.dimensions(),
-                CUBE_EXTENTS_FACE_ORDER[i],
-                vtx,
-                idx,
-                e,
-                chunk_data.lightmap()[neighbor_index],
-                0.0
-            );
+            if e.force_face(i)
+                || !suppress_face_when(
+                    block,
+                    self.block_defs
+                        .get_blockdef(chunk_data.block_ids()[neighbor_index]),
+                )
+            {
+                emit_cube_face_vk(
+                    pos,
+                    textures[i],
+                    self.texture_atlas.dimensions(),
+                    CUBE_EXTENTS_FACE_ORDER[i],
+                    vtx,
+                    idx,
+                    e,
+                    chunk_data.lightmap()[neighbor_index],
+                    0.0,
+                );
+            }
         }
     }
 
@@ -601,7 +646,7 @@ impl BlockRenderer {
                 idx,
                 e,
                 chunk_data.lightmap()[offset.as_extended_index()],
-                plantlike_render_info.wave_effect_scale
+                plantlike_render_info.wave_effect_scale,
             );
         }
     }
@@ -639,7 +684,7 @@ impl BlockRenderer {
                 &mut idx,
                 e,
                 255,
-                0.0
+                0.0,
             );
         }
 
@@ -681,15 +726,83 @@ impl BlockRenderer {
 }
 
 const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5));
-fn get_cube_extents(render_info: &CubeRenderInfo, variant: u16) -> CubeExtents {
+#[inline]
+fn get_cube_extents(
+    render_info: &CubeRenderInfo,
+    variant: u16,
+    chunk_data: &ChunkDataView,
+    offset: ChunkOffset,
+) -> CubeExtents {
     match render_info.variant_effect() {
         blocks_proto::CubeVariantEffect::None => FULL_CUBE_EXTENTS,
         blocks_proto::CubeVariantEffect::RotateNesw => FULL_CUBE_EXTENTS.rotate_y(variant),
         blocks_proto::CubeVariantEffect::Liquid => {
-            let height = ((variant as f32) / 7.0).clamp(0.05, 1.0);
-            // todo actually skew it based on neighbors...
-            CubeExtents::new((-0.5, 0.5), (0.5 - height, 0.5), (-0.5, 0.5))
-        },
+            build_liquid_cube_extents(chunk_data, offset, variant)
+        }
+    }
+}
+
+fn build_liquid_cube_extents(
+    chunk_data: &ChunkDataView,
+    offset: ChunkOffset,
+    variant: u16,
+) -> CubeExtents {
+    let neighbor_variant = |offset: ChunkOffset, dx: i8, dz: i8| -> u16 {
+        let (x, z) = (offset.x as i8 + dx, offset.z as i8 + dz);
+        chunk_data.block_ids()[(x, offset.y as i8, z).as_extended_index()].variant()
+    };
+
+    fn variant_to_height(variant: u16) -> f32 {
+        let height = ((variant as f32) / 7.0).clamp(0.025, 1.0);
+        0.5 - height
+    }
+
+    let y_xn_zn = variant_to_height(
+        variant
+            .max(neighbor_variant(offset, -1, 0))
+            .max(neighbor_variant(offset, 0, -1))
+            .max(neighbor_variant(offset, -1, -1)),
+    );
+    let y_xn_zp = variant_to_height(
+        variant
+            .max(neighbor_variant(offset, -1, 0))
+            .max(neighbor_variant(offset, 0, 1))
+            .max(neighbor_variant(offset, -1, 1)),
+    );
+    let y_xp_zn = variant_to_height(
+        variant
+            .max(neighbor_variant(offset, 1, 0))
+            .max(neighbor_variant(offset, 0, -1))
+            .max(neighbor_variant(offset, 1, -1)),
+    );
+    let y_xp_zp = variant_to_height(
+        variant
+            .max(neighbor_variant(offset, 1, 0))
+            .max(neighbor_variant(offset, 0, 1))
+            .max(neighbor_variant(offset, 1, 1)),
+    );
+
+    CubeExtents {
+        vertices: [
+            vec3(-0.5, y_xn_zn, -0.5),
+            vec3(-0.5, y_xn_zp, 0.5),
+            vec3(-0.5, 0.5, -0.5),
+            vec3(-0.5, 0.5, 0.5),
+            vec3(0.5, y_xp_zn, -0.5),
+            vec3(0.5, y_xp_zp, 0.5),
+            vec3(0.5, 0.5, -0.5),
+            vec3(0.5, 0.5, 0.5),
+        ],
+        neighbors: [
+            (1, 0, 0),
+            (-1, 0, 0),
+            (0, 1, 0),
+            (0, -1, 0),
+            (0, 0, 1),
+            (0, 0, -1),
+        ],
+        // top face should be forced if it's not flush with the bottom of the next block
+        force: [false, false, variant < 7, false, false, false],
     }
 }
 
@@ -788,8 +901,8 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
 }
 
 const GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = [
-    0., 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
-    0.875, 0.9375,
+    0., 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75,
+    0.8125, 0.875, 0.9375,
 ];
 // TODO enable global brightness
 const BRIGHTNESS_TABLE: [f32; 16] = [
@@ -811,7 +924,7 @@ fn make_cgv(
         uv_texcoord: tex_uv.into(),
         brightness: BRIGHTNESS_TABLE[brightness_lower],
         global_brightness_contribution: GLOBAL_BRIGHTNESS_TABLE[brightness_upper],
-        wave_horizontal
+        wave_horizontal,
     }
 }
 

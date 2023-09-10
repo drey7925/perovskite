@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use perovskite_core::{
-    constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE, items::default_item_interaction_rules},
+    constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE, items::default_item_interaction_rules, block_groups::{DEFAULT_LIQUID, DEFAULT_GAS}},
     protocol::{
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
@@ -115,7 +115,7 @@ impl GameBuilder {
             render_info: Some(RenderInfo::Empty(EMPTY)),
             physics_info: Some(PhysicsInfo::Air(EMPTY)),
             base_dig_time: 1.0,
-            groups: vec![],
+            groups: vec![DEFAULT_GAS.to_string()],
             wear_multiplier: 1.0,
             light_emission: 0,
             allow_light_propagation: true,

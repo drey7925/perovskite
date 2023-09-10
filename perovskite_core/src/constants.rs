@@ -17,10 +17,13 @@
 /// Names for well-known block groups. By using these, different plugins
 /// can interoperate effectively.
 pub mod block_groups {
-    /// Block group for all solid blocks, e.g. dirt, glass, sand
+    /// Block group for all solid blocks, e.g. dirt, glass, sand, furniture, furnaces
+    /// Most tools won't select/point at a block unless it has this group.
     pub const DEFAULT_SOLID: &str = "default:solid";
     /// Block group for all liquid/fluid blocks, e.g. water, lava
     pub const DEFAULT_LIQUID: &str = "default:liquid";
+    /// Block group for all gas-like blocks (e.g. air, clouds)
+    pub const DEFAULT_GAS: &str = "default:gas";
 
     /// Blocks that cannot be dug by hand or using a generic non-tool item
     pub const TOOL_REQUIRED: &str = "default:tool_required";
