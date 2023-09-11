@@ -19,7 +19,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use perovskite_core::{
     constants::{
-        block_groups::{self, DEFAULT_SOLID, DEFAULT_LIQUID, DEFAULT_GAS},
+        block_groups::{self, DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID},
         items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
@@ -680,26 +680,22 @@ impl BulkUpdateCallback for LiquidPropagator {
                         // liquid sources are invariant.
                         continue;
                     }
-                    if self.air.id().equals_ignore_variant(block)
-                        || self.this_liquid.id().equals_ignore_variant(block.into())
-                    {
-                        let mut new_variant = match block.variant() {
+                    let is_air = self.air.id().equals_ignore_variant(block);
+                    let is_same_liquid = self.this_liquid.id().equals_ignore_variant(block.into());
+                    if is_air || is_same_liquid {
+                        // Apply the decay rule first
+                        let variant_from_decay = match block.variant() {
+                            // Air stays air, regardless of what variant it has
+                            _ if is_air => -1,
                             // By default, decay one liquid level.
                             // Zero becomes air
                             0 => -1,
                             // Source stays source
-                            0xfff => 0xfff,
+                            0xfff if is_same_liquid => 0xfff,
                             // and flowing water drops by a level
                             x => (x.saturating_sub(1)).min(7) as i32,
                         };
-                        if coord
-                            .try_delta(0, 1, 0)
-                            .and_then(|x| neighbors.get_block(x))
-                            .is_some_and(|x| x.equals_ignore_variant(self.this_liquid.id()))
-                        {
-                            // If there's liquid above, let it flow into here.
-                            new_variant = 7;
-                        }
+                        let mut variant_from_flow = -1;
                         for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)] {
                             if let Some(neighbor_liquid) = coord
                                 .try_delta(dx, dy, dz)
@@ -712,23 +708,39 @@ impl BulkUpdateCallback for LiquidPropagator {
                                     .equals_ignore_variant(neighbor_liquid.into())
                                 {
                                     // and the material below it causes it to spread...
-                                    if let Some(neighbor_below) = coord
+                                    if coord
                                         .try_delta(dx, dy - 1, dz)
                                         .and_then(|x| neighbors.get_block(x))
+                                        .is_some_and(|x| self.can_flow_laterally_over(x))
                                     {
-                                        if self.can_flow_laterally_over(neighbor_below) {
-                                            new_variant = new_variant
-                                                .max((neighbor_liquid.variant() as i32) - 1)
-                                                .min(7);
-                                        }
-                                        if neighbor_liquid.variant() == 0xfff {
-                                            // Let a source spread out one block, even if the source is not over a solid surface
-                                            new_variant = new_variant.max(0);
-                                        }
+                                        variant_from_flow = variant_from_flow
+                                            .max((neighbor_liquid.variant() as i32) - 1)
+                                            .min(7);
                                     }
                                 }
                             }
                         }
+
+                        if !coord
+                            .try_delta(0, -1, 0)
+                            .and_then(|x| neighbors.get_block(x))
+                            .is_some_and(|x| self.can_flow_laterally_over(x))
+                        {
+                            // If this block is draining directly down, clamp its variant (from flow) to 0.
+                            variant_from_flow = variant_from_flow.min(0);
+                        }
+
+                        if coord
+                            .try_delta(0, 1, 0)
+                            .and_then(|x| neighbors.get_block(x))
+                            .is_some_and(|x| x.equals_ignore_variant(self.this_liquid.id()))
+                        {
+                            // If there's liquid above, let it flow into here. This happens after clamping-to-zero (on downflow)
+                            // and overrides it.
+                            variant_from_flow = 7;
+                        }
+
+                        let new_variant = variant_from_flow.max(variant_from_decay);
 
                         let new_block = if new_variant < 0 {
                             self.air
@@ -751,7 +763,7 @@ impl LiquidPropagator {
             // if it's air below, don't let it flow laterally
             false
         } else if x.equals_ignore_variant(self.this_liquid.id()) {
-            // if it's a flowing liquid below, don't let it flow laterally unless it's a source
+            // if it's the same liquid below, don't let it flow laterally unless it's a source
             x.variant() == 0xfff
         } else {
             // It's a different block

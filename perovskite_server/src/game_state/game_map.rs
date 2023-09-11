@@ -720,10 +720,13 @@ impl ServerGameMap {
         Ok(result)
     }
 
-    pub(crate) fn bump_access_time(&self, coord: ChunkCoordinate) {
+    pub(crate) fn bump_chunk(&self, coord: ChunkCoordinate) -> bool {
         let _span = span!("bump_access_time");
         if let Some(chunk) = self.live_chunks[shard_id(coord)].read().chunks.get(&coord) {
             chunk.bump_access_time();
+            true
+        } else {
+            false
         }
     }
 
@@ -1893,6 +1896,7 @@ impl GameMapTimer {
                             TimerCallback::BulkUpdateWithNeighbors(_) => {
                                 self.run_bulk_handler(
                                     &game_state,
+                                    holder,
                                     &mut chunk,
                                     coord,
                                     Some(&chunk_neighbors),
@@ -2022,7 +2026,7 @@ impl GameMapTimer {
                     self.run_per_block_handler(game_state, &mut chunk, holder, block_types, coord)?;
                 }
                 TimerCallback::BulkUpdate(_) => {
-                    self.run_bulk_handler(game_state, &mut chunk, coord, None)?;
+                    self.run_bulk_handler(game_state, holder, &mut chunk, coord, None)?;
                 }
                 TimerCallback::BulkUpdateWithNeighbors(_) => {
                     unreachable!()
@@ -2130,6 +2134,7 @@ impl GameMapTimer {
     fn run_bulk_handler(
         &self,
         game_state: &Arc<GameState>,
+        holder: &MapChunkHolder,
         chunk: &mut MapChunkInnerGuard<'_>,
         coord: ChunkCoordinate,
         neighbor_data: Option<&ChunkNeighbors>,
@@ -2154,8 +2159,19 @@ impl GameMapTimer {
             }
             _ => unreachable!(),
         };
+        let mut seen_blocks = FxHashSet::default();
         for i in 0..4096 {
-            if old_block_ids[i] != chunk.block_ids[i] {
+            let old_block_id = BlockId::from(old_block_ids[i]);
+            let new_block_id = BlockId::from(chunk.block_ids[i]);
+            if old_block_id != new_block_id {
+                if seen_blocks.insert(new_block_id.base_id()) {
+                    // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
+                    // on x86_64.
+                    // Only insert unique block ids (still need to test this optimization)
+                    // TODO fork the bloom filter library and extend it to support constant lengths
+                    holder.block_bloom_filter
+                        .insert(new_block_id.base_id() as u64);
+                }
                 chunk.dirty = true;
                 game_state.map().broadcast_block_change(BlockUpdate {
                     location: coord.with_offset(ChunkOffset::from_index(i)),

@@ -2447,6 +2447,7 @@ dependencies = [
  "futures",
  "hex",
  "image",
+ "lazy_static",
  "line_drawing",
  "log",
  "microbench",

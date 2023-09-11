@@ -97,7 +97,7 @@ message CubeRenderInfo {
 message PlantLikeRenderInfo {
   // The texture for this block.
   perovskite.protocol.render.TextureReference tex = 1;
-  // (not yet implemented) how much the top of the block should wave over time
+  // how much the top of the block should wave over time
   // This will be the amplitude, given in units of 1.0 = entire width of block.
   float wave_effect_scale = 2;
 }

@@ -337,15 +337,17 @@ impl ClientChunk {
         fn overlaps(min1: f32, max1: f32, min2: f32, max2: f32) -> bool {
             min1 <= max2 && min2 <= max1
         }
+        // 16.5 since some features are offset by around up to 1 block, after accounting for reasonable waving effects, 0.5 block offset
+        // in the coordinates, etc
         const CORNERS: [Vector4<f32>; 8] = [
             vec4(0., 0., 0., 1.),
-            vec4(16., 0., 0., 1.),
-            vec4(0., -16., 0., 1.),
-            vec4(16., -16., 0., 1.),
-            vec4(0., 0., 16., 1.),
-            vec4(16., 0., 16., 1.),
-            vec4(0., -16., 16., 1.),
-            vec4(16., -16., 16., 1.),
+            vec4(17.0, 0., 0., 1.),
+            vec4(0., -17.0, 0., 1.),
+            vec4(17.0, -17.0, 0., 1.),
+            vec4(0., 0., 17.0, 1.),
+            vec4(17.0, 0., 17.0, 1.),
+            vec4(0., -17.0, 17.0, 1.),
+            vec4(17.0, -17.0, 17.0, 1.),
         ];
         let mut ndc_min = vec4(f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut ndc_max = vec4(

@@ -92,7 +92,7 @@ fn register_superuser_pickaxe(
                 InteractionRule {
                     block_group: vec![DEFAULT_SOLID.to_string()],
                     tool_wear: 1,
-                    dig_behavior: Some(DigBehavior::ScaledTime(2.0)),
+                    dig_behavior: Some(DigBehavior::ScaledTime(0.25)),
                 },
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),

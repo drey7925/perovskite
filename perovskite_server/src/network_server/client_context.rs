@@ -548,11 +548,14 @@ impl MapChunkSender {
                 );
                 break;
             }
-
-            //if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
-                self.context.game_state.map().bump_access_time(coord);
-            //}
-            if self.chunk_tracker.is_loaded(coord) {
+            let mut chunk_needs_reload = false;
+            if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
+                if !block_in_place(|| self.context.game_state.map().bump_chunk(coord)) {
+                    // chunk wasn't in the map, so we need to reload it
+                    chunk_needs_reload = true;
+                }
+            }
+            if self.chunk_tracker.is_loaded(coord) && !chunk_needs_reload {
                 continue;
             }
             // We load chunks as long as they're close enough and the map system
@@ -563,6 +566,7 @@ impl MapChunkSender {
                     || !self.context.game_state.map().in_pushback());
             if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
                 self.elements_to_skip = i;
+                break;
             }
             let chunk_data = tokio::task::block_in_place(|| {
                 self.context
