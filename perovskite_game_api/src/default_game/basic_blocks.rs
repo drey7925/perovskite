@@ -15,12 +15,12 @@
 use std::{sync::atomic::AtomicU32, time::Duration};
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder, MatterType},
+    blocks::{BlockBuilder, CubeAppearanceBuilder, MatterType, PlantLikeAppearanceBuilder},
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
 use perovskite_core::{
-    constants::block_groups::{self, TOOL_REQUIRED, DEFAULT_LIQUID},
+    constants::block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
     coordinates::ChunkOffset,
     protocol::{
         self,
@@ -29,9 +29,9 @@ use perovskite_core::{
     },
 };
 use perovskite_server::game_state::{
-    blocks::{BlockTypeHandle, ExtDataHandling},
+    blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
     game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
-    items::ItemStack,
+    items::{BlockInteractionHandler, ItemStack},
 };
 
 use super::{
@@ -59,6 +59,9 @@ pub const TORCH: BlockName = BlockName("default:torch");
 /// Stability note: not stable (liquids are TBD)
 pub const WATER: BlockName = BlockName("default:water");
 
+/// test only, no crafting recipe, not finalized
+pub const TNT: BlockName = BlockName("default:tnt");
+
 const DIRT_TEXTURE: TextureName = TextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: TextureName = TextureName("default:dirt_grass_side");
 const GRASS_TOP_TEXTURE: TextureName = TextureName("default:grass_top");
@@ -68,6 +71,7 @@ const WATER_TEXTURE: TextureName = TextureName("default:water");
 // TODO real chest texture
 const CHEST_TEXTURE: TextureName = TextureName("default:chest");
 const TORCH_TEXTURE: TextureName = TextureName("default:torch");
+const TNT_TEXTURE: TextureName = TextureName("default:tnt");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -143,6 +147,7 @@ pub mod ores {
 
 pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     register_core_blocks(&mut game_builder.inner)?;
+    register_tnt(&mut game_builder.inner)?;
     ores::register_ores(game_builder)?;
 
     game_builder
@@ -170,6 +175,46 @@ pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Re
             shapeless: false,
             metadata: (),
         });
+
+    Ok(())
+}
+
+fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
+    include_texture_bytes!(builder, TNT_TEXTURE, "textures/tnt.png")?;
+    let air = builder.air_block;
+    BlockBuilder::new(TNT)
+        .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
+        .set_inventory_texture(TNT_TEXTURE)
+        .set_modifier(Box::new(move |block_type| {
+            block_type.tap_handler_full = Some(Box::new(move |ctx, coord, tool| {
+                if tool.is_some_and(|tool| tool.proto.item_name == "default:superuser_pickaxe") {
+                    return Ok(Default::default());
+                }
+
+                for i in -3..=3 {
+                    for j in -3..=3 {
+                        for k in -3..=3 {
+                            if let Some(neighbor) = coord.try_delta(i, j, k) {
+                                ctx.game_map().set_block(neighbor, air, None)?;
+                            }
+                        }
+                    }
+                }
+
+                Ok(BlockInteractionResult {
+                    item_stacks: vec![ItemStack {
+                        proto: protocol::items::ItemStack {
+                            item_name: "default:tnt".to_string(),
+                            quantity: 2,
+                            current_wear: 0,
+                            quantity_type: Some(QuantityType::Stack(256)),
+                        },
+                    }],
+                    tool_wear: 0,
+                })
+            }))
+        }))
+        .build_and_deploy_into(builder)?;
 
     Ok(())
 }

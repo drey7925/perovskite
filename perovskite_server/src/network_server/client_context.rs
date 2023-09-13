@@ -657,6 +657,8 @@ impl BlockEventSender {
         &mut self,
         update: Result<BlockUpdate, broadcast::error::RecvError>,
     ) -> Result<()> {
+        // Sleep 10 msec to allow some more updates to be aggregated
+        tokio::time::sleep(Duration::from_millis(10)).await;
         let update = match update {
             Err(broadcast::error::RecvError::Lagged(num_pending)) => {
                 tracing::warn!(
