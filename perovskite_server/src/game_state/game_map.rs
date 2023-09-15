@@ -1904,6 +1904,9 @@ impl GameMapTimer {
                             }
                             _ => unreachable!(),
                         }
+                        if chunk.dirty {
+                            writeback_permit.take().unwrap().send(WritebackReq::Chunk(coord));
+                        }
                     }
                 }
             }
@@ -1922,14 +1925,7 @@ impl GameMapTimer {
         block_types: &FxHashSet<u32>,
     ) -> Result<()> {
         match &self.callback {
-            TimerCallback::PerBlockLocked(_) => self.do_tick_fast_lock_path(
-                coarse_shard,
-                fine_shard,
-                fine_shards_per_coarse,
-                game_state,
-                block_types,
-            ),
-            TimerCallback::BulkUpdate(_) => self.do_tick_fast_lock_path(
+            TimerCallback::PerBlockLocked(_) | TimerCallback::BulkUpdate(_) => self.do_tick_fast_lock_path(
                 coarse_shard,
                 fine_shard,
                 fine_shards_per_coarse,

@@ -50,6 +50,7 @@ pub(crate) struct EguiUi {
     stack_carried_by_mouse_offset: (f32, f32),
 
     chat_message_input: String,
+    chat_scroll_counter: usize
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -73,6 +74,7 @@ impl EguiUi {
             stack_carried_by_mouse_offset: (0., 0.),
 
             chat_message_input: String::new(),
+            chat_scroll_counter: 0
         }
     }
     pub(crate) fn wants_user_events(&self) -> bool {
@@ -547,7 +549,10 @@ impl EguiUi {
                                 ui.add(egui::Label::new(formatted_message.1).wrap(true));
                             });
                         }
-                        ui.scroll_to_cursor(Some(egui::Align::Max));
+                        if self.chat_scroll_counter != messages.len() {
+                            ui.scroll_to_cursor(Some(egui::Align::Max));
+                            self.chat_scroll_counter = messages.len();
+                        }
                     });
                     let editor = ui.add(
                         egui::TextEdit::singleline(&mut self.chat_message_input)

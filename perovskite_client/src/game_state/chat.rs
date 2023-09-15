@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use perovskite_core::chat::ChatMessage;
 
 pub(crate) struct ChatState {
