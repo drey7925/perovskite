@@ -355,7 +355,7 @@ impl ChunkTracker {
             // present in the filter
             loaded_chunks_bloom: cbloom::Filter::new(
                 65536,
-                (LOAD_LAZY_DISTANCE as usize).pow(3) / 2,
+                ((LOAD_LAZY_DISTANCE as usize).pow(3) / 2).max(1),
             ),
             loaded_chunks: RwLock::new(FxHashSet::default()),
         }

@@ -30,7 +30,7 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
-    game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
+    game_map::{BulkUpdateCallback, TimerCallback, TimerSettings, TimerState},
     items::{BlockInteractionHandler, ItemStack},
 };
 
@@ -392,7 +392,7 @@ impl BulkUpdateCallback for TestSpamDirtStoneCallback {
     fn bulk_update_callback(
         &self,
         _chunk_coordinate: perovskite_core::coordinates::ChunkCoordinate,
-        _missed_timers: u64,
+        _staet: &TimerState,
         _game_state: &std::sync::Arc<perovskite_server::game_state::GameState>,
         chunk: &mut perovskite_server::game_state::game_map::MapChunk,
         _neighbors: Option<&perovskite_server::game_state::game_map::ChunkNeighbors>,

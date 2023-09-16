@@ -45,7 +45,7 @@ use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
     game_map::{
-        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings,
+        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings, TimerState,
     },
     items::{InteractionRuleExt, Item, ItemStack},
     GameState,
@@ -486,6 +486,7 @@ impl BlockBuilder {
                     block_types: vec![block_handle],
                     per_block_probability: 1.0,
                     ignore_block_type_presence_check: true,
+                    idle_chunk_after_unchanged: true,
                     ..Default::default()
                 },
                 TimerCallback::BulkUpdateWithNeighbors(Box::new(LiquidPropagator {
@@ -662,7 +663,7 @@ impl BulkUpdateCallback for LiquidPropagator {
     fn bulk_update_callback(
         &self,
         chunk_coordinate: ChunkCoordinate,
-        _missed_timers: u64,
+        _timer_state: &TimerState,
         _game_state: &Arc<GameState>,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
@@ -747,8 +748,9 @@ impl BulkUpdateCallback for LiquidPropagator {
                         } else {
                             self.this_liquid.with_variant(new_variant as u16).unwrap()
                         };
-
-                        chunk.set_block(coord.offset(), new_block, None);
+                        if block != new_block.id() {
+                            chunk.set_block(coord.offset(), new_block, None);
+                        }
                     }
                 }
             }

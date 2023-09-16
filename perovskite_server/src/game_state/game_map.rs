@@ -298,15 +298,20 @@ impl MapChunk {
         block: BlockTypeHandle,
         extended_data: Option<ExtendedData>,
     ) {
+        let old_block = BlockId(self.block_ids[coordinate.as_index()]);
+        let extended_data_was_some = extended_data.is_some();
         self.block_ids[coordinate.as_index()] = block.id().into();
-        if let Some(extended_data) = extended_data {
+        let old_ext_data = if let Some(extended_data) = extended_data {
             self.extended_data
-                .insert(coordinate.as_index().try_into().unwrap(), extended_data);
+                .insert(coordinate.as_index().try_into().unwrap(), extended_data)
         } else {
             self.extended_data
-                .remove(&coordinate.as_index().try_into().unwrap());
+                .remove(&coordinate.as_index().try_into().unwrap())
+        };
+
+        if old_block != block.id() || extended_data_was_some || old_ext_data.is_some() {
+            self.dirty = true;
         }
-        self.dirty = true;
     }
     #[inline]
     pub fn get_block(&self, coordinate: ChunkOffset) -> BlockId {
@@ -442,6 +447,7 @@ struct MapChunkHolder {
     chunk: Mutex<HolderState>,
     condition: Condvar,
     last_accessed: Mutex<Instant>,
+    last_written: Mutex<Instant>,
     block_bloom_filter: cbloom::Filter,
 }
 impl MapChunkHolder {
@@ -450,6 +456,7 @@ impl MapChunkHolder {
             chunk: Mutex::new(HolderState::Empty),
             condition: Condvar::new(),
             last_accessed: Mutex::new(Instant::now()),
+            last_written: Mutex::new(Instant::now()),
             // TODO: make bloom filter configurable or adaptive
             // For now, 128 bytes is a reasonable overhead (a chunk contains 4096 u32s which is 16 KiB already + extended data)
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
@@ -594,6 +601,7 @@ impl<'a> MapChunkOuterGuard<'a> {
     // Naming note - _inner because ServerGameMap first does some error checking and
     // monitoring/stats before calling this.
     fn write_back_inner(mut self) {
+        *self.last_written.lock() = Instant::now();
         self.writeback_permit
             .take()
             .unwrap()
@@ -607,6 +615,7 @@ impl<'a> Drop for MapChunkOuterGuard<'a> {
             // Do so now.
             // If the permit was already taken, we don't need to do anything.
             if let Some(permit) = self.writeback_permit.take() {
+                *self.last_written.lock() = Instant::now();
                 permit.send(WritebackReq::Chunk(self.coord));
             }
         }
@@ -802,6 +811,7 @@ impl ServerGameMap {
         };
         let new_id = block.id();
         chunk.block_ids[coord.offset().as_index()] = new_id.into();
+
         chunk.dirty = true;
         let light_change = self
             .block_type_manager()
@@ -870,7 +880,7 @@ impl ServerGameMap {
         coord: BlockCoordinate,
         predicate: F,
         block: T,
-        extended_data: Option<ExtendedData>,
+        new_extended_data: Option<ExtendedData>,
     ) -> Result<(CasOutcome, BlockTypeHandle, Option<ExtendedData>)>
     where
         F: FnOnce(BlockTypeHandle, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
@@ -882,8 +892,8 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get()?;
 
-        let old_id = chunk.block_ids[coord.offset().as_index()];
-        let old_block = self.block_type_manager().make_blockref(old_id.into())?;
+        let old_id = BlockId(chunk.block_ids[coord.offset().as_index()]);
+        let old_block = self.block_type_manager().make_blockref(old_id)?;
         if !predicate(
             old_block,
             chunk
@@ -893,7 +903,8 @@ impl ServerGameMap {
         )? {
             return Ok((CasOutcome::Mismatch, old_block, None));
         }
-        let old_data = match extended_data {
+        let new_data_was_some = new_extended_data.is_some();
+        let old_data = match new_extended_data {
             Some(new_data) => chunk
                 .extended_data
                 .insert(coord.offset().as_index().try_into().unwrap(), new_data),
@@ -904,7 +915,9 @@ impl ServerGameMap {
 
         let new_id = block.id();
         chunk.block_ids[coord.offset().as_index()] = new_id.into();
-        chunk.dirty = true;
+        if old_id != new_id || old_data.is_some() || new_data_was_some {
+            chunk.dirty = true;
+        }
 
         let light_change = self
             .block_type_manager()
@@ -1646,21 +1659,29 @@ impl Drop for GameMapWriteback {
     }
 }
 
+pub struct TimerState {
+    pub prev_tick_time: Instant,
+    pub current_tick_time: Instant,
+}
+
+struct ShardState {
+    timer_state: TimerState,
+}
+
 pub trait TimerInlineCallback: Send + Sync {
     /// Called once for each block on the map that matched the block type configured for the timer
     /// This may be invoked concurrenty for multiple blocks and multiple chunks.
     ///
     /// Args:
     /// * coordinate: Location of the block this is being called for
-    /// * missed_timers: The number of timer cycles to run. This may be greater than 0 if chunks are unloaded
-    ///     or the game engine is overloaded. *Currently unimplemented, always 0*.
+    /// * state: The ShardState for this run of the timer.
     /// * block_type: Mutable reference to the block type in the block.
     /// * data: Mutable reference to the extended data in the block.
     /// * ctx: Context for the callback
     fn inline_callback(
         &self,
         coordinate: BlockCoordinate,
-        missed_timers: u64,
+        timer_state: &TimerState,
         block_type: &mut BlockTypeHandle,
         data: &mut ExtendedDataHolder,
         ctx: &InlineContext,
@@ -1669,7 +1690,7 @@ pub trait TimerInlineCallback: Send + Sync {
 
 pub struct ChunkNeighbors {
     center: BlockCoordinate,
-    bitmap: u32,
+    presence_bitmap: u32,
     blocks: Box<[u32; 48 * 48 * 48]>,
 }
 impl ChunkNeighbors {
@@ -1688,7 +1709,7 @@ impl ChunkNeighbors {
         let cx = dx >> 4;
         let cz = dz >> 4;
         let cy = dy >> 4;
-        if self.bitmap & (1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1))) == 0 {
+        if self.presence_bitmap & (1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1))) == 0 {
             return None;
         }
         let index = ((dx + 16) * 48 * 48) as usize + (dz + 16) as usize * 48 + (dy + 16) as usize;
@@ -1705,7 +1726,7 @@ pub trait BulkUpdateCallback: Send + Sync {
     fn bulk_update_callback(
         &self,
         chunk_coordinate: ChunkCoordinate,
-        missed_timers: u64,
+        timer_state: &TimerState,
         game_state: &Arc<GameState>,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
@@ -1753,6 +1774,11 @@ pub struct TimerSettings {
     ///
     /// **Warning:** Ignored for handlers that act on entire chunks (e.g. BulkUpdate or BulkUpdateWithNeighbors)
     pub per_block_probability: f64,
+    /// For *bulk handlers only*, if the bulk handler leaves a chunk unchanged, do not run the bulk handler for that chunk
+    /// again until the next time the chunk is modified by external means.
+    ///
+    /// For bulk handlers with neighbors, the handler will run if the chunk or any neighbors have been modified.
+    pub idle_chunk_after_unchanged: bool,
     pub _ne: NonExhaustive,
 }
 impl Default for TimerSettings {
@@ -1764,6 +1790,7 @@ impl Default for TimerSettings {
             block_types: Default::default(),
             ignore_block_type_presence_check: false,
             per_block_probability: 1.0,
+            idle_chunk_after_unchanged: false,
             _ne: NonExhaustive(()),
         }
     }
@@ -1841,11 +1868,21 @@ impl GameMapTimer {
 
         let mut interval = tokio::time::interval_at(start_time.into(), self.settings.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut shard_state = ShardState {
+            timer_state: TimerState {
+                prev_tick_time: start_time,
+                current_tick_time: Instant::now(),
+            },
+        };
         // Todo detect skipped ticks and adjust accordingly
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 _ = interval.tick() => {
-                    tokio::task::block_in_place(|| self.delegate_locking_path(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types))?;
+                    let current_tick_start = Instant::now();
+                    shard_state.timer_state.current_tick_time = current_tick_start;
+
+                    tokio::task::block_in_place(|| self.delegate_locking_path(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types, &shard_state))?;
+                    shard_state.timer_state.prev_tick_time = current_tick_start;
                 }
             }
         }
@@ -1858,6 +1895,7 @@ impl GameMapTimer {
         fine_shard: usize,
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
+        state: &ShardState,
     ) -> Result<()> {
         let _span = span!("timer tick with neighbors");
         let mut writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
@@ -1882,13 +1920,26 @@ impl GameMapTimer {
                 .then_with(|| a.y.cmp(&b.y))
         });
         plot!("timer tick coords", coords.len() as f64);
+        let mut neighbor_buffer = ChunkNeighbors {
+            center: BlockCoordinate::new(0, 0, 0),
+            presence_bitmap: 0,
+            blocks: Box::new([0; 48 * 48 * 48]),
+        };
+
         for coord in coords.into_iter() {
             if writeback_permit.is_none() {
                 writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
             }
+            // this does the locking twice, with the benefit that it elides all of the memory copying
+            // associated with build_neighbors if we don't end up actually using that neighbor data
+            let (matches, latest_update) =
+                self.build_neighbors(&mut neighbor_buffer, coord, &game_state.map(), false)?;
+            let should_run = (!self.settings.idle_chunk_after_unchanged
+                || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
+                && matches;
 
-            let (chunk_neighbors, matches) = self.build_neighbors(coord, &game_state.map)?;
-            if matches {
+            if should_run {
+                let (_, _) = self.build_neighbors(&mut neighbor_buffer, coord, &game_state.map, true)?;
                 let shard = game_state.map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
                     if let Some(mut chunk) = holder.try_get()? {
@@ -1899,13 +1950,22 @@ impl GameMapTimer {
                                     holder,
                                     &mut chunk,
                                     coord,
-                                    Some(&chunk_neighbors),
+                                    Some(&neighbor_buffer),
+                                    state,
                                 )?;
                             }
                             _ => unreachable!(),
                         }
-                        if chunk.dirty {
-                            writeback_permit.take().unwrap().send(WritebackReq::Chunk(coord));
+                        if chunk.dirty {                            
+                            // This has a small missed optimization - until the chunk is written back, this
+                            // will keep firing. If further optimizations is needed, track whether
+                            // *this* bulk updater modified the chunk, and use that for setting
+                            // the last_written timestamp
+                            *holder.last_written.lock() = state.timer_state.current_tick_time;
+                            writeback_permit
+                                .take()
+                                .unwrap()
+                                .send(WritebackReq::Chunk(coord));
                         }
                     }
                 }
@@ -1923,20 +1983,24 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         block_types: &FxHashSet<u32>,
+        state: &ShardState,
     ) -> Result<()> {
         match &self.callback {
-            TimerCallback::PerBlockLocked(_) | TimerCallback::BulkUpdate(_) => self.do_tick_fast_lock_path(
-                coarse_shard,
-                fine_shard,
-                fine_shards_per_coarse,
-                game_state,
-                block_types,
-            ),
+            TimerCallback::PerBlockLocked(_) | TimerCallback::BulkUpdate(_) => self
+                .do_tick_fast_lock_path(
+                    coarse_shard,
+                    fine_shard,
+                    fine_shards_per_coarse,
+                    game_state,
+                    block_types,
+                    state,
+                ),
             TimerCallback::BulkUpdateWithNeighbors(_) => self.do_tick_locking_with_neighbors(
                 coarse_shard,
                 fine_shard,
                 fine_shards_per_coarse,
                 game_state,
+                state,
             ),
         }
     }
@@ -1949,6 +2013,7 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         block_types: &FxHashSet<u32>,
+        state: &ShardState,
     ) -> Result<()> {
         let _span = span!("timer tick fast");
         let mut writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
@@ -1999,6 +2064,7 @@ impl GameMapTimer {
                         &game_state,
                         block_types,
                         &mut writeback_permit,
+                        state,
                     )?;
                 }
             }
@@ -2013,22 +2079,40 @@ impl GameMapTimer {
         game_state: &Arc<GameState>,
         block_types: &FxHashSet<u32>,
         writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
+        state: &ShardState,
     ) -> Result<()> {
         assert!(writeback_permit.is_some());
 
         if let Some(mut chunk) = holder.try_get()? {
             match &self.callback {
                 TimerCallback::PerBlockLocked(_) => {
-                    self.run_per_block_handler(game_state, &mut chunk, holder, block_types, coord)?;
+                    self.run_per_block_handler(
+                        game_state,
+                        &mut chunk,
+                        holder,
+                        block_types,
+                        coord,
+                        state,
+                    )?;
                 }
                 TimerCallback::BulkUpdate(_) => {
-                    self.run_bulk_handler(game_state, holder, &mut chunk, coord, None)?;
+                    let chunk_update = *holder.last_written.lock();
+                    if !self.settings.idle_chunk_after_unchanged
+                        || chunk_update >= state.timer_state.prev_tick_time
+                    {
+                        self.run_bulk_handler(game_state, holder, &mut chunk, coord, None, state)?;
+                    }
                 }
                 TimerCallback::BulkUpdateWithNeighbors(_) => {
                     unreachable!()
                 }
             }
             if chunk.dirty {
+                // This has a small missed optimization - until the chunk is written back, this
+                // will keep firing. If further optimizations is needed, track whether
+                // *this* bulk updater modified the chunk, and use that for setting
+                // the last_written timestamp
+                *holder.last_written.lock() = state.timer_state.current_tick_time;
                 writeback_permit
                     .take()
                     .unwrap()
@@ -2046,6 +2130,7 @@ impl GameMapTimer {
         holder: &MapChunkHolder,
         block_types: &HashSet<u32, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>,
         coord: ChunkCoordinate,
+        state: &ShardState,
     ) -> Result<(), Error> {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
@@ -2063,6 +2148,7 @@ impl GameMapTimer {
                     map,
                     coord,
                     game_state,
+                    state,
                 ) {
                     Ok(()) => {
                         // continue
@@ -2083,6 +2169,7 @@ impl GameMapTimer {
         map: &ServerGameMap,
         coord: ChunkCoordinate,
         game_state: &Arc<GameState>,
+        state: &ShardState,
     ) -> Result<()> {
         match &self.callback {
             TimerCallback::PerBlockLocked(cb) => {
@@ -2102,7 +2189,7 @@ impl GameMapTimer {
                         run_handler!(
                             || cb.inline_callback(
                                 coord.with_offset(offset),
-                                0,
+                                &state.timer_state,
                                 block_id,
                                 extended_data,
                                 &ctx
@@ -2134,13 +2221,20 @@ impl GameMapTimer {
         chunk: &mut MapChunkInnerGuard<'_>,
         coord: ChunkCoordinate,
         neighbor_data: Option<&ChunkNeighbors>,
+        state: &ShardState,
     ) -> Result<()> {
         let old_block_ids = chunk.block_ids.clone();
         match &self.callback {
             TimerCallback::BulkUpdate(cb) => {
                 assert!(neighbor_data.is_none());
                 run_handler!(
-                    || cb.bulk_update_callback(coord, 0, game_state, chunk, neighbor_data),
+                    || cb.bulk_update_callback(
+                        coord,
+                        &state.timer_state,
+                        game_state,
+                        chunk,
+                        neighbor_data
+                    ),
                     "timer_bulk_update",
                     EventInitiator::Engine
                 )?;
@@ -2148,7 +2242,13 @@ impl GameMapTimer {
             TimerCallback::BulkUpdateWithNeighbors(cb) => {
                 assert!(neighbor_data.is_some());
                 run_handler!(
-                    || cb.bulk_update_callback(coord, 0, game_state, chunk, neighbor_data),
+                    || cb.bulk_update_callback(
+                        coord,
+                        &state.timer_state,
+                        game_state,
+                        chunk,
+                        neighbor_data
+                    ),
                     "timer_bulk_update_with_neighbors",
                     EventInitiator::Engine
                 )?;
@@ -2165,7 +2265,8 @@ impl GameMapTimer {
                     // on x86_64.
                     // Only insert unique block ids (still need to test this optimization)
                     // TODO fork the bloom filter library and extend it to support constant lengths
-                    holder.block_bloom_filter
+                    holder
+                        .block_bloom_filter
                         .insert(new_block_id.base_id() as u64);
                 }
                 chunk.dirty = true;
@@ -2180,16 +2281,19 @@ impl GameMapTimer {
 
     fn build_neighbors(
         &self,
-        coord: ChunkCoordinate,
+        neighbor_data: &mut ChunkNeighbors,
+        center_coord: ChunkCoordinate,
         game_map: &ServerGameMap,
-    ) -> Result<(ChunkNeighbors, bool)> {
-        let mut buf = Box::new([0; 48 * 48 * 48]);
-        let mut bitmap = 0u32;
+        copy_data: bool,
+    ) -> Result<(bool, Option<Instant>)> {
+        let mut buf = &mut neighbor_data.blocks;
+        let mut presence_bitmap = 0u32;
         let mut any_blooms_match = false;
+        let mut update_times = vec![];
         for cx in -1..=1 {
             for cz in -1..=1 {
                 for cy in -1..=1 {
-                    if let Some(neighbor_coord) = coord.try_delta(cx, cy, cz) {
+                    if let Some(neighbor_coord) = center_coord.try_delta(cx, cy, cz) {
                         let shard = game_map.live_chunks[shard_id(neighbor_coord)].read();
                         if let Some(neighbor_holder) = shard.chunks.get(&neighbor_coord) {
                             if self.settings.block_types.iter().any(|x| {
@@ -2199,20 +2303,23 @@ impl GameMapTimer {
                             }) {
                                 any_blooms_match = true;
                             }
+                            update_times.push(*neighbor_holder.last_written.lock());
 
                             if let Some(contents) = neighbor_holder.try_get()? {
-                                bitmap |= 1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1));
-                                for dx in 0..16 {
-                                    for dz in 0..16 {
-                                        for dy in 0..16 {
-                                            let x = (16 * cx) + dx;
-                                            let z = (16 * cz) + dz;
-                                            let y = (16 * cy) + dy;
-                                            let o_index = (x + 16) as usize * 48 * 48
-                                                + (z + 16) as usize * 48
-                                                + (y + 16) as usize;
-                                            let i_index = dx * 16 * 16 + dz * 16 + dy;
-                                            buf[o_index] = contents.block_ids[i_index as usize];
+                                presence_bitmap |= 1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1));
+                                if copy_data {
+                                    for dx in 0..16 {
+                                        for dz in 0..16 {
+                                            for dy in 0..16 {
+                                                let x = (16 * cx) + dx;
+                                                let z = (16 * cz) + dz;
+                                                let y = (16 * cy) + dy;
+                                                let o_index = (x + 16) as usize * 48 * 48
+                                                    + (z + 16) as usize * 48
+                                                    + (y + 16) as usize;
+                                                let i_index = dx * 16 * 16 + dz * 16 + dy;
+                                                buf[o_index] = contents.block_ids[i_index as usize];
+                                            }
                                         }
                                     }
                                 }
@@ -2222,12 +2329,9 @@ impl GameMapTimer {
                 }
             }
         }
-        let neighbors = ChunkNeighbors {
-            center: coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0 }),
-            bitmap,
-            blocks: buf,
-        };
-        Ok((neighbors, any_blooms_match))
+        neighbor_data.center = center_coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0});
+        neighbor_data.presence_bitmap = presence_bitmap;
+        Ok((any_blooms_match, update_times.into_iter().max()))
     }
 }
 

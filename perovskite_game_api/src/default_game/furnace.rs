@@ -8,7 +8,7 @@ use perovskite_server::game_state::{
         ExtendedDataHolder, InlineContext,
     },
     client_ui::Popup,
-    game_map::{TimerCallback, TimerInlineCallback, TimerSettings},
+    game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
     items::{InteractionRuleExt, ItemStack, MaybeStack},
 };
 use prost::Message;
@@ -73,14 +73,11 @@ impl TimerInlineCallback for FurnaceTimerCallback {
     fn inline_callback(
         &self,
         coordinate: perovskite_core::coordinates::BlockCoordinate,
-        missed_timers: u64,
+        _state: &TimerState,
         block_type: &mut BlockTypeHandle,
         data: &mut ExtendedDataHolder,
         ctx: &InlineContext,
     ) -> Result<()> {
-        if missed_timers > 0 {
-            log::warn!("Unimplemented: FurnaceTimerCallback with missed_timers");
-        }
         let mut set_dirty = false;
         let extended_data = data.get_or_insert_with(|| ExtendedData {
             custom_data: Some(Box::<FurnaceState>::default()),
