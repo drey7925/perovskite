@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
@@ -67,6 +67,22 @@ pub(crate) enum CubeFace {
     PlantXPlusZMinus,
     PlantXMinusZPlus,
     PlantXMinusZMinus,
+}
+impl CubeFace {
+    fn index(&self) -> usize {
+        match self {
+            CubeFace::XPlus => 0,
+            CubeFace::XMinus => 1,
+            CubeFace::YPlus => 2,
+            CubeFace::YMinus => 3,
+            CubeFace::ZPlus => 4,
+            CubeFace::ZMinus => 5,
+            CubeFace::PlantXPlusZPlus => 6,
+            CubeFace::PlantXPlusZMinus => 7,
+            CubeFace::PlantXMinusZPlus => 8,
+            CubeFace::PlantXMinusZMinus => 9,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -463,33 +479,41 @@ impl VkChunkVertexData {
     }
 }
 
+fn get_texture(
+    texture_coords: &FxHashMap<String, Rect>,
+    tex: Option<&TextureReference>,
+) -> RectF32 {
+    let rect = tex
+        .and_then(|tex| texture_coords.get(&tex.texture_name).copied())
+        .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
+    let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
+    if let Some(crop) = tex.and_then(|tex| tex.crop.as_ref()) {
+        rect_f = crop_texture(&crop, rect_f);
+    }
+    rect_f
+}
+
+fn crop_texture(crop: &TextureCrop, r: RectF32) -> RectF32 {
+    RectF32::new(
+        r.l + (crop.left * r.w),
+        r.t + (crop.top * r.h),
+        r.w * (crop.right - crop.left),
+        r.h * (crop.bottom - crop.top),
+    )
+}
+
 /// Manages the block type definitions, and their underlying textures,
 /// for the game.
 pub(crate) struct BlockRenderer {
     block_defs: Arc<ClientBlockTypeManager>,
     texture_coords: FxHashMap<String, Rect>,
     texture_atlas: Arc<Texture2DHolder>,
+    tex_coord_cache: TexCoordCache,
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
-    fn get_texture(&self, tex: Option<&TextureReference>) -> RectF32 {
-        let rect = tex
-            .and_then(|tex| self.texture_coords.get(&tex.texture_name).copied())
-            .unwrap_or_else(|| *self.texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
-        let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
-        if let Some(crop) = tex.and_then(|tex| tex.crop.as_ref()) {
-            rect_f = self.crop_texture(&crop, rect_f);
-        }
-        rect_f
-    }
-
-    fn crop_texture(&self, crop: &TextureCrop, r: RectF32) -> RectF32 {
-        RectF32::new(
-            r.l + (crop.left * r.w),
-            r.t + (crop.top * r.h),
-            r.w * (crop.right - crop.left),
-            r.h * (crop.bottom - crop.top),
-        )
+    fn get_texture_cache_miss(&self, tex: Option<&TextureReference>) -> RectF32 {
+        get_texture(&self.texture_coords, tex)
     }
 
     pub(crate) async fn new<T>(
@@ -500,13 +524,14 @@ impl BlockRenderer {
     where
         T: AsyncTextureLoader,
     {
-        let (texture_atlas, texture_coords) =
+        let (texture_atlas, texture_coords, tex_coord_cache) =
             build_texture_atlas(&block_defs, texture_loader).await?;
         let texture_atlas = Arc::new(Texture2DHolder::create(ctx, &texture_atlas)?);
         Ok(BlockRenderer {
             block_defs,
             texture_coords,
             texture_atlas,
+            tex_coord_cache,
             allocator: ctx.allocator(),
         })
     }
@@ -653,14 +678,17 @@ impl BlockRenderer {
 
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
-        let textures = [
-            self.get_texture(render_info.tex_right.as_ref()),
-            self.get_texture(render_info.tex_left.as_ref()),
-            self.get_texture(render_info.tex_top.as_ref()),
-            self.get_texture(render_info.tex_bottom.as_ref()),
-            self.get_texture(render_info.tex_back.as_ref()),
-            self.get_texture(render_info.tex_front.as_ref()),
-        ];
+        let textures = match self.tex_coord_cache.get(id) {
+            Some(x) => *x,
+            None => [
+                self.get_texture_cache_miss(render_info.tex_right.as_ref()),
+                self.get_texture_cache_miss(render_info.tex_left.as_ref()),
+                self.get_texture_cache_miss(render_info.tex_top.as_ref()),
+                self.get_texture_cache_miss(render_info.tex_bottom.as_ref()),
+                self.get_texture_cache_miss(render_info.tex_back.as_ref()),
+                self.get_texture_cache_miss(render_info.tex_front.as_ref()),
+            ],
+        };
         for i in 0..6 {
             let (n_x, n_y, n_z) = e.neighbors[i];
             let neighbor_index = (
@@ -695,7 +723,7 @@ impl BlockRenderer {
     fn emit_plantlike(
         &self,
         _block: &BlockTypeDef,
-        _id: BlockId,
+        id: BlockId,
         offset: ChunkOffset,
         chunk_data: &ChunkDataView<'_>,
         vtx: &mut Vec<CubeGeometryVertex>,
@@ -704,7 +732,10 @@ impl BlockRenderer {
     ) {
         let e = FULL_CUBE_EXTENTS;
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
-        let tex = self.get_texture(plantlike_render_info.tex.as_ref());
+        let tex = match self.tex_coord_cache.get(id) {
+            Some(x) => x[0],
+            None => self.get_texture_cache_miss(plantlike_render_info.tex.as_ref()),
+        };
         vtx.reserve(8);
         idx.reserve(24);
         for i in 0..4 {
@@ -889,10 +920,19 @@ fn build_liquid_cube_extents(
     }
 }
 
+struct TexCoordCache {
+    blocks: Vec<Option<[RectF32; 6]>>,
+}
+impl TexCoordCache {
+    fn get(&self, block_id: BlockId) -> Option<&[RectF32; 6]> {
+        self.blocks.get(block_id.index()).and_then(|x| x.as_ref())
+    }
+}
+
 async fn build_texture_atlas<T: AsyncTextureLoader>(
     block_defs: &ClientBlockTypeManager,
     mut texture_loader: T,
-) -> Result<(DynamicImage, FxHashMap<String, Rect>)> {
+) -> Result<(DynamicImage, FxHashMap<String, Rect>, TexCoordCache)> {
     let mut all_texture_names = HashSet::new();
     for def in block_defs.all_block_defs() {
         match &def.render_info {
@@ -969,12 +1009,39 @@ async fn build_texture_atlas<T: AsyncTextureLoader>(
 
     let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer)
         .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
-    let texture_coords = texture_packer
+    let texture_coords: FxHashMap<String, Rect> = texture_packer
         .get_frames()
         .iter()
         .map(|(k, v)| (k.clone(), v.frame))
         .collect();
-    Ok((texture_atlas, texture_coords))
+
+    let fallback: RectF32 = (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into();
+
+    let build_cache_entry = |block_def: &BlockTypeDef| match &block_def.render_info {
+        Some(RenderInfo::Cube(render_info)) => Some([
+            get_texture(&texture_coords, render_info.tex_right.as_ref()),
+            get_texture(&texture_coords, render_info.tex_left.as_ref()),
+            get_texture(&texture_coords, render_info.tex_top.as_ref()),
+            get_texture(&texture_coords, render_info.tex_bottom.as_ref()),
+            get_texture(&texture_coords, render_info.tex_back.as_ref()),
+            get_texture(&texture_coords, render_info.tex_front.as_ref()),
+        ]),
+        Some(RenderInfo::PlantLike(render_info)) => {
+            let coords = get_texture(&texture_coords, render_info.tex.as_ref());
+            Some([coords; 6])
+        }
+        _ => None,
+    };
+
+    let tex_coord_cache = TexCoordCache {
+        blocks: block_defs
+            .block_defs
+            .iter()
+            .map(|x| x.as_ref().and_then(build_cache_entry))
+            .collect(),
+    };
+
+    Ok((texture_atlas, texture_coords, tex_coord_cache))
 }
 
 pub(crate) fn fallback_texture() -> Option<TextureReference> {
