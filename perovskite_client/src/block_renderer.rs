@@ -28,7 +28,7 @@ use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
     self as blocks_proto, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
 };
-use perovskite_core::protocol::render::TextureReference;
+use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
 use anyhow::{ensure, Context, Error, Result};
@@ -67,6 +67,36 @@ pub(crate) enum CubeFace {
     PlantXPlusZMinus,
     PlantXMinusZPlus,
     PlantXMinusZMinus,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RectF32 {
+    l: f32,
+    t: f32,
+    w: f32,
+    h: f32,
+}
+impl RectF32 {
+    fn new(l: f32, t: f32, w: f32, h: f32) -> Self {
+        Self { l, t, w, h }
+    }
+    fn top(&self) -> f32 {
+        self.t
+    }
+    fn bottom(&self) -> f32 {
+        self.t + self.h
+    }
+    fn left(&self) -> f32 {
+        self.l
+    }
+    fn right(&self) -> f32 {
+        self.l + self.w
+    }
+}
+impl From<Rect> for RectF32 {
+    fn from(rect: Rect) -> Self {
+        Self::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32)
+    }
 }
 
 pub(crate) struct ClientBlockTypeManager {
@@ -229,10 +259,10 @@ impl ClientBlockTypeManager {
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct CubeExtents {
-    vertices: [Vector3<f32>; 8],
+    pub vertices: [Vector3<f32>; 8],
     /// Given in the same order as the first six members of [`CubeFace`].
-    neighbors: [(i8, i8, i8); 6],
-    force: [bool; 6],
+    pub neighbors: [(i8, i8, i8); 6],
+    pub force: [bool; 6],
 }
 impl CubeExtents {
     pub const fn new(x: (f32, f32), y: (f32, f32), z: (f32, f32)) -> Self {
@@ -319,7 +349,7 @@ impl CubeExtents {
 }
 
 #[inline]
-fn rotate_y<T: Num + std::ops::Neg<Output = T>>(
+pub fn rotate_y<T: Num + std::ops::Neg<Output = T>>(
     c: (T, T, T),
     angle_90_deg_units: u16,
 ) -> (T, T, T) {
@@ -328,6 +358,32 @@ fn rotate_y<T: Num + std::ops::Neg<Output = T>>(
         1 => (c.2, c.1, -c.0),
         2 => (-c.0, c.1, -c.2),
         3 => (-c.2, c.1, c.0),
+        _ => unreachable!(),
+    }
+}
+
+pub fn rotate_x<T: Num + std::ops::Neg<Output = T>>(
+    c: (T, T, T),
+    angle_90_deg_units: u16,
+) -> (T, T, T) {
+    match angle_90_deg_units % 4 {
+        0 => c,
+        1 => (c.0, -c.2, c.1),
+        2 => (c.0, -c.1, -c.2),
+        3 => (c.0, c.2, -c.1),
+        _ => unreachable!(),
+    }
+}
+
+pub fn rotate_z<T: Num + std::ops::Neg<Output = T>>(
+    c: (T, T, T),
+    angle_90_deg_units: u16,
+) -> (T, T, T) {
+    match angle_90_deg_units % 4 {
+        0 => c,
+        1 => (c.1, -c.0, c.2),
+        2 => (-c.0, -c.1, c.2),
+        3 => (-c.1, c.0, c.2),
         _ => unreachable!(),
     }
 }
@@ -416,12 +472,26 @@ pub(crate) struct BlockRenderer {
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
-    fn get_texture(&self, id: &str) -> Rect {
-        self.texture_coords
-            .get(id)
-            .copied()
-            .unwrap_or_else(|| *self.texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap())
+    fn get_texture(&self, tex: Option<&TextureReference>) -> RectF32 {
+        let rect = tex
+            .and_then(|tex| self.texture_coords.get(&tex.texture_name).copied())
+            .unwrap_or_else(|| *self.texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
+        let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
+        if let Some(crop) = tex.and_then(|tex| tex.crop.as_ref()) {
+            rect_f = self.crop_texture(&crop, rect_f);
+        }
+        rect_f
     }
+
+    fn crop_texture(&self, crop: &TextureCrop, r: RectF32) -> RectF32 {
+        RectF32::new(
+            r.l + (crop.left * r.w),
+            r.t + (crop.top * r.h),
+            r.w * (crop.right - crop.left),
+            r.h * (crop.bottom - crop.top),
+        )
+    }
+
     pub(crate) async fn new<T>(
         block_defs: Arc<ClientBlockTypeManager>,
         texture_loader: T,
@@ -584,12 +654,12 @@ impl BlockRenderer {
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
         let textures = [
-            self.get_texture(render_info.tex_right.tex_name()),
-            self.get_texture(render_info.tex_left.tex_name()),
-            self.get_texture(render_info.tex_top.tex_name()),
-            self.get_texture(render_info.tex_bottom.tex_name()),
-            self.get_texture(render_info.tex_back.tex_name()),
-            self.get_texture(render_info.tex_front.tex_name()),
+            self.get_texture(render_info.tex_right.as_ref()),
+            self.get_texture(render_info.tex_left.as_ref()),
+            self.get_texture(render_info.tex_top.as_ref()),
+            self.get_texture(render_info.tex_bottom.as_ref()),
+            self.get_texture(render_info.tex_back.as_ref()),
+            self.get_texture(render_info.tex_front.as_ref()),
         ];
         for i in 0..6 {
             let (n_x, n_y, n_z) = e.neighbors[i];
@@ -634,7 +704,7 @@ impl BlockRenderer {
     ) {
         let e = FULL_CUBE_EXTENTS;
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
-        let tex = self.get_texture(plantlike_render_info.tex.tex_name());
+        let tex = self.get_texture(plantlike_render_info.tex.as_ref());
         vtx.reserve(8);
         idx.reserve(24);
         for i in 0..4 {
@@ -683,7 +753,7 @@ impl BlockRenderer {
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
                 vk_pos,
-                frame,
+                frame.into(),
                 self.texture_atlas.dimensions(),
                 face,
                 &mut vtx,
@@ -910,6 +980,7 @@ async fn build_texture_atlas<T: AsyncTextureLoader>(
 pub(crate) fn fallback_texture() -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: FALLBACK_UNKNOWN_TEXTURE.to_string(),
+        crop: None,
     })
 }
 
@@ -922,14 +993,7 @@ const BRIGHTNESS_TABLE_RAW: [f32; 16] = [
     0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
     0.875, 0.9375, 1.00,
 ];
-const CUBE_FACE_BRIGHTNESS_BIASES: [f32; 6] = [
-    0.975,
-    0.975,
-    1.05,
-    0.95,
-    0.975,
-    0.975,
-];
+const CUBE_FACE_BRIGHTNESS_BIASES: [f32; 6] = [0.975, 0.975, 1.05, 0.95, 0.975, 0.975];
 
 lazy_static::lazy_static! {
     static ref GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = {
@@ -965,7 +1029,7 @@ fn make_cgv(
 #[inline]
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
-    frame: Rect,
+    frame: RectF32,
     tex_dimension: (u32, u32),
     face: CubeFace,
     vert_buf: &mut Vec<CubeGeometryVertex>,
@@ -979,10 +1043,10 @@ pub(crate) fn emit_cube_face_vk(
     let coord = vec3(coord.x, -coord.y, coord.z);
     let width = (tex_dimension.0) as f32;
     let height = (tex_dimension.1) as f32;
-    let l = frame.left() as f32 / width;
-    let r = (frame.right() + 1) as f32 / width;
-    let t = frame.top() as f32 / height;
-    let b = (frame.bottom() + 1) as f32 / height;
+    let l = frame.left() / width;
+    let r = frame.right() / width;
+    let t = frame.top() / height;
+    let b = frame.bottom() / height;
     // todo handle rotating textures (both in the texture ref and here)
     // Possibly at the caller?
     let tl = Vector2::new(l, t);

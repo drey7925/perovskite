@@ -28,6 +28,7 @@ pub(crate) fn register_pickaxe(
             display_name: display_name.into(),
             inventory_texture: Some(TextureReference {
                 texture_name: texture.0.to_string(),
+                crop: None,
             }),
             groups: vec![TOOL_WEAR.to_string()],
             interaction_rules: vec![
@@ -74,6 +75,7 @@ fn register_superuser_pickaxe(
             display_name: display_name.into(),
             inventory_texture: Some(TextureReference {
                 texture_name: texture.0.to_string(),
+                crop: None,
             }),
             groups: vec![TOOL_WEAR.to_string()],
             interaction_rules: vec![

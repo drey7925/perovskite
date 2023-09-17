@@ -66,6 +66,13 @@ impl BlockCoordinate {
         Some(BlockCoordinate { x, y, z })
     }
 }
+
+impl Into<cgmath::Vector3<f64>> for BlockCoordinate {
+    fn into(self) -> cgmath::Vector3<f64> {
+        cgmath::Vector3::new(self.x as f64, self.y as f64, self.z as f64)
+    }
+}
+
 impl From<BlockCoordinate> for crate::protocol::coordinates::BlockCoordinate {
     fn from(value: BlockCoordinate) -> Self {
         crate::protocol::coordinates::BlockCoordinate {

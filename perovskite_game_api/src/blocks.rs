@@ -632,9 +632,12 @@ impl PlantLikeAppearanceBuilder {
     }
 }
 
+pub use protocol::render::TextureCrop;
+
 fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: tex_name,
+        crop: None,
     })
 }
 

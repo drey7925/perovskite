@@ -20,5 +20,15 @@ package perovskite.protocol.render;
 
 message TextureReference {
     string texture_name = 1;
-    // todo other tex properties
+    // Only supported for rendering blocks, not supported in inventory or popups yet
+    TextureCrop crop = 2;
+}
+
+// If set, the texture will be cropped to the given coordinates.
+// Use ranges 0-1 for the full texture
+message TextureCrop {
+    float left = 1;
+    float top = 2;
+    float right = 3;
+    float bottom = 4;
 }

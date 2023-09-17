@@ -293,7 +293,12 @@ impl PhysicsState {
         (new_yv, target)
     }
 
-    fn apply_movement_input(&self, pos: Vector3<f64>, input: &mut InputState, distance: f64) -> Vector3<f64> {
+    fn apply_movement_input(
+        &self,
+        pos: Vector3<f64>,
+        input: &mut InputState,
+        distance: f64,
+    ) -> Vector3<f64> {
         let mut target = pos;
         if input.is_pressed(BoundAction::MoveForward) {
             target.z += self.az.cos() * distance;
@@ -442,29 +447,30 @@ fn clamp_collisions_loop(
     }
 }
 
+struct CollisionBox {
+    min: Vector3<f64>,
+    max: Vector3<f64>,
+}
+impl CollisionBox {
+    fn full_cube(coord: Vector3<f64>) -> CollisionBox {
+        CollisionBox {
+            min: vec3(coord.x - 0.5, coord.y - 0.5, coord.z - 0.5),
+            max: vec3(coord.x + 0.5, coord.y + 0.5, coord.z + 0.5),
+        }
+    }
+}
+
 fn clamp_collisions(
     old_pos: Vector3<f64>,
     mut new_pos: Vector3<f64>,
     chunks: &ChunkManagerView,
     block_types: &ClientBlockTypeManager,
 ) -> Vector3<f64> {
-    // Determine all the interacting blocks for old_pos and new_pos (i.e. those blocks that the player intersects with)
-    // For old_active, bias against including a block when we're right on the edge
-    let old_active = compute_bbox_intersections(old_pos, 0.);
     // For new_active, bias toward including a block when we're right on the edge
-    let new_active = compute_bbox_intersections(new_pos, 0.);
+    let collision_boxes = get_collision_boxes(new_pos, chunks, block_types);
 
-    let new_blocks: Vec<_> = new_active.difference(&old_active).collect();
-
-    if new_blocks.is_empty() {
-        return new_pos;
-    }
-
-    for &coord in new_blocks {
-        if !is_collision(get_block(coord, chunks, block_types)) {
-            continue;
-        }
-        new_pos = clamp_single_block(old_pos, new_pos, coord);
+    for cbox in collision_boxes {
+        new_pos = clamp_single_block(old_pos, new_pos, cbox);
     }
     new_pos
 }
@@ -473,34 +479,45 @@ fn clamp_collisions(
 fn clamp_single_block(
     old: Vector3<f64>,
     new: Vector3<f64>,
-    coord: BlockCoordinate,
+    cbox: CollisionBox,
 ) -> Vector3<f64> {
+
     vec3(
         clamp_single_axis(
             old.x,
             new.x,
-            coord.x,
+            cbox.min.x,
+            cbox.max.x,
             PLAYER_COLLISIONBOX_CORNER_POS.x,
             PLAYER_COLLISIONBOX_CORNER_NEG.x,
         ),
         clamp_single_axis(
             old.y,
             new.y,
-            coord.y,
+            cbox.min.y,
+            cbox.max.y,
             PLAYER_COLLISIONBOX_CORNER_POS.y,
             PLAYER_COLLISIONBOX_CORNER_NEG.y,
         ),
         clamp_single_axis(
             old.z,
             new.z,
-            coord.z,
+            cbox.min.z,
+            cbox.max.z,
             PLAYER_COLLISIONBOX_CORNER_POS.z,
             PLAYER_COLLISIONBOX_CORNER_NEG.z,
         ),
     )
 }
 
-fn clamp_single_axis(old: f64, new: f64, obstacle: i32, pos_bias: f64, neg_bias: f64) -> f64 {
+fn clamp_single_axis(
+    old: f64,
+    new: f64,
+    obstacle_min: f64,
+    obstacle_max: f64,
+    pos_bias: f64,
+    neg_bias: f64,
+) -> f64 {
     debug_assert!(pos_bias > 0.);
     debug_assert!(neg_bias < 0.);
     // // Check if we're already within the obstacle block in the current dimension
@@ -509,7 +526,7 @@ fn clamp_single_axis(old: f64, new: f64, obstacle: i32, pos_bias: f64, neg_bias:
     // }
     match new.total_cmp(&old) {
         std::cmp::Ordering::Less => {
-            let boundary = obstacle as f64 + 0.5 - neg_bias;
+            let boundary = obstacle_max - neg_bias;
             if old + COLLISION_EPS > boundary && new - COLLISION_EPS < boundary {
                 // back away from the boundary by FLOAT_EPS
                 boundary + COLLISION_EPS
@@ -519,7 +536,7 @@ fn clamp_single_axis(old: f64, new: f64, obstacle: i32, pos_bias: f64, neg_bias:
         }
         std::cmp::Ordering::Equal => new,
         std::cmp::Ordering::Greater => {
-            let boundary = obstacle as f64 - 0.5 - pos_bias;
+            let boundary = obstacle_min - pos_bias;
             if old - COLLISION_EPS < boundary && new + COLLISION_EPS > boundary {
                 boundary - COLLISION_EPS
             } else {
@@ -562,16 +579,35 @@ fn inclusive<T: Ord>(a: T, b: T) -> RangeInclusive<T> {
     }
 }
 
-fn compute_bbox_intersections(pos: Vector3<f64>, bias: f64) -> HashSet<BlockCoordinate> {
-    let corner1 = pos + PLAYER_COLLISIONBOX_CORNER_POS.bias_with(bias);
-    let corner2 = pos + PLAYER_COLLISIONBOX_CORNER_NEG.bias_with(bias);
-    let mut output = HashSet::new();
+fn get_collision_boxes(
+    pos: Vector3<f64>,
+    chunks: &ChunkManagerView,
+    block_types: &ClientBlockTypeManager,
+) -> Vec<CollisionBox> {
+    let corner1 = pos + PLAYER_COLLISIONBOX_CORNER_POS;
+    let corner2 = pos + PLAYER_COLLISIONBOX_CORNER_NEG;
+    let mut output = vec![];
     for x in inclusive(corner1.x.round() as i32, corner2.x.round() as i32) {
         for y in inclusive(corner1.y.round() as i32, corner2.y.round() as i32) {
             for z in inclusive(corner1.z.round() as i32, corner2.z.round() as i32) {
-                output.insert(BlockCoordinate { x, y, z });
+                let coord = BlockCoordinate { x, y, z };
+                match get_block(coord, chunks, block_types) {
+                    Some(block) => {
+                        push_collision_boxes(coord.into(), block, &mut output);
+                    }
+                    None => output.push(CollisionBox::full_cube(coord.into())),
+                }
             }
         }
     }
     output
+}
+
+fn push_collision_boxes(coord: Vector3<f64>, block: &BlockTypeDef, output: &mut Vec<CollisionBox>) {
+    match block.physics_info {
+        Some(block_type_def::PhysicsInfo::Solid(_)) => output.push(CollisionBox::full_cube(coord)),
+        Some(block_type_def::PhysicsInfo::Fluid(_)) => {},
+        Some(block_type_def::PhysicsInfo::Air(_)) => {},
+        None => {},
+    }
 }

@@ -65,6 +65,17 @@ message BlockTypeDef {
 
 message Empty {}
 
+// A rectangular prism. 0,0,0 is at the center of the block.
+// y is given with positive upwards.
+message AxisAlignedBox {
+  float x_min = 1;
+  float y_min = 2;
+  float z_min = 3;
+  float x_max = 4;
+  float y_max = 5;
+  float z_max = 6;
+}
+
 // Describes the way a cube-shaped block should be rendered.
 enum CubeRenderMode {
   // Behavior is unspecified

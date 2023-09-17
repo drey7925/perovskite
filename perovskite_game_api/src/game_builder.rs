@@ -43,6 +43,7 @@ impl From<TextureName> for TextureReference {
     fn from(value: TextureName) -> Self {
         TextureReference {
             texture_name: value.0.to_string(),
+            crop: None
         }
     }
 }
