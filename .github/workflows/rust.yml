@@ -16,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Build
-      run: cargo build --verbose
+    - name: Build      
+    - run: |
+        apt-get install protobuf-compiler build-essential git python cmake libvulkan-dev vulkan-utils
+        cargo build --verbose
       # TODO add tests
