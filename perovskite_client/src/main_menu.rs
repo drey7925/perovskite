@@ -2,7 +2,7 @@ use std::{ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
-use egui::{Color32, Layout, ProgressBar, TextEdit};
+use egui::{Color32, Layout, ProgressBar, RichText, TextEdit};
 use tokio::sync::{oneshot, watch};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
@@ -67,6 +67,15 @@ impl MainMenu {
         egui::CentralPanel::default().show(&self.egui_gui.egui_ctx, |ui| {
             ui.set_enabled(matches!(game_state, GameState::MainMenu) && !self.show_register_popup);
             ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+            if cfg!(debug_assertions) {
+                ui.label(
+                    RichText::new("Debug binary; will be unplayably slow.\nRecompile with --release!")
+                        .color(Color32::RED)
+                        .size(16.0)
+                        .strong(),
+                );
+            }
+
             ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                 let label = ui.label("Server address: ");
                 let editor = TextEdit::singleline(&mut self.host_field);

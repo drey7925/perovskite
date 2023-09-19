@@ -16,18 +16,20 @@
 
 use std::time::Duration;
 
-
+use cgmath::vec3;
+use perovskite_core::protocol::blocks::block_type_def::PhysicsInfo;
 use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
-use perovskite_core::protocol::blocks::BlockTypeDef;
+use line_drawing::WalkVoxels;
+use perovskite_core::protocol::blocks::{BlockTypeDef, AxisAlignedBoxRotation};
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::ItemDef;
-use line_drawing::WalkVoxels;
 use rustc_hash::FxHashSet;
 
+use super::physics::apply_aabox_transformation;
 use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
 
 struct DigState {
@@ -166,7 +168,7 @@ impl ToolController {
         } else {
             self.dig_progress = None;
         }
-        
+
         if input.take_just_released(BoundAction::Dig) {
             action = Some(GameAction::Tap(super::DigTapAction {
                 target: pointee,
@@ -216,6 +218,13 @@ impl ToolController {
         // TODO handle custom collision boxes
         let pos = last_pos.position;
         let end = pos + (POINTEE_DISTANCE * last_pos.face_unit_vector());
+
+        let delta_inv = vec3(
+            1.0 / (end.x - pos.x),
+            1.0 / (end.y - pos.y),
+            1.0 / (end.z - pos.z),
+        );
+
         let chunks = client_state.chunks.read_lock();
         let mut prev = None;
         for (x, y, z) in WalkVoxels::<f64, i64>::new(
@@ -235,15 +244,62 @@ impl ToolController {
                     .block_types
                     .get_blockdef(id)
                     .unwrap_or(&self.fallback_blockdef);
-                for rule in self.current_item_interacting_groups.iter() {
-                    if rule.iter().all(|x| block_def.groups.contains(x)) {
-                        return Some((coord, prev, block_def));
+                if check_intersection(
+                    vec3(coord.x as f64, coord.y as f64, coord.z as f64),
+                    block_def,
+                    pos,
+                    delta_inv,
+                    id.variant()
+                ) {
+                    for rule in self.current_item_interacting_groups.iter() {
+                        if rule.iter().all(|x| block_def.groups.contains(x)) {
+                            return Some((coord, prev, block_def));
+                        }
                     }
                 }
                 prev = Some(coord);
             }
         }
         None
+    }
+}
+
+fn check_intersection(
+    block_coord: cgmath::Vector3<f64>,
+    block_def: &BlockTypeDef,
+    pos: cgmath::Vector3<f64>,
+    delta_inv: cgmath::Vector3<f64>,
+    variant: u16,
+) -> bool {
+    match &block_def.physics_info {
+        Some(PhysicsInfo::SolidCustomCollisionboxes(boxes)) => boxes.boxes.iter().any(|aa_box| {
+            if aa_box.variant_mask != 0 && aa_box.variant_mask & variant as u32 == 0 {
+                return false;
+            }
+
+            let (min, max) = apply_aabox_transformation(aa_box, block_coord, variant);
+
+            let tx1 = (min.x - pos.x) * delta_inv.x;
+            let tx2 = (max.x - pos.x) * delta_inv.x;
+
+            let t_min = tx1.min(tx2);
+            let t_max = tx1.max(tx2);
+
+            let ty1 = (min.y - pos.y) * delta_inv.y;
+            let ty2 = (max.y - pos.y) * delta_inv.y;
+
+            let t_min = t_min.max(ty1.min(ty2));
+            let t_max = t_max.min(ty1.max(ty2));
+
+            let tz1 = (min.z - pos.z) * delta_inv.z;
+            let tz2 = (max.z - pos.z) * delta_inv.z;
+
+            let t_min = t_min.max(tz1.min(tz2));
+            let t_max = t_max.min(tz1.max(tz2));
+
+            t_max >= t_min && t_max >= 0.
+        }),
+        _ => true,
     }
 }
 

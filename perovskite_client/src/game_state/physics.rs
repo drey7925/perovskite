@@ -129,7 +129,7 @@ impl PhysicsState {
             y_velocity: 0.,
             landed_last_frame: false,
             last_land_height: 0.,
-            bump_decay: 0.
+            bump_decay: 0.,
         }
     }
 
@@ -279,8 +279,7 @@ impl PhysicsState {
                 println!("bump debug {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : N/A\nnewpos  : {new_pos:?}");
             }
             self.bump_decay = new_pos.y - pre_bump_y;
-        }
-        else {
+        } else {
             self.bump_decay = (self.bump_decay - (delta_secs * BUMP_DECAY_SPEED)).max(0.0);
         }
 
@@ -480,31 +479,40 @@ impl CollisionBox {
         aa_box: &perovskite_core::protocol::blocks::AxisAlignedBox,
         variant: u16,
     ) -> CollisionBox {
-        let min = vec3(
-            aa_box.x_min as f64,
-            aa_box.y_min as f64,
-            aa_box.z_min as f64,
-        );
-        let max = vec3(
-            aa_box.x_max as f64,
-            aa_box.y_max as f64,
-            aa_box.z_max as f64,
-        );
-        match aa_box.rotation() {
-            perovskite_core::protocol::blocks::AxisAlignedBoxRotation::None => {
-                CollisionBox { min: coord + min, max: coord + max }
-            }
-            perovskite_core::protocol::blocks::AxisAlignedBoxRotation::Nesw => {
-                let r_matrix = Matrix3::from_angle_y(Deg(90.0 * (variant % 4) as f64));
-                let v1 = coord + r_matrix * min;
-                let v2 = coord + r_matrix * max;
-                let min = vec3(v1.x.min(v2.x), v1.y.min(v2.y), v1.z.min(v2.z));
-                let max = vec3(v1.x.max(v2.x), v1.y.max(v2.y), v1.z.max(v2.z));
-                CollisionBox { min, max }
-                
-            }
-        }
+        let (min, max) = apply_aabox_transformation(aa_box, coord, variant);
+        CollisionBox { min, max }
     }
+}
+
+pub(crate) fn apply_aabox_transformation(
+    aa_box: &perovskite_core::protocol::blocks::AxisAlignedBox,
+    coord: Vector3<f64>,
+    variant: u16,
+) -> (Vector3<f64>, Vector3<f64>) {
+    let min = vec3(
+        aa_box.x_min as f64,
+        aa_box.y_min as f64,
+        aa_box.z_min as f64,
+    );
+    let max = vec3(
+        aa_box.x_max as f64,
+        aa_box.y_max as f64,
+        aa_box.z_max as f64,
+    );
+    let (min, max) = match aa_box.rotation() {
+        perovskite_core::protocol::blocks::AxisAlignedBoxRotation::None => {
+            (coord + min, coord + max)
+        }
+        perovskite_core::protocol::blocks::AxisAlignedBoxRotation::Nesw => {
+            let r_matrix = Matrix3::from_angle_y(Deg(90.0 * (variant % 4) as f64));
+            let v1 = coord + r_matrix * min;
+            let v2 = coord + r_matrix * max;
+            let min = vec3(v1.x.min(v2.x), v1.y.min(v2.y), v1.z.min(v2.z));
+            let max = vec3(v1.x.max(v2.x), v1.y.max(v2.y), v1.z.max(v2.z));
+            (min, max)
+        }
+    };
+    (min, max)
 }
 
 fn clamp_collisions(
