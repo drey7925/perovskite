@@ -26,7 +26,7 @@ use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
-    self as blocks_proto, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
+    self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
 };
 use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
@@ -506,32 +506,156 @@ fn crop_texture(crop: &TextureCrop, r: RectF32) -> RectF32 {
 /// for the game.
 pub(crate) struct BlockRenderer {
     block_defs: Arc<ClientBlockTypeManager>,
-    texture_coords: FxHashMap<String, Rect>,
     texture_atlas: Arc<Texture2DHolder>,
-    tex_coord_cache: TexCoordCache,
+    selection_box_tex_coord: RectF32,
+    fallback_tex_coord: RectF32,
+    simple_block_tex_coords: SimpleTexCoordCache,
+    axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
-    fn get_texture_cache_miss(&self, tex: Option<&TextureReference>) -> RectF32 {
-        get_texture(&self.texture_coords, tex)
-    }
-
     pub(crate) async fn new<T>(
         block_defs: Arc<ClientBlockTypeManager>,
-        texture_loader: T,
+        mut texture_loader: T,
         ctx: &VulkanContext,
     ) -> Result<BlockRenderer>
     where
         T: AsyncTextureLoader,
     {
-        let (texture_atlas, texture_coords, tex_coord_cache) =
-            build_texture_atlas(&block_defs, texture_loader).await?;
+        let mut all_texture_names = HashSet::new();
+        for def in block_defs.all_block_defs() {
+            match &def.render_info {
+                Some(RenderInfo::Cube(cube)) => {
+                    if let Some(tex) = &cube.tex_back {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                    if let Some(tex) = &cube.tex_front {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                    if let Some(tex) = &cube.tex_left {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                    if let Some(tex) = &cube.tex_right {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                    if let Some(tex) = &cube.tex_top {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                    if let Some(tex) = &cube.tex_bottom {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                }
+                Some(RenderInfo::PlantLike(plant_like)) => {
+                    if let Some(tex) = &plant_like.tex {
+                        all_texture_names.insert(tex.texture_name.clone());
+                    }
+                }
+                Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) => {
+                    for aa_box in &aa_boxes.boxes {
+                        if let Some(tex) = &aa_box.tex_back {
+                            all_texture_names.insert(tex.texture_name.clone());
+                        }
+                        if let Some(tex) = &aa_box.tex_front {
+                            all_texture_names.insert(tex.texture_name.clone());
+                        }
+                        if let Some(tex) = &aa_box.tex_left {
+                            all_texture_names.insert(tex.texture_name.clone());
+                        }
+                        if let Some(tex) = &aa_box.tex_right {
+                            all_texture_names.insert(tex.texture_name.clone());
+                        }
+                        if let Some(tex) = &aa_box.tex_top {
+                            all_texture_names.insert(tex.texture_name.clone());
+                        }
+                        if let Some(tex) = &aa_box.tex_bottom {
+                            all_texture_names.insert(tex.texture_name.clone());
+                        }
+                    }
+                }
+                Some(RenderInfo::Empty(_)) => {}
+                None => {
+                    log::warn!("Got a block without renderinfo: {}", def.short_name)
+                }
+            }
+        }
+
+        let mut all_textures = FxHashMap::default();
+        for x in all_texture_names {
+            let texture = texture_loader.load_texture(&x).await?;
+            all_textures.insert(x, texture);
+        }
+
+        let config = texture_packer::TexturePackerConfig {
+            // todo break these out into config
+            allow_rotation: false,
+            max_width: 1024,
+            max_height: 1024,
+            border_padding: 2,
+            texture_padding: 2,
+            texture_extrusion: 2,
+            trim: false,
+            texture_outlines: false,
+        };
+        let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
+        // TODO move these files to a sensible location
+        texture_packer
+            .pack_own(
+                String::from(FALLBACK_UNKNOWN_TEXTURE),
+                ImageImporter::import_from_memory(include_bytes!("block_unknown.png")).unwrap(),
+            )
+            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+
+        texture_packer
+            .pack_own(
+                String::from(SELECTION_RECTANGLE),
+                ImageImporter::import_from_memory(include_bytes!("selection.png")).unwrap(),
+            )
+            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+
+        for (name, texture) in all_textures {
+            texture_packer
+                .pack_own(name, texture)
+                .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+        }
+
+        let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer)
+            .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
+        let texture_coords: FxHashMap<String, Rect> = texture_packer
+            .get_frames()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.frame))
+            .collect();
+
+        let simple_block_tex_coords = SimpleTexCoordCache {
+            blocks: block_defs
+                .block_defs
+                .iter()
+                .map(|x| {
+                    x.as_ref()
+                        .and_then(|x| build_simple_cache_entry(x, &texture_coords))
+                })
+                .collect(),
+        };
+
+        let axis_aligned_box_blocks = AxisAlignedBoxBlocksCache {
+            blocks: block_defs
+                .block_defs
+                .iter()
+                .map(|x| {
+                    x.as_ref()
+                        .and_then(|x| build_axis_aligned_box_cache_entry(x, &texture_coords))
+                })
+                .collect(),
+        };
+
         let texture_atlas = Arc::new(Texture2DHolder::create(ctx, &texture_atlas)?);
         Ok(BlockRenderer {
             block_defs,
-            texture_coords,
             texture_atlas,
-            tex_coord_cache,
+            selection_box_tex_coord: (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into(),
+            fallback_tex_coord: (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into(),
+            simple_block_tex_coords,
+            axis_aligned_box_blocks,
             allocator: ctx.allocator(),
         })
     }
@@ -570,8 +694,10 @@ impl BlockRenderer {
                     Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
                         x == CubeRenderMode::Transparent.into()
                     }
-                    // plant-like blocks always include a transparent pass
+                    // plant-like blocks always go into the transparent pass
                     Some(RenderInfo::PlantLike(_)) => true,
+                    // axis-aligned boxes always go into the transparent pass
+                    Some(RenderInfo::AxisAlignedBoxes(_)) => true,
                     Some(_) | None => false,
                 },
                 |block, neighbor| {
@@ -652,6 +778,16 @@ impl BlockRenderer {
                                     &mut idx,
                                     plantlike_render_info,
                                 ),
+                            Some(RenderInfo::AxisAlignedBoxes(render_info)) => self
+                                .emit_axis_aligned_boxes(
+                                    block,
+                                    id,
+                                    offset,
+                                    chunk_data,
+                                    &mut vtx,
+                                    &mut idx,
+                                    render_info,
+                                ),
                             _ => (),
                         }
                     }
@@ -678,16 +814,9 @@ impl BlockRenderer {
 
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
-        let textures = match self.tex_coord_cache.get(id) {
+        let textures = match self.simple_block_tex_coords.get(id) {
             Some(x) => *x,
-            None => [
-                self.get_texture_cache_miss(render_info.tex_right.as_ref()),
-                self.get_texture_cache_miss(render_info.tex_left.as_ref()),
-                self.get_texture_cache_miss(render_info.tex_top.as_ref()),
-                self.get_texture_cache_miss(render_info.tex_bottom.as_ref()),
-                self.get_texture_cache_miss(render_info.tex_back.as_ref()),
-                self.get_texture_cache_miss(render_info.tex_front.as_ref()),
-            ],
+            None => [self.fallback_tex_coord; 6],
         };
         for i in 0..6 {
             let (n_x, n_y, n_z) = e.neighbors[i];
@@ -732,9 +861,9 @@ impl BlockRenderer {
     ) {
         let e = FULL_CUBE_EXTENTS;
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
-        let tex = match self.tex_coord_cache.get(id) {
+        let tex = match self.simple_block_tex_coords.get(id) {
             Some(x) => x[0],
-            None => self.get_texture_cache_miss(plantlike_render_info.tex.as_ref()),
+            None => self.fallback_tex_coord,
         };
         vtx.reserve(8);
         idx.reserve(24);
@@ -751,6 +880,59 @@ impl BlockRenderer {
                 plantlike_render_info.wave_effect_scale,
                 1.0,
             );
+        }
+    }
+
+    fn emit_axis_aligned_boxes(
+        &self,
+        block: &BlockTypeDef,
+        id: BlockId,
+        offset: ChunkOffset,
+        chunk_data: &ChunkDataView<'_>,
+        vtx: &mut Vec<CubeGeometryVertex>,
+        idx: &mut Vec<u32>,
+        render_info: &AxisAlignedBoxes,
+    ) {
+        let aabb_data = self.axis_aligned_box_blocks.get(id);
+        if aabb_data.is_none() {
+            // todo handle this case properly
+            return;
+        }
+
+        let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
+
+        let aabb_data = aabb_data.unwrap();
+        for aabb in aabb_data {
+            if aabb.mask != 0 && !(aabb.mask & id.variant() != 0) {
+                continue;
+            }
+            let mut e = aabb.extents;
+            match aabb.rotation {
+                AabbRotation::None => (),
+                AabbRotation::Nesw => e = e.rotate_y(id.variant() % 4),
+            }
+            for i in 0..6 {
+                let (n_x, n_y, n_z) = e.neighbors[i];
+                let neighbor_index = (
+                    offset.x as i8 + n_x,
+                    offset.y as i8 + n_y,
+                    offset.z as i8 + n_z,
+                )
+                    .as_extended_index();
+
+                emit_cube_face_vk(
+                    pos,
+                    aabb.textures[i],
+                    self.texture_atlas.dimensions(),
+                    CUBE_EXTENTS_FACE_ORDER[i],
+                    vtx,
+                    idx,
+                    e,
+                    chunk_data.lightmap()[neighbor_index],
+                    0.0,
+                    CUBE_FACE_BRIGHTNESS_BIASES[i],
+                );
+            }
         }
     }
 
@@ -775,7 +957,7 @@ impl BlockRenderer {
     ) -> Result<CubeGeometryDrawCall> {
         let mut vtx = vec![];
         let mut idx = vec![];
-        let frame = *self.texture_coords.get(SELECTION_RECTANGLE).unwrap();
+        let frame = self.selection_box_tex_coord;
         const POINTEE_SELECTION_EXTENTS: CubeExtents =
             CubeExtents::new((-0.51, 0.51), (-0.51, 0.51), (-0.51, 0.51));
         let e = POINTEE_SELECTION_EXTENTS;
@@ -830,6 +1012,71 @@ impl BlockRenderer {
                 translucent: None,
             },
         })
+    }
+}
+
+fn build_axis_aligned_box_cache_entry(
+    x: &BlockTypeDef,
+    texture_coords: &FxHashMap<String, Rect>,
+) -> Option<Box<[CachedAxisAlignedBox]>> {
+    if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
+        let mut result = Vec::new();
+        for (i, aa_box) in aa_boxes.boxes.iter().enumerate() {
+            let extents = CubeExtents::new(
+                (aa_box.x_min, aa_box.x_max),
+                (-aa_box.y_max, -aa_box.y_min),
+                (aa_box.z_min, aa_box.z_max),
+            );
+            let textures = [
+                get_texture(texture_coords, aa_box.tex_right.as_ref()),
+                get_texture(texture_coords, aa_box.tex_left.as_ref()),
+                get_texture(texture_coords, aa_box.tex_top.as_ref()),
+                get_texture(texture_coords, aa_box.tex_bottom.as_ref()),
+                get_texture(texture_coords, aa_box.tex_back.as_ref()),
+                get_texture(texture_coords, aa_box.tex_front.as_ref()),
+            ];
+            if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
+                log::warn!(
+                    "Block {} box {} had bad variant mask: {:x}",
+                    x.short_name,
+                    i,
+                    aa_box.variant_mask
+                );
+            }
+            result.push(CachedAxisAlignedBox {
+                extents,
+                textures,
+                rotation: match aa_box.rotation() {
+                    blocks_proto::AxisAlignedBoxRotation::None => AabbRotation::None,
+                    blocks_proto::AxisAlignedBoxRotation::Nesw => AabbRotation::Nesw,
+                },
+                mask: (aa_box.variant_mask & 0xfff) as u16,
+            });
+        }
+        Some(result.into_boxed_slice())
+    } else {
+        None
+    }
+}
+
+fn build_simple_cache_entry(
+    block_def: &BlockTypeDef,
+    texture_coords: &FxHashMap<String, Rect>,
+) -> Option<[RectF32; 6]> {
+    match &block_def.render_info {
+        Some(RenderInfo::Cube(render_info)) => Some([
+            get_texture(texture_coords, render_info.tex_right.as_ref()),
+            get_texture(texture_coords, render_info.tex_left.as_ref()),
+            get_texture(texture_coords, render_info.tex_top.as_ref()),
+            get_texture(texture_coords, render_info.tex_bottom.as_ref()),
+            get_texture(texture_coords, render_info.tex_back.as_ref()),
+            get_texture(texture_coords, render_info.tex_front.as_ref()),
+        ]),
+        Some(RenderInfo::PlantLike(render_info)) => {
+            let coords = get_texture(texture_coords, render_info.tex.as_ref());
+            Some([coords; 6])
+        }
+        _ => None,
     }
 }
 
@@ -920,128 +1167,34 @@ fn build_liquid_cube_extents(
     }
 }
 
-struct TexCoordCache {
+struct SimpleTexCoordCache {
     blocks: Vec<Option<[RectF32; 6]>>,
 }
-impl TexCoordCache {
+impl SimpleTexCoordCache {
     fn get(&self, block_id: BlockId) -> Option<&[RectF32; 6]> {
         self.blocks.get(block_id.index()).and_then(|x| x.as_ref())
     }
 }
 
-async fn build_texture_atlas<T: AsyncTextureLoader>(
-    block_defs: &ClientBlockTypeManager,
-    mut texture_loader: T,
-) -> Result<(DynamicImage, FxHashMap<String, Rect>, TexCoordCache)> {
-    let mut all_texture_names = HashSet::new();
-    for def in block_defs.all_block_defs() {
-        match &def.render_info {
-            Some(RenderInfo::Cube(cube)) => {
-                if let Some(tex) = &cube.tex_back {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-                if let Some(tex) = &cube.tex_front {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-                if let Some(tex) = &cube.tex_left {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-                if let Some(tex) = &cube.tex_right {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-                if let Some(tex) = &cube.tex_top {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-                if let Some(tex) = &cube.tex_bottom {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-            }
-            Some(RenderInfo::PlantLike(plant_like)) => {
-                if let Some(tex) = &plant_like.tex {
-                    all_texture_names.insert(tex.texture_name.clone());
-                }
-            }
-            Some(RenderInfo::Empty(_)) => {}
-            None => {
-                log::warn!("Got a block without renderinfo: {}", def.short_name)
-            }
-        }
+enum AabbRotation {
+    None,
+    Nesw,
+}
+
+struct CachedAxisAlignedBox {
+    extents: CubeExtents,
+    textures: [RectF32; 6],
+    rotation: AabbRotation,
+    mask: u16,
+}
+
+struct AxisAlignedBoxBlocksCache {
+    blocks: Vec<Option<Box<[CachedAxisAlignedBox]>>>,
+}
+impl AxisAlignedBoxBlocksCache {
+    fn get(&self, block_id: BlockId) -> Option<&[CachedAxisAlignedBox]> {
+        self.blocks.get(block_id.index()).and_then(|x| x.as_deref())
     }
-
-    let mut all_textures = FxHashMap::default();
-    for x in all_texture_names {
-        let texture = texture_loader.load_texture(&x).await?;
-        all_textures.insert(x, texture);
-    }
-
-    let config = texture_packer::TexturePackerConfig {
-        // todo break these out into config
-        allow_rotation: false,
-        max_width: 1024,
-        max_height: 1024,
-        border_padding: 2,
-        texture_padding: 2,
-        texture_extrusion: 2,
-        trim: false,
-        texture_outlines: false,
-    };
-    let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
-    // TODO move these files to a sensible location
-    texture_packer
-        .pack_own(
-            String::from(FALLBACK_UNKNOWN_TEXTURE),
-            ImageImporter::import_from_memory(include_bytes!("block_unknown.png")).unwrap(),
-        )
-        .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-    texture_packer
-        .pack_own(
-            String::from(SELECTION_RECTANGLE),
-            ImageImporter::import_from_memory(include_bytes!("selection.png")).unwrap(),
-        )
-        .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-    for (name, texture) in all_textures {
-        texture_packer
-            .pack_own(name, texture)
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-    }
-
-    let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer)
-        .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
-    let texture_coords: FxHashMap<String, Rect> = texture_packer
-        .get_frames()
-        .iter()
-        .map(|(k, v)| (k.clone(), v.frame))
-        .collect();
-
-    let fallback: RectF32 = (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into();
-
-    let build_cache_entry = |block_def: &BlockTypeDef| match &block_def.render_info {
-        Some(RenderInfo::Cube(render_info)) => Some([
-            get_texture(&texture_coords, render_info.tex_right.as_ref()),
-            get_texture(&texture_coords, render_info.tex_left.as_ref()),
-            get_texture(&texture_coords, render_info.tex_top.as_ref()),
-            get_texture(&texture_coords, render_info.tex_bottom.as_ref()),
-            get_texture(&texture_coords, render_info.tex_back.as_ref()),
-            get_texture(&texture_coords, render_info.tex_front.as_ref()),
-        ]),
-        Some(RenderInfo::PlantLike(render_info)) => {
-            let coords = get_texture(&texture_coords, render_info.tex.as_ref());
-            Some([coords; 6])
-        }
-        _ => None,
-    };
-
-    let tex_coord_cache = TexCoordCache {
-        blocks: block_defs
-            .block_defs
-            .iter()
-            .map(|x| x.as_ref().and_then(build_cache_entry))
-            .collect(),
-    };
-
-    Ok((texture_atlas, texture_coords, tex_coord_cache))
 }
 
 pub(crate) fn fallback_texture() -> Option<TextureReference> {

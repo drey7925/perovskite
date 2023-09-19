@@ -24,7 +24,10 @@ use perovskite_core::{
     coordinates::ChunkOffset,
     protocol::{
         self,
-        blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
+        blocks::{
+            block_type_def::PhysicsInfo, AxisAlignedBox, AxisAlignedBoxRotation, AxisAlignedBoxes,
+            FluidPhysicsInfo,
+        },
         items::item_stack::QuantityType,
     },
 };
@@ -275,6 +278,101 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_inventory_texture(STONE_TEXTURE)
             .set_inventory_display_name("Stone block"),
     )?;
+
+    // testonly - add a handler to generate slabs, and extra builders to allow other
+    // blocks to set custom geometry in a fine grained manner
+    let stone_slab = game_builder.add_block(
+        BlockBuilder::new(BlockName("default:stone_slab"))
+            // TODO: make not-diggable-by-hand after tools are implemented
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .set_cube_single_texture(STONE_TEXTURE)
+            .set_inventory_texture(STONE_TEXTURE)
+            .set_inventory_display_name("Stone slab")
+            .set_allow_light_propagation(true)
+            .set_modifier(Box::new(|bt| {
+                let the_box = AxisAlignedBox {
+                    x_min: -0.5,
+                    y_min: -0.5,
+                    z_min: -0.5,
+                    x_max: 0.5,
+                    y_max: 0.0,
+                    z_max: 0.5,
+                    tex_left: Some(STONE_TEXTURE.into()),
+                    tex_right: Some(STONE_TEXTURE.into()),
+                    tex_top: Some(STONE_TEXTURE.into()),
+                    tex_bottom: Some(STONE_TEXTURE.into()),
+                    tex_front: Some(STONE_TEXTURE.into()),
+                    tex_back: Some(STONE_TEXTURE.into()),
+                    rotation: AxisAlignedBoxRotation::None.into(),
+                    variant_mask: 0,
+                };
+
+                let aabbs = AxisAlignedBoxes {
+                    boxes: vec![the_box],
+                };
+                bt.client_info.physics_info =
+                    Some(PhysicsInfo::SolidCustomCollisionboxes(aabbs.clone()));
+                bt.client_info.render_info =
+                    Some(protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabbs))
+            })),
+    )?;
+
+    let stone_stair = game_builder.add_block(
+        BlockBuilder::new(BlockName("default:stone_stair"))
+            // TODO: make not-diggable-by-hand after tools are implemented
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .set_cube_single_texture(STONE_TEXTURE)
+            .set_inventory_texture(STONE_TEXTURE)
+            .set_inventory_display_name("Stone stair")
+            .set_allow_light_propagation(true)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_rotate_laterally())
+            .set_modifier(Box::new(|bt| {
+                let bottom_box = AxisAlignedBox {
+                    x_min: -0.5,
+                    y_min: -0.5,
+                    z_min: -0.5,
+                    x_max: 0.5,
+                    y_max: 0.0,
+                    z_max: 0.5,
+                    tex_left: Some(STONE_TEXTURE.into()),
+                    tex_right: Some(STONE_TEXTURE.into()),
+                    tex_top: Some(STONE_TEXTURE.into()),
+                    tex_bottom: Some(STONE_TEXTURE.into()),
+                    tex_front: Some(STONE_TEXTURE.into()),
+                    tex_back: Some(STONE_TEXTURE.into()),
+                    rotation: AxisAlignedBoxRotation::Nesw.into(),
+                    variant_mask: 0,
+                };
+
+                let back_box = AxisAlignedBox {
+                    x_min: -0.5,
+                    y_min: -0.5,
+                    z_min: 0.0,
+                    x_max: 0.5,
+                    y_max: 0.5,
+                    z_max: 0.5,
+                    tex_left: Some(STONE_TEXTURE.into()),
+                    tex_right: Some(STONE_TEXTURE.into()),
+                    tex_top: Some(STONE_TEXTURE.into()),
+                    tex_bottom: Some(STONE_TEXTURE.into()),
+                    tex_front: Some(STONE_TEXTURE.into()),
+                    tex_back: Some(STONE_TEXTURE.into()),
+                    rotation: AxisAlignedBoxRotation::Nesw.into(),
+                    variant_mask: 0,
+                };
+
+                let aabbs = AxisAlignedBoxes {
+                    boxes: vec![bottom_box, back_box],
+                };
+                bt.client_info.physics_info =
+                    Some(PhysicsInfo::SolidCustomCollisionboxes(aabbs.clone()));
+                bt.client_info.render_info =
+                    Some(protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabbs))
+            })),
+    )?;
+
     game_builder.add_block(
         BlockBuilder::new(GLASS)
             .add_block_group(BRITTLE)

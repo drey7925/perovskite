@@ -23,6 +23,7 @@ pub(crate) enum BoundAction {
     Menu,
     Chat,
     ChatSlash,
+    PhysicsDebug
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -48,7 +49,9 @@ pub(crate) struct KeybindSettings {
     pub(crate) menu: Keybind,
 
     pub(crate) chat: Keybind,
-    pub(crate) chat_slash: Keybind
+    pub(crate) chat_slash: Keybind,
+
+    pub(crate) physics_debug: Keybind
 }
 impl KeybindSettings {
     pub(crate) fn get(&self, action: BoundAction) -> Keybind {
@@ -67,7 +70,8 @@ impl KeybindSettings {
             BoundAction::TogglePhysics => self.toggle_physics,
             BoundAction::Menu => self.menu,
             BoundAction::Chat => self.chat,
-            BoundAction::ChatSlash => self.chat_slash
+            BoundAction::ChatSlash => self.chat_slash,
+            BoundAction::PhysicsDebug => self.physics_debug
         }
     }
 }
@@ -92,6 +96,7 @@ impl Default for KeybindSettings {
             menu: ScanCode(0x1),
             chat: ScanCode(0x14),
             chat_slash: ScanCode(0x35),
+            physics_debug: ScanCode(0x2)
         }
     }
 }

@@ -16,7 +16,7 @@
 
 use std::{collections::HashSet, ops::RangeInclusive, time::Duration};
 
-use cgmath::{vec3, Angle, Deg, InnerSpace, Vector3};
+use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Matrix4, Vector3};
 use perovskite_core::{
     coordinates::BlockCoordinate,
     protocol::blocks::{
@@ -52,7 +52,7 @@ const _PLAYER_COLLISIONBOX_CORNERS: [Vector3<f64>; 8] = [
     vec3(-PLAYER_WIDTH / 2., -EYE_TO_BTM, PLAYER_WIDTH / 2.),
     vec3(-PLAYER_WIDTH / 2., -EYE_TO_BTM, -PLAYER_WIDTH / 2.),
 ];
-const TRAVERSABLE_BUMP_HEIGHT_LANDED: f64 = 0.501;
+const TRAVERSABLE_BUMP_HEIGHT_LANDED: f64 = 0.51;
 const TRAVERSABLE_BUMP_HEIGHT_MIDAIR: f64 = 0.2;
 const WALK_SPEED: f64 = 3.0;
 const JUMP_VELOCITY: f64 = 6.0;
@@ -114,6 +114,7 @@ pub(crate) struct PhysicsState {
     y_velocity: f64,
     landed_last_frame: bool,
     last_land_height: f64,
+    bump_decay: f64,
 }
 
 impl PhysicsState {
@@ -128,6 +129,7 @@ impl PhysicsState {
             y_velocity: 0.,
             landed_last_frame: false,
             last_land_height: 0.,
+            bump_decay: 0.
         }
     }
 
@@ -154,8 +156,8 @@ impl PhysicsState {
             }
             PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
         }
-
-        (self.pos, (self.angle()))
+        let adjusted_for_bump = vec3(self.pos.x, self.pos.y - self.bump_decay, self.pos.z);
+        (adjusted_for_bump, self.angle())
     }
 
     fn update_standard(
@@ -182,7 +184,7 @@ impl PhysicsState {
             block_types,
         );
 
-        let block_physics = surrounding_block.and_then(|x| x.physics_info.as_ref());
+        let block_physics = surrounding_block.and_then(|(x, _)| x.physics_info.as_ref());
         let (mut new_yv, target) = match block_physics {
             Some(PhysicsInfo::Air(_)) => {
                 self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
@@ -198,7 +200,7 @@ impl PhysicsState {
                     block_types,
                 );
                 let is_surface = matches!(
-                    surface_test_block.and_then(|x| x.physics_info.as_ref()),
+                    surface_test_block.and_then(|(x, _)| x.physics_info.as_ref()),
                     Some(PhysicsInfo::Air(_))
                 );
                 self.update_target_fluid(input, self.pos, fluid_data, delta, is_surface)
@@ -207,6 +209,9 @@ impl PhysicsState {
                 // We're in a block, possibly one we just placed. This shouldn't happen, so allow
                 // the user to jump or walk out of it (unless they would run into other solid blocks
                 // in the process)
+                self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
+            }
+            Some(PhysicsInfo::SolidCustomCollisionboxes(_)) => {
                 self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
             }
             None => self.update_target_air(input, self.pos, delta_secs * 3.0, delta),
@@ -237,6 +242,7 @@ impl PhysicsState {
                 .clamp(0., TRAVERSABLE_BUMP_HEIGHT_MIDAIR)
         };
 
+        let pre_bump_y = new_pos.y;
         if bump_height > 0.
             && ((new_pos.x - target.x).abs() > COLLISION_EPS
                 || (new_pos.z - target.z).abs() > COLLISION_EPS)
@@ -248,7 +254,7 @@ impl PhysicsState {
             // and this is where we want to end up after the bump
             let post_bump_target = vec3(target.x, bump_outcome.y, target.z);
             let post_bump_outcome =
-                clamp_collisions(bump_outcome, post_bump_target, &chunks, block_types);
+                clamp_collisions_loop(bump_outcome, post_bump_target, &chunks, block_types);
             // did we end up making it anywhere horizontally?
             if (post_bump_outcome.x - bump_target.x).abs() > COLLISION_EPS
                 || (post_bump_outcome.z - bump_target.z).abs() > COLLISION_EPS
@@ -259,12 +265,23 @@ impl PhysicsState {
                     post_bump_outcome.y - bump_height,
                     post_bump_outcome.z,
                 );
-                new_pos =
-                    clamp_collisions(post_bump_outcome, down_bump_target, &chunks, block_types);
+                new_pos = clamp_collisions_loop(
+                    post_bump_outcome,
+                    down_bump_target,
+                    &chunks,
+                    block_types,
+                );
                 if cfg!(debug_assertions) {
                     println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
                 }
             }
+            if input.is_pressed(BoundAction::PhysicsDebug) {
+                println!("bump debug {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : N/A\nnewpos  : {new_pos:?}");
+            }
+            self.bump_decay = new_pos.y - pre_bump_y;
+        }
+        else {
+            self.bump_decay = (self.bump_decay - (delta_secs * BUMP_DECAY_SPEED)).max(0.0);
         }
 
         self.pos = new_pos;
@@ -278,8 +295,6 @@ impl PhysicsState {
         distance: f64,
         time_delta: Duration,
     ) -> (f64, Vector3<f64>) {
-        // TODO stop using raw scancodes here
-        // TODO make these configurable by the user
         let mut target = self.apply_movement_input(pos, input, distance);
         // velocity if unperturbed
         let mut new_yv = self.y_velocity - (time_delta.as_secs_f64() * GRAVITY_ACCEL)
@@ -402,6 +417,7 @@ impl PhysicsState {
 
 const ANGLE_SMOOTHING_FACTOR: f64 = 0.8;
 const ANGLE_SMOOTHING_REFERENCE_DELTA: f64 = 1.0 / 165.0;
+const BUMP_DECAY_SPEED: f64 = 3.0;
 
 fn clamp_collisions_loop(
     old_pos: Vector3<f64>,
@@ -458,6 +474,37 @@ impl CollisionBox {
             max: vec3(coord.x + 0.5, coord.y + 0.5, coord.z + 0.5),
         }
     }
+
+    fn from_aabb(
+        coord: Vector3<f64>,
+        aa_box: &perovskite_core::protocol::blocks::AxisAlignedBox,
+        variant: u16,
+    ) -> CollisionBox {
+        let min = vec3(
+            aa_box.x_min as f64,
+            aa_box.y_min as f64,
+            aa_box.z_min as f64,
+        );
+        let max = vec3(
+            aa_box.x_max as f64,
+            aa_box.y_max as f64,
+            aa_box.z_max as f64,
+        );
+        match aa_box.rotation() {
+            perovskite_core::protocol::blocks::AxisAlignedBoxRotation::None => {
+                CollisionBox { min: coord + min, max: coord + max }
+            }
+            perovskite_core::protocol::blocks::AxisAlignedBoxRotation::Nesw => {
+                let r_matrix = Matrix3::from_angle_y(Deg(90.0 * (variant % 4) as f64));
+                let v1 = coord + r_matrix * min;
+                let v2 = coord + r_matrix * max;
+                let min = vec3(v1.x.min(v2.x), v1.y.min(v2.y), v1.z.min(v2.z));
+                let max = vec3(v1.x.max(v2.x), v1.y.max(v2.y), v1.z.max(v2.z));
+                CollisionBox { min, max }
+                
+            }
+        }
+    }
 }
 
 fn clamp_collisions(
@@ -468,20 +515,35 @@ fn clamp_collisions(
 ) -> Vector3<f64> {
     // For new_active, bias toward including a block when we're right on the edge
     let collision_boxes = get_collision_boxes(new_pos, chunks, block_types);
+    let player_bbox_min = vec3(
+        PLAYER_COLLISIONBOX_CORNER_NEG.x + new_pos.x,
+        PLAYER_COLLISIONBOX_CORNER_NEG.y + new_pos.y,
+        PLAYER_COLLISIONBOX_CORNER_NEG.z + new_pos.z,
+    );
+    let player_bbox_max = vec3(
+        PLAYER_COLLISIONBOX_CORNER_POS.x + new_pos.x,
+        PLAYER_COLLISIONBOX_CORNER_POS.y + new_pos.y,
+        PLAYER_COLLISIONBOX_CORNER_POS.z + new_pos.z,
+    );
+
+    #[inline]
+    fn overlaps(min1: f64, max1: f64, min2: f64, max2: f64) -> bool {
+        min1 <= max2 && min2 <= max1
+    }
 
     for cbox in collision_boxes {
-        new_pos = clamp_single_block(old_pos, new_pos, cbox);
+        if overlaps(cbox.min.x, cbox.max.x, player_bbox_min.x, player_bbox_max.x)
+            && overlaps(cbox.min.y, cbox.max.y, player_bbox_min.y, player_bbox_max.y)
+            && overlaps(cbox.min.z, cbox.max.z, player_bbox_min.z, player_bbox_max.z)
+        {
+            new_pos = clamp_single_block(old_pos, new_pos, cbox);
+        }
     }
     new_pos
 }
 
 #[inline]
-fn clamp_single_block(
-    old: Vector3<f64>,
-    new: Vector3<f64>,
-    cbox: CollisionBox,
-) -> Vector3<f64> {
-
+fn clamp_single_block(old: Vector3<f64>, new: Vector3<f64>, cbox: CollisionBox) -> Vector3<f64> {
     vec3(
         clamp_single_axis(
             old.x,
@@ -520,10 +582,7 @@ fn clamp_single_axis(
 ) -> f64 {
     debug_assert!(pos_bias > 0.);
     debug_assert!(neg_bias < 0.);
-    // // Check if we're already within the obstacle block in the current dimension
-    // if (old + neg_bias) < (obstacle as f64 + 0.5) && (old + pos_bias) > (obstacle as f64 - 0.5) {
-    //     return new;
-    // }
+
     match new.total_cmp(&old) {
         std::cmp::Ordering::Less => {
             let boundary = obstacle_max - neg_bias;
@@ -546,28 +605,15 @@ fn clamp_single_axis(
     }
 }
 
-fn is_collision(block: Option<&BlockTypeDef>) -> bool {
-    match block {
-        Some(def) => match def.physics_info {
-            Some(block_type_def::PhysicsInfo::Solid(_)) => true,
-            Some(block_type_def::PhysicsInfo::Fluid(_)) => false,
-            Some(block_type_def::PhysicsInfo::Air(_)) => false,
-            // no physics info -> no interaction
-            None => false,
-        },
-        // no block def -> unknown block -> true
-        None => true,
-    }
-}
-
 fn get_block<'a>(
     coord: BlockCoordinate,
     chunks: &ChunkManagerView,
     block_types: &'a ClientBlockTypeManager,
-) -> Option<&'a BlockTypeDef> {
-    chunks
-        .get(&coord.chunk())
-        .and_then(|chunk| block_types.get_blockdef(chunk.get_single(coord.offset())))
+) -> Option<(&'a BlockTypeDef, u16)> {
+    let chunk = chunks.get(&coord.chunk())?;
+    let id = chunk.get_single(coord.offset());
+    let block = block_types.get_blockdef(id)?;
+    Some((block, id.variant()))
 }
 
 #[inline]
@@ -592,8 +638,8 @@ fn get_collision_boxes(
             for z in inclusive(corner1.z.round() as i32, corner2.z.round() as i32) {
                 let coord = BlockCoordinate { x, y, z };
                 match get_block(coord, chunks, block_types) {
-                    Some(block) => {
-                        push_collision_boxes(coord.into(), block, &mut output);
+                    Some((block, variant)) => {
+                        push_collision_boxes(coord.into(), block, variant, &mut output);
                     }
                     None => output.push(CollisionBox::full_cube(coord.into())),
                 }
@@ -603,11 +649,23 @@ fn get_collision_boxes(
     output
 }
 
-fn push_collision_boxes(coord: Vector3<f64>, block: &BlockTypeDef, output: &mut Vec<CollisionBox>) {
-    match block.physics_info {
+fn push_collision_boxes(
+    coord: Vector3<f64>,
+    block: &BlockTypeDef,
+    variant: u16,
+    output: &mut Vec<CollisionBox>,
+) {
+    match &block.physics_info {
         Some(block_type_def::PhysicsInfo::Solid(_)) => output.push(CollisionBox::full_cube(coord)),
-        Some(block_type_def::PhysicsInfo::Fluid(_)) => {},
-        Some(block_type_def::PhysicsInfo::Air(_)) => {},
-        None => {},
+        Some(block_type_def::PhysicsInfo::Fluid(_)) => {}
+        Some(block_type_def::PhysicsInfo::Air(_)) => {}
+        Some(block_type_def::PhysicsInfo::SolidCustomCollisionboxes(boxes)) => {
+            for box_ in &boxes.boxes {
+                if box_.variant_mask == 0 || (variant & box_.variant_mask as u16) != 0 {
+                    output.push(CollisionBox::from_aabb(coord, box_, variant));
+                }
+            }
+        }
+        None => {}
     }
 }

@@ -54,18 +54,21 @@ message BlockTypeDef {
     CubeRenderInfo cube = 11;
     // The block is a plant-like object, with transparency; the texture is applied as an X shape.
     PlantLikeRenderInfo plant_like = 12;
+    // The block contains many rectangular prisms, each with its own texture and extent.
+    AxisAlignedBoxes axis_aligned_boxes = 13;
   };
   // How the client should handle physics when interacting with the block
   oneof physics_info {
     Empty air = 20;
     Empty solid = 21;
     FluidPhysicsInfo fluid = 22;
+    // Any texture/rendering related info is ignored; rotation and variant_mask are used
+    AxisAlignedBoxes solid_custom_collisionboxes = 23;
   }
 }
 
-message Empty {}
-
-// A rectangular prism. 0,0,0 is at the center of the block.
+// A rectangular prism. 0,0,0 is at the center of the block. A full cube spans (-0.5, 0.5) on
+// each axis.
 // y is given with positive upwards.
 message AxisAlignedBox {
   float x_min = 1;
@@ -74,7 +77,33 @@ message AxisAlignedBox {
   float x_max = 4;
   float y_max = 5;
   float z_max = 6;
+  
+  perovskite.protocol.render.TextureReference tex_left = 7;
+  perovskite.protocol.render.TextureReference tex_right = 8;
+  perovskite.protocol.render.TextureReference tex_top = 9;
+  perovskite.protocol.render.TextureReference tex_bottom = 10;
+  perovskite.protocol.render.TextureReference tex_front = 11;
+  perovskite.protocol.render.TextureReference tex_back = 12;
+
+  AxisAlignedBoxRotation rotation = 13;
+  // If nonzero, this box will only be rendered if variant & variant_mask != 0.
+  uint32 variant_mask = 14;
 }
+
+enum AxisAlignedBoxRotation {
+  // No rotation is performed
+  AXIS_ALIGNED_BOX_ROTATION_NONE = 0;
+  // Bottom two bits of variant 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
+  // The top and bottom textures are rotated to line up.
+  AXIS_ALIGNED_BOX_ROTATION_NESW = 1;
+  // TODO allow all three euler angles
+}
+
+message AxisAlignedBoxes {
+  repeated AxisAlignedBox boxes = 1;
+}
+
+message Empty {}
 
 // Describes the way a cube-shaped block should be rendered.
 enum CubeRenderMode {
@@ -116,7 +145,7 @@ message PlantLikeRenderInfo {
 enum CubeVariantEffect {
   // The variant has no effect on rendering
   CUBE_VARIANT_EFFECT_NONE = 0;
-  // Variants 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
+  // Bottom two bits of variant 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
   // The top and bottom textures are rotated to line up.
   CUBE_VARIANT_EFFECT_ROTATE_NESW = 1;
   // Variant 0xfff is a full cube representing a source of this liquid. Variants 0-8 indicate flowing instances of this liquid.
@@ -127,10 +156,6 @@ enum CubeVariantEffect {
   //
   // Note - this may be superseded by its own render_info oneof type in the future.
   CUBE_VARIANT_EFFECT_LIQUID = 2;
-}
-
-message CubeExRendererInfo {
-  // todo define what CubeEx will include, if we ever need it
 }
 
 message FluidPhysicsInfo {

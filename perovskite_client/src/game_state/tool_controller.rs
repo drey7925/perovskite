@@ -213,6 +213,7 @@ impl ToolController {
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
     ) -> Option<(BlockCoordinate, Option<BlockCoordinate>, &'a BlockTypeDef)> {
+        // TODO handle custom collision boxes
         let pos = last_pos.position;
         let end = pos + (POINTEE_DISTANCE * last_pos.face_unit_vector());
         let chunks = client_state.chunks.read_lock();
