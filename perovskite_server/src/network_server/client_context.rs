@@ -1098,7 +1098,7 @@ impl InboundWorker {
                             )
                         },
                         "item dig handler",
-                        initiator.clone(),
+                        &initiator,
                     )?
                 };
                 *stack = result.updated_tool;
@@ -1244,7 +1244,7 @@ impl InboundWorker {
                                     )
                                 },
                                 "item_place",
-                                initiator,
+                                &initiator,
                             )?;
                             *stack = new_stack;
                         }
@@ -1467,7 +1467,7 @@ impl InboundWorker {
             .0
             .interact_key_handler
         {
-            if let Some(popup) = run_handler!(|| (handler)(ctx, coord), "interact_key", initiator,)?
+            if let Some(popup) = run_handler!(|| (handler)(ctx, coord), "interact_key", &initiator,)?
             {
                 messages.push(StreamToClient {
                     tick: self.context.game_state.tick(),

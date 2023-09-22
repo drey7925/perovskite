@@ -24,7 +24,7 @@ use super::event::EventInitiator;
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
 /// Currently a no-op
 #[inline]
-pub(crate) fn run_handler_impl<T, F>(closure: F, name: &'static str, _initiator: EventInitiator) -> anyhow::Result<T>
+pub(crate) fn run_handler_impl<T, F>(closure: F, name: &'static str, _initiator: &EventInitiator) -> anyhow::Result<T>
 where
     F: FnOnce() -> anyhow::Result<T>,
 {

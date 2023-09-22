@@ -23,7 +23,10 @@ use crate::{
 };
 use anyhow::Result;
 use perovskite_core::{
-    constants::block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
+    constants::{
+        block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
+        item_groups::HIDDEN_FROM_CREATIVE,
+    },
     coordinates::ChunkOffset,
     protocol::{
         self,
@@ -31,13 +34,13 @@ use perovskite_core::{
             block_type_def::PhysicsInfo, AxisAlignedBox, AxisAlignedBoxRotation, AxisAlignedBoxes,
             FluidPhysicsInfo,
         },
-        items::item_stack::QuantityType,
+        items::{item_stack::QuantityType, InteractionRule},
     },
 };
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
     game_map::{BulkUpdateCallback, TimerCallback, TimerSettings, TimerState},
-    items::{BlockInteractionHandler, ItemStack},
+    items::{BlockInteractionHandler, Item, ItemStack},
 };
 
 use super::{
@@ -187,8 +190,38 @@ pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Re
 }
 
 fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
+    let tnt_actor_tool = builder.inner.items_mut().register_item(Item {
+        proto: protocol::items::ItemDef {
+            short_name: "default:tnt_actor_tool".to_string(),
+            display_name: "TNT actor tool (you should not see this)".to_string(),
+            inventory_texture: Some(TNT_TEXTURE.into()),
+            groups: vec![HIDDEN_FROM_CREATIVE.into()],
+            interaction_rules: vec![InteractionRule {
+                block_group: vec![],
+                tool_wear: 0,
+                dig_behavior: Some(
+                    protocol::items::interaction_rule::DigBehavior::InstantDigOneshot(
+                        Default::default(),
+                    ),
+                ),
+            }],
+            quantity_type: None,
+        },
+        dig_handler: None,
+        tap_handler: None,
+        place_handler: None,
+    })?;
+
+    let tnt_tool_stack = Some(
+        ItemStack { proto: protocol::items::ItemStack {
+            item_name: "default:tnt_actor_tool".to_string(),
+            quantity: 1,
+            ..Default::default()
+        }}
+    );
+
     include_texture_bytes!(builder, TNT_TEXTURE, "textures/tnt.png")?;
-    let air = builder.air_block;
+    //let air = builder.air_block;
     BlockBuilder::new(TNT)
         .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
         .set_inventory_texture(TNT_TEXTURE)
@@ -202,7 +235,8 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
                     for j in -3..=3 {
                         for k in -3..=3 {
                             if let Some(neighbor) = coord.try_delta(i, j, k) {
-                                ctx.game_map().set_block(neighbor, air, None)?;
+                                // discard the block interaction result; the player isn't getting the drops
+                                ctx.game_map().dig_block(neighbor, ctx.initiator(), tnt_tool_stack.as_ref())?;
                             }
                         }
                     }
@@ -487,10 +521,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 (-0.3, 0.5),
             )),
     )?;
-    
+
     game_builder.add_block(
-        BlockBuilder::new(BlockName("testonly:aabb_geometry_test2"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TESTONLY_UNKNOWN_TEX)),
+        BlockBuilder::new(BlockName("testonly:aabb_geometry_test2")).set_cube_appearance(
+            CubeAppearanceBuilder::new().set_single_texture(TESTONLY_UNKNOWN_TEX),
+        ),
     )?;
 
     Ok(())

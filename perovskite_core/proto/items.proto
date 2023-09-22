@@ -54,6 +54,8 @@ message InteractionRule {
   // The block groups (see the `group` field in BlockTypeDef) that the rule
   // applies to. If *all* groups for the block match any of the groups listed here,
   // the block can be dug
+  //
+  // An empty vec implies that all blocks will match
   repeated string block_group = 1;
   // If this interaction rule applies while the current item has a durability counter, this
   // value will be subtracted from the current durability in the *default* handler.

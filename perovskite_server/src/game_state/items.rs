@@ -15,9 +15,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, ensure, Result};
+use lazy_static::lazy_static;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::protocol::items::item_def::QuantityType;
-use lazy_static::lazy_static;
 use rustc_hash::FxHashSet;
 
 use std::collections::HashMap;
@@ -58,6 +58,8 @@ pub struct Item {
     /// If the block should still be dug in the normal way, this handler is responsible for
     /// calling game_map().dig_block(...). It may call that function multiple times, e.g.
     /// if a tool digs multiple coordinates in one activation.
+    /// 
+    /// Note - if a plugin calls game_map().dig_block directly, then this handler will not be called.
     ///
     /// If None, the current item stack will not be updated, and the block's dig handler will be run.
     pub dig_handler: Option<Box<BlockInteractionHandler>>,
@@ -141,18 +143,20 @@ impl Item {
             Some(proto::item_def::QuantityType::Stack(_))
         )
     }
+}
 
-    pub fn get_interaction_rule(&self, block_type: &BlockType) -> Option<proto::InteractionRule> {
-        let block_groups = block_type
-            .client_info
-            .groups
-            .iter()
-            .collect::<FxHashSet<_>>();
-        self.proto
-            .interaction_rules
-            .iter()
-            .find(|rule| rule.block_group.iter().all(|x| block_groups.contains(x)))
-            .cloned()
+fn eval_interaction_rules<'a>(rules: &'a [proto::InteractionRule], block_type: &BlockType) -> Option<&'a proto::InteractionRule> {
+    let block_groups = block_type
+        .client_info
+        .groups
+        .iter()
+        .collect::<FxHashSet<_>>();
+    rules.iter().find(|rule| rule.block_group.iter().all(|x| block_groups.contains(x)))
+}
+
+impl HasInteractionRules for &Item {
+    fn get_interaction_rule(&self, block_type: &BlockType) -> Option<&proto::InteractionRule> {
+        eval_interaction_rules(&self.proto.interaction_rules, block_type)
     }
 }
 
@@ -499,6 +503,24 @@ pub(crate) fn default_dig_handler(
         },
         obtained_items: dig_result.item_stacks,
     })
+}
+
+pub trait HasInteractionRules {
+    fn get_interaction_rule(&self, block_type: &BlockType) -> Option<&proto::InteractionRule>;
+}
+
+impl HasInteractionRules for Option<&Item> {
+    fn get_interaction_rule(&self, block_type: &BlockType) -> Option<&proto::InteractionRule> {
+        if let Some(item) = self {
+            item.get_interaction_rule(block_type)
+        } else {
+            eval_interaction_rules(&DEFAULT_INTERACTION_RULES, block_type)
+        }
+    }
+}
+
+lazy_static!{
+    static ref DEFAULT_INTERACTION_RULES: Vec<proto::InteractionRule> = default_item_interaction_rules();
 }
 
 pub(crate) const NO_TOOL: &str = "internal:no_tool";

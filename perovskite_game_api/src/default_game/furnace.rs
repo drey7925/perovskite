@@ -9,7 +9,7 @@ use perovskite_server::game_state::{
     },
     client_ui::Popup,
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
-    items::{InteractionRuleExt, ItemStack, MaybeStack},
+    items::{InteractionRuleExt, ItemStack, MaybeStack, HasInteractionRules},
 };
 use prost::Message;
 
@@ -407,7 +407,7 @@ fn furnace_dig_handler(
     let rule = ctx
         .items()
         .from_stack(tool)
-        .and_then(|item| item.get_interaction_rule(block_type));
+        .and_then(|item| item.get_interaction_rule(block_type).cloned());
     if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
         *bt = air;
         extended_data.clear();

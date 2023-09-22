@@ -1122,7 +1122,7 @@ impl ServerGameMap {
                 let result = run_handler!(
                     || (inline_handler)(ctx, block, ext_data, tool),
                     "block_inline",
-                    initiator.clone(),
+                    initiator,
                 )?;
                 Ok((blocktype, result))
             } else {
@@ -1139,7 +1139,7 @@ impl ServerGameMap {
             result += run_handler!(
                 || (full_handler)(ctx, coord, tool),
                 "block_full",
-                initiator.clone(),
+                initiator,
             )?;
         }
 
@@ -1272,7 +1272,7 @@ impl ServerGameMap {
                     Ok(())
                 },
                 "mapgen",
-                EventInitiator::Engine
+                &EventInitiator::Engine
             )?;
         }
         Ok((chunk, true))
@@ -2197,7 +2197,7 @@ impl GameMapTimer {
                                 &ctx
                             ),
                             "timer_inline_locked",
-                            EventInitiator::Engine
+                            &EventInitiator::Engine
                         )?;
                         Ok(())
                     },
@@ -2238,7 +2238,7 @@ impl GameMapTimer {
                         neighbor_data
                     ),
                     "timer_bulk_update",
-                    EventInitiator::Engine
+                    &EventInitiator::Engine
                 )?;
             }
             TimerCallback::BulkUpdateWithNeighbors(cb) => {
@@ -2252,7 +2252,7 @@ impl GameMapTimer {
                         neighbor_data
                     ),
                     "timer_bulk_update_with_neighbors",
-                    EventInitiator::Engine
+                    &EventInitiator::Engine
                 )?;
             }
             _ => unreachable!(),

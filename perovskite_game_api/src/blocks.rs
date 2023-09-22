@@ -48,7 +48,7 @@ use perovskite_server::game_state::{
         BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings,
         TimerState,
     },
-    items::{InteractionRuleExt, Item, ItemStack},
+    items::{InteractionRuleExt, Item, ItemStack, HasInteractionRules},
     GameState,
 };
 
@@ -78,7 +78,7 @@ impl DroppedItem {
             let rule = ctx
                 .items()
                 .from_stack(stack)
-                .and_then(|item| item.get_interaction_rule(block_type));
+                .and_then(|item| item.get_interaction_rule(block_type).cloned());
             if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
                 *target_block = air_block;
                 ext_data.clear();
