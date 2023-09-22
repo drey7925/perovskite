@@ -1038,6 +1038,8 @@ impl ServerGameMap {
     }
 
     /// Digs a block, running its on-dig event handler. The items it drops are returned.
+    /// 
+    /// This does not check whether the tool is able to dig the block.
     pub fn dig_block(
         &self,
         coord: BlockCoordinate,

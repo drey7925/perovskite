@@ -15,7 +15,10 @@
 use std::{sync::atomic::AtomicU32, time::Duration};
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder, MatterType, PlantLikeAppearanceBuilder},
+    blocks::{
+        AaBoxTextures, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
+        MatterType, PlantLikeAppearanceBuilder,
+    },
     game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
 };
 use anyhow::Result;
@@ -75,6 +78,7 @@ const WATER_TEXTURE: TextureName = TextureName("default:water");
 const CHEST_TEXTURE: TextureName = TextureName("default:chest");
 const TORCH_TEXTURE: TextureName = TextureName("default:torch");
 const TNT_TEXTURE: TextureName = TextureName("default:tnt");
+const TESTONLY_UNKNOWN_TEX: TextureName = TextureName("default:testonly_unknown");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -238,6 +242,13 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
     include_texture_bytes!(game_builder, CHEST_TEXTURE, "textures/chest_side.png")?;
     include_texture_bytes!(game_builder, TORCH_TEXTURE, "textures/torch.png")?;
+
+    include_texture_bytes!(
+        game_builder,
+        TESTONLY_UNKNOWN_TEX,
+        "../media/block_unknown.png"
+    )?;
+
     let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
@@ -463,21 +474,24 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             })),
     )?;
 
-    // game_builder.inner.add_timer(
-    //     "testonly_spam",
-    //     TimerSettings {
-    //         interval: Duration::from_secs(5),
-    //         shards: 16,
-    //         spreading: 1.0,
-    //         block_types: vec![dirt.0, stone.0],
-    //         per_block_probability: 1.0,
-    //         ..Default::default()
-    //     },
-    //     TimerCallback::BulkUpdate(Box::new(TestSpamDirtStoneCallback {
-    //         dirt: dirt.0,
-    //         stone: stone.0,
-    //     })),
-    // );
+    game_builder.add_block(
+        BlockBuilder::new(BlockName("testonly:aabb_geometry_test"))
+            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
+                AaBoxTextures::new_single_tex(
+                    TESTONLY_UNKNOWN_TEX,
+                    crate::blocks::TextureCropping::AutoCrop,
+                    crate::blocks::RotationMode::None,
+                ),
+                (-0.3, 0.5),
+                (-0.3, 0.5),
+                (-0.3, 0.5),
+            )),
+    )?;
+    
+    game_builder.add_block(
+        BlockBuilder::new(BlockName("testonly:aabb_geometry_test2"))
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TESTONLY_UNKNOWN_TEX)),
+    )?;
 
     Ok(())
 }

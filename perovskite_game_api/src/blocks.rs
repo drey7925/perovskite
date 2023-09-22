@@ -28,8 +28,8 @@ use perovskite_core::{
         self,
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
-            BlockTypeDef, CubeRenderInfo, CubeRenderMode, CubeVariantEffect, Empty,
-            PlantLikeRenderInfo,
+            AxisAlignedBox, AxisAlignedBoxRotation, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo,
+            CubeRenderMode, CubeVariantEffect, Empty, PlantLikeRenderInfo,
         },
         items as items_proto,
         items::{item_def::QuantityType, ItemDef},
@@ -45,7 +45,8 @@ use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
     game_map::{
-        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings, TimerState,
+        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings,
+        TimerState,
     },
     items::{InteractionRuleExt, Item, ItemStack},
     GameState,
@@ -55,6 +56,8 @@ use crate::{
     game_builder::{BlockName, GameBuilder, ItemName},
     maybe_export,
 };
+
+pub mod custom_geometry;
 
 /// The item obtained when the block is dug.
 /// TODO stabilize item stack and expose a vec<itemstack> option
@@ -361,6 +364,27 @@ impl BlockBuilder {
     pub fn set_cube_single_texture(self, texture: impl Into<TextureReference>) -> Self {
         self.set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(texture))
     }
+
+    pub fn set_axis_aligned_boxes_appearance(
+        mut self,
+        appearance: AxisAlignedBoxesAppearanceBuilder,
+    ) -> Self {
+        self.variant_effect = if appearance
+            .proto
+            .boxes
+            .iter()
+            .any(|b| b.rotation() == AxisAlignedBoxRotation::Nesw)
+        {
+            VariantEffect::RotateNesw
+        } else {
+            VariantEffect::None
+        };
+        self.client_info.render_info = Some(RenderInfo::AxisAlignedBoxes(appearance.proto.clone()));
+        self.client_info.physics_info =
+            Some(PhysicsInfo::SolidCustomCollisionboxes(appearance.proto));
+        self
+    }
+
     /// Sets the block to have a plant-like appearance
     pub fn set_plant_like_appearance(mut self, appearance: PlantLikeAppearanceBuilder) -> Self {
         self.client_info.render_info = Some(RenderInfo::PlantLike(appearance.render_info));
@@ -500,6 +524,7 @@ impl BlockBuilder {
     }
 }
 
+#[derive(Clone)]
 pub struct CubeAppearanceBuilder {
     render_info: CubeRenderInfo,
 }
@@ -759,6 +784,178 @@ impl BulkUpdateCallback for LiquidPropagator {
             }
         }
         Ok(())
+    }
+}
+
+/// How textures for an axis-aligned box should be cropped
+#[derive(Clone, Debug)]
+pub enum TextureCropping {
+    /// The texture is sized to span the entire 1x1x1 cube in world space. It is then cropped down to fit the axis-aligned box being drawn.
+    /// This prevents visual artifacts (z-flickering) when two axis-aligned boxes overlap on a face, as long as both use the same texture.
+    AutoCrop,
+    /// The texture is scaled to fit the axis-aligned box.
+    NoCrop,
+}
+
+#[derive(Clone, Debug)]
+/// How axis-aligned boxes rotate
+pub enum RotationMode {
+    /// No rotation, the box always faces the same direction
+    None,
+    /// The box rotates horizontally around the center of the block.
+    /// When placed, the player's facing direction sets the rotation.
+    RotateHorizontally,
+}
+
+/// The textures to apply to an axis-aligned box.
+#[derive(Clone, Debug)]
+pub struct AaBoxTextures {
+    left: TextureReference,
+    right: TextureReference,
+    top: TextureReference,
+    bottom: TextureReference,
+    front: TextureReference,
+    back: TextureReference,
+    crop_mode: TextureCropping,
+    rotation_mode: RotationMode,
+}
+impl AaBoxTextures {
+    pub fn new(
+        left: impl Into<TextureReference>,
+        right: impl Into<TextureReference>,
+        top: impl Into<TextureReference>,
+        bottom: impl Into<TextureReference>,
+        front: impl Into<TextureReference>,
+        back: impl Into<TextureReference>,
+        crop_mode: TextureCropping,
+        rotation_mode: RotationMode,
+    ) -> Self {
+        Self {
+            left: left.into(),
+            right: right.into(),
+            top: top.into(),
+            bottom: bottom.into(),
+            front: front.into(),
+            back: back.into(),
+            crop_mode,
+            rotation_mode,
+        }
+    }
+
+    pub fn new_single_tex(
+        texture: impl Into<TextureReference>,
+        crop_mode: TextureCropping,
+        rotation_mode: RotationMode,
+    ) -> Self {
+        let tex = texture.into();
+        Self {
+            left: tex.clone(),
+            right: tex.clone(),
+            top: tex.clone(),
+            bottom: tex.clone(),
+            front: tex.clone(),
+            back: tex,
+            crop_mode,
+            rotation_mode,
+        }
+    }
+}
+
+/// Block appearance builder for blocks that have custom axis-aligned box geometry
+pub struct AxisAlignedBoxesAppearanceBuilder {
+    proto: AxisAlignedBoxes,
+}
+impl AxisAlignedBoxesAppearanceBuilder {
+    pub fn new() -> Self {
+        Self {
+            proto: AxisAlignedBoxes::default(),
+        }
+    }
+
+    /// Adds a box to the block appearance builder.
+    ///
+    /// x, y, z are given as (min, max) with the center of the cube at 0.0.
+    /// A full cube would span from -0.5 to 0.5 in all directions.
+    pub fn add_box(
+        mut self,
+        textures: AaBoxTextures,
+        x: (f32, f32),
+        y: (f32, f32),
+        z: (f32, f32),
+    ) -> Self {
+        self.proto.boxes.push(AxisAlignedBox {
+            x_min: x.0,
+            x_max: x.1,
+            y_min: y.0,
+            y_max: y.1,
+            z_min: z.0,
+            z_max: z.1,
+            tex_left: Some(Self::maybe_crop(
+                textures.left,
+                &textures.crop_mode,
+                (0.5 - z.1, 0.5 - z.0),
+                (0.5 - y.1, 0.5 - y.0),
+            )),
+            tex_right: Some(Self::maybe_crop(
+                textures.right,
+                &textures.crop_mode,
+                (z.0 + 0.5, z.1 + 0.5),
+                (0.5 - y.1, 0.5 - y.0),
+            )),
+            tex_top: Some(Self::maybe_crop(
+                textures.top,
+                &textures.crop_mode,
+                (0.5 - x.1, 0.5 - x.0),
+                (z.0 + 0.5, z.1 + 0.5),
+            )),
+            tex_bottom: Some(Self::maybe_crop(
+                textures.bottom,
+                &textures.crop_mode,
+                (x.0 + 0.5, x.1 + 0.5),
+                (z.0 + 0.5, z.1 + 0.5),
+            )),
+            tex_front: Some(Self::maybe_crop(
+                textures.front,
+                &textures.crop_mode,
+                (x.0 + 0.5, x.1 + 0.5),
+                (0.5 - y.1, 0.5 - y.0),
+            )),
+            tex_back: Some(Self::maybe_crop(
+                textures.back,
+                &textures.crop_mode,
+                (0.5 - x.1, 0.5 - x.0),
+                (0.5 - y.1, 0.5 - y.0),
+            )),
+            rotation: match textures.rotation_mode {
+                RotationMode::None => AxisAlignedBoxRotation::None.into(),
+                RotationMode::RotateHorizontally => AxisAlignedBoxRotation::Nesw.into(),
+            },
+            variant_mask: 0,
+        });
+        self
+    }
+
+    fn maybe_crop(
+        tex: TextureReference,
+        crop_mode: &TextureCropping,
+        extents_u: (f32, f32),
+        extents_v: (f32, f32),
+    ) -> TextureReference {
+        match crop_mode {
+            TextureCropping::AutoCrop => TextureReference {
+                texture_name: tex.texture_name,
+                crop: Some(TextureCrop {
+                    left: extents_u.0,
+                    right: extents_u.1,
+                    top: extents_v.0,
+                    bottom: extents_v.1,
+                }),
+            },
+            TextureCropping::NoCrop => TextureReference {
+                texture_name: tex.texture_name,
+                crop: None,
+            },
+        }
     }
 }
 

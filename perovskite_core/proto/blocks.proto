@@ -96,7 +96,6 @@ enum AxisAlignedBoxRotation {
   // Bottom two bits of variant 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
   // The top and bottom textures are rotated to line up.
   AXIS_ALIGNED_BOX_ROTATION_NESW = 1;
-  // TODO allow all three euler angles
 }
 
 message AxisAlignedBoxes {
