@@ -86,10 +86,7 @@ These can be adjusted in the settings file, whose filename is printed in the log
 Tons of stuff, in no particular order, and not yet prioritized:
 
 * Rendering and display:
-    * Non-cube blocks (e.g. torches, plants). Eventually custom geometry, but not there yet.
     * Lighting
-* Block types
-    * Liquids
 * Game state and interactions:
     * Chat
     * Commands
@@ -108,17 +105,18 @@ Tons of stuff, in no particular order, and not yet prioritized:
     * Player action validation
     * Adaptive and adjustable chunk load distance
 * Content
+    * Torch (doable w/ custom geometry + custom handlers)
     * Mapgen
         * Trees - keep refining
         * Sand and other surface material variety
-        * Ores
+        * Ores (+ resulting items)
         * Simple caves
         * Slightly more interesting elevation profile
+    * Helpers for stairs and slabs
     * Simple tools
     * Locked chests
     * Cobblestone, bricks, etc
 * Bugfixes for known issues
-    * Inconsistency with block ID assignment when unknown blocks are present
     * Trees intersect each other
     * Only binds to IPv6 on Windows
 
@@ -130,4 +128,6 @@ perovskite_server's API can change in breaking ways. perovskite_game_api (as wel
 
 ## Who is behind this?
 
-A pseudoanonymous software engineer (drey7925). This project is not endorsed, sponsored, or supported by my employer or any affiliates.
+I work on low-level infrastructure at a major hyperscaler and produce this game in my free time. You can find me on discord as `drey7925`. 
+
+Note that this project is not endorsed, sponsored, or supported by my employer or any affiliates.

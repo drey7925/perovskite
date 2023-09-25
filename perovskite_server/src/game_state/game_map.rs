@@ -15,14 +15,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Error;
-use hashbrown::hash_map::DefaultHashBuilder;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::hash::BuildHasherDefault;
-use std::num::NonZeroUsize;
+use smallvec::{smallvec, SmallVec};
 use std::ops::{Deref, DerefMut};
 use std::{
     collections::HashSet,
@@ -33,7 +31,6 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::game_state::handlers;
 use crate::run_handler;
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
@@ -1038,7 +1035,7 @@ impl ServerGameMap {
     }
 
     /// Digs a block, running its on-dig event handler. The items it drops are returned.
-    /// 
+    ///
     /// This does not check whether the tool is able to dig the block.
     pub fn dig_block(
         &self,
@@ -1136,11 +1133,7 @@ impl ServerGameMap {
                 initiator: initiator.clone(),
                 game_state: self.game_state(),
             };
-            result += run_handler!(
-                || (full_handler)(ctx, coord, tool),
-                "block_full",
-                initiator,
-            )?;
+            result += run_handler!(|| (full_handler)(ctx, coord, tool), "block_full", initiator,)?;
         }
 
         Ok(result)
@@ -1668,6 +1661,8 @@ pub struct TimerState {
 
 struct ShardState {
     timer_state: TimerState,
+    // pre-allocated here to avoid allocations in the timer path
+    neighbor_buffer: ChunkNeighbors,
 }
 
 pub trait TimerInlineCallback: Send + Sync {
@@ -1875,6 +1870,11 @@ impl GameMapTimer {
                 prev_tick_time: start_time,
                 current_tick_time: Instant::now(),
             },
+            neighbor_buffer:  ChunkNeighbors {
+                center: BlockCoordinate::new(0, 0, 0),
+                presence_bitmap: 0,
+                blocks: Box::new([0; 48 * 48 * 48]),
+            },
         };
         // Todo detect skipped ticks and adjust accordingly
         while !self.cancellation.is_cancelled() {
@@ -1883,7 +1883,7 @@ impl GameMapTimer {
                     let current_tick_start = Instant::now();
                     shard_state.timer_state.current_tick_time = current_tick_start;
 
-                    tokio::task::block_in_place(|| self.delegate_locking_path(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types, &shard_state))?;
+                    tokio::task::block_in_place(|| self.delegate_locking_path(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types, &mut shard_state))?;
                     shard_state.timer_state.prev_tick_time = current_tick_start;
                 }
             }
@@ -1897,7 +1897,7 @@ impl GameMapTimer {
         fine_shard: usize,
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
-        state: &ShardState,
+        state: &mut ShardState,
     ) -> Result<()> {
         let _span = span!("timer tick with neighbors");
         let mut writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
@@ -1922,11 +1922,7 @@ impl GameMapTimer {
                 .then_with(|| a.y.cmp(&b.y))
         });
         plot!("timer tick coords", coords.len() as f64);
-        let mut neighbor_buffer = ChunkNeighbors {
-            center: BlockCoordinate::new(0, 0, 0),
-            presence_bitmap: 0,
-            blocks: Box::new([0; 48 * 48 * 48]),
-        };
+
 
         for coord in coords.into_iter() {
             if writeback_permit.is_none() {
@@ -1935,13 +1931,14 @@ impl GameMapTimer {
             // this does the locking twice, with the benefit that it elides all of the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
             let (matches, latest_update) =
-                self.build_neighbors(&mut neighbor_buffer, coord, &game_state.map(), false)?;
+                self.build_neighbors(&mut state.neighbor_buffer, coord, &game_state.map(), false)?;
             let should_run = (!self.settings.idle_chunk_after_unchanged
                 || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
                 && matches;
 
             if should_run {
-                let (_, _) = self.build_neighbors(&mut neighbor_buffer, coord, &game_state.map, true)?;
+                let (_, _) =
+                    self.build_neighbors(&mut state.neighbor_buffer, coord, &game_state.map, true)?;
                 let shard = game_state.map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
                     if let Some(mut chunk) = holder.try_get()? {
@@ -1952,13 +1949,13 @@ impl GameMapTimer {
                                     holder,
                                     &mut chunk,
                                     coord,
-                                    Some(&neighbor_buffer),
+                                    Some(&state.neighbor_buffer),
                                     state,
                                 )?;
                             }
                             _ => unreachable!(),
                         }
-                        if chunk.dirty {                            
+                        if chunk.dirty {
                             // This has a small missed optimization - until the chunk is written back, this
                             // will keep firing. If further optimizations is needed, track whether
                             // *this* bulk updater modified the chunk, and use that for setting
@@ -1985,7 +1982,7 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         block_types: &FxHashSet<u32>,
-        state: &ShardState,
+        state: &mut ShardState,
     ) -> Result<()> {
         match &self.callback {
             TimerCallback::PerBlockLocked(_) | TimerCallback::BulkUpdate(_) => self
@@ -2288,10 +2285,10 @@ impl GameMapTimer {
         game_map: &ServerGameMap,
         copy_data: bool,
     ) -> Result<(bool, Option<Instant>)> {
-        let mut buf = &mut neighbor_data.blocks;
+        let buf = &mut neighbor_data.blocks;
         let mut presence_bitmap = 0u32;
         let mut any_blooms_match = false;
-        let mut update_times = vec![];
+        let mut update_times: SmallVec<[_; 27]> = smallvec![];
         for cx in -1..=1 {
             for cz in -1..=1 {
                 for cy in -1..=1 {
@@ -2331,7 +2328,7 @@ impl GameMapTimer {
                 }
             }
         }
-        neighbor_data.center = center_coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0});
+        neighbor_data.center = center_coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0 });
         neighbor_data.presence_bitmap = presence_bitmap;
         Ok((any_blooms_match, update_times.into_iter().max()))
     }

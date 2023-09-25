@@ -13,7 +13,8 @@ pub(crate) struct RenderSettings {
     pub(crate) num_mesh_workers: usize,
     pub(crate) num_neighbor_propagators: usize,
     pub(crate) show_placement_guide: bool,
-    pub(crate) testonly_noop_meshing: bool
+    pub(crate) testonly_noop_meshing: bool,
+    pub(crate) physics_debug: bool
 }
 
 impl Default for RenderSettings {
@@ -22,7 +23,8 @@ impl Default for RenderSettings {
             num_mesh_workers: 2,
             num_neighbor_propagators: 1,
             show_placement_guide: false,
-            testonly_noop_meshing: false
+            testonly_noop_meshing: false,
+            physics_debug: false
         }
     }
 }

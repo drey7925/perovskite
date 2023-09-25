@@ -9,13 +9,13 @@ use perovskite_server::game_state::{
     },
     client_ui::Popup,
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
-    items::{InteractionRuleExt, ItemStack, MaybeStack, HasInteractionRules},
+    items::{HasInteractionRules, InteractionRuleExt, ItemStack, MaybeStack},
 };
 use prost::Message;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder},
-    game_builder::{BlockName, TextureName},
+    game_builder::{StaticBlockName, TextureName},
     include_texture_bytes,
 };
 
@@ -27,9 +27,9 @@ use super::{
 };
 
 /// Furnace that's not current lit
-pub const FURNACE: BlockName = BlockName("default:furnace");
+pub const FURNACE: StaticBlockName = StaticBlockName("default:furnace");
 /// Furnace that's lit
-pub const FURNACE_ON: BlockName = BlockName("default:furnace_on");
+pub const FURNACE_ON: StaticBlockName = StaticBlockName("default:furnace_on");
 /// How long a single furnace tick takes.
 pub const FURNACE_TICK_DURATION: Duration = Duration::from_millis(250);
 
@@ -251,7 +251,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
         "textures/furnace_on_front.png"
     )?;
 
-    let furnace_off_handle = game_builder.inner.add_block(
+    let furnace_off_block = game_builder.inner.add_block(
         BlockBuilder::new(FURNACE)
             .add_block_group(BRITTLE)
             .set_cube_appearance(
@@ -267,7 +267,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                     .set_rotate_laterally(),
             )
             .set_inventory_texture(FURNACE_ON_FRONT_TEXTURE)
-            .set_inventory_display_name("Furnace")
+            .set_display_name("Furnace")
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
@@ -276,7 +276,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                 bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
             })),
     )?;
-    let furnace_on_handle = game_builder.inner.add_block(
+    let furnace_on_block = game_builder.inner.add_block(
         BlockBuilder::new(FURNACE_ON)
             .add_block_group(BRITTLE)
             .add_item_group(HIDDEN_FROM_CREATIVE)
@@ -294,8 +294,8 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
             )
             .set_light_emission(8)
             .set_inventory_texture(FURNACE_ON_FRONT_TEXTURE)
-            .set_inventory_display_name("Lit furnace (should not see this)")
-            .set_dropped_item(FURNACE.0, 1)
+            .set_display_name("Lit furnace (should not see this)")
+            .set_dropped_item(&FURNACE.0, 1)
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
@@ -308,8 +308,8 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
     let timer_handler = FurnaceTimerCallback {
         recipes: game_builder.smelting_recipes.clone(),
         fuels: game_builder.smelting_fuels.clone(),
-        furnace_off_handle: furnace_off_handle.0,
-        furnace_on_handle: furnace_on_handle.0,
+        furnace_off_handle: furnace_off_block.handle.0,
+        furnace_on_handle: furnace_on_block.handle.0,
     };
     game_builder.inner.inner.add_timer(
         "default:furnace_timer",
@@ -317,7 +317,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
             interval: FURNACE_TICK_DURATION,
             shards: 32,
             spreading: 1.0,
-            block_types: vec![furnace_off_handle.0, furnace_on_handle.0],
+            block_types: vec![furnace_off_block.handle.0, furnace_on_block.handle.0],
             per_block_probability: 1.0,
             ..Default::default()
         },
@@ -413,7 +413,7 @@ fn furnace_dig_handler(
         extended_data.clear();
 
         Ok(BlockInteractionResult {
-            item_stacks: vec![ctx.items().get_item(FURNACE.0).unwrap().singleton_stack()],
+            item_stacks: vec![ctx.items().get_item(&FURNACE.0).unwrap().singleton_stack()],
             tool_wear: match rule {
                 Some(rule) => rule.tool_wear(block_type)?,
                 None => 0,

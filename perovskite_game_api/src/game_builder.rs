@@ -15,7 +15,12 @@
 use std::path::Path;
 
 use perovskite_core::{
-    constants::{blocks::AIR, textures::FALLBACK_UNKNOWN_TEXTURE, items::default_item_interaction_rules, block_groups::{DEFAULT_LIQUID, DEFAULT_GAS}},
+    constants::{
+        block_groups::{DEFAULT_GAS, DEFAULT_LIQUID},
+        blocks::AIR,
+        items::default_item_interaction_rules,
+        textures::FALLBACK_UNKNOWN_TEXTURE,
+    },
     protocol::{
         blocks::{
             block_type_def::{PhysicsInfo, RenderInfo},
@@ -43,23 +48,39 @@ impl From<TextureName> for TextureReference {
     fn from(value: TextureName) -> Self {
         TextureReference {
             texture_name: value.0.to_string(),
-            crop: None
+            crop: None,
         }
     }
 }
 
-/// Type-safe newtype wrapper for a block name
-pub struct BlockName(pub &'static str);
+pub(crate) const FALLBACK_UNKNOWN_TEXTURE_NAME: TextureName = TextureName(FALLBACK_UNKNOWN_TEXTURE);
 
-/// Type-safe newtype wrapper for an item name
-pub struct ItemName(pub &'static str);
+/// Type-safe newtype wrapper for a const/static block name
+pub struct StaticBlockName(pub &'static str);
+/// Type-safe wrapper for a block name
+pub struct BlockName(pub String);
+impl From<StaticBlockName> for BlockName {
+    fn from(value: StaticBlockName) -> Self {
+        BlockName(value.0.to_string())
+    }
+}
+
+/// Type-safe newtype wrapper for a const/static item name
+pub struct StaticItemName(pub &'static str);
+/// Type-safe wrapper for an item name
+pub struct ItemName(pub String);
+impl From<StaticItemName> for ItemName {
+    fn from(value: StaticItemName) -> Self {
+        ItemName(value.0.to_string())
+    }
+}
 
 #[cfg(feature = "unstable_api")]
 /// Unstable re-export of the raw gameserver API. This API is subject to
 /// breaking changes that do not follow semver, before 1.0
 use perovskite_server::server as server_api;
 
-use crate::blocks::{BlockBuilder, BlockTypeHandleWrapper};
+use crate::blocks::{BlockBuilder, BlockTypeHandleWrapper, BuiltBlock};
 
 /// Stable API for building and configuring a game.
 ///
@@ -125,11 +146,11 @@ impl GameBuilder {
         Ok(GameBuilder { inner, air_block })
     }
     /// Registers a block and its corresponding item in the game.
-    pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<BlockTypeHandleWrapper> {
+    pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<BuiltBlock> {
         block_builder.build_and_deploy_into(self)
     }
 
-    pub fn get_block(&self, block_name: BlockName) -> Option<BlockTypeHandle> {
+    pub fn get_block(&self, block_name: StaticBlockName) -> Option<BlockTypeHandle> {
         self.inner.blocks().get_by_name(block_name.0)
     }
 
@@ -138,7 +159,7 @@ impl GameBuilder {
     /// nothing were held in the hand.
     pub fn register_basic_item(
         &mut self,
-        short_name: ItemName,
+        short_name: StaticItemName,
         display_name: impl Into<String>,
         texture: TextureName,
         groups: Vec<String>,
@@ -150,7 +171,9 @@ impl GameBuilder {
                 inventory_texture: Some(texture.into()),
                 groups,
                 interaction_rules: default_item_interaction_rules(),
-                quantity_type: Some(perovskite_core::protocol::items::item_def::QuantityType::Stack(256)),
+                quantity_type: Some(
+                    perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
+                ),
             },
             dig_handler: None,
             tap_handler: None,

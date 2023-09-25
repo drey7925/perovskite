@@ -16,10 +16,12 @@ use std::{sync::atomic::AtomicU32, time::Duration};
 
 use crate::{
     blocks::{
-        AaBoxTextures, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
+        AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
         MatterType, PlantLikeAppearanceBuilder,
     },
-    game_builder::{include_texture_bytes, BlockName, GameBuilder, ItemName, TextureName},
+    game_builder::{
+        include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, TextureName,
+    },
 };
 use anyhow::Result;
 use perovskite_core::{
@@ -30,46 +32,44 @@ use perovskite_core::{
     coordinates::ChunkOffset,
     protocol::{
         self,
-        blocks::{
-            block_type_def::PhysicsInfo, AxisAlignedBox, AxisAlignedBoxRotation, AxisAlignedBoxes,
-            FluidPhysicsInfo,
-        },
+        blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
         items::{item_stack::QuantityType, InteractionRule},
     },
 };
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
-    game_map::{BulkUpdateCallback, TimerCallback, TimerSettings, TimerState},
-    items::{BlockInteractionHandler, Item, ItemStack},
+    game_map::{BulkUpdateCallback, TimerState},
+    items::{Item, ItemStack},
 };
 
 use super::{
     block_groups::{BRITTLE, GRANULAR},
     mapgen::OreDefinition,
     recipes::RecipeSlot,
+    shaped_blocks::{make_stairs, make_slab},
     DefaultGameBuilder,
 };
 
 /// Dirt without grass on it.
-pub const DIRT: BlockName = BlockName("default:dirt");
+pub const DIRT: StaticBlockName = StaticBlockName("default:dirt");
 /// Dirt with grass on top.
-pub const DIRT_WITH_GRASS: BlockName = BlockName("default:dirt_with_grass");
+pub const DIRT_WITH_GRASS: StaticBlockName = StaticBlockName("default:dirt_with_grass");
 /// Solid grey stone.
-pub const STONE: BlockName = BlockName("default:stone");
+pub const STONE: StaticBlockName = StaticBlockName("default:stone");
 /// Transparent glass.
-pub const GLASS: BlockName = BlockName("default:glass");
+pub const GLASS: StaticBlockName = StaticBlockName("default:glass");
 /// Unlocked chest.
-pub const CHEST: BlockName = BlockName("default:chest");
+pub const CHEST: StaticBlockName = StaticBlockName("default:chest");
 
 /// Torch
-pub const TORCH: BlockName = BlockName("default:torch");
+pub const TORCH: StaticBlockName = StaticBlockName("default:torch");
 
 /// Water
 /// Stability note: not stable (liquids are TBD)
-pub const WATER: BlockName = BlockName("default:water");
+pub const WATER: StaticBlockName = StaticBlockName("default:water");
 
 /// test only, no crafting recipe, not finalized
-pub const TNT: BlockName = BlockName("default:tnt");
+pub const TNT: StaticBlockName = StaticBlockName("default:tnt");
 
 const DIRT_TEXTURE: TextureName = TextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: TextureName = TextureName("default:dirt_grass_side");
@@ -91,13 +91,13 @@ pub mod ores {
     use crate::{
         blocks::CubeAppearanceBuilder,
         default_game::recipes::{RecipeImpl, RecipeSlot},
-        game_builder::ItemName,
+        game_builder::StaticItemName,
     };
 
     use super::*;
 
-    const COAL_ORE: BlockName = BlockName("default:coal_ore");
-    const COAL_PIECE: ItemName = ItemName("default:coal_piece");
+    const COAL_ORE: StaticBlockName = StaticBlockName("default:coal_ore");
+    const COAL_PIECE: StaticItemName = StaticItemName("default:coal_piece");
     const COAL_ORE_TEXTURE: TextureName = TextureName("default:coal_ore");
     const COAL_PIECE_TEXTURE: TextureName = TextureName("default:coal_piece");
 
@@ -119,15 +119,19 @@ pub mod ores {
             COAL_PIECE_TEXTURE,
             vec![],
         )?;
-        let coal_ore_builder = BlockBuilder::new(COAL_ORE)
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(COAL_ORE_TEXTURE))
-            .set_inventory_texture(COAL_ORE_TEXTURE)
-            .add_block_group(BRITTLE)
-            .add_block_group(TOOL_REQUIRED)
-            .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2)));
-        let coal_ore = coal_ore_builder.build_and_deploy_into(game_builder.game_builder())?;
+        let coal_ore = game_builder.game_builder().add_block(
+            BlockBuilder::new(COAL_ORE)
+                .set_cube_appearance(
+                    CubeAppearanceBuilder::new().set_single_texture(COAL_ORE_TEXTURE),
+                )
+                .set_inventory_texture(COAL_ORE_TEXTURE)
+                .add_block_group(BRITTLE)
+                .add_block_group(TOOL_REQUIRED)
+                .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2))),
+        )?;
+
         game_builder.register_ore(OreDefinition {
-            block: coal_ore,
+            block: coal_ore.handle,
             noise_cutoff: splines::Spline::from_vec(vec![
                 splines::Key {
                     value: -0.5,
@@ -156,7 +160,7 @@ pub mod ores {
 }
 
 pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
-    register_core_blocks(&mut game_builder.inner)?;
+    register_core_blocks(game_builder)?;
     register_tnt(&mut game_builder.inner)?;
     ores::register_ores(game_builder)?;
 
@@ -190,7 +194,7 @@ pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Re
 }
 
 fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
-    let tnt_actor_tool = builder.inner.items_mut().register_item(Item {
+    builder.inner.items_mut().register_item(Item {
         proto: protocol::items::ItemDef {
             short_name: "default:tnt_actor_tool".to_string(),
             display_name: "TNT actor tool (you should not see this)".to_string(),
@@ -212,57 +216,63 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
         place_handler: None,
     })?;
 
-    let tnt_tool_stack = Some(
-        ItemStack { proto: protocol::items::ItemStack {
+    let tnt_tool_stack = Some(ItemStack {
+        proto: protocol::items::ItemStack {
             item_name: "default:tnt_actor_tool".to_string(),
             quantity: 1,
             ..Default::default()
-        }}
-    );
+        },
+    });
 
     include_texture_bytes!(builder, TNT_TEXTURE, "textures/tnt.png")?;
     //let air = builder.air_block;
-    BlockBuilder::new(TNT)
-        .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
-        .set_inventory_texture(TNT_TEXTURE)
-        .set_modifier(Box::new(move |block_type| {
-            block_type.tap_handler_full = Some(Box::new(move |ctx, coord, tool| {
-                if tool.is_some_and(|tool| tool.proto.item_name == "default:superuser_pickaxe") {
-                    return Ok(Default::default());
-                }
+    builder.add_block(
+        BlockBuilder::new(TNT)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
+            .set_inventory_texture(TNT_TEXTURE)
+            .set_modifier(Box::new(move |block_type| {
+                block_type.tap_handler_full = Some(Box::new(move |ctx, coord, tool| {
+                    if tool.is_some_and(|tool| tool.proto.item_name == "default:superuser_pickaxe")
+                    {
+                        return Ok(Default::default());
+                    }
 
-                for i in -3..=3 {
-                    for j in -3..=3 {
-                        for k in -3..=3 {
-                            if let Some(neighbor) = coord.try_delta(i, j, k) {
-                                // discard the block interaction result; the player isn't getting the drops
-                                ctx.game_map().dig_block(neighbor, ctx.initiator(), tnt_tool_stack.as_ref())?;
+                    for i in -3..=3 {
+                        for j in -3..=3 {
+                            for k in -3..=3 {
+                                if let Some(neighbor) = coord.try_delta(i, j, k) {
+                                    // discard the block interaction result; the player isn't getting the drops
+                                    ctx.game_map().dig_block(
+                                        neighbor,
+                                        ctx.initiator(),
+                                        tnt_tool_stack.as_ref(),
+                                    )?;
+                                }
                             }
                         }
                     }
-                }
 
-                Ok(BlockInteractionResult {
-                    item_stacks: vec![ItemStack {
-                        proto: protocol::items::ItemStack {
-                            item_name: "default:tnt".to_string(),
-                            quantity: 2,
-                            current_wear: 0,
-                            quantity_type: Some(QuantityType::Stack(256)),
-                        },
-                    }],
-                    tool_wear: 0,
-                })
-            }))
-        }))
-        .build_and_deploy_into(builder)?;
+                    Ok(BlockInteractionResult {
+                        item_stacks: vec![ItemStack {
+                            proto: protocol::items::ItemStack {
+                                item_name: "default:tnt".to_string(),
+                                quantity: 2,
+                                current_wear: 0,
+                                quantity_type: Some(QuantityType::Stack(256)),
+                            },
+                        }],
+                        tool_wear: 0,
+                    })
+                }))
+            })),
+    )?;
 
     Ok(())
 }
 
 static TESTONLY_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
+fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, DIRT_TEXTURE, "textures/dirt.png")?;
     include_texture_bytes!(
         game_builder,
@@ -288,7 +298,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(GRANULAR)
             .set_cube_single_texture(DIRT_TEXTURE)
             .set_inventory_texture(DIRT_TEXTURE)
-            .set_inventory_display_name("Dirt block"),
+            .set_display_name("Dirt block"),
     )?;
     game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_GRASS)
@@ -308,9 +318,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 // Test only: There is no way to get glass yet (no sand, no crafting)
                 // We need glass to test renderer changes
                 if TESTONLY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 2 == 0 {
-                    (ItemName("default:dirt"), 1)
+                    (StaticItemName("default:dirt"), 1)
                 } else {
-                    (ItemName("default:glass"), 5)
+                    (StaticItemName("default:glass"), 5)
                 }
             }),
     )?;
@@ -321,104 +331,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(STONE_TEXTURE)
             .set_inventory_texture(STONE_TEXTURE)
-            .set_inventory_display_name("Stone block"),
+            .set_display_name("Stone block"),
     )?;
 
-    // testonly - add a handler to generate slabs, and extra builders to allow other
-    // blocks to set custom geometry in a fine grained manner
-    let stone_slab = game_builder.add_block(
-        BlockBuilder::new(BlockName("default:stone_slab"))
-            // TODO: make not-diggable-by-hand after tools are implemented
-            .add_block_group(BRITTLE)
-            .add_block_group(TOOL_REQUIRED)
-            .set_cube_single_texture(STONE_TEXTURE)
-            .set_inventory_texture(STONE_TEXTURE)
-            .set_inventory_display_name("Stone slab")
-            .set_allow_light_propagation(true)
-            .set_modifier(Box::new(|bt| {
-                let the_box = AxisAlignedBox {
-                    x_min: -0.5,
-                    y_min: -0.5,
-                    z_min: -0.5,
-                    x_max: 0.5,
-                    y_max: 0.0,
-                    z_max: 0.5,
-                    tex_left: Some(STONE_TEXTURE.into()),
-                    tex_right: Some(STONE_TEXTURE.into()),
-                    tex_top: Some(STONE_TEXTURE.into()),
-                    tex_bottom: Some(STONE_TEXTURE.into()),
-                    tex_front: Some(STONE_TEXTURE.into()),
-                    tex_back: Some(STONE_TEXTURE.into()),
-                    rotation: AxisAlignedBoxRotation::None.into(),
-                    variant_mask: 0,
-                };
-
-                let aabbs = AxisAlignedBoxes {
-                    boxes: vec![the_box],
-                };
-                bt.client_info.physics_info =
-                    Some(PhysicsInfo::SolidCustomCollisionboxes(aabbs.clone()));
-                bt.client_info.render_info =
-                    Some(protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabbs))
-            })),
-    )?;
-
-    let stone_stair = game_builder.add_block(
-        BlockBuilder::new(BlockName("default:stone_stair"))
-            // TODO: make not-diggable-by-hand after tools are implemented
-            .add_block_group(BRITTLE)
-            .add_block_group(TOOL_REQUIRED)
-            .set_cube_single_texture(STONE_TEXTURE)
-            .set_inventory_texture(STONE_TEXTURE)
-            .set_inventory_display_name("Stone stair")
-            .set_allow_light_propagation(true)
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_rotate_laterally())
-            .set_modifier(Box::new(|bt| {
-                let bottom_box = AxisAlignedBox {
-                    x_min: -0.5,
-                    y_min: -0.5,
-                    z_min: -0.5,
-                    x_max: 0.5,
-                    y_max: 0.0,
-                    z_max: 0.5,
-                    tex_left: Some(STONE_TEXTURE.into()),
-                    tex_right: Some(STONE_TEXTURE.into()),
-                    tex_top: Some(STONE_TEXTURE.into()),
-                    tex_bottom: Some(STONE_TEXTURE.into()),
-                    tex_front: Some(STONE_TEXTURE.into()),
-                    tex_back: Some(STONE_TEXTURE.into()),
-                    rotation: AxisAlignedBoxRotation::Nesw.into(),
-                    variant_mask: 0,
-                };
-
-                let back_box = AxisAlignedBox {
-                    x_min: -0.5,
-                    y_min: -0.5,
-                    z_min: 0.0,
-                    x_max: 0.5,
-                    y_max: 0.5,
-                    z_max: 0.5,
-                    tex_left: Some(STONE_TEXTURE.into()),
-                    tex_right: Some(STONE_TEXTURE.into()),
-                    tex_top: Some(STONE_TEXTURE.into()),
-                    tex_bottom: Some(STONE_TEXTURE.into()),
-                    tex_front: Some(STONE_TEXTURE.into()),
-                    tex_back: Some(STONE_TEXTURE.into()),
-                    rotation: AxisAlignedBoxRotation::Nesw.into(),
-                    variant_mask: 0,
-                };
-
-                let aabbs = AxisAlignedBoxes {
-                    boxes: vec![bottom_box, back_box],
-                };
-                bt.client_info.physics_info =
-                    Some(PhysicsInfo::SolidCustomCollisionboxes(aabbs.clone()));
-                bt.client_info.render_info =
-                    Some(protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabbs))
-            })),
-    )?;
-
-    game_builder.add_block(
+    let glass = game_builder.add_block(
         BlockBuilder::new(GLASS)
             .add_block_group(BRITTLE)
             .set_cube_appearance(
@@ -428,7 +344,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_allow_light_propagation(true)
             .set_inventory_texture(GLASS_TEXTURE)
-            .set_inventory_display_name("Glass block"),
+            .set_display_name("Glass block"),
     )?;
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
@@ -442,7 +358,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .set_not_diggable()
         .set_allow_light_propagation(true)
         .set_inventory_texture(WATER_TEXTURE)
-        .set_inventory_display_name("Water block")
+        .set_display_name("Water block")
         .set_liquid_flow(Some(Duration::from_millis(500)))
         .set_matter_type(MatterType::Liquid);
     water_builder.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
@@ -469,7 +385,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(block_groups::INSTANT_DIG)
             .set_allow_light_propagation(true)
             .set_inventory_texture(TORCH_TEXTURE)
-            .set_inventory_display_name("Torch")
+            .set_display_name("Torch")
             .set_light_emission(8),
     )?;
 
@@ -478,7 +394,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         BlockBuilder::new(CHEST)
             .set_cube_single_texture(CHEST_TEXTURE)
             .set_inventory_texture(CHEST_TEXTURE)
-            .set_inventory_display_name("Unlocked chest")
+            .set_display_name("Unlocked chest")
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
@@ -509,9 +425,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     game_builder.add_block(
-        BlockBuilder::new(BlockName("testonly:aabb_geometry_test"))
+        BlockBuilder::new(StaticBlockName("testonly:aabb_geometry_test"))
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
-                AaBoxTextures::new_single_tex(
+                AaBoxProperties::new_single_tex(
                     TESTONLY_UNKNOWN_TEX,
                     crate::blocks::TextureCropping::AutoCrop,
                     crate::blocks::RotationMode::None,
@@ -523,10 +439,17 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     game_builder.add_block(
-        BlockBuilder::new(BlockName("testonly:aabb_geometry_test2")).set_cube_appearance(
+        BlockBuilder::new(StaticBlockName("testonly:aabb_geometry_test2")).set_cube_appearance(
             CubeAppearanceBuilder::new().set_single_texture(TESTONLY_UNKNOWN_TEX),
         ),
     )?;
+
+    make_stairs(game_builder, &stone, true)?;
+    make_stairs(game_builder, &glass, true)?;
+    make_stairs(game_builder, &dirt, false)?;
+    make_slab(game_builder, &stone, true)?;
+    make_slab(game_builder, &glass, true)?;
+    make_slab(game_builder, &dirt, false)?;
 
     Ok(())
 }

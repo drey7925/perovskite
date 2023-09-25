@@ -14,8 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashSet, ops::RangeInclusive, time::Duration};
+use std::{collections::HashSet, ops::RangeInclusive, time::Duration, sync::Arc};
 
+use arc_swap::ArcSwap;
 use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Matrix4, Vector3};
 use perovskite_core::{
     coordinates::BlockCoordinate,
@@ -31,7 +32,7 @@ use crate::block_renderer::ClientBlockTypeManager;
 
 use super::{
     input::{BoundAction, InputState},
-    ChunkManagerView, ClientState,
+    ChunkManagerView, ClientState, settings::GameSettings,
 };
 
 const PLAYER_WIDTH: f64 = 0.75;
@@ -115,10 +116,11 @@ pub(crate) struct PhysicsState {
     landed_last_frame: bool,
     last_land_height: f64,
     bump_decay: f64,
+    settings: Arc<ArcSwap<GameSettings>>
 }
 
 impl PhysicsState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(settings: Arc<ArcSwap<GameSettings>>) -> Self {
         Self {
             pos: cgmath::vec3(0., 0., -4.),
             az: Deg(0.),
@@ -130,6 +132,7 @@ impl PhysicsState {
             landed_last_frame: false,
             last_land_height: 0.,
             bump_decay: 0.,
+            settings
         }
     }
 
@@ -219,7 +222,7 @@ impl PhysicsState {
 
         plot!("physics_delta", (target - self.pos).magnitude());
 
-        let mut new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
+        let new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
         // If we hit a floor or ceiling
         if (new_pos.y - target.y) > COLLISION_EPS {
             self.landed_last_frame = true;
@@ -242,6 +245,26 @@ impl PhysicsState {
                 .clamp(0., TRAVERSABLE_BUMP_HEIGHT_MIDAIR)
         };
 
+        self.pos = self.update_with_bumping(
+            new_pos,
+            bump_height,
+            target,
+            chunks,
+            block_types,
+            delta_secs,
+        );
+        self.y_velocity = new_yv;
+    }
+
+    fn update_with_bumping(
+        &mut self,
+        mut new_pos: Vector3<f64>,
+        bump_height: f64,
+        target: Vector3<f64>,
+        chunks: ChunkManagerView<'_>,
+        block_types: &std::sync::Arc<ClientBlockTypeManager>,
+        delta_secs: f64,
+    ) -> Vector3<f64> {
         let pre_bump_y = new_pos.y;
         if bump_height > 0.
             && ((new_pos.x - target.x).abs() > COLLISION_EPS
@@ -271,20 +294,16 @@ impl PhysicsState {
                     &chunks,
                     block_types,
                 );
-                if cfg!(debug_assertions) {
+                if self.settings.load().render.physics_debug {
                     println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
                 }
+                self.bump_decay = self.bump_decay.max(new_pos.y - pre_bump_y);
+                println!("bump decay: {}", self.bump_decay);
             }
-            if input.is_pressed(BoundAction::PhysicsDebug) {
-                println!("bump debug {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : N/A\nnewpos  : {new_pos:?}");
-            }
-            self.bump_decay = new_pos.y - pre_bump_y;
-        } else {
-            self.bump_decay = (self.bump_decay - (delta_secs * BUMP_DECAY_SPEED)).max(0.0);
         }
+        self.bump_decay = (self.bump_decay - (delta_secs * BUMP_DECAY_SPEED)).max(0.0);
 
-        self.pos = new_pos;
-        self.y_velocity = new_yv;
+        new_pos
     }
 
     fn update_target_air(
@@ -377,20 +396,28 @@ impl PhysicsState {
     ) {
         let distance = delta.as_secs_f64() * WALK_SPEED * 4.0;
 
-        let mut new_pos = self.apply_movement_input(self.pos, input, distance);
+        let mut target_pos = self.apply_movement_input(self.pos, input, distance);
         if input.is_pressed(BoundAction::Jump) {
-            new_pos.y += distance;
+            target_pos.y += distance;
         } else if input.is_pressed(BoundAction::Descend) {
-            new_pos.y -= distance;
+            target_pos.y -= distance;
         }
 
         if collisions {
             let chunks = client_state.chunks.read_lock();
             let block_types = &client_state.block_types;
-            new_pos = clamp_collisions_loop(self.pos, new_pos, &chunks, block_types);
+            let new_pos = clamp_collisions_loop(self.pos, target_pos, &chunks, block_types);
+            self.pos = self.update_with_bumping(
+                new_pos,
+                TRAVERSABLE_BUMP_HEIGHT_LANDED,
+                target_pos,
+                chunks,
+                block_types,
+                delta.as_secs_f64(),
+            );
+        } else {
+            self.pos = target_pos
         }
-
-        self.pos = new_pos
     }
 
     pub(crate) fn pos(&self) -> Vector3<f64> {

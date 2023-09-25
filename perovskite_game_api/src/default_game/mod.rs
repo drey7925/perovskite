@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::{sync::Arc, ops::{Deref, DerefMut}};
 
-use crate::game_builder::{GameBuilder};
+use crate::game_builder::GameBuilder;
 
 use anyhow::Result;
 
 use perovskite_core::protocol::items::{self as items_proto};
-use perovskite_server::game_state::items::{ItemStack};
+use perovskite_server::game_state::items::ItemStack;
 
 use self::{recipes::{RecipeBook, RecipeImpl, RecipeSlot}, mapgen::OreDefinition};
 
@@ -33,6 +33,8 @@ pub mod recipes;
 pub mod tools;
 /// Trees, plants, etc
 pub mod foliage;
+/// Helpers for stairs, slabs, and other blocks derived from a base block
+pub mod shaped_blocks;
 
 #[cfg(feature = "unstable_api")]
 /// Furnace implementation,
@@ -70,6 +72,17 @@ pub struct DefaultGameBuilder {
     smelting_fuels: Arc<RecipeBook<1, u32>>,
 
     ores: Vec<OreDefinition>
+}
+impl Deref for DefaultGameBuilder {
+    type Target = GameBuilder;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl DerefMut for DefaultGameBuilder {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 impl DefaultGameBuilder {
     /// Provides access to the [GameBuilder] that this DefaultGameBuilder is wrapping,

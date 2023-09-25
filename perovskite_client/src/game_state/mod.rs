@@ -413,11 +413,11 @@ impl ClientState {
     ) -> ClientState {
         ClientState {
             settings: settings.clone(),
-            input: Mutex::new(InputState::new(settings)),
+            input: Mutex::new(InputState::new(settings.clone())),
             block_types,
             items,
             last_update: Mutex::new(Instant::now()),
-            physics_state: Mutex::new(physics::PhysicsState::new()),
+            physics_state: Mutex::new(physics::PhysicsState::new(settings)),
             chunks: ChunkManager::new(),
             inventories: Mutex::new(InventoryViewManager::new()),
             tool_controller: Mutex::new(ToolController::new()),
