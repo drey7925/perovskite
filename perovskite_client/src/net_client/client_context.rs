@@ -58,7 +58,7 @@ pub(crate) async fn make_contexts(
         mesh_workers: mesh_workers.clone(),
         mesh_worker_handles,
         neighbor_propagators: neighbor_propagators.clone(),
-        neighbor_propagator_handles: neighbor_propagator_handles,
+        neighbor_propagator_handles,
         snappy_helper: SnappyDecodeHelper::new(),
     };
 
@@ -301,6 +301,11 @@ impl InboundContext {
                         },
                         Ok(None) => {
                             log::info!("Server disconnected");
+                            let mut pending_error = self.client_state.pending_error.lock();
+                            if pending_error.is_none() {
+                                *pending_error = Some("Server disconnected unexpectedly without sending a detailed error message".to_string());
+                            }
+
                             self.cancellation.cancel();
                         }
                         Ok(Some(message)) => {
@@ -396,6 +401,9 @@ impl InboundContext {
                         .with_color_fixed32(message.color_argb),
                 )
             }
+            Some(rpc::stream_to_client::ServerMessage::ShutdownMessage(msg)) => {
+                *self.client_state.pending_error.lock() = Some(msg.clone());
+            }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);
             }
@@ -408,10 +416,8 @@ impl InboundContext {
             .enqueue(coord);
     }
     fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
-        self.mesh_workers[coord.hash_u64() as usize % self.mesh_workers.len()]
-            .enqueue(coord);
+        self.mesh_workers[coord.hash_u64() as usize % self.mesh_workers.len()].enqueue(coord);
     }
-
 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
         match &chunk.chunk_coord {
@@ -564,10 +570,9 @@ impl InboundContext {
             for coord in needs_remesh {
                 if eligible_for_inline(coord) {
                     self.client_state
-                    .chunks
-                    .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?;    
-                }
-                else {
+                        .chunks
+                        .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?;
+                } else {
                     self.enqueue_for_meshing(coord);
                 }
             }

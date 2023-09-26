@@ -1515,13 +1515,29 @@ impl MiscOutboundWorker {
                 message = self.player_event_receiver.chat_messages.recv() => {
                     match message {
                         Some(message) => {
-                            self.transmit_chat_message(message).await?;
+                        self.transmit_chat_message(message).await?;
                         },
                         None => {
                             tracing::warn!("Chat message sender disconnected")
                         }
                     }
                 },
+                message = self.player_event_receiver.disconnection_message.recv() => {
+                    match message {
+                        Some(message) => {
+                            self.outbound_tx.send(Ok(StreamToClient {
+                                tick: self.context.game_state.tick(),
+                                server_message: Some(ServerMessage::ShutdownMessage(message)),
+                            })).await?;
+                        },
+                        None => {
+                            tracing::warn!("Disconnection message sender disconnected")
+                        }
+                    }
+                    // Even if the player is using a hacked client, we will disconnect
+                    // them on our end
+                    self.context.cancellation.cancel();
+                }
                 message = broadcast_messages.recv() => {
                     match message {
                         Ok(message) => {
@@ -1540,7 +1556,10 @@ impl MiscOutboundWorker {
                 }
                 _ = self.context.game_state.await_start_shutdown() => {
                     info!("Game shutting down, disconnecting {}", self.context.id);
-                    self.transmit_chat_message(ChatMessage::new("[system]", "Server is shutting down").with_color((255, 128, 0))).await?;
+                    self.outbound_tx.send(Ok(StreamToClient {
+                        tick: self.context.game_state.tick(),
+                        server_message: Some(ServerMessage::ShutdownMessage("Game server is shutting down.".to_string())),
+                    })).await?;
                     // cancel the inbound context as well
                     self.context.cancellation.cancel();
                 },

@@ -48,27 +48,33 @@ impl ChatState {
             EventInitiator::Player(p) => {
                 if message.starts_with("/mapdebug") {
                     p.player
-                        .send_chat_message(ChatMessage::new("[server]", "Map debug: ")).await?;
+                        .send_chat_message(ChatMessage::new("[server]", "Map debug: "))
+                        .await?;
                     let shard_sizes = block_in_place(|| game_state.map().debug_shard_sizes());
                     for (shard, size) in shard_sizes.iter().enumerate() {
-                        p.player.send_chat_message(
-                            ChatMessage::new(
+                        p.player
+                            .send_chat_message(ChatMessage::new(
                                 "[server]",
                                 format!("shard {} has {} chunks", shard, size),
-                            )
-                        ).await?;
+                            ))
+                            .await?;
                     }
-                }
-
-                p.player
-                    .send_chat_message(
-                        ChatMessage::new(
-                            "[server]",
-                            "This is where we'd handle a slash command in the future.",
+                    Ok(())
+                } else if message.starts_with("/kickme") {
+                    p.player.kick_player("Test kick reason").await?;
+                    Ok(())
+                } else {
+                    p.player
+                        .send_chat_message(
+                            ChatMessage::new(
+                                "[server]",
+                                "This is where we'd handle a slash command in the future.",
+                            )
+                            .with_color((0, 255, 255)),
                         )
-                        .with_color((0, 255, 255)),
-                    )
-                    .await
+                        .await?;
+                    Ok(())
+                }
             }
             initiator => {
                 tracing::warn!("Unhandled slash command from {:?}: {}", initiator, message);

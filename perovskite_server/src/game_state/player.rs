@@ -42,8 +42,9 @@ use crate::{
 
 use super::{
     client_ui::Popup,
+    event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
-    GameState, event::{EventInitiator, PlayerInitiator},
+    GameState,
 };
 
 pub struct Player {
@@ -170,6 +171,14 @@ impl Player {
 
     pub async fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
         self.sender.chat_messages.send(message).await?;
+        Ok(())
+    }
+
+    pub async fn kick_player(&self, reason: &str) -> Result<()> {
+        self.sender
+            .disconnection_message
+            .send(format!("Kicked: {reason}"))
+            .await?;
         Ok(())
     }
 }
@@ -307,20 +316,25 @@ impl Drop for PlayerContext {
 
 struct PlayerEventSender {
     chat_messages: tokio::sync::mpsc::Sender<ChatMessage>,
+    disconnection_message: tokio::sync::mpsc::Sender<String>,
 }
 pub(crate) struct PlayerEventReceiver {
     pub(crate) chat_messages: tokio::sync::mpsc::Receiver<ChatMessage>,
+    pub(crate) disconnection_message: tokio::sync::mpsc::Receiver<String>,
 }
 
 fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
     const CHAT_BUFFER_SIZE: usize = 128;
     let (chat_sender, chat_receiver) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
+    let (disconnection_sender, disconnection_receiver) = tokio::sync::mpsc::channel(2);
     (
         PlayerEventSender {
             chat_messages: chat_sender,
+            disconnection_message: disconnection_sender,
         },
         PlayerEventReceiver {
             chat_messages: chat_receiver,
+            disconnection_message: disconnection_receiver,
         },
     )
 }
@@ -346,7 +360,10 @@ impl PlayerManager {
     fn game_state(&self) -> Arc<GameState> {
         self.game_state.upgrade().unwrap()
     }
-    pub(crate) fn connect(self: Arc<Self>, name: &str) -> Result<(PlayerContext, PlayerEventReceiver)> {
+    pub(crate) fn connect(
+        self: Arc<Self>,
+        name: &str,
+    ) -> Result<(PlayerContext, PlayerEventReceiver)> {
         let mut lock = self.active_players.lock();
         if lock.contains_key(name) {
             bail!("Player {name} already connected");
@@ -370,10 +387,13 @@ impl PlayerManager {
         let player = Arc::new(player);
         lock.insert(name.to_string(), player.clone());
 
-        Ok((PlayerContext {
-            player,
-            manager: self.clone(),
-        }, receiver))
+        Ok((
+            PlayerContext {
+                player,
+                manager: self.clone(),
+            },
+            receiver,
+        ))
     }
     fn drop_disconnect(&self, name: &str) {
         match self.active_players.lock().entry(name.to_string()) {

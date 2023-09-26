@@ -152,6 +152,9 @@ message StreamToClient {
     bytes server_login_response = 151;
     // Indicates that authentication is successful
     Nop auth_success = 152;
+    // Indicates that the server is about to shut down (e.g. crash, admin-initiated shutdown)
+    // or that the connection is about to shut down (e.g. user being kicked)
+    string shutdown_message = 153;
   };
 }
 

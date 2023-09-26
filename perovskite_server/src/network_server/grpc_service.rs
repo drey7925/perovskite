@@ -17,6 +17,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use perovskite_core::protocol::game_rpc::perovskite_game_server::PerovskiteGame;
+use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::stream_to_server::ClientMessage;
 use perovskite_core::protocol::game_rpc::{self as proto, StreamToClient, StreamToServer};
 
@@ -164,14 +165,22 @@ async fn game_stream_impl(
                 .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
         }
     };
-    let (player_context, player_event_receiver) = game_state
-        .player_manager()
-        .clone()
-        .connect(&username)
-        .map_err(|x| {
-            log::error!("Failed to establish player context: {:?}", x);
-            Status::internal("Failed to establish player context")
-        })?;
+    let (player_context, player_event_receiver) =
+        match game_state.player_manager().clone().connect(&username) {
+            Ok(x) => x,
+            Err(e) => {
+                log::error!("Failed to establish player context: {:?}", e);
+                outbound_tx
+                    .send(Ok(StreamToClient {
+                        tick: 0,
+                        server_message: Some(ServerMessage::ShutdownMessage(
+                            format!("Failed to establish player context: {e:?}"),
+                        )),
+                    }))
+                    .await?;
+                return Err(Status::internal("Failed to establish player context").into());
+            }
+        };
 
     // Wait for the initial ready message from the client
     match inbound_rx.message().await? {
