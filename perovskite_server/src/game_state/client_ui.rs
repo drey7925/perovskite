@@ -48,6 +48,10 @@ pub struct PopupResponse {
     pub textfield_values: HashMap<String, String>,
 }
 
+type InventoryUpdateCallback = Box<dyn Fn(&Popup) + Send + Sync>;
+
+type ButtonCallback = Box<dyn Fn(PopupResponse) + Send + Sync>;
+
 /// A server-side representation of a custom UI drawn on the client's screen.
 /// The client and server network code will serialize popups and display them on
 /// the client's screen. Clicking buttons will lead to events firing at the server.
@@ -59,8 +63,8 @@ pub struct Popup {
     inventory_views: HashMap<String, InventoryView<Popup>>,
     interested_stored_inventories: HashSet<InventoryKey>,
     interested_coordinates: HashSet<BlockCoordinate>,
-    inventory_update_callback: Option<Box<dyn Fn(&Popup) + Send + Sync>>,
-    button_callback: Option<Box<dyn Fn(PopupResponse) + Send + Sync>>,
+    inventory_update_callback: Option<InventoryUpdateCallback>,
+    button_callback: Option<ButtonCallback>,
 }
 impl Popup {
     /// Creates a new popup. Until it's sent to a player, it is inert and has no effects

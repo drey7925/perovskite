@@ -146,11 +146,11 @@ fn make_derived_block_core(
     };
     let appearance = appearance_builder(appearance);
     let block_builder = BlockBuilder::new(BlockName(
-        block_type.0.short_name().to_owned() + &short_suffix,
+        block_type.0.short_name().to_owned() + short_suffix,
     ))
     .set_axis_aligned_boxes_appearance(appearance)
     .set_inventory_texture(convert_or_fallback(&item.proto.inventory_texture))
-    .set_display_name(item.proto.display_name.clone() + &display_suffix)
+    .set_display_name(item.proto.display_name.clone() + display_suffix)
     .set_allow_light_propagation(true)
     .add_block_groups(block_type.0.client_info.groups.iter().cloned());
     let built_block = game_builder.inner.add_block(block_builder)?;

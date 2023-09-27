@@ -488,7 +488,7 @@ fn get_texture(
         .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
     let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
     if let Some(crop) = tex.and_then(|tex| tex.crop.as_ref()) {
-        rect_f = crop_texture(&crop, rect_f);
+        rect_f = crop_texture(crop, rect_f);
     }
     rect_f
 }
@@ -867,12 +867,12 @@ impl BlockRenderer {
         };
         vtx.reserve(8);
         idx.reserve(24);
-        for i in 0..4 {
+        for face in PLANTLIKE_FACE_ORDER {
             emit_cube_face_vk(
                 pos,
                 tex,
                 self.texture_atlas.dimensions(),
-                PLANTLIKE_FACE_ORDER[i],
+                face,
                 vtx,
                 idx,
                 e,
@@ -903,7 +903,7 @@ impl BlockRenderer {
 
         let aabb_data = aabb_data.unwrap();
         for aabb in aabb_data {
-            if aabb.mask != 0 && !(aabb.mask & id.variant() != 0) {
+            if aabb.mask != 0 && (aabb.mask & id.variant() == 0) {
                 continue;
             }
             let mut e = aabb.extents;
@@ -966,7 +966,7 @@ impl BlockRenderer {
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
                 vk_pos,
-                frame.into(),
+                frame,
                 self.texture_atlas.dimensions(),
                 face,
                 &mut vtx,

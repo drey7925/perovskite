@@ -259,11 +259,6 @@ fn rem_euclid_16_u8(i: i32) -> u8 {
     (i & 0xf) as u8
 }
 #[inline]
-fn rem_euclid_16_i32(i: i32) -> i32 {
-    // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
-    i & 0xf
-}
-#[inline]
 fn div_euclid_16_i32(i: i32) -> i32 {
     // Even with a constant value of 16, rem_euclid generates pretty bad assembly on x86_64: https://godbolt.org/z/T8zjsYezs
     i >> 4

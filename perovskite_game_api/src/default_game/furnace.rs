@@ -295,7 +295,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
             .set_light_emission(8)
             .set_inventory_texture(FURNACE_ON_FRONT_TEXTURE)
             .set_display_name("Lit furnace (should not see this)")
-            .set_dropped_item(&FURNACE.0, 1)
+            .set_dropped_item(FURNACE.0, 1)
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
@@ -413,7 +413,7 @@ fn furnace_dig_handler(
         extended_data.clear();
 
         Ok(BlockInteractionResult {
-            item_stacks: vec![ctx.items().get_item(&FURNACE.0).unwrap().singleton_stack()],
+            item_stacks: vec![ctx.items().get_item(FURNACE.0).unwrap().singleton_stack()],
             tool_wear: match rule {
                 Some(rule) => rule.tool_wear(block_type)?,
                 None => 0,

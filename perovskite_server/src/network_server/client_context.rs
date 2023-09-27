@@ -52,18 +52,18 @@ use cgmath::Zero;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
-use perovskite_core::protocol::coordinates::Angles;
-use perovskite_core::protocol::game_rpc as proto;
-use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
-use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
-use perovskite_core::protocol::game_rpc::PlayerPosition;
-use perovskite_core::protocol::game_rpc::StreamToClient;
 use itertools::iproduct;
 use log::error;
 use log::info;
 use log::warn;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use perovskite_core::protocol::coordinates::Angles;
+use perovskite_core::protocol::game_rpc as proto;
+use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
+use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
+use perovskite_core::protocol::game_rpc::PlayerPosition;
+use perovskite_core::protocol::game_rpc::StreamToClient;
 use prost::Message;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -455,7 +455,7 @@ impl MapChunkSender {
             self.snappy_output_buffer.resize(compressed_len_bound, 0);
         }
         let actual_compressed_len = self.snappy_encoder.compress(
-            &mut self.snappy_input_buffer,
+            &self.snappy_input_buffer,
             &mut self.snappy_output_buffer,
         )?;
         Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
@@ -549,12 +549,13 @@ impl MapChunkSender {
                 break;
             }
             let mut chunk_needs_reload = false;
-            if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64) {
-                if !block_in_place(|| self.context.game_state.map().bump_chunk(coord)) {
-                    // chunk wasn't in the map, so we need to reload it
-                    chunk_needs_reload = true;
-                }
+            if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64)
+                && !block_in_place(|| self.context.game_state.map().bump_chunk(coord))
+            {
+                // chunk wasn't in the map, so we need to reload it
+                chunk_needs_reload = true;
             }
+
             if self.chunk_tracker.is_loaded(coord) && !chunk_needs_reload {
                 continue;
             }
@@ -1012,11 +1013,15 @@ impl InboundWorker {
                 self.handle_interact_key(interact_key).await?;
             }
             Some(proto::stream_to_server::ClientMessage::ChatMessage(message)) => {
-                self.context.game_state.chat().handle_inbound_chat_message(
-                    self.context.player_context.make_initiator(),
-                    self.context.game_state.clone(),
-                    message,
-                ).await?;
+                self.context
+                    .game_state
+                    .chat()
+                    .handle_inbound_chat_message(
+                        self.context.player_context.make_initiator(),
+                        self.context.game_state.clone(),
+                        message,
+                    )
+                    .await?;
             }
             Some(_) => {
                 warn!(
@@ -1467,7 +1472,8 @@ impl InboundWorker {
             .0
             .interact_key_handler
         {
-            if let Some(popup) = run_handler!(|| (handler)(ctx, coord), "interact_key", &initiator,)?
+            if let Some(popup) =
+                run_handler!(|| (handler)(ctx, coord), "interact_key", &initiator,)?
             {
                 messages.push(StreamToClient {
                     tick: self.context.game_state.tick(),

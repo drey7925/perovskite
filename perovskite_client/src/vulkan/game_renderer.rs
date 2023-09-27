@@ -484,6 +484,8 @@ impl GameRenderer {
                             )
                             .then_signal_fence_and_flush();
                         fences[image_i as usize] = match future {
+                            // Holding this in an Arc makes this easier
+                            #[allow(clippy::arc_with_non_send_sync)]
                             Ok(value) => Some(Arc::new(value)),
                             Err(FlushError::OutOfDate) => {
                                 recreate_swapchain = true;

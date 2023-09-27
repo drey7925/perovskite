@@ -163,11 +163,10 @@ pub struct MapChunk {
 }
 impl MapChunk {
     fn new(coord: ChunkCoordinate) -> Self {
-        let extended_data = Box::new(FxHashMap::default());
         Self {
             coord,
             block_ids: Box::new([0; 4096]),
-            extended_data,
+            extended_data: Default::default(),
             dirty: false,
         }
     }
@@ -916,9 +915,7 @@ impl ServerGameMap {
             chunk.dirty = true;
         }
 
-        let light_change = self
-            .block_type_manager()
-            .allows_light_propagation(old_id.into())
+        let light_change = self.block_type_manager().allows_light_propagation(old_id)
             ^ self.block_type_manager().allows_light_propagation(new_id);
         if light_change {
             chunk_guard.update_lighting_after_edit(
@@ -1188,7 +1185,7 @@ impl ServerGameMap {
             write_guard
                 .light_columns
                 .entry((coord.x, coord.z))
-                .or_insert_with(|| ChunkColumn::empty())
+                .or_insert_with(ChunkColumn::empty)
                 .insert_empty(coord.y);
 
             // Now we downgrade the write lock.
@@ -1200,7 +1197,7 @@ impl ServerGameMap {
             let chunk_holder = read_guard.chunks.get(&coord).unwrap();
             match self.load_uncached_or_generate_chunk(coord) {
                 Ok((chunk, force_writeback)) => {
-                    chunk_holder.fill(chunk, &read_guard.light_columns, &self.block_type_manager());
+                    chunk_holder.fill(chunk, &read_guard.light_columns, self.block_type_manager());
                     let outer_guard = MapChunkOuterGuard {
                         read_guard,
                         coord,
@@ -1700,7 +1697,7 @@ impl ChunkNeighbors {
         let dx = coord.x - self.center.x;
         let dz = coord.z - self.center.z;
         let dy = coord.y - self.center.y;
-        if dx < -16 || dx > 32 || dz < -16 || dz > 32 || dy < -16 || dy > 32 {
+        if !(-16..=32).contains(&dx) || !(-16..=32).contains(&dz) || !(-16..=32).contains(&dy) {
             return None;
         }
         let cx = dx >> 4;
@@ -1870,7 +1867,7 @@ impl GameMapTimer {
                 prev_tick_time: start_time,
                 current_tick_time: Instant::now(),
             },
-            neighbor_buffer:  ChunkNeighbors {
+            neighbor_buffer: ChunkNeighbors {
                 center: BlockCoordinate::new(0, 0, 0),
                 presence_bitmap: 0,
                 blocks: Box::new([0; 48 * 48 * 48]),
@@ -1923,7 +1920,6 @@ impl GameMapTimer {
         });
         plot!("timer tick coords", coords.len() as f64);
 
-
         for coord in coords.into_iter() {
             if writeback_permit.is_none() {
                 writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
@@ -1931,14 +1927,14 @@ impl GameMapTimer {
             // this does the locking twice, with the benefit that it elides all of the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
             let (matches, latest_update) =
-                self.build_neighbors(&mut state.neighbor_buffer, coord, &game_state.map(), false)?;
+                self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.map(), false)?;
             let should_run = (!self.settings.idle_chunk_after_unchanged
                 || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
                 && matches;
 
             if should_run {
                 let (_, _) =
-                    self.build_neighbors(&mut state.neighbor_buffer, coord, &game_state.map, true)?;
+                    self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.map(), true)?;
                 let shard = game_state.map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
                     if let Some(mut chunk) = holder.try_get()? {
@@ -2134,7 +2130,7 @@ impl GameMapTimer {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
         let map = game_state.map();
-        Ok(for i in 0..4096 {
+        for i in 0..4096 {
             let block_id = BlockId(chunk.block_ids[i]);
             assert!(holder
                 .block_bloom_filter
@@ -2157,7 +2153,8 @@ impl GameMapTimer {
                     }
                 }
             }
-        })
+        }
+        Ok(())
     }
 
     fn run_per_block_callback(

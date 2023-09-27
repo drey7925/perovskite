@@ -313,7 +313,7 @@ impl ClientChunk {
             for z in 0..16 {
                 'inner: for y in 0..16 {
                     let id = data.block_ids[(ChunkOffset { x, y, z }).as_extended_index()];
-                    if !block_types.propagates_light(id.into()) {
+                    if !block_types.propagates_light(id) {
                         occlusion.set(x, z, true);
                         break 'inner;
                     }

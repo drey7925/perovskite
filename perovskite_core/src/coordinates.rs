@@ -21,7 +21,7 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use cgmath::{Deg, Angle};
+use cgmath::{Angle, Deg};
 use rustc_hash::FxHasher;
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -67,9 +67,9 @@ impl BlockCoordinate {
     }
 }
 
-impl Into<cgmath::Vector3<f64>> for BlockCoordinate {
-    fn into(self) -> cgmath::Vector3<f64> {
-        cgmath::Vector3::new(self.x as f64, self.y as f64, self.z as f64)
+impl From<BlockCoordinate> for cgmath::Vector3<f64> {
+    fn from(val: BlockCoordinate) -> Self {
+        cgmath::Vector3::new(val.x as f64, val.y as f64, val.z as f64)
     }
 }
 
@@ -120,7 +120,7 @@ impl TryFrom<cgmath::Vector3<f64>> for BlockCoordinate {
 }
 
 /// Represents an offset of a block within a chunk.
-/// 
+///
 /// The most cache-friendly iteration order has x in the outer loop, z in the middle loop, and y in the innermost loop
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct ChunkOffset {
@@ -347,11 +347,7 @@ impl PlayerPositionUpdate {
     pub fn face_unit_vector(&self) -> cgmath::Vector3<f64> {
         let (sin_az, cos_az) = Deg(self.face_direction.0).sin_cos();
         let (sin_el, cos_el) = Deg(self.face_direction.1).sin_cos();
-        cgmath::vec3(
-                cos_el * sin_az,
-                sin_el,
-                cos_el * cos_az,
-            )
+        cgmath::vec3(cos_el * sin_az, sin_el, cos_el * cos_az)
     }
 }
 impl TryFrom<&crate::protocol::game_rpc::PlayerPosition> for PlayerPositionUpdate {

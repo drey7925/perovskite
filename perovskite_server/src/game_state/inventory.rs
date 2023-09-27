@@ -219,7 +219,7 @@ impl InventoryManager {
             self.unlock_condvar.wait(&mut lock_set);
         }
         lock_set.insert(key);
-        InventoryLockGuard { parent: &self, key }
+        InventoryLockGuard { parent: self, key }
     }
 
     /// Create a new, empty inventory
@@ -300,7 +300,7 @@ impl InventoryManager {
     pub(crate) fn new(db: Arc<dyn GameDatabase>) -> InventoryManager {
         let (sender, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
         InventoryManager {
-            db: db.into(),
+            db,
             update_sender: sender,
             locked: Mutex::new(FxHashSet::default()),
             unlock_condvar: Condvar::new(),

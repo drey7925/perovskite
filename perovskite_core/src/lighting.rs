@@ -242,7 +242,7 @@ impl<'a> ChunkColumnCursor<'a> {
             if counter > 0 && !outgoing_diffs.any_set() {
                 break;
             }
-            assert!((outgoing_diffs & !prev_diff).any_set() == false);
+            assert!(!(outgoing_diffs & !prev_diff).any_set());
             prev_diff = if counter > 0 {
                 outgoing_diffs
             } else {

@@ -115,7 +115,7 @@ pub(crate) async fn connect_game(
     let items = Arc::new(ClientItemManager::new(
         item_defs_proto.into_inner().item_defs,
         &block_renderer,
-        &ctx,
+        ctx,
     )?);
 
     progress.send((0.7, "Loading item textures...".to_string()))?;

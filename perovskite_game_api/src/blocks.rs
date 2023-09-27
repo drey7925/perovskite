@@ -679,6 +679,11 @@ impl PlantLikeAppearanceBuilder {
         self
     }
 }
+impl Default for PlantLikeAppearanceBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub use protocol::render::TextureCrop;
 
@@ -726,14 +731,14 @@ impl BulkUpdateCallback for LiquidPropagator {
                     let offset = ChunkOffset { x, y, z };
                     let coord = chunk_coordinate.with_offset(offset);
                     let block = chunk.get_block(offset);
-                    if self.this_liquid.id().equals_ignore_variant(block.into())
+                    if self.this_liquid.id().equals_ignore_variant(block)
                         && block.variant() == 0xfff
                     {
                         // liquid sources are invariant.
                         continue;
                     }
                     let is_air = self.air.id().equals_ignore_variant(block);
-                    let is_same_liquid = self.this_liquid.id().equals_ignore_variant(block.into());
+                    let is_same_liquid = self.this_liquid.id().equals_ignore_variant(block);
                     if is_air || is_same_liquid {
                         // Apply the decay rule first
                         let variant_from_decay = match block.variant() {
@@ -757,7 +762,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                                 if self
                                     .this_liquid
                                     .id()
-                                    .equals_ignore_variant(neighbor_liquid.into())
+                                    .equals_ignore_variant(neighbor_liquid)
                                 {
                                     // and the material below it causes it to spread...
                                     if coord
@@ -979,6 +984,12 @@ impl AxisAlignedBoxesAppearanceBuilder {
                 crop: None,
             },
         }
+    }
+}
+
+impl Default for AxisAlignedBoxesAppearanceBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

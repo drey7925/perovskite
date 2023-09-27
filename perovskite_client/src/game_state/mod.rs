@@ -246,7 +246,7 @@ impl ChunkManager {
                 let chunk = block_coord.chunk();
                 needs_remesh.insert(chunk);
                 for i in -1..=1 {
-                    for j in (-1 - extra_chunks as i32)..=1 {
+                    for j in (-1 - extra_chunks)..=1 {
                         for k in -1..=1 {
                             if let Some(neighbor) = chunk.try_delta(i, j, k) {
                                 needs_remesh.insert(neighbor);
@@ -273,12 +273,12 @@ impl ChunkManager {
                 for j in -1..=1 {
                     if let Some(delta) = chunk.try_delta(i, j, k) {
                         data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
-                            chunk_lock.get(&delta).map(|x| Box::new(x.chunk_data().block_ids().clone()));
+                            chunk_lock.get(&delta).map(|x| Box::new(*x.chunk_data().block_ids()));
                         if let Some(light_column) = light_column {
                             inbound_lights[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
                                 light_column
                                     .get_incoming_light(delta.y)
-                                    .unwrap_or_else(|| Lightfield::zero());
+                                    .unwrap_or_else(Lightfield::zero);
                         }
                     }
                 }
@@ -335,9 +335,11 @@ impl<'a> ChunkManagerView<'a> {
     }
 }
 
+type ChunkWithEdgesBuffer = Box<[BlockId; 18 * 18 * 18]>;
+
 pub(crate) struct FastChunkNeighbors {
     center: Option<Arc<ClientChunk>>,
-    neighbors: [[[Option<Box<[BlockId; 18 * 18 * 18]>>; 3]; 3]; 3],
+    neighbors: [[[Option<ChunkWithEdgesBuffer>; 3]; 3]; 3],
     inbound_lights: [[[Lightfield; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
