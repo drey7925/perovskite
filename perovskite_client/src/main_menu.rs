@@ -11,7 +11,7 @@ use crate::{
     game_state::settings::GameSettings,
     vulkan::{
         game_renderer::{ConnectionSettings, ConnectionState, GameState},
-        VulkanContext,
+        VulkanWindow,
     },
 };
 
@@ -29,7 +29,7 @@ pub(crate) struct MainMenu {
 }
 impl MainMenu {
     pub(crate) fn new(
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         event_loop: &EventLoop<()>,
         settings: Arc<ArcSwap<GameSettings>>,
     ) -> MainMenu {
@@ -229,7 +229,7 @@ impl MainMenu {
 
     pub(crate) fn draw<L>(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         game_state: &mut GameState,
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
     ) -> Option<ConnectionSettings> {

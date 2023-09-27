@@ -48,7 +48,7 @@ use super::{
         egui_adapter::{self, EguiAdapter},
         flat_texture, PipelineProvider, PipelineWrapper,
     },
-    CommandBufferBuilder, VulkanContext,
+    CommandBufferBuilder, VulkanWindow,
 };
 
 pub(crate) struct ActiveGame {
@@ -69,7 +69,7 @@ impl ActiveGame {
     fn build_command_buffers(
         &mut self,
         window_size: PhysicalSize<u32>,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
             PrimaryAutoCommandBuffer,
             Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
@@ -197,7 +197,7 @@ impl ActiveGame {
         finish_command_buffer(command_buf_builder).unwrap()
     }
 
-    fn handle_resize(&mut self, ctx: &mut VulkanContext) -> Result<()> {
+    fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
         self.cube_pipeline = self
             .cube_provider
             .make_pipeline(ctx, self.client_state.block_renderer.atlas())
@@ -232,7 +232,7 @@ impl GameState {
     }
     fn update_if_connected(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         event_loop: &EventLoopWindowTarget<()>,
         control_flow: &mut ControlFlow,
     ) {
@@ -281,7 +281,7 @@ pub(crate) enum GameStateMutRef<'a> {
 }
 
 pub struct GameRenderer {
-    ctx: VulkanContext,
+    ctx: VulkanWindow,
     settings: Arc<ArcSwap<GameSettings>>,
     game: Mutex<GameState>,
 
@@ -294,7 +294,7 @@ impl GameRenderer {
             GameSettings::load_from_disk()?.unwrap_or_default().into(),
         ));
 
-        let ctx = VulkanContext::create(event_loop).unwrap();
+        let ctx = VulkanWindow::create(event_loop).unwrap();
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -555,7 +555,7 @@ pub(crate) struct ConnectionSettings {
 }
 
 async fn connect_impl(
-    ctx: VulkanContext,
+    ctx: VulkanWindow,
     settings: Arc<ArcSwap<GameSettings>>,
     server_addr: String,
     username: String,

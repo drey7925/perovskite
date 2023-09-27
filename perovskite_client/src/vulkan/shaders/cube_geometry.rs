@@ -42,7 +42,7 @@ use crate::{
     block_renderer::VkChunkVertexData,
     vulkan::{
         shaders::{frag_lighting, vert_3d::ModelMatrix},
-        CommandBufferBuilder, Texture2DHolder, VulkanContext,
+        CommandBufferBuilder, Texture2DHolder, VulkanWindow,
     },
 };
 
@@ -165,7 +165,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipeline
 
     fn bind<L>(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         per_frame_config: Matrix4<f32>,
         command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: BlockRenderPass,
@@ -248,7 +248,7 @@ impl CubePipelineProvider {
 impl PipelineProvider for CubePipelineProvider {
     fn make_pipeline(
         &self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         config: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
         let default_pipeline = GraphicsPipeline::start()

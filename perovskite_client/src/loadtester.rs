@@ -11,13 +11,13 @@ use winit::event_loop::EventLoop;
 use crate::{
     game_state::{settings::GameSettings, DigTapAction},
     net_client,
-    vulkan::{VulkanContext},
+    vulkan::{VulkanWindow},
 };
 
 pub struct Loadtester {
     runtime: tokio::runtime::Runtime,
     workers: Vec<JoinHandle<()>>,
-    vk_ctx: Arc<VulkanContext>,
+    vk_ctx: Arc<VulkanWindow>,
     settings: Arc<ArcSwap<GameSettings>>,
     cancel: CancellationToken,
 }
@@ -31,7 +31,7 @@ impl Loadtester {
                 .unwrap(),
             workers: vec![],
             vk_ctx: Arc::new(
-                VulkanContext::create(Box::<EventLoop<()>>::leak(Box::new(EventLoop::new())))
+                VulkanWindow::create(Box::<EventLoop<()>>::leak(Box::new(EventLoop::new())))
                     .unwrap(),
             ),
             settings: Arc::new(ArcSwap::new(

@@ -16,7 +16,7 @@ use std::path::Path;
 
 use perovskite_core::{
     constants::{
-        block_groups::{DEFAULT_GAS, DEFAULT_LIQUID},
+        block_groups::{DEFAULT_GAS},
         blocks::AIR,
         items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
@@ -80,7 +80,7 @@ impl From<StaticItemName> for ItemName {
 /// breaking changes that do not follow semver, before 1.0
 use perovskite_server::server as server_api;
 
-use crate::blocks::{BlockBuilder, BlockTypeHandleWrapper, BuiltBlock};
+use crate::blocks::{BlockBuilder, BuiltBlock};
 
 /// Stable API for building and configuring a game.
 ///
@@ -174,6 +174,7 @@ impl GameBuilder {
                 quantity_type: Some(
                     perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
                 ),
+                block_apperance: "".to_string(),
             },
             dig_handler: None,
             tap_handler: None,

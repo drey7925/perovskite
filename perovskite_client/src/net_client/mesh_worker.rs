@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use cgmath::InnerSpace;
 use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
-use parking_lot::{Condvar, Mutex, MutexGuard};
+use parking_lot::{Condvar, Mutex};
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};

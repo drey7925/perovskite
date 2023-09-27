@@ -15,10 +15,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod game_renderer;
+pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
 pub(crate) mod util;
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use anyhow::{Context, Result};
 use log::warn;
@@ -57,22 +58,46 @@ pub(crate) type CommandBufferBuilder<L> =
     AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
 
 use self::util::select_physical_device;
+
 #[derive(Clone)]
 pub(crate) struct VulkanContext {
     vk_device: Arc<Device>,
     queue: Arc<Queue>,
+    memory_allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+}
+impl VulkanContext {
+    
+    pub(crate) fn allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
+        self.memory_allocator.clone()
+    }
+
+    pub(crate) fn clone_queue(&self) -> Arc<Queue> {
+        self.queue.clone()
+    }
+
+}
+
+#[derive(Clone)]
+pub(crate) struct VulkanWindow {
+    vk_ctx: Arc<VulkanContext>,
     render_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<SwapchainImage>>,
     framebuffers: Vec<Arc<Framebuffer>>,
     window: Arc<Window>,
-    memory_allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
-    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     viewport: Viewport,
 }
-impl VulkanContext {
-    pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanContext> {
+impl Deref for VulkanWindow {
+    type Target = VulkanContext;
+    fn deref(&self) -> &Self::Target {
+        &self.vk_ctx
+    }
+}
+
+impl VulkanWindow {
+    pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanWindow> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
         let required_extensions = vulkano_win::required_extensions(&library);
@@ -207,17 +232,19 @@ impl VulkanContext {
         let framebuffers =
             get_framebuffers_with_depth(&swapchain_images, &memory_allocator, render_pass.clone());
 
-        Ok(VulkanContext {
-            vk_device,
-            queue,
+        Ok(VulkanWindow {
+            vk_ctx: Arc::new(VulkanContext {
+                vk_device,
+                queue,
+                memory_allocator,
+                command_buffer_allocator,
+                descriptor_set_allocator,
+            }),
             render_pass,
             swapchain,
             swapchain_images,
             framebuffers,
             window,
-            memory_allocator,
-            command_buffer_allocator,
-            descriptor_set_allocator,
             viewport,
         })
     }
@@ -282,16 +309,8 @@ impl VulkanContext {
         (dims[0] as u32, dims[1] as u32)
     }
 
-    pub(crate) fn allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
-        self.memory_allocator.clone()
-    }
-
     pub(crate) fn swapchain(&self) -> &Swapchain {
         self.swapchain.as_ref()
-    }
-
-    pub(crate) fn clone_queue(&self) -> Arc<Queue> {
-        self.queue.clone()
     }
 
     pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {

@@ -522,7 +522,7 @@ impl MapChunkSender {
         // Chunks are expensive to load and send, so we keep track of
         let mut sent_chunks = 0;
 
-        let skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
+        let _skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
             self.elements_to_skip
         } else {
             0

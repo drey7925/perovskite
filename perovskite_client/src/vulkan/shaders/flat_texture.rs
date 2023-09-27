@@ -37,7 +37,7 @@ use vulkano::{
 
 use crate::vulkan::{
     shaders::{vert_2d, PipelineProvider, PipelineWrapper},
-    CommandBufferBuilder, Texture2DHolder, VulkanContext,
+    CommandBufferBuilder, Texture2DHolder, VulkanWindow, VulkanContext,
 };
 
 use super::{frag_simple, vert_2d::UniformData};
@@ -171,7 +171,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
 
     fn bind<L>(
         &mut self,
-        ctx: &crate::vulkan::VulkanContext,
+        ctx: &crate::vulkan::VulkanWindow,
         _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: (),
@@ -217,7 +217,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
 
     fn make_pipeline(
         &self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         config: (&Texture2DHolder, u32),
     ) -> Result<Self::PipelineWrapperImpl> {
         let (atlas, subpass) = config;

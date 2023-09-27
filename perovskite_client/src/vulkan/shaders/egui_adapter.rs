@@ -13,7 +13,7 @@ use winit::{event::WindowEvent, event_loop::EventLoopWindowTarget};
 use crate::{
     game_state::ClientState,
     game_ui::egui_ui::EguiUi,
-    vulkan::{Texture2DHolder, VulkanContext},
+    vulkan::{Texture2DHolder, VulkanWindow},
 };
 
 use anyhow::{Context, Result};
@@ -43,7 +43,7 @@ impl EguiAdapter {
     }
 
     pub(crate) fn new(
-        ctx: &crate::vulkan::VulkanContext,
+        ctx: &crate::vulkan::VulkanWindow,
         event_loop: &EventLoopWindowTarget<()>,
         egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {
@@ -77,7 +77,7 @@ impl EguiAdapter {
 
     pub(crate) fn draw<L>(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
         client_state: &ClientState,
     ) -> Result<()> {
@@ -119,7 +119,7 @@ impl EguiAdapter {
         Ok(())
     }
 
-    pub(crate) fn notify_resize(&mut self, ctx: &VulkanContext) -> Result<()> {
+    pub(crate) fn notify_resize(&mut self, ctx: &VulkanWindow) -> Result<()> {
         self.flat_overlay_pipeline = self
             .flat_overlay_provider
             .make_pipeline(ctx, (self.atlas.as_ref(), 1))?;

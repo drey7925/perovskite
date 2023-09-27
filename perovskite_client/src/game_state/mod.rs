@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::marker::PhantomData;
+
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +28,7 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosit
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use perovskite_core::protocol;
-use perovskite_core::protocol::game_rpc::{MapDeltaUpdate, MapDeltaUpdateBatch};
+use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch};
 use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -42,7 +42,7 @@ use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 
 use self::chat::ChatState;
-use self::chunk::{ChunkDataView, SnappyDecodeHelper};
+use self::chunk::{SnappyDecodeHelper};
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::settings::GameSettings;

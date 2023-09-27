@@ -53,7 +53,7 @@ use perovskite_server::game_state::{
 };
 
 use crate::{
-    game_builder::{BlockName, GameBuilder, ItemName, StaticBlockName, StaticItemName},
+    game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
     maybe_export,
 };
 
@@ -224,10 +224,11 @@ impl BlockBuilder {
             proto: ItemDef {
                 short_name: name.clone(),
                 display_name: name.clone(),
-                inventory_texture: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
+                inventory_texture: None,
                 groups: vec![],
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
+                block_apperance: name.clone(),
             },
             dig_handler: None,
             tap_handler: None,
@@ -373,6 +374,7 @@ impl BlockBuilder {
     }
     /// Sets the texture shown for this block's item in the inventory.
     pub fn set_inventory_texture(mut self, texture: impl Into<TextureReference>) -> Self {
+        self.item.proto.block_apperance = "".to_string();
         self.item.proto.inventory_texture = Some(texture.into());
         self
     }

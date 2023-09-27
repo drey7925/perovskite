@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 
 use std::sync::Arc;
 
@@ -885,13 +885,13 @@ impl BlockRenderer {
 
     fn emit_axis_aligned_boxes(
         &self,
-        block: &BlockTypeDef,
+        _block: &BlockTypeDef,
         id: BlockId,
         offset: ChunkOffset,
         chunk_data: &ChunkDataView<'_>,
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
-        render_info: &AxisAlignedBoxes,
+        _render_info: &AxisAlignedBoxes,
     ) {
         let aabb_data = self.axis_aligned_box_blocks.get(id);
         if aabb_data.is_none() {

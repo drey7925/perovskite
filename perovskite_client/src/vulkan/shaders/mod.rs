@@ -16,7 +16,7 @@
 
 use anyhow::Result;
 
-use super::{CommandBufferBuilder, VulkanContext};
+use super::{CommandBufferBuilder, VulkanWindow};
 
 pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
@@ -180,7 +180,7 @@ pub(crate) trait PipelineWrapper<T, U> {
     /// Bind the pipeline. Must be called each frame before draw
     fn bind<L>(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         per_frame_config: U,
         command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: Self::PassIdentifier,
@@ -199,7 +199,7 @@ where
     type PipelineWrapperImpl: for<'a> PipelineWrapper<Self::DrawCall<'a>, Self::PerFrameConfig>;
     fn make_pipeline(
         &self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         config: Self::PerPipelineConfig<'_>,
     ) -> Result<Self::PipelineWrapperImpl>;
 }

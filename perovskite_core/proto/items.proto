@@ -34,6 +34,8 @@ message ItemDef {
   // Groups for this item. This is NOT the same as the groups that this item
   // can dig; see InteractionRule for that
   repeated string groups = 5;
+  // If set, disregard inventory_texture and render this block instead.
+  string block_apperance = 6;
 
   // Optional oneof. If unset, item neither stacks nor wears out
   oneof quantity_type {

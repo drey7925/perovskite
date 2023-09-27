@@ -1,13 +1,11 @@
 use crate::{
     blocks::{
-        AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock,
-        CubeAppearanceBuilder, RotationMode, TextureCropping,
+        AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode, TextureCropping,
     },
-    game_builder::{BlockName, ItemName, StaticBlockName, FALLBACK_UNKNOWN_TEXTURE_NAME},
+    game_builder::{BlockName, FALLBACK_UNKNOWN_TEXTURE_NAME},
 };
 use anyhow::{Context, Result};
 use perovskite_core::{
-    constants::textures::FALLBACK_UNKNOWN_TEXTURE,
     protocol::{
         blocks::{block_type_def::RenderInfo, CubeRenderInfo},
         items::item_stack::QuantityType,

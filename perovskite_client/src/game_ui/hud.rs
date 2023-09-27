@@ -24,7 +24,7 @@ use crate::{
     game_state::{items::ClientItemManager, ClientState},
     vulkan::{
         shaders::flat_texture::{self, FlatTextureDrawBuilder, FlatTextureDrawCall},
-        Texture2DHolder, VulkanContext,
+        Texture2DHolder, VulkanWindow,
     },
 };
 
@@ -51,7 +51,7 @@ impl GameHud {
 
     pub(crate) fn update_and_render(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         client_state: &ClientState,
     ) -> Result<Vec<FlatTextureDrawCall>> {
         let slot_delta = client_state.input.lock().take_scroll_slots();
@@ -107,7 +107,7 @@ impl GameHud {
 
     fn recreate_crosshair(
         &self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         window_size: (u32, u32),
     ) -> Result<FlatTextureDrawCall> {
         let mut builder = flat_texture::FlatTextureDrawBuilder::new();
@@ -122,7 +122,7 @@ impl GameHud {
 
     fn recreate_hotbar(
         &self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         window_size: (u32, u32),
         client_state: &ClientState,
     ) -> Result<Option<FlatTextureDrawCall>> {

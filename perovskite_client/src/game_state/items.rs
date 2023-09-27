@@ -21,11 +21,14 @@ use perovskite_core::protocol::items as items_proto;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
+use crate::block_renderer::BlockRenderer;
+use crate::vulkan::VulkanContext;
+
 pub(crate) struct ClientItemManager {
     item_defs: HashMap<String, items_proto::ItemDef>,
 }
 impl ClientItemManager {
-    pub(crate) fn new(items: Vec<items_proto::ItemDef>) -> Result<ClientItemManager> {
+    pub(crate) fn new(items: Vec<items_proto::ItemDef>, _block_renderer: &BlockRenderer, _vk_ctx: &VulkanContext) -> Result<ClientItemManager> {
         let mut item_defs = HashMap::new();
         for item in items {
             match item_defs.entry(item.short_name.clone()) {

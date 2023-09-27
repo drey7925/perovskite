@@ -15,9 +15,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::{Deref, RangeInclusive};
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4};
+
+use cgmath::{vec4, ElementWise, Matrix4, Vector3, Vector4};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
 use perovskite_core::lighting::Lightfield;
 use perovskite_core::protocol::game_rpc as rpc_proto;
@@ -32,7 +32,7 @@ use crate::block_renderer::{BlockRenderer, ClientBlockTypeManager, VkChunkVertex
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use prost::Message;
 
-use super::LightColumnMap;
+
 
 pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView<'_> {

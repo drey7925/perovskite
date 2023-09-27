@@ -14,10 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashSet, ops::RangeInclusive, time::Duration, sync::Arc};
+use std::{ops::RangeInclusive, time::Duration, sync::Arc};
 
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Matrix4, Vector3};
+use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3};
 use perovskite_core::{
     coordinates::BlockCoordinate,
     protocol::blocks::{

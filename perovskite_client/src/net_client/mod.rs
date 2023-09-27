@@ -39,7 +39,7 @@ use opaque_ke::{
 use rand::rngs::OsRng;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{async_trait, codegen::CompressionEncoding, transport::Channel, Request, Streaming};
+use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
@@ -49,7 +49,7 @@ use crate::{
         settings::GameSettings,
         ClientState,
     },
-    vulkan::VulkanContext,
+    vulkan::{VulkanWindow},
 };
 
 mod client_context;
@@ -69,7 +69,7 @@ pub(crate) async fn connect_game(
     password: String,
     register: bool,
     settings: Arc<ArcSwap<GameSettings>>,
-    ctx: &VulkanContext,
+    ctx: &VulkanWindow,
     progress: &mut watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
     progress.send((0.1, "Connecting to server...".to_string()))?;
@@ -114,6 +114,8 @@ pub(crate) async fn connect_game(
     );
     let items = Arc::new(ClientItemManager::new(
         item_defs_proto.into_inner().item_defs,
+        &block_renderer,
+        &ctx,
     )?);
 
     progress.send((0.7, "Loading item textures...".to_string()))?;

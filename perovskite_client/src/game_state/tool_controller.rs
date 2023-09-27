@@ -24,7 +24,7 @@ use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
 use line_drawing::WalkVoxels;
-use perovskite_core::protocol::blocks::{BlockTypeDef, AxisAlignedBoxRotation};
+use perovskite_core::protocol::blocks::{BlockTypeDef};
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::ItemDef;
 use rustc_hash::FxHashSet;
@@ -322,6 +322,7 @@ fn default_item() -> ItemDef {
         groups: vec![],
         interaction_rules: rules,
         quantity_type: None,
+        block_apperance: "".to_string(),
     }
 }
 

@@ -210,6 +210,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
                 ),
             }],
             quantity_type: None,
+            block_apperance: "".to_string(),
         },
         dig_handler: None,
         tap_handler: None,

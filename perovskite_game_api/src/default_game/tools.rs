@@ -51,6 +51,7 @@ pub(crate) fn register_pickaxe(
                 },
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
+            block_apperance: "".to_string(),
         },
         dig_handler: None,
         tap_handler: None,
@@ -98,6 +99,7 @@ fn register_superuser_pickaxe(
                 },
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
+            block_apperance: "".to_string(),
         },
         dig_handler: Some(Box::new(move |ctx, coord, tool| {
             let (old_block, _) = ctx.game_map().set_block(coord, air, None)?;

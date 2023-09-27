@@ -6,12 +6,12 @@ use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{MutexGuard};
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
 
-use crate::game_state::chat::ChatState;
+
 use crate::game_state::items::InventoryViewManager;
 use crate::game_state::{GameAction, InventoryAction};
 use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};

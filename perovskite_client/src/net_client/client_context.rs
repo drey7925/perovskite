@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::game_state::{
-    self, chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
+    chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
 };
 use anyhow::Result;
 use cgmath::{vec3, InnerSpace};
@@ -17,7 +17,7 @@ use perovskite_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
-use rustc_hash::FxHashSet;
+
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;

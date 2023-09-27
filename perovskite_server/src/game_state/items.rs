@@ -426,6 +426,7 @@ impl ItemManager {
                 groups: vec![],
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: None,
+                ..Default::default()
             },
             dig_handler: None,
             tap_handler: None,
