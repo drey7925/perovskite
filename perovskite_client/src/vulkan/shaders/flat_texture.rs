@@ -171,7 +171,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
 
     fn bind<L>(
         &mut self,
-        ctx: &crate::vulkan::VulkanWindow,
+        ctx: &crate::vulkan::VulkanContext,
         _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: (),

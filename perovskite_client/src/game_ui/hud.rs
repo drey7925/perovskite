@@ -284,7 +284,7 @@ pub(crate) fn render_number(
     atlas: &Texture2DHolder,
 ) {
     let digits_frame = atlas_coords[DIGIT_ATLAS];
-    let mut x = pos.0 - DIGIT_WIDTH;
+    let mut x = pos.0.saturating_sub(DIGIT_WIDTH);
     loop {
         let digit = number % 10;
         builder.rect(

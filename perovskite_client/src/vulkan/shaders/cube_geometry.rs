@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::{Matrix4, Rad, Angle};
+use cgmath::{Angle, Matrix4, Rad};
 use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
 use vulkano::{
@@ -30,11 +30,11 @@ use vulkano::{
             input_assembly::InputAssemblyState,
             rasterization::RasterizationState,
             vertex_input::Vertex,
-            viewport::ViewportState,
+            viewport::{Viewport, ViewportState},
         },
         GraphicsPipeline, Pipeline, StateMode,
     },
-    render_pass::Subpass,
+    render_pass::{RenderPass, Subpass},
     shader::ShaderModule,
 };
 
@@ -42,7 +42,7 @@ use crate::{
     block_renderer::VkChunkVertexData,
     vulkan::{
         shaders::{frag_lighting, vert_3d::ModelMatrix},
-        CommandBufferBuilder, Texture2DHolder, VulkanWindow,
+        CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
     },
 };
 
@@ -89,7 +89,7 @@ pub(crate) struct CubePipelineWrapper {
     solid_descriptor: Arc<PersistentDescriptorSet>,
     sparse_descriptor: Arc<PersistentDescriptorSet>,
     translucent_descriptor: Arc<PersistentDescriptorSet>,
-    start_time: Instant
+    start_time: Instant,
 }
 const PLANT_WAVE_FREQUENCY_HZ: f64 = 0.25;
 impl CubePipelineWrapper {
@@ -165,7 +165,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipeline
 
     fn bind<L>(
         &mut self,
-        ctx: &VulkanWindow,
+        ctx: &VulkanContext,
         per_frame_config: Matrix4<f32>,
         command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: BlockRenderPass,
@@ -244,12 +244,13 @@ impl CubePipelineProvider {
             fs_sparse,
         })
     }
-}
-impl PipelineProvider for CubePipelineProvider {
-    fn make_pipeline(
+
+    pub(crate) fn build_pipeline(
         &self,
-        ctx: &VulkanWindow,
-        config: &Texture2DHolder,
+        ctx: &VulkanContext,
+        viewport: Viewport,
+        render_pass: Arc<RenderPass>,
+        tex: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
         let default_pipeline = GraphicsPipeline::start()
             .vertex_input_state(CubeGeometryVertex::per_vertex())
@@ -260,9 +261,7 @@ impl PipelineProvider for CubePipelineProvider {
                 (),
             )
             .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
-                .viewport
-                .clone()]))
+            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([viewport]))
             .rasterization_state(
                 RasterizationState::default()
                     .front_face(
@@ -273,7 +272,7 @@ impl PipelineProvider for CubePipelineProvider {
             .color_blend_state(ColorBlendState::default().blend_alpha())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
             .render_pass(
-                Subpass::from(ctx.render_pass.clone(), 0).context("Could not find subpass 0")?,
+                Subpass::from(render_pass.clone(), 0).context("Could not find subpass 0")?,
             );
 
         let solid_pipeline = default_pipeline
@@ -315,9 +314,9 @@ impl PipelineProvider for CubePipelineProvider {
             })
             .build(self.device.clone())?;
 
-        let solid_descriptor = config.descriptor_set(&solid_pipeline, 0, 0)?;
-        let sparse_descriptor = config.descriptor_set(&sparse_pipeline, 0, 0)?;
-        let translucent_descriptor = config.descriptor_set(&translucent_pipeline, 0, 0)?;
+        let solid_descriptor = tex.descriptor_set(&solid_pipeline, 0, 0)?;
+        let sparse_descriptor = tex.descriptor_set(&sparse_pipeline, 0, 0)?;
+        let translucent_descriptor = tex.descriptor_set(&translucent_pipeline, 0, 0)?;
         Ok(CubePipelineWrapper {
             solid_pipeline,
             sparse_pipeline,
@@ -327,6 +326,20 @@ impl PipelineProvider for CubePipelineProvider {
             translucent_descriptor,
             start_time: Instant::now(),
         })
+    }
+}
+impl PipelineProvider for CubePipelineProvider {
+    fn make_pipeline(
+        &self,
+        wnd: &VulkanWindow,
+        config: &Texture2DHolder,
+    ) -> Result<CubePipelineWrapper> {
+        self.build_pipeline(
+            &wnd.vk_ctx,
+            wnd.viewport.clone(),
+            wnd.render_pass.clone(),
+            config,
+        )
     }
 
     type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];

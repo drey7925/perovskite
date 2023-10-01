@@ -149,7 +149,6 @@ fn make_derived_block_core(
         block_type.0.short_name().to_owned() + short_suffix,
     ))
     .set_axis_aligned_boxes_appearance(appearance)
-    .set_inventory_texture(convert_or_fallback(&item.proto.inventory_texture))
     .set_display_name(item.proto.display_name.clone() + display_suffix)
     .set_allow_light_propagation(true)
     .add_block_groups(block_type.0.client_info.groups.iter().cloned());

@@ -69,14 +69,27 @@ pub(crate) struct VulkanContext {
 }
 impl VulkanContext {
     
-    pub(crate) fn allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
+    pub(crate) fn clone_allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
         self.memory_allocator.clone()
+    }
+
+    pub(crate) fn allocator(&self) -> &GenericMemoryAllocator<Arc<FreeListAllocator>> {
+        &self.memory_allocator
     }
 
     pub(crate) fn clone_queue(&self) -> Arc<Queue> {
         self.queue.clone()
     }
 
+    fn start_command_buffer(&self) -> Result<CommandBufferBuilder<PrimaryAutoCommandBuffer>> {
+        let builder = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+        )?;
+
+        Ok(builder)
+    }
 }
 
 #[derive(Clone)]
@@ -97,6 +110,14 @@ impl Deref for VulkanWindow {
 }
 
 impl VulkanWindow {
+    pub fn context(&self) -> &VulkanContext {
+        &self.vk_ctx
+    }
+
+    pub fn clone_context(&self) -> Arc<VulkanContext> {
+        self.vk_ctx.clone()
+    }
+
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanWindow> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
@@ -192,35 +213,7 @@ impl VulkanWindow {
             )?
         };
 
-        let render_pass = vulkano::ordered_passes_renderpass!(
-            vk_device.clone(),
-            attachments: {
-                color: {
-                    load: Clear,
-                    store: Store,
-                    format: swapchain.image_format(),
-                    samples: 1,
-                },
-                depth: {
-                    load: Clear,
-                    store: DontCare,
-                    format: Format::D24_UNORM_S8_UINT,
-                    samples: 1,
-                },
-            },
-            passes: [
-                {
-                    color: [color],
-                    depth_stencil: {depth},
-                    input: [],
-                },
-                {
-                    color: [color],
-                    depth_stencil: {},
-                    input: []
-                },
-            ]
-        )?;
+        let render_pass = make_render_pass(vk_device.clone(), swapchain.image_format())?;
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(vk_device.clone()));
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
@@ -279,15 +272,6 @@ impl VulkanWindow {
         Ok(())
     }
 
-    fn start_command_buffer(&self) -> Result<CommandBufferBuilder<PrimaryAutoCommandBuffer>> {
-        let builder = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
-            self.queue.queue_family_index(),
-            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-        )?;
-
-        Ok(builder)
-    }
 
     fn start_render_pass(
         &self,
@@ -316,6 +300,38 @@ impl VulkanWindow {
     pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {
         self.render_pass.clone()
     }
+}
+
+pub(crate) fn make_render_pass(vk_device: Arc<Device>, output_format: Format) -> Result<Arc<RenderPass>> {
+    vulkano::ordered_passes_renderpass!(
+        vk_device,
+        attachments: {
+            color: {
+                load: Clear,
+                store: Store,
+                format: output_format,
+                samples: 1,
+            },
+            depth: {
+                load: Clear,
+                store: DontCare,
+                format: Format::D24_UNORM_S8_UINT,
+                samples: 1,
+            },
+        },
+        passes: [
+            {
+                color: [color],
+                depth_stencil: {depth},
+                input: [],
+            },
+            {
+                color: [color],
+                depth_stencil: {},
+                input: []
+            },
+        ]
+    ).context("Renderpass creation failed")
 }
 
 fn find_best_format(

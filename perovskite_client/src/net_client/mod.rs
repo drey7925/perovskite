@@ -14,15 +14,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use self::client_context::*;
 use anyhow::{bail, Context, Error, Result};
 
 use arc_swap::ArcSwap;
+use image::DynamicImage;
+use opaque_ke::{
+    ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
+    RegistrationResponse,
+};
 use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
     protocol::game_rpc::{
@@ -30,11 +32,6 @@ use perovskite_core::{
         stream_to_server::ClientMessage, GetBlockDefsRequest, GetItemDefsRequest, GetMediaRequest,
         StartAuth, StreamToClient, StreamToServer,
     },
-};
-use image::DynamicImage;
-use opaque_ke::{
-    ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
-    RegistrationResponse,
 };
 use rand::rngs::OsRng;
 use tokio::sync::{mpsc, watch};
@@ -44,12 +41,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::{
     block_renderer::{AsyncTextureLoader, BlockRenderer, ClientBlockTypeManager},
-    game_state::{
-        items::ClientItemManager,
-        settings::GameSettings,
-        ClientState,
-    },
-    vulkan::{VulkanWindow},
+    game_state::{items::ClientItemManager, settings::GameSettings, ClientState},
+    vulkan::VulkanWindow,
 };
 
 mod client_context;
@@ -69,7 +62,7 @@ pub(crate) async fn connect_game(
     password: String,
     register: bool,
     settings: Arc<ArcSwap<GameSettings>>,
-    ctx: &VulkanWindow,
+    window: &VulkanWindow,
     progress: &mut watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
     progress.send((0.1, "Connecting to server...".to_string()))?;
@@ -104,7 +97,8 @@ pub(crate) async fn connect_game(
     )?);
 
     progress.send((0.5, "Setting up block renderer...".to_string()))?;
-    let block_renderer = BlockRenderer::new(block_types.clone(), texture_loader.clone(), ctx).await?;
+    let block_renderer =
+        BlockRenderer::new(block_types.clone(), texture_loader.clone(), window).await?;
 
     progress.send((0.6, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
@@ -115,11 +109,17 @@ pub(crate) async fn connect_game(
     let items = Arc::new(ClientItemManager::new(
         item_defs_proto.into_inner().item_defs,
         &block_renderer,
-        ctx,
+        window,
     )?);
 
     progress.send((0.7, "Loading item textures...".to_string()))?;
-    let (hud, egui) = crate::game_ui::make_uis(items.clone(), texture_loader, ctx).await?;
+    let (hud, egui) = crate::game_ui::make_uis(
+        items.clone(),
+        texture_loader,
+        window.clone_context(),
+        &block_renderer,
+    )
+    .await?;
 
     // TODO clean up this hacky cloning of the context.
     // We need to clone it to start up the game ui without running into borrow checker issues,

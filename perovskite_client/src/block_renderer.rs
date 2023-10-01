@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashSet};
+use std::collections::HashSet;
 
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
-use crate::game_state::chunk::{ChunkDataView, ChunkOffsetExt};
+use crate::game_state::chunk::{LockedChunkDataView, ChunkOffsetExt, ChunkDataView};
 use crate::game_state::make_fallback_blockdef;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
@@ -122,6 +122,7 @@ pub(crate) struct ClientBlockTypeManager {
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
     solid_opaque_blocks: bv::BitVec,
+    name_to_id: FxHashMap<String, BlockId>,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(
@@ -145,6 +146,8 @@ impl ClientBlockTypeManager {
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
 
+        let mut name_to_id = FxHashMap::default();
+
         let mut air_block = BlockId::from(u32::MAX);
         for def in server_defs {
             let id = BlockId(def.id);
@@ -153,6 +156,7 @@ impl ClientBlockTypeManager {
             if def.short_name == AIR {
                 air_block = id;
             }
+            name_to_id.insert(def.short_name.clone(), id);
             if def.allow_light_propagation {
                 light_propagators.set(id.index(), true);
             }
@@ -185,6 +189,7 @@ impl ClientBlockTypeManager {
             light_propagators,
             light_emitters,
             solid_opaque_blocks,
+            name_to_id
         })
     }
 
@@ -204,6 +209,10 @@ impl ClientBlockTypeManager {
                 x.as_ref()
             }
         }
+    }
+
+    pub(crate) fn get_block_by_name(&self, name: &str) -> Option<BlockId> {
+        self.name_to_id.get(name).copied()
     }
 
     pub(crate) fn air_block(&self) -> BlockId {
@@ -656,8 +665,12 @@ impl BlockRenderer {
             fallback_tex_coord: (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into(),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
-            allocator: ctx.allocator(),
+            allocator: ctx.clone_allocator(),
         })
+    }
+
+    pub(crate) fn block_types(&self) -> &ClientBlockTypeManager {
+        &self.block_defs
     }
 
     pub(crate) fn atlas(&self) -> &Texture2DHolder {
@@ -668,7 +681,7 @@ impl BlockRenderer {
         &self.allocator
     }
 
-    pub(crate) fn mesh_chunk(&self, chunk_data: &ChunkDataView) -> Result<VkChunkVertexData> {
+    pub(crate) fn mesh_chunk(&self, chunk_data: &LockedChunkDataView) -> Result<VkChunkVertexData> {
         let _span = span!("meshing");
         Ok(VkChunkVertexData {
             solid_opaque: self.mesh_chunk_subpass(
@@ -734,7 +747,7 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk_subpass<F, G>(
         &self,
-        chunk_data: &ChunkDataView,
+        chunk_data: &LockedChunkDataView,
         // closure taking a block and returning whether this subpass should render it
         include_block_when: F,
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
@@ -755,41 +768,15 @@ impl BlockRenderer {
                     let (id, block) = self.get_block(chunk_data.block_ids(), offset);
 
                     if include_block_when(block) {
-                        match &block.render_info {
-                            Some(RenderInfo::Cube(cube_render_info)) => {
-                                self.emit_full_cube(
-                                    block,
-                                    id,
-                                    offset,
-                                    chunk_data,
-                                    &mut vtx,
-                                    &mut idx,
-                                    cube_render_info,
-                                    &suppress_face_when,
-                                );
-                            }
-                            Some(RenderInfo::PlantLike(plantlike_render_info)) => self
-                                .emit_plantlike(
-                                    block,
-                                    id,
-                                    offset,
-                                    chunk_data,
-                                    &mut vtx,
-                                    &mut idx,
-                                    plantlike_render_info,
-                                ),
-                            Some(RenderInfo::AxisAlignedBoxes(render_info)) => self
-                                .emit_axis_aligned_boxes(
-                                    block,
-                                    id,
-                                    offset,
-                                    chunk_data,
-                                    &mut vtx,
-                                    &mut idx,
-                                    render_info,
-                                ),
-                            _ => (),
-                        }
+                        self.render_single_block(
+                            block,
+                            id,
+                            offset,
+                            chunk_data,
+                            &mut vtx,
+                            &mut idx,
+                            &suppress_face_when,
+                        );
                     }
                 }
             }
@@ -797,12 +784,53 @@ impl BlockRenderer {
         VkChunkPass::from_buffers(vtx, idx, self.allocator())
     }
 
+    pub(crate) fn render_single_block<G>(
+        &self,
+        block: &BlockTypeDef,
+        id: BlockId,
+        offset: ChunkOffset,
+        chunk_data: &impl ChunkDataView,
+        vtx: &mut Vec<CubeGeometryVertex>,
+        idx: &mut Vec<u32>,
+        suppress_face_when: &G,
+    ) where
+        G: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+    {
+        match &block.render_info {
+            Some(RenderInfo::Cube(cube_render_info)) => {
+                self.emit_full_cube(
+                    block,
+                    id,
+                    offset,
+                    chunk_data,
+                    vtx,
+                    idx,
+                    cube_render_info,
+                    suppress_face_when,
+                );
+            }
+            Some(RenderInfo::PlantLike(plantlike_render_info)) => self.emit_plantlike(
+                block,
+                id,
+                offset,
+                chunk_data,
+                vtx,
+                idx,
+                plantlike_render_info,
+            ),
+            Some(RenderInfo::AxisAlignedBoxes(render_info)) => {
+                self.emit_axis_aligned_boxes(block, id, offset, chunk_data, vtx, idx, render_info)
+            }
+            _ => (),
+        }
+    }
+
     fn emit_full_cube<F>(
         &self,
         block: &BlockTypeDef,
         id: BlockId,
         offset: ChunkOffset,
-        chunk_data: &ChunkDataView,
+        chunk_data: &impl ChunkDataView,
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         render_info: &CubeRenderInfo,
@@ -854,7 +882,7 @@ impl BlockRenderer {
         _block: &BlockTypeDef,
         id: BlockId,
         offset: ChunkOffset,
-        chunk_data: &ChunkDataView<'_>,
+        chunk_data: &impl ChunkDataView,
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         plantlike_render_info: &blocks_proto::PlantLikeRenderInfo,
@@ -888,7 +916,7 @@ impl BlockRenderer {
         _block: &BlockTypeDef,
         id: BlockId,
         offset: ChunkOffset,
-        chunk_data: &ChunkDataView<'_>,
+        chunk_data: &impl ChunkDataView,
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         _render_info: &AxisAlignedBoxes,
@@ -1085,7 +1113,7 @@ const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5)
 fn get_cube_extents(
     render_info: &CubeRenderInfo,
     id: BlockId,
-    chunk_data: &ChunkDataView,
+    chunk_data: &impl ChunkDataView,
     offset: ChunkOffset,
 ) -> CubeExtents {
     match render_info.variant_effect() {
@@ -1098,7 +1126,7 @@ fn get_cube_extents(
 }
 
 fn build_liquid_cube_extents(
-    chunk_data: &ChunkDataView,
+    chunk_data: &impl ChunkDataView,
     offset: ChunkOffset,
     id: BlockId,
 ) -> CubeExtents {

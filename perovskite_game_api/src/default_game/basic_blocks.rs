@@ -124,7 +124,6 @@ pub mod ores {
                 .set_cube_appearance(
                     CubeAppearanceBuilder::new().set_single_texture(COAL_ORE_TEXTURE),
                 )
-                .set_inventory_texture(COAL_ORE_TEXTURE)
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
                 .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2))),
@@ -230,7 +229,6 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
     builder.add_block(
         BlockBuilder::new(TNT)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
-            .set_inventory_texture(TNT_TEXTURE)
             .set_modifier(Box::new(move |block_type| {
                 block_type.tap_handler_full = Some(Box::new(move |ctx, coord, tool| {
                     if tool.is_some_and(|tool| tool.proto.item_name == "default:superuser_pickaxe")
@@ -298,7 +296,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
             .set_cube_single_texture(DIRT_TEXTURE)
-            .set_inventory_texture(DIRT_TEXTURE)
             .set_display_name("Dirt block"),
     )?;
     game_builder.add_block(
@@ -312,7 +309,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
             ))
-            .set_inventory_texture(DIRT_GRASS_SIDE_TEXTURE)
             .set_dropped_item(DIRT.0, 1)
             // testonly
             .set_dropped_item_closure(|| {
@@ -331,7 +327,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(STONE_TEXTURE)
-            .set_inventory_texture(STONE_TEXTURE)
             .set_display_name("Stone block"),
     )?;
 
@@ -344,7 +339,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
                     .set_needs_transparency(),
             )
             .set_allow_light_propagation(true)
-            .set_inventory_texture(GLASS_TEXTURE)
             .set_display_name("Glass block"),
     )?;
     let mut water_builder = BlockBuilder::new(WATER)
@@ -358,7 +352,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
         )
         .set_not_diggable()
         .set_allow_light_propagation(true)
-        .set_inventory_texture(WATER_TEXTURE)
         .set_display_name("Water block")
         .set_liquid_flow(Some(Duration::from_millis(500)))
         .set_matter_type(MatterType::Liquid);
@@ -385,7 +378,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
             )
             .add_block_group(block_groups::INSTANT_DIG)
             .set_allow_light_propagation(true)
-            .set_inventory_texture(TORCH_TEXTURE)
             .set_display_name("Torch")
             .set_light_emission(8),
     )?;
@@ -394,7 +386,6 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     game_builder.add_block(
         BlockBuilder::new(CHEST)
             .set_cube_single_texture(CHEST_TEXTURE)
-            .set_inventory_texture(CHEST_TEXTURE)
             .set_display_name("Unlocked chest")
             .set_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;

@@ -294,11 +294,11 @@ impl PhysicsState {
                     &chunks,
                     block_types,
                 );
+                self.bump_decay = self.bump_decay.max(new_pos.y - pre_bump_y);
                 if self.settings.load().render.physics_debug {
                     println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
+                    println!("bump decay: {}", self.bump_decay);
                 }
-                self.bump_decay = self.bump_decay.max(new_pos.y - pre_bump_y);
-                println!("bump decay: {}", self.bump_decay);
             }
         }
         self.bump_decay = (self.bump_decay - (delta_secs * BUMP_DECAY_SPEED)).max(0.0);

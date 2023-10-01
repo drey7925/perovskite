@@ -33,19 +33,23 @@ use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use prost::Message;
 
 
+pub(crate) trait ChunkDataView {
+    fn block_ids(&self) -> &[BlockId; 18 * 18 * 18];
+    fn lightmap(&self) -> &[u8; 18 * 18 * 18];
+    fn get_block(&self, offset: ChunkOffset) -> BlockId {
+        self.block_ids()[offset.as_extended_index()]
+    }
+}
 
-pub(crate) struct ChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
-impl ChunkDataView<'_> {
-    pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
+
+pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
+impl ChunkDataView for LockedChunkDataView<'_> {
+    fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
         &self.0.block_ids
     }
 
-    pub(crate) fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
+    fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
         &self.0.lightmap
-    }
-
-    pub(crate) fn get_block(&self, offset: ChunkOffset) -> BlockId {
-        self.0.block_ids[offset.as_extended_index()]
     }
 }
 
@@ -394,8 +398,8 @@ impl ClientChunk {
         self.coord
     }
 
-    pub(crate) fn chunk_data(&self) -> ChunkDataView<'_> {
-        ChunkDataView(self.chunk_data.read())
+    pub(crate) fn chunk_data(&self) -> LockedChunkDataView<'_> {
+        LockedChunkDataView(self.chunk_data.read())
     }
 
     pub(crate) fn chunk_data_mut(&self) -> ChunkDataViewMut<'_> {
