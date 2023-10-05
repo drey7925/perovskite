@@ -4,6 +4,7 @@ use std::{
 };
 
 use image::{DynamicImage, RgbImage};
+use parking_lot::Mutex;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
@@ -77,30 +78,49 @@ where
             all_texture_names.insert(tex.texture_name.clone());
         }
     }
+    let all_rendered_blocks = all_rendered_blocks.into_iter().collect::<Vec<_>>();
 
     let all_texture_names = item_defs
         .all_item_defs()
         .flat_map(|x| &x.inventory_texture)
         .map(|x| x.texture_name.clone())
         .collect::<HashSet<_>>();
-    let mut renderer = MiniBlockRenderer::new(
-        ctx.clone(),
-        [128, 128],
-        block_renderer.atlas(),
-        block_renderer.block_types().air_block(),
-    )?;
 
     let mut simple_textures = HashMap::new();
-    let mut rendered_block_textures = HashMap::new();
+    let rendered_block_textures = Arc::new(Mutex::new(HashMap::new()));
     for name in all_texture_names {
         let texture = texture_loader.load_texture(&name).await?;
         simple_textures.insert(name, texture);
     }
-    for block_name in all_rendered_blocks {
-        let block_tex = renderer.render(&block_name, block_renderer)?.unwrap();
-        rendered_block_textures.insert(block_name, block_tex);
-    }
+    tokio::task::block_in_place(|| {
+        std::thread::scope(|s| {
+            const NUM_MINI_RENDER_THREADS: usize = 4;
+            let mut handles = Vec::with_capacity(NUM_MINI_RENDER_THREADS);
+            for i in 0..NUM_MINI_RENDER_THREADS {
+                let ctx = ctx.clone();
 
+                let mut tasks = vec![];
+                for (j, name) in all_rendered_blocks.iter().enumerate() {
+                    if (j % NUM_MINI_RENDER_THREADS) == i {
+                        tasks.push(name);
+                    }
+                }
+                handles.push(s.spawn(|| {
+                    let mut renderer = MiniBlockRenderer::new(
+                        ctx,
+                        [128, 128],
+                        block_renderer.atlas(),
+                        block_renderer.block_types().air_block(),
+                    )
+                    .unwrap();
+                    for name in tasks {
+                        let block_tex = renderer.render(&name, block_renderer).unwrap().unwrap();
+                        rendered_block_textures.lock().insert(name, block_tex);
+                    }
+                }));
+            }
+        });
+    });
     let config = texture_packer::TexturePackerConfig {
         // todo tweak these or make into a setting
         allow_rotation: false,
@@ -165,7 +185,7 @@ where
             texture,
         )?;
     }
-    for (name, texture) in rendered_block_textures {
+    for (name, texture) in rendered_block_textures.lock().drain() {
         pack_tex(
             &mut texture_packer,
             &("rendered_block:".to_string() + &name),
