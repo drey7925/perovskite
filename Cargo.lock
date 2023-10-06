@@ -2361,6 +2361,7 @@ dependencies = [
  "ron",
  "rustc-hash",
  "serde",
+ "sha2",
  "snap",
  "texture_packer",
  "textwrap",

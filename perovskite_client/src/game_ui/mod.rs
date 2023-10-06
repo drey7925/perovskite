@@ -1,17 +1,19 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::Cursor,
     sync::Arc,
 };
 
 use image::{DynamicImage, RgbImage};
 use parking_lot::Mutex;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
-use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
+use texture_packer::{exporter::ImageExporter, importer::ImageImporter, Rect, TexturePacker};
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Error, Result};
 
 use crate::{
-    block_renderer::{AsyncTextureLoader, BlockRenderer},
+    block_renderer::{AsyncMediaLoader, BlockRenderer},
+    cache::CacheManager,
     game_state::items::ClientItemManager,
     vulkan::{mini_renderer::MiniBlockRenderer, Texture2DHolder, VulkanContext},
 };
@@ -21,17 +23,14 @@ use self::{egui_ui::EguiUi, hud::GameHud};
 pub(crate) mod egui_ui;
 pub(crate) mod hud;
 
-pub(crate) async fn make_uis<T>(
+pub(crate) async fn make_uis(
     item_defs: Arc<ClientItemManager>,
-    texture_loader: T,
+    cache_manager: &Arc<Mutex<CacheManager>>,
     ctx: Arc<VulkanContext>,
     block_renderer: &BlockRenderer,
-) -> Result<(hud::GameHud, egui_ui::EguiUi)>
-where
-    T: AsyncTextureLoader,
-{
+) -> Result<(hud::GameHud, egui_ui::EguiUi)> {
     let (texture_atlas, texture_coords) =
-        build_texture_atlas(&item_defs, texture_loader, ctx, block_renderer).await?;
+        build_texture_atlas(&item_defs, cache_manager, ctx, block_renderer).await?;
 
     let hud = GameHud {
         texture_coords: texture_coords.clone(),
@@ -60,15 +59,12 @@ fn pack_tex(
         .map_err(|x| Error::msg(format!("Texture pack for {} failed: {:?}", name, x)))
 }
 
-async fn build_texture_atlas<T>(
+async fn build_texture_atlas(
     item_defs: &ClientItemManager,
-    mut texture_loader: T,
+    cache_manager: &Arc<Mutex<CacheManager>>,
     ctx: Arc<VulkanContext>,
     block_renderer: &BlockRenderer,
-) -> Result<(Arc<Texture2DHolder>, HashMap<String, Rect>)>
-where
-    T: AsyncTextureLoader,
-{
+) -> Result<(Arc<Texture2DHolder>, HashMap<String, Rect>)> {
     let mut all_texture_names = HashSet::new();
     let mut all_rendered_blocks = HashSet::new();
     for def in item_defs.all_item_defs() {
@@ -88,10 +84,12 @@ where
 
     let mut simple_textures = HashMap::new();
     let rendered_block_textures = Arc::new(Mutex::new(HashMap::new()));
+    let mut cache_manager_lock = cache_manager.lock();
     for name in all_texture_names {
-        let texture = texture_loader.load_texture(&name).await?;
+        let texture = cache_manager_lock.load_media_by_name(&name).await?;
         simple_textures.insert(name, texture);
     }
+    drop(cache_manager_lock);
     tokio::task::block_in_place(|| {
         std::thread::scope(|s| {
             const NUM_MINI_RENDER_THREADS: usize = 4;
@@ -114,7 +112,38 @@ where
                     )
                     .unwrap();
                     for name in tasks {
-                        let block_tex = renderer.render(&name, block_renderer).unwrap().unwrap();
+                        let block_id = match block_renderer.block_types().get_block_by_name(name) {
+                            Some(id) => id,
+                            None => continue,
+                        };
+                        let block_def = match block_renderer.block_types().get_blockdef(block_id) {
+                            Some(block_type) => block_type,
+                            None => continue,
+                        };
+
+                        let cached_content = cache_manager
+                            .lock()
+                            .try_get_block_appearance(&block_def)
+                            .unwrap();
+                        if let Some(content) = cached_content {
+                            rendered_block_textures
+                                .lock()
+                                .insert(name, ImageImporter::import_from_memory(&content).unwrap());
+                            continue;
+                        }
+
+                        let block_tex = renderer
+                            .render(block_renderer, block_id, block_def)
+                            .unwrap();
+
+                        let mut bytes: Vec<u8> = Vec::new();
+                        block_tex
+                            .write_to(&mut Cursor::new(&mut bytes), image::ImageOutputFormat::Png)
+                            .unwrap();
+                        cache_manager
+                            .lock()
+                            .insert_block_appearance(&block_def, bytes)
+                            .unwrap();
                         rendered_block_textures.lock().insert(name, block_tex);
                     }
                 }));
@@ -182,7 +211,8 @@ where
         pack_tex(
             &mut texture_packer,
             &("simple:".to_string() + &name),
-            texture,
+            ImageImporter::import_from_memory(&texture)
+                .map_err(|x| Error::msg(format!("Texture import failed: {:?}", x)))?,
         )?;
     }
     for (name, texture) in rendered_block_textures.lock().drain() {

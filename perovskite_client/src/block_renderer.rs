@@ -45,7 +45,8 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
-use crate::game_state::chunk::{LockedChunkDataView, ChunkOffsetExt, ChunkDataView};
+use crate::cache::CacheManager;
+use crate::game_state::chunk::{ChunkDataView, ChunkOffsetExt, LockedChunkDataView};
 use crate::game_state::make_fallback_blockdef;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
@@ -189,7 +190,7 @@ impl ClientBlockTypeManager {
             light_propagators,
             light_emitters,
             solid_opaque_blocks,
-            name_to_id
+            name_to_id,
         })
     }
 
@@ -523,13 +524,11 @@ pub(crate) struct BlockRenderer {
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
-    pub(crate) async fn new<T>(
+    pub(crate) async fn new(
         block_defs: Arc<ClientBlockTypeManager>,
-        mut texture_loader: T,
+        cache_manager: &mut CacheManager,
         ctx: &VulkanContext,
     ) -> Result<BlockRenderer>
-    where
-        T: AsyncTextureLoader,
     {
         let mut all_texture_names = HashSet::new();
         for def in block_defs.all_block_defs() {
@@ -590,7 +589,7 @@ impl BlockRenderer {
 
         let mut all_textures = FxHashMap::default();
         for x in all_texture_names {
-            let texture = texture_loader.load_texture(&x).await?;
+            let texture = cache_manager.load_media_by_name(&x).await?;
             all_textures.insert(x, texture);
         }
 
@@ -622,6 +621,8 @@ impl BlockRenderer {
             .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
 
         for (name, texture) in all_textures {
+            let texture = ImageImporter::import_from_memory(&texture)
+                .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))?;
             texture_packer
                 .pack_own(name, texture)
                 .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
@@ -1634,6 +1635,6 @@ impl TexRefHelper for Option<TextureReference> {
 }
 
 #[async_trait]
-pub(crate) trait AsyncTextureLoader {
-    async fn load_texture(&mut self, tex_name: &str) -> Result<DynamicImage>;
+pub(crate) trait AsyncMediaLoader {
+    async fn load_media(&mut self, tex_name: &str) -> Result<Vec<u8>>;
 }

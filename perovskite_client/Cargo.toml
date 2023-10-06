@@ -50,6 +50,7 @@ bitvec = "1.0.1"
 mimalloc = { version = "0.1.37", default-features = false }
 snap = "1.1.0"
 lazy_static = "1.4.0"
+sha2 = "0.10.6"
 
 [features]
 default = []

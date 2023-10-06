@@ -40,7 +40,7 @@ pub(crate) struct GameSettings {
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
-        let project_dirs = directories::ProjectDirs::from("foo", "drey7925", "perovskite")
+        let project_dirs = project_dirs()
             .context("couldn't find config dir")?;
         let config_dir = project_dirs.config_dir();
         if !config_dir.exists() {
@@ -67,6 +67,10 @@ impl GameSettings {
         let parsed = ron::from_str(&config)?;
         Ok(Some(parsed))
     }
+}
+
+pub(crate) fn project_dirs() -> Option<directories::ProjectDirs> {
+    directories::ProjectDirs::from("foo", "drey7925", "perovskite")
 }
 
     /// Replaces the user's home directory with an environment variable.

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use cgmath::{vec3, Matrix4, SquareMatrix, Deg};
 use image::{DynamicImage, RgbaImage};
-use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
+use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef};
 use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -112,18 +112,11 @@ impl MiniBlockRenderer {
 
     pub(crate) fn render(
         &mut self,
-        block_name: &str,
         block_renderer: &BlockRenderer,
-    ) -> Result<Option<DynamicImage>> {
-        let block_id = match block_renderer.block_types().get_block_by_name(block_name) {
-            Some(id) => id,
-            None => return Ok(None),
-        };
-        let block_def = match block_renderer.block_types().get_blockdef(block_id) {
-            Some(block_type) => block_type,
-            None => return Ok(None),
-        };
-
+        block_id: BlockId,
+        block_def: &BlockTypeDef,
+    ) -> Result<DynamicImage> {
+        
         let mut vtx = vec![];
         let mut idx = vec![];
 
@@ -191,7 +184,7 @@ impl MiniBlockRenderer {
         let guard = self.download_buffer.read()?;
         let image = RgbaImage::from_raw(self.surface_size[0], self.surface_size[1], guard.to_vec())
             .context("Failed to create image")?;
-        Ok(Some(image.into()))
+        Ok(image.into())
     }
 }
 
