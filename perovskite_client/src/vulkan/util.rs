@@ -26,15 +26,15 @@ pub(crate) fn select_physical_device(
     device_extensions: &DeviceExtensions,
     preferred_gpu: &str,
 ) -> Result<(Arc<PhysicalDevice>, u32)> {
-    println!(
-        "{:?}",
+    log::info!(
+        "Detected GPUs: {:?}",
         instance
             .enumerate_physical_devices()
             .unwrap()
             .map(|x| x.properties().device_name.clone())
             .collect::<Vec<String>>()
     );
-    instance
+    let (selected_gpu, queue_family_index) = instance
         .enumerate_physical_devices()
         .expect("failed to enumerate physical devices")
         .filter(|p| p.supported_extensions().contains(device_extensions))
@@ -49,7 +49,12 @@ pub(crate) fn select_physical_device(
                 .map(|q| (p, q as u32))
         })
         .min_by_key(|(p, _)| {
-            if !preferred_gpu.is_empty() && p.properties().device_name.starts_with(preferred_gpu) {
+            if !preferred_gpu.is_empty()
+                && p.properties()
+                    .device_name
+                    .to_lowercase()
+                    .starts_with(&preferred_gpu.to_lowercase())
+            {
                 return 0;
             };
             match p.properties().device_type {
@@ -60,5 +65,7 @@ pub(crate) fn select_physical_device(
                 _ => 5,
             }
         })
-        .with_context(|| "no device available")
+        .with_context(|| "no device available")?;
+    log::info!("Selected GPU: {:?}, queue family index: {}", selected_gpu.properties().device_name, queue_family_index);
+    Ok((selected_gpu, queue_family_index))
 }

@@ -72,7 +72,9 @@ pub(crate) struct VulkanContext {
     memory_allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    /// The format of the image buffer used for rendering to *screen*. Render-to-texture always uses R8G8B8A8_SRGB
     color_format: Format,
+    /// The format of the depth buffer used for rendering to *screen*. Probed at startup, and used for both render-to-screen and render-to-texture
     depth_format: Format,
 }
 impl VulkanContext {

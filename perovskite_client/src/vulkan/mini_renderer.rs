@@ -53,11 +53,12 @@ impl MiniBlockRenderer {
         atlas_texture: &Texture2DHolder,
         air_block: BlockId,
     ) -> Result<Self> {
-        let render_pass = make_render_pass(ctx.vk_device.clone(), ctx.color_format, ctx.depth_format)?;
+        // All compliant GPUs should be able to render to R8G8B8A8_SRGB
+        let render_pass = make_render_pass(ctx.vk_device.clone(), Format::R8G8B8A8_SRGB, ctx.depth_format)?;
         let target_image = AttachmentImage::with_usage(
             ctx.allocator(),
             surface_size,
-            ctx.color_format,
+            Format::R8G8B8A8_SRGB,
             ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
         )?;
         let create_info = ImageViewCreateInfo {
