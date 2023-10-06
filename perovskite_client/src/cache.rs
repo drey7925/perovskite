@@ -107,7 +107,6 @@ impl CacheManager {
     }
 
     fn insert_into_cache(&mut self, extension: &str, hash: &[u8; 32], data: &[u8]) -> Result<()> {
-        println!("insert");
         if let Some(cache_dir) = &self.cache_dir {
             let path = get_cache_path(hash, cache_dir, extension);
             if !path.parent().unwrap().exists() {
@@ -168,19 +167,13 @@ impl CacheManager {
                             path.display(),
                             hex::encode(actual_hash)
                         );
-
-                        println!("corruption");
                         std::fs::rename(&path, &path.with_extension("corrupt")).unwrap();
                         return Ok(None);
                     }
                 }
-
-                println!("hit");
                 return Ok(Some(data));
             }
         }
-
-        println!("miss");
         Ok(None)
     }
 

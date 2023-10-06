@@ -24,6 +24,7 @@ pub(crate) fn select_physical_device(
     instance: &Arc<Instance>,
     surface: &Arc<Surface>,
     device_extensions: &DeviceExtensions,
+    preferred_gpu: &str,
 ) -> Result<(Arc<PhysicalDevice>, u32)> {
     println!(
         "{:?}",
@@ -48,17 +49,15 @@ pub(crate) fn select_physical_device(
                 .map(|q| (p, q as u32))
         })
         .min_by_key(|(p, _)| {
-            // TEST ONLY
-            // TODO make this a selectable preference
-            // if p.properties().device_name.starts_with("Intel") {
-            //     return -1;
-            // };
+            if !preferred_gpu.is_empty() && p.properties().device_name.starts_with(preferred_gpu) {
+                return 0;
+            };
             match p.properties().device_type {
-                PhysicalDeviceType::DiscreteGpu => 0,
-                PhysicalDeviceType::IntegratedGpu => 1,
-                PhysicalDeviceType::VirtualGpu => 2,
-                PhysicalDeviceType::Cpu => 3,
-                _ => 4,
+                PhysicalDeviceType::DiscreteGpu => 1,
+                PhysicalDeviceType::IntegratedGpu => 2,
+                PhysicalDeviceType::VirtualGpu => 3,
+                PhysicalDeviceType::Cpu => 4,
+                _ => 5,
             }
         })
         .with_context(|| "no device available")

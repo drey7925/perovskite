@@ -294,7 +294,7 @@ impl GameRenderer {
             GameSettings::load_from_disk()?.unwrap_or_default().into(),
         ));
 
-        let ctx = VulkanWindow::create(event_loop).unwrap();
+        let ctx = VulkanWindow::create(event_loop, &settings).unwrap();
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()

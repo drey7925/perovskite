@@ -22,6 +22,7 @@ pub(crate) mod util;
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::{bail, Context, Result};
+use arc_swap::ArcSwap;
 use log::warn;
 
 use vulkano::{
@@ -59,6 +60,8 @@ use winit::{
 
 pub(crate) type CommandBufferBuilder<L> =
     AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
+
+use crate::game_state::settings::GameSettings;
 
 use self::util::select_physical_device;
 
@@ -122,7 +125,7 @@ impl VulkanWindow {
         self.vk_ctx.clone()
     }
 
-    pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<VulkanWindow> {
+    pub(crate) fn create(event_loop: &EventLoop<()>, settings: &Arc<ArcSwap<GameSettings>>) -> Result<VulkanWindow> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
         let required_extensions = vulkano_win::required_extensions(&library);
@@ -169,7 +172,7 @@ impl VulkanWindow {
         };
 
         let (physical_device, queue_family_index) =
-            select_physical_device(&instance, &surface, &device_extensions)?;
+            select_physical_device(&instance, &surface, &device_extensions, &settings.load().render.preferred_gpu)?;
 
         let (vk_device, mut queues) = Device::new(
             physical_device.clone(),

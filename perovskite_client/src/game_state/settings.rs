@@ -14,7 +14,8 @@ pub(crate) struct RenderSettings {
     pub(crate) num_neighbor_propagators: usize,
     pub(crate) show_placement_guide: bool,
     pub(crate) testonly_noop_meshing: bool,
-    pub(crate) physics_debug: bool
+    pub(crate) physics_debug: bool,
+    pub(crate) preferred_gpu: String
 }
 
 impl Default for RenderSettings {
@@ -24,7 +25,8 @@ impl Default for RenderSettings {
             num_neighbor_propagators: 1,
             show_placement_guide: false,
             testonly_noop_meshing: false,
-            physics_debug: false
+            physics_debug: false,
+            preferred_gpu: String::from(""),
         }
     }
 }

@@ -11,7 +11,7 @@ use winit::event_loop::EventLoop;
 use crate::{
     game_state::{settings::GameSettings, DigTapAction},
     net_client,
-    vulkan::{VulkanWindow},
+    vulkan::VulkanWindow,
 };
 
 pub struct Loadtester {
@@ -23,7 +23,9 @@ pub struct Loadtester {
 }
 impl Loadtester {
     pub fn new() -> Self {
-        let settings = GameSettings::default();
+        let settings = Arc::new(ArcSwap::new(
+            GameSettings::default().into(),
+        ));
         Self {
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -31,12 +33,10 @@ impl Loadtester {
                 .unwrap(),
             workers: vec![],
             vk_ctx: Arc::new(
-                VulkanWindow::create(Box::<EventLoop<()>>::leak(Box::new(EventLoop::new())))
+                VulkanWindow::create(Box::<EventLoop<()>>::leak(Box::new(EventLoop::new())), &settings)
                     .unwrap(),
             ),
-            settings: Arc::new(ArcSwap::new(
-                settings.into(),
-            )),
+            settings,
             cancel: CancellationToken::new(),
         }
     }
