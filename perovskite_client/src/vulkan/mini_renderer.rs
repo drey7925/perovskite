@@ -53,11 +53,11 @@ impl MiniBlockRenderer {
         atlas_texture: &Texture2DHolder,
         air_block: BlockId,
     ) -> Result<Self> {
-        let render_pass = make_render_pass(ctx.vk_device.clone(), Format::R8G8B8A8_SRGB)?;
+        let render_pass = make_render_pass(ctx.vk_device.clone(), ctx.color_format, ctx.depth_format)?;
         let target_image = AttachmentImage::with_usage(
             ctx.allocator(),
             surface_size,
-            Format::R8G8B8A8_SRGB,
+            ctx.color_format,
             ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
         )?;
         let create_info = ImageViewCreateInfo {
@@ -67,7 +67,7 @@ impl MiniBlockRenderer {
         let target_image = ImageView::new(target_image, create_info)?;
 
         let depth_buffer = ImageView::new_default(
-            AttachmentImage::transient(ctx.allocator(), surface_size, Format::D24_UNORM_S8_UINT)
+            AttachmentImage::transient(ctx.allocator(), surface_size, ctx.depth_format)
                 .unwrap(),
         )?;
 

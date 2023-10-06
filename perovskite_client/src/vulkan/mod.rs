@@ -21,7 +21,7 @@ pub(crate) mod util;
 
 use std::{ops::Deref, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use log::warn;
 
 use vulkano::{
@@ -33,8 +33,11 @@ use vulkano::{
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
     },
-    device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo},
-    format::{Format, NumericType},
+    device::{
+        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue,
+        QueueCreateInfo,
+    },
+    format::{Format, FormatFeatures, NumericType},
     image::{
         view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
@@ -66,9 +69,10 @@ pub(crate) struct VulkanContext {
     memory_allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    color_format: Format,
+    depth_format: Format,
 }
 impl VulkanContext {
-    
     pub(crate) fn clone_allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
         self.memory_allocator.clone()
     }
@@ -181,7 +185,7 @@ impl VulkanWindow {
         )?;
         let queue = queues.next().with_context(|| "expected a queue")?;
 
-        let (swapchain, swapchain_images) = {
+        let (swapchain, swapchain_images, color_format) = {
             let caps = physical_device
                 .surface_capabilities(&surface, Default::default())
                 .expect("failed to get surface capabilities");
@@ -198,7 +202,7 @@ impl VulkanWindow {
                 }
             }
 
-            Swapchain::new(
+            let (swapchain, images) = Swapchain::new(
                 vk_device.clone(),
                 surface,
                 SwapchainCreateInfo {
@@ -210,10 +214,14 @@ impl VulkanWindow {
                     image_color_space: color_space,
                     ..Default::default()
                 },
-            )?
+            )?;
+            (swapchain, images, image_format)
         };
 
-        let render_pass = make_render_pass(vk_device.clone(), swapchain.image_format())?;
+        let depth_format = find_best_depth_format(&physical_device)?;
+
+        let render_pass =
+            make_render_pass(vk_device.clone(), swapchain.image_format(), depth_format)?;
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(vk_device.clone()));
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
@@ -222,8 +230,12 @@ impl VulkanWindow {
         ));
         let descriptor_set_allocator =
             Arc::new(StandardDescriptorSetAllocator::new(vk_device.clone()));
-        let framebuffers =
-            get_framebuffers_with_depth(&swapchain_images, &memory_allocator, render_pass.clone());
+        let framebuffers = get_framebuffers_with_depth(
+            &swapchain_images,
+            &memory_allocator,
+            render_pass.clone(),
+            depth_format,
+        );
 
         Ok(VulkanWindow {
             vk_ctx: Arc::new(VulkanContext {
@@ -232,6 +244,8 @@ impl VulkanWindow {
                 memory_allocator,
                 command_buffer_allocator,
                 descriptor_set_allocator,
+                color_format,
+                depth_format,
             }),
             render_pass,
             swapchain,
@@ -268,10 +282,10 @@ impl VulkanWindow {
             &new_images,
             &self.memory_allocator,
             self.render_pass.clone(),
+            self.depth_format,
         );
         Ok(())
     }
-
 
     fn start_render_pass(
         &self,
@@ -302,7 +316,39 @@ impl VulkanWindow {
     }
 }
 
-pub(crate) fn make_render_pass(vk_device: Arc<Device>, output_format: Format) -> Result<Arc<RenderPass>> {
+fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
+    const FORMATS_TO_TRY: [Format; 5] = [
+        Format::D24_UNORM_S8_UINT,
+        Format::X8_D24_UNORM_PACK32,
+        Format::D32_SFLOAT,
+        Format::D32_SFLOAT_S8_UINT,
+        Format::D16_UNORM,
+    ];
+    for format in FORMATS_TO_TRY {
+        if physical_device
+            .format_properties(format)?
+            .optimal_tiling_features
+            .contains(FormatFeatures::DEPTH_STENCIL_ATTACHMENT)
+        {
+            log::info!("Depth format found: {format:?}");
+            if format == Format::D16_UNORM {
+                log::warn!(
+                    "Depth format D16_UNORM may have low precision and cause visual glitches"
+                );
+                log::warn!("According to the vulkan spec, at least one of the other formats should be supported by any compliant GPU.");
+                log::warn!("Please reach out to the devs with details about your GPU.");
+            }
+            return Ok(format);
+        }
+    }
+    bail!("No depth format found");
+}
+
+pub(crate) fn make_render_pass(
+    vk_device: Arc<Device>,
+    output_format: Format,
+    depth_format: Format,
+) -> Result<Arc<RenderPass>> {
     vulkano::ordered_passes_renderpass!(
         vk_device,
         attachments: {
@@ -315,7 +361,7 @@ pub(crate) fn make_render_pass(vk_device: Arc<Device>, output_format: Format) ->
             depth: {
                 load: Clear,
                 store: DontCare,
-                format: Format::D24_UNORM_S8_UINT,
+                format: depth_format,
                 samples: 1,
             },
         },
@@ -331,7 +377,8 @@ pub(crate) fn make_render_pass(vk_device: Arc<Device>, output_format: Format) ->
                 input: []
             },
         ]
-    ).context("Renderpass creation failed")
+    )
+    .context("Renderpass creation failed")
 }
 
 fn find_best_format(
@@ -364,6 +411,7 @@ pub(crate) fn get_framebuffers_with_depth(
     images: &[Arc<SwapchainImage>],
     allocator: &StandardMemoryAllocator,
     render_pass: Arc<RenderPass>,
+    depth_format: Format,
 ) -> Vec<Arc<Framebuffer>> {
     images
         .iter()
@@ -373,7 +421,7 @@ pub(crate) fn get_framebuffers_with_depth(
                 AttachmentImage::transient(
                     allocator,
                     image.dimensions().width_height(),
-                    Format::D24_UNORM_S8_UINT,
+                    depth_format,
                 )
                 .unwrap(),
             )
@@ -423,6 +471,10 @@ impl Texture2DHolder {
             img_rgba,
             dimensions,
             vulkano::image::MipmapsCount::Log2,
+            // Ideally, we would probe for support between RGB and BGR, but we can't swizzle the
+            // colors currently, so BGR formats wouldn't render properly.
+            // According to https://registry.khronos.org/vulkan/site/spec/latest/chapters/formats.html#features-required-format-support,
+            // any compliant GPU should support RGB.
             Format::R8G8B8A8_SRGB,
             &mut builder,
         )?;
