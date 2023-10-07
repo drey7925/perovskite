@@ -54,6 +54,12 @@ pub struct Player {
     // The main inventory is a bit special - it's drawn in the HUD and used for interactions
     pub(crate) main_inventory_key: InventoryKey,
     // Mutable state of the player
+    // Impl note: If mutating access is provided to callers, then we have no way of assuring that
+    // client(s) are notified of the change.
+    //
+    // We should ensure that the only way to get mutating access is through something like a PlayerMutView that
+    // Derefs to a player and has its own mutating functions that appropriate track whether any updates need
+    // to be sent to clients.
     pub(crate) state: Mutex<PlayerState>,
     // Sends events for that player; the corresponding receiver will send them over the network to the client.
     sender: PlayerEventSender,
@@ -71,6 +77,9 @@ impl Player {
     }
     pub fn last_position(&self) -> PlayerPositionUpdate {
         self.state.lock().last_position
+    }
+    pub fn selected_hotbar_slot(&self) -> Option<u32> {
+        self.state.lock().hotbar_slot
     }
     fn to_server_proto(&self) -> StoredPlayer {
         StoredPlayer {
@@ -119,6 +128,7 @@ impl Player {
                     true,
                     false,
                 )?,
+                hotbar_slot: None,
             }),
             sender,
         })
@@ -161,6 +171,7 @@ impl Player {
                     true,
                     false,
                 )?,
+                hotbar_slot: None,
             }
             .into(),
             sender,
@@ -184,15 +195,18 @@ impl Player {
 }
 
 pub(crate) struct PlayerState {
+    /// The player's last client-reported position
     pub(crate) last_position: PlayerPositionUpdate,
-    // The inventory popup is always loaded, even when it's not shown
+    /// The inventory popup is always loaded, even when it's not shown
     pub(crate) inventory_popup: Popup,
-    // Other active popups for the player. These get deleted when closed.
+    /// Other active popups for the player. These get deleted when closed.
     pub(crate) active_popups: Vec<Popup>,
-    // The player's main inventory, which is shown in the user hotbar
+    /// The player's main inventory, which is shown in the user hotbar
     pub(crate) hotbar_inventory_view: InventoryView<()>,
-    // A 1x1 transient view used to carry items with the mouse
+    /// A 1x1 transient view used to carry items with the mouse
     pub(crate) inventory_manipulation_view: InventoryView<()>,
+    /// The player's currently selected hotbar slot, if known.
+    pub(crate) hotbar_slot: Option<u32>,
 }
 impl PlayerState {
     pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {
@@ -291,6 +305,17 @@ impl PlayerContext {
     pub(crate) fn update_position(&self, pos: PlayerPositionUpdate) {
         self.player.state.lock().last_position = pos;
     }
+    /// Internal method that will get more parameters as we add more animation/interaction state in player
+    /// position update messages
+    pub(crate) fn update_client_position_state(&self, pos: PlayerPositionUpdate, hotbar_slot: u32) {
+        let mut lock = self.player.state.lock();
+        lock.last_position = pos;
+        lock.hotbar_slot = Some(hotbar_slot);
+    }
+    pub(crate) fn last_position(&self) -> PlayerPositionUpdate {
+        self.player.state.lock().last_position
+        
+    }
     pub fn name(&self) -> &str {
         &self.player.name
     }
@@ -317,24 +342,29 @@ impl Drop for PlayerContext {
 struct PlayerEventSender {
     chat_messages: tokio::sync::mpsc::Sender<ChatMessage>,
     disconnection_message: tokio::sync::mpsc::Sender<String>,
+    reinit_player_state: tokio::sync::watch::Sender<()>,
 }
 pub(crate) struct PlayerEventReceiver {
     pub(crate) chat_messages: tokio::sync::mpsc::Receiver<ChatMessage>,
     pub(crate) disconnection_message: tokio::sync::mpsc::Receiver<String>,
+    pub(crate) reinit_player_state: tokio::sync::watch::Receiver<()>,
 }
 
 fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
     const CHAT_BUFFER_SIZE: usize = 128;
     let (chat_sender, chat_receiver) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
     let (disconnection_sender, disconnection_receiver) = tokio::sync::mpsc::channel(2);
+    let (reinit_sender, reinit_receiver) = tokio::sync::watch::channel(());
     (
         PlayerEventSender {
             chat_messages: chat_sender,
             disconnection_message: disconnection_sender,
+            reinit_player_state: reinit_sender,
         },
         PlayerEventReceiver {
             chat_messages: chat_receiver,
             disconnection_message: disconnection_receiver,
+            reinit_player_state: reinit_receiver,
         },
     )
 }
@@ -395,6 +425,17 @@ impl PlayerManager {
             receiver,
         ))
     }
+
+    /// Runs the given closure on the provided player.
+    pub fn for_connected_player<F, T>(&self, name: &str, closure: F) -> Result<T> where F: FnOnce(&Player) -> Result<T> {
+        let lock = self.active_players.lock();
+        if !lock.contains_key(name) {
+            bail!("Player {name} not connected");
+        }
+        let player = lock.get(name).unwrap();
+        closure(&player)
+    }
+
     fn drop_disconnect(&self, name: &str) {
         match self.active_players.lock().entry(name.to_string()) {
             Entry::Occupied(entry) => {

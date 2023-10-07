@@ -14,9 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::panic::{AssertUnwindSafe};
-
+use std::panic::AssertUnwindSafe;
+use std::future::Future;
 use anyhow::Error;
+use futures::FutureExt;
 
 
 use super::event::EventInitiator;
@@ -24,7 +25,7 @@ use super::event::EventInitiator;
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
 /// Currently a no-op
 #[inline]
-pub(crate) fn run_handler_impl<T, F>(closure: F, name: &'static str, _initiator: &EventInitiator) -> anyhow::Result<T>
+pub(crate) fn run_handler_impl<T, F>(closure: F, name: &str, _initiator: &EventInitiator<'_>) -> anyhow::Result<T>
 where
     F: FnOnce() -> anyhow::Result<T>,
 {
@@ -39,15 +40,43 @@ where
 macro_rules! run_handler {
     ($closure:expr, $name:literal, $initiator:expr $(,)?) => {
         {
-            let _span = span!(concat!($name, " handler"));
+            let _span = tracy_client::span!(concat!($name, " handler"));
             $crate::game_state::handlers::run_handler_impl($closure, $name, $initiator)
         }
     };
 }
 
-/// A thread-local context used for event handlers.
-/// This is set by the server when an event is received from a client, and propagated
-/// when handlers call each other.
-pub struct EventContext {
-
+pub(crate) async fn run_async_handler_impl<T, F>(
+    future: F,
+    name: &str,
+    _initiator: &EventInitiator<'_>,
+) -> anyhow::Result<T>
+where
+    F: Future<Output = anyhow::Result<T>>
+{
+    // todo clean up AssertUnwindSafe if possible
+    match AssertUnwindSafe(future).catch_unwind().await {
+        Ok(x) => x,
+        Err(_e) => Err(Error::msg(format!("Handler {} panicked", name))),
+    }
+    
 }
+
+
+#[macro_export]
+macro_rules! run_async_handler {
+    // todo parametrize
+    ($closure:expr, $name:literal, $initiator:expr, $($field:tt)*) => {
+        {
+            let _span = tracing::trace_span!(concat!($name, " async_handler"), $($field)*);
+            $crate::game_state::handlers::run_async_handler_impl($closure, $name, $initiator)
+        }
+    };
+}
+
+// /// A thread-local context used for event handlers.
+// /// This is set by the server when an event is received from a client, and propagated
+// /// when handlers call each other.
+// pub struct EventContext {
+
+// }

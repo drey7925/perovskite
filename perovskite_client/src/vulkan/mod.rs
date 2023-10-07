@@ -304,10 +304,11 @@ impl VulkanWindow {
         &self,
         builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
         framebuffer: Arc<Framebuffer>,
+        clear_color: [f32; 4],
     ) -> Result<()> {
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some(self.depth_clear_value())],
+                clear_values: vec![Some(clear_color.into()), Some(self.depth_clear_value())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassContents::Inline,

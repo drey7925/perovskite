@@ -52,3 +52,4 @@ pub mod auth;
 pub mod items;
 pub mod lighting;
 pub mod chat;
+pub mod time;

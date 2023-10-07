@@ -38,6 +38,8 @@ pub(crate) struct EguiUi {
     inventory_open: bool,
     pause_menu_open: bool,
     chat_open: bool,
+    chat_force_request_focus: bool,
+    chat_force_cursor_to_end: bool,
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
@@ -65,6 +67,8 @@ impl EguiUi {
             inventory_open: false,
             pause_menu_open: false,
             chat_open: false,
+            chat_force_request_focus: false,
+            chat_force_cursor_to_end: false,
             inventory_view: None,
             scale: 1.0,
             visible_popups: vec![],
@@ -88,10 +92,13 @@ impl EguiUi {
     }
     pub(crate) fn open_chat(&mut self) {
         self.chat_open = true;
+        self.chat_force_request_focus = true;
     }
     pub(crate) fn open_chat_slash(&mut self) {
         self.chat_open = true;
         self.chat_message_input = "/".to_string();
+        self.chat_force_request_focus = true;
+        self.chat_force_cursor_to_end = true;
     }
     pub(crate) fn draw_all_uis(
         &mut self,
@@ -560,6 +567,20 @@ impl EguiUi {
                             .lock_focus(true)
                             .desired_width(f32::INFINITY),
                     );
+                    if self.chat_force_request_focus {
+                        self.chat_force_request_focus = false;
+                        ui.ctx().memory_mut(|m| m.request_focus(editor.id));
+                    }
+                    if self.chat_force_cursor_to_end {
+                        self.chat_force_cursor_to_end = false;
+                        let id = editor.id;
+                        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+                            let ccursor = egui::text::CCursor::new(self.chat_message_input.chars().count());
+                            state.set_ccursor_range(Some(egui::text::CCursorRange::one(ccursor)));
+                            state.store(ui.ctx(), id);
+                            ui.ctx().memory_mut(|m| m.request_focus(id)); // give focus back to the `TextEdit`.
+                        }
+                    }
                     ui.memory_mut(|m| m.request_focus(editor.id));
                     if ui.input(|i| i.key_pressed(egui::Key::Enter))
                         && !self.chat_message_input.trim().is_empty()

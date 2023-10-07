@@ -28,8 +28,13 @@ use perovskite_core::protocol::game_rpc::perovskite_game_server::PerovskiteGameS
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
-        blocks::BlockTypeManager, game_behaviors::GameBehaviors, items::ItemManager,
-        mapgen::MapgenInterface, GameState, game_map::{TimerSettings, TimerCallback},
+        blocks::BlockTypeManager,
+        chat::commands::{ChatCommand, CommandImplementation, CommandManager},
+        game_behaviors::GameBehaviors,
+        game_map::{TimerCallback, TimerSettings},
+        items::ItemManager,
+        mapgen::MapgenInterface,
+        GameState,
     },
     media::MediaManager,
     network_server::grpc_service::PerovskiteGameServerImpl,
@@ -107,9 +112,8 @@ impl Server {
             });
         }
 
-        let perovskite_service = PerovskiteGameServer::new(PerovskiteGameServerImpl::new(
-            self.game_state.clone(),
-        ));
+        let perovskite_service =
+            PerovskiteGameServer::new(PerovskiteGameServerImpl::new(self.game_state.clone()));
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(perovskite_core::protocol::DESCRIPTOR_SET)
             .build()
@@ -147,6 +151,7 @@ pub struct ServerBuilder {
     map_timers: Vec<(String, TimerSettings, TimerCallback)>,
     args: ServerArgs,
     game_behaviors: GameBehaviors,
+    commands: CommandManager,
 }
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
@@ -182,6 +187,7 @@ impl ServerBuilder {
             map_timers: Vec::new(),
             args: args.clone(),
             game_behaviors: Default::default(),
+            commands: CommandManager::new(),
         })
     }
     pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
@@ -202,8 +208,24 @@ impl ServerBuilder {
     pub fn media(&self) -> &MediaManager {
         &self.media
     }
-    pub fn add_timer(&mut self, name: impl Into<String>, settings: TimerSettings, callback: TimerCallback) {
+    pub fn add_timer(
+        &mut self,
+        name: impl Into<String>,
+        settings: TimerSettings,
+        callback: TimerCallback,
+    ) {
         self.map_timers.push((name.into(), settings, callback));
+    }
+    pub fn register_command(
+        &mut self,
+        name: &str,
+        command: Box<dyn CommandImplementation>,
+        help_text: &str,
+    ) -> Result<()> {
+        self.commands.add_command(
+            name.to_string(),
+            ChatCommand::new(command, help_text.to_string()),
+        )
     }
     /// Sets the mapgen for this game.
     /// Stability note: The mapgen API is a WIP, and has not been stabilized yet.
@@ -224,23 +246,19 @@ impl ServerBuilder {
         let blocks = Arc::new(self.blocks);
         blocks.save_to(self.db.as_ref())?;
         let _rt_guard = self.runtime.enter();
-        let game_state = 
-        GameState::new(
+        let game_state = GameState::new(
             self.db,
             blocks,
             self.items,
             self.media,
             self.mapgen.with_context(|| "Mapgen not specified")?,
             self.game_behaviors,
+            self.commands,
         )?;
         for (name, settings, callback) in self.map_timers {
-            game_state.map().register_timer(name, settings, callback)?;
+            game_state.game_map().register_timer(name, settings, callback)?;
         }
-        Server::new(
-            self.runtime,
-            game_state,
-            addr,
-        )
+        Server::new(self.runtime, game_state, addr)
     }
 
     pub fn game_behaviors_mut(&mut self) -> &mut GameBehaviors {

@@ -244,6 +244,8 @@ message ClientPacing {
 message ClientUpdate {
   PlayerPosition position = 1;
   ClientPacing pacing = 2;
+  uint32 hotbar_slot = 3;
+  // todo animation state
 }
 
 message PlayerPosition {
@@ -272,6 +274,10 @@ message SetClientState {
   // A 1x1 transient view used for the item that the player clicked and is
   // moving around.
   uint64 inventory_manipulation_view = 4;
+  // The time of day, as a floating point. 0.0 is midnight, 0.99999 is just before midnight
+  double time_of_day = 5;
+  // The period, in real-time seconds, of a day
+  double day_length_sec = 6;
 }
 
 message StartAuth {

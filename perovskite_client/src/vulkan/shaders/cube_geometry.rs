@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::{Angle, Matrix4, Rad};
+use cgmath::{Angle, Matrix4, Rad, Vector3};
 use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
 use vulkano::{
@@ -51,15 +51,19 @@ use crate::vulkan::shaders::{
     PipelineProvider, PipelineWrapper,
 };
 
-use super::frag_lighting_sparse;
+use super::{frag_lighting_sparse, SceneState};
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
 pub(crate) struct CubeGeometryVertex {
-    /// Position, given relative to the origin of the chunk.
+    /// Position, given relative to the origin of the chunk in world space.
     /// Not transformed into camera space via a view matrix yet
     #[format(R32G32B32_SFLOAT)]
     pub(crate) position: [f32; 3],
+
+    /// Normal, given in world space
+    #[format(R32G32B32_SFLOAT)]
+    pub(crate) normal: [f32; 3],
 
     // Texture coordinate in tex space (0-1)
     #[format(R32G32_SFLOAT)]
@@ -109,7 +113,7 @@ pub(crate) enum BlockRenderPass {
     Translucent,
 }
 
-impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipelineWrapper {
+impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWrapper {
     type PassIdentifier = BlockRenderPass;
     fn draw<L>(
         &mut self,
@@ -166,7 +170,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipeline
     fn bind<L>(
         &mut self,
         ctx: &VulkanContext,
-        per_frame_config: Matrix4<f32>,
+        per_frame_config: SceneState,
         command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: BlockRenderPass,
     ) -> Result<()> {
@@ -197,10 +201,10 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], Matrix4<f32>> for CubePipeline
                 ..Default::default()
             },
             UniformData {
-                vp_matrix: per_frame_config.into(),
-                plant_wave_vector: self.get_plant_wave_vector(),
-                // TODO set this
-                global_brightness: 1.0,
+                vp_matrix: per_frame_config.vp_matrix.into(),
+                plant_wave_vector: self.get_plant_wave_vector().into(),
+                global_brightness_color: per_frame_config.global_light_color.into(),
+                global_light_direction: per_frame_config.global_light_direction.into(),
             },
         )?;
 
@@ -343,7 +347,7 @@ impl PipelineProvider for CubePipelineProvider {
     }
 
     type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];
-    type PerFrameConfig = Matrix4<f32>;
+    type PerFrameConfig = SceneState;
     type PipelineWrapperImpl = CubePipelineWrapper;
     type PerPipelineConfig<'a> = &'a Texture2DHolder;
 }

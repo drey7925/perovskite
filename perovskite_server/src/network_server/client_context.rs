@@ -39,6 +39,7 @@ use crate::game_state::items::Item;
 
 use crate::game_state::player::PlayerContext;
 use crate::game_state::player::PlayerEventReceiver;
+use crate::game_state::player::PlayerState;
 use crate::game_state::GameState;
 use crate::run_handler;
 
@@ -49,6 +50,7 @@ use anyhow::Result;
 use cgmath::InnerSpace;
 use cgmath::Vector3;
 use cgmath::Zero;
+use parking_lot::MutexGuard;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
@@ -145,7 +147,7 @@ pub(crate) async fn make_client_contexts(
 
     let player_context = Arc::new(player_context);
 
-    let block_events = game_state.map().subscribe();
+    let block_events = game_state.game_map().subscribe();
     let inventory_events = game_state.inventory_manager().subscribe();
     let chunk_tracker = Arc::new(ChunkTracker::new(
         game_state.clone(),
@@ -233,12 +235,6 @@ async fn initialize_protocol_state(
     context: &SharedContext,
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<()> {
-    let initial_position = PlayerPositionUpdate {
-        position: context.player_context.last_position().position,
-        velocity: cgmath::Vector3::zero(),
-        face_direction: (0., 0.),
-    };
-
     let (hotbar_update, inv_manipulation_update) = {
         let player_state = context.player_context.state.lock();
         (
@@ -256,25 +252,7 @@ async fn initialize_protocol_state(
 
     let message = {
         let player_state = context.player_context.state.lock();
-        StreamToClient {
-            tick: context.game_state.tick(),
-            server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
-                proto::SetClientState {
-                    position: Some(PlayerPosition {
-                        position: Some(initial_position.position.try_into()?),
-                        velocity: Some(Vector3::zero().try_into()?),
-                        face_direction: Some(Angles {
-                            deg_azimuth: 0.,
-                            deg_elevation: 0.,
-                        }),
-                    }),
-                    // TODO pull these out (or better yet, the whole proto) into a player_state method
-                    hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
-                    inventory_popup: Some(player_state.inventory_popup.to_proto()),
-                    inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
-                },
-            )),
-        }
+        make_client_state_update_message(&context, player_state)?
     };
     outbound_tx
         .send(Ok(message))
@@ -454,10 +432,9 @@ impl MapChunkSender {
         if self.snappy_output_buffer.len() < compressed_len_bound {
             self.snappy_output_buffer.resize(compressed_len_bound, 0);
         }
-        let actual_compressed_len = self.snappy_encoder.compress(
-            &self.snappy_input_buffer,
-            &mut self.snappy_output_buffer,
-        )?;
+        let actual_compressed_len = self
+            .snappy_encoder
+            .compress(&self.snappy_input_buffer, &mut self.snappy_output_buffer)?;
         Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
     }
 
@@ -550,7 +527,7 @@ impl MapChunkSender {
             }
             let mut chunk_needs_reload = false;
             if coord.hash_u64() % (ACCESS_TIME_BUMP_SHARDS as u64) == (bump_index as u64)
-                && !block_in_place(|| self.context.game_state.map().bump_chunk(coord))
+                && !block_in_place(|| self.context.game_state.game_map().bump_chunk(coord))
             {
                 // chunk wasn't in the map, so we need to reload it
                 chunk_needs_reload = true;
@@ -564,7 +541,7 @@ impl MapChunkSender {
             // chunks that are close enough to the player to really matter.
             let should_load = distance <= LOAD_EAGER_DISTANCE
                 && (distance <= FORCE_LOAD_DISTANCE
-                    || !self.context.game_state.map().in_pushback());
+                    || !self.context.game_state.game_map().in_pushback());
             if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
                 self.elements_to_skip = i;
                 break;
@@ -572,7 +549,7 @@ impl MapChunkSender {
             let chunk_data = tokio::task::block_in_place(|| {
                 self.context
                     .game_state
-                    .map()
+                    .game_map()
                     .serialize_for_client(coord, should_load)
             })?;
             if let Some(chunk_data) = chunk_data {
@@ -742,33 +719,55 @@ impl BlockEventSender {
         Ok(())
     }
 
-    async fn teleport_player(&mut self, location: Vector3<f64>) -> Result<()> {
-        let message = {
-            let player_state = self.context.player_context.state.lock();
-            StreamToClient {
-                tick: self.context.game_state.tick(),
-                server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
-                    proto::SetClientState {
-                        position: Some(PlayerPosition {
-                            position: Some(location.try_into()?),
-                            velocity: Some(Vector3::zero().try_into()?),
-                            face_direction: Some(Angles {
-                                deg_azimuth: 0.,
-                                deg_elevation: 0.,
-                            }),
-                        }),
-                        hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
-                        inventory_popup: Some(player_state.inventory_popup.to_proto()),
-                        inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
-                    },
-                )),
-            }
+    pub(crate) async fn teleport_player(&mut self, location: Vector3<f64>) -> Result<()> {
+        let mut player_state = self.context.player_context.state.lock();
+        player_state.last_position = PlayerPositionUpdate {
+            position: location,
+            velocity: Vector3::zero(),
+            face_direction: (0., 0.),
         };
+        let message = make_client_state_update_message(&self.context, player_state);
         self.outbound_tx
-            .send(Ok(message))
+            .send(Ok(message?))
             .await
-            .map_err(|_| Error::msg("Could not send outbound message (initial state)"))
+            .map_err(|_| Error::msg("Could not send outbound message (updated state)"))
     }
+}
+
+fn make_client_state_update_message(
+    ctx: &SharedContext,
+    player_state: MutexGuard<'_, PlayerState>,
+) -> Result<StreamToClient> {
+    let message = {
+        let position = player_state.last_position.position;
+
+        let (time_now, day_len) = {
+            let time_state = ctx.game_state.time_state().lock();
+            (time_state.time_of_day(), time_state.day_length())
+        };
+        StreamToClient {
+            tick: ctx.game_state.tick(),
+            server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
+                proto::SetClientState {
+                    position: Some(PlayerPosition {
+                        position: Some(position.try_into()?),
+                        velocity: Some(Vector3::zero().try_into()?),
+                        face_direction: Some(Angles {
+                            deg_azimuth: 0.,
+                            deg_elevation: 0.,
+                        }),
+                    }),
+                    hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
+                    inventory_popup: Some(player_state.inventory_popup.to_proto()),
+                    inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
+                    time_of_day: time_now,
+                    day_length_sec: day_len.as_secs_f64(),
+                },
+            )),
+        }
+    };
+
+    Ok(message)
 }
 
 pub(crate) struct InventoryEventSender {
@@ -1177,7 +1176,7 @@ impl InboundWorker {
                     position: pos,
                     chunks_to_send: self.chunk_pacing.get(),
                 });
-                self.context.player_context.update_position(pos);
+                self.context.player_context.update_client_position_state(pos, update.hotbar_slot);
             }
             None => {
                 warn!("No position in update message from client");
@@ -1460,12 +1459,12 @@ impl InboundWorker {
             initiator: initiator.clone(),
             game_state: self.context.game_state.clone(),
         };
-        let block = self.context.game_state.map().get_block(coord)?;
+        let block = self.context.game_state.game_map().get_block(coord)?;
         let mut messages = vec![];
         if let Some(handler) = &self
             .context
             .game_state
-            .map()
+            .game_map()
             .block_type_manager()
             .get_block(&block)
             .unwrap()
@@ -1516,6 +1515,8 @@ struct MiscOutboundWorker {
 impl MiscOutboundWorker {
     async fn run_outbound_loop(&mut self) -> Result<()> {
         let mut broadcast_messages = self.context.game_state.chat().subscribe();
+        let mut resync_player_state_global =
+            self.context.game_state.subscribe_player_state_resyncs();
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.player_event_receiver.chat_messages.recv() => {
@@ -1543,6 +1544,14 @@ impl MiscOutboundWorker {
                     // Even if the player is using a hacked client, we will disconnect
                     // them on our end
                     self.context.cancellation.cancel();
+                },
+                _ = resync_player_state_global.changed() => {
+                    let lock = self.context.player_context.player.state.lock();
+                    self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock)?)).await?;
+                },
+                _ = self.player_event_receiver.reinit_player_state.changed() => {
+                    let lock = self.context.player_context.player.state.lock();
+                    self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock)?)).await?;
                 }
                 message = broadcast_messages.recv() => {
                     match message {

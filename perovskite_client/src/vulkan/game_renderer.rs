@@ -26,6 +26,7 @@ use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
+    render_pass::Framebuffer,
     swapchain::{self, AcquireError, SwapchainPresentInfo},
     sync::{future::FenceSignalFuture, FlushError, GpuFuture},
 };
@@ -70,6 +71,7 @@ impl ActiveGame {
         &mut self,
         window_size: PhysicalSize<u32>,
         ctx: &VulkanWindow,
+        framebuffer: Arc<Framebuffer>,
         mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
             PrimaryAutoCommandBuffer,
             Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
@@ -77,12 +79,18 @@ impl ActiveGame {
     ) -> PrimaryAutoCommandBuffer {
         let _span = span!("build renderer buffers");
         let FrameState {
-            view_proj_matrix,
+            scene_state,
             player_position,
             tool_state,
         } = self
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
+        ctx.start_render_pass(
+            &mut command_buf_builder,
+            framebuffer,
+            scene_state.clear_color,
+        )
+        .unwrap();
         self.cube_draw_calls.clear();
         if let Some(pointee) = tool_state.pointee {
             self.cube_draw_calls.push(
@@ -116,9 +124,9 @@ impl ActiveGame {
         };
         plot!("total_chunks", chunk_lock.len() as f64);
         self.cube_draw_calls.extend(
-            chunk_lock.values().filter_map(|chunk| {
-                chunk.make_draw_call(player_position, view_proj_matrix)
-            }),
+            chunk_lock
+                .values()
+                .filter_map(|chunk| chunk.make_draw_call(player_position, scene_state.vp_matrix)),
         );
         plot!(
             "chunk_rate",
@@ -129,7 +137,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .bind(
                     ctx,
-                    view_proj_matrix,
+                    scene_state,
                     &mut command_buf_builder,
                     BlockRenderPass::Opaque,
                 )
@@ -144,7 +152,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .bind(
                     ctx,
-                    view_proj_matrix,
+                    scene_state,
                     &mut command_buf_builder,
                     BlockRenderPass::Transparent,
                 )
@@ -159,7 +167,7 @@ impl ActiveGame {
             self.cube_pipeline
                 .bind(
                     ctx,
-                    view_proj_matrix,
+                    scene_state,
                     &mut command_buf_builder,
                     BlockRenderPass::Translucent,
                 )
@@ -449,16 +457,23 @@ impl GameRenderer {
                     // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
                     // you cannot create one independently of any particular pipeline.
                     let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
-                    self.ctx
-                        .start_render_pass(
-                            &mut command_buf_builder,
-                            self.ctx.framebuffers[image_i as usize].clone(),
-                        )
-                        .unwrap();
+
                     let command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut()
                     {
-                        game.build_command_buffers(window_size, &self.ctx, command_buf_builder)
+                        game.build_command_buffers(
+                            window_size,
+                            &self.ctx,
+                            self.ctx.framebuffers[image_i as usize].clone(),
+                            command_buf_builder,
+                        )
                     } else {
+                        self.ctx
+                            .start_render_pass(
+                                &mut command_buf_builder,
+                                self.ctx.framebuffers[image_i as usize].clone(),
+                                [0.0, 0.0, 0.0, 0.0],
+                            )
+                            .unwrap();
                         if let Some(connection_settings) = self.main_menu.lock().draw(
                             &self.ctx,
                             &mut game_lock,

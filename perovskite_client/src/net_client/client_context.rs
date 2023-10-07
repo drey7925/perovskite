@@ -145,11 +145,13 @@ impl OutboundContext {
             )
             .try_into()
             .unwrap();
+        let hotbar_slot = self.client_state.hud.lock().hotbar_slot;
         let sequence = self
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
                 rpc::ClientUpdate {
                     position: Some(pos.to_proto()?),
                     pacing: Some(rpc::ClientPacing { pending_chunks }),
+                    hotbar_slot
                 },
             ))
             .await?;
@@ -158,6 +160,7 @@ impl OutboundContext {
     }
 
     async fn handle_game_action(&mut self, action: GameAction) -> Result<()> {
+        self.send_position_update(self.client_state.last_position()).await?;
         match action {
             GameAction::Dig(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Dig(
@@ -630,14 +633,29 @@ impl InboundContext {
             .physics_state
             .lock()
             .set_position(pos_vector.try_into()?);
+        {
+            let mut egui_lock = self.client_state.egui.lock();
+            egui_lock.inventory_view = state_update.inventory_popup.clone();
+            egui_lock.inventory_manipulation_view_id =
+                Some(state_update.inventory_manipulation_view);
+        }
 
-        let mut egui_lock = self.client_state.egui.lock();
-        egui_lock.inventory_view = state_update.inventory_popup.clone();
-        egui_lock.inventory_manipulation_view_id = Some(state_update.inventory_manipulation_view);
+        {
+            let mut hud_lock = self.client_state.hud.lock();
+            hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);
+            hud_lock.invalidate_hotbar();
+        }
 
-        let mut hud_lock = self.client_state.hud.lock();
-        hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);
-        hud_lock.invalidate_hotbar();
+        {
+            let mut time_lock = self.client_state.light_cycle.lock();
+            time_lock
+                .time_state_mut()
+                .set_time(state_update.time_of_day);
+            time_lock
+                .time_state_mut()
+                .set_day_length(Duration::from_secs_f64(state_update.day_length_sec));
+        }
+
         Ok(())
     }
 }

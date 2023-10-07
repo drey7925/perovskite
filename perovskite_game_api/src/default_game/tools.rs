@@ -103,7 +103,7 @@ fn register_superuser_pickaxe(
         },
         dig_handler: Some(Box::new(move |ctx, coord, tool| {
             let (old_block, _) = ctx.game_map().set_block(coord, air, None)?;
-            let (block, variant) = ctx.blocks().get_block(&old_block)?;
+            let (block, variant) = ctx.block_types().get_block(&old_block)?;
             tracing::info!("superuser pickaxe dug {}:{:x}", block.short_name(), variant);
             Ok(ItemInteractionResult { updated_tool: Some(tool.clone()), obtained_items: vec![] })
         })),

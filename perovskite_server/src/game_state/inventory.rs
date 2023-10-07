@@ -516,7 +516,7 @@ impl<T> InventoryView<T> {
     ) -> Result<InventoryView<T>> {
         let actual_dimensions =
             game_state
-                .map()
+                .game_map()
                 .mutate_block_atomically(coord, |_, ext_data| {
                     if ext_data.is_none() {
                         *(ext_data.deref_mut()) = Some(ExtendedData {
@@ -577,7 +577,7 @@ impl<T> InventoryView<T> {
                             })?,
                         BorrowLocation::Block(coord, key, slot) => self
                             .game_state
-                            .map()
+                            .game_map()
                             .mutate_block_atomically(coord, |_, ext_data| {
                                 match ext_data.as_mut().and_then(|x| x.inventories.get_mut(&key)) {
                                     Some(inv) => {
@@ -772,7 +772,7 @@ impl<T> InventoryView<T> {
                 .to_vec()),
             ViewBacking::StoredInBlock(coord, key) => Ok(self
                 .game_state
-                .map()
+                .game_map()
                 .get_block_with_extended_data(*coord, |x| {
                     Some(
                         x.inventories
@@ -840,7 +840,7 @@ impl<T> InventoryView<T> {
                 })),
             ViewBacking::StoredInBlock(coord, key) => self
                 .game_state
-                .map()
+                .game_map()
                 .mutate_block_atomically(*coord, |_, ext_data| {
                     ext_data.set_dirty();
                     Ok(ext_data
@@ -919,7 +919,7 @@ impl<T> InventoryView<T> {
                 })),
             ViewBacking::StoredInBlock(coord, key) => Ok(self
                 .game_state
-                .map()
+                .game_map()
                 .mutate_block_atomically(*coord, |_, ext_data| {
                     ext_data.set_dirty();
                     match ext_data.as_mut().and_then(|x| x.inventories.get_mut(key)) {

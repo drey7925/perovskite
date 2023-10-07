@@ -242,7 +242,12 @@ impl<'a> ChunkColumnCursor<'a> {
             if counter > 0 && !outgoing_diffs.any_set() {
                 break;
             }
-            assert!(!(outgoing_diffs & !prev_diff).any_set());
+            if (outgoing_diffs & !prev_diff).any_set() {
+                println!("Lightfield invariant violated");
+                println!("Prev diff: {:?}", prev_diff);
+                println!("mismatch: {:?}", outgoing_diffs & !prev_diff);
+                panic!();
+            }
             prev_diff = if counter > 0 {
                 outgoing_diffs
             } else {

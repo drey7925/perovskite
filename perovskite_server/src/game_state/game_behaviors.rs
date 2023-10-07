@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 
@@ -12,11 +12,14 @@ pub struct GameBehaviors {
     /// entering the game.
     pub make_inventory_popup:
         Box<dyn Fn(Arc<GameState>, String, InventoryKey) -> Result<Popup> + Send + Sync + 'static>,
+    /// The length of an in-game day, in terms of real-world duration.
+    pub day_length: Duration,
 }
 impl Default for GameBehaviors {
     fn default() -> Self {
         Self {
             make_inventory_popup: Box::new(defaults::make_inventory_popup),
+            day_length: Duration::from_secs(24 * 60)
         }
     }
 }

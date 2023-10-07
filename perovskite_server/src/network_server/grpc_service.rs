@@ -85,7 +85,7 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         Result::Ok(Response::new(proto::GetBlockDefsResponse {
             block_types: self
                 .game_state
-                .map()
+                .game_map()
                 .block_type_manager()
                 .to_client_protos(),
         }))

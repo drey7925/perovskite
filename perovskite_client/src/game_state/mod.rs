@@ -14,10 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -25,12 +24,13 @@ use cgmath::{Deg, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
+use log::warn;
+use parking_lot::{Mutex, RwLockReadGuard};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use perovskite_core::protocol;
-use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch};
-use log::warn;
-use parking_lot::{Mutex, RwLockReadGuard};
+use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
+use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracy_client::span;
@@ -40,21 +40,24 @@ use crate::block_renderer::{fallback_texture, BlockRenderer, ClientBlockTypeMana
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
+use crate::vulkan::shaders::SceneState;
 
 use self::chat::ChatState;
-use self::chunk::{SnappyDecodeHelper, ChunkDataView};
+use self::chunk::{ChunkDataView, SnappyDecodeHelper};
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
+use self::lightcycle::LightCycle;
 use self::settings::GameSettings;
 use self::tool_controller::{ToolController, ToolState};
 
+pub(crate) mod chat;
 pub(crate) mod chunk;
 pub(crate) mod input;
 pub(crate) mod items;
+pub(crate) mod lightcycle;
 pub(crate) mod physics;
 pub(crate) mod settings;
 pub(crate) mod tool_controller;
-pub(crate) mod chat;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DigTapAction {
@@ -272,8 +275,9 @@ impl ChunkManager {
                     .and_then(|delta| lights_lock.get(&(delta.x, delta.z)));
                 for j in -1..=1 {
                     if let Some(delta) = chunk.try_delta(i, j, k) {
-                        data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
-                            chunk_lock.get(&delta).map(|x| Box::new(*x.chunk_data().block_ids()));
+                        data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] = chunk_lock
+                            .get(&delta)
+                            .map(|x| Box::new(*x.chunk_data().block_ids()));
                         if let Some(light_column) = light_column {
                             inbound_lights[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
                                 light_column
@@ -388,7 +392,7 @@ pub(crate) struct ClientState {
     pub(crate) tool_controller: parking_lot::Mutex<ToolController>,
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) actions: mpsc::Sender<GameAction>,
-
+    pub(crate) light_cycle: Arc<Mutex<LightCycle>>,
     pub(crate) chat: Arc<Mutex<ChatState>>,
 
     // block_renderer doesn't currently need a mutex because it's stateless
@@ -425,6 +429,10 @@ impl ClientState {
             tool_controller: Mutex::new(ToolController::new()),
             shutdown: tokio_util::sync::CancellationToken::new(),
             actions: action_sender,
+            light_cycle: Arc::new(Mutex::new(LightCycle::new(TimeState::new(
+                Duration::from_secs(24 * 60),
+                0.0
+            )))),
             chat: Arc::new(Mutex::new(ChatState::new())),
             block_renderer: Arc::new(block_renderer),
             hud: Arc::new(Mutex::new(hud)),
@@ -511,8 +519,14 @@ impl ClientState {
             face_direction: (az, el),
         };
 
+        let (sky, lighting, light_direction) = self.light_cycle.lock().get_colors();
         FrameState {
-            view_proj_matrix,
+            scene_state: SceneState {
+                vp_matrix: view_proj_matrix,
+                clear_color: [sky.x, sky.y, sky.z, 1.],
+                global_light_color: lighting.into(),
+                global_light_direction: light_direction,
+            },
             player_position,
             tool_state,
         }
@@ -524,7 +538,7 @@ impl ClientState {
 }
 
 pub(crate) struct FrameState {
-    pub(crate) view_proj_matrix: cgmath::Matrix4<f32>,
+    pub(crate) scene_state: SceneState,
     pub(crate) player_position: cgmath::Vector3<f64>,
     pub(crate) tool_state: ToolState,
 }

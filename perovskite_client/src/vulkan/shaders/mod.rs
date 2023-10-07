@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use cgmath::{Matrix4, Vector3};
 
 use super::{CommandBufferBuilder, VulkanWindow, VulkanContext};
 
@@ -32,15 +33,17 @@ pub(crate) mod vert_3d {
             src: r"
             #version 460
                 layout(location = 0) in vec3 position;
-                layout(location = 1) in vec2 uv_texcoord;
-                layout(location = 2) in float brightness;
-                layout(location = 3) in float global_brightness_contribution;
-                layout(location = 4) in float wave_horizontal;
+                layout(location = 1) in vec3 normal;
+                layout(location = 2) in vec2 uv_texcoord;
+                layout(location = 3) in float brightness;
+                layout(location = 4) in float global_brightness_contribution;
+                layout(location = 5) in float wave_horizontal;
 
                 layout(set = 1, binding = 0) uniform UniformData { 
                     mat4 vp_matrix;
                     vec2 plant_wave_vector;
-                    float global_brightness;
+                    vec3 global_brightness_color;
+                    vec3 global_light_direction;
                 };
                 // 64 bytes of push constants :(
                 layout(push_constant) uniform ModelMatrix {
@@ -49,6 +52,7 @@ pub(crate) mod vert_3d {
 
                 layout(location = 0) out vec2 uv_texcoord_out;
                 layout(location = 1) out float brightness_out;
+                layout(location = 2) out vec3 global_brightness_out;
 
                 void main() {
                     float wave_x = wave_horizontal * plant_wave_vector.x;
@@ -56,7 +60,9 @@ pub(crate) mod vert_3d {
                     vec3 position_with_wave = vec3(position.x + wave_x, position.y, position.z + wave_z);
                     gl_Position = vp_matrix * model_matrix * vec4(position_with_wave, 1.0);
                     uv_texcoord_out = uv_texcoord;
-                    brightness_out = brightness + (global_brightness * global_brightness_contribution);
+                    brightness_out = brightness;
+                    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, normal));
+                    global_brightness_out = global_brightness_color * global_brightness_contribution * gbc_adjustment;
                 }
             "
             },
@@ -81,13 +87,17 @@ pub(crate) mod frag_lighting {
 
     layout(location = 0) in vec2 uv_texcoord;
     layout(location = 1) in float brightness;
+    layout(location = 2) in vec3 global_brightness;
 
     layout(location = 0) out vec4 f_color;
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
         vec4 color = texture(tex, uv_texcoord);
-        f_color = vec4(brightness * color.r, brightness * color.g, brightness * color.b, color.a);
+        f_color = vec4((brightness + global_brightness.r) * color.r,
+                       (brightness + global_brightness.g) * color.g,
+                       (brightness + global_brightness.b) * color.b,
+                       color.a);
     }
     "
     }
@@ -102,13 +112,17 @@ pub(crate) mod frag_lighting_sparse {
 
     layout(location = 0) in vec2 uv_texcoord;
     layout(location = 1) in float brightness;
+    layout(location = 2) in vec3 global_brightness;
 
     layout(location = 0) out vec4 f_color;
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
         vec4 color = texture(tex, uv_texcoord);
-        f_color = vec4(brightness * color.r, brightness * color.g, brightness * color.b, color.a);
+        f_color = vec4((brightness + global_brightness.r) * color.r,
+                       (brightness + global_brightness.g) * color.g,
+                       (brightness + global_brightness.b) * color.b,
+                       color.a);
         if (f_color.a < 0.5) {
             discard;
         } else {
@@ -202,4 +216,12 @@ where
         ctx: &VulkanWindow,
         config: Self::PerPipelineConfig<'_>,
     ) -> Result<Self::PipelineWrapperImpl>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SceneState {
+    pub(crate) vp_matrix: Matrix4<f32>,
+    pub(crate) global_light_color: [f32; 3],
+    pub(crate) clear_color: [f32; 4],
+    pub(crate) global_light_direction: Vector3<f32>
 }

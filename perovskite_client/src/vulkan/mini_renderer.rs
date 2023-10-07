@@ -21,7 +21,7 @@ use vulkano::{
 
 use crate::{
     block_renderer::{BlockRenderer, ClientBlockTypeManager, VkChunkPass, VkChunkVertexData},
-    game_state::chunk::{ChunkDataView, ChunkOffsetExt},
+    game_state::chunk::{ChunkDataView, ChunkOffsetExt}, vulkan::shaders::SceneState,
 };
 
 use super::{
@@ -150,7 +150,7 @@ impl MiniBlockRenderer {
         if let Some(pass) = pass {
             self.cube_pipeline.bind(
                 &self.ctx,
-                *TRANSFORM_MATRIX,
+                *SCENE_STATE,
                 &mut commands,
                 BlockRenderPass::Translucent,
             )?;
@@ -205,12 +205,17 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
 }
 
 lazy_static::lazy_static! {
-    static ref TRANSFORM_MATRIX: Matrix4<f32> = {
-        let correction = cgmath::Matrix4::from_nonuniform_scale(-1., 1., 1.);
+    static ref SCENE_STATE: SceneState = {
         let projection = cgmath::perspective(Deg(45.0), 1.0, 0.01, 1000.);
         let projection = cgmath::ortho(-1., 1., -1., 1., -2., 2.);
         let rotation = Matrix4::from_angle_x(Deg(30.0)) * Matrix4::from_angle_y(Deg(45.0));
         let translation = Matrix4::from_translation(vec3(0.0, 0.0, -1.0));
-        projection * translation * rotation
+        let vp_matrix = projection * translation * rotation;
+        SceneState {
+            vp_matrix,
+            clear_color: [0.0, 0.0, 0.0, 0.0],
+            global_light_color: [0.0, 0.0, 0.0],
+            global_light_direction: vec3(0., 0., 0.)
+        }
     };
 }

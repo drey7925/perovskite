@@ -33,7 +33,7 @@ use perovskite_core::{
 use perovskite_server::{
     game_state::{
         blocks::{BlockType, BlockTypeHandle},
-        items::Item,
+        items::Item, chat::commands::CommandImplementation,
     },
     server::ServerBuilder,
 };
@@ -80,7 +80,7 @@ impl From<StaticItemName> for ItemName {
 /// breaking changes that do not follow semver, before 1.0
 use perovskite_server::server as server_api;
 
-use crate::blocks::{BlockBuilder, BuiltBlock};
+use crate::{blocks::{BlockBuilder, BuiltBlock}, maybe_export};
 
 /// Stable API for building and configuring a game.
 ///
@@ -181,6 +181,15 @@ impl GameBuilder {
             place_handler: None,
         })
     }
+    
+    maybe_export!(
+        /// Registers a chat command. name should not contain the leading slash
+        // TODO: convert this into a builder once we have more features in commands
+        fn add_command(&mut self, name: &str, command: Box<dyn CommandImplementation>, help: &str) -> Result<()> {
+            self.inner.register_command(name, command, help)?;
+            Ok(())
+        }
+    );
 
     /// Adds a texture to the game by reading from a file.
     ///

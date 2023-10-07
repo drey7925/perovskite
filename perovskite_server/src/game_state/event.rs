@@ -14,9 +14,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::{num::NonZeroU64, sync::Arc};
 
+use anyhow::Result;
+
+use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::PlayerPositionUpdate;
+use tracing::warn;
 
 use super::blocks::BlockTypeManager;
 use super::{game_map::ServerGameMap, items::ItemManager, player::Player, GameState, client_ui::Popup};
@@ -51,6 +56,21 @@ impl EventInitiator<'_> {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(p.position),
             EventInitiator::Plugin(_) => None
+        }
+    }
+    pub async fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
+        match self {
+            EventInitiator::Engine => warn!("Attempted to send chat message to engine"),
+            EventInitiator::Player(p) => p.player.send_chat_message(message).await?,
+            EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin")
+        }
+        Ok(())
+    }
+    pub(crate) fn as_debug_str(&self) -> &str {
+        match self {
+            EventInitiator::Engine => "engine",
+            EventInitiator::Player(p) => p.player.name(),
+            EventInitiator::Plugin(_) => "plugin"
         }
     }
 }
@@ -92,16 +112,14 @@ impl<'a> HandlerContext<'a> {
     pub fn tick(&self) -> u64 {
         self.tick
     }
-    pub fn game_map(&self) -> &ServerGameMap {
-        self.game_state.map()
-    }
-    pub fn blocks(&self) -> &BlockTypeManager {
-        self.game_state.map.block_type_manager()
-    }
-    pub fn items(&self) -> &ItemManager {
-        self.game_state.item_manager()
-    }
+    /// Creates a new popup
     pub fn new_popup(&self) -> Popup {
         Popup::new(self.game_state.clone())
+    }
+}
+impl Deref for HandlerContext<'_> {
+    type Target = GameState;
+    fn deref(&self) -> &Self::Target {
+        &self.game_state
     }
 }

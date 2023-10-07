@@ -12,29 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{sync::Arc, ops::{Deref, DerefMut}};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use crate::game_builder::GameBuilder;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 
-use perovskite_core::protocol::items::{self as items_proto};
-use perovskite_server::game_state::items::ItemStack;
+use async_trait::async_trait;
+use perovskite_core::{
+    chat::{ChatMessage, SERVER_WARNING_COLOR},
+    protocol::items::{self as items_proto, item_def::QuantityType},
+};
+use perovskite_server::game_state::{
+    chat::commands::CommandImplementation,
+    event::{EventInitiator, HandlerContext, PlayerInitiator},
+    items::ItemStack,
+};
 
-use self::{recipes::{RecipeBook, RecipeImpl, RecipeSlot}, mapgen::OreDefinition};
+use self::{
+    mapgen::OreDefinition,
+    recipes::{RecipeBook, RecipeImpl, RecipeSlot},
+};
 
 /// Blocks defined in the default game.
 pub mod basic_blocks;
+/// Trees, plants, etc
+pub mod foliage;
 /// Basic server behaviors not covered in other modules
 pub mod game_behaviors;
 /// Recipes for crafting, smelting, etc
 pub mod recipes;
-/// Standard tools - pickaxes, shovels, axes
-pub mod tools;
-/// Trees, plants, etc
-pub mod foliage;
 /// Helpers for stairs, slabs, and other blocks derived from a base block
 pub mod shaped_blocks;
+/// Standard tools - pickaxes, shovels, axes
+pub mod tools;
 
 #[cfg(feature = "unstable_api")]
 /// Furnace implementation,
@@ -71,7 +85,7 @@ pub struct DefaultGameBuilder {
     // Output item is ignored
     smelting_fuels: Arc<RecipeBook<1, u32>>,
 
-    ores: Vec<OreDefinition>
+    ores: Vec<OreDefinition>,
 }
 impl Deref for DefaultGameBuilder {
     type Target = GameBuilder;
@@ -98,7 +112,9 @@ impl DefaultGameBuilder {
     }
     /// Creates a new default-game builder with custom server configuration.
     #[cfg(feature = "unstable_api")]
-    pub fn new_from_args(args: &perovskite_server::server::ServerArgs) -> Result<DefaultGameBuilder> {
+    pub fn new_from_args(
+        args: &perovskite_server::server::ServerArgs,
+    ) -> Result<DefaultGameBuilder> {
         Self::new_with_builtins(GameBuilder::from_args(args)?)
     }
 
@@ -170,7 +186,6 @@ impl DefaultGameBuilder {
         })
     }
 
-
     /// Starts a game based on this builder.
     pub fn build_and_run(mut self) -> Result<()> {
         self.crafting_recipes.sort();
@@ -191,5 +206,199 @@ fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     tools::register_default_tools(game_builder)?;
     furnace::register_furnace(game_builder)?;
     foliage::register_foliage(game_builder)?;
+    register_default_commands(game_builder)?;
     Ok(())
+}
+
+fn register_default_commands(game_builder: &mut DefaultGameBuilder) -> Result<()> {
+    game_builder.add_command(
+        "whereami",
+        Box::new(WhereAmICommand),
+        ": Tells you your current coordinates.",
+    )?;
+    game_builder.add_command(
+        "give",
+        Box::new(GiveCommand),
+        "<recipient> <item> [count]: Gives someone an item.",
+    )?;
+    game_builder.add_command(
+        "giveme",
+        Box::new(GiveMeCommand),
+        "<item> [count]: Gives you an item.",
+    )?;
+    game_builder.add_command(
+        "settime",
+        Box::new(SetTimeCommand),
+        "<days>: Sets the game time to the given number of days. 0.0 is midnight, 0.5 is noon, and 1.0 is midnight the next day."
+    )?;
+    game_builder.add_command(
+        "discard",
+        Box::new(DiscardCommand),
+        ": Discards the currently selected item.",
+    )?;
+    game_builder.add_command(
+        "discardall",
+        Box::new(DiscardAllCommand),
+        ": Discards ALL items in your inventory.",
+    )?;
+    Ok(())
+}
+
+struct WhereAmICommand;
+#[async_trait]
+impl CommandImplementation for WhereAmICommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if let EventInitiator::Player(p) = context.initiator() {
+            p.player
+                .send_chat_message(ChatMessage::new_server_message(format!(
+                    "You are at {:?}",
+                    p.position.position
+                )))
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+struct GiveMeCommand;
+#[async_trait]
+impl CommandImplementation for GiveMeCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        // message is either /giveme item or /give item count
+        let params = message.split_whitespace().collect::<Vec<_>>();
+        let (item, count) = match params.len() {
+            2 => (params[1], 1),
+            3 => (params[1], params[2].parse().context("Invalid count")?),
+            _ => bail!("Incorrect usage: should be /giveme <item> [count]"),
+        };
+
+        if let EventInitiator::Player(p) = context.initiator() {
+            let player_inventory = p.player.main_inventory();
+            let stack = make_stack(item, count, context).await?;
+
+            let leftover = context
+                .inventory_manager()
+                .mutate_inventory_atomically(&player_inventory, |inv| Ok(inv.try_insert(stack)))?;
+            if leftover.is_some() {
+                p.player
+                    .send_chat_message(
+                        ChatMessage::new_server_message("Not enough space in inventory")
+                            .with_color(SERVER_WARNING_COLOR),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn make_stack(item: &str, mut count: u32, context: &HandlerContext<'_>) -> Result<ItemStack> {
+    let item = match context.item_manager().get_item(item) {
+        Some(item) => item,
+        None => bail!("Item not found"),
+    };
+    if !item.stackable() && count != 1 {
+        context
+            .initiator()
+            .send_chat_message(
+                ChatMessage::new_server_message("Item is not stackable, setting count to 1")
+                    .with_color(SERVER_WARNING_COLOR),
+            )
+            .await?;
+        count = 1
+    }
+    if let Some(QuantityType::Wear(x)) = item.proto.quantity_type {
+        count = x;
+    }
+    Ok(item.make_stack(count))
+}
+
+struct GiveCommand;
+#[async_trait]
+impl CommandImplementation for GiveCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let params = message.split_whitespace().collect::<Vec<_>>();
+        let (recipient, item, count) = match params.len() {
+            3 => (params[1], params[2], 1),
+            4 => (
+                params[1],
+                params[2],
+                params[3].parse().context("Invalid count")?,
+            ),
+            _ => bail!("Incorrect usage: should be /giveme <item> [count]"),
+        };
+        let player_inventory = context
+            .player_manager()
+            .for_connected_player(recipient, |p| Ok(p.main_inventory()))?;
+        let stack = make_stack(item, count, context).await?;
+        let leftover = context
+            .inventory_manager()
+            .mutate_inventory_atomically(&player_inventory, |inv| Ok(inv.try_insert(stack)))?;
+        if leftover.is_some() {
+            context
+                .initiator()
+                .send_chat_message(
+                    ChatMessage::new_server_message("Not enough space in inventory")
+                        .with_color(SERVER_WARNING_COLOR),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+struct SetTimeCommand;
+#[async_trait]
+impl CommandImplementation for SetTimeCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let params = message.split_whitespace().collect::<Vec<_>>();
+        if params.len() != 2 {
+            bail!("Incorrect usage: should be /settime <time>");
+        }
+        let time: f64 = params[1].parse()?;
+        context.set_time_of_day(time);
+        Ok(())
+    }
+}
+
+struct DiscardCommand;
+#[async_trait]
+impl CommandImplementation for DiscardCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if let EventInitiator::Player(p) = context.initiator() {
+            let inv = p.player.main_inventory();
+            let slot = p
+                .player
+                .selected_hotbar_slot()
+                .context("Unknown selected_inv_slot, this is a bug")?;
+            context
+                .inventory_manager()
+                .mutate_inventory_atomically(&inv, |inv| {
+                    *inv.contents_mut()
+                        .get_mut(slot as usize)
+                        .context("Item slot was out of bounds; this is a bug")? = None;
+                    Ok(())
+                })?;
+        }
+        Ok(())
+    }
+}
+
+struct DiscardAllCommand;
+#[async_trait]
+impl CommandImplementation for DiscardAllCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if let EventInitiator::Player(p) = context.initiator() {
+            let inv = p.player.main_inventory();
+            context
+                .inventory_manager()
+                .mutate_inventory_atomically(&inv, |inv| {
+                    for slot in inv.contents_mut().iter_mut() {
+                        *slot = None;
+                    }
+                    Ok(())
+                })?;
+        }
+        Ok(())
+    }
 }

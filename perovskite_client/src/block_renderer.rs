@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use cgmath::num_traits::Num;
-use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
+use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Vector2, Vector3, Zero};
 
 use perovskite_core::constants::blocks::AIR;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
@@ -57,6 +57,7 @@ const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
 
 /// Given in game world coordinates (Y is up)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
+#[repr(u8)]
 pub(crate) enum CubeFace {
     XPlus,
     XMinus,
@@ -70,19 +71,9 @@ pub(crate) enum CubeFace {
     PlantXMinusZMinus,
 }
 impl CubeFace {
+    #[inline(always)]
     fn index(&self) -> usize {
-        match self {
-            CubeFace::XPlus => 0,
-            CubeFace::XMinus => 1,
-            CubeFace::YPlus => 2,
-            CubeFace::YMinus => 3,
-            CubeFace::ZPlus => 4,
-            CubeFace::ZMinus => 5,
-            CubeFace::PlantXPlusZPlus => 6,
-            CubeFace::PlantXPlusZMinus => 7,
-            CubeFace::PlantXMinusZPlus => 8,
-            CubeFace::PlantXMinusZMinus => 9,
-        }
+        *self as usize
     }
 }
 
@@ -260,6 +251,19 @@ impl ClientBlockTypeManager {
     }
 }
 
+const DEFAULT_FACE_NORMALS: [(i8, i8, i8); 10] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+    (1, 0, 1),
+    (1, 0, -1),
+    (-1, 0, 1),
+    (-1, 0, -1),
+];
+
 /// The extents of a single axis-aligned cube.
 ///
 /// ```ignore
@@ -287,7 +291,7 @@ impl ClientBlockTypeManager {
 pub struct CubeExtents {
     pub vertices: [Vector3<f32>; 8],
     /// Given in the same order as the first six members of [`CubeFace`].
-    pub neighbors: [(i8, i8, i8); 6],
+    pub normals: [(i8, i8, i8); 10],
     pub force: [bool; 6],
 }
 impl CubeExtents {
@@ -303,25 +307,18 @@ impl CubeExtents {
                 vec3(x.1, y.1, z.0),
                 vec3(x.1, y.1, z.1),
             ],
-            neighbors: [
-                (1, 0, 0),
-                (-1, 0, 0),
-                (0, 1, 0),
-                (0, -1, 0),
-                (0, 0, 1),
-                (0, 0, -1),
-            ],
+            normals: DEFAULT_FACE_NORMALS,
             force: [false; 6],
         }
     }
 
     pub fn rotate_y(self, variant: u16) -> CubeExtents {
         let mut vertices = self.vertices;
-        let mut neighbors = self.neighbors;
+        let mut normals = self.normals;
         for vtx in &mut vertices {
             *vtx = Vector3::from(rotate_y((vtx.x, vtx.y, vtx.z), variant));
         }
-        for neighbor in &mut neighbors {
+        for neighbor in &mut normals {
             *neighbor = rotate_y(*neighbor, variant);
         }
         /*    XPlus,
@@ -363,7 +360,7 @@ impl CubeExtents {
 
         Self {
             vertices,
-            neighbors,
+            normals,
             force: force_swizzled,
         }
     }
@@ -528,8 +525,7 @@ impl BlockRenderer {
         block_defs: Arc<ClientBlockTypeManager>,
         cache_manager: &mut CacheManager,
         ctx: &VulkanContext,
-    ) -> Result<BlockRenderer>
-    {
+    ) -> Result<BlockRenderer> {
         let mut all_texture_names = HashSet::new();
         for def in block_defs.all_block_defs() {
             match &def.render_info {
@@ -848,7 +844,7 @@ impl BlockRenderer {
             None => [self.fallback_tex_coord; 6],
         };
         for i in 0..6 {
-            let (n_x, n_y, n_z) = e.neighbors[i];
+            let (n_x, n_y, n_z) = e.normals[i];
             let neighbor_index = (
                 offset.x as i8 + n_x,
                 offset.y as i8 + n_y,
@@ -941,7 +937,7 @@ impl BlockRenderer {
                 AabbRotation::Nesw => e = e.rotate_y(id.variant() % 4),
             }
             for i in 0..6 {
-                let (n_x, n_y, n_z) = e.neighbors[i];
+                let (n_x, n_y, n_z) = e.normals[i];
                 let neighbor_index = (
                     offset.x as i8 + n_x,
                     offset.y as i8 + n_y,
@@ -1183,14 +1179,7 @@ fn build_liquid_cube_extents(
             vec3(0.5, 0.5, -0.5),
             vec3(0.5, 0.5, 0.5),
         ],
-        neighbors: [
-            (1, 0, 0),
-            (-1, 0, 0),
-            (0, 1, 0),
-            (0, -1, 0),
-            (0, 0, 1),
-            (0, 0, -1),
-        ],
+        normals: DEFAULT_FACE_NORMALS,
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
     }
@@ -1256,6 +1245,7 @@ lazy_static::lazy_static! {
 #[inline]
 fn make_cgv(
     coord: Vector3<f32>,
+    normal: Vector3<f32>,
     tex_uv: cgmath::Vector2<f32>,
     brightness: f32,
     global_brightness: f32,
@@ -1263,6 +1253,7 @@ fn make_cgv(
 ) -> CubeGeometryVertex {
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
+        normal: [normal.x, normal.y, normal.z],
         uv_texcoord: tex_uv.into(),
         brightness,
         global_brightness_contribution: global_brightness,
@@ -1308,11 +1299,13 @@ pub(crate) fn emit_cube_face_vk(
 
     let global_brightness = GLOBAL_BRIGHTNESS_TABLE[brightness_upper];
     let brightness = BRIGHTNESS_TABLE[brightness_lower] * brightness_bias;
-
+    let normal = e.normals[face.index()];
+    let normal = vec3(normal.0 as f32, -normal.1 as f32, normal.2 as f32).normalize();
     let mut vertices = match face {
         CubeFace::ZMinus => vec![
             make_cgv(
                 coord + e.vertices[0],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1320,6 +1313,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[2],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1327,6 +1321,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[6],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1334,6 +1329,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[4],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1343,6 +1339,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::ZPlus => vec![
             make_cgv(
                 coord + e.vertices[5],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1350,6 +1347,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[7],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1357,6 +1355,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[3],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1364,6 +1363,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[1],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1373,6 +1373,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::XMinus => vec![
             make_cgv(
                 coord + e.vertices[1],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1380,6 +1381,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[3],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1387,6 +1389,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[2],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1394,6 +1397,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[0],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1403,6 +1407,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::XPlus => vec![
             make_cgv(
                 coord + e.vertices[4],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1410,6 +1415,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[6],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1417,6 +1423,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[7],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1424,6 +1431,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[5],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1435,6 +1443,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::YMinus => vec![
             make_cgv(
                 coord + e.vertices[2],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1442,6 +1451,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[3],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1449,6 +1459,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[7],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1456,6 +1467,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[6],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1465,6 +1477,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::YPlus => vec![
             make_cgv(
                 coord + e.vertices[4],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1472,6 +1485,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[5],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1479,6 +1493,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[1],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1486,6 +1501,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[0],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1495,6 +1511,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::PlantXMinusZMinus => vec![
             make_cgv(
                 coord + e.vertices[1],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1502,6 +1519,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[3],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1509,6 +1527,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[6],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1516,6 +1535,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[4],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1525,6 +1545,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::PlantXPlusZPlus => vec![
             make_cgv(
                 coord + e.vertices[4],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1532,6 +1553,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[6],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1539,6 +1561,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[3],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1546,6 +1569,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[1],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1555,6 +1579,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::PlantXMinusZPlus => vec![
             make_cgv(
                 coord + e.vertices[5],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1562,6 +1587,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[7],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1569,6 +1595,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[2],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1576,6 +1603,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[0],
+                normal,
                 tr,
                 brightness,
                 global_brightness,
@@ -1585,6 +1613,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::PlantXPlusZMinus => vec![
             make_cgv(
                 coord + e.vertices[0],
+                normal,
                 tl,
                 brightness,
                 global_brightness,
@@ -1592,6 +1621,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[2],
+                normal,
                 bl,
                 brightness,
                 global_brightness,
@@ -1599,6 +1629,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[7],
+                normal,
                 br,
                 brightness,
                 global_brightness,
@@ -1606,6 +1637,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[5],
+                normal,
                 tr,
                 brightness,
                 global_brightness,

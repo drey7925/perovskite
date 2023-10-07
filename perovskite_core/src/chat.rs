@@ -44,7 +44,24 @@ impl ChatMessage {
         self.origin_color = color_from_fixed32(origin_color);
         self
     }
+    pub fn with_origin(mut self, origin: impl ToString) -> Self {
+        self.origin = origin.to_string();
+        self
+    }
+
+    pub fn new_server_message(text: impl ToString) -> Self {
+        Self {
+            origin: "[server]".to_string(),
+            origin_color: SERVER_MESSAGE_COLOR,
+            timestamp: Instant::now(),
+            text: text.to_string(),
+        }
+    }
 }
+
+pub const SERVER_MESSAGE_COLOR: (u8, u8, u8) = (0, 255, 255);
+pub const SERVER_WARNING_COLOR: (u8, u8, u8) = (255, 255, 0);
+pub const SERVER_ERROR_COLOR: (u8, u8, u8) = (255, 0, 0);
 
 pub fn color_to_fixed32(color: (u8, u8, u8)) -> u32 {
     ((color.0 as u32) << 16) | ((color.1 as u32) << 8) | (color.2 as u32)

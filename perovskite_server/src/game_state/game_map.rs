@@ -215,7 +215,7 @@ impl MapChunk {
     ) -> Result<Option<mapchunk_proto::ExtendedData>> {
         let id = self.block_ids[block_index];
         let (block_type, _) = game_state
-            .map()
+            .game_map()
             .block_type_manager()
             .get_block_by_id(id.into())?;
         if block_type.extended_data_handling == ExtDataHandling::NoExtData
@@ -235,7 +235,7 @@ impl MapChunk {
                             tick: game_state.tick(),
                             initiator: EventInitiator::Engine,
                             location: block_coord,
-                            block_types: game_state.map().block_type_manager(),
+                            block_types: game_state.game_map().block_type_manager(),
                             items: game_state.item_manager(),
                         };
 
@@ -339,7 +339,7 @@ fn parse_v1(
             "Block IDs vec lookup failed, even though bounds check passed. This should not happen.",
         );
         let (block_def, _) = game_state
-            .map()
+            .game_map()
             .block_type_manager()
             .get_block_by_id(block_id.into())?;
         if block_def.extended_data_handling == ExtDataHandling::NoExtData {
@@ -354,7 +354,7 @@ fn parse_v1(
             tick: game_state.tick(),
             initiator: EventInitiator::Engine,
             location: block_coord,
-            block_types: game_state.map().block_type_manager(),
+            block_types: game_state.game_map().block_type_manager(),
             items: game_state.item_manager(),
         };
         if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
@@ -1897,12 +1897,12 @@ impl GameMapTimer {
         state: &mut ShardState,
     ) -> Result<()> {
         let _span = span!("timer tick with neighbors");
-        let mut writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
+        let mut writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
 
         // Read the coords, and then unlock.
         let mut coords = {
             let _span = span!("read and filter chunks");
-            game_state.map().live_chunks[coarse_shard]
+            game_state.game_map().live_chunks[coarse_shard]
                 .read()
                 .chunks
                 .keys()
@@ -1922,20 +1922,20 @@ impl GameMapTimer {
 
         for coord in coords.into_iter() {
             if writeback_permit.is_none() {
-                writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
+                writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
             }
             // this does the locking twice, with the benefit that it elides all of the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
             let (matches, latest_update) =
-                self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.map(), false)?;
+                self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.game_map(), false)?;
             let should_run = (!self.settings.idle_chunk_after_unchanged
                 || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
                 && matches;
 
             if should_run {
                 let (_, _) =
-                    self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.map(), true)?;
-                let shard = game_state.map().live_chunks[coarse_shard].read();
+                    self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.game_map(), true)?;
+                let shard = game_state.game_map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
                     if let Some(mut chunk) = holder.try_get()? {
                         match &self.callback {
@@ -2011,10 +2011,10 @@ impl GameMapTimer {
         state: &ShardState,
     ) -> Result<()> {
         let _span = span!("timer tick fast");
-        let mut writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
+        let mut writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
         let mut read_lock = {
             let _span = span!("acquire game_map read lock");
-            game_state.map().live_chunks[coarse_shard].read()
+            game_state.game_map().live_chunks[coarse_shard].read()
         };
         let coords = read_lock
             .chunks
@@ -2027,18 +2027,18 @@ impl GameMapTimer {
             if writeback_permit.is_none() {
                 // A chunk used our writeback permit. Get a new one.
                 // Fast path - if we can get a permit without blocking, take it
-                if let Some(permit) = game_state.map().try_get_writeback_permit(coarse_shard)? {
+                if let Some(permit) = game_state.game_map().try_get_writeback_permit(coarse_shard)? {
                     writeback_permit = Some(permit);
                 } else {
                     // We need to release the read lock to get a permit, as the writeback thread needs to get a write lock
                     // to make progress.
                     drop(read_lock);
 
-                    writeback_permit = Some(game_state.map().get_writeback_permit(coarse_shard)?);
+                    writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
 
                     read_lock = {
                         let _span = span!("reacquire game_map read lock (need permit)");
-                        game_state.map().live_chunks[coarse_shard].read()
+                        game_state.game_map().live_chunks[coarse_shard].read()
                     };
                 }
             } else if i % 100 == 0 {
@@ -2129,7 +2129,7 @@ impl GameMapTimer {
     ) -> Result<(), Error> {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
-        let map = game_state.map();
+        let map = game_state.game_map();
         for i in 0..4096 {
             let block_id = BlockId(chunk.block_ids[i]);
             assert!(holder
@@ -2179,7 +2179,7 @@ impl GameMapTimer {
                             tick: 0,
                             initiator: EventInitiator::Engine,
                             location: coord.with_offset(offset),
-                            block_types: game_state.map().block_type_manager(),
+                            block_types: game_state.game_map().block_type_manager(),
                             items: game_state.item_manager(),
                         };
                         run_handler!(
@@ -2266,7 +2266,7 @@ impl GameMapTimer {
                         .insert(new_block_id.base_id() as u64);
                 }
                 chunk.dirty = true;
-                game_state.map().broadcast_block_change(BlockUpdate {
+                game_state.game_map().broadcast_block_change(BlockUpdate {
                     location: coord.with_offset(ChunkOffset::from_index(i)),
                     new_value: BlockId(chunk.block_ids[i]),
                 });
