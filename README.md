@@ -86,7 +86,7 @@ These can be adjusted in the settings file, whose filename is printed in the log
 Tons of stuff, in no particular order, and not yet prioritized:
 
 * Rendering and display:
-    * Lighting
+    * TBD
 * Game state and interactions:
     * Chat
     * Commands
@@ -94,7 +94,6 @@ Tons of stuff, in no particular order, and not yet prioritized:
     * Support for falling blocks (e.g. sand)
     * Further optimized APIs
         * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
-        * Fast neighbor checks (e.g. for timers) that avoid re-locking and extra ops
     * Multithreaded mapgen?
 * Entities
     * Initial design of non-block entities (e.g. other player characters)

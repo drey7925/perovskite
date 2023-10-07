@@ -140,7 +140,7 @@ impl MiniBlockRenderer {
         let mut commands = self.ctx.start_command_buffer()?;
         commands.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into()), Some((1.0, 0).into())],
+                clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into()), Some(self.ctx.depth_clear_value())],
                 ..RenderPassBeginInfo::framebuffer(self.framebuffer.clone())
             },
             SubpassContents::Inline,

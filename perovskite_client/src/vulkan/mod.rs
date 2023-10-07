@@ -38,7 +38,7 @@ use vulkano::{
         physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue,
         QueueCreateInfo,
     },
-    format::{Format, FormatFeatures, NumericType},
+    format::{Format, FormatFeatures, NumericType, ClearValue},
     image::{
         view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
@@ -98,6 +98,14 @@ impl VulkanContext {
         )?;
 
         Ok(builder)
+    }
+
+    pub(crate) fn depth_clear_value(&self) -> ClearValue {
+        if self.depth_format.type_stencil().is_some() {
+            ClearValue::DepthStencil((1.0, 0))
+        } else {
+            ClearValue::Depth(1.0)
+        }
     }
 }
 
@@ -299,7 +307,7 @@ impl VulkanWindow {
     ) -> Result<()> {
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some((1.0, 0).into())],
+                clear_values: vec![Some([0.25, 0.9, 1.0, 1.0].into()), Some(self.depth_clear_value())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassContents::Inline,
