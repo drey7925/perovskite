@@ -278,9 +278,13 @@ message SetClientState {
   double time_of_day = 5;
   // The period, in real-time seconds, of a day
   double day_length_sec = 6;
+  // Permissions available to the client. Only permissions listed in CLIENT_RELEVANT_PERMISSIONS
+  // are included here
+  repeated string permission = 7;
 }
 
 message StartAuth {
+  // The username to authenticate as
   string username = 1;
   // If true, register for a new account. If false, log into an existing
   // account.

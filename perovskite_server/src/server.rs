@@ -29,7 +29,7 @@ use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
         blocks::BlockTypeManager,
-        chat::commands::{ChatCommand, CommandImplementation, CommandManager},
+        chat::commands::{ChatCommand, ChatCommandHandler, CommandManager},
         game_behaviors::GameBehaviors,
         game_map::{TimerCallback, TimerSettings},
         items::ItemManager,
@@ -219,7 +219,7 @@ impl ServerBuilder {
     pub fn register_command(
         &mut self,
         name: &str,
-        command: Box<dyn CommandImplementation>,
+        command: Box<dyn ChatCommandHandler>,
         help_text: &str,
     ) -> Result<()> {
         self.commands.add_command(

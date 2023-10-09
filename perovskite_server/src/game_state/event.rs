@@ -73,6 +73,15 @@ impl EventInitiator<'_> {
             EventInitiator::Plugin(_) => "plugin"
         }
     }
+    /// Checks if the player has the given permission. If the initiator is not a player, then
+    /// this always returns true (plugins and engine are assumed to always have permission when acting as themselves)
+    pub fn check_permission_if_player(&self, permission: &str) -> bool {
+        match self {
+            EventInitiator::Engine => true,
+            EventInitiator::Player(p) => p.player.has_permission(permission),
+            EventInitiator::Plugin(_) => false
+        }
+    }
 }
 
 /// Details about a player that initiated an event.

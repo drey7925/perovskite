@@ -89,3 +89,76 @@ pub mod textures {
     /// A simple fallback texture.
     pub const FALLBACK_UNKNOWN_TEXTURE: &str = "builtin:unknown";
 }
+
+/// Built-in permissions that can be granted to a player.
+/// 
+/// This is not an exhaustive list of permissions, and plugins may define
+/// new permissions of their own. However, plugins may want to use these
+/// for consistency where possible.
+pub mod permissions {
+    /// The player can fly
+    pub const FLY: &str = "default:fly";
+    /// The player can sprint
+    pub const FAST_MOVE: &str = "default:fast_move";
+    /// The player can use /give and /giveme commands
+    pub const GIVE: &str = "default:give";
+    /// The player can grant permissions to themselves/other players
+    /// Note that to avoid lock-out, a player cannot revoke this permission
+    /// from themselves
+    pub const GRANT: &str = "default:grant";
+    /// The player can bypass permission checks on inventories (e.g. locked chests)
+    pub const BYPASS_INVENTORY_CHECKS: &str = "default:bypass_inventory_checks";
+    /// The player has access to a creative inventory
+    pub const CREATIVE: &str = "default:creative";
+    /// The player can dig and place blocks
+    pub const DIG_PLACE: &str = "default:dig_place";
+    /// The player can punch blocks. While this can modify the world, it does so in
+    /// more limited ways (e.g. punching a block might cause some in-world automation
+    /// to run, but generally won't modify the world substantially in the way mining and placing would)
+    pub const PUNCH: &str = "default:punch";
+    /// The player may actually log in.
+    /// If this is not granted, the player will be immediately disconnected after authentication.
+    pub const LOG_IN: &str = "default:log_in";
+    /// Allows the user to mess with the world state (e.g. set time, weather, etc)
+    pub const WORLD_STATE: &str = "default:set_world_state";
+    /// Allows the player to interact with inventories, popups, etc
+    pub const INVENTORY: &str = "default:inventory";
+
+    /// The set of permissions that affect client behavior. Only these are sent to clients
+    pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] = &[
+        FLY,
+        FAST_MOVE,
+        DIG_PLACE,
+        PUNCH,
+    ];
+
+    pub const ALL_PERMISSIONS: [&'static str; 11] = [
+        FLY,
+        FAST_MOVE,
+        GIVE,
+        GRANT,
+        BYPASS_INVENTORY_CHECKS,
+        CREATIVE,
+        DIG_PLACE,
+        PUNCH,
+        LOG_IN,
+        WORLD_STATE,
+        INVENTORY,
+    ];
+    
+    /// Prefix for permissions that can be self-granted on request, used for
+    /// /elevate. Intended to allow an admin to have permissions without them having
+    /// an effect at all times.
+    /// 
+    /// e.g. a player having `eligible:default:bypass_inventory_checks` would by default
+    /// be subject to inventory checks, but could use /elevate default:bypass_inventory_checks
+    /// (command TBD and to be implemented) to *temporarily* enable that permission 
+    /// 
+    /// This is implemented in perovskite_server and doesn't require any special handling
+    /// in plugins when doing permission checks for actions. Once an eligible permission
+    /// is activated with /elevate, that permission will show up when calling permission check functions
+    /// on the player without the eligible: prefix.
+    /// 
+    /// However, plugins may check eligible permissions for their own purposes if they wish to.
+    pub const ELIGIBLE_PREFIX: &str = "eligible:";
+}

@@ -116,7 +116,7 @@ pub(crate) struct PhysicsState {
     landed_last_frame: bool,
     last_land_height: f64,
     bump_decay: f64,
-    settings: Arc<ArcSwap<GameSettings>>
+    settings: Arc<ArcSwap<GameSettings>>,
 }
 
 impl PhysicsState {

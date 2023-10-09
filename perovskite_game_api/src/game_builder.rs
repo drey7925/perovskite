@@ -33,7 +33,7 @@ use perovskite_core::{
 use perovskite_server::{
     game_state::{
         blocks::{BlockType, BlockTypeHandle},
-        items::Item, chat::commands::CommandImplementation,
+        items::Item, chat::commands::ChatCommandHandler,
     },
     server::ServerBuilder,
 };
@@ -185,7 +185,7 @@ impl GameBuilder {
     maybe_export!(
         /// Registers a chat command. name should not contain the leading slash
         // TODO: convert this into a builder once we have more features in commands
-        fn add_command(&mut self, name: &str, command: Box<dyn CommandImplementation>, help: &str) -> Result<()> {
+        fn add_command(&mut self, name: &str, command: Box<dyn ChatCommandHandler>, help: &str) -> Result<()> {
             self.inner.register_command(name, command, help)?;
             Ok(())
         }

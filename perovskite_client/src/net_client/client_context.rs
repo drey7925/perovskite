@@ -151,7 +151,7 @@ impl OutboundContext {
                 rpc::ClientUpdate {
                     position: Some(pos.to_proto()?),
                     pacing: Some(rpc::ClientPacing { pending_chunks }),
-                    hotbar_slot
+                    hotbar_slot,
                 },
             ))
             .await?;
@@ -160,7 +160,8 @@ impl OutboundContext {
     }
 
     async fn handle_game_action(&mut self, action: GameAction) -> Result<()> {
-        self.send_position_update(self.client_state.last_position()).await?;
+        self.send_position_update(self.client_state.last_position())
+            .await?;
         match action {
             GameAction::Dig(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Dig(
@@ -620,19 +621,16 @@ impl InboundContext {
         &mut self,
         state_update: &rpc::SetClientState,
     ) -> Result<()> {
-        let x = state_update
+        let position = state_update
             .position
             .as_ref()
             .and_then(|x| x.position.clone());
-        let Some(pos_vector) = x else {
-            return self
-                .send_bugcheck("Missing position in ClientState update".to_string())
-                .await;
-        };
-        self.client_state
-            .physics_state
-            .lock()
-            .set_position(pos_vector.try_into()?);
+        if let Some(pos_vector) = position {
+            self.client_state
+                .physics_state
+                .lock()
+                .set_position(pos_vector.try_into()?);
+        }
         {
             let mut egui_lock = self.client_state.egui.lock();
             egui_lock.inventory_view = state_update.inventory_popup.clone();
@@ -655,6 +653,9 @@ impl InboundContext {
                 .time_state_mut()
                 .set_day_length(Duration::from_secs_f64(state_update.day_length_sec));
         }
+
+        // TODO continue here with permissions - once permissions are received, apply them to the
+        // relevant subsystems for a consistent client-side experience.
 
         Ok(())
     }

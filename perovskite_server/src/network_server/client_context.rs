@@ -52,6 +52,7 @@ use cgmath::Vector3;
 use cgmath::Zero;
 use parking_lot::MutexGuard;
 use perovskite_core::chat::ChatMessage;
+use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use itertools::iproduct;
@@ -235,6 +236,17 @@ async fn initialize_protocol_state(
     context: &SharedContext,
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<()> {
+    if !context.player_context.has_permission(permissions::LOG_IN) {
+        context.cancellation.cancel();
+        outbound_tx
+            .send(Ok(proto::StreamToClient {
+                tick: context.game_state.tick(),
+                server_message: Some(proto::stream_to_client::ServerMessage::ShutdownMessage(
+                    "You don't have permission to log in".to_string(),
+                )),
+            }))
+            .await?;
+    }
     let (hotbar_update, inv_manipulation_update) = {
         let player_state = context.player_context.state.lock();
         (
@@ -252,7 +264,7 @@ async fn initialize_protocol_state(
 
     let message = {
         let player_state = context.player_context.state.lock();
-        make_client_state_update_message(&context, player_state)?
+        make_client_state_update_message(&context, player_state, true)?
     };
     outbound_tx
         .send(Ok(message))
@@ -726,7 +738,7 @@ impl BlockEventSender {
             velocity: Vector3::zero(),
             face_direction: (0., 0.),
         };
-        let message = make_client_state_update_message(&self.context, player_state);
+        let message = make_client_state_update_message(&self.context, player_state, true);
         self.outbound_tx
             .send(Ok(message?))
             .await
@@ -737,10 +749,21 @@ impl BlockEventSender {
 fn make_client_state_update_message(
     ctx: &SharedContext,
     player_state: MutexGuard<'_, PlayerState>,
+    update_location: bool,
 ) -> Result<StreamToClient> {
     let message = {
-        let position = player_state.last_position.position;
-
+        let position = if update_location {
+            Some(PlayerPosition {
+                position: Some(player_state.last_position.position.try_into()?),
+                velocity: Some(Vector3::zero().try_into()?),
+                face_direction: Some(Angles {
+                    deg_azimuth: 0.,
+                    deg_elevation: 0.,
+                }),
+            })
+        } else {
+            None
+        };
         let (time_now, day_len) = {
             let time_state = ctx.game_state.time_state().lock();
             (time_state.time_of_day(), time_state.day_length())
@@ -749,19 +772,17 @@ fn make_client_state_update_message(
             tick: ctx.game_state.tick(),
             server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                 proto::SetClientState {
-                    position: Some(PlayerPosition {
-                        position: Some(position.try_into()?),
-                        velocity: Some(Vector3::zero().try_into()?),
-                        face_direction: Some(Angles {
-                            deg_azimuth: 0.,
-                            deg_elevation: 0.,
-                        }),
-                    }),
+                    position,
                     hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
                     inventory_popup: Some(player_state.inventory_popup.to_proto()),
                     inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
                     time_of_day: time_now,
                     day_length_sec: day_len.as_secs_f64(),
+                    permission: player_state
+                        .effective_permissions(&ctx.game_state)
+                        .iter()
+                        .cloned()
+                        .collect(),
                 },
             )),
         }
@@ -1176,7 +1197,9 @@ impl InboundWorker {
                     position: pos,
                     chunks_to_send: self.chunk_pacing.get(),
                 });
-                self.context.player_context.update_client_position_state(pos, update.hotbar_slot);
+                self.context
+                    .player_context
+                    .update_client_position_state(pos, update.hotbar_slot);
             }
             None => {
                 warn!("No position in update message from client");
@@ -1547,11 +1570,19 @@ impl MiscOutboundWorker {
                 },
                 _ = resync_player_state_global.changed() => {
                     let lock = self.context.player_context.player.state.lock();
-                    self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock)?)).await?;
+                    self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock, false)?)).await?;
                 },
-                _ = self.player_event_receiver.reinit_player_state.changed() => {
-                    let lock = self.context.player_context.player.state.lock();
-                    self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock)?)).await?;
+                want_location_update = self.player_event_receiver.reinit_player_state.recv() => {
+                    match want_location_update {
+                        Some(want_location_update) => {
+                            let lock = self.context.player_context.player.state.lock();
+                            self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock, want_location_update)?)).await?;
+                        },
+                        None => {
+                            tracing::warn!("Reinit player state sender disconnected");
+                        }
+                    }
+
                 }
                 message = broadcast_messages.recv() => {
                     match message {

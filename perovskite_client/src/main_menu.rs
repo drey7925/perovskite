@@ -202,6 +202,17 @@ impl MainMenu {
                             "Please specify a non-empty password".to_string(),
                         );
                     } else {
+                        self.settings.rcu(|x| {
+                            let old = x.clone();
+                            GameSettings {
+                                last_hostname: self.register_host_field.trim().to_string(),
+                                last_username: self.register_user_field.trim().to_string(),
+                                ..old.deref().clone()
+                            }
+                        });
+                        if let Err(e) = self.settings.load().save_to_disk() {
+                            log::error!("Failure saving settings: {}", e);
+                        }
                         let (state, settings) = make_connection(
                             self.register_host_field.trim().to_string(),
                             self.register_user_field.trim().to_string(),

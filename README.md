@@ -77,6 +77,8 @@ To reach a client on the local machine, use `grpc://localhost:28273` as the serv
 * F to interact with a block (e.g. furnace/chest).
 * I for inventory
 * P to toggle between normal physics, flying, and noclip. This is useful if you spawn underground.
+    * left-control to descend
+* Left-shift to sprint (if you have server permission to do so)
 * Escape for menu
 
 These can be adjusted in the settings file, whose filename is printed in the log when the client starts up.

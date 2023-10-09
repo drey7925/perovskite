@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     ops::Deref,
     sync::{Arc, Weak},
     time::{Duration, Instant},
@@ -23,6 +23,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
+use futures::Future;
 use perovskite_core::{
     chat::ChatMessage,
     coordinates::PlayerPositionUpdate,
@@ -30,7 +31,7 @@ use perovskite_core::{
 };
 
 use log::warn;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -59,10 +60,11 @@ pub struct Player {
     //
     // We should ensure that the only way to get mutating access is through something like a PlayerMutView that
     // Derefs to a player and has its own mutating functions that appropriate track whether any updates need
-    // to be sent to clients.
+    // to be sent to clients, or only through this struct (which can maintain the necessary invariant)
     pub(crate) state: Mutex<PlayerState>,
     // Sends events for that player; the corresponding receiver will send them over the network to the client.
     sender: PlayerEventSender,
+    game_state: Arc<GameState>,
 }
 
 impl Player {
@@ -82,10 +84,12 @@ impl Player {
         self.state.lock().hotbar_slot
     }
     fn to_server_proto(&self) -> StoredPlayer {
+        let lock = self.state.lock();
         StoredPlayer {
             name: self.name.clone(),
-            last_position: Some(self.last_position().position.try_into().unwrap()),
+            last_position: Some(lock.last_position.position.try_into().unwrap()),
             main_inventory: self.main_inventory_key.as_bytes().to_vec(),
+            permission: lock.granted_permissions.iter().cloned().collect(),
         }
     }
     fn from_server_proto(
@@ -94,7 +98,26 @@ impl Player {
         sender: PlayerEventSender,
     ) -> Result<Player> {
         let main_inventory_key = InventoryKey::parse_bytes(&proto.main_inventory)?;
+        let mut effective_permissions = HashSet::new();
+        for permission in &proto.permission {
+            if game_state.game_behaviors.has_defined_permission(permission) {
+                effective_permissions.insert(permission.clone());
+            } else {
+                tracing::warn!(
+                    "Player {} has unknown permission: {}",
+                    proto.name,
+                    permission
+                );
+            }
+        }
 
+        effective_permissions.extend(
+            game_state
+                .game_behaviors
+                .ambient_permissions
+                .iter()
+                .cloned(),
+        );
         Ok(Player {
             name: proto.name.clone(),
             main_inventory_key,
@@ -109,11 +132,15 @@ impl Player {
                     face_direction: (0., 0.),
                 },
                 active_popups: vec![],
-                inventory_popup: (game_state.game_behaviors().make_inventory_popup)(
-                    game_state.clone(),
-                    proto.name.clone(),
-                    main_inventory_key,
-                )?,
+                inventory_popup: game_state
+                    .game_behaviors()
+                    .make_inventory_popup
+                    .make_inventory_popup(
+                        game_state.clone(),
+                        proto.name.clone(),
+                        effective_permissions.into_iter().collect(),
+                        main_inventory_key,
+                    )?,
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
                     game_state.clone(),
@@ -121,7 +148,7 @@ impl Player {
                     false,
                 )?,
                 inventory_manipulation_view: InventoryView::new_transient(
-                    game_state,
+                    game_state.clone(),
                     (1, 1),
                     vec![None],
                     true,
@@ -129,8 +156,11 @@ impl Player {
                     false,
                 )?,
                 hotbar_slot: None,
+                granted_permissions: proto.permission.iter().cloned().collect(),
+                temporary_permissions: HashSet::new(),
             }),
             sender,
+            game_state,
         })
     }
 
@@ -142,6 +172,15 @@ impl Player {
         let main_inventory_key = game_state.inventory_manager().make_inventory(4, 8)?;
         // TODO provide hooks here
         // TODO custom spawn location
+
+        let effective_permissions = game_state
+            .game_behaviors()
+            .default_permissions
+            .clone()
+            .union(&game_state.game_behaviors().ambient_permissions)
+            .cloned()
+            .collect();
+
         let player = Player {
             name: name.to_string(),
             main_inventory_key,
@@ -152,11 +191,15 @@ impl Player {
                     face_direction: (0., 0.),
                 },
                 active_popups: vec![],
-                inventory_popup: (game_state.game_behaviors().make_inventory_popup)(
-                    game_state.clone(),
-                    name.to_string(),
-                    main_inventory_key,
-                )?,
+                inventory_popup: game_state
+                    .game_behaviors()
+                    .make_inventory_popup
+                    .make_inventory_popup(
+                        game_state.clone(),
+                        name.to_string(),
+                        effective_permissions,
+                        main_inventory_key,
+                    )?,
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
                     game_state.clone(),
@@ -164,7 +207,7 @@ impl Player {
                     false,
                 )?,
                 inventory_manipulation_view: InventoryView::new_transient(
-                    game_state,
+                    game_state.clone(),
                     (1, 1),
                     vec![None],
                     true,
@@ -172,9 +215,12 @@ impl Player {
                     false,
                 )?,
                 hotbar_slot: None,
+                granted_permissions: game_state.game_behaviors().default_permissions.clone(),
+                temporary_permissions: HashSet::new(),
             }
             .into(),
             sender,
+            game_state,
         };
 
         Ok(player)
@@ -192,6 +238,93 @@ impl Player {
             .await?;
         Ok(())
     }
+
+    pub fn grant_permission(&self, permission: &str) -> Result<()> {
+        if !self
+            .game_state
+            .game_behaviors
+            .has_defined_permission(permission)
+        {
+            bail!("Permission {} not defined", permission);
+        }
+
+        let mut lock = self.state.lock();
+        lock.granted_permissions.insert(permission.to_string());
+        self.post_permission_update(lock)
+    }
+
+    fn post_permission_update(&self, mut lock: MutexGuard<'_, PlayerState>) -> Result<()> {
+        let effective_permissions = lock.effective_permissions(&self.game_state).into_iter().collect();
+        lock.inventory_popup = self
+            .game_state
+            .game_behaviors()
+            .make_inventory_popup
+            .make_inventory_popup(
+                self.game_state.clone(),
+                self.name.clone(),
+                effective_permissions,
+                self.main_inventory_key,
+            )?;
+        tokio::task::block_in_place(|| self.sender.reinit_player_state.blocking_send(false))?;
+        Ok(())
+    }
+
+    pub fn grant_temporary_permission(&self, permission: &str) -> Result<()> {
+        if !self
+            .game_state
+            .game_behaviors
+            .has_defined_permission(permission)
+        {
+            bail!("Permission {} not defined", permission);
+        }
+        let mut lock = self.state.lock();
+        lock.temporary_permissions.insert(permission.to_string());
+        self.post_permission_update(lock)
+    }
+
+    pub fn revoke_permission(&self, permission: &str) -> Result<bool> {
+        let mut lock = self.state.lock();
+        let removed = lock.granted_permissions.remove(permission);
+        self.post_permission_update(lock)?;
+        Ok(removed)
+    }
+
+    pub fn revoke_temporary_permission(&self, permission: &str) -> Result<bool> {
+        let mut lock = self.state.lock();
+        let removed = lock.temporary_permissions.remove(permission);
+        self.post_permission_update(lock)?;
+        Ok(removed)
+    }
+
+    pub fn clear_temporary_permissions(&self) -> Result<()> {
+        let mut lock = self.state.lock();
+        lock.temporary_permissions.clear();
+        self.post_permission_update(lock)
+    }
+
+    pub fn has_permission(&self, permission: &str) -> bool {
+        let lock = self.state.lock();
+        lock.granted_permissions.contains(permission)
+            || lock.temporary_permissions.contains(permission)
+            || self
+                .game_state
+                .game_behaviors()
+                .ambient_permissions
+                .contains(permission)
+    }
+
+    /// Lists the player's effective permissions (ambient, granted, and temporary)
+    pub fn effective_permissions(&self) -> HashSet<String> {
+        self.state.lock().effective_permissions(&self.game_state)
+    }
+    /// Lists the player's granted permissions (i.e. those stored in the database)
+    pub fn granted_permissions(&self) -> HashSet<String> {
+        self.state.lock().granted_permissions.clone()
+    }
+    /// Lists the player's temporary permissions (i.e. obtained from /elevate or similar)
+    pub fn temporary_permissions(&self) -> HashSet<String> {
+        self.state.lock().temporary_permissions.clone()
+    }
 }
 
 pub(crate) struct PlayerState {
@@ -207,6 +340,12 @@ pub(crate) struct PlayerState {
     pub(crate) inventory_manipulation_view: InventoryView<()>,
     /// The player's currently selected hotbar slot, if known.
     pub(crate) hotbar_slot: Option<u32>,
+    /// The player's persistently granted permissions
+    /// (i.e. ones stored in the database, not including any that are ambient)
+    pub(crate) granted_permissions: HashSet<String>,
+    /// Permissions that this player has obtained using /elevate or similar
+    /// They are sent to the client, but they are not stored in the database.
+    pub(crate) temporary_permissions: HashSet<String>,
 }
 impl PlayerState {
     pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {
@@ -292,6 +431,20 @@ impl PlayerState {
 
         bail!("View not found");
     }
+
+    pub(crate) fn effective_permissions(&self, game_state: &GameState) -> HashSet<String> {
+        let mut effective_permissions = HashSet::new();
+        for permission in &self.granted_permissions {
+            effective_permissions.insert(permission.clone());
+        }
+        for permission in &self.temporary_permissions {
+            effective_permissions.insert(permission.clone());
+        }
+        for permission in &game_state.game_behaviors().ambient_permissions {
+            effective_permissions.insert(permission.clone());
+        }
+        effective_permissions
+    }
 }
 
 // Struct held by the client contexts for this player. When dropped, the
@@ -314,7 +467,6 @@ impl PlayerContext {
     }
     pub(crate) fn last_position(&self) -> PlayerPositionUpdate {
         self.player.state.lock().last_position
-        
     }
     pub fn name(&self) -> &str {
         &self.player.name
@@ -342,19 +494,19 @@ impl Drop for PlayerContext {
 struct PlayerEventSender {
     chat_messages: tokio::sync::mpsc::Sender<ChatMessage>,
     disconnection_message: tokio::sync::mpsc::Sender<String>,
-    reinit_player_state: tokio::sync::watch::Sender<()>,
+    reinit_player_state: tokio::sync::mpsc::Sender<bool>,
 }
 pub(crate) struct PlayerEventReceiver {
     pub(crate) chat_messages: tokio::sync::mpsc::Receiver<ChatMessage>,
     pub(crate) disconnection_message: tokio::sync::mpsc::Receiver<String>,
-    pub(crate) reinit_player_state: tokio::sync::watch::Receiver<()>,
+    pub(crate) reinit_player_state: tokio::sync::mpsc::Receiver<bool>,
 }
 
 fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
     const CHAT_BUFFER_SIZE: usize = 128;
     let (chat_sender, chat_receiver) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
     let (disconnection_sender, disconnection_receiver) = tokio::sync::mpsc::channel(2);
-    let (reinit_sender, reinit_receiver) = tokio::sync::watch::channel(());
+    let (reinit_sender, reinit_receiver) = tokio::sync::mpsc::channel(4);
     (
         PlayerEventSender {
             chat_messages: chat_sender,
@@ -382,6 +534,7 @@ pub struct PlayerManager {
 
     shutdown: CancellationToken,
     writeback: Mutex<Option<JoinHandle<Result<()>>>>,
+    writeback_now_sender: tokio::sync::mpsc::Sender<String>,
 }
 impl PlayerManager {
     fn db_key(player: &str) -> Vec<u8> {
@@ -427,7 +580,10 @@ impl PlayerManager {
     }
 
     /// Runs the given closure on the provided player.
-    pub fn for_connected_player<F, T>(&self, name: &str, closure: F) -> Result<T> where F: FnOnce(&Player) -> Result<T> {
+    pub fn for_connected_player<F, T>(&self, name: &str, closure: F) -> Result<T>
+    where
+        F: FnOnce(&Player) -> Result<T>,
+    {
         let lock = self.active_players.lock();
         if !lock.contains_key(name) {
             bail!("Player {name} not connected");
@@ -473,22 +629,36 @@ impl PlayerManager {
         game_state: Weak<GameState>,
         db: Arc<dyn GameDatabase>,
     ) -> Result<Arc<PlayerManager>> {
+        let (sender, receiver) = tokio::sync::mpsc::channel(32);
         let result = Arc::new(PlayerManager {
             game_state,
             db,
             active_players: Mutex::new(HashMap::new()),
             shutdown: CancellationToken::new(),
             writeback: Mutex::new(None),
+            writeback_now_sender: sender,
         });
-        result.start_writeback()?;
+        result.start_writeback(receiver)?;
         Ok(result)
     }
 
-    pub(crate) async fn writeback_loop(self: Arc<Self>) -> Result<()> {
+    pub(crate) async fn writeback_loop(
+        self: Arc<Self>,
+        mut receiver: tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<()> {
         while !self.shutdown.is_cancelled() {
             let deadline = Instant::now() + PLAYER_WRITEBACK_INTERVAL;
             select! {
                 _ = tokio::time::sleep_until(deadline.into()) => {},
+                name = receiver.recv() => {
+                    if let Some(name) = name {
+                        let lock = self.active_players.lock();
+                        let player = lock.get(&name);
+                        if let Some(player) = player {
+                            self.write_back(player)?;
+                        }
+                    }
+                }
                 _ = self.shutdown.cancelled() => {
                     log::info!("Player writeback detected cancellation");
                 }
@@ -499,10 +669,13 @@ impl PlayerManager {
         Ok(())
     }
 
-    fn start_writeback(self: &Arc<Self>) -> Result<()> {
+    fn start_writeback(
+        self: &Arc<Self>,
+        receiver: tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<()> {
         let clone = self.clone();
         *(self.writeback.lock()) = Some(crate::spawn_async("player_writeback", async {
-            clone.writeback_loop().await
+            clone.writeback_loop(receiver).await
         })?);
         Ok(())
     }
