@@ -14,6 +14,7 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
+    constants::permissions,
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
@@ -625,19 +626,30 @@ impl InboundContext {
             .position
             .as_ref()
             .and_then(|x| x.position.clone());
-        if let Some(pos_vector) = position {
-            self.client_state
-                .physics_state
-                .lock()
-                .set_position(pos_vector.try_into()?);
+        {
+            let mut physics_lock = self.client_state.physics_state.lock();
+
+            if let Some(pos_vector) = position {
+                physics_lock.set_position(pos_vector.try_into()?);
+            }
+            physics_lock.update_permissions(&state_update.permission, &self.client_state);
         }
         {
             let mut egui_lock = self.client_state.egui.lock();
             egui_lock.inventory_view = state_update.inventory_popup.clone();
             egui_lock.inventory_manipulation_view_id =
                 Some(state_update.inventory_manipulation_view);
+            egui_lock.set_allow_inventory_interaction(
+                state_update
+                    .permission
+                    .iter()
+                    .any(|p| p == permissions::INVENTORY),
+            )
         }
-
+        {
+            let mut tc_lock = self.client_state.tool_controller.lock();
+            tc_lock.update_permissions(&state_update.permission);
+        }
         {
             let mut hud_lock = self.client_state.hud.lock();
             hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);

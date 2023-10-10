@@ -62,6 +62,7 @@ impl ChatMessage {
 pub const SERVER_MESSAGE_COLOR: (u8, u8, u8) = (0, 255, 255);
 pub const SERVER_WARNING_COLOR: (u8, u8, u8) = (255, 255, 0);
 pub const SERVER_ERROR_COLOR: (u8, u8, u8) = (255, 0, 0);
+pub const CLIENT_INTERNAL_MESSAGE_COLOR: (u8, u8, u8) = (255, 255, 0);
 
 pub fn color_to_fixed32(color: (u8, u8, u8)) -> u32 {
     ((color.0 as u32) << 16) | ((color.1 as u32) << 8) | (color.2 as u32)

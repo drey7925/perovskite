@@ -24,7 +24,7 @@ pub(crate) enum BoundAction {
     Menu,
     Chat,
     ChatSlash,
-    PhysicsDebug
+    PhysicsDebug,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -53,7 +53,7 @@ pub(crate) struct KeybindSettings {
     pub(crate) chat: Keybind,
     pub(crate) chat_slash: Keybind,
 
-    pub(crate) physics_debug: Keybind
+    pub(crate) physics_debug: Keybind,
 }
 impl KeybindSettings {
     pub(crate) fn get(&self, action: BoundAction) -> Keybind {
@@ -74,7 +74,7 @@ impl KeybindSettings {
             BoundAction::Menu => self.menu,
             BoundAction::Chat => self.chat,
             BoundAction::ChatSlash => self.chat_slash,
-            BoundAction::PhysicsDebug => self.physics_debug
+            BoundAction::PhysicsDebug => self.physics_debug,
         }
     }
 }
@@ -90,8 +90,8 @@ impl Default for KeybindSettings {
             move_right: ScanCode(0x20),
             toggle_physics: ScanCode(0x19),
             jump: ScanCode(0x39),
-            descend: ScanCode(0x2a),
-            fast_move: ScanCode(0x1d),
+            descend: ScanCode(0x1d),
+            fast_move: ScanCode(0x2a),
             interact_key: ScanCode(0x21),
             dig: MouseButton(winit::event::MouseButton::Left),
             place: MouseButton(winit::event::MouseButton::Right),
@@ -100,7 +100,7 @@ impl Default for KeybindSettings {
             menu: ScanCode(0x1),
             chat: ScanCode(0x14),
             chat_slash: ScanCode(0x35),
-            physics_debug: ScanCode(0x2)
+            physics_debug: ScanCode(0x2),
         }
     }
 }
@@ -183,6 +183,14 @@ impl InputState {
             .remove(&self.settings.load().input.get(action))
     }
 
+    pub(crate) fn peek_just_pressed(&self, action: BoundAction) -> bool {
+        if self.modal_active {
+            return false;
+        }
+        self.new_presses
+            .contains(&self.settings.load().input.get(action))
+    }
+
     pub(crate) fn take_just_released(&mut self, action: BoundAction) -> bool {
         if self.modal_active {
             return false;
@@ -209,21 +217,16 @@ impl InputState {
                     self.new_releases.insert(Keybind::ScanCode(input.scancode));
                 }
             }
-        } else if let &WindowEvent::MouseInput {
-            state,
-            button,
-            ..
-        } = event
-        {
+        } else if let &WindowEvent::MouseInput { state, button, .. } = event {
             match state {
                 ElementState::Pressed => {
                     self.active_keybinds.insert(Keybind::MouseButton(button));
                     self.new_presses.insert(Keybind::MouseButton(button));
-                },
+                }
                 ElementState::Released => {
                     self.active_keybinds.remove(&Keybind::MouseButton(button));
                     self.new_releases.insert(Keybind::MouseButton(button));
-                },
+                }
             }
         }
     }

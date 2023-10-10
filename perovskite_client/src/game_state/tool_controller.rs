@@ -14,9 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cgmath::vec3;
+use perovskite_core::constants::permissions;
 use perovskite_core::protocol::blocks::block_type_def::PhysicsInfo;
 use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 
@@ -24,7 +25,7 @@ use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
 use line_drawing::WalkVoxels;
-use perovskite_core::protocol::blocks::{BlockTypeDef};
+use perovskite_core::protocol::blocks::BlockTypeDef;
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::ItemDef;
 use rustc_hash::FxHashSet;
@@ -51,6 +52,9 @@ pub(crate) struct ToolController {
     current_slot: u32,
     current_item_interacting_groups: Vec<Vec<String>>,
     fallback_blockdef: BlockTypeDef,
+    can_dig_place: bool,
+    can_tap_interact: bool,
+    futile_dig_since: Option<Instant>,
 }
 impl ToolController {
     pub(crate) fn new() -> ToolController {
@@ -60,7 +64,19 @@ impl ToolController {
             current_slot: 0,
             current_item_interacting_groups: get_dig_interacting_groups(&default_item()),
             fallback_blockdef: make_fallback_blockdef(),
+            can_dig_place: false,
+            can_tap_interact: false,
+            futile_dig_since: None,
         }
+    }
+
+    pub(crate) fn update_permissions(&mut self, permissions: &[String]) {
+        self.can_dig_place = permissions
+            .iter()
+            .any(|p| p.contains(permissions::DIG_PLACE));
+        self.can_tap_interact = permissions
+            .iter()
+            .any(|p| p.contains(permissions::TAP_INTERACT));
     }
 
     // Update the current item
@@ -106,7 +122,7 @@ impl ToolController {
 
         let mut input = client_state.input.lock();
 
-        if input.is_pressed(BoundAction::Dig) {
+        if input.is_pressed(BoundAction::Dig) && self.can_dig_place {
             if self.dig_progress.as_ref().map_or(true, |x: &DigState| {
                 x.coord != pointee || !x.id.equals_ignore_variant(BlockId(block_def.id))
             }) {
@@ -169,26 +185,52 @@ impl ToolController {
             self.dig_progress = None;
         }
 
-        if input.take_just_released(BoundAction::Dig) {
+        if input.take_just_released(BoundAction::Dig) && self.can_tap_interact {
             action = Some(GameAction::Tap(super::DigTapAction {
                 target: pointee,
                 prev: neighbor,
                 item_slot: self.current_slot,
                 player_pos,
             }))
-        } else if input.take_just_pressed(BoundAction::Place) && neighbor.is_some() {
+        } else if input.take_just_pressed(BoundAction::Place)
+            && neighbor.is_some()
+            && self.can_dig_place
+        {
             action = Some(GameAction::Place(super::PlaceAction {
                 target: neighbor.unwrap(),
                 anchor: Some(pointee),
                 item_slot: self.current_slot,
                 player_pos,
             }))
-        } else if input.take_just_pressed(BoundAction::Interact) {
+        } else if input.take_just_pressed(BoundAction::Interact) && self.can_tap_interact {
             action = Some(GameAction::InteractKey(super::InteractKeyAction {
                 target: pointee,
                 item_slot: self.current_slot,
                 player_pos,
             }))
+        }
+
+        if !self.can_dig_place {
+            if input.peek_just_pressed(BoundAction::Dig) {
+                self.futile_dig_since = Some(Instant::now());
+            } else if !input.is_pressed(BoundAction::Dig) {
+                self.futile_dig_since = None;
+            }
+            if self.futile_dig_since.map_or(false, |x: Instant| {
+                x.elapsed() > Duration::from_secs_f64(0.5)
+            }) {
+                self.futile_dig_since = None;
+                client_state
+                    .chat
+                    .lock()
+                    .show_client_message("You don't have permission to dig".to_string());
+            }
+            if input.peek_just_pressed(BoundAction::Place) {
+                client_state
+                    .chat
+                    .lock()
+                    .show_client_message("You don't have permission to place".to_string());
+            }
         }
 
         if let Some(action) = &action {
@@ -249,7 +291,7 @@ impl ToolController {
                     block_def,
                     pos,
                     delta_inv,
-                    id.variant()
+                    id.variant(),
                 ) {
                     for rule in self.current_item_interacting_groups.iter() {
                         if rule.iter().all(|x| block_def.groups.contains(x)) {

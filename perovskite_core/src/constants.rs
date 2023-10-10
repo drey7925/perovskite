@@ -100,6 +100,8 @@ pub mod permissions {
     pub const FLY: &str = "default:fly";
     /// The player can sprint
     pub const FAST_MOVE: &str = "default:fast_move";
+    /// The player can pass through solid obstacles
+    pub const NOCLIP: &str = "default:noclip";
     /// The player can use /give and /giveme commands
     pub const GIVE: &str = "default:give";
     /// The player can grant permissions to themselves/other players
@@ -112,10 +114,12 @@ pub mod permissions {
     pub const CREATIVE: &str = "default:creative";
     /// The player can dig and place blocks
     pub const DIG_PLACE: &str = "default:dig_place";
-    /// The player can punch blocks. While this can modify the world, it does so in
-    /// more limited ways (e.g. punching a block might cause some in-world automation
+    /// The player can tap blocks and interact (the F key by default). While this can modify the world, it does so in
+    /// more limited ways (e.g. tapping a block might cause some in-world automation designed by other players
     /// to run, but generally won't modify the world substantially in the way mining and placing would)
-    pub const PUNCH: &str = "default:punch";
+    /// 
+    /// This controls whether the user can click buttons in server-defined popups as well.
+    pub const TAP_INTERACT: &str = "default:tap_interact";
     /// The player may actually log in.
     /// If this is not granted, the player will be immediately disconnected after authentication.
     pub const LOG_IN: &str = "default:log_in";
@@ -123,24 +127,31 @@ pub mod permissions {
     pub const WORLD_STATE: &str = "default:set_world_state";
     /// Allows the player to interact with inventories, popups, etc
     pub const INVENTORY: &str = "default:inventory";
+    /// Allows the player to send chat messages to other players. This does NOT affect slash commands
+    /// which should check permissions on their own. (e.g. some slash commands may still be useful for players
+    /// that are not permitted to chat yet)
+    pub const CHAT: &str = "default:chat";
 
     /// The set of permissions that affect client behavior. Only these are sent to clients
     pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] = &[
         FLY,
         FAST_MOVE,
+        NOCLIP,
         DIG_PLACE,
-        PUNCH,
+        TAP_INTERACT,
+        INVENTORY
     ];
 
-    pub const ALL_PERMISSIONS: [&'static str; 11] = [
+    pub const ALL_PERMISSIONS: [&'static str; 12] = [
         FLY,
         FAST_MOVE,
+        NOCLIP,
         GIVE,
         GRANT,
         BYPASS_INVENTORY_CHECKS,
         CREATIVE,
         DIG_PLACE,
-        PUNCH,
+        TAP_INTERACT,
         LOG_IN,
         WORLD_STATE,
         INVENTORY,

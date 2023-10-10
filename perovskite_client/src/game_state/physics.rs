@@ -14,11 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{ops::RangeInclusive, time::Duration, sync::Arc};
+use std::{ops::RangeInclusive, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3};
 use perovskite_core::{
+    chat::{ChatMessage, CLIENT_INTERNAL_MESSAGE_COLOR, SERVER_MESSAGE_COLOR},
+    constants::permissions,
     coordinates::BlockCoordinate,
     protocol::blocks::{
         block_type_def::{self, PhysicsInfo},
@@ -32,7 +34,8 @@ use crate::block_renderer::ClientBlockTypeManager;
 
 use super::{
     input::{BoundAction, InputState},
-    ChunkManagerView, ClientState, settings::GameSettings,
+    settings::GameSettings,
+    ChunkManagerView, ClientState,
 };
 
 const PLAYER_WIDTH: f64 = 0.75;
@@ -95,10 +98,22 @@ enum PhysicsMode {
     Noclip,
 }
 impl PhysicsMode {
-    fn next(&self) -> PhysicsMode {
+    fn next(&self, allow_fly: bool, allow_noclip: bool) -> PhysicsMode {
         match self {
-            PhysicsMode::Standard => PhysicsMode::FlyingCollisions,
-            PhysicsMode::FlyingCollisions => PhysicsMode::Noclip,
+            PhysicsMode::Standard => {
+                if allow_fly {
+                    PhysicsMode::FlyingCollisions
+                } else {
+                    PhysicsMode::Standard
+                }
+            }
+            PhysicsMode::FlyingCollisions => {
+                if allow_noclip {
+                    PhysicsMode::Noclip
+                } else {
+                    PhysicsMode::Standard
+                }
+            }
             PhysicsMode::Noclip => PhysicsMode::Standard,
         }
     }
@@ -117,6 +132,10 @@ pub(crate) struct PhysicsState {
     last_land_height: f64,
     bump_decay: f64,
     settings: Arc<ArcSwap<GameSettings>>,
+
+    can_fly: bool,
+    can_fast: bool,
+    can_noclip: bool,
 }
 
 impl PhysicsState {
@@ -132,7 +151,10 @@ impl PhysicsState {
             landed_last_frame: false,
             last_land_height: 0.,
             bump_decay: 0.,
-            settings
+            settings,
+            can_fly: false,
+            can_fast: false,
+            can_noclip: false,
         }
     }
 
@@ -145,7 +167,15 @@ impl PhysicsState {
     ) -> (cgmath::Vector3<f64>, (f64, f64)) {
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
-            self.physics_mode = self.physics_mode.next();
+            self.physics_mode = self.physics_mode.next(self.can_fly, self.can_noclip);
+            client_state.chat.lock().show_client_message(format!(
+                "Physics mode changed to {}",
+                match self.physics_mode {
+                    PhysicsMode::Standard => "standard",
+                    PhysicsMode::FlyingCollisions => "flying",
+                    PhysicsMode::Noclip => "noclip",
+                }
+            ));
         }
         let (x, y) = input.take_mouse_delta();
         self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
@@ -330,8 +360,11 @@ impl PhysicsState {
         &self,
         pos: Vector3<f64>,
         input: &mut InputState,
-        distance: f64,
+        mut distance: f64,
     ) -> Vector3<f64> {
+        if self.can_fast && input.is_pressed(BoundAction::FastMove) {
+            distance *= Self::FAST_MOVE_RATIO;
+        }
         let mut target = pos;
         if input.is_pressed(BoundAction::MoveForward) {
             target.z += self.az.cos() * distance;
@@ -350,6 +383,8 @@ impl PhysicsState {
         }
         target
     }
+
+    const FAST_MOVE_RATIO: f64 = 3.0;
 
     fn update_target_fluid(
         &self,
@@ -425,6 +460,38 @@ impl PhysicsState {
     }
     pub(crate) fn set_position(&mut self, pos: Vector3<f64>) {
         self.pos = pos;
+    }
+    pub(crate) fn update_permissions(
+        &mut self,
+        permissions: &[String],
+        client_state: &ClientState,
+    ) {
+        self.can_fly = permissions.iter().any(|p| p == permissions::FLY);
+        self.can_fast = permissions.iter().any(|p| p == permissions::FAST_MOVE);
+        self.can_noclip = permissions.iter().any(|p| p == permissions::NOCLIP);
+
+        let new_physics_mode = if !self.can_noclip {
+            match self.physics_mode {
+                PhysicsMode::Standard => PhysicsMode::Standard,
+                PhysicsMode::FlyingCollisions => PhysicsMode::FlyingCollisions,
+                PhysicsMode::Noclip => PhysicsMode::FlyingCollisions,
+            }
+        } else if !self.can_fly {
+            PhysicsMode::Standard
+        } else {
+            self.physics_mode
+        };
+        if new_physics_mode != self.physics_mode {
+            client_state.chat.lock().show_client_message(format!(
+                "Physics mode changed to {}",
+                match new_physics_mode {
+                    PhysicsMode::Standard => "standard",
+                    PhysicsMode::FlyingCollisions => "flying",
+                    PhysicsMode::Noclip => "noclip",
+                }
+            ));
+        }
+        self.physics_mode = new_physics_mode;
     }
     pub(crate) fn angle(&self) -> (f64, f64) {
         (self.az.0, self.el.0)

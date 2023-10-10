@@ -961,6 +961,13 @@ impl InboundWorker {
         Ok(())
     }
 
+    fn check_player_permission(&self, permission: &str) -> Result<()> {
+        if !self.context.player_context.has_permission(permission) {
+            return Err(Error::msg("Player does not have permission"))
+        } 
+        Ok(())
+    }
+
     async fn handle_message(&mut self, message: &proto::StreamToServer) -> Result<()> {
         // todo do something with the client tick once we define ticks
         match &message.client_message {
@@ -971,6 +978,7 @@ impl InboundWorker {
                 );
             }
             Some(proto::stream_to_server::ClientMessage::Dig(dig_message)) => {
+                self.check_player_permission(permissions::DIG_PLACE)?;
                 // TODO check whether the current item can dig this block, and whether
                 // it's been long enough since the last dig
                 let coord: BlockCoordinate = dig_message
@@ -994,6 +1002,7 @@ impl InboundWorker {
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::Tap(tap_message)) => {
+                self.check_player_permission(permissions::TAP_INTERACT)?;
                 let coord: BlockCoordinate = tap_message
                     .block_coord
                     .as_ref()
@@ -1021,15 +1030,19 @@ impl InboundWorker {
                 error!("Client bug check: {:?}", bug_check);
             }
             Some(proto::stream_to_server::ClientMessage::Place(place_message)) => {
+                self.check_player_permission(permissions::DIG_PLACE)?;
                 self.handle_place(place_message).await?;
             }
             Some(proto::stream_to_server::ClientMessage::Inventory(inventory_message)) => {
+                self.check_player_permission(permissions::INVENTORY)?;
                 self.handle_inventory_action(inventory_message).await?;
             }
             Some(proto::stream_to_server::ClientMessage::PopupResponse(response)) => {
+                self.check_player_permission(permissions::INVENTORY)?;
                 self.handle_popup_response(response).await?;
             }
             Some(proto::stream_to_server::ClientMessage::InteractKey(interact_key)) => {
+                self.check_player_permission(permissions::TAP_INTERACT)?;
                 self.handle_interact_key(interact_key).await?;
             }
             Some(proto::stream_to_server::ClientMessage::ChatMessage(message)) => {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use perovskite_core::chat::ChatMessage;
+use perovskite_core::{chat::ChatMessage, constants::permissions};
 use tokio::{sync::broadcast, task::block_in_place};
 
 use self::commands::CommandManager;
@@ -9,7 +9,7 @@ use super::{
     event::{EventInitiator, HandlerContext},
     GameState,
 };
-use anyhow::Result;
+use anyhow::{Result, bail};
 pub struct ChatState {
     pub(crate) broadcast_messages: broadcast::Sender<ChatMessage>,
     pub(crate) command_manager: CommandManager,
@@ -34,6 +34,9 @@ impl ChatState {
             self.handle_slash_command(initiator, game_state, message)
                 .await
         } else {
+            if !initiator.check_permission_if_player(permissions::CHAT) {
+                bail!("You do not have permission to chat");
+            }
             let message = match initiator {
                 EventInitiator::Player(p) => {
                     ChatMessage::new(format!("<{}>", p.player.name()), message)

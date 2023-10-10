@@ -1,16 +1,15 @@
 use anyhow::Result;
+use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
 use perovskite_core::protocol::items::ItemStack;
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
-use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 
-use parking_lot::{MutexGuard};
+use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
-
 
 use crate::game_state::items::InventoryViewManager;
 use crate::game_state::{GameAction, InventoryAction};
@@ -50,9 +49,11 @@ pub(crate) struct EguiUi {
     pub(crate) inventory_manipulation_view_id: Option<u64>,
     last_mouse_position: egui::Pos2,
     stack_carried_by_mouse_offset: (f32, f32),
+    allow_inventory_interaction: bool,
+    allow_button_interaction: bool,
 
     chat_message_input: String,
-    chat_scroll_counter: usize
+    chat_scroll_counter: usize,
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -76,13 +77,18 @@ impl EguiUi {
             inventory_manipulation_view_id: None,
             last_mouse_position: egui::Pos2 { x: 0., y: 0. },
             stack_carried_by_mouse_offset: (0., 0.),
+            allow_inventory_interaction: true,
+            allow_button_interaction: true,
 
             chat_message_input: String::new(),
-            chat_scroll_counter: 0
+            chat_scroll_counter: 0,
         }
     }
     pub(crate) fn wants_user_events(&self) -> bool {
-        self.inventory_open || !self.visible_popups.is_empty() || self.pause_menu_open || self.chat_open
+        self.inventory_open
+            || !self.visible_popups.is_empty()
+            || self.pause_menu_open
+            || self.chat_open
     }
     pub(crate) fn open_inventory(&mut self) {
         self.inventory_open = true;
@@ -93,6 +99,12 @@ impl EguiUi {
     pub(crate) fn open_chat(&mut self) {
         self.chat_open = true;
         self.chat_force_request_focus = true;
+    }
+    pub(crate) fn set_allow_inventory_interaction(&mut self, allow: bool) {
+        self.allow_inventory_interaction = allow;
+    }
+    pub(crate) fn set_allow_button_interaction(&mut self, allow: bool) {
+        self.allow_button_interaction = allow;
     }
     pub(crate) fn open_chat_slash(&mut self) {
         self.chat_open = true;
@@ -216,8 +228,16 @@ impl EguiUi {
                         }
                         Some(proto::ui_element::Element::Button(button_def)) => {
                             let button = egui::Button::new(button_def.label.clone());
-                            if ui.add_enabled(button_def.enabled, button).clicked() {
-                                clicked_button = Some(button_def.key.clone());
+                            if ui
+                                .add_enabled(
+                                    button_def.enabled && self.allow_button_interaction,
+                                    button,
+                                )
+                                .clicked()
+                            {
+                                if self.allow_button_interaction {
+                                    clicked_button = Some(button_def.key.clone());
+                                }
                             }
                         }
                         Some(proto::ui_element::Element::Inventory(inventory)) => {
@@ -381,7 +401,7 @@ impl EguiUi {
 
                 let frame_response = ui.put(frame_rect, frame_image);
 
-                if frame_response.clicked() {
+                if frame_response.clicked() && self.allow_inventory_interaction {
                     clicked_index = Some((index, InvClickType::LeftClick));
                     self.stack_carried_by_mouse_offset = (-frame_size.x / 2., -frame_size.y / 2.)
                 } else if frame_response.clicked_by(egui::PointerButton::Secondary) {
@@ -575,7 +595,8 @@ impl EguiUi {
                         self.chat_force_cursor_to_end = false;
                         let id = editor.id;
                         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
-                            let ccursor = egui::text::CCursor::new(self.chat_message_input.chars().count());
+                            let ccursor =
+                                egui::text::CCursor::new(self.chat_message_input.chars().count());
                             state.set_ccursor_range(Some(egui::text::CCursorRange::one(ccursor)));
                             state.store(ui.ctx(), id);
                             ui.ctx().memory_mut(|m| m.request_focus(id)); // give focus back to the `TextEdit`.
@@ -586,8 +607,11 @@ impl EguiUi {
                         && !self.chat_message_input.trim().is_empty()
                     {
                         // If this is failing to unwrap, we have pretty serious problems and may as well crash
-                        client_state.actions.blocking_send(GameAction::ChatMessage(self.chat_message_input.clone())).unwrap();
-                        
+                        client_state
+                            .actions
+                            .blocking_send(GameAction::ChatMessage(self.chat_message_input.clone()))
+                            .unwrap();
+
                         self.chat_message_input.clear();
                     } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.chat_message_input.clear();
@@ -647,7 +671,9 @@ fn format_chat(message: &ChatMessage) -> (egui::RichText, egui::RichText) {
             "[{} seconds ago] {}",
             message.timestamp().elapsed().as_secs(),
             message.origin()
-        )).color(Color32::from_rgb(color.0, color.1, color.2)).size(16.0),
+        ))
+        .color(Color32::from_rgb(color.0, color.1, color.2))
+        .size(16.0),
         egui::RichText::strong(message.text().into()).size(16.0),
     )
 }

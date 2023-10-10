@@ -49,15 +49,11 @@ impl Default for GameBehaviors {
             make_inventory_popup: Box::new(defaults::DefaultInventoryPopupProvider),
             day_length: Duration::from_secs(24 * 60),
             defined_permissions: ALL_PERMISSIONS.iter().map(|x| x.to_string()).collect(),
-            default_permissions: HashSet::from([
-                DIG_PLACE.to_string(),
-                PUNCH.to_string(),
-                FAST_MOVE.to_string(),
-                LOG_IN.to_string(),
-            ]),
-            // TODO clean these up - for testing only
-            // TODO find a way to give the initial player administrative permissions
-            ambient_permissions: HashSet::from([CREATIVE.to_string(), GRANT.to_string()]),
+            // All permissions are granted until the game is more polished.
+            // In particular, we need to ensure that players don't spawn underground, and that
+            // we have a way to bootstrap administrative permissions.
+            default_permissions: ALL_PERMISSIONS.iter().map(|x| x.to_string()).collect(),
+            ambient_permissions: HashSet::from([]),
         }
     }
 }
