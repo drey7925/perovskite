@@ -5,9 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::game_state::{
+use crate::{game_state::{
     chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
-};
+}, net_client::{MIN_PROTOCOL_VERSION, MAX_PROTOCOL_VERSION}};
 use anyhow::Result;
 use cgmath::{vec3, InnerSpace};
 use futures::StreamExt;
@@ -31,6 +31,9 @@ pub(crate) async fn make_contexts(
     tx_send: mpsc::Sender<StreamToServer>,
     stream: Streaming<StreamToClient>,
     action_receiver: mpsc::Receiver<GameAction>,
+    // Not yet used, only one protocol version is supported
+    protocol_version: u32,
+    initial_state_notification: Arc<tokio::sync::Notify>
 ) -> Result<(InboundContext, OutboundContext)> {
     let cancellation = client_state.shutdown.clone();
 
@@ -61,6 +64,8 @@ pub(crate) async fn make_contexts(
         neighbor_propagators: neighbor_propagators.clone(),
         neighbor_propagator_handles,
         snappy_helper: SnappyDecodeHelper::new(),
+        protocol_version,
+        initial_state_notification
     };
 
     let outbound = OutboundContext {
@@ -73,6 +78,7 @@ pub(crate) async fn make_contexts(
         last_pos_update_seq: None,
         mesh_workers,
         neighbor_propagators,
+        protocol_version,
     };
 
     Ok((inbound, outbound))
@@ -92,6 +98,8 @@ pub(crate) struct OutboundContext {
     // Used only for pacing
     mesh_workers: Vec<Arc<MeshWorker>>,
     neighbor_propagators: Vec<Arc<NeighborPropagator>>,
+
+    protocol_version: u32,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
@@ -236,16 +244,6 @@ impl OutboundContext {
     }
 
     pub(crate) async fn run_outbound_loop(&mut self) -> Result<()> {
-        self.outbound_tx
-            .send(StreamToServer {
-                sequence: 0,
-                client_tick: 0,
-                client_message: Some(rpc::stream_to_server::ClientMessage::ClientInitialReady(
-                    rpc::Nop {},
-                )),
-            })
-            .await?;
-
         let mut position_tx_timer = tokio::time::interval(Duration::from_secs_f64(0.1));
         position_tx_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         while !self.cancellation.is_cancelled() {
@@ -292,6 +290,9 @@ pub(crate) struct InboundContext {
         futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
 
     snappy_helper: SnappyDecodeHelper,
+    protocol_version: u32,
+
+    initial_state_notification: Arc<tokio::sync::Notify>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
@@ -485,6 +486,9 @@ impl InboundContext {
                     rpc::ClientBugCheck {
                         description,
                         backtrace: backtrace::Backtrace::force_capture().to_string(),
+                        protocol_version: self.protocol_version,
+                        min_protocol_version: MIN_PROTOCOL_VERSION,
+                        max_protocol_version: MAX_PROTOCOL_VERSION,
                     },
                 )),
             })
@@ -618,57 +622,8 @@ impl InboundContext {
         Ok(())
     }
 
-    async fn handle_client_state_update(
-        &mut self,
-        state_update: &rpc::SetClientState,
-    ) -> Result<()> {
-        let position = state_update
-            .position
-            .as_ref()
-            .and_then(|x| x.position.clone());
-        {
-            let mut physics_lock = self.client_state.physics_state.lock();
-
-            if let Some(pos_vector) = position {
-                physics_lock.set_position(pos_vector.try_into()?);
-            }
-            physics_lock.update_permissions(&state_update.permission, &self.client_state);
-        }
-        {
-            let mut egui_lock = self.client_state.egui.lock();
-            egui_lock.inventory_view = state_update.inventory_popup.clone();
-            egui_lock.inventory_manipulation_view_id =
-                Some(state_update.inventory_manipulation_view);
-            egui_lock.set_allow_inventory_interaction(
-                state_update
-                    .permission
-                    .iter()
-                    .any(|p| p == permissions::INVENTORY),
-            )
-        }
-        {
-            let mut tc_lock = self.client_state.tool_controller.lock();
-            tc_lock.update_permissions(&state_update.permission);
-        }
-        {
-            let mut hud_lock = self.client_state.hud.lock();
-            hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);
-            hud_lock.invalidate_hotbar();
-        }
-
-        {
-            let mut time_lock = self.client_state.light_cycle.lock();
-            time_lock
-                .time_state_mut()
-                .set_time(state_update.time_of_day);
-            time_lock
-                .time_state_mut()
-                .set_day_length(Duration::from_secs_f64(state_update.day_length_sec));
-        }
-
-        // TODO continue here with permissions - once permissions are received, apply them to the
-        // relevant subsystems for a consistent client-side experience.
-
-        Ok(())
+    async fn handle_client_state_update(&mut self, state_update: &rpc::SetClientState) -> Result<()> {
+        self.initial_state_notification.notify_one();
+        self.client_state.handle_server_update(state_update)
     }
 }

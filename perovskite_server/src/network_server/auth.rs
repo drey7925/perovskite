@@ -16,17 +16,17 @@
 
 use std::{sync::Arc, u8};
 
+use opaque_ke::{
+    CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
+    ServerLogin, ServerLoginStartParameters, ServerLoginStartResult, ServerRegistration,
+    ServerSetup,
+};
 use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
     protocol::game_rpc::{
         stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StreamToClient,
         StreamToServer,
     },
-};
-use opaque_ke::{
-    CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
-    ServerLogin, ServerLoginStartParameters, ServerLoginStartResult, ServerRegistration,
-    ServerSetup,
 };
 use rand::rngs::OsRng;
 use tokio::sync::mpsc;
@@ -38,6 +38,12 @@ fn db_key_from_username(username: &str) -> Vec<u8> {
     key_builder.append(&mut b"user_auth_opaque_".to_vec());
     key_builder.append(&mut hex::encode(username).as_bytes().to_vec());
     KeySpace::UserMeta.make_key(&key_builder)
+}
+
+pub(crate) struct AuthOutcome {
+    pub username: String,
+    pub min_protocol_version: u32,
+    pub max_protocol_version: u32,
 }
 
 pub struct AuthService {
@@ -182,7 +188,7 @@ impl AuthService {
         &self,
         inbound: &mut tonic::Streaming<StreamToServer>,
         outbound: &mpsc::Sender<tonic::Result<StreamToClient>>,
-    ) -> tonic::Result<String> {
+    ) -> tonic::Result<AuthOutcome> {
         match inbound.message().await {
             Ok(Some(StreamToServer {
                 client_message: Some(ClientMessage::StartAuthentication(req)),
@@ -192,11 +198,19 @@ impl AuthService {
                 if req.register {
                     self.do_registration_flow(&req.opaque_request, &username, inbound, outbound)
                         .await?;
-                    Ok(username)
+                    Ok(AuthOutcome {
+                        username,
+                        min_protocol_version: req.min_protocol_version,
+                        max_protocol_version: req.max_protocol_version,
+                    })
                 } else {
                     self.do_login_flow(&req.opaque_request, &username, inbound, outbound)
                         .await?;
-                    Ok(username)
+                    Ok(AuthOutcome {
+                        username,
+                        min_protocol_version: req.min_protocol_version,
+                        max_protocol_version: req.max_protocol_version,
+                    })
                 }
             }
             Ok(Some(_)) => Err(tonic::Status::unauthenticated(
@@ -236,14 +250,6 @@ impl AuthService {
                 ..
             }) => {
                 self.finish_registration(username, &data)?;
-                outbound
-                    .send(Ok(StreamToClient {
-                        tick: 0,
-                        server_message: Some(ServerMessage::AuthSuccess(Nop {})),
-                    }))
-                    .await
-                    .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
-
                 Ok(())
             }
             Some(_) => Err(tonic::Status::unauthenticated(
@@ -284,13 +290,6 @@ impl AuthService {
                 ..
             }) => {
                 self.finish_login(login_state, &data)?;
-                outbound
-                    .send(Ok(StreamToClient {
-                        tick: 0,
-                        server_message: Some(ServerMessage::AuthSuccess(Nop {})),
-                    }))
-                    .await
-                    .map_err(|_| tonic::Status::unavailable("Error sending success message to client"))?;
                 Ok(())
             }
             Some(_) => Err(tonic::Status::unauthenticated(

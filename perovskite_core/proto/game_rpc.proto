@@ -151,7 +151,7 @@ message StreamToClient {
     // The server->client message sent as part of login in the OPAQUE protocol
     bytes server_login_response = 151;
     // Indicates that authentication is successful
-    Nop auth_success = 152;
+    AuthSuccess auth_success = 152;
     // Indicates that the server is about to shut down (e.g. crash, admin-initiated shutdown)
     // or that the connection is about to shut down (e.g. user being kicked)
     string shutdown_message = 153;
@@ -233,6 +233,9 @@ message MapChunkUnsubscribe {
 message ClientBugCheck {
   string description = 1;
   string backtrace = 2;
+  uint32 protocol_version = 3;
+  uint32 min_protocol_version = 4;
+  uint32 max_protocol_version = 5;
 }
 
 message ClientPacing {
@@ -283,6 +286,10 @@ message SetClientState {
   repeated string permission = 7;
 }
 
+message AuthSuccess {
+  uint32 effective_protocol_version = 1;
+}
+
 message StartAuth {
   // The username to authenticate as
   string username = 1;
@@ -293,7 +300,21 @@ message StartAuth {
   // registration flow. Otherwise, the first client->server message in the
   // OPAQUE login flow.
   bytes opaque_request = 3;
+
+  // The version of the game protocol being used.
+  // This is used as a compatibility check.
+  //
+  // Clients signal the protocol version, servers either accept it or reject it,
+  // possibly changing behavior when a mismatch can be easily handled.
+  //
+  // Changelog of important and recent protcol versions:
+  // 1 - 2023-10-10 (commit hash 1e63a10bd9d6aab96dc4d0379d52085a9c2052a8)
+  //        * Server sends set of client-relevant permissions to the client
+  //        * Client and server send protocol versions to each other
+  uint32 min_protocol_version = 4;
+  uint32 max_protocol_version = 5;
 }
+
 
 // Chat message to be shown on the client.
 message ChatMessage {

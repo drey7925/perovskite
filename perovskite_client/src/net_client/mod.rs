@@ -17,10 +17,9 @@
 use std::{sync::Arc, time::Duration};
 
 use self::client_context::*;
-use anyhow::{bail, Context, Error, Result};
+use anyhow::{bail, Error, Result};
 
 use arc_swap::ArcSwap;
-use image::DynamicImage;
 use opaque_ke::{
     ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
     RegistrationResponse,
@@ -49,6 +48,9 @@ use crate::{
 
 mod client_context;
 pub(crate) mod mesh_worker;
+
+const MIN_PROTOCOL_VERSION: u32 = 1;
+const MAX_PROTOCOL_VERSION: u32 = 1;
 
 async fn connect_grpc(
     server_addr: String,
@@ -79,8 +81,23 @@ pub(crate) async fn connect_game(
     let request = Request::new(ReceiverStream::new(tx_recv));
     let mut stream = connection.game_stream(request).await?.into_inner();
     progress.send((0.2, "Logging into server...".to_string()))?;
-    do_auth_handshake(&tx_send, &mut stream, username, password, register).await?;
 
+    let protocol_version =
+        do_auth_handshake(&tx_send, &mut stream, username, password, register).await?;
+
+    if protocol_version < MIN_PROTOCOL_VERSION {
+        bail!(
+            "Client is too new to handle protocol version {}",
+            protocol_version
+        )
+    }
+    if protocol_version > MAX_PROTOCOL_VERSION {
+        bail!(
+            "Client is too old to handle protocol version {}",
+            protocol_version
+        )
+    }
+    log::info!("Protocol version: {}", protocol_version);
     log::info!("Connection to {} established.", &server_addr);
 
     progress.send((0.3, "Fetching media list...".to_string()))?;
@@ -106,16 +123,15 @@ pub(crate) async fn connect_game(
 
     progress.send((0.5, "Loading block textures...".to_string()))?;
 
-    let block_types = Arc::new(ClientBlockTypeManager::new(
-        block_defs_proto.into_inner().block_types,
-    )?);
+    let block_types = Arc::new(tokio::task::block_in_place(|| {
+        ClientBlockTypeManager::new(block_defs_proto.into_inner().block_types)
+    })?);
 
     progress.send((0.6, "Setting up block renderer...".to_string()))?;
     let block_renderer = {
         let mut cache_manager_lock = cache_manager.lock();
         BlockRenderer::new(block_types.clone(), &mut cache_manager_lock, window).await?
     };
-        
 
     progress.send((0.7, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
@@ -138,10 +154,6 @@ pub(crate) async fn connect_game(
     )
     .await?;
 
-    // TODO clean up this hacky cloning of the context.
-    // We need to clone it to start up the game ui without running into borrow checker issues,
-    // since it provides access to the allocators.
-
     let (action_sender, action_receiver) = mpsc::channel(4);
     let client_state = Arc::new(ClientState::new(
         settings,
@@ -152,9 +164,25 @@ pub(crate) async fn connect_game(
         egui,
         block_renderer,
     ));
-
-    let (mut inbound, mut outbound) =
-        make_contexts(client_state.clone(), tx_send, stream, action_receiver).await?;
+    tx_send
+        .send(StreamToServer {
+            sequence: 0,
+            client_tick: 0,
+            client_message: Some(rpc::stream_to_server::ClientMessage::ClientInitialReady(
+                rpc::Nop {},
+            )),
+        })
+        .await?;
+    let initial_state_notification = Arc::new(tokio::sync::Notify::new());
+    let (mut inbound, mut outbound) = make_contexts(
+        client_state.clone(),
+        tx_send,
+        stream,
+        action_receiver,
+        protocol_version,
+        initial_state_notification.clone(),
+    )
+    .await?;
     // todo track exit status and catch errors?
     // Right now we just print a panic message, but don't actually exit because of it
     tokio::spawn(async move {
@@ -163,6 +191,9 @@ pub(crate) async fn connect_game(
             Err(e) => log::error!("Inbound loop crashed: {e:?}"),
         }
     });
+    
+    progress.send((0.9, "Waiting for initial game state...".to_string()))?;
+    initial_state_notification.notified().await;
     tokio::spawn(async move {
         match outbound.run_outbound_loop().await {
             Ok(_) => log::info!("Outbound loop shut down normally"),
@@ -187,7 +218,7 @@ async fn do_auth_handshake(
     username: String,
     password: String,
     register: bool,
-) -> Result<()> {
+) -> Result<u32> {
     if register {
         do_register_handshake(tx, rx, username, normalize_password(password)).await
     } else {
@@ -200,7 +231,7 @@ async fn do_register_handshake(
     rx: &mut Streaming<StreamToClient>,
     username: String,
     password: String,
-) -> Result<()> {
+) -> Result<u32> {
     let mut client_rng = OsRng;
     let client_state = opaque_ke::ClientRegistration::<PerovskiteOpaqueAuth>::start(
         &mut client_rng,
@@ -214,6 +245,8 @@ async fn do_register_handshake(
             username,
             register: true,
             opaque_request: client_state.message.serialize().to_vec(),
+            min_protocol_version: MIN_PROTOCOL_VERSION,
+            max_protocol_version: MIN_PROTOCOL_VERSION,
         })),
     })
     .await?;
@@ -250,9 +283,9 @@ async fn do_register_handshake(
     .await?;
     match rx.message().await? {
         Some(StreamToClient {
-            server_message: Some(ServerMessage::AuthSuccess(_)),
+            server_message: Some(ServerMessage::AuthSuccess(success)),
             ..
-        }) => Ok(()),
+        }) => Ok(success.effective_protocol_version),
         Some(x) => {
             bail!("Server sent an unexpected message instead of confirming auth success: {x:?}")
         }
@@ -265,7 +298,7 @@ async fn do_login_handshake(
     rx: &mut Streaming<StreamToClient>,
     username: String,
     password: String,
-) -> Result<()> {
+) -> Result<u32> {
     let mut client_rng = OsRng;
     let client_state =
         opaque_ke::ClientLogin::<PerovskiteOpaqueAuth>::start(&mut client_rng, password.as_bytes())
@@ -277,6 +310,8 @@ async fn do_login_handshake(
             username,
             register: false,
             opaque_request: client_state.message.serialize().to_vec(),
+            min_protocol_version: MIN_PROTOCOL_VERSION,
+            max_protocol_version: MAX_PROTOCOL_VERSION,
         })),
     })
     .await?;
@@ -313,9 +348,9 @@ async fn do_login_handshake(
 
     match rx.message().await? {
         Some(StreamToClient {
-            server_message: Some(ServerMessage::AuthSuccess(_)),
+            server_message: Some(ServerMessage::AuthSuccess(success)),
             ..
-        }) => Ok(()),
+        }) => Ok(success.effective_protocol_version),
         Some(x) => {
             bail!("Server sent an unexpected message instead of confirming auth success: {x:?}")
         }

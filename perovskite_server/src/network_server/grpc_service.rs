@@ -16,10 +16,13 @@
 
 use std::{pin::Pin, sync::Arc};
 
+use anyhow::{bail, ensure};
 use perovskite_core::protocol::game_rpc::perovskite_game_server::PerovskiteGame;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::stream_to_server::ClientMessage;
-use perovskite_core::protocol::game_rpc::{self as proto, StreamToClient, StreamToServer};
+use perovskite_core::protocol::game_rpc::{
+    self as proto, AuthSuccess, StreamToClient, StreamToServer,
+};
 
 use log::{error, info, warn};
 use tokio::sync::mpsc;
@@ -148,14 +151,19 @@ async fn game_stream_impl(
     mut inbound_rx: tonic::Streaming<StreamToServer>,
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> anyhow::Result<()> {
-    let username = match game_state
+    let auth_outcome = match game_state
         .auth()
         .do_auth_flow(&mut inbound_rx, &outbound_tx)
         .await
     {
-        Ok(x) => {
-            log::info!("Player {} successfully authenticated", x);
-            x
+        Ok(outcome) => {
+            log::info!(
+                "Player {} successfully authenticated, protocol range {}..={}",
+                outcome.username,
+                outcome.min_protocol_version,
+                outcome.max_protocol_version
+            );
+            outcome
         }
         Err(e) => {
             log::error!("Player failed to authenticate: {e:?}");
@@ -165,22 +173,47 @@ async fn game_stream_impl(
                 .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
         }
     };
-    let (player_context, player_event_receiver) =
-        match game_state.player_manager().clone().connect(&username) {
-            Ok(x) => x,
-            Err(e) => {
-                log::error!("Failed to establish player context: {:?}", e);
-                outbound_tx
-                    .send(Ok(StreamToClient {
-                        tick: 0,
-                        server_message: Some(ServerMessage::ShutdownMessage(
-                            format!("Failed to establish player context: {e:?}"),
-                        )),
-                    }))
-                    .await?;
-                return Err(Status::internal("Failed to establish player context").into());
-            }
-        };
+    
+    const SERVER_MIN_PROTCOL_VERSION: u32 = 1;
+    const SERVER_MAX_PROTCOL_VERSION: u32 = 1;
+
+    if SERVER_MIN_PROTCOL_VERSION > auth_outcome.max_protocol_version {
+        bail!("Client is too old");
+    } else if SERVER_MAX_PROTCOL_VERSION < auth_outcome.min_protocol_version {
+        bail!("Client is too new");
+    }
+    let effective_min_protocol = SERVER_MIN_PROTCOL_VERSION.max(auth_outcome.min_protocol_version);
+    let effective_max_protocol = SERVER_MAX_PROTCOL_VERSION.min(auth_outcome.max_protocol_version);
+    ensure!(effective_min_protocol <= effective_max_protocol);
+
+    outbound_tx
+        .send(Ok(StreamToClient {
+            tick: 0,
+            server_message: Some(ServerMessage::AuthSuccess(AuthSuccess {
+                effective_protocol_version: effective_max_protocol,
+            })),
+        }))
+        .await?;
+
+    let (player_context, player_event_receiver) = match game_state
+        .player_manager()
+        .clone()
+        .connect(&auth_outcome.username)
+    {
+        Ok(x) => x,
+        Err(e) => {
+            log::error!("Failed to establish player context: {:?}", e);
+            outbound_tx
+                .send(Ok(StreamToClient {
+                    tick: 0,
+                    server_message: Some(ServerMessage::ShutdownMessage(format!(
+                        "Failed to establish player context: {e:?}"
+                    ))),
+                }))
+                .await?;
+            return Err(Status::internal("Failed to establish player context").into());
+        }
+    };
 
     // Wait for the initial ready message from the client
     match inbound_rx.message().await? {
@@ -191,7 +224,7 @@ async fn game_stream_impl(
             // all OK
             log::info!(
                 "Client for {} reports ready; starting up client's context on server",
-                username
+                auth_outcome.username
             );
         }
         Some(_) => {
@@ -219,6 +252,7 @@ async fn game_stream_impl(
         player_event_receiver,
         inbound_rx,
         outbound_tx.clone(),
+        effective_max_protocol,
     )
     .await
     {

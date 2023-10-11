@@ -128,6 +128,7 @@ pub(crate) async fn make_client_contexts(
     player_event_receiver: PlayerEventReceiver,
     inbound_rx: tonic::Streaming<proto::StreamToServer>,
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    effective_protocol_version: u32,
 ) -> Result<PlayerCoroutinePack> {
     let id = CLIENT_CONTEXT_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -160,6 +161,7 @@ pub(crate) async fn make_client_contexts(
         player_context,
         id,
         cancellation,
+        effective_protocol_version
     });
 
     let inbound_worker = InboundWorker {
@@ -313,6 +315,7 @@ pub struct SharedContext {
     player_context: Arc<PlayerContext>,
     id: usize,
     cancellation: CancellationToken,
+    effective_protocol_version: u32,
 }
 impl Drop for SharedContext {
     fn drop(&mut self) {

@@ -22,6 +22,7 @@ use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{Deg, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
+use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use log::warn;
@@ -29,7 +30,7 @@ use parking_lot::{Mutex, RwLockReadGuard};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use perovskite_core::protocol;
-use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
+use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch, SetClientState};
 use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
@@ -534,6 +535,53 @@ impl ClientState {
 
     pub(crate) fn cancel_requested(&self) -> bool {
         self.shutdown.is_cancelled()
+    }
+
+    pub(crate) fn handle_server_update(&self, state_update: &SetClientState) -> Result<()> {
+        let position = state_update
+            .position
+            .as_ref()
+            .and_then(|x| x.position.clone());
+        {
+            let mut physics_lock = self.physics_state.lock();
+
+            if let Some(pos_vector) = position {
+                physics_lock.set_position(pos_vector.try_into()?);
+            }
+            physics_lock.update_permissions(&state_update.permission, self);
+        }
+        {
+            let mut egui_lock = self.egui.lock();
+            egui_lock.inventory_view = state_update.inventory_popup.clone();
+            egui_lock.inventory_manipulation_view_id =
+                Some(state_update.inventory_manipulation_view);
+            egui_lock.set_allow_inventory_interaction(
+                state_update
+                    .permission
+                    .iter()
+                    .any(|p| p == permissions::INVENTORY),
+            )
+        }
+        {
+            let mut tc_lock = self.tool_controller.lock();
+            tc_lock.update_permissions(&state_update.permission);
+        }
+        {
+            let mut hud_lock = self.hud.lock();
+            hud_lock.hotbar_view_id = Some(state_update.hotbar_inventory_view);
+            hud_lock.invalidate_hotbar();
+        }
+
+        {
+            let mut time_lock = self.light_cycle.lock();
+            time_lock
+                .time_state_mut()
+                .set_time(state_update.time_of_day);
+            time_lock
+                .time_state_mut()
+                .set_day_length(Duration::from_secs_f64(state_update.day_length_sec));
+        }
+        Ok(())
     }
 }
 
