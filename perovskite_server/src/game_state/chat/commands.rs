@@ -1,7 +1,6 @@
 use std::{collections::HashMap, panic::AssertUnwindSafe};
 
 use anyhow::{bail, Result};
-use futures::FutureExt;
 use itertools::Itertools;
 use perovskite_core::{
     chat::ChatMessage,
@@ -68,7 +67,7 @@ impl CommandManager {
             ChatCommand {
                 action: Box::new(ElevateCommandImpl),
                 help_text:
-                    "<permission>: Temporarily grant yourself the given permission, if eligible."
+                    "[permission]: Temporarily grant yourself the given permission, if eligible. If no permission specified, list eligible permissions."
                         .to_string(),
             },
         );
@@ -286,31 +285,61 @@ impl ChatCommandHandler for ElevateCommandImpl {
         };
 
         // todo allow a timeout to be set
-        if params.len() != 2 {
-            bail!("Incorrect usage: should be /elevate clear or /elevate <permission>");
-        }
-        if params[1] == "clear" {
-            player_initiator.player.clear_temporary_permissions()?;
-            context
-                .initiator
-                .send_chat_message(ChatMessage::new_server_message(
-                    "Temporary permissions cleared",
-                ))
-                .await?;
-        } else {
-            let permission_to_check = ELIGIBLE_PREFIX.to_string() + params[1];
-            if !player_initiator.player.has_permission(&permission_to_check) {
-                bail!("Not eligible to sudo this permission");
+        match params.len() {
+            1 => {
+                let eligible = player_initiator
+                    .player
+                    .effective_permissions()
+                    .iter()
+                    .filter_map(|x| x.strip_prefix(ELIGIBLE_PREFIX))
+                    .join(", ");
+                if eligible.is_empty() {
+                    context
+                        .initiator()
+                        .send_chat_message(ChatMessage::new_server_message(
+                            "You are not eligible for any permissions",
+                        ))
+                        .await?;
+                } else {
+                    context
+                        .initiator()
+                        .send_chat_message(ChatMessage::new_server_message(format!(
+                            "You are eligible for the following permissions: {}",
+                            eligible
+                        )))
+                        .await;
+                }
             }
-            player_initiator
-                .player
-                .grant_temporary_permission(&params[1])?;
-            context
-                .initiator
-                .send_chat_message(ChatMessage::new_server_message(
-                    "Temporary permission granted",
-                ))
-                .await?;
+            2 => {
+                if params[1] == "clear" {
+                    player_initiator.player.clear_temporary_permissions()?;
+                    context
+                        .initiator
+                        .send_chat_message(ChatMessage::new_server_message(
+                            "Temporary permissions cleared",
+                        ))
+                        .await?;
+                } else {
+                    let permission_to_check = ELIGIBLE_PREFIX.to_string() + params[1];
+                    if !player_initiator.player.has_permission(&permission_to_check) {
+                        bail!("Not eligible to sudo this permission");
+                    }
+                    player_initiator
+                        .player
+                        .grant_temporary_permission(&params[1])?;
+                    context
+                        .initiator
+                        .send_chat_message(ChatMessage::new_server_message(
+                            "Temporary permission granted",
+                        ))
+                        .await?;
+                }
+            }
+            _ => {
+                bail!(
+                    "Incorrect usage: should be /elevate, /elevate clear, or /elevate <permission>"
+                );
+            }
         }
 
         Ok(())
@@ -377,7 +406,7 @@ impl ChatCommandHandler for ListPermissionsImpl {
                             Ok(ChatMessage::new_server_message(message))
                         })?;
                 context.initiator.send_chat_message(message).await?;
-            },
+            }
             _ => {
                 bail!("Incorrect usage: should be /permissions <playername> or /permissions");
             }
