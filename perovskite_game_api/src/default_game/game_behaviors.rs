@@ -8,17 +8,15 @@ use perovskite_server::game_state::{
     items::{Item, ItemStack},
     GameState,
 };
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use super::{recipes::RecipeBook, DefaultGameBuilder};
 
 pub(crate) fn register_game_behaviors(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     let recipe_book = game_builder.crafting_recipes.clone();
-    game_builder
-        .inner
-        .inner
-        .game_behaviors_mut()
-        .make_inventory_popup = Box::new(DefaultGameInventoryPopupProvider { recipe_book });
+    let behaviors = game_builder.inner.inner.game_behaviors_mut();
+    behaviors.make_inventory_popup = Box::new(DefaultGameInventoryPopupProvider { recipe_book });
+    behaviors.super_users = game_builder.settings.super_users.iter().cloned().collect();
 
     Ok(())
 }
@@ -147,11 +145,11 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                                     }
                                 }
                             }
-                        },
+                        }
                         "left" => {
                             let mut lock = creative_state_for_update.write();
                             lock.offset = lock.offset.saturating_sub(32);
-                        },
+                        }
                         "right" => {
                             let mut lock = creative_state_for_update.write();
                             if (lock.offset + 32) < lock.items.len() {

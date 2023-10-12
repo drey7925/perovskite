@@ -90,6 +90,11 @@ impl PlayerCoroutinePack {
     pub(crate) async fn run_all(mut self) -> Result<()> {
         let username = self.context.player_context.name().to_string();
         initialize_protocol_state(&self.context, &self.inbound_worker.outbound_tx).await?;
+        self.context.game_state.game_behaviors().on_player_join.handle(&self.context.player_context, HandlerContext {
+            tick: self.context.game_state.tick(),
+            initiator: EventInitiator::Engine,
+            game_state: self.context.game_state.clone(),
+        }).await?;
 
         tracing::info!("Starting workers for {}...", username);
         crate::spawn_async(&format!("inbound_worker_{}", username), async move {
@@ -782,7 +787,7 @@ fn make_client_state_update_message(
                     time_of_day: time_now,
                     day_length_sec: day_len.as_secs_f64(),
                     permission: player_state
-                        .effective_permissions(&ctx.game_state)
+                        .effective_permissions(&ctx.game_state, ctx.player_context.name())
                         .iter()
                         .cloned()
                         .collect(),
@@ -1631,6 +1636,11 @@ impl MiscOutboundWorker {
                 }
             }
         }
+        self.context.game_state.game_behaviors().on_player_leave.handle(&self.context.player_context, HandlerContext {
+            tick: self.context.game_state.tick(),
+            initiator: EventInitiator::Engine,
+            game_state: self.context.game_state.clone(),
+        }).await?;
         Ok(())
     }
     async fn transmit_chat_message(&mut self, message: ChatMessage) -> Result<()> {

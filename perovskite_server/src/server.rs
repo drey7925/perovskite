@@ -46,10 +46,6 @@ pub struct ServerArgs {
     #[arg(short, long, value_name = "DATA_DIR")]
     data_dir: PathBuf,
 
-    /// If true, the data dir will be created if it doesn't exist.
-    #[arg(long)]
-    create: bool,
-
     /// The interface address to bind to. By default, bind all interfaces.
     #[arg(long)]
     bind_addr: Option<IpAddr>,
@@ -152,6 +148,7 @@ pub struct ServerBuilder {
     args: ServerArgs,
     game_behaviors: GameBehaviors,
     commands: CommandManager,
+    data_dir: PathBuf,
 }
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
@@ -188,6 +185,7 @@ impl ServerBuilder {
             args: args.clone(),
             game_behaviors: Default::default(),
             commands: CommandManager::new(),
+            data_dir: args.data_dir.clone(),
         })
     }
     pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
@@ -247,6 +245,7 @@ impl ServerBuilder {
         blocks.save_to(self.db.as_ref())?;
         let _rt_guard = self.runtime.enter();
         let game_state = GameState::new(
+            self.data_dir,
             self.db,
             blocks,
             self.items,
@@ -263,5 +262,9 @@ impl ServerBuilder {
 
     pub fn game_behaviors_mut(&mut self) -> &mut GameBehaviors {
         &mut self.game_behaviors
+    }
+
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
     }
 }

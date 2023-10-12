@@ -19,22 +19,14 @@ use std::{
 
 use crate::game_builder::GameBuilder;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 
-use async_trait::async_trait;
-use perovskite_core::{
-    chat::{ChatMessage, SERVER_WARNING_COLOR},
-    protocol::items::{self as items_proto, item_def::QuantityType},
-};
-use perovskite_server::game_state::{
-    chat::commands::ChatCommandHandler,
-    event::{EventInitiator, HandlerContext, PlayerInitiator},
-    items::ItemStack,
-};
+use perovskite_core::protocol::items as items_proto;
+use perovskite_server::game_state::items::ItemStack;
 
 use self::{
     mapgen::OreDefinition,
-    recipes::{RecipeBook, RecipeImpl, RecipeSlot},
+    recipes::{RecipeBook, RecipeImpl, RecipeSlot}, game_settings::GameSettings,
 };
 
 /// Blocks defined in the default game.
@@ -77,6 +69,7 @@ pub mod mapgen;
 /// a [GameBuilder].
 pub struct DefaultGameBuilder {
     inner: GameBuilder,
+    settings: GameSettings,
 
     crafting_recipes: Arc<RecipeBook<9, ()>>,
     /// Metadata is number of furnace timer ticks (period given by [`furnace::FURNACE_TICK_DURATION`]) that it takes to smelt this recipe
@@ -120,13 +113,15 @@ impl DefaultGameBuilder {
 
     fn new_with_builtins(
         builder: GameBuilder,
-    ) -> std::result::Result<DefaultGameBuilder, anyhow::Error> {
+    ) -> Result<DefaultGameBuilder> {
+        let data_dir = builder.data_dir().clone();
         let mut builder = DefaultGameBuilder {
             inner: builder,
             crafting_recipes: Arc::new(RecipeBook::new()),
             smelting_recipes: Arc::new(RecipeBook::new()),
             smelting_fuels: Arc::new(RecipeBook::new()),
             ores: Vec::new(),
+            settings: game_settings::load(&data_dir)?,
         };
         register_defaults(&mut builder)?;
         Ok(builder)
@@ -211,3 +206,5 @@ fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
 }
 
 mod commands;
+
+pub mod game_settings;

@@ -38,7 +38,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
-    game_state::inventory::InventoryViewWithContext, network_server::auth::AuthOutcome,
+    game_state::inventory::InventoryViewWithContext,
+    network_server::auth::AuthOutcome,
 };
 
 use super::{
@@ -177,7 +178,7 @@ impl Player {
             .game_behaviors()
             .default_permissions
             .clone()
-            .union(&game_state.game_behaviors().ambient_permissions)
+            .union(&game_state.game_behaviors().ambient_permissions(name))
             .cloned()
             .collect();
 
@@ -254,7 +255,10 @@ impl Player {
     }
 
     fn post_permission_update(&self, mut lock: MutexGuard<'_, PlayerState>) -> Result<()> {
-        let effective_permissions = lock.effective_permissions(&self.game_state).into_iter().collect();
+        let effective_permissions = lock
+            .effective_permissions(&self.game_state, &self.name)
+            .into_iter()
+            .collect();
         lock.inventory_popup = self
             .game_state
             .game_behaviors()
@@ -309,13 +313,15 @@ impl Player {
             || self
                 .game_state
                 .game_behaviors()
-                .ambient_permissions
+                .ambient_permissions(&self.name)
                 .contains(permission)
     }
 
     /// Lists the player's effective permissions (ambient, granted, and temporary)
     pub fn effective_permissions(&self) -> HashSet<String> {
-        self.state.lock().effective_permissions(&self.game_state)
+        self.state
+            .lock()
+            .effective_permissions(&self.game_state, &self.name)
     }
     /// Lists the player's granted permissions (i.e. those stored in the database)
     pub fn granted_permissions(&self) -> HashSet<String> {
@@ -432,7 +438,11 @@ impl PlayerState {
         bail!("View not found");
     }
 
-    pub(crate) fn effective_permissions(&self, game_state: &GameState) -> HashSet<String> {
+    pub(crate) fn effective_permissions(
+        &self,
+        game_state: &GameState,
+        name: &str,
+    ) -> HashSet<String> {
         let mut effective_permissions = HashSet::new();
         for permission in &self.granted_permissions {
             effective_permissions.insert(permission.clone());
@@ -440,7 +450,11 @@ impl PlayerState {
         for permission in &self.temporary_permissions {
             effective_permissions.insert(permission.clone());
         }
-        for permission in &game_state.game_behaviors().ambient_permissions {
+        for permission in game_state
+            .game_behaviors()
+            .ambient_permissions(name)
+            .iter()
+        {
             effective_permissions.insert(permission.clone());
         }
         effective_permissions

@@ -50,6 +50,11 @@ impl ChatState {
             Ok(())
         }
     }
+    /// Sends a chat message to all connected players
+    pub fn broadcast_chat_message(&self, message: ChatMessage) -> Result<()> {
+        self.broadcast_messages.send(message)?;
+        Ok(())
+    }
 
     async fn handle_slash_command(
         &self,

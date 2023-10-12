@@ -37,6 +37,7 @@ use perovskite_core::time::TimeState;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -55,6 +56,7 @@ use self::items::ItemManager;
 use self::player::PlayerManager;
 
 pub struct GameState {
+    data_dir: PathBuf,
     map: Arc<ServerGameMap>,
     mapgen: Arc<dyn MapgenInterface>,
     database: Arc<dyn GameDatabase>,
@@ -73,6 +75,7 @@ pub struct GameState {
 
 impl GameState {
     pub(crate) fn new(
+        data_dir: PathBuf,
         db: Arc<dyn GameDatabase>,
         blocks: Arc<BlockTypeManager>,
         items: ItemManager,
@@ -88,6 +91,7 @@ impl GameState {
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
         let day_length = game_behaviors.day_length;
         Ok(Arc::new_cyclic(|weak| Self {
+            data_dir,
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
             mapgen,
             database: db.clone(),
@@ -196,6 +200,10 @@ impl GameState {
 
     pub(crate) fn subscribe_player_state_resyncs(&self) -> tokio::sync::watch::Receiver<()> {
         self.player_state_resync.subscribe()
+    }
+
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
     }
 }
 

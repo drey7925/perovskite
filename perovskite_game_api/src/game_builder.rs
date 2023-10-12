@@ -213,6 +213,10 @@ impl GameBuilder {
             .media_mut()
             .register_from_memory(tex_name.0, data)
     }
+
+    pub fn data_dir(&self) -> &std::path::PathBuf {
+        self.inner.data_dir()
+    }
 }
 
 /// Convenience helper for including a texture in the source tree into the game.
