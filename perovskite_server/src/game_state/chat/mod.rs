@@ -52,7 +52,8 @@ impl ChatState {
     }
     /// Sends a chat message to all connected players
     pub fn broadcast_chat_message(&self, message: ChatMessage) -> Result<()> {
-        self.broadcast_messages.send(message)?;
+        // Ignore error, since there may be no listeners
+        let _ = self.broadcast_messages.send(message);
         Ok(())
     }
 
