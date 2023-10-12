@@ -161,7 +161,7 @@ pub(crate) async fn make_client_contexts(
         player_context,
         id,
         cancellation,
-        effective_protocol_version
+        effective_protocol_version,
     });
 
     let inbound_worker = InboundWorker {
@@ -966,8 +966,8 @@ impl InboundWorker {
 
     fn check_player_permission(&self, permission: &str) -> Result<()> {
         if !self.context.player_context.has_permission(permission) {
-            return Err(Error::msg("Player does not have permission"))
-        } 
+            return Err(Error::msg("Player does not have permission"));
+        }
         Ok(())
     }
 
@@ -1585,14 +1585,14 @@ impl MiscOutboundWorker {
                     self.context.cancellation.cancel();
                 },
                 _ = resync_player_state_global.changed() => {
-                    let lock = self.context.player_context.player.state.lock();
-                    self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock, false)?)).await?;
+                    let message = make_client_state_update_message(&self.context, self.context.player_context.player.state.lock(), false)?;
+                    self.outbound_tx.send(Ok(message)).await?;
                 },
                 want_location_update = self.player_event_receiver.reinit_player_state.recv() => {
                     match want_location_update {
                         Some(want_location_update) => {
-                            let lock = self.context.player_context.player.state.lock();
-                            self.outbound_tx.send(Ok(make_client_state_update_message(&self.context, lock, want_location_update)?)).await?;
+                            let message = make_client_state_update_message(&self.context, self.context.player_context.player.state.lock(), want_location_update)?;
+                            self.outbound_tx.send(Ok(message)).await?;
                         },
                         None => {
                             tracing::warn!("Reinit player state sender disconnected");

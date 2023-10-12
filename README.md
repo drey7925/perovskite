@@ -89,9 +89,6 @@ Tons of stuff, in no particular order, and not yet prioritized:
 
 * Rendering and display:
     * TBD
-* Game state and interactions:
-    * Chat
-    * Commands
 * Game map
     * Support for falling blocks (e.g. sand)
     * Further optimized APIs
@@ -101,7 +98,6 @@ Tons of stuff, in no particular order, and not yet prioritized:
     * Initial design of non-block entities (e.g. other player characters)
     * TBD based on the initial design
 * Net code
-    * Caching images/resources
     * Testing and optimization for slow WANs
     * Player action validation
     * Adaptive and adjustable chunk load distance
