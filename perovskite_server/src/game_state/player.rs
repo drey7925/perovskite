@@ -187,7 +187,7 @@ impl Player {
             main_inventory_key,
             state: PlayerState {
                 last_position: PlayerPositionUpdate {
-                    position: vec3(5., 10., 5.),
+                    position: (game_state.game_behaviors().spawn_location)(name),
                     velocity: Vector3::zero(),
                     face_direction: (0., 0.),
                 },
@@ -450,11 +450,7 @@ impl PlayerState {
         for permission in &self.temporary_permissions {
             effective_permissions.insert(permission.clone());
         }
-        for permission in game_state
-            .game_behaviors()
-            .ambient_permissions(name)
-            .iter()
-        {
+        for permission in game_state.game_behaviors().ambient_permissions(name).iter() {
             effective_permissions.insert(permission.clone());
         }
         effective_permissions

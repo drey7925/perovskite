@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::Result;
+use cgmath::{vec3, Vector3};
 use perovskite_core::{chat::ChatMessage, constants::permissions::ELIGIBLE_PREFIX};
 use tonic::async_trait;
 
@@ -50,6 +51,8 @@ pub struct GameBehaviors {
 
     pub on_player_join: Box<dyn GenericAsyncHandler<Player, ()>>,
     pub on_player_leave: Box<dyn GenericAsyncHandler<Player, ()>>,
+
+    pub spawn_location: Box<dyn Fn(&str) -> Vector3<f64> + Send + Sync + 'static>,
 }
 impl GameBehaviors {
     pub(crate) fn has_defined_permission(&self, permission: &str) -> bool {
@@ -98,6 +101,7 @@ impl Default for GameBehaviors {
             on_player_leave: Box::new(SendChatMessageHandlerImpl::new(|player: &Player, _| {
                 ChatMessage::new_server_message(format!("{} left the game.", player.name()))
             })),
+            spawn_location: Box::new(|_| vec3(0.0, 30.0, 0.0)),
         }
     }
 }

@@ -5,10 +5,10 @@ use perovskite_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse},
     game_behaviors::InventoryPopupProvider,
     inventory::{InventoryKey, VirtualOutputCallbacks},
-    items::{Item, ItemStack},
+    items::ItemStack,
     GameState,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use super::{recipes::RecipeBook, DefaultGameBuilder};
 
@@ -17,6 +17,10 @@ pub(crate) fn register_game_behaviors(game_builder: &mut DefaultGameBuilder) -> 
     let behaviors = game_builder.inner.inner.game_behaviors_mut();
     behaviors.make_inventory_popup = Box::new(DefaultGameInventoryPopupProvider { recipe_book });
     behaviors.super_users = game_builder.settings.super_users.iter().cloned().collect();
+    {
+        let spawn_location = game_builder.settings.spawn_location.into();
+        behaviors.spawn_location = Box::new(move |_| spawn_location);
+    }
 
     Ok(())
 }

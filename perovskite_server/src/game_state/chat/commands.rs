@@ -307,7 +307,7 @@ impl ChatCommandHandler for ElevateCommandImpl {
                             "You are eligible for the following permissions: {}",
                             eligible
                         )))
-                        .await;
+                        .await?;
                 }
             }
             2 => {
@@ -398,7 +398,7 @@ impl ChatCommandHandler for ListPermissionsImpl {
                                 context
                                     .game_state
                                     .game_behaviors()
-                                    .ambient_permissions
+                                    .ambient_permissions(username)
                                     .iter()
                                     .sorted()
                                     .join(", ")

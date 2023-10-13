@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct GameSettings {
     /// Users that are eligible for all permissions
     pub super_users: Vec<String>,
+    pub spawn_location: (f64, f64, f64),
 }
 
 pub const FILENAME: &str = "settings.ron";
@@ -15,6 +16,9 @@ impl Default for GameSettings {
     fn default() -> Self {
         Self {
             super_users: Vec::new(),
+            // arbitrary, and not always meaningful
+            // todo ask the mapgen?
+            spawn_location: (5.0, 10.0, 5.0),
         }
     }
 }
