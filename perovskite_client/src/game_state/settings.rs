@@ -38,7 +38,7 @@ pub(crate) struct GameSettings {
     pub(crate) render: RenderSettings,
     pub(crate) last_hostname: String,
     pub(crate) last_username: String,
-
+    pub(crate) previous_servers: Vec<String>,
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
@@ -68,6 +68,11 @@ impl GameSettings {
         log::info!("Loaded settings from {}", clean_path(config_file));
         let parsed = ron::from_str(&config)?;
         Ok(Some(parsed))
+    }
+
+    pub(crate) fn push_hostname(&mut self, hostname: String) {
+        self.previous_servers.retain(|h| h != &hostname);
+        self.previous_servers.push(hostname);
     }
 }
 

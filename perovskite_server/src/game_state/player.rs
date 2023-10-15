@@ -31,7 +31,7 @@ use perovskite_core::{
 };
 
 use log::warn;
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -540,7 +540,7 @@ pub struct PlayerManager {
     // and only provide &Player borrows
     //
     // This should probably be cleaned up somehow in the future; current approach seems ugly
-    active_players: Mutex<HashMap<String, Arc<Player>>>,
+    active_players: RwLock<HashMap<String, Arc<Player>>>,
 
     shutdown: CancellationToken,
     writeback: Mutex<Option<JoinHandle<Result<()>>>>,
@@ -557,13 +557,14 @@ impl PlayerManager {
         self: Arc<Self>,
         name: &str,
     ) -> Result<(PlayerContext, PlayerEventReceiver)> {
-        let mut lock = self.active_players.lock();
+        let mut lock = self.active_players.write();
         if lock.contains_key(name) {
             bail!("Player {name} already connected");
         }
 
         let (sender, receiver) = make_event_channels();
-
+        // TODO - optimization: This is IO done under the global player lock
+        // Maybe something like the game map double locks?
         let player = match self.db.get(&Self::db_key(name))? {
             Some(player_proto) => Player::from_server_proto(
                 self.game_state(),
@@ -590,11 +591,11 @@ impl PlayerManager {
     }
 
     /// Runs the given closure on the provided player.
-    pub fn for_connected_player<F, T>(&self, name: &str, closure: F) -> Result<T>
+    pub fn with_connected_player<F, T>(&self, name: &str, closure: F) -> Result<T>
     where
         F: FnOnce(&Player) -> Result<T>,
     {
-        let lock = self.active_players.lock();
+        let lock = self.active_players.read();
         if !lock.contains_key(name) {
             bail!("Player {name} not connected");
         }
@@ -602,8 +603,19 @@ impl PlayerManager {
         closure(&player)
     }
 
+    pub fn for_all_connected_players<F>(&self, mut closure: F) -> Result<()>
+    where
+        F: FnMut(&Player) -> Result<()>,
+    {
+        let lock = self.active_players.read();
+        for (_, player) in lock.iter() {
+            closure(&player)?;
+        }
+        Ok(())
+    }
+
     fn drop_disconnect(&self, name: &str) {
-        match self.active_players.lock().entry(name.to_string()) {
+        match self.active_players.write().entry(name.to_string()) {
             Entry::Occupied(entry) => {
                 let count = Arc::strong_count(entry.get());
                 // We expect 2 - one in the map, and one that we're holding while calling drop_disconnect
@@ -643,7 +655,7 @@ impl PlayerManager {
         let result = Arc::new(PlayerManager {
             game_state,
             db,
-            active_players: Mutex::new(HashMap::new()),
+            active_players: RwLock::new(HashMap::new()),
             shutdown: CancellationToken::new(),
             writeback: Mutex::new(None),
             writeback_now_sender: sender,
@@ -662,7 +674,7 @@ impl PlayerManager {
                 _ = tokio::time::sleep_until(deadline.into()) => {},
                 name = receiver.recv() => {
                     if let Some(name) = name {
-                        let lock = self.active_players.lock();
+                        let lock = self.active_players.read();
                         let player = lock.get(&name);
                         if let Some(player) = player {
                             self.write_back(player)?;
@@ -702,7 +714,7 @@ impl PlayerManager {
     }
 
     fn flush(&self) -> Result<()> {
-        for player in self.active_players.lock().values() {
+        for player in self.active_players.read().values() {
             self.write_back(player)?;
         }
         Ok(())

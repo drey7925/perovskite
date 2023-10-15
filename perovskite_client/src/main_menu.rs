@@ -25,6 +25,7 @@ pub(crate) struct MainMenu {
     register_pass_field: String,
     confirm_pass_field: String,
     show_register_popup: bool,
+    previous_servers: Vec<String>,
     settings: Arc<ArcSwap<GameSettings>>,
 }
 impl MainMenu {
@@ -47,16 +48,18 @@ impl MainMenu {
                 .unwrap(),
             gui_config,
         );
+        let settings_guard = settings.load();
         MainMenu {
             egui_gui,
-            host_field: settings.load().last_hostname.clone(),
-            user_field: settings.load().last_username.clone(),
+            host_field: settings_guard.last_hostname.clone(),
+            user_field: settings_guard.last_username.clone(),
             pass_field: "".to_string(),
             register_host_field: "".to_string(),
             register_user_field: "".to_string(),
             register_pass_field: "".to_string(),
             confirm_pass_field: "".to_string(),
             show_register_popup: false,
+            previous_servers: settings_guard.previous_servers.clone(),
             settings,
         }
     }
@@ -69,10 +72,12 @@ impl MainMenu {
             ui.visuals_mut().override_text_color = Some(Color32::WHITE);
             if cfg!(debug_assertions) {
                 ui.label(
-                    RichText::new("Debug binary; will be unplayably slow.\nRecompile with --release!")
-                        .color(Color32::RED)
-                        .size(16.0)
-                        .strong(),
+                    RichText::new(
+                        "Debug binary; will be unplayably slow.\nRecompile with --release!",
+                    )
+                    .color(Color32::RED)
+                    .size(16.0)
+                    .strong(),
                 );
             }
 
@@ -81,6 +86,29 @@ impl MainMenu {
                 let editor = TextEdit::singleline(&mut self.host_field);
                 ui.add(editor).labelled_by(label.id);
             });
+
+            ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
+                let label = ui.label("Recent servers: ");
+                egui::ComboBox::from_id_source(label.id)
+                    .selected_text("Select...")
+                    .show_ui(ui, |ui| {
+                        
+                        let mut fake_selectable = self.host_field.clone();
+                        ui.selectable_value(
+                            &mut fake_selectable,
+                            "select".to_string(),
+                            "Select...",
+                        );
+                        for server in self.previous_servers.iter().rev() {
+                            ui.selectable_value(
+                                &mut self.host_field,
+                                server.clone(),
+                                server,
+                            );
+                        }
+                    });
+            });
+
             ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                 let label = ui.label("Username: ");
                 let editor = TextEdit::singleline(&mut self.user_field);
@@ -97,12 +125,15 @@ impl MainMenu {
             if ui.add_enabled(connect_enabled, connect_button).clicked() {
                 self.settings.rcu(|x| {
                     let old = x.clone();
-                    GameSettings {
+                    let mut new = GameSettings {
                         last_hostname: self.host_field.trim().to_string(),
                         last_username: self.user_field.trim().to_string(),
                         ..old.deref().clone()
-                    }
+                    };
+                    new.push_hostname(self.host_field.trim().to_string());
+                    new
                 });
+                self.previous_servers = self.settings.load().previous_servers.clone();
                 if let Err(e) = self.settings.load().save_to_disk() {
                     log::error!("Failure saving settings: {}", e);
                 }
@@ -204,12 +235,15 @@ impl MainMenu {
                     } else {
                         self.settings.rcu(|x| {
                             let old = x.clone();
-                            GameSettings {
+                            let mut new = GameSettings {
                                 last_hostname: self.register_host_field.trim().to_string(),
                                 last_username: self.register_user_field.trim().to_string(),
                                 ..old.deref().clone()
-                            }
+                            };
+                            new.push_hostname(self.register_host_field.trim().to_string());
+                            new
                         });
+                        self.previous_servers = self.settings.load().previous_servers.clone();
                         if let Err(e) = self.settings.load().save_to_disk() {
                             log::error!("Failure saving settings: {}", e);
                         }

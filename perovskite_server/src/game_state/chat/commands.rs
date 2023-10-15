@@ -188,7 +188,7 @@ impl ChatCommandHandler for GrantCommandImpl {
             vec![permission.to_string()]
         };
         // todo support offline players
-        context.player_manager().for_connected_player(user, |p| {
+        context.player_manager().with_connected_player(user, |p| {
             for permission in permissions {
                 p.grant_permission(&permission)?;
             }
@@ -243,7 +243,7 @@ impl ChatCommandHandler for RevokeCommandImpl {
             vec![permission.to_string()]
         };
         // todo support offline players
-        let any_failed = context.player_manager().for_connected_player(user, |p| {
+        let any_failed = context.player_manager().with_connected_player(user, |p| {
             let mut any_failed = false;
             for permission in permissions {
                 if !p.revoke_permission(&permission)? {
@@ -389,7 +389,7 @@ impl ChatCommandHandler for ListPermissionsImpl {
                     context
                         .game_state
                         .player_manager()
-                        .for_connected_player(username, |p| {
+                        .with_connected_player(username, |p| {
                             let message = format!(
                                 "{}'s permissions:\n  granted: {}\n  temporary: {}\n  ambient: {}",
                                 username,

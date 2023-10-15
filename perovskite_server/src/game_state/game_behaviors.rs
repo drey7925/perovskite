@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use cgmath::{vec3, Vector3};
+use itertools::Itertools;
 use perovskite_core::{chat::ChatMessage, constants::permissions::ELIGIBLE_PREFIX};
 use tonic::async_trait;
 
@@ -95,9 +96,7 @@ impl Default for GameBehaviors {
             ]),
             ambient_permissions: HashSet::from([]),
             super_users: HashSet::from([]),
-            on_player_join: Box::new(SendChatMessageHandlerImpl::new(|player: &Player, _| {
-                ChatMessage::new_server_message(format!("{} joined the game.", player.name()))
-            })),
+            on_player_join: Box::new(PlayerJoinHandlerImpl),
             on_player_leave: Box::new(SendChatMessageHandlerImpl::new(|player: &Player, _| {
                 ChatMessage::new_server_message(format!("{} left the game.", player.name()))
             })),
@@ -123,6 +122,28 @@ impl<T: Send + Sync + 'static> GenericAsyncHandler<T, ()> for SendChatMessageHan
     async fn handle(&self, req: &T, context: HandlerContext<'_>) -> Result<()> {
         let message = (self.message_generator)(req, &context);
         context.game_state.chat().broadcast_chat_message(message)?;
+        Ok(())
+    }
+}
+
+pub struct PlayerJoinHandlerImpl;
+#[async_trait]
+impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
+    async fn handle(&self, req: &Player, context: HandlerContext<'_>) -> Result<()> {
+        let broadcast_message = ChatMessage::new_server_message(format!(
+            "{} has joined the game.", req.name()
+        ));
+        context.chat().broadcast_chat_message(broadcast_message)?;
+
+        let mut connected_players = vec![];
+        context.player_manager().for_all_connected_players(|p| {
+            connected_players.push(p.name().to_string());
+            Ok(())
+        })?;
+        let individual_message = ChatMessage::new_server_message(format!(
+            "Welcome! Currently connected players: {}", connected_players.iter().sorted().join(", ")
+        ));
+        req.send_chat_message(individual_message).await?;
         Ok(())
     }
 }

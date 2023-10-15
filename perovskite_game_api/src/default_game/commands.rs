@@ -147,7 +147,7 @@ impl ChatCommandHandler for GiveCommand {
         };
         let player_inventory = context
             .player_manager()
-            .for_connected_player(recipient, |p| Ok(p.main_inventory()))?;
+            .with_connected_player(recipient, |p| Ok(p.main_inventory()))?;
         let stack = make_stack(item, count, context).await?;
         let leftover = context
             .inventory_manager()
