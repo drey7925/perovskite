@@ -1745,40 +1745,45 @@ impl EntityEventSender {
         Ok(())
     }
     async fn do_tick(&mut self) -> Result<()> {
-        let mut messages = vec![];
+        let messages = {
+            let mut messages = vec![];
 
-        let entities = self.context.game_state.entities().contents();
+            let entities = self.context.game_state.entities().contents();
 
-        // TODO this is suboptimal
-        let known_to_us = self.observed_ids.iter().cloned().collect::<HashSet<_>>();
-        let still_valid = entities.iter().map(DrivenEntity::id).collect();
-        let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
-        for entity_id in to_remove {
-            messages.push(proto::EntityMovement {
-                entity_id: entity_id.client_id(),
-                position: None,
-                velocity: None,
-                remove: true,
-            });
-            self.observed_ids.remove(entity_id);
-        }
-
-        for entity in entities.iter() {
-            if entity.id() == self.context.player_context.entity_id {
-                continue;
-            }
-
-            if !self.observed_ids.contains(&entity.id()) || entity.updated_since(self.last_update) {
-                self.observed_ids.insert(entity.id());
-                let (position, velocity) = entity.sample();
+            // TODO this is suboptimal
+            let known_to_us = self.observed_ids.iter().cloned().collect::<HashSet<_>>();
+            let still_valid = entities.iter().map(DrivenEntity::id).collect();
+            let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
+            for entity_id in to_remove {
                 messages.push(proto::EntityMovement {
-                    entity_id: entity.id().client_id(),
-                    position: Some(position.try_into()?),
-                    velocity: Some(velocity.try_into()?),
-                    remove: false,
+                    entity_id: entity_id.client_id(),
+                    position: None,
+                    velocity: None,
+                    remove: true,
                 });
+                self.observed_ids.remove(entity_id);
             }
-        }
+
+            for entity in entities.iter() {
+                if entity.id() == self.context.player_context.entity_id {
+                    continue;
+                }
+
+                if !self.observed_ids.contains(&entity.id())
+                    || entity.updated_since(self.last_update)
+                {
+                    self.observed_ids.insert(entity.id());
+                    let (position, velocity) = entity.sample();
+                    messages.push(proto::EntityMovement {
+                        entity_id: entity.id().client_id(),
+                        position: Some(position.try_into()?),
+                        velocity: Some(velocity.try_into()?),
+                        remove: false,
+                    });
+                }
+            }
+            messages
+        };
         let tick = self.context.game_state.tick();
         for message in messages {
             self.outbound_tx
