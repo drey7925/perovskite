@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::{Angle, Matrix4, Rad, Vector3};
+use cgmath::{Angle, Matrix4, Rad};
 use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
 use vulkano::{
@@ -251,7 +251,7 @@ impl CubePipelineProvider {
 
     pub(crate) fn build_pipeline(
         &self,
-        ctx: &VulkanContext,
+        _ctx: &VulkanContext,
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,

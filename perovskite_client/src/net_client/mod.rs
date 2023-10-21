@@ -50,7 +50,7 @@ mod client_context;
 pub(crate) mod mesh_worker;
 
 const MIN_PROTOCOL_VERSION: u32 = 1;
-const MAX_PROTOCOL_VERSION: u32 = 1;
+const MAX_PROTOCOL_VERSION: u32 = 2;
 
 async fn connect_grpc(
     server_addr: String,
@@ -163,7 +163,7 @@ pub(crate) async fn connect_game(
         hud,
         egui,
         block_renderer,
-    ));
+    )?);
     tx_send
         .send(StreamToServer {
             sequence: 0,

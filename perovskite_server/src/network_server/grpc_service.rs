@@ -146,6 +146,9 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
     }
 }
 
+pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 2;
+
 async fn game_stream_impl(
     game_state: Arc<GameState>,
     mut inbound_rx: tonic::Streaming<StreamToServer>,
@@ -174,16 +177,14 @@ async fn game_stream_impl(
         }
     };
     
-    const SERVER_MIN_PROTCOL_VERSION: u32 = 1;
-    const SERVER_MAX_PROTCOL_VERSION: u32 = 1;
 
-    if SERVER_MIN_PROTCOL_VERSION > auth_outcome.max_protocol_version {
+    if SERVER_MIN_PROTOCOL_VERSION > auth_outcome.max_protocol_version {
         bail!("Client is too old");
-    } else if SERVER_MAX_PROTCOL_VERSION < auth_outcome.min_protocol_version {
+    } else if SERVER_MAX_PROTOCOL_VERSION < auth_outcome.min_protocol_version {
         bail!("Client is too new");
     }
-    let effective_min_protocol = SERVER_MIN_PROTCOL_VERSION.max(auth_outcome.min_protocol_version);
-    let effective_max_protocol = SERVER_MAX_PROTCOL_VERSION.min(auth_outcome.max_protocol_version);
+    let effective_min_protocol = SERVER_MIN_PROTOCOL_VERSION.max(auth_outcome.min_protocol_version);
+    let effective_max_protocol = SERVER_MAX_PROTOCOL_VERSION.min(auth_outcome.max_protocol_version);
     ensure!(effective_min_protocol <= effective_max_protocol);
 
     outbound_tx

@@ -23,6 +23,8 @@ use std::time::Instant;
 
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
+use crate::game_state::entities::DrivenEntity;
+use crate::game_state::entities::EntityId;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
@@ -76,6 +78,8 @@ use tokio_util::sync::CancellationToken;
 use tracy_client::plot;
 use tracy_client::span;
 
+use super::grpc_service::SERVER_MAX_PROTOCOL_VERSION;
+
 static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 pub(crate) struct PlayerCoroutinePack {
@@ -85,42 +89,64 @@ pub(crate) struct PlayerCoroutinePack {
     inventory_event_sender: InventoryEventSender,
     inbound_worker: InboundWorker,
     misc_outbound_worker: MiscOutboundWorker,
+    entity_sender: EntityEventSender,
 }
 impl PlayerCoroutinePack {
     pub(crate) async fn run_all(mut self) -> Result<()> {
         let username = self.context.player_context.name().to_string();
         initialize_protocol_state(&self.context, &self.inbound_worker.outbound_tx).await?;
-        self.context.game_state.game_behaviors().on_player_join.handle(&self.context.player_context, HandlerContext {
-            tick: self.context.game_state.tick(),
-            initiator: EventInitiator::Engine,
-            game_state: self.context.game_state.clone(),
-        }).await?;
+        self.context
+            .game_state
+            .game_behaviors()
+            .on_player_join
+            .handle(
+                &self.context.player_context,
+                HandlerContext {
+                    tick: self.context.game_state.tick(),
+                    initiator: EventInitiator::Engine,
+                    game_state: self.context.game_state.clone(),
+                },
+            )
+            .await?;
 
         tracing::info!("Starting workers for {}...", username);
         crate::spawn_async(&format!("inbound_worker_{}", username), async move {
-            if let Err(e) = self.inbound_worker.run_inbound_loop().await {
+            if let Err(e) = self.inbound_worker.inbound_worker_loop().await {
                 log::error!("Error running inbound loop: {:?}", e);
             }
         })?;
         crate::spawn_async(&format!("chunk_sender_{}", username), async move {
-            if let Err(e) = self.chunk_sender.run_loop().await {
+            if let Err(e) = self.chunk_sender.chunk_sender_loop().await {
                 log::error!("Error running chunk sender: {:?}", e);
             }
         })?;
         crate::spawn_async(&format!("block_event_sender_{}", username), async move {
-            if let Err(e) = self.block_event_sender.run_outbound_loop().await {
+            if let Err(e) = self.block_event_sender.block_sender_loop().await {
                 log::error!("Error running block event sender loop: {:?}", e);
             }
         })?;
         crate::spawn_async(&format!("inv_event_sender_{}", username), async move {
-            if let Err(e) = self.inventory_event_sender.run_outbound_loop().await {
+            if let Err(e) = self.inventory_event_sender.inv_sender_loop().await {
                 log::error!("Error running inventory event sender loop: {:?}", e);
             }
         })?;
         crate::spawn_async(&format!("misc_outbound_worker_{}", username), async move {
-            if let Err(e) = self.misc_outbound_worker.run_outbound_loop().await {
+            if let Err(e) = self.misc_outbound_worker.misc_outbound_worker_loop().await {
                 log::error!("Error running misc outbound worker loop: {:?}", e);
             }
+        })?;
+        crate::spawn_async(&format!("entity_sender_{}", username), async move {
+            if let Err(e) = self.entity_sender.entity_sender_loop().await {
+                log::error!("Error running misc outbound worker loop: {:?}", e);
+            }
+        })?;
+        let cancellation = self.context.cancellation.clone();
+        crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
+            cancellation.cancelled().await;
+            self.context
+                .game_state
+                .entities()
+                .remove_entity(self.context.player_context.entity_id);
         })?;
 
         Ok(())
@@ -162,7 +188,7 @@ pub(crate) async fn make_client_contexts(
     ));
 
     let context = Arc::new(SharedContext {
-        game_state,
+        game_state: game_state.clone(),
         player_context,
         id,
         cancellation,
@@ -222,6 +248,13 @@ pub(crate) async fn make_client_contexts(
         outbound_tx: outbound_tx.clone(),
     };
 
+    let entity_sender = EntityEventSender {
+        context: context.clone(),
+        outbound_tx: outbound_tx.clone(),
+        observed_ids: FxHashSet::default(),
+        last_update: game_state.server_start_time(),
+    };
+
     Ok(PlayerCoroutinePack {
         context,
         chunk_sender,
@@ -229,6 +262,7 @@ pub(crate) async fn make_client_contexts(
         inventory_event_sender,
         inbound_worker,
         misc_outbound_worker,
+        entity_sender,
     })
 }
 
@@ -277,6 +311,12 @@ async fn initialize_protocol_state(
         .send(Ok(message))
         .await
         .map_err(|_| Error::msg("Could not send outbound message (initial state)"))?;
+
+    if context.effective_protocol_version != SERVER_MAX_PROTOCOL_VERSION {
+        context.player_context.send_chat_message(ChatMessage::new_server_message(
+            format!("Your client is out of date and you may not be able to use all server features. Please consider updating.")
+        )).await?;
+    }
     Ok(())
 }
 
@@ -416,7 +456,7 @@ impl MapChunkSender {
             player_name = %self.context.player_context.name(),
         ),
     )]
-    pub(crate) async fn run_loop(&mut self) -> Result<()> {
+    pub(crate) async fn chunk_sender_loop(&mut self) -> Result<()> {
         assert!(CACHE_CLEAN_MIN_AGE > (Duration::from_secs_f64(0.2) * ACCESS_TIME_BUMP_SHARDS));
         let mut access_time_bump_idx = 0;
         while !self.context.cancellation.is_cancelled() {
@@ -628,7 +668,7 @@ impl BlockEventSender {
             player_name = %self.context.player_context.name(),
         )
     )]
-    pub(crate) async fn run_outbound_loop(&mut self) -> Result<()> {
+    pub(crate) async fn block_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 block_event = self.block_events.recv() => {
@@ -817,7 +857,7 @@ impl InventoryEventSender {
             player_name = %self.context.player_context.name(),
         )
     )]
-    pub(crate) async fn run_outbound_loop(&mut self) -> Result<()> {
+    pub(crate) async fn inv_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 inventory_update = self.inventory_events.recv() => {
@@ -935,7 +975,7 @@ pub(crate) struct InboundWorker {
 }
 impl InboundWorker {
     // Poll for world events and send them through outbound_tx
-    pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
+    pub(crate) async fn inbound_worker_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -1221,6 +1261,11 @@ impl InboundWorker {
                 self.context
                     .player_context
                     .update_client_position_state(pos, update.hotbar_slot);
+                self.context.game_state.entities().drive_entity(
+                    self.context.player_context.entity_id,
+                    pos.position,
+                    pos.velocity,
+                )?;
             }
             None => {
                 warn!("No position in update message from client");
@@ -1557,7 +1602,7 @@ struct MiscOutboundWorker {
     context: Arc<SharedContext>,
 }
 impl MiscOutboundWorker {
-    async fn run_outbound_loop(&mut self) -> Result<()> {
+    async fn misc_outbound_worker_loop(&mut self) -> Result<()> {
         let mut broadcast_messages = self.context.game_state.chat().subscribe();
         let mut resync_player_state_global =
             self.context.game_state.subscribe_player_state_resyncs();
@@ -1636,11 +1681,19 @@ impl MiscOutboundWorker {
                 }
             }
         }
-        self.context.game_state.game_behaviors().on_player_leave.handle(&self.context.player_context, HandlerContext {
-            tick: self.context.game_state.tick(),
-            initiator: EventInitiator::Engine,
-            game_state: self.context.game_state.clone(),
-        }).await?;
+        self.context
+            .game_state
+            .game_behaviors()
+            .on_player_leave
+            .handle(
+                &self.context.player_context,
+                HandlerContext {
+                    tick: self.context.game_state.tick(),
+                    initiator: EventInitiator::Engine,
+                    game_state: self.context.game_state.clone(),
+                },
+            )
+            .await?;
         Ok(())
     }
     async fn transmit_chat_message(&mut self, message: ChatMessage) -> Result<()> {
@@ -1654,6 +1707,88 @@ impl MiscOutboundWorker {
                 })),
             }))
             .await?;
+        Ok(())
+    }
+}
+
+/// Handles sending entities. Currently unoptimized, and not very scalable.
+struct EntityEventSender {
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    context: Arc<SharedContext>,
+    observed_ids: FxHashSet<EntityId>,
+    last_update: Instant,
+}
+impl EntityEventSender {
+    async fn entity_sender_loop(&mut self) -> Result<()> {
+        if self.context.effective_protocol_version < 2 {
+            tracing::info!(
+                "Client {} is using an unsupported protocol version, ignoring entity events",
+                self.context.id
+            );
+            self.context.cancellation.cancelled().await;
+            return Ok(());
+        }
+
+        // TODO - optimize this with actual awakenings based on relevant entities
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        while !self.context.cancellation.is_cancelled() {
+            tokio::select! {
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Entity event sender context {} detected cancellation and shutting down", self.context.id);
+                }
+                _ = interval.tick() => {
+                    self.do_tick().await?;
+                }
+            }
+        }
+        Ok(())
+    }
+    async fn do_tick(&mut self) -> Result<()> {
+        let mut messages = vec![];
+
+        let entities = self.context.game_state.entities().contents();
+
+        // TODO this is suboptimal
+        let known_to_us = self.observed_ids.iter().cloned().collect::<HashSet<_>>();
+        let still_valid = entities.iter().map(DrivenEntity::id).collect();
+        let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
+        for entity_id in to_remove {
+            messages.push(proto::EntityMovement {
+                entity_id: entity_id.client_id(),
+                position: None,
+                velocity: None,
+                remove: true,
+            });
+            self.observed_ids.remove(entity_id);
+        }
+
+        for entity in entities.iter() {
+            if entity.id() == self.context.player_context.entity_id {
+                continue;
+            }
+
+            if !self.observed_ids.contains(&entity.id()) || entity.updated_since(self.last_update) {
+                self.observed_ids.insert(entity.id());
+                let (position, velocity) = entity.sample();
+                messages.push(proto::EntityMovement {
+                    entity_id: entity.id().client_id(),
+                    position: Some(position.try_into()?),
+                    velocity: Some(velocity.try_into()?),
+                    remove: false,
+                });
+            }
+        }
+        let tick = self.context.game_state.tick();
+        for message in messages {
+            self.outbound_tx
+                .send(Ok(StreamToClient {
+                    tick,
+                    server_message: Some(ServerMessage::EntityMovement(message)),
+                }))
+                .await?;
+        }
+        self.last_update = Instant::now();
         Ok(())
     }
 }

@@ -54,6 +54,7 @@ use crate::vulkan::{Texture2DHolder, VulkanContext};
 use bitvec::prelude as bv;
 
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
+const TESTONLY_ENTITY: &str = "builtin:testonly_entity";
 
 /// Given in game world coordinates (Y is up)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
@@ -518,6 +519,7 @@ pub(crate) struct BlockRenderer {
     fallback_tex_coord: RectF32,
     simple_block_tex_coords: SimpleTexCoordCache,
     axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
+    fake_entity_tex_coords: RectF32,
     allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
 }
 impl BlockRenderer {
@@ -616,6 +618,14 @@ impl BlockRenderer {
             )
             .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
 
+        texture_packer
+            .pack_own(
+                String::from(TESTONLY_ENTITY),
+                ImageImporter::import_from_memory(include_bytes!("temporary_player_entity.png"))
+                    .unwrap(),
+            )
+            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+
         for (name, texture) in all_textures {
             let texture = ImageImporter::import_from_memory(&texture)
                 .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))?;
@@ -660,6 +670,7 @@ impl BlockRenderer {
             texture_atlas,
             selection_box_tex_coord: (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into(),
             fallback_tex_coord: (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into(),
+            fake_entity_tex_coords: (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into(),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
             allocator: ctx.clone_allocator(),
@@ -843,6 +854,34 @@ impl BlockRenderer {
             Some(x) => *x,
             None => [self.fallback_tex_coord; 6],
         };
+        self.emit_single_cube_impl(
+            e,
+            offset,
+            suppress_face_when,
+            block,
+            chunk_data,
+            pos,
+            textures,
+            vtx,
+            idx,
+        );
+    }
+
+    // made crate-visible for the sake of entities
+    pub(crate) fn emit_single_cube_impl<F>(
+        &self,
+        e: CubeExtents,
+        offset: ChunkOffset,
+        suppress_face_when: F,
+        block: &BlockTypeDef,
+        chunk_data: &impl ChunkDataView,
+        pos: Vector3<f32>,
+        textures: [RectF32; 6],
+        vtx: &mut Vec<CubeGeometryVertex>,
+        idx: &mut Vec<u32>,
+    ) where
+        F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+    {
         for i in 0..6 {
             let (n_x, n_y, n_z) = e.normals[i];
             let neighbor_index = (
@@ -871,6 +910,34 @@ impl BlockRenderer {
                     CUBE_FACE_BRIGHTNESS_BIASES[i],
                 );
             }
+        }
+    }
+
+    
+    // made crate-visible for the sake of entities
+    pub(crate) fn emit_single_cube_simple(
+        &self,
+        e: CubeExtents,
+        pos: Vector3<f32>,
+        textures: [RectF32; 6],
+        vtx: &mut Vec<CubeGeometryVertex>,
+        idx: &mut Vec<u32>,
+    ) {
+        for i in 0..6 {
+                emit_cube_face_vk(
+                    pos,
+                    textures[i],
+                    self.texture_atlas.dimensions(),
+                    CUBE_EXTENTS_FACE_ORDER[i],
+                    vtx,
+                    idx,
+                    e,
+                    // TODO proper brightness for entities
+                    0xf0,
+                    0.0,
+                    CUBE_FACE_BRIGHTNESS_BIASES[i],
+                );
+            
         }
     }
 
@@ -1037,6 +1104,12 @@ impl BlockRenderer {
                 translucent: None,
             },
         })
+    }
+
+    // TODO stop relying on the block renderer to render entities, or clean up
+    // responsibility
+    pub(crate) fn fake_entity_tex_coords(&self) -> RectF32 {
+        self.fake_entity_tex_coords
     }
 }
 

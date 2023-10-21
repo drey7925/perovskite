@@ -145,6 +145,9 @@ message StreamToClient {
     perovskite.protocol.ui.PopupDescription show_popup = 87;
     // Client should display a chat message
     ChatMessage chat_message = 88;
+    // An entity moved. This part of the protocol is under development
+    EntityMovement entity_movement = 89;
+
     // The server->client message sent as part of registration in the OPAQUE
     // protocol
     bytes server_registration_response = 150;
@@ -311,6 +314,9 @@ message StartAuth {
   // 1 - 2023-10-10 (commit hash 1e63a10bd9d6aab96dc4d0379d52085a9c2052a8)
   //        * Server sends set of client-relevant permissions to the client
   //        * Client and server send protocol versions to each other
+  // 2 - circa 2023-10-20
+  //        * Server sends minimal entity definitions (WIP) with only ID/coordinates/velocities
+  //        * Client assumes each entity is a player
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }
@@ -326,4 +332,17 @@ message ChatMessage {
 
   // The actual text to display
   string message = 3;
+}
+
+message EntityMovement {
+  // The entity ID
+  uint64 entity_id = 1;
+  // The entity's position
+  perovskite.protocol.coordinates.Vec3D position = 2;
+  // The entity's velocity
+  perovskite.protocol.coordinates.Vec3D velocity = 3;
+  // Whether the entity should stop being displayed. If so, ignore all other fields
+  bool remove = 4;
+  // TODO appearance/texture/etc (only on first appearance)
+  // TODO network lag compensation?
 }

@@ -40,7 +40,7 @@ use winit::{
 use crate::{
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
-    net_client,
+    net_client, block_renderer::{VkChunkVertexData, VkChunkPass},
 };
 
 use super::{
@@ -116,6 +116,30 @@ impl ActiveGame {
                         .unwrap(),
                 );
             }
+        }
+
+        let (entity_translations, vtx, idx) = {
+            let mut entity_coords = vec![];
+            let entity_lock = self.client_state.entities.lock();
+            for entity in entity_lock.entities.values() {
+                entity_coords.push(entity.as_transform(player_position))
+            }
+            (
+                entity_coords,
+                entity_lock.fake_entity_vtx.clone(),
+                entity_lock.fake_entity_idx.clone(),
+            )
+        };
+
+        for translation in entity_translations {
+            self.cube_draw_calls.push(CubeGeometryDrawCall {
+                models: VkChunkVertexData {
+                    solid_opaque: None,
+                    transparent: Some(VkChunkPass { vtx: vtx.clone(), idx: idx.clone() }),
+                    translucent: None,
+                },
+                model_matrix: translation,
+            })
         }
 
         let chunk_lock = {

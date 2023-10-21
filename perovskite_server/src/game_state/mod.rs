@@ -25,6 +25,7 @@ pub mod inventory;
 pub mod items;
 pub mod mapgen;
 pub mod player;
+pub mod entities;
 
 #[cfg(test)]
 pub mod tests;
@@ -39,6 +40,7 @@ use rand::prelude::Distribution;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::database::database_engine::{GameDatabase, KeySpace};
@@ -50,6 +52,7 @@ use crate::network_server::auth::AuthService;
 use self::blocks::BlockTypeManager;
 use self::chat::ChatState;
 use self::chat::commands::CommandManager;
+use self::entities::EntityManager;
 use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
@@ -70,7 +73,9 @@ pub struct GameState {
     game_behaviors: GameBehaviors,
     auth: AuthService,
     time_state: Mutex<TimeState>,
-    player_state_resync: tokio::sync::watch::Sender<()>
+    player_state_resync: tokio::sync::watch::Sender<()>,
+    entities: EntityManager,
+    server_start_time: Instant,
 }
 
 impl GameState {
@@ -106,6 +111,8 @@ impl GameState {
             auth: AuthService::create(db).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
             player_state_resync: tokio::sync::watch::channel(()).0,
+            entities: EntityManager::new(weak.clone()),
+            server_start_time: Instant::now(),
         }))
     }
 
@@ -189,6 +196,10 @@ impl GameState {
         &self.time_state
     }
 
+    pub(crate) fn entities(&self) -> &EntityManager {
+        &self.entities
+    }
+
     /// Sets the time of day. 0 is midnight, 1 is the next midnight.
     pub fn set_time_of_day(&self, time_of_day: f64) {
         self.time_state.lock().set_time(time_of_day);
@@ -204,6 +215,11 @@ impl GameState {
 
     pub fn data_dir(&self) -> &PathBuf {
         &self.data_dir
+    }
+
+    /// Returns the time when the server started.
+    pub fn server_start_time(&self) -> Instant {
+        self.server_start_time
     }
 }
 

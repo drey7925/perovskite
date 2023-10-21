@@ -21,8 +21,9 @@ impl TimeState {
         self.day_length = day_length;
     }
     pub fn time_of_day(&self) -> f64 {
-        (self.realtime_start.elapsed().as_secs_f64() / self.day_length.as_secs_f64()) % 1.0
-            + self.game_time_start_days
+        (self.realtime_start.elapsed().as_secs_f64() / self.day_length.as_secs_f64()
+            + self.game_time_start_days)
+            % 1.0
     }
     pub fn day_length(&self) -> Duration {
         self.day_length

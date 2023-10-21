@@ -16,7 +16,7 @@
 
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -45,6 +45,7 @@ use crate::vulkan::shaders::SceneState;
 
 use self::chat::ChatState;
 use self::chunk::{ChunkDataView, SnappyDecodeHelper};
+use self::entities::EntityManager;
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::lightcycle::LightCycle;
@@ -53,6 +54,7 @@ use self::tool_controller::{ToolController, ToolState};
 
 pub(crate) mod chat;
 pub(crate) mod chunk;
+pub(crate) mod entities;
 pub(crate) mod input;
 pub(crate) mod items;
 pub(crate) mod lightcycle;
@@ -395,6 +397,7 @@ pub(crate) struct ClientState {
     pub(crate) actions: mpsc::Sender<GameAction>,
     pub(crate) light_cycle: Arc<Mutex<LightCycle>>,
     pub(crate) chat: Arc<Mutex<ChatState>>,
+    pub(crate) entities: Mutex<EntityManager>,
 
     // block_renderer doesn't currently need a mutex because it's stateless
     // and keeps its cached geometry data in the chunks themselves
@@ -417,8 +420,8 @@ impl ClientState {
         hud: GameHud,
         egui: EguiUi,
         block_renderer: BlockRenderer,
-    ) -> ClientState {
-        ClientState {
+    ) -> Result<ClientState> {
+        Ok(ClientState {
             settings: settings.clone(),
             input: Mutex::new(InputState::new(settings.clone())),
             block_types,
@@ -432,9 +435,11 @@ impl ClientState {
             actions: action_sender,
             light_cycle: Arc::new(Mutex::new(LightCycle::new(TimeState::new(
                 Duration::from_secs(24 * 60),
-                0.0
+                0.0,
             )))),
             chat: Arc::new(Mutex::new(ChatState::new())),
+            entities: Mutex::new(EntityManager::new(&block_renderer)?),
+
             block_renderer: Arc::new(block_renderer),
             hud: Arc::new(Mutex::new(hud)),
             egui: Arc::new(Mutex::new(egui)),
@@ -445,7 +450,7 @@ impl ClientState {
                 velocity: cgmath::Vector3::zero(),
                 face_direction: (0.0, 0.0),
             }),
-        }
+        })
     }
 
     pub(crate) fn window_event(&self, event: &Event<()>) {

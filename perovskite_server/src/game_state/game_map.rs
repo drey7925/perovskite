@@ -141,7 +141,7 @@ impl AsDbKey for ChunkCoordinate {
 #[derive(PartialEq, Eq)]
 pub(crate) enum ChunkUsage {
     // Chunk is for the client. Extended data is not present (or client-specific ext data will be present
-    // once that is implemented)
+    // if that is implemented)
     Client,
     // Chunk is for the server and its database. Extended data is present.
     Server,

@@ -46,7 +46,7 @@ use super::{
     client_ui::Popup,
     event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
-    GameState,
+    GameState, entities::EntityId,
 };
 
 pub struct Player {
@@ -66,6 +66,8 @@ pub struct Player {
     // Sends events for that player; the corresponding receiver will send them over the network to the client.
     sender: PlayerEventSender,
     game_state: Arc<GameState>,
+    // TODO - refactor according to the final design of entities
+    pub(crate) entity_id: EntityId,
 }
 
 impl Player {
@@ -119,16 +121,21 @@ impl Player {
                 .iter()
                 .cloned(),
         );
+
+        let position =  proto
+        .last_position
+        .as_ref()
+        .with_context(|| "Missing last_position in StoredPlayer")?
+        .try_into()?;
+
+        let entity_id = game_state.entities.insert_entity(position, Vector3::zero())?;
+
         Ok(Player {
             name: proto.name.clone(),
             main_inventory_key,
             state: Mutex::new(PlayerState {
                 last_position: PlayerPositionUpdate {
-                    position: proto
-                        .last_position
-                        .as_ref()
-                        .with_context(|| "Missing last_position in StoredPlayer")?
-                        .try_into()?,
+                    position,
                     velocity: vec3(0., 0., 0.),
                     face_direction: (0., 0.),
                 },
@@ -162,6 +169,7 @@ impl Player {
             }),
             sender,
             game_state,
+            entity_id
         })
     }
 
@@ -182,12 +190,15 @@ impl Player {
             .cloned()
             .collect();
 
+        let position = (game_state.game_behaviors().spawn_location)(name);
+        let entity_id = game_state.entities.insert_entity(position, Vector3::zero())?;
+
         let player = Player {
             name: name.to_string(),
             main_inventory_key,
             state: PlayerState {
                 last_position: PlayerPositionUpdate {
-                    position: (game_state.game_behaviors().spawn_location)(name),
+                    position,
                     velocity: Vector3::zero(),
                     face_direction: (0., 0.),
                 },
@@ -222,6 +233,7 @@ impl Player {
             .into(),
             sender,
             game_state,
+            entity_id,
         };
 
         Ok(player)

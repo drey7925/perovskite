@@ -1,12 +1,12 @@
 use std::{
     backtrace,
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use crate::{game_state::{
-    chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction,
+    chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction, entities::GameEntity,
 }, net_client::{MIN_PROTOCOL_VERSION, MAX_PROTOCOL_VERSION}};
 use anyhow::Result;
 use cgmath::{vec3, InnerSpace};
@@ -410,6 +410,9 @@ impl InboundContext {
             Some(rpc::stream_to_client::ServerMessage::ShutdownMessage(msg)) => {
                 *self.client_state.pending_error.lock() = Some(msg.clone());
             }
+            Some(rpc::stream_to_client::ServerMessage::EntityMovement(movement)) => {
+                self.handle_entity_movement(movement).await?;
+            }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);
             }
@@ -625,5 +628,39 @@ impl InboundContext {
     async fn handle_client_state_update(&mut self, state_update: &rpc::SetClientState) -> Result<()> {
         self.initial_state_notification.notify_one();
         self.client_state.handle_server_update(state_update)
+    }
+
+    async fn handle_entity_movement(&mut self, movement: &rpc::EntityMovement) -> Result<()> {
+        if movement.remove {
+            if self.client_state.entities.lock().entities.remove(&movement.entity_id).is_none() {
+                self.send_bugcheck(format!(
+                    "Got remove for non-existent entity {}",
+                    movement.entity_id
+                )).await?;
+            }
+            return Ok(())
+        }
+
+        let position = match &movement.position {
+            Some(position) => position.try_into()?,
+            None => {
+                return self.send_bugcheck(format!(
+                    "Got move for entity {} with no position",
+                    movement.entity_id
+                )).await
+            }
+        };
+        match self.client_state.entities.lock().entities.entry(movement.entity_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().position = position;
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(GameEntity {
+                    position,
+                });
+            }
+        }
+
+        Ok(())
     }
 }
