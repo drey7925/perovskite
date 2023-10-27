@@ -303,11 +303,10 @@ impl ChatCommandHandler for TeleportCommand {
 
         context
             .player_manager()
-            .with_connected_player_async(name, |p| Box::pin(async move {
-                p.set_position(coords).await?;
+            .with_connected_player(name, |p| {
+                p.set_position_blocking(coords)?;
                 Ok(())
-            }))
-            .await?;
+            })?;
 
         Ok(())
     }

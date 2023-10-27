@@ -17,8 +17,9 @@
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     ops::Deref,
+    pin::Pin,
     sync::{Arc, Weak},
-    time::{Duration, Instant}, pin::Pin,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -44,9 +45,10 @@ use crate::{
 
 use super::{
     client_ui::Popup,
+    entities::EntityId,
     event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
-    GameState, entities::EntityId,
+    GameState,
 };
 
 pub struct Player {
@@ -122,13 +124,15 @@ impl Player {
                 .cloned(),
         );
 
-        let position =  proto
-        .last_position
-        .as_ref()
-        .with_context(|| "Missing last_position in StoredPlayer")?
-        .try_into()?;
+        let position = proto
+            .last_position
+            .as_ref()
+            .with_context(|| "Missing last_position in StoredPlayer")?
+            .try_into()?;
 
-        let entity_id = game_state.entities.insert_entity(position, Vector3::zero())?;
+        let entity_id = game_state
+            .entities
+            .insert_entity(position, Vector3::zero())?;
 
         Ok(Player {
             name: proto.name.clone(),
@@ -169,7 +173,7 @@ impl Player {
             }),
             sender,
             game_state,
-            entity_id
+            entity_id,
         })
     }
 
@@ -191,7 +195,9 @@ impl Player {
             .collect();
 
         let position = (game_state.game_behaviors().spawn_location)(name);
-        let entity_id = game_state.entities.insert_entity(position, Vector3::zero())?;
+        let entity_id = game_state
+            .entities
+            .insert_entity(position, Vector3::zero())?;
 
         let player = Player {
             name: name.to_string(),
@@ -348,6 +354,10 @@ impl Player {
         self.state.lock().last_position.position = position;
         self.sender.reinit_player_state.send(true).await?;
         Ok(())
+    }
+
+    pub fn set_position_blocking(&self, position: Vector3<f64>) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.set_position(position))
     }
 }
 
@@ -623,7 +633,9 @@ impl PlayerManager {
 
     pub async fn with_connected_player_async<F, T>(&self, name: &str, closure: F) -> Result<T>
     where
-        F: for <'a> FnOnce(&'a Player) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>,
+        F: for<'a> FnOnce(
+            &'a Player,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>,
     {
         let lock = tokio::task::block_in_place(|| self.active_players.read());
         if !lock.contains_key(name) {
