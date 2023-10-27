@@ -9,7 +9,7 @@ use super::{
     event::{EventInitiator, HandlerContext},
     GameState,
 };
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 pub struct ChatState {
     pub(crate) broadcast_messages: broadcast::Sender<ChatMessage>,
     pub(crate) command_manager: CommandManager,
@@ -35,7 +35,15 @@ impl ChatState {
                 .await
         } else {
             if !initiator.check_permission_if_player(permissions::CHAT) {
-                bail!("You do not have permission to chat");
+                initiator
+                    .send_chat_message(
+                        ChatMessage::new_server_message(format!(
+                            "You are not permitted to chat."
+                        ))
+                        .with_color((255, 0, 0)),
+                    )
+                    .await?;
+                bail!("Insufficient permissions");
             }
             let message = match initiator {
                 EventInitiator::Player(p) => {
@@ -63,14 +71,16 @@ impl ChatState {
         game_state: Arc<GameState>,
         message: &str,
     ) -> Result<()> {
-        self.command_manager.handle_command(
-            message,
-            HandlerContext {
-                tick: game_state.tick(),
-                initiator: initiator,
-                game_state,
-            },
-        ).await
+        self.command_manager
+            .handle_command(
+                message,
+                HandlerContext {
+                    tick: game_state.tick(),
+                    initiator: initiator,
+                    game_state,
+                },
+            )
+            .await
     }
 
     /// Returns a broadcast receiver for chat messages

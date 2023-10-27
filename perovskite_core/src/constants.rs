@@ -142,7 +142,7 @@ pub mod permissions {
         INVENTORY
     ];
 
-    pub const ALL_PERMISSIONS: [&'static str; 12] = [
+    pub const ALL_PERMISSIONS: [&'static str; 13] = [
         FLY,
         FAST_MOVE,
         NOCLIP,
@@ -155,6 +155,7 @@ pub mod permissions {
         LOG_IN,
         WORLD_STATE,
         INVENTORY,
+        CHAT
     ];
     
     /// Prefix for permissions that can be self-granted on request, used for

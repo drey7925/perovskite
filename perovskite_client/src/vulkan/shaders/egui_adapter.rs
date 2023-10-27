@@ -65,6 +65,9 @@ impl EguiAdapter {
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_overlay_pipeline =
             flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
+        
+        set_up_fonts(&mut gui_adapter.egui_ctx);
+
         Ok(EguiAdapter {
             gui_adapter,
             egui_ui,
@@ -125,4 +128,31 @@ impl EguiAdapter {
             .make_pipeline(ctx, (self.atlas.as_ref(), 1))?;
         Ok(())
     }
+}
+
+fn set_up_fonts(egui_ctx: &mut egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "NotoSans-Light".to_owned(),
+        egui::FontData::from_static(include_bytes!(
+            "../../fonts/NotoSans-Light.ttf"
+        )),
+    );
+    fonts.font_data.insert(
+        "NotoSansJP-Light".to_owned(),
+        egui::FontData::from_static(include_bytes!(
+            "../../fonts/NotoSansJP-Light.ttf"
+        )),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "NotoSans-Light".to_owned());
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(1, "NotoSansJP-Light".to_owned());
+    egui_ctx.set_fonts(fonts);
 }
