@@ -650,7 +650,6 @@ impl MapChunkSender {
     }
 
     async fn fix_position_and_notify(&self, position: Vector3<f64>) -> Result<Vector3<f64>> {
-        tracing::warn!("Fixing position for {}: {position:?}", self.context.player_context.name);
         let new_position = if !position.x.is_finite() || !position.y.is_finite() || !position.z.is_finite() {
             // The player somehow got an inf/nan position, so respawn them
             self.context

@@ -623,37 +623,27 @@ impl PlayerManager {
     where
         F: FnOnce(&Player) -> Result<T>,
     {
-        let lock = self.active_players.read();
-        if !lock.contains_key(name) {
-            bail!("Player {name} not connected");
-        }
-        let player = lock.get(name).unwrap();
-        closure(&player)
-    }
-
-    pub async fn with_connected_player_async<F, T>(&self, name: &str, closure: F) -> Result<T>
-    where
-        F: for<'a> FnOnce(
-            &'a Player,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>,
-    {
-        let lock = tokio::task::block_in_place(|| self.active_players.read());
-        if !lock.contains_key(name) {
-            bail!("Player {name} not connected");
-        }
-        let player = lock.get(name).unwrap();
-        closure(&player).await
+        tokio::task::block_in_place(|| {
+            let lock = self.active_players.read();
+            if !lock.contains_key(name) {
+                bail!("Player {name} not connected");
+            }
+            let player = lock.get(name).unwrap();
+            closure(&player)
+        })
     }
 
     pub fn for_all_connected_players<F>(&self, mut closure: F) -> Result<()>
     where
         F: FnMut(&Player) -> Result<()>,
     {
-        let lock = self.active_players.read();
-        for (_, player) in lock.iter() {
-            closure(&player)?;
-        }
-        Ok(())
+        tokio::task::block_in_place(|| {
+            let lock = self.active_players.read();
+            for (_, player) in lock.iter() {
+                closure(&player)?;
+            }
+            Ok(())
+        })
     }
 
     pub async fn for_all_connected_players_async<F, G>(&self, mut closure: F) -> Result<()>
