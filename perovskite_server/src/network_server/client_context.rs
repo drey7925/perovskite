@@ -571,6 +571,7 @@ impl MapChunkSender {
         let skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
             self.elements_to_skip
         } else {
+            self.skip_if_near = position.position;
             0
         };
 
@@ -644,7 +645,6 @@ impl MapChunkSender {
                 }
             }
         }
-        self.skip_if_near = position.position;
         self.chunk_limit_aimd.lock().increase();
         Ok(())
     }
