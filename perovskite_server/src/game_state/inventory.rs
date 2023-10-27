@@ -751,7 +751,6 @@ impl<T> InventoryView<T> {
     pub fn peek(&self, context: &T) -> Result<Vec<Option<ItemStack>>> {
         match &self.backing {
             ViewBacking::Transient(contents) => Ok(contents
-                .borrow()
                 .try_read()
                 .context("already borrowed")?
                 .iter()

@@ -221,8 +221,8 @@ pub(crate) async fn make_client_contexts(
         outbound_tx: outbound_tx.clone(),
         chunk_tracker: chunk_tracker.clone(),
         player_position: pos_recv,
-        skip_if_near: Vector3::zero(),
-        elements_to_skip: 0,
+        skip_if_near: ChunkCoordinate { x: 0, y: 0, z: 0 },
+        processed_elements: 0,
         snappy_encoder: snap::raw::Encoder::new(),
         snappy_input_buffer: vec![],
         snappy_output_buffer: vec![],
@@ -437,8 +437,8 @@ pub(crate) struct MapChunkSender {
     chunk_tracker: Arc<ChunkTracker>,
 
     player_position: watch::Receiver<PositionAndPacing>,
-    skip_if_near: cgmath::Vector3<f64>,
-    elements_to_skip: usize,
+    skip_if_near: ChunkCoordinate,
+    processed_elements: usize,
 
     snappy_encoder: snap::raw::Encoder,
     snappy_input_buffer: Vec<u8>,
@@ -529,12 +529,14 @@ impl MapChunkSender {
                     .player_context
                     .set_position(fixed_position)
                     .await?;
-                fixed_position.try_into().unwrap_or_else(
-                    |e| {
-                        tracing::error!("Player had invalid position even after fix: {:?} {:?}", position.position, e);
-                        BlockCoordinate::new(0, 0, 0)
-                    }
-                )
+                fixed_position.try_into().unwrap_or_else(|e| {
+                    tracing::error!(
+                        "Player had invalid position even after fix: {:?} {:?}",
+                        position.position,
+                        e
+                    );
+                    BlockCoordinate::new(0, 0, 0)
+                })
             }
         };
         let player_chunk = player_block_coord.chunk();
@@ -568,11 +570,18 @@ impl MapChunkSender {
         // Chunks are expensive to load and send, so we keep track of
         let mut sent_chunks = 0;
 
-        let skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
-            self.elements_to_skip
+        let moved_distance = player_chunk.manhattan_distance(self.skip_if_near);
+        let skip = if moved_distance == 0 {
+            self.processed_elements
         } else {
-            self.skip_if_near = position.position;
-            0
+            self.skip_if_near = player_chunk;
+            // Find the highest distance we know we processed
+            let finished_distance = MAX_INDEX_FOR_DISTANCE
+                .partition_point(|&x| x < self.processed_elements)
+                .saturating_sub(2);
+            let new_distance = (finished_distance.saturating_sub(moved_distance as usize)).max(0);
+            self.processed_elements
+                .min(MIN_INDEX_FOR_DISTANCE[new_distance as usize])
         };
 
         let start_time = Instant::now();
@@ -613,7 +622,7 @@ impl MapChunkSender {
                 && (distance <= FORCE_LOAD_DISTANCE
                     || !self.context.game_state.game_map().in_pushback());
 
-            self.elements_to_skip = i;
+            self.processed_elements = i;
             if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
                 break;
             }
@@ -650,32 +659,36 @@ impl MapChunkSender {
     }
 
     async fn fix_position_and_notify(&self, position: Vector3<f64>) -> Result<Vector3<f64>> {
-        let new_position = if !position.x.is_finite() || !position.y.is_finite() || !position.z.is_finite() {
-            // The player somehow got an inf/nan position, so respawn them
-            self.context
-                .player_context
-                .send_chat_message(ChatMessage::new_server_message(
-                    "Your position is borked. Respawning you.",
-                ))
-                .await?;
-            (self.context.game_state.game_behaviors().spawn_location)(
-                &self.context.player_context.name,
-            )
-        } else {
-            // The position is finite but it's out of bounds
-            self.context
-                .player_context
-                .send_chat_message(ChatMessage::new_server_message(
-                    "How about we explore the area ahead of us later?",
-                ))
-                .await?;
-            Vector3::new(
-                position.x.clamp(-2147483640.0, 2147483640.0),
-                position.y.clamp(-2147483640.0, 2147483640.0),
-                position.z.clamp(-2147483640.0, 2147483640.0),
-            )
-        };
-        tracing::warn!("Fixing position for {}: {position:?} -> {new_position:?}", self.context.player_context.name);
+        let new_position =
+            if !position.x.is_finite() || !position.y.is_finite() || !position.z.is_finite() {
+                // The player somehow got an inf/nan position, so respawn them
+                self.context
+                    .player_context
+                    .send_chat_message(ChatMessage::new_server_message(
+                        "Your position is borked. Respawning you.",
+                    ))
+                    .await?;
+                (self.context.game_state.game_behaviors().spawn_location)(
+                    &self.context.player_context.name,
+                )
+            } else {
+                // The position is finite but it's out of bounds
+                self.context
+                    .player_context
+                    .send_chat_message(ChatMessage::new_server_message(
+                        "You've hit the edge of the map.",
+                    ))
+                    .await?;
+                Vector3::new(
+                    position.x.clamp(-2147483640.0, 2147483640.0),
+                    position.y.clamp(-2147483640.0, 2147483640.0),
+                    position.z.clamp(-2147483640.0, 2147483640.0),
+                )
+            };
+        tracing::warn!(
+            "Fixing position for {}: {position:?} -> {new_position:?}",
+            self.context.player_context.name
+        );
         Ok(new_position)
     }
 
@@ -1843,7 +1856,9 @@ impl EntityEventSender {
 // Chunks within this distance will be loaded into memory if not yet loaded
 const LOAD_EAGER_DISTANCE: i32 = 20;
 // Chunks within this distance will be sent if they are already loaded into memory
-const LOAD_LAZY_DISTANCE: i32 = 25;
+// TODO: This has to equal LOAD_EAGER_DISTANCE to avoid an issue where a chunk is lazily processed,
+// and then never eagerly re-processed as it gets closer
+const LOAD_LAZY_DISTANCE: i32 = LOAD_EAGER_DISTANCE;
 const UNLOAD_DISTANCE: i32 = 50;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
 const FORCE_LOAD_DISTANCE: i32 = 3;
@@ -1870,8 +1885,31 @@ lazy_static::lazy_static! {
         for (&x, &y, &z) in iproduct!(LOAD_LAZY_ZIGZAG_VEC.iter(), LOAD_LAZY_ZIGZAG_VEC.iter(), LOAD_LAZY_ZIGZAG_VEC.iter()) {
             v.push((x, y, z));
         }
-        v.sort_by_key(|(x, y, z)| x.abs() + (4 * y.abs()) + z.abs());
-        v.retain(|x| (x.0 + x.1 + x.2) <= LOAD_LAZY_DISTANCE);
+        v.sort_by_key(|(x, y, z)| x.abs() + y.abs() + z.abs());
+        v.retain(|x| (x.0.abs() + x.1.abs() + x.2.abs()) <= LOAD_LAZY_DISTANCE);
+        v
+    };
+    // chunk distance -> min index where we would encounter it
+    static ref MIN_INDEX_FOR_DISTANCE: Vec<usize> = {
+        let mut v = vec![];
+        v.resize((LOAD_LAZY_DISTANCE + 1) as usize, usize::MAX);
+        for (i, &(x, y, z)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate() {
+            let distance = (x.abs() + y.abs() + z.abs()) as usize;
+            v[distance] = v[distance].min(i);
+        }
+        for x in &v {
+            assert!(*x != usize::MAX);
+        }
+        v
+    };
+    // chunk distance -> max index where we would encounter it
+    static ref MAX_INDEX_FOR_DISTANCE: Vec<usize> = {
+        let mut v = vec![];
+        v.resize((LOAD_LAZY_DISTANCE + 1) as usize, 0);
+        for (i, &(x, y, z)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate() {
+            let distance = (x.abs() + y.abs() + z.abs()) as usize;
+            v[distance] = v[distance].max(i);
+        }
         v
     };
 }
