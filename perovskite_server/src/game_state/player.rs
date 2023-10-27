@@ -343,6 +343,12 @@ impl Player {
     pub fn temporary_permissions(&self) -> HashSet<String> {
         self.state.lock().temporary_permissions.clone()
     }
+
+    pub fn set_position(&self, position: Vector3<f64>) -> Result<()> {
+        self.state.lock().last_position.position = position;
+        tokio::task::block_in_place(|| self.sender.reinit_player_state.blocking_send(true))?;
+        Ok(())
+    }
 }
 
 pub(crate) struct PlayerState {

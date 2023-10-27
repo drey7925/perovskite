@@ -2395,6 +2395,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "cgmath",
  "console-subscriber",
  "dhat",
  "env_logger",

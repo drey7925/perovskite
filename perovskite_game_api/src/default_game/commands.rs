@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use cgmath::Vector3;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
     constants::permissions,
@@ -43,6 +44,11 @@ pub(crate) fn register_default_commands(game_builder: &mut DefaultGameBuilder) -
         "discardall",
         Box::new(DiscardAllCommand),
         ": Discards ALL items in your inventory.",
+    )?;
+    game_builder.add_command(
+        "teleport",
+        Box::new(TeleportCommand),
+        "[player] <x> <y> <z>: Teleports a player to the given coordinates. If no player specified, teleports you.",
     )?;
     Ok(())
 }
@@ -100,7 +106,9 @@ impl ChatCommandHandler for GiveMeCommand {
         Ok(())
     }
     fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
-        context.initiator().check_permission_if_player(permissions::GIVE)
+        context
+            .initiator()
+            .check_permission_if_player(permissions::GIVE)
     }
 }
 
@@ -164,7 +172,9 @@ impl ChatCommandHandler for GiveCommand {
         Ok(())
     }
     fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
-        context.initiator().check_permission_if_player(permissions::GIVE)
+        context
+            .initiator()
+            .check_permission_if_player(permissions::GIVE)
     }
 }
 
@@ -187,7 +197,9 @@ impl ChatCommandHandler for SetTimeCommand {
         Ok(())
     }
     fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
-        context.initiator().check_permission_if_player(permissions::WORLD_STATE)
+        context
+            .initiator()
+            .check_permission_if_player(permissions::WORLD_STATE)
     }
 }
 
@@ -219,7 +231,9 @@ impl ChatCommandHandler for DiscardCommand {
         Ok(())
     }
     fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
-        context.initiator().check_permission_if_player(permissions::INVENTORY)
+        context
+            .initiator()
+            .check_permission_if_player(permissions::INVENTORY)
     }
 }
 
@@ -247,6 +261,53 @@ impl ChatCommandHandler for DiscardAllCommand {
         Ok(())
     }
     fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
-        context.initiator().check_permission_if_player(permissions::INVENTORY)
+        context
+            .initiator()
+            .check_permission_if_player(permissions::INVENTORY)
+    }
+}
+
+struct TeleportCommand;
+#[async_trait]
+impl ChatCommandHandler for TeleportCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !context
+            .initiator()
+            .check_permission_if_player(permissions::WORLD_STATE)
+        {
+            bail!("Insufficient permissions");
+        }
+        let params = message.split_whitespace().collect::<Vec<_>>();
+        let (name, coords) = match params.len() {
+            4 => {
+                let name = match context.initiator() {
+                    EventInitiator::Player(p) => p.player.name(),
+                    _ => bail!("Incorrect usage: no player specified and caller was not a player"),
+                };
+                (
+                    name,
+                    (params[1].parse()?, params[2].parse()?, params[3].parse()?),
+                )
+            }
+            5 => (
+                params[1],
+                (params[2].parse()?, (params[3]).parse()?, params[4].parse()?),
+            ),
+            _ => bail!("Incorrect usage: should be /teleport [player] <x> <y> <z>"),
+        };
+        let coords = Vector3::<f64>::new(coords.0, coords.1, coords.2);
+        
+        if !coords.x.is_finite() || !coords.y.is_finite() || !coords.z.is_finite() {
+            bail!("Incorrect usage: a coordinate was infinite/NaN");
+        }
+
+        context
+            .player_manager()
+            .with_connected_player(name, |p| {
+                p.set_position(coords)?;
+                Ok(())
+            })?;
+
+        Ok(())
     }
 }

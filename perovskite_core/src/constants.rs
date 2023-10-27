@@ -123,7 +123,7 @@ pub mod permissions {
     /// The player may actually log in.
     /// If this is not granted, the player will be immediately disconnected after authentication.
     pub const LOG_IN: &str = "default:log_in";
-    /// Allows the user to mess with the world state (e.g. set time, weather, etc)
+    /// Allows the user to mess with the world state (e.g. set time, weather, player locations, etc)
     pub const WORLD_STATE: &str = "default:set_world_state";
     /// Allows the player to interact with inventories, popups, etc
     pub const INVENTORY: &str = "default:inventory";

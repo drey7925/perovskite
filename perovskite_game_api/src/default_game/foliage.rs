@@ -47,7 +47,6 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
                 MAPLE_TREE_SIDE_TEX,
                 MAPLE_TREE_SIDE_TEX,
             ))
-            .set_inventory_texture(MAPLE_TREE_TOP_TEX),
     )?;
     builder.game_builder().add_block(
         BlockBuilder::new(TALL_GRASS)
@@ -83,7 +82,6 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
                 .set_needs_transparency(),
         )
         .set_allow_light_propagation(true)
-        .set_inventory_texture(MAPLE_LEAVES_TEX)
         .build_and_deploy_into(builder.game_builder())?;
     Ok(())
 }
