@@ -18,7 +18,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     ops::Deref,
     sync::{Arc, Weak},
-    time::{Duration, Instant},
+    time::{Duration, Instant}, pin::Pin,
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -344,9 +344,9 @@ impl Player {
         self.state.lock().temporary_permissions.clone()
     }
 
-    pub fn set_position(&self, position: Vector3<f64>) -> Result<()> {
+    pub async fn set_position(&self, position: Vector3<f64>) -> Result<()> {
         self.state.lock().last_position.position = position;
-        tokio::task::block_in_place(|| self.sender.reinit_player_state.blocking_send(true))?;
+        self.sender.reinit_player_state.send(true).await?;
         Ok(())
     }
 }
@@ -621,6 +621,18 @@ impl PlayerManager {
         closure(&player)
     }
 
+    pub async fn with_connected_player_async<F, T>(&self, name: &str, closure: F) -> Result<T>
+    where
+        F: for <'a> FnOnce(&'a Player) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>,
+    {
+        let lock = tokio::task::block_in_place(|| self.active_players.read());
+        if !lock.contains_key(name) {
+            bail!("Player {name} not connected");
+        }
+        let player = lock.get(name).unwrap();
+        closure(&player).await
+    }
+
     pub fn for_all_connected_players<F>(&self, mut closure: F) -> Result<()>
     where
         F: FnMut(&Player) -> Result<()>,
@@ -628,6 +640,18 @@ impl PlayerManager {
         let lock = self.active_players.read();
         for (_, player) in lock.iter() {
             closure(&player)?;
+        }
+        Ok(())
+    }
+
+    pub async fn for_all_connected_players_async<F, G>(&self, mut closure: F) -> Result<()>
+    where
+        F: FnMut(&Player) -> G,
+        G: Future<Output = anyhow::Result<()>>,
+    {
+        let lock = tokio::task::block_in_place(|| self.active_players.read());
+        for (_, player) in lock.iter() {
+            closure(&player).await?;
         }
         Ok(())
     }

@@ -524,8 +524,17 @@ impl MapChunkSender {
                     position.position,
                     e
                 );
-                // TODO teleport the player
-                BlockCoordinate::new(0, 0, 0)
+                let fixed_position = self.fix_position_and_notify(position.position).await?;
+                self.context
+                    .player_context
+                    .set_position(fixed_position)
+                    .await?;
+                fixed_position.try_into().unwrap_or_else(
+                    |e| {
+                        tracing::error!("Player had invalid position even after fix: {:?} {:?}", position.position, e);
+                        BlockCoordinate::new(0, 0, 0)
+                    }
+                )
             }
         };
         let player_chunk = player_block_coord.chunk();
@@ -559,14 +568,14 @@ impl MapChunkSender {
         // Chunks are expensive to load and send, so we keep track of
         let mut sent_chunks = 0;
 
-        let _skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
+        let skip = if (self.skip_if_near - position.position).magnitude2() < 256.0 {
             self.elements_to_skip
         } else {
             0
         };
 
         let start_time = Instant::now();
-        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate().skip(0) {
+        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate().skip(skip) {
             let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
@@ -602,8 +611,9 @@ impl MapChunkSender {
             let should_load = distance <= LOAD_EAGER_DISTANCE
                 && (distance <= FORCE_LOAD_DISTANCE
                     || !self.context.game_state.game_map().in_pushback());
+
+            self.elements_to_skip = i;
             if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
-                self.elements_to_skip = i;
                 break;
             }
             let chunk_data = tokio::task::block_in_place(|| {
@@ -637,6 +647,37 @@ impl MapChunkSender {
         self.skip_if_near = position.position;
         self.chunk_limit_aimd.lock().increase();
         Ok(())
+    }
+
+    async fn fix_position_and_notify(&self, position: Vector3<f64>) -> Result<Vector3<f64>> {
+        tracing::warn!("Fixing position for {}: {position:?}", self.context.player_context.name);
+        let new_position = if !position.x.is_finite() || !position.y.is_finite() || !position.z.is_finite() {
+            // The player somehow got an inf/nan position, so respawn them
+            self.context
+                .player_context
+                .send_chat_message(ChatMessage::new_server_message(
+                    "Your position is borked. Respawning you.",
+                ))
+                .await?;
+            (self.context.game_state.game_behaviors().spawn_location)(
+                &self.context.player_context.name,
+            )
+        } else {
+            // The position is finite but it's out of bounds
+            self.context
+                .player_context
+                .send_chat_message(ChatMessage::new_server_message(
+                    "How about we explore the area ahead of us later?",
+                ))
+                .await?;
+            Vector3::new(
+                position.x.clamp(-2147483640.0, 2147483640.0),
+                position.y.clamp(-2147483640.0, 2147483640.0),
+                position.z.clamp(-2147483640.0, 2147483640.0),
+            )
+        };
+        tracing::warn!("Fixing position for {}: {position:?} -> {new_position:?}", self.context.player_context.name);
+        Ok(new_position)
     }
 
     fn should_unload(&self, player_chunk: ChunkCoordinate, chunk: ChunkCoordinate) -> bool {

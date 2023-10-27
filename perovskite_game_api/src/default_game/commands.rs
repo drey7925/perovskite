@@ -296,17 +296,18 @@ impl ChatCommandHandler for TeleportCommand {
             _ => bail!("Incorrect usage: should be /teleport [player] <x> <y> <z>"),
         };
         let coords = Vector3::<f64>::new(coords.0, coords.1, coords.2);
-        
+
         if !coords.x.is_finite() || !coords.y.is_finite() || !coords.z.is_finite() {
             bail!("Incorrect usage: a coordinate was infinite/NaN");
         }
 
         context
             .player_manager()
-            .with_connected_player(name, |p| {
-                p.set_position(coords)?;
+            .with_connected_player_async(name, |p| Box::pin(async move {
+                p.set_position(coords).await?;
                 Ok(())
-            })?;
+            }))
+            .await?;
 
         Ok(())
     }
