@@ -626,6 +626,10 @@ impl MapChunkSender {
             if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
                 break;
             }
+            // avoid starving other tasks
+            if i % 100 == 0 {
+                tokio::task::yield_now().await;
+            }
             let chunk_data = tokio::task::block_in_place(|| {
                 self.context
                     .game_state
