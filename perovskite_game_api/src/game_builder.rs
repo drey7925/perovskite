@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
+use std::{path::Path, time::Duration, collections::HashMap};
 
 use perovskite_core::{
     constants::{
@@ -33,7 +33,7 @@ use perovskite_core::{
 use perovskite_server::{
     game_state::{
         blocks::{BlockType, BlockTypeHandle},
-        items::Item, chat::commands::ChatCommandHandler,
+        items::Item, chat::commands::ChatCommandHandler, game_map::{TimerSettings, TimerCallback},
     },
     server::ServerBuilder,
 };
@@ -80,7 +80,7 @@ impl From<StaticItemName> for ItemName {
 /// breaking changes that do not follow semver, before 1.0
 use perovskite_server::server as server_api;
 
-use crate::{blocks::{BlockBuilder, BuiltBlock}, maybe_export};
+use crate::{blocks::{BlockBuilder, BuiltBlock, LiquidPropagator}, maybe_export};
 
 /// Stable API for building and configuring a game.
 ///
@@ -90,6 +90,7 @@ use crate::{blocks::{BlockBuilder, BuiltBlock}, maybe_export};
 pub struct GameBuilder {
     pub(crate) inner: ServerBuilder,
     pub(crate) air_block: BlockTypeHandle,
+    pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockTypeHandle>>,
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -114,12 +115,37 @@ impl GameBuilder {
 
     /// Returns the ServerBuilder with everything built so far.
     #[cfg(feature = "unstable_api")]
-    pub fn into_server_builder(self) -> server_api::ServerBuilder {
-        self.inner
+    pub fn into_server_builder(mut self) -> Result<server_api::ServerBuilder> {
+        self.pre_build()?;
+        Ok(self.inner)
+    }
+
+    fn pre_build(&mut self) -> Result<()> {
+        for (&period, liquid_group) in self.liquids_by_flow_time.iter() {
+            self.inner.add_timer(
+                format!("liquid_flow_{}", period.as_micros()),
+                TimerSettings {
+                    interval: period,
+                    shards: 16,
+                    spreading: 1.0,
+                    block_types: liquid_group.clone(),
+                    per_block_probability: 1.0,
+                    ignore_block_type_presence_check: true,
+                    idle_chunk_after_unchanged: true,
+                    ..Default::default()
+                },
+                TimerCallback::BulkUpdateWithNeighbors(Box::new(LiquidPropagator {
+                    liquids: liquid_group.clone(),
+                    air: self.air_block,
+                })),
+            )
+        }
+        Ok(())
     }
 
     /// Run the game server
-    pub fn run_game_server(self) -> Result<()> {
+    pub fn run_game_server(mut self) -> Result<()> {
+        self.pre_build()?;
         self.inner.build()?.serve()
     }
 
@@ -143,7 +169,7 @@ impl GameBuilder {
             allow_light_propagation: true,
         };
         let air_block = inner.blocks_mut().register_block(air_block)?;
-        Ok(GameBuilder { inner, air_block })
+        Ok(GameBuilder { inner, air_block, liquids_by_flow_time: HashMap::new() })
     }
     /// Registers a block and its corresponding item in the game.
     pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<BuiltBlock> {

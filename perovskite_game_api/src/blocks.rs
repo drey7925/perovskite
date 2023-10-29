@@ -213,6 +213,7 @@ pub struct BlockBuilder {
     pub(crate) client_info: BlockTypeDef,
     variant_effect: VariantEffect,
     liquid_flow_period: Option<Duration>,
+    falls_down: bool,
     matter_type: MatterType,
 }
 impl BlockBuilder {
@@ -266,6 +267,7 @@ impl BlockBuilder {
             },
             variant_effect: VariantEffect::None,
             liquid_flow_period: None,
+            falls_down: false,
             matter_type: MatterType::Solid,
         }
     }
@@ -435,9 +437,22 @@ impl BlockBuilder {
 
     /// Makes the block flow as a liquid on a regular basis. Setting period to None disables flow
     /// Note that you should also call set_matter_type(Liquid) if you want the block to interact
-    /// as a liquid (e.g. tools/blocks point through it/can replace it when placing, buckets point at it/fill it)
+    /// as a liquid (e.g. tools/blocks point through it/can replace it when placing, 
+    /// buckets point at it/fill it)
+    /// 
+    /// When multiple liquids share the same period, they can share a timer worker, which improves
+    /// CPU efficiency.
     pub fn set_liquid_flow(mut self, period: Option<Duration>) -> Self {
         self.liquid_flow_period = period;
+        self
+    }
+
+    /// Makes the block fall when there's nothing under it.
+    /// 
+    /// The exact implementation is subject to change. At the moment,
+    /// it is approximate, best-effort, and an abrupt, un-animated fall
+    pub fn set_falls_down(mut self, falls_down: bool) -> Self {
+        self.falls_down = falls_down;
         self
     }
 
@@ -516,28 +531,18 @@ impl BlockBuilder {
         game_builder.inner.items_mut().register_item(item)?;
 
         if let Some(period) = self.liquid_flow_period {
-            if !matches!(self.variant_effect, VariantEffect::None) {
+            if !matches!(self.variant_effect, VariantEffect::Liquid) {
                 tracing::warn!(
                     "Liquid flow is only supported for blocks with a liquid variant effect"
                 );
             }
-            game_builder.inner.add_timer(
-                format!("liquid_flow_{}", self.block_name),
-                TimerSettings {
-                    interval: period,
-                    shards: 16,
-                    spreading: 1.0,
-                    block_types: vec![block_handle],
-                    per_block_probability: 1.0,
-                    ignore_block_type_presence_check: true,
-                    idle_chunk_after_unchanged: true,
-                    ..Default::default()
-                },
-                TimerCallback::BulkUpdateWithNeighbors(Box::new(LiquidPropagator {
-                    this_liquid: block_handle,
-                    air: air_block,
-                })),
-            )
+            else {
+                game_builder.liquids_by_flow_time.entry(period).or_default().push(block_handle);
+            }
+        }
+
+        if self.falls_down {
+            tracing::warn!("Falling blocks are not implemented yet");
         }
 
         Ok(BuiltBlock {
@@ -711,9 +716,9 @@ pub mod variants {
     }
 }
 
-struct LiquidPropagator {
-    this_liquid: BlockTypeHandle,
-    air: BlockTypeHandle,
+pub(crate) struct LiquidPropagator {
+    pub(crate) liquids: Vec<BlockTypeHandle>,
+    pub(crate) air: BlockTypeHandle,
 }
 impl BulkUpdateCallback for LiquidPropagator {
     fn bulk_update_callback(
@@ -725,93 +730,109 @@ impl BulkUpdateCallback for LiquidPropagator {
         neighbors: Option<&ChunkNeighbors>,
     ) -> Result<()> {
         let neighbors = neighbors.unwrap();
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..16 {
-                    let offset = ChunkOffset { x, y, z };
-                    let coord = chunk_coordinate.with_offset(offset);
-                    let block = chunk.get_block(offset);
-                    if self.this_liquid.id().equals_ignore_variant(block)
-                        && block.variant() == 0xfff
-                    {
-                        // liquid sources are invariant.
-                        continue;
-                    }
-                    let is_air = self.air.id().equals_ignore_variant(block);
-                    let is_same_liquid = self.this_liquid.id().equals_ignore_variant(block);
-                    if is_air || is_same_liquid {
-                        // Apply the decay rule first
-                        let variant_from_decay = match block.variant() {
-                            // Air stays air, regardless of what variant it has
-                            _ if is_air => -1,
-                            // By default, decay one liquid level.
-                            // Zero becomes air
-                            0 => -1,
-                            // Source stays source
-                            0xfff if is_same_liquid => 0xfff,
-                            // and flowing water drops by a level
-                            x => (x.saturating_sub(1)).min(7) as i32,
-                        };
-                        let mut variant_from_flow = -1;
-                        for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)] {
-                            if let Some(neighbor_liquid) = coord
-                                .try_delta(dx, dy, dz)
-                                .and_then(|x| neighbors.get_block(x))
-                            {
-                                // if there's a matching liquid at the neighbor...
-                                if self
-                                    .this_liquid
-                                    .id()
-                                    .equals_ignore_variant(neighbor_liquid)
+        for liquid_type in self.liquids.iter() {
+            for x in 0..16 {
+                for z in 0..16 {
+                    for y in 0..16 {
+                        let offset = ChunkOffset { x, y, z };
+                        let coord = chunk_coordinate.with_offset(offset);
+                        let block = chunk.get_block(offset);
+                        if liquid_type.id().equals_ignore_variant(block)
+                            && block.variant() == 0xfff
+                        {
+                            // liquid sources are invariant.
+                            continue;
+                        }
+                        let is_air = self.air.id().equals_ignore_variant(block);
+                        let is_same_liquid = liquid_type.id().equals_ignore_variant(block);
+                        if is_air || is_same_liquid {
+                            // Apply the decay rule first
+                            let variant_from_decay = match block.variant() {
+                                // Air stays air, regardless of what variant it has
+                                _ if is_air => -1,
+                                // By default, decay one liquid level.
+                                // Zero becomes air
+                                0 => -1,
+                                // Source stays source
+                                0xfff if is_same_liquid => 0xfff,
+                                // and flowing water drops by a level
+                                x => (x.saturating_sub(1)).min(7) as i32,
+                            };
+                            let mut variant_from_flow = -1;
+                            for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)] {
+                                if let Some(neighbor_liquid) = coord
+                                    .try_delta(dx, dy, dz)
+                                    .and_then(|x| neighbors.get_block(x))
                                 {
-                                    // and the material below it causes it to spread...
-                                    if coord
-                                        .try_delta(dx, dy - 1, dz)
-                                        .and_then(|x| neighbors.get_block(x))
-                                        .is_some_and(|x| self.can_flow_laterally_over(x))
+                                    // if there's a matching liquid at the neighbor...
+                                    if liquid_type.id().equals_ignore_variant(neighbor_liquid)
                                     {
-                                        variant_from_flow = variant_from_flow
-                                            .max((neighbor_liquid.variant() as i32) - 1)
-                                            .min(7);
+                                        // and the material below it causes it to spread...
+                                        if coord
+                                            .try_delta(dx, dy - 1, dz)
+                                            .and_then(|x| neighbors.get_block(x))
+                                            .is_some_and(|x| self.can_flow_laterally_over(x, liquid_type))
+                                        {
+                                            variant_from_flow = variant_from_flow
+                                                .max((neighbor_liquid.variant() as i32) - 1)
+                                                .min(7);
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        if !coord
-                            .try_delta(0, -1, 0)
-                            .and_then(|x| neighbors.get_block(x))
-                            .is_some_and(|x| self.can_flow_laterally_over(x))
-                        {
-                            // If this block is draining directly down, clamp its variant (from flow) to 0.
-                            variant_from_flow = variant_from_flow.min(0);
-                        }
+                            if !coord
+                                .try_delta(0, -1, 0)
+                                .and_then(|x| neighbors.get_block(x))
+                                .is_some_and(|x| self.can_flow_laterally_over(x, liquid_type))
+                            {
+                                // If this block is draining directly down, clamp its variant (from flow) to 0.
+                                variant_from_flow = variant_from_flow.min(0);
+                            }
 
-                        if coord
-                            .try_delta(0, 1, 0)
-                            .and_then(|x| neighbors.get_block(x))
-                            .is_some_and(|x| x.equals_ignore_variant(self.this_liquid.id()))
-                        {
-                            // If there's liquid above, let it flow into here. This happens after clamping-to-zero (on downflow)
-                            // and overrides it.
-                            variant_from_flow = 7;
-                        }
+                            if coord
+                                .try_delta(0, 1, 0)
+                                .and_then(|x| neighbors.get_block(x))
+                                .is_some_and(|x| x.equals_ignore_variant(liquid_type.id()))
+                            {
+                                // If there's liquid above, let it flow into here. This happens after clamping-to-zero (on downflow)
+                                // and overrides it.
+                                variant_from_flow = 7;
+                            }
 
-                        let new_variant = variant_from_flow.max(variant_from_decay);
+                            let new_variant = variant_from_flow.max(variant_from_decay);
 
-                        let new_block = if new_variant < 0 {
-                            self.air
-                        } else {
-                            self.this_liquid.with_variant(new_variant as u16).unwrap()
-                        };
-                        if block != new_block.id() {
-                            chunk.set_block(coord.offset(), new_block, None);
+                            let new_block = if new_variant < 0 {
+                                self.air
+                            } else {
+                                liquid_type.with_variant(new_variant as u16).unwrap()
+                            };
+                            if block != new_block.id() {
+                                chunk.set_block(coord.offset(), new_block, None);
+                            }
                         }
                     }
                 }
             }
         }
+
         Ok(())
+    }
+}
+
+
+impl LiquidPropagator {
+    fn can_flow_laterally_over(&self, x: perovskite_core::block_id::BlockId, liquid_type: &BlockTypeHandle) -> bool {
+        if x.equals_ignore_variant(self.air.id()) {
+            // if it's air below, don't let it flow laterally
+            false
+        } else if x.equals_ignore_variant(liquid_type.id()) {
+            // if it's the same liquid below, don't let it flow laterally unless it's a source
+            x.variant() == 0xfff
+        } else {
+            // It's a different block
+            true
+        }
     }
 }
 
@@ -990,20 +1011,5 @@ impl AxisAlignedBoxesAppearanceBuilder {
 impl Default for AxisAlignedBoxesAppearanceBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl LiquidPropagator {
-    fn can_flow_laterally_over(&self, x: perovskite_core::block_id::BlockId) -> bool {
-        if x.equals_ignore_variant(self.air.id()) {
-            // if it's air below, don't let it flow laterally
-            false
-        } else if x.equals_ignore_variant(self.this_liquid.id()) {
-            // if it's the same liquid below, don't let it flow laterally unless it's a source
-            x.variant() == 0xfff
-        } else {
-            // It's a different block
-            true
-        }
     }
 }
