@@ -18,6 +18,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use perovskite_core::{
+    block_id::BlockId,
     constants::{
         block_groups::{self, DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID},
         items::default_item_interaction_rules,
@@ -51,6 +52,7 @@ use perovskite_server::game_state::{
     items::{HasInteractionRules, InteractionRuleExt, Item, ItemStack},
     GameState,
 };
+use rand::Rng;
 
 use crate::{
     game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
@@ -437,9 +439,9 @@ impl BlockBuilder {
 
     /// Makes the block flow as a liquid on a regular basis. Setting period to None disables flow
     /// Note that you should also call set_matter_type(Liquid) if you want the block to interact
-    /// as a liquid (e.g. tools/blocks point through it/can replace it when placing, 
+    /// as a liquid (e.g. tools/blocks point through it/can replace it when placing,
     /// buckets point at it/fill it)
-    /// 
+    ///
     /// When multiple liquids share the same period, they can share a timer worker, which improves
     /// CPU efficiency.
     pub fn set_liquid_flow(mut self, period: Option<Duration>) -> Self {
@@ -448,7 +450,7 @@ impl BlockBuilder {
     }
 
     /// Makes the block fall when there's nothing under it.
-    /// 
+    ///
     /// The exact implementation is subject to change. At the moment,
     /// it is approximate, best-effort, and an abrupt, un-animated fall
     pub fn set_falls_down(mut self, falls_down: bool) -> Self {
@@ -535,14 +537,17 @@ impl BlockBuilder {
                 tracing::warn!(
                     "Liquid flow is only supported for blocks with a liquid variant effect"
                 );
-            }
-            else {
-                game_builder.liquids_by_flow_time.entry(period).or_default().push(block_handle);
+            } else {
+                game_builder
+                    .liquids_by_flow_time
+                    .entry(period)
+                    .or_default()
+                    .push(block_handle);
             }
         }
 
         if self.falls_down {
-            tracing::warn!("Falling blocks are not implemented yet");
+            game_builder.falling_blocks.push(block_handle);
         }
 
         Ok(BuiltBlock {
@@ -716,6 +721,52 @@ pub mod variants {
     }
 }
 
+pub(crate) struct FallingBlocksPropagator {
+    pub(crate) blocks: Vec<BlockId>,
+    pub(crate) air: BlockTypeHandle,
+}
+impl BulkUpdateCallback for FallingBlocksPropagator {
+    fn bulk_update_callback(
+        &self,
+        _chunk_coordinate: ChunkCoordinate,
+        _timer_state: &TimerState,
+        _game_state: &Arc<GameState>,
+        chunk: &mut MapChunk,
+        _neighbors: Option<&ChunkNeighbors>,
+    ) -> Result<()> {
+        println!("Propagating falling blocks");
+        // consider whether we might have enough falling blocks that a linear scan becomes slow
+        for x in 0..16 {
+            for z in 0..16 {
+                // This doesn't cover edges. Edges are inherently more expensive.
+                for y in (0..15).rev() {
+                    // Reverse iteration isn't the most efficient, but 16 entries of four bytes
+                    // is 64 bytes, which fits in a cache line.
+                    //
+                    // Y covers 0 to 15. The block just above this Y covers 1 to 16.
+                    let bottom = ChunkOffset { x, y, z };
+                    let top = ChunkOffset { x, y: y + 1, z };
+                    let bottom_block = chunk.get_block(bottom);
+                    let top_block = chunk.get_block(top);
+                    // TODO this shouldn't just check for air - it should check for
+                    // liquids and any other blocks that opt into being crushed by
+                    // falling objects.
+                    //
+                    // This might take some design work, including additional callbacks
+                    // added to the block type that the falling block falls into
+                    if bottom_block == self.air
+                        && top_block != self.air
+                        && self.blocks.contains(&top_block)
+                    {
+                        chunk.swap_blocks(bottom, top);                            
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct LiquidPropagator {
     pub(crate) liquids: Vec<BlockTypeHandle>,
     pub(crate) air: BlockTypeHandle,
@@ -737,8 +788,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                         let offset = ChunkOffset { x, y, z };
                         let coord = chunk_coordinate.with_offset(offset);
                         let block = chunk.get_block(offset);
-                        if liquid_type.id().equals_ignore_variant(block)
-                            && block.variant() == 0xfff
+                        if liquid_type.id().equals_ignore_variant(block) && block.variant() == 0xfff
                         {
                             // liquid sources are invariant.
                             continue;
@@ -765,13 +815,14 @@ impl BulkUpdateCallback for LiquidPropagator {
                                     .and_then(|x| neighbors.get_block(x))
                                 {
                                     // if there's a matching liquid at the neighbor...
-                                    if liquid_type.id().equals_ignore_variant(neighbor_liquid)
-                                    {
+                                    if liquid_type.id().equals_ignore_variant(neighbor_liquid) {
                                         // and the material below it causes it to spread...
                                         if coord
                                             .try_delta(dx, dy - 1, dz)
                                             .and_then(|x| neighbors.get_block(x))
-                                            .is_some_and(|x| self.can_flow_laterally_over(x, liquid_type))
+                                            .is_some_and(|x| {
+                                                self.can_flow_laterally_over(x, liquid_type)
+                                            })
                                         {
                                             variant_from_flow = variant_from_flow
                                                 .max((neighbor_liquid.variant() as i32) - 1)
@@ -820,9 +871,12 @@ impl BulkUpdateCallback for LiquidPropagator {
     }
 }
 
-
 impl LiquidPropagator {
-    fn can_flow_laterally_over(&self, x: perovskite_core::block_id::BlockId, liquid_type: &BlockTypeHandle) -> bool {
+    fn can_flow_laterally_over(
+        &self,
+        x: perovskite_core::block_id::BlockId,
+        liquid_type: &BlockTypeHandle,
+    ) -> bool {
         if x.equals_ignore_variant(self.air.id()) {
             // if it's air below, don't let it flow laterally
             false

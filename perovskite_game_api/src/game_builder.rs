@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{path::Path, time::Duration, collections::HashMap};
+use std::{arch::x86_64, collections::HashMap, path::Path, time::Duration};
 
 use perovskite_core::{
     constants::{
-        block_groups::{DEFAULT_GAS},
-        blocks::AIR,
-        items::default_item_interaction_rules,
+        block_groups::DEFAULT_GAS, blocks::AIR, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
     protocol::{
@@ -33,7 +31,9 @@ use perovskite_core::{
 use perovskite_server::{
     game_state::{
         blocks::{BlockType, BlockTypeHandle},
-        items::Item, chat::commands::ChatCommandHandler, game_map::{TimerSettings, TimerCallback},
+        chat::commands::ChatCommandHandler,
+        game_map::{TimerCallback, TimerSettings},
+        items::Item,
     },
     server::ServerBuilder,
 };
@@ -80,7 +80,10 @@ impl From<StaticItemName> for ItemName {
 /// breaking changes that do not follow semver, before 1.0
 use perovskite_server::server as server_api;
 
-use crate::{blocks::{BlockBuilder, BuiltBlock, LiquidPropagator}, maybe_export};
+use crate::{
+    blocks::{BlockBuilder, BuiltBlock, FallingBlocksPropagator, LiquidPropagator},
+    maybe_export,
+};
 
 /// Stable API for building and configuring a game.
 ///
@@ -91,6 +94,7 @@ pub struct GameBuilder {
     pub(crate) inner: ServerBuilder,
     pub(crate) air_block: BlockTypeHandle,
     pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockTypeHandle>>,
+    pub(crate) falling_blocks: Vec<BlockTypeHandle>,
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -130,7 +134,7 @@ impl GameBuilder {
                     spreading: 1.0,
                     block_types: liquid_group.clone(),
                     per_block_probability: 1.0,
-                    ignore_block_type_presence_check: true,
+                    ignore_block_type_presence_check: false,
                     idle_chunk_after_unchanged: true,
                     ..Default::default()
                 },
@@ -140,6 +144,27 @@ impl GameBuilder {
                 })),
             )
         }
+
+        if !self.falling_blocks.is_empty() {
+            self.inner.add_timer(
+                "falling_blocks_inchunk",
+                TimerSettings {
+                    interval: Duration::from_secs(1),
+                    shards: 16,
+                    spreading: 1.0,
+                    block_types: self.falling_blocks.clone(),
+                    per_block_probability: 1.0,
+                    ignore_block_type_presence_check: false,
+                    idle_chunk_after_unchanged: true,
+                    ..Default::default()
+                },
+                TimerCallback::BulkUpdate(Box::new(FallingBlocksPropagator {
+                    blocks: self.falling_blocks.clone(),
+                    air: self.air_block,
+                })),
+            );
+        }
+
         Ok(())
     }
 
@@ -169,7 +194,12 @@ impl GameBuilder {
             allow_light_propagation: true,
         };
         let air_block = inner.blocks_mut().register_block(air_block)?;
-        Ok(GameBuilder { inner, air_block, liquids_by_flow_time: HashMap::new() })
+        Ok(GameBuilder {
+            inner,
+            air_block,
+            liquids_by_flow_time: HashMap::new(),
+            falling_blocks: vec![],
+        })
     }
     /// Registers a block and its corresponding item in the game.
     pub fn add_block(&mut self, block_builder: BlockBuilder) -> Result<BuiltBlock> {
@@ -207,11 +237,16 @@ impl GameBuilder {
             place_handler: None,
         })
     }
-    
+
     maybe_export!(
         /// Registers a chat command. name should not contain the leading slash
         // TODO: convert this into a builder once we have more features in commands
-        fn add_command(&mut self, name: &str, command: Box<dyn ChatCommandHandler>, help: &str) -> Result<()> {
+        fn add_command(
+            &mut self,
+            name: &str,
+            command: Box<dyn ChatCommandHandler>,
+            help: &str,
+        ) -> Result<()> {
             self.inner.register_command(name, command, help)?;
             Ok(())
         }

@@ -56,6 +56,10 @@ pub const DIRT: StaticBlockName = StaticBlockName("default:dirt");
 pub const DIRT_WITH_GRASS: StaticBlockName = StaticBlockName("default:dirt_with_grass");
 /// Solid grey stone.
 pub const STONE: StaticBlockName = StaticBlockName("default:stone");
+
+/// Beach sand.
+pub const SAND: StaticBlockName = StaticBlockName("default:sand");
+
 /// Transparent glass.
 pub const GLASS: StaticBlockName = StaticBlockName("default:glass");
 /// Unlocked chest.
@@ -75,6 +79,7 @@ const DIRT_TEXTURE: TextureName = TextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: TextureName = TextureName("default:dirt_grass_side");
 const GRASS_TOP_TEXTURE: TextureName = TextureName("default:grass_top");
 const STONE_TEXTURE: TextureName = TextureName("default:stone");
+const SAND_TEXTURE: TextureName = TextureName("default:sand");
 const GLASS_TEXTURE: TextureName = TextureName("default:glass");
 const WATER_TEXTURE: TextureName = TextureName("default:water");
 // TODO real chest texture
@@ -280,6 +285,8 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     )?;
     include_texture_bytes!(game_builder, GRASS_TOP_TEXTURE, "textures/grass_top.png")?;
     include_texture_bytes!(game_builder, STONE_TEXTURE, "textures/stone.png")?;
+    include_texture_bytes!(game_builder, SAND_TEXTURE, "textures/sand.png")?;
+
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
@@ -328,6 +335,14 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(STONE_TEXTURE)
             .set_display_name("Stone block"),
+    )?;
+
+    let _sand = game_builder.add_block(
+        BlockBuilder::new(SAND)
+            .add_block_group(GRANULAR)
+            .set_cube_single_texture(SAND_TEXTURE)
+            .set_display_name("Sand block")
+            .set_falls_down(true),
     )?;
 
     let glass = game_builder.add_block(

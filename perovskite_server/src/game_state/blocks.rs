@@ -259,10 +259,7 @@ impl BlockType {
 
     pub fn block_type_ref(&self, variant: u16) -> Result<BlockTypeHandle> {
         if let Some(unique_id) = self.block_type_manager_id {
-            Ok(BlockTypeHandle {
-                manager_unique_id: unique_id,
-                id: self.id(variant)?,
-            })
+            Ok(self.id(variant)?)
         } else {
             bail!(BlockError::BlockNotRegistered(
                 self.client_info.short_name.clone()
@@ -407,18 +404,11 @@ impl BlockTypeManager {
         if id.index() >= self.block_types.len() {
             bail!(BlockError::IdNotFound(id.into()));
         }
-        Ok(BlockTypeHandle {
-            manager_unique_id: self.unique_id,
-            id,
-        })
+        Ok(id)
     }
     /// Given a handle, return the block.
     pub fn get_block(&self, handle: &BlockTypeHandle) -> Result<(&BlockType, u16)> {
-        ensure!(
-            self.unique_id == handle.manager_unique_id,
-            BlockError::WrongManager(self.unique_id, handle.manager_unique_id)
-        );
-        self.get_block_by_id(handle.id)
+        self.get_block_by_id(*handle)
     }
 
     pub(crate) fn get_block_by_id(&self, id: BlockId) -> Result<(&BlockType, u16)> {
@@ -479,10 +469,7 @@ impl BlockTypeManager {
             }
         };
 
-        Ok(BlockTypeHandle {
-            manager_unique_id: self.unique_id,
-            id,
-        })
+        Ok(id)
     }
 
     pub(crate) fn from_proto(
@@ -604,28 +591,19 @@ impl BlockTypeManager {
             // Multiple threads might race, but they should set the same value anyway
             if let Some(&id) = self.name_to_base_id_map.get(&block_name.name) {
                 block_name.base_id.store(id, Ordering::Relaxed);
-                Some(BlockTypeHandle {
-                    manager_unique_id: self.unique_id,
-                    id: id.into(),
-                })
+                Some(id.into())
             } else {
                 None
             }
         } else {
-            Some(BlockTypeHandle {
-                manager_unique_id: self.unique_id,
-                id: cached.into(),
-            })
+            Some(cached.into())
         }
     }
 
     /// Tries to get a block by name. Equivalent to calling make_block_name and then resolve_name back to back.
     pub fn get_by_name(&self, block_name: &str) -> Option<BlockTypeHandle> {
         if let Some(&id) = self.name_to_base_id_map.get(block_name) {
-            Some(BlockTypeHandle {
-                manager_unique_id: self.unique_id,
-                id: id.into(),
-            })
+            Some(id.into())
         } else {
             None
         }
@@ -720,40 +698,8 @@ pub trait TryAsHandle {
 /// The game map, and other APIs, use this as a value type to indicate the type of a block (e.g. at a certain location
 /// in the map). This struct implements Copy and has no lifetime requirements to make it easier to use in
 /// these contexts.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BlockTypeHandle {
-    // Used to ensure that a BlockTypeHandle is used with the correct BlockTypeManager
-    manager_unique_id: usize,
-    id: BlockId,
-}
-impl BlockTypeHandle {
-    /// Returns a BlockTypeHandle for the same block with the indicated variant.
-    pub fn with_variant(&self, variant: u16) -> Result<BlockTypeHandle> {
-        ensure!(
-            variant & (BLOCK_VARIANT_MASK as u16) == variant,
-            BlockError::VariantOutOfRange(variant)
-        );
-        let new_id = BlockId::new(self.id.base_id(), variant)?;
-        Ok(BlockTypeHandle {
-            manager_unique_id: self.manager_unique_id,
-            id: new_id,
-        })
-    }
-    pub fn variant(&self) -> u16 {
-        self.id.variant()
-    }
-    pub fn id(&self) -> BlockId {
-        self.id
-    }
-    pub fn equals_ignore_variant(&self, other: BlockTypeHandle) -> bool {
-        self.id.base_id() == other.id.base_id()
-    }
-}
-impl Debug for BlockTypeHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("blocktype:0x{:x}", self.id.0))
-    }
-}
+pub type BlockTypeHandle = BlockId;
+
 impl TryAsHandle for BlockTypeHandle {
     #[inline]
     fn as_handle(&self, _manager: &BlockTypeManager) -> Option<BlockTypeHandle> {

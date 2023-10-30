@@ -57,6 +57,13 @@ impl BlockId {
     pub fn variant(&self) -> u16 {
         (self.0 & BLOCK_VARIANT_MASK) as u16
     }
+    pub fn with_variant(self, variant: u16) -> Result<BlockId> {
+        ensure!(
+            variant & (BLOCK_VARIANT_MASK as u16) == variant,
+            BlockError::VariantOutOfRange(variant)
+        );
+        Ok(BlockId(self.base_id() | (variant as u32)))
+    }
     pub fn new(base: u32, variant: u16) -> Result<BlockId> {
         ensure!(
             base & BLOCK_VARIANT_MASK == 0,
@@ -72,7 +79,12 @@ impl BlockId {
     pub fn equals_ignore_variant(&self, other: BlockId) -> bool {
         self.base_id() == other.base_id()
     }
+    #[deprecated]
+    pub fn id(&self) -> BlockId {
+        *self
+    }
 }
+
 impl From<u32> for BlockId {
     fn from(value: u32) -> Self {
         BlockId(value)

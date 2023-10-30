@@ -296,7 +296,7 @@ impl MapChunk {
     ) {
         let old_block = BlockId(self.block_ids[coordinate.as_index()]);
         let extended_data_was_some = extended_data.is_some();
-        self.block_ids[coordinate.as_index()] = block.id().into();
+        self.block_ids[coordinate.as_index()] = block.into();
         let old_ext_data = if let Some(extended_data) = extended_data {
             self.extended_data
                 .insert(coordinate.as_index().try_into().unwrap(), extended_data)
@@ -305,12 +305,29 @@ impl MapChunk {
                 .remove(&coordinate.as_index().try_into().unwrap())
         };
 
-        if old_block != block.id() || extended_data_was_some || old_ext_data.is_some() {
+        if old_block != block || extended_data_was_some || old_ext_data.is_some() {
             self.dirty = true;
         }
     }
+    /// Swaps blocks at two offsets, with extended data moved along with them
+    pub fn swap_blocks(&mut self, a: ChunkOffset, b: ChunkOffset) {
+        if a == b {
+            return;
+        }
+        self.block_ids.swap(a.as_index(), b.as_index());
+        let a_ext = self.extended_data.remove(&(a.as_index() as u16));
+        let b_ext = self.extended_data.remove(&(b.as_index() as u16));
+        if let Some(a_ext) = a_ext {
+            self.extended_data.insert(b.as_index() as u16, a_ext);
+        }
+        if let Some(b_ext) = b_ext {
+            self.extended_data.insert(a.as_index() as u16, b_ext);
+        }
+        self.dirty = true;
+    }
+
     #[inline]
-    pub fn get_block(&self, coordinate: ChunkOffset) -> BlockId {
+    pub fn get_block(&self, coordinate: ChunkOffset) -> BlockTypeHandle {
         BlockId(self.block_ids[coordinate.as_index()])
     }
 }
@@ -780,6 +797,23 @@ impl ServerGameMap {
         self.block_type_manager().make_blockref(id.into())
     }
 
+    /// Attempts to get a block without its extended data. Will not attempt to load blocks on cache misses
+    ///
+    /// This avoids taking write locks or doing expensive IO, at the expense of sometimes not being able to
+    /// actually get the block
+    pub fn try_get_block(&self, coord: BlockCoordinate) -> Result<Option<BlockTypeHandle>> {
+        let chunk_guard = match self.try_get_chunk(coord.chunk())? {
+            Some(chunk_guard) => chunk_guard,
+            None => return Ok(None),
+        };
+        let chunk = match chunk_guard.try_get()? {
+            Some(chunk) => chunk,
+            None => return Ok(None),
+        };
+        let id = chunk.block_ids[coord.offset().as_index()];
+        Ok(Some(self.block_type_manager().make_blockref(id.into())?))
+    }
+
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
     /// The old block is returned along with its extended data, if any.
     pub fn set_block<T: TryAsHandle>(
@@ -788,7 +822,7 @@ impl ServerGameMap {
         block: T,
         new_data: Option<ExtendedData>,
     ) -> Result<(BlockTypeHandle, Option<ExtendedData>)> {
-        let block = block
+        let new_id = block
             .as_handle(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
@@ -805,7 +839,6 @@ impl ServerGameMap {
                 .extended_data
                 .remove(&coord.offset().as_index().try_into().unwrap()),
         };
-        let new_id = block.id();
         chunk.block_ids[coord.offset().as_index()] = new_id.into();
 
         chunk.dirty = true;
@@ -824,12 +857,12 @@ impl ServerGameMap {
         drop(chunk);
         chunk_guard
             .block_bloom_filter
-            .insert(block.id().base_id() as u64);
+            .insert(new_id.base_id() as u64);
 
         self.enqueue_writeback(chunk_guard)?;
         self.broadcast_block_change(BlockUpdate {
             location: coord,
-            new_value: block.id(),
+            new_value: new_id,
         });
         Ok((old_block, old_data))
     }
@@ -1217,6 +1250,28 @@ impl ServerGameMap {
             log::warn!("Took {load_chunk_tries} tries to load {coord:?}");
         }
         result
+    }
+
+    #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]
+    fn try_get_chunk<'a>(
+        &'a self,
+        coord: ChunkCoordinate,
+    ) -> Result<Option<MapChunkOuterGuard<'a>>> {
+        let shard = shard_id(coord);
+        let guard = self.live_chunks[shard].read();
+        // We need this check - if the chunk isn't in memory, we cannot construct a MapChunkOuterGuard for it
+        // (unwrapping will panic)
+        //
+        // As long as the guard lives, nobody can remove the entry from the map
+        if !guard.chunks.contains_key(&coord) {
+            return Ok(None);
+        }
+        return Ok(Some(MapChunkOuterGuard {
+            read_guard: guard,
+            coord,
+            writeback_permit: None,
+            force_writeback: false,
+        }));
     }
 
     fn get_writeback_permit(&self, shard: usize) -> Result<mpsc::Permit<'_, WritebackReq>> {
@@ -1858,7 +1913,7 @@ impl GameMapTimer {
         game_state: Arc<GameState>,
     ) -> Result<()> {
         let block_types =
-            FxHashSet::from_iter(self.settings.block_types.iter().map(|x| x.id().base_id()));
+            FxHashSet::from_iter(self.settings.block_types.iter().map(|x| x.base_id()));
 
         let mut interval = tokio::time::interval_at(start_time.into(), self.settings.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1926,15 +1981,23 @@ impl GameMapTimer {
             }
             // this does the locking twice, with the benefit that it elides all of the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
-            let (matches, latest_update) =
-                self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.game_map(), false)?;
+            let (matches, latest_update) = self.build_neighbors(
+                &mut state.neighbor_buffer,
+                coord,
+                game_state.game_map(),
+                false,
+            )?;
             let should_run = (!self.settings.idle_chunk_after_unchanged
                 || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
                 && matches;
 
             if should_run {
-                let (_, _) =
-                    self.build_neighbors(&mut state.neighbor_buffer, coord, game_state.game_map(), true)?;
+                let (_, _) = self.build_neighbors(
+                    &mut state.neighbor_buffer,
+                    coord,
+                    game_state.game_map(),
+                    true,
+                )?;
                 let shard = game_state.game_map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
                     if let Some(mut chunk) = holder.try_get()? {
@@ -2027,14 +2090,18 @@ impl GameMapTimer {
             if writeback_permit.is_none() {
                 // A chunk used our writeback permit. Get a new one.
                 // Fast path - if we can get a permit without blocking, take it
-                if let Some(permit) = game_state.game_map().try_get_writeback_permit(coarse_shard)? {
+                if let Some(permit) = game_state
+                    .game_map()
+                    .try_get_writeback_permit(coarse_shard)?
+                {
                     writeback_permit = Some(permit);
                 } else {
                     // We need to release the read lock to get a permit, as the writeback thread needs to get a write lock
                     // to make progress.
                     drop(read_lock);
 
-                    writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
+                    writeback_permit =
+                        Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
 
                     read_lock = {
                         let _span = span!("reacquire game_map read lock (need permit)");
@@ -2047,20 +2114,25 @@ impl GameMapTimer {
             }
             if let Some(chunk) = read_lock.chunks.get(&coord) {
                 if self.settings.ignore_block_type_presence_check
-                    || self.settings.block_types.iter().any(|x| {
-                        chunk
-                            .block_bloom_filter
-                            .maybe_contains(x.id().base_id() as u64)
-                    })
+                    || self
+                        .settings
+                        .block_types
+                        .iter()
+                        .any(|x| chunk.block_bloom_filter.maybe_contains(x.base_id() as u64))
                 {
-                    self.handle_chunk_no_neighbors(
-                        coord,
-                        chunk,
-                        &game_state,
-                        block_types,
-                        &mut writeback_permit,
-                        state,
-                    )?;
+                    let last_update = *chunk.last_written.lock();
+                    let should_run = !self.settings.idle_chunk_after_unchanged
+                        || last_update >= state.timer_state.prev_tick_time;
+                    if should_run {
+                        self.handle_chunk_no_neighbors(
+                            coord,
+                            chunk,
+                            &game_state,
+                            block_types,
+                            &mut writeback_permit,
+                            state,
+                        )?;
+                    }
                 }
             }
         }
