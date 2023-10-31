@@ -93,6 +93,7 @@ impl Default for GameBehaviors {
                 LOG_IN.to_string(),
                 WORLD_STATE.to_string(),
                 INVENTORY.to_string(),
+                CHAT.to_string()
             ]),
             ambient_permissions: HashSet::from([]),
             super_users: HashSet::from([]),
