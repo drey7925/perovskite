@@ -135,20 +135,17 @@ impl ChunkColumn {
         assert!(self.present.remove(&chunk_y).is_some());
     }
 
-    /// Returns an immutable reference to the chunk lighting state for the given chunk.
-    /// Panics if the chunk is not present.
-    pub fn lock_for_read(&self, chunk_y: i32) -> RwLockReadGuard<'_, ChunkLightingState> {
-        self.present.get(&chunk_y).unwrap().read()
-    }
+
     /// Returns a cursor that starts in a state where it can propagate light *into* the given chunk
     /// from the previous chunk above it.
     pub fn cursor_into(&self, chunk_y: i32) -> ChunkColumnCursor<'_> {
         // Lock ordering: predecessor read() is called before current write()
-        let predecessor = self
+        let (prev_pos, predecessor) = self
             .present
             .range((chunk_y + 1)..)
             .next()
-            .map(|(_, guard)| guard.read());
+            .map(|(pos, guard)| (*pos, guard.read())).unzip();
+
         let current = self.present.get(&chunk_y).unwrap().write();
         ChunkColumnCursor {
             generation: self
@@ -156,6 +153,7 @@ impl ChunkColumn {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             map: &self.present,
             current_pos: chunk_y,
+            prev_pos,
             previous: predecessor,
             current,
         }
@@ -172,14 +170,25 @@ impl ChunkColumn {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             map: &self.present,
             current_pos: *successor.0,
+            prev_pos: Some(chunk_y),
             previous: Some(current),
             current: successor.1.write(),
         })
     }
+
+    /// Returns a cursor out of the first possible chunk, into the second chunk.
+    pub fn cursor_out_of_first(&self) -> Option<ChunkColumnCursor<'_>> {
+        self.cursor_out_of(*self.present.last_key_value()?.0)
+    }
+
     /// Returns the incoming light for the given chunk.
     /// Takes a short-lived read lock.
     pub fn get_incoming_light(&self, y: i32) -> Option<Lightfield> {
         self.present.get(&y).map(|x| x.read().incoming)
+    }
+
+    pub fn copy_keys(&self) -> Vec<i32> {
+        self.present.keys().copied().collect()
     }
 }
 
@@ -188,6 +197,7 @@ pub struct ChunkColumnCursor<'a> {
     generation: usize,
     map: &'a BTreeMap<i32, RwLock<ChunkLightingState>>,
     current_pos: i32,
+    prev_pos: Option<i32>,
     pub(crate) previous: Option<RwLockReadGuard<'a, ChunkLightingState>>,
     pub(crate) current: RwLockWriteGuard<'a, ChunkLightingState>,
 }
@@ -208,10 +218,18 @@ impl<'a> ChunkColumnCursor<'a> {
         Some(ChunkColumnCursor {
             generation: self.generation,
             map: self.map,
+            prev_pos: Some(self.current_pos),
             current_pos: *new_current.0,
             previous: Some(new_previous),
             current: new_current.1.write(),
         })
+    }
+
+    pub fn current_pos(&self) -> i32 {
+        self.current_pos
+    }
+    pub fn previous_pos(&self) -> Option<i32> {
+        self.prev_pos
     }
 
     pub fn propagate_lighting(mut self) -> usize {

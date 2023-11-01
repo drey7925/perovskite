@@ -81,7 +81,7 @@ impl From<StaticItemName> for ItemName {
 use perovskite_server::server as server_api;
 
 use crate::{
-    blocks::{BlockBuilder, BuiltBlock, FallingBlocksPropagator, LiquidPropagator},
+    blocks::{BlockBuilder, BuiltBlock, FallingBlocksPropagator, LiquidPropagator, FallingBlocksChunkEdgePropagator},
     maybe_export,
 };
 
@@ -147,21 +147,25 @@ impl GameBuilder {
 
         if !self.falling_blocks.is_empty() {
             self.inner.add_timer(
-                "falling_blocks_inchunk",
+                "falling_blocks",
                 TimerSettings {
                     interval: Duration::from_secs(1),
                     shards: 16,
                     spreading: 1.0,
                     block_types: self.falling_blocks.clone(),
                     per_block_probability: 1.0,
-                    ignore_block_type_presence_check: false,
-                    idle_chunk_after_unchanged: true,
+                    ignore_block_type_presence_check: true,
+                    idle_chunk_after_unchanged: false,
                     ..Default::default()
                 },
-                TimerCallback::BulkUpdate(Box::new(FallingBlocksPropagator {
+                // TimerCallback::BulkUpdate(Box::new(FallingBlocksPropagator {
+                //     blocks: self.falling_blocks.clone(),
+                //     air: self.air_block,
+                // })),
+                TimerCallback::LockedVerticalNeighors(Box::new(FallingBlocksChunkEdgePropagator {
                     blocks: self.falling_blocks.clone(),
-                    air: self.air_block,
-                })),
+                    air: self.air_block, 
+                }))
             );
         }
 

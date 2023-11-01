@@ -47,7 +47,7 @@ use perovskite_server::game_state::{
     event::HandlerContext,
     game_map::{
         BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings,
-        TimerState,
+        TimerState, VerticalNeighborTimerCallback,
     },
     items::{HasInteractionRules, InteractionRuleExt, Item, ItemStack},
     GameState,
@@ -758,7 +758,85 @@ impl BulkUpdateCallback for FallingBlocksPropagator {
                         && top_block != self.air
                         && self.blocks.contains(&top_block)
                     {
-                        chunk.swap_blocks(bottom, top);                            
+                        chunk.swap_blocks(bottom, top);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+pub(crate) struct FallingBlocksChunkEdgePropagator {
+    pub(crate) blocks: Vec<BlockId>,
+    pub(crate) air: BlockTypeHandle,
+}
+impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
+    fn vertical_neighbor_callback(
+        &self,
+        _upper: ChunkCoordinate,
+        _lower: ChunkCoordinate,
+        upper_chunk: &mut MapChunk,
+        lower_chunk: &mut MapChunk,
+        _timer_state: &TimerState,
+        _game_state: &Arc<GameState>,
+    ) -> Result<()> {
+        let blocks = self.blocks.iter().map(|&b| b.base_id()).collect::<Vec<_>>();
+        //println!("Propagating falling blocks");
+        // consider whether we might have enough falling blocks that a linear scan becomes slow
+        for x in 0..16 {
+            for z in 0..16 {
+                // Upper chunk first
+                for y in (0..15).rev() {
+                    // Reverse iteration isn't the most efficient, but 16 entries of four bytes
+                    // is 64 bytes, which fits in a cache line.
+                    //
+                    // Y covers 0 to 15. The block just above this Y covers 1 to 16.
+                    let bottom = ChunkOffset { x, y, z };
+                    let top = ChunkOffset { x, y: y + 1, z };
+                    let bottom_block = upper_chunk.get_block(bottom);
+                    let top_block = upper_chunk.get_block(top);
+                    // TODO this shouldn't just check for air - it should check for
+                    // liquids and any other blocks that opt into being crushed by
+                    // falling objects.
+                    //
+                    // This might take some design work, including additional callbacks
+                    // added to the block type that the falling block falls into
+                    if bottom_block == self.air
+                        && top_block != self.air
+                        && blocks.contains(&top_block.base_id())
+                    {
+                        upper_chunk.swap_blocks(bottom, top);
+                    }
+                }
+                // then the seam
+                let lower_coord = ChunkOffset { x, y: 15, z };
+                let upper_coord = ChunkOffset { x, y: 0, z };
+                let bottom_block = lower_chunk.get_block(lower_coord);
+                let top_block = upper_chunk.get_block(upper_coord);
+                if bottom_block == self.air
+                    && top_block != self.air
+                    && blocks.contains(&top_block.base_id())
+                {
+                    MapChunk::swap_blocks_across_chunks(
+                        lower_chunk,
+                        upper_chunk,
+                        lower_coord,
+                        upper_coord,
+                    );
+                }
+
+                // and now for the lower chunk
+                for y in (0..15).rev() {
+                    let bottom = ChunkOffset { x, y, z };
+                    let top = ChunkOffset { x, y: y + 1, z };
+                    let bottom_block: BlockId = lower_chunk.get_block(bottom);
+                    let top_block = lower_chunk.get_block(top);
+
+                    if bottom_block.equals_ignore_variant(self.air)
+                        && !top_block.equals_ignore_variant(self.air)
+                        && blocks.contains(&top_block.base_id())
+                    {
+                        lower_chunk.swap_blocks(bottom, top);
                     }
                 }
             }
@@ -788,13 +866,13 @@ impl BulkUpdateCallback for LiquidPropagator {
                         let offset = ChunkOffset { x, y, z };
                         let coord = chunk_coordinate.with_offset(offset);
                         let block = chunk.get_block(offset);
-                        if liquid_type.id().equals_ignore_variant(block) && block.variant() == 0xfff
+                        if liquid_type.equals_ignore_variant(block) && block.variant() == 0xfff
                         {
                             // liquid sources are invariant.
                             continue;
                         }
-                        let is_air = self.air.id().equals_ignore_variant(block);
-                        let is_same_liquid = liquid_type.id().equals_ignore_variant(block);
+                        let is_air = self.air.equals_ignore_variant(block);
+                        let is_same_liquid = liquid_type.equals_ignore_variant(block);
                         if is_air || is_same_liquid {
                             // Apply the decay rule first
                             let variant_from_decay = match block.variant() {
@@ -815,7 +893,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                                     .and_then(|x| neighbors.get_block(x))
                                 {
                                     // if there's a matching liquid at the neighbor...
-                                    if liquid_type.id().equals_ignore_variant(neighbor_liquid) {
+                                    if liquid_type.equals_ignore_variant(neighbor_liquid) {
                                         // and the material below it causes it to spread...
                                         if coord
                                             .try_delta(dx, dy - 1, dz)
@@ -844,7 +922,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                             if coord
                                 .try_delta(0, 1, 0)
                                 .and_then(|x| neighbors.get_block(x))
-                                .is_some_and(|x| x.equals_ignore_variant(liquid_type.id()))
+                                .is_some_and(|x| x.equals_ignore_variant(*liquid_type))
                             {
                                 // If there's liquid above, let it flow into here. This happens after clamping-to-zero (on downflow)
                                 // and overrides it.
@@ -858,7 +936,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                             } else {
                                 liquid_type.with_variant(new_variant as u16).unwrap()
                             };
-                            if block != new_block.id() {
+                            if block != new_block {
                                 chunk.set_block(coord.offset(), new_block, None);
                             }
                         }
@@ -877,10 +955,10 @@ impl LiquidPropagator {
         x: perovskite_core::block_id::BlockId,
         liquid_type: &BlockTypeHandle,
     ) -> bool {
-        if x.equals_ignore_variant(self.air.id()) {
+        if x.equals_ignore_variant(self.air) {
             // if it's air below, don't let it flow laterally
             false
-        } else if x.equals_ignore_variant(liquid_type.id()) {
+        } else if x.equals_ignore_variant(*liquid_type) {
             // if it's the same liquid below, don't let it flow laterally unless it's a source
             x.variant() == 0xfff
         } else {

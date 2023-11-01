@@ -19,8 +19,10 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
+use std::arch::x86_64::__m128;
+use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::{
     collections::HashSet,
@@ -326,6 +328,34 @@ impl MapChunk {
         self.dirty = true;
     }
 
+    pub fn swap_blocks_across_chunks(
+        a_chunk: &mut Self,
+        b_chunk: &mut Self,
+        a_coord: ChunkOffset,
+        b_coord: ChunkOffset,
+    ) {
+        std::mem::swap(
+            &mut a_chunk.block_ids[a_coord.as_index()],
+            &mut b_chunk.block_ids[b_coord.as_index()],
+        );
+
+        // a_chunk and b_chunk cannot alias each other, so no need for an equality check
+        let a_ext = a_chunk.extended_data.remove(&(a_coord.as_index() as u16));
+        let b_ext = b_chunk.extended_data.remove(&(b_coord.as_index() as u16));
+        if let Some(a_ext) = a_ext {
+            b_chunk
+                .extended_data
+                .insert(b_coord.as_index() as u16, a_ext);
+        }
+        if let Some(b_ext) = b_ext {
+            a_chunk
+                .extended_data
+                .insert(a_coord.as_index() as u16, b_ext);
+        }
+        a_chunk.dirty = true;
+        b_chunk.dirty = true;
+    }
+
     #[inline]
     pub fn get_block(&self, coordinate: ChunkOffset) -> BlockTypeHandle {
         BlockId(self.block_ids[coordinate.as_index()])
@@ -490,6 +520,7 @@ impl MapChunkHolder {
         }
     }
     /// Get the chunk, returning None if it's not loaded yet
+    /// However, this WILL wait for the mutex (just not for loading)
     fn try_get(&self) -> Result<Option<MapChunkInnerGuard<'_>>> {
         let guard = self.chunk.lock();
         match &*guard {
@@ -1782,6 +1813,26 @@ pub trait BulkUpdateCallback: Send + Sync {
     ) -> Result<()>;
 }
 
+pub trait VerticalNeighborTimerCallback: Send + Sync {
+    /// Called once for each chunk that *might* contain one of the block types configured for this timer.
+    ///
+    /// In particular, this will be called when either upper or lower contains the block type in question.
+    ///
+    /// *This is a probabilistic check, and the callback may be called even if a configured block type is not actually
+    ///    present.*
+    ///
+    /// Performance tip: Iterating in x/z/y (y on the innermost loop) order is the most cache-friendly order possible.
+    fn vertical_neighbor_callback(
+        &self,
+        upper: ChunkCoordinate,
+        lower: ChunkCoordinate,
+        upper_chunk: &mut MapChunk,
+        lower_chunk: &mut MapChunk,
+        timer_state: &TimerState,
+        game_state: &Arc<GameState>,
+    ) -> Result<()>;
+}
+
 pub enum TimerCallback {
     /// Callback operating on one block at a time. The engine may call it concurrently for multiple
     /// blocks in a chunk, or for multiple chunks. The timing of the callback may be changed between versions,
@@ -1797,6 +1848,16 @@ pub enum TimerCallback {
     ///
     /// Neighbor data is passed.
     BulkUpdateWithNeighbors(Box<dyn BulkUpdateCallback>),
+    /// A fast callback that gives you locked access to *two* vertically contiguous chunks
+    /// at a time. The iteration order is top-to-bottom, and only vertically contiguous chunks
+    /// are supported. This takes advantage of lighting-related acceleration structures.
+    ///
+    /// Note that the sharding policy of this timer may be significantly different from other
+    /// timer types. In the current implementation, sharding is done based on vertical slices
+    /// of the loaded map, rather than on a chunk-by-chunk basis.
+    ///
+    /// Experimental, subject to change (even more so than everything else in this crate)
+    LockedVerticalNeighors(Box<dyn VerticalNeighborTimerCallback>),
 }
 
 /// Marker that a struct may be extended in the future
@@ -1878,6 +1939,9 @@ impl GameMapTimer {
                     let cloned_game_state = game_state.clone();
                     tasks.push(crate::spawn_async(
                         &format!("timer_{}_shard_{}", self.name, fine_shard),
+                        // TODO error-check this
+                        // It's brittle on shutdown due to closed channels
+                        // We should probaly shut down the timers before shutting down the rest of the map
                         async move {
                             cloned_self
                                 .run_shard(
@@ -1943,6 +2007,126 @@ impl GameMapTimer {
         Ok(())
     }
 
+    fn do_vertical_neighbor_locking(
+        &self,
+        coarse_shard: usize,
+        fine_shard: usize,
+        fine_shards_per_coarse: usize,
+        game_state: Arc<GameState>,
+        state: &mut ShardState,
+    ) -> Result<()> {
+        let _span = span!("timer tick hand-over-hand");
+        let mut writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
+        let mut writeback_permit2 = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
+
+        // Read the 2D slice coords we will work on, and then unlock
+        let mut read_lock = {
+            let _span = span!("acquire game_map read lock");
+            game_state.game_map().live_chunks[coarse_shard].read()
+        };
+        let mut coords = {
+            let _span = span!("read and filter chunks");
+            read_lock
+                .light_columns
+                .keys()
+                .filter(|&coord| {
+                    let mut hasher = FxHasher::default();
+                    coord.hash(&mut hasher);
+                    hasher.finish() % fine_shards_per_coarse as u64 == fine_shard as u64
+                })
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        // Basic sort to try to increase locality a bit
+        coords.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+        for (x, z) in coords.into_iter() {
+            {
+                // we have a light column
+                let light_col = match read_lock.light_columns.get(&(x, z)) {
+                    Some(light_col) => light_col.copy_keys(),
+                    None => {
+                        continue;
+                    }
+                };
+                // It's a bit of a pain to get safe deadlock-free borrows to work correctly if we actually use the chunk cursor.
+                // To be clear, this is not a limitation of the borrow-checker; it is a limitation of the logic I managed to
+                // come up with when I tried the nifty approach here
+
+                // array_windows is unstable, so we have to do this manually
+                for i in (0..light_col.len() - 1).rev() {
+                    let upper_y = light_col[i + 1];
+                    let lower_y = light_col[i];
+                    if upper_y == (lower_y + 1) {
+                        // We can actually work on a chunk
+                        if writeback_permit.is_none() {
+                            writeback_permit = Some(reacquire_writeback_permit(
+                                &game_state,
+                                coarse_shard,
+                                &mut read_lock,
+                            )?);
+                        }
+                        if writeback_permit2.is_none() {
+                            writeback_permit2 = Some(reacquire_writeback_permit(
+                                &game_state,
+                                coarse_shard,
+                                &mut read_lock,
+                            )?);
+                        }
+                        // Lock ordering: It's important that we lock these upper-to-lower
+                        // TODO: consider whether true hand-over-hand improves performance
+                        let upper_coord = ChunkCoordinate::new(x, upper_y, z);
+                        let lower_coord = ChunkCoordinate::new(x, lower_y, z);
+                        let upper_chunk = match read_lock.chunks.get(&upper_coord) {
+                            Some(upper_chunk) => upper_chunk,
+                            None => {
+                                continue;
+                            }
+                        };
+                        let lower_chunk = match read_lock.chunks.get(&lower_coord) {
+                            Some(lower_chunk) => lower_chunk,
+                            None => {
+                                continue;
+                            }
+                        };
+                        let passed_block_presence = self.settings.ignore_block_type_presence_check
+                            || self.settings.block_types.iter().any(|x| {
+                                upper_chunk
+                                    .block_bloom_filter
+                                    .maybe_contains(x.base_id() as u64)
+                            })
+                            || self.settings.block_types.iter().any(|x| {
+                                lower_chunk
+                                    .block_bloom_filter
+                                    .maybe_contains(x.base_id() as u64)
+                            });
+                        if !passed_block_presence {
+                            continue;
+                        }
+                        let last_update = (*upper_chunk.last_written.lock())
+                            .max(*lower_chunk.last_written.lock());
+                        let should_run = !self.settings.idle_chunk_after_unchanged
+                            || last_update >= state.timer_state.prev_tick_time;
+                        if should_run {
+                            self.handle_chunk_vertical_pairs(
+                                upper_coord,
+                                lower_coord,
+                                upper_chunk,
+                                lower_chunk,
+                                &game_state,
+                                &mut writeback_permit,
+                                &mut writeback_permit2,
+                                state,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn do_tick_locking_with_neighbors(
         &self,
         coarse_shard: usize,
@@ -1977,6 +2161,7 @@ impl GameMapTimer {
 
         for coord in coords.into_iter() {
             if writeback_permit.is_none() {
+                // We don't hold a read lock, so this doesn't risk deadlock
                 writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
             }
             // this does the locking twice, with the benefit that it elides all of the memory copying
@@ -2010,21 +2195,22 @@ impl GameMapTimer {
                                     coord,
                                     Some(&state.neighbor_buffer),
                                     state,
+                                    &mut writeback_permit
                                 )?;
                             }
                             _ => unreachable!(),
                         }
-                        if chunk.dirty {
-                            // This has a small missed optimization - until the chunk is written back, this
-                            // will keep firing. If further optimizations is needed, track whether
-                            // *this* bulk updater modified the chunk, and use that for setting
-                            // the last_written timestamp
-                            *holder.last_written.lock() = state.timer_state.current_tick_time;
-                            writeback_permit
-                                .take()
-                                .unwrap()
-                                .send(WritebackReq::Chunk(coord));
-                        }
+                        // if chunk.dirty {
+                        //     // This has a small missed optimization - until the chunk is written back, this
+                        //     // will keep firing. If further optimizations is needed, track whether
+                        //     // *this* bulk updater modified the chunk, and use that for setting
+                        //     // the last_written timestamp
+                        //     *holder.last_written.lock() = state.timer_state.current_tick_time;
+                        //     writeback_permit
+                        //         .take()
+                        //         .unwrap()
+                        //         .send(WritebackReq::Chunk(coord));
+                        // }
                     }
                 }
             }
@@ -2060,6 +2246,13 @@ impl GameMapTimer {
                 game_state,
                 state,
             ),
+            TimerCallback::LockedVerticalNeighors(_) => self.do_vertical_neighbor_locking(
+                coarse_shard,
+                fine_shard,
+                fine_shards_per_coarse,
+                game_state,
+                state,
+            ),
         }
     }
 
@@ -2088,26 +2281,11 @@ impl GameMapTimer {
         plot!("timer tick coords", coords.len() as f64);
         for (i, coord) in coords.into_iter().enumerate() {
             if writeback_permit.is_none() {
-                // A chunk used our writeback permit. Get a new one.
-                // Fast path - if we can get a permit without blocking, take it
-                if let Some(permit) = game_state
-                    .game_map()
-                    .try_get_writeback_permit(coarse_shard)?
-                {
-                    writeback_permit = Some(permit);
-                } else {
-                    // We need to release the read lock to get a permit, as the writeback thread needs to get a write lock
-                    // to make progress.
-                    drop(read_lock);
-
-                    writeback_permit =
-                        Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
-
-                    read_lock = {
-                        let _span = span!("reacquire game_map read lock (need permit)");
-                        game_state.game_map().live_chunks[coarse_shard].read()
-                    };
-                }
+                writeback_permit = Some(reacquire_writeback_permit(
+                    &game_state,
+                    coarse_shard,
+                    &mut read_lock,
+                )?);
             } else if i % 100 == 0 {
                 let _span = span!("timer bumping");
                 RwLockReadGuard::bump(&mut read_lock);
@@ -2167,25 +2345,85 @@ impl GameMapTimer {
                     if !self.settings.idle_chunk_after_unchanged
                         || chunk_update >= state.timer_state.prev_tick_time
                     {
-                        self.run_bulk_handler(game_state, holder, &mut chunk, coord, None, state)?;
+                        self.run_bulk_handler(game_state, holder, &mut chunk, coord, None, state, writeback_permit)?;
                     }
                 }
                 TimerCallback::BulkUpdateWithNeighbors(_) => {
                     unreachable!()
                 }
-            }
-            if chunk.dirty {
-                // This has a small missed optimization - until the chunk is written back, this
-                // will keep firing. If further optimizations is needed, track whether
-                // *this* bulk updater modified the chunk, and use that for setting
-                // the last_written timestamp
-                *holder.last_written.lock() = state.timer_state.current_tick_time;
-                writeback_permit
-                    .take()
-                    .unwrap()
-                    .send(WritebackReq::Chunk(chunk.coord));
+                TimerCallback::LockedVerticalNeighors(_) => {
+                    unreachable!()
+                }
             }
         }
+
+        Ok(())
+    }
+
+    fn handle_chunk_vertical_pairs(
+        &self,
+        upper_coord: ChunkCoordinate,
+        lower_coord: ChunkCoordinate,
+        upper_holder: &MapChunkHolder,
+        lower_holder: &MapChunkHolder,
+        game_state: &Arc<GameState>,
+        upper_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
+        lower_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
+        state: &ShardState,
+    ) -> Result<()> {
+        assert!(upper_writeback_permit.is_some());
+        assert!(lower_writeback_permit.is_some());
+        let mut upper_chunk = match upper_holder.try_get()? {
+            Some(x) => x,
+            None => {
+                return Ok(());
+            }
+        };
+        let mut lower_chunk = match lower_holder.try_get()? {
+            Some(x) => x,
+            None => {
+                return Ok(());
+            }
+        };
+        let upper_old_block_ids = upper_chunk.block_ids.clone();
+        let lower_old_block_ids = lower_chunk.block_ids.clone();
+        match &self.callback {
+            TimerCallback::LockedVerticalNeighors(x) => {
+                run_handler!(
+                    || x.vertical_neighbor_callback(
+                        upper_coord,
+                        lower_coord,
+                        &mut upper_chunk,
+                        &mut lower_chunk,
+                        &state.timer_state,
+                        game_state,
+                    ),
+                    "vertical_neighbor_timer",
+                    &EventInitiator::Engine
+                )?;
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+        reconcile_after_bulk_handler(
+            &upper_old_block_ids,
+            &mut upper_chunk,
+            &upper_holder,
+            game_state,
+            upper_coord,
+            upper_writeback_permit,
+            state.timer_state.current_tick_time
+        );
+        reconcile_after_bulk_handler(
+            &lower_old_block_ids,
+            &mut lower_chunk,
+            &lower_holder,
+            game_state,
+            lower_coord,
+            lower_writeback_permit,
+            state.timer_state.current_tick_time
+        );
 
         Ok(())
     }
@@ -2290,6 +2528,7 @@ impl GameMapTimer {
         coord: ChunkCoordinate,
         neighbor_data: Option<&ChunkNeighbors>,
         state: &ShardState,
+        permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     ) -> Result<()> {
         let old_block_ids = chunk.block_ids.clone();
         match &self.callback {
@@ -2323,27 +2562,7 @@ impl GameMapTimer {
             }
             _ => unreachable!(),
         };
-        let mut seen_blocks = FxHashSet::default();
-        for i in 0..4096 {
-            let old_block_id = BlockId::from(old_block_ids[i]);
-            let new_block_id = BlockId::from(chunk.block_ids[i]);
-            if old_block_id != new_block_id {
-                if seen_blocks.insert(new_block_id.base_id()) {
-                    // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
-                    // on x86_64.
-                    // Only insert unique block ids (still need to test this optimization)
-                    // TODO fork the bloom filter library and extend it to support constant lengths
-                    holder
-                        .block_bloom_filter
-                        .insert(new_block_id.base_id() as u64);
-                }
-                chunk.dirty = true;
-                game_state.game_map().broadcast_block_change(BlockUpdate {
-                    location: coord.with_offset(ChunkOffset::from_index(i)),
-                    new_value: BlockId(chunk.block_ids[i]),
-                });
-            }
-        }
+        reconcile_after_bulk_handler(&old_block_ids, chunk, holder, game_state, coord, permit, state.timer_state.current_tick_time);
         Ok(())
     }
 
@@ -2367,7 +2586,7 @@ impl GameMapTimer {
                             if self.settings.block_types.iter().any(|x| {
                                 neighbor_holder
                                     .block_bloom_filter
-                                    .maybe_contains(x.id().base_id() as u64)
+                                    .maybe_contains(x.base_id() as u64)
                             }) {
                                 any_blooms_match = true;
                             }
@@ -2400,6 +2619,68 @@ impl GameMapTimer {
         neighbor_data.center = center_coord.with_offset(ChunkOffset { x: 0, y: 0, z: 0 });
         neighbor_data.presence_bitmap = presence_bitmap;
         Ok((any_blooms_match, update_times.into_iter().max()))
+    }
+}
+
+fn reconcile_after_bulk_handler(
+    old_block_ids: &[u32; 4096],
+    chunk: &mut MapChunkInnerGuard<'_>,
+    holder: &MapChunkHolder,
+    game_state: &Arc<GameState>,
+    coord: ChunkCoordinate,
+    permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
+    update_time: Instant
+) {
+    let mut seen_blocks = FxHashSet::default();
+    let mut any_updated = false;
+    for i in 0..4096 {
+        let old_block_id = BlockId::from(old_block_ids[i]);
+        let new_block_id = BlockId::from(chunk.block_ids[i]);
+        if old_block_id != new_block_id {
+            if seen_blocks.insert(new_block_id.base_id()) {
+                // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
+                // on x86_64.
+                // Only insert unique block ids (still need to test this optimization)
+                // TODO fork the bloom filter library and extend it to support constant lengths
+                holder
+                    .block_bloom_filter
+                    .insert(new_block_id.base_id() as u64);
+            }
+            chunk.dirty = true;
+            any_updated = true;
+            game_state.game_map().broadcast_block_change(BlockUpdate {
+                location: coord.with_offset(ChunkOffset::from_index(i)),
+                new_value: BlockId(chunk.block_ids[i]),
+            });
+        }
+    }
+    
+    if any_updated {
+        permit.take().unwrap().send(WritebackReq::Chunk(coord));
+        *holder.last_written.lock() = update_time;
+    }
+}
+
+fn reacquire_writeback_permit<'a, 'b>(
+    game_state: &'a Arc<GameState>,
+    coarse_shard: usize,
+    read_lock: &mut parking_lot::lock_api::RwLockReadGuard<'_, parking_lot::RawRwLock, MapShard>,
+) -> Result<mpsc::Permit<'b, WritebackReq>, Error>
+where
+    'a: 'b,
+{
+    if let Some(permit) = game_state
+        .game_map()
+        .try_get_writeback_permit(coarse_shard)?
+    {
+        Ok(permit)
+    } else {
+        // We need to release the read lock to get a permit, as the writeback thread needs to get a write lock
+        // to make progress.
+        let permit_or = RwLockReadGuard::unlocked(read_lock, || {
+            game_state.game_map().get_writeback_permit(coarse_shard)
+        });
+        Ok(permit_or?)
     }
 }
 

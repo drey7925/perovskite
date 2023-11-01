@@ -585,16 +585,16 @@ impl MapChunkSender {
         };
 
         let start_time = Instant::now();
-        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate().skip(skip) {
+        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate() {
             let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
                 z: player_chunk.z.saturating_add(dz),
             };
-            let distance = dx.abs() + dy.abs() + dz.abs();
             if !coord.is_in_bounds() {
                 continue;
             }
+            let distance = dx.abs() + dy.abs() + dz.abs();
             if self.player_position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE
             {
                 // If we already have a new position update, restart the process with the new position
@@ -610,6 +610,11 @@ impl MapChunkSender {
             {
                 // chunk wasn't in the map, so we need to reload it
                 chunk_needs_reload = true;
+            }
+            // We do need to bump chunk access times, even in the skip range :(
+            // Otherwise nearby chunks get unloaded and timers never fire
+            if i < skip {
+                continue;
             }
 
             if self.chunk_tracker.is_loaded(coord) && !chunk_needs_reload {
