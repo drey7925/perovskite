@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use noise::NoiseFn;
 use perovskite_game_api::default_game::DefaultGameBuilder;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::{prelude::*, registry::LookupSpan};
@@ -65,6 +66,16 @@ where
 }
 
 fn main() {
+    // I don't have a good place to test noise functions. It's easier to just do it in
+    // main.rs, although this is rather silly to include in the source tree.
+    // let noise = noise::SuperSimplex::new(3);
+    // let mut v = Vec::new();
+    // for i in 0..1000 {
+    //     v.push(noise.get([i as f64 * 1123.0, 2.0 * (i as f64 * 10001.0) % 18.5]));
+    // }
+    // println!("{:?}", v);
+    // return;
+
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 

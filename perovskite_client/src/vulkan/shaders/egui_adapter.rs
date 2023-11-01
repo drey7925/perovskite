@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use vulkano::{
     command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents},
     image::SampleCount,
-    render_pass::Subpass,
+    render_pass::Subpass, sampler::SamplerCreateInfo,
 };
 use winit::{event::WindowEvent, event_loop::EventLoopWindowTarget};
 
@@ -48,7 +48,7 @@ impl EguiAdapter {
         egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {
         let config = GuiConfig {
-            preferred_format: Some(ctx.swapchain.image_format()),
+            allow_srgb_render_target: true,
             is_overlay: true,
             samples: SampleCount::Sample1,
         };
@@ -57,10 +57,16 @@ impl EguiAdapter {
             ctx.swapchain.surface().clone(),
             ctx.queue.clone(),
             Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
+            ctx.swapchain.image_format(),
             config,
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
-        let atlas_texture_id = gui_adapter.register_user_image_view(atlas.clone_image_view());
+
+        let mut sampler_create_info = SamplerCreateInfo::default();
+        sampler_create_info.mag_filter = vulkano::sampler::Filter::Nearest;
+        sampler_create_info.min_filter = vulkano::sampler::Filter::Linear;
+
+        let atlas_texture_id = gui_adapter.register_user_image_view(atlas.clone_image_view(), sampler_create_info);
 
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_overlay_pipeline =

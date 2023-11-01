@@ -3,7 +3,10 @@ use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 use anyhow::Result;
 use cgmath::{vec3, Vector3};
 use itertools::Itertools;
-use perovskite_core::{chat::ChatMessage, constants::permissions::ELIGIBLE_PREFIX};
+use perovskite_core::{
+    chat::ChatMessage,
+    constants::permissions::{ELIGIBLE_PREFIX, FAST_MOVE, FLY, NOCLIP},
+};
 use tonic::async_trait;
 
 use super::{
@@ -71,6 +74,8 @@ impl GameBehaviors {
                     .iter()
                     .map(|x| ELIGIBLE_PREFIX.to_owned() + x),
             );
+            Cow::to_mut(&mut permissions)
+                .extend([FLY.to_owned(), FAST_MOVE.to_owned(), NOCLIP.to_owned()].into_iter())
         }
         permissions
     }
@@ -93,7 +98,7 @@ impl Default for GameBehaviors {
                 LOG_IN.to_string(),
                 WORLD_STATE.to_string(),
                 INVENTORY.to_string(),
-                CHAT.to_string()
+                CHAT.to_string(),
             ]),
             ambient_permissions: HashSet::from([]),
             super_users: HashSet::from([]),
@@ -131,9 +136,8 @@ pub struct PlayerJoinHandlerImpl;
 #[async_trait]
 impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
     async fn handle(&self, req: &Player, context: HandlerContext<'_>) -> Result<()> {
-        let broadcast_message = ChatMessage::new_server_message(format!(
-            "{} has joined the game.", req.name()
-        ));
+        let broadcast_message =
+            ChatMessage::new_server_message(format!("{} has joined the game.", req.name()));
         context.chat().broadcast_chat_message(broadcast_message)?;
 
         let mut connected_players = vec![];
@@ -142,7 +146,8 @@ impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
             Ok(())
         })?;
         let individual_message = ChatMessage::new_server_message(format!(
-            "Welcome! Currently connected players: {}", connected_players.iter().sorted().join(", ")
+            "Welcome! Currently connected players: {}",
+            connected_players.iter().sorted().join(", ")
         ));
         req.send_chat_message(individual_message).await?;
         Ok(())

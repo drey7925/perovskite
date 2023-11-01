@@ -23,6 +23,10 @@ pub const MAPLE_LEAVES_TEX: TextureName = TextureName("default:maple_leaves");
 pub const TALL_GRASS: StaticBlockName = StaticBlockName("default:tall_grass");
 pub const TALL_GRASS_TEX: TextureName = TextureName("default:tall_grass");
 
+pub const CACTUS: StaticBlockName = StaticBlockName("default:cactus");
+pub const CACTUS_TOP_TEX: TextureName = TextureName("default:cactus_top");
+pub const CACTUS_SIDE_TEX: TextureName = TextureName("default:cactus_side");
+
 pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
     include_texture_bytes!(
         builder.inner,
@@ -36,6 +40,8 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
     )?;
     include_texture_bytes!(builder.inner, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
     include_texture_bytes!(builder.inner, TALL_GRASS_TEX, "textures/tall_grass.png")?;
+    include_texture_bytes!(builder.inner, CACTUS_TOP_TEX, "textures/cactus_top.png")?;
+    include_texture_bytes!(builder.inner, CACTUS_SIDE_TEX, "textures/cactus_side.png")?;
     builder.game_builder().add_block(
         BlockBuilder::new(MAPLE_TREE)
             .add_block_group(FIBROUS)
@@ -46,7 +52,7 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
                 MAPLE_TREE_TOP_TEX,
                 MAPLE_TREE_SIDE_TEX,
                 MAPLE_TREE_SIDE_TEX,
-            ))
+            )),
     )?;
     builder.game_builder().add_block(
         BlockBuilder::new(TALL_GRASS)
@@ -83,5 +89,17 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
         )
         .set_allow_light_propagation(true)
         .build_and_deploy_into(builder.game_builder())?;
+    builder.game_builder().add_block(
+        BlockBuilder::new(CACTUS)
+            .add_block_group(FIBROUS)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+                CACTUS_SIDE_TEX,
+                CACTUS_SIDE_TEX,
+                CACTUS_TOP_TEX,
+                CACTUS_TOP_TEX,
+                CACTUS_SIDE_TEX,
+                CACTUS_SIDE_TEX,
+            )),
+    )?;
     Ok(())
 }

@@ -35,7 +35,7 @@ impl MainMenu {
         settings: Arc<ArcSwap<GameSettings>>,
     ) -> MainMenu {
         let gui_config = egui_winit_vulkano::GuiConfig {
-            preferred_format: Some(ctx.swapchain().image_format()),
+            allow_srgb_render_target: true,
             is_overlay: true,
             samples: SampleCount::Sample1,
         };
@@ -46,6 +46,7 @@ impl MainMenu {
             Subpass::from(ctx.clone_render_pass(), 1)
                 .context("Could not find subpass 0")
                 .unwrap(),
+            ctx.swapchain().image_format(),
             gui_config,
         );
         let settings_guard = settings.load();

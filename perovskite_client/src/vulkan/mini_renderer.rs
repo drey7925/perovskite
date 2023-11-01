@@ -87,7 +87,7 @@ impl MiniBlockRenderer {
         let cube_pipeline =
             cube_provider.build_pipeline(&ctx, viewport, render_pass.clone(), atlas_texture)?;
         let download_buffer = Buffer::new_slice(
-            ctx.allocator().clone(),
+            ctx.allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_DST,
                 ..Default::default()

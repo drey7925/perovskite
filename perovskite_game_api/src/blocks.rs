@@ -800,7 +800,8 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                     // falling objects.
                     //
                     // This might take some design work, including additional callbacks
-                    // added to the block type that the falling block falls into
+                    // added to the block type that the falling block falls into, to
+                    // actually damage/break the bottom block.
                     if bottom_block == self.air
                         && top_block != self.air
                         && blocks.contains(&top_block.base_id())

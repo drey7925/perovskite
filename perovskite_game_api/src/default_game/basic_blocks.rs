@@ -46,7 +46,7 @@ use super::{
     block_groups::{BRITTLE, GRANULAR},
     mapgen::OreDefinition,
     recipes::RecipeSlot,
-    shaped_blocks::{make_stairs, make_slab},
+    shaped_blocks::{make_slab, make_stairs},
     DefaultGameBuilder,
 };
 
@@ -59,6 +59,10 @@ pub const STONE: StaticBlockName = StaticBlockName("default:stone");
 
 /// Beach sand.
 pub const SAND: StaticBlockName = StaticBlockName("default:sand");
+
+/// Desert materials.
+pub const DESERT_STONE: StaticBlockName = StaticBlockName("default:desert_stone");
+pub const DESERT_SAND: StaticBlockName = StaticBlockName("default:desert_sand");
 
 /// Transparent glass.
 pub const GLASS: StaticBlockName = StaticBlockName("default:glass");
@@ -80,6 +84,8 @@ const DIRT_GRASS_SIDE_TEXTURE: TextureName = TextureName("default:dirt_grass_sid
 const GRASS_TOP_TEXTURE: TextureName = TextureName("default:grass_top");
 const STONE_TEXTURE: TextureName = TextureName("default:stone");
 const SAND_TEXTURE: TextureName = TextureName("default:sand");
+const DESERT_STONE_TEXTURE: TextureName = TextureName("default:desert_stone");
+const DESERT_SAND_TEXTURE: TextureName = TextureName("default:desert_sand");
 const GLASS_TEXTURE: TextureName = TextureName("default:glass");
 const WATER_TEXTURE: TextureName = TextureName("default:water");
 // TODO real chest texture
@@ -286,6 +292,16 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, GRASS_TOP_TEXTURE, "textures/grass_top.png")?;
     include_texture_bytes!(game_builder, STONE_TEXTURE, "textures/stone.png")?;
     include_texture_bytes!(game_builder, SAND_TEXTURE, "textures/sand.png")?;
+    include_texture_bytes!(
+        game_builder,
+        DESERT_STONE_TEXTURE,
+        "textures/desert_stone.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        DESERT_SAND_TEXTURE,
+        "textures/desert_sand.png"
+    )?;
 
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
 
@@ -334,14 +350,28 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(STONE_TEXTURE)
-            .set_display_name("Stone block"),
+            .set_display_name("Stone"),
     )?;
 
     let _sand = game_builder.add_block(
         BlockBuilder::new(SAND)
             .add_block_group(GRANULAR)
             .set_cube_single_texture(SAND_TEXTURE)
-            .set_display_name("Sand block")
+            .set_display_name("Sand")
+            .set_falls_down(true),
+    )?;
+
+    let _desert_stone = game_builder.add_block(
+        BlockBuilder::new(DESERT_STONE)
+            .add_block_group(BRITTLE)
+            .set_cube_single_texture(DESERT_STONE_TEXTURE)
+            .set_display_name("Desert stone"),
+    )?;
+    let _desert_sand = game_builder.add_block(
+        BlockBuilder::new(DESERT_SAND)
+            .add_block_group(GRANULAR)
+            .set_cube_single_texture(DESERT_SAND_TEXTURE)
+            .set_display_name("Desert sand")
             .set_falls_down(true),
     )?;
 
@@ -354,7 +384,7 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
                     .set_needs_transparency(),
             )
             .set_allow_light_propagation(true)
-            .set_display_name("Glass block"),
+            .set_display_name("Glass"),
     )?;
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
