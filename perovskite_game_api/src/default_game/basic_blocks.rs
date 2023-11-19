@@ -112,6 +112,13 @@ pub mod ores {
     const COAL_ORE_TEXTURE: TextureName = TextureName("default:coal_ore");
     const COAL_PIECE_TEXTURE: TextureName = TextureName("default:coal_piece");
 
+    const IRON_ORE: StaticBlockName = StaticBlockName("default:iron_ore");
+    const IRON_PIECE: StaticItemName = StaticItemName("default:iron_piece");
+    const IRON_INGOT: StaticItemName = StaticItemName("default:iron_ingot");
+    const IRON_ORE_TEXTURE: TextureName = TextureName("default:iron_ore");
+    const IRON_PIECE_TEXTURE: TextureName = TextureName("default:iron_piece");
+    const IRON_INGOT_TEXTURE: TextureName = TextureName("default:iron_ingot");
+
     pub(crate) fn register_ores(game_builder: &mut DefaultGameBuilder) -> Result<()> {
         // todo factor this into a function per-ore
         include_texture_bytes!(
@@ -163,8 +170,79 @@ pub mod ores {
                 proto: Default::default(),
             },
             shapeless: false,
+            metadata: 16,
+        });
+
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            IRON_ORE_TEXTURE,
+            "textures/iron_ore.png"
+        )?;
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            IRON_PIECE_TEXTURE,
+            "textures/iron_piece.png"
+        )?;
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            IRON_INGOT_TEXTURE,
+            "textures/iron_ingot.png"
+        )?;
+        game_builder.game_builder().register_basic_item(
+            IRON_PIECE,
+            "Piece of iron",
+            IRON_PIECE_TEXTURE,
+            vec![],
+        )?;
+        game_builder.game_builder().register_basic_item(
+            IRON_INGOT,
+            "Iron ingot",
+            IRON_INGOT_TEXTURE,
+            vec![],
+        )?;
+        game_builder.smelting_recipes.register_recipe(RecipeImpl {
+            slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: IRON_INGOT.0.to_string(),
+                    quantity: 1,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
+                },
+            },
+            shapeless: false,
             metadata: 8,
         });
+
+        let iron_ore = game_builder.game_builder().add_block(
+            BlockBuilder::new(IRON_ORE)
+                .set_cube_appearance(
+                    CubeAppearanceBuilder::new().set_single_texture(IRON_ORE_TEXTURE),
+                )
+                .add_block_group(BRITTLE)
+                .add_block_group(TOOL_REQUIRED)
+                .set_dropped_item_closure(|| (IRON_PIECE, rand::thread_rng().gen_range(1..=2))),
+        )?;
+
+        game_builder.register_ore(OreDefinition {
+            block: iron_ore.handle,
+            // Use the same schedule as coal
+            noise_cutoff: splines::Spline::from_vec(vec![
+                splines::Key {
+                    value: -0.5,
+                    t: 0.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+                splines::Key {
+                    value: -0.6,
+                    t: 100.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+            ]),
+
+            noise_scale: (4., 0.25, 4.),
+        });
+
         Ok(())
     }
 }

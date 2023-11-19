@@ -82,7 +82,7 @@ impl Default for KeybindSettings {
     fn default() -> Self {
         use Keybind::*;
         Self {
-            camera_sensitivity: 0.75,
+            camera_sensitivity: 0.5,
             scroll_inverse_sensitivity: 100,
             move_forward: ScanCode(0x11),
             move_backward: ScanCode(0x1f),

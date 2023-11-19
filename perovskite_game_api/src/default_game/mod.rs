@@ -129,7 +129,7 @@ impl DefaultGameBuilder {
 
     /// Adds an ore to the mapgen.
     ///
-    /// **API skeleton, unimplemented, parameters TBD**
+    /// **API skeleton, parameters TBD**
     /// Will be made pub when finalized and implemented
     fn register_ore(&mut self, ore_definition: OreDefinition) {
         self.ores.push(ore_definition);

@@ -33,7 +33,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::run_handler;
+use crate::{run_handler, RwCondvar};
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
@@ -449,20 +449,36 @@ pub(crate) struct BlockUpdate {
     pub(crate) new_value: BlockId,
 }
 
-struct MapChunkInnerGuard<'a> {
-    guard: MutexGuard<'a, HolderState>,
+struct MapChunkInnerReadGuard<'a> {
+    guard: RwLockReadGuard<'a, HolderState>,
 }
-impl<'a> Deref for MapChunkInnerGuard<'a> {
+impl<'a> Deref for MapChunkInnerReadGuard<'a> {
     type Target = MapChunk;
     fn deref(&self) -> &Self::Target {
         self.guard.unwrap()
     }
 }
-impl<'a> DerefMut for MapChunkInnerGuard<'a> {
+
+struct MapChunkInnerWriteGuard<'a> {
+    guard: RwLockWriteGuard<'a, HolderState>,
+}
+impl<'a> MapChunkInnerWriteGuard<'a> {
+    fn downgrade(self) -> MapChunkInnerReadGuard<'a> {
+        MapChunkInnerReadGuard { guard: RwLockWriteGuard::downgrade(self.guard) }
+    }
+}
+impl<'a> Deref for MapChunkInnerWriteGuard<'a> {
+    type Target = MapChunk;
+    fn deref(&self) -> &Self::Target {
+        self.guard.unwrap()
+    }
+}
+impl<'a> DerefMut for MapChunkInnerWriteGuard<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.guard.unwrap_mut()
     }
 }
+
 
 enum HolderState {
     Empty,
@@ -487,8 +503,8 @@ impl HolderState {
 }
 
 struct MapChunkHolder {
-    chunk: Mutex<HolderState>,
-    condition: Condvar,
+    chunk: RwLock<HolderState>,
+    condition: RwCondvar,
     last_accessed: Mutex<Instant>,
     last_written: Mutex<Instant>,
     block_bloom_filter: cbloom::Filter,
@@ -496,8 +512,8 @@ struct MapChunkHolder {
 impl MapChunkHolder {
     fn new_empty() -> Self {
         Self {
-            chunk: Mutex::new(HolderState::Empty),
-            condition: Condvar::new(),
+            chunk: RwLock::new(HolderState::Empty),
+            condition: RwCondvar::new(),
             last_accessed: Mutex::new(Instant::now()),
             last_written: Mutex::new(Instant::now()),
             // TODO: make bloom filter configurable or adaptive
@@ -508,27 +524,52 @@ impl MapChunkHolder {
     }
 
     /// Get the chunk, blocking until it's loaded
-    fn wait_and_get(&self) -> Result<MapChunkInnerGuard<'_>> {
-        let mut guard = self.chunk.lock();
+    fn wait_and_get_for_read(&self) -> Result<MapChunkInnerReadGuard<'_>> {
+        let mut guard = self.chunk.read();
         let _span = span!("wait_and_get");
         loop {
             match &*guard {
-                HolderState::Empty => self.condition.wait(&mut guard),
+                HolderState::Empty => self.condition.wait_reader(&mut guard),
                 HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => return Ok(MapChunkInnerGuard { guard }),
+                HolderState::Ok(_) => return Ok(MapChunkInnerReadGuard { guard }),
             }
         }
     }
     /// Get the chunk, returning None if it's not loaded yet
-    /// However, this WILL wait for the mutex (just not for loading)
-    fn try_get(&self) -> Result<Option<MapChunkInnerGuard<'_>>> {
-        let guard = self.chunk.lock();
+    /// However, this WILL wait for the mutex (just not for a database load/mapgen)
+    fn try_get_read(&self) -> Result<Option<MapChunkInnerReadGuard<'_>>> {
+        let guard = self.chunk.read();
         match &*guard {
             HolderState::Empty => Ok(None),
             HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-            HolderState::Ok(_) => Ok(Some(MapChunkInnerGuard { guard })),
+            HolderState::Ok(_) => Ok(Some(MapChunkInnerReadGuard { guard })),
         }
     }
+
+    /// Get the chunk, blocking until it's loaded
+    fn wait_and_get_for_write(&self) -> Result<MapChunkInnerWriteGuard<'_>> {
+        let mut guard = self.chunk.write();
+        let _span = span!("wait_and_get");
+        loop {
+            match &*guard {
+                HolderState::Empty => self.condition.wait_writer(&mut guard),
+                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+                HolderState::Ok(_) => return Ok(MapChunkInnerWriteGuard { guard }),
+            }
+        }
+    }
+    
+    /// Get the chunk, returning None if it's not loaded yet
+    /// However, this WILL wait for the mutex (just not for a database load/mapgen)
+    fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_>>> {
+        let guard = self.chunk.write();
+        match &*guard {
+            HolderState::Empty => Ok(None),
+            HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+            HolderState::Ok(_) => Ok(Some(MapChunkInnerWriteGuard { guard })),
+        }
+    }
+
     /// Set the chunk, and notify any threads waiting in wait_and_get
     fn fill(
         &self,
@@ -548,7 +589,7 @@ impl MapChunkHolder {
             }
         }
         let _span = span!("game_map waiting to fill chunk");
-        let mut guard = self.chunk.lock();
+        let mut guard = self.chunk.write();
         assert!(matches!(*guard, HolderState::Empty));
 
         self.fill_lighting_for_load(&chunk, light_columns, block_types);
@@ -623,7 +664,7 @@ impl MapChunkHolder {
 
     /// Set the chunk to an error, and notify any waiting threads so they can propagate the error
     fn set_err(&self, err: anyhow::Error) {
-        let mut guard = self.chunk.lock();
+        let mut guard = self.chunk.write();
         assert!(matches!(*guard, HolderState::Empty));
         *guard = HolderState::Err(err);
         self.condition.notify_all();
@@ -801,7 +842,7 @@ impl ServerGameMap {
         F: FnOnce(&ExtendedData) -> Option<T>,
     {
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let chunk = chunk_guard.wait_and_get()?;
+        let chunk = chunk_guard.wait_and_get_for_read()?;
 
         let id = chunk.block_ids[coord.offset().as_index()];
         let ext_data = match chunk
@@ -821,7 +862,7 @@ impl ServerGameMap {
     /// Gets a block + variant without its extended data
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockTypeHandle> {
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let chunk = chunk_guard.wait_and_get()?;
+        let chunk = chunk_guard.wait_and_get_for_read()?;
 
         let id = chunk.block_ids[coord.offset().as_index()];
 
@@ -832,12 +873,14 @@ impl ServerGameMap {
     ///
     /// This avoids taking write locks or doing expensive IO, at the expense of sometimes not being able to
     /// actually get the block
+    /// 
+    /// TODO rewrite this using the truly weak read method
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Result<Option<BlockTypeHandle>> {
         let chunk_guard = match self.try_get_chunk(coord.chunk())? {
             Some(chunk_guard) => chunk_guard,
             None => return Ok(None),
         };
-        let chunk = match chunk_guard.try_get()? {
+        let chunk = match chunk_guard.try_get_read()? {
             Some(chunk) => chunk,
             None => return Ok(None),
         };
@@ -858,7 +901,7 @@ impl ServerGameMap {
             .with_context(|| "Block not found")?;
 
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get()?;
+        let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = chunk.block_ids[coord.offset().as_index()];
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
@@ -950,7 +993,7 @@ impl ServerGameMap {
             .with_context(|| "Block not found")?;
 
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get()?;
+        let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = BlockId(chunk.block_ids[coord.offset().as_index()]);
         let old_block = self.block_type_manager().make_blockref(old_id)?;
@@ -1018,7 +1061,7 @@ impl ServerGameMap {
         F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
     {
         let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get()?;
+        let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let (result, block_changed) = self.mutate_block_atomically_locked(
             &chunk_guard,
@@ -1045,7 +1088,7 @@ impl ServerGameMap {
     fn mutate_block_atomically_locked<F, T>(
         &self,
         holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerGuard<'_>,
+        chunk: &mut MapChunkInnerWriteGuard<'_>,
         offset: ChunkOffset,
         mutator: F,
         game_map: &ServerGameMap,
@@ -1366,7 +1409,9 @@ impl ServerGameMap {
         let _span = span!("unload single chunk");
         let chunk = lock.chunks.remove(&coord);
         if let Some(chunk) = chunk {
-            match &*chunk.chunk.lock() {
+            // The read/write type doesn't matter here. We already have a write lock on the mapshard.
+            // If this is contended, something else has already gone terribly wrong.
+            match chunk.chunk.into_inner() {
                 HolderState::Empty => {
                     panic!("chunk unload got a chunk with an empty holder. This should never happen - please file a bug");
                 }
@@ -1430,7 +1475,7 @@ impl ServerGameMap {
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
         if load_if_missing {
             let chunk_guard = self.get_chunk(coord)?;
-            let chunk = chunk_guard.wait_and_get()?;
+            let chunk = chunk_guard.wait_and_get_for_read()?;
             Ok(Some(
                 chunk.serialize(ChunkUsage::Client, &self.game_state())?,
             ))
@@ -1616,7 +1661,7 @@ impl GameMapWriteback {
             assert!(self.shard_id == shard_id(coord));
             match lock.chunks.get(&coord) {
                 Some(chunk_holder) => {
-                    if let Some(mut chunk) = chunk_holder.try_get()? {
+                    if let Some(mut chunk) = chunk_holder.try_get_write()? {
                         if !chunk.dirty {
                             warn!("Writeback thread got chunk {:?} but it wasn't dirty", coord);
                         }
@@ -2185,7 +2230,7 @@ impl GameMapTimer {
                 )?;
                 let shard = game_state.game_map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
-                    if let Some(mut chunk) = holder.try_get()? {
+                    if let Some(mut chunk) = holder.try_get_write()? {
                         match &self.callback {
                             TimerCallback::BulkUpdateWithNeighbors(_) => {
                                 self.run_bulk_handler(
@@ -2328,12 +2373,12 @@ impl GameMapTimer {
     ) -> Result<()> {
         assert!(writeback_permit.is_some());
 
-        if let Some(mut chunk) = holder.try_get()? {
+        if let Some(mut chunk) = holder.try_get_write()? {
             match &self.callback {
                 TimerCallback::PerBlockLocked(_) => {
                     self.run_per_block_handler(
                         game_state,
-                        &mut chunk,
+                        chunk,
                         holder,
                         block_types,
                         coord,
@@ -2373,13 +2418,13 @@ impl GameMapTimer {
     ) -> Result<()> {
         assert!(upper_writeback_permit.is_some());
         assert!(lower_writeback_permit.is_some());
-        let mut upper_chunk = match upper_holder.try_get()? {
+        let mut upper_chunk = match upper_holder.try_get_write()? {
             Some(x) => x,
             None => {
                 return Ok(());
             }
         };
-        let mut lower_chunk = match lower_holder.try_get()? {
+        let mut lower_chunk = match lower_holder.try_get_write()? {
             Some(x) => x,
             None => {
                 return Ok(());
@@ -2431,7 +2476,7 @@ impl GameMapTimer {
     fn run_per_block_handler(
         &self,
         game_state: &Arc<GameState>,
-        chunk: &mut MapChunkInnerGuard<'_>,
+        mut chunk: MapChunkInnerWriteGuard<'_>,
         holder: &MapChunkHolder,
         block_types: &HashSet<u32, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>,
         coord: ChunkCoordinate,
@@ -2448,7 +2493,7 @@ impl GameMapTimer {
             if block_types.contains(&block_id.base_id()) && sampler.sample(&mut rng) {
                 match self.run_per_block_callback(
                     holder,
-                    chunk,
+                    &mut chunk,
                     ChunkOffset::from_index(i),
                     map,
                     coord,
@@ -2470,7 +2515,7 @@ impl GameMapTimer {
     fn run_per_block_callback(
         &self,
         holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerGuard<'_>,
+        chunk: &mut MapChunkInnerWriteGuard<'_>,
         offset: ChunkOffset,
         map: &ServerGameMap,
         coord: ChunkCoordinate,
@@ -2524,7 +2569,7 @@ impl GameMapTimer {
         &self,
         game_state: &Arc<GameState>,
         holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerGuard<'_>,
+        chunk: &mut MapChunkInnerWriteGuard<'_>,
         coord: ChunkCoordinate,
         neighbor_data: Option<&ChunkNeighbors>,
         state: &ShardState,
@@ -2592,7 +2637,7 @@ impl GameMapTimer {
                             }
                             update_times.push(*neighbor_holder.last_written.lock());
 
-                            if let Some(contents) = neighbor_holder.try_get()? {
+                            if let Some(contents) = neighbor_holder.try_get_read()? {
                                 presence_bitmap |= 1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1));
                                 if copy_data {
                                     for dx in 0..16 {
@@ -2624,7 +2669,7 @@ impl GameMapTimer {
 
 fn reconcile_after_bulk_handler(
     old_block_ids: &[u32; 4096],
-    chunk: &mut MapChunkInnerGuard<'_>,
+    chunk: &mut MapChunkInnerWriteGuard<'_>,
     holder: &MapChunkHolder,
     game_state: &Arc<GameState>,
     coord: ChunkCoordinate,
