@@ -31,6 +31,7 @@ async-trait = "0.1.73"
 ron = "0.8.0"
 serde = { version = "1.0.163", features = ["derive"] }
 cgmath = "0.18.0"
+tokio = { version = "1.29.1", features = ["full", "tracing"] }
 
 [features]
 default = ["default_game"]

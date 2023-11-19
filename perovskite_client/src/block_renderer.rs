@@ -1296,7 +1296,7 @@ pub(crate) fn fallback_texture() -> Option<TextureReference> {
 }
 
 const GLOBAL_BRIGHTNESS_TABLE_RAW: [f32; 16] = [
-    0., 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75,
+    0.0, 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75,
     0.8125, 0.875, 0.9375,
 ];
 // TODO enable global brightness
@@ -1311,7 +1311,7 @@ lazy_static::lazy_static! {
         GLOBAL_BRIGHTNESS_TABLE_RAW.iter().map(|x| x.powf(1.5)).collect::<Vec<f32>>().try_into().unwrap()
     };
     static ref BRIGHTNESS_TABLE: [f32; 16] = {
-        BRIGHTNESS_TABLE_RAW.iter().map(|x| x.powf(1.5)).collect::<Vec<f32>>().try_into().unwrap()
+        BRIGHTNESS_TABLE_RAW.iter().map(|x| x.powf(1.25)).collect::<Vec<f32>>().try_into().unwrap()
     };
 }
 

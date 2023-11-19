@@ -1156,15 +1156,22 @@ impl InboundWorker {
                 self.handle_interact_key(interact_key).await?;
             }
             Some(proto::stream_to_server::ClientMessage::ChatMessage(message)) => {
-                self.context
-                    .game_state
-                    .chat()
-                    .handle_inbound_chat_message(
-                        self.context.player_context.make_initiator(),
-                        self.context.game_state.clone(),
-                        message,
-                    )
-                    .await?;
+                let gs = self.context.game_state.clone();
+                let player_handle = self.context.player_context.clone();
+                let message = message.clone();
+                tokio::task::spawn(async move {
+                    if let Err(e) = gs
+                        .chat()
+                        .handle_inbound_chat_message(
+                            player_handle.make_initiator(),
+                            gs.clone(),
+                            &message,
+                        )
+                        .await
+                    {
+                        warn!("Error handling inbound chat message: {:?}", e);
+                    }
+                });
             }
             Some(_) => {
                 warn!(

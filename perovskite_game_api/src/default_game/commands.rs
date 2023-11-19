@@ -1,9 +1,12 @@
+use std::time::Instant;
+
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use cgmath::Vector3;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
     constants::permissions,
+    coordinates::BlockCoordinate,
     protocol::items::item_def::QuantityType,
 };
 use perovskite_server::game_state::{
@@ -49,6 +52,16 @@ pub(crate) fn register_default_commands(game_builder: &mut DefaultGameBuilder) -
         "teleport",
         Box::new(TeleportCommand),
         "[player] <x> <y> <z>: Teleports a player to the given coordinates. If no player specified, teleports you.",
+    )?;
+    game_builder.add_command(
+        "benchmark",
+        Box::new(TestonlyBenchmarkCommand),
+        ": Runs a benchmark to measure the performance of the game.",
+    )?;
+    game_builder.add_command(
+        "panic",
+        Box::new(TestonlyPanicCommand),
+        ": Panics the player's coroutine.",
     )?;
     Ok(())
 }
@@ -301,13 +314,119 @@ impl ChatCommandHandler for TeleportCommand {
             bail!("Incorrect usage: a coordinate was infinite/NaN");
         }
 
-        context
-            .player_manager()
-            .with_connected_player(name, |p| {
-                p.set_position_blocking(coords)?;
-                Ok(())
-            })?;
+        context.player_manager().with_connected_player(name, |p| {
+            p.set_position_blocking(coords)?;
+            Ok(())
+        })?;
 
         Ok(())
+    }
+}
+
+struct TestonlyBenchmarkCommand;
+#[async_trait]
+impl ChatCommandHandler for TestonlyBenchmarkCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        {
+            let start = Instant::now();
+            let sgm = context.game_map();
+            let mut oks = 0;
+            tokio::task::block_in_place(|| {
+                for _ in 0..1000000 {
+                    if std::hint::black_box(sgm.try_get_block(BlockCoordinate::new(0, 0, 0))).is_some() {
+                        oks += 1;
+                    };
+                }
+            });
+
+            let end = Instant::now();
+            context
+                .initiator()
+                .send_chat_message(ChatMessage::new_server_message(format!(
+                    "Fastpath took {} ms ({:?} per iter), {} ok",
+                    (end - start).as_millis(), (end-start) / 1000000, oks
+                )))
+                .await?;
+        }
+        {
+            let start = Instant::now();
+            let sgm = context.game_map();
+            let mut oks = 0;
+            tokio::task::block_in_place(|| {
+                for i in 0..100 {
+                    for j in 0..100 {
+                        for k in 0..100 {
+                            if std::hint::black_box(sgm.try_get_block(BlockCoordinate::new(i, j, k))).is_some() {
+                                oks += 1;
+                            };
+                        }
+                    }
+                }
+            });
+
+            let end = Instant::now();
+            context
+                .initiator()
+                .send_chat_message(ChatMessage::new_server_message(format!(
+                    "Fastpath moving took {} ms ({:?} per iter), {} ok",
+                    (end - start).as_millis(), (end-start) / 1000000, oks
+                )))
+                .await?;
+        }
+        {
+            let start = Instant::now();
+            let sgm = context.game_map();
+            let mut oks = 0;
+            tokio::task::block_in_place(|| {
+                for _ in 0..1000000 {
+                    if std::hint::black_box(sgm.get_block(BlockCoordinate::new(0, 0, 0))).is_ok() {
+                        oks += 1;
+                    };
+                }
+            });
+
+            let end = Instant::now();
+            context
+                .initiator()
+                .send_chat_message(ChatMessage::new_server_message(format!(
+                    "Slowpath took {} ms ({:?} per iter), {} ok",
+                    (end - start).as_millis(), (end-start) / 1000000, oks
+                )))
+                .await?;
+        }
+        {
+            let start = Instant::now();
+            let sgm = context.game_map();
+            let mut oks = 0;
+            tokio::task::block_in_place(|| {
+                for i in 0..100 {
+                    for j in 0..100 {
+                        for k in 0..100 {
+                            if std::hint::black_box(sgm.get_block(BlockCoordinate::new(i, j, k))).is_ok() {
+                                oks += 1;
+                            };
+                        }
+                    }
+                }
+            });
+
+            let end = Instant::now();
+            context
+                .initiator()
+                .send_chat_message(ChatMessage::new_server_message(format!(
+                    "Slowpath moving took {} ms ({:?} per iter), {} ok",
+                    (end - start).as_millis(), (end-start) / 1000000, oks
+                )))
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+struct TestonlyPanicCommand;
+#[async_trait]
+impl ChatCommandHandler for TestonlyPanicCommand {
+    async fn handle(&self, _message: &str, _context: &HandlerContext<'_>) -> Result<()> {
+        panic!("Test panic");
     }
 }

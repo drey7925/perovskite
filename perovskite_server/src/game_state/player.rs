@@ -287,7 +287,11 @@ impl Player {
                 effective_permissions,
                 self.main_inventory_key,
             )?;
-        tokio::task::block_in_place(|| self.sender.reinit_player_state.blocking_send(false))?;
+        tokio::task::block_in_place(|| {
+            MutexGuard::unlocked(&mut lock, || {
+                self.sender.reinit_player_state.blocking_send(false)
+            })
+        })?;
         Ok(())
     }
 

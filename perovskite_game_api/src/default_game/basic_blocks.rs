@@ -151,17 +151,17 @@ pub mod ores {
             block: coal_ore.handle,
             noise_cutoff: splines::Spline::from_vec(vec![
                 splines::Key {
-                    value: -0.5,
+                    value: 0.5,
                     t: 0.,
                     interpolation: splines::Interpolation::Linear,
                 },
                 splines::Key {
-                    value: -0.6,
+                    value: 0.6,
                     t: 100.,
                     interpolation: splines::Interpolation::Linear,
                 },
             ]),
-
+            cave_bias_effect: 0.0,
             noise_scale: (4., 0.25, 4.),
         });
         game_builder.smelting_fuels.register_recipe(RecipeImpl {
@@ -229,17 +229,17 @@ pub mod ores {
             // Use the same schedule as coal
             noise_cutoff: splines::Spline::from_vec(vec![
                 splines::Key {
-                    value: -0.5,
+                    value: 0.5,
                     t: 0.,
                     interpolation: splines::Interpolation::Linear,
                 },
                 splines::Key {
-                    value: -0.6,
+                    value: 0.6,
                     t: 100.,
                     interpolation: splines::Interpolation::Linear,
                 },
             ]),
-
+            cave_bias_effect: 0.5,
             noise_scale: (4., 0.25, 4.),
         });
 

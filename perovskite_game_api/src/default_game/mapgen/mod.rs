@@ -36,7 +36,7 @@ const CACTUS_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
 const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
 
-// Next seed offset: 6
+// Next seed offset: 7
 
 #[derive(Clone, Copy, Debug)]
 enum Biome {
@@ -119,16 +119,49 @@ impl ElevationNoise {
     }
 }
 
+struct CaveNoise {
+    cave: noise::Fbm<noise::SuperSimplex>,
+}
+impl CaveNoise {
+    fn new(seed: u32) -> CaveNoise {
+        CaveNoise {
+            cave: noise::Fbm::new(seed.wrapping_add(6)),
+        }
+    }
+
+    // Returns (is_cave, ore_bias)
+    fn get(&self, block_coord: BlockCoordinate) -> (bool, f64) {
+        const CAVE_NOISE_INPUT_SCALE: f64 = 1.0 / 240.0;
+        const CAVE_SQUASH_FACTOR: f64 = 8.0;
+        // If we're at -10 or above, bias against caves. counter_bias ranges from 0.0 to 0.20
+        let counter_bias = (block_coord.y as f64 + 20.0).clamp(0.0, 20.0) / 50.0;
+        let noise = self.cave.get([
+            block_coord.x as f64 * CAVE_NOISE_INPUT_SCALE,
+            block_coord.y as f64 * CAVE_NOISE_INPUT_SCALE * CAVE_SQUASH_FACTOR,
+            block_coord.z as f64 * CAVE_NOISE_INPUT_SCALE,
+        ]);
+        let threshold = 0.6 + counter_bias;
+        let is_cave = noise > threshold;
+        // At the edge, bias by up to 1.0. If the noise is well below the threshold, clamp to 0.
+        let ore_bias = (noise - threshold + 0.1).clamp(0.0, 0.1) * 1.0;
+        (is_cave, ore_bias)
+    }
+}
+
 /// An ore that the mapgen should generate. Note: This struct is subject to being extended with new fields
 /// in the future
 pub struct OreDefinition {
     pub block: BlockTypeHandleWrapper,
-    /// When the generated noise is smaller than this value, the ore is generated.
+    /// When the generated noise is larger than this value, the ore is generated.
     /// TODO figure out and document the range of the noise
     /// This is expressed as a spline with the input being the depth at which we are generating ore.
     pub noise_cutoff: splines::spline::Spline<f64, f64>,
     /// The scale of the noise that generates this ore. The higher the scale, the larger and more spread-apart the clumps are.
     pub noise_scale: (f64, f64, f64),
+    /// How much to multiply the ore bias from caves. This adjusts noise_scale. 0.0 -> no adjustment near caves.
+    /// Positive values -> More likely to be near cave
+    /// Negative values -> Less likely to be near cave
+    pub cave_bias_effect: f64,
 }
 
 struct DefaultMapgen {
@@ -151,6 +184,7 @@ struct DefaultMapgen {
     tree_density_noise: noise::Billow<noise::SuperSimplex>,
     cactus_density_noise: noise::Billow<noise::SuperSimplex>,
     biome_noise: BiomeNoise,
+    cave_noise: CaveNoise,
     ores: Vec<(OreDefinition, noise::SuperSimplex)>,
     seed: u32,
 }
@@ -173,12 +207,23 @@ impl MapgenInterface for DefaultMapgen {
                     let block_coord = chunk_coord.with_offset(offset);
 
                     let vert_offset = block_coord.y - (elevation as i32);
+
+                    let (is_cave, cave_ore_bias) = self.cave_noise.get(block_coord);
+                    if is_cave {
+                        // TODO - lava, etc?
+                        chunk.set_block(offset, self.air, None);
+                        continue;
+                    }
+                    let gen_ore = || {
+                        self.generate_ore(block_coord, cave_ore_bias)
+                    };
+
                     let block = match biome {
                         Biome::DefaultGrassy => {
-                            self.generate_default_biome(vert_offset, block_coord)
+                            self.generate_default_biome(vert_offset, block_coord, gen_ore)
                         }
-                        Biome::SandyBeach => self.generate_sandy_beach(vert_offset, block_coord),
-                        Biome::Desert => self.generate_desert(vert_offset, block_coord),
+                        Biome::SandyBeach => self.generate_sandy_beach(vert_offset, block_coord, gen_ore),
+                        Biome::Desert => self.generate_desert(vert_offset, block_coord, gen_ore),
                     };
                     chunk.set_block(offset, block, None);
                 }
@@ -190,19 +235,20 @@ impl MapgenInterface for DefaultMapgen {
 
 impl DefaultMapgen {
     #[inline]
-    fn generate_ore(&self, coord: BlockCoordinate) -> BlockTypeHandle {
+    fn generate_ore(&self, coord: BlockCoordinate, cave_bias: f64) -> BlockTypeHandle {
         for (ore, noise) in &self.ores {
-            let cutoff = ore
+            let mut cutoff = ore
                 .noise_cutoff
                 .clamped_sample(-(coord.y as f64))
                 .unwrap_or(0.);
+            cutoff -= ore.cave_bias_effect * cave_bias;
             let noise_coord = [
                 coord.x as f64 / ore.noise_scale.0,
                 coord.y as f64 / ore.noise_scale.1,
                 coord.z as f64 / ore.noise_scale.2,
             ];
             let sample = noise.get(noise_coord);
-            if sample < cutoff {
+            if sample > cutoff {
                 return ore.block.0;
             }
         }
@@ -344,11 +390,13 @@ impl DefaultMapgen {
             }
         }
 
-    fn generate_default_biome(
+    fn generate_default_biome<F>(
         &self,
         vert_offset: i32,
         block_coord: BlockCoordinate,
-    ) -> perovskite_core::block_id::BlockId {
+        gen_ore: F
+    ) -> perovskite_core::block_id::BlockId
+    where F: Fn() -> perovskite_core::block_id::BlockId {
         if vert_offset > 0 {
             if block_coord.y > 0 {
                 self.air
@@ -361,15 +409,17 @@ impl DefaultMapgen {
             // todo variable depth of dirt
             self.dirt
         } else {
-            self.generate_ore(block_coord)
+            gen_ore()
         }
     }
 
-    fn generate_sandy_beach(
+    fn generate_sandy_beach<F>(
         &self,
         vert_offset: i32,
         block_coord: BlockCoordinate,
-    ) -> perovskite_core::block_id::BlockId {
+        gen_ore: F
+    ) -> perovskite_core::block_id::BlockId
+    where F: Fn() -> perovskite_core::block_id::BlockId {
         if vert_offset > 0 {
             if block_coord.y > 0 {
                 self.air
@@ -380,15 +430,17 @@ impl DefaultMapgen {
             // todo variable depth
             self.sand
         } else {
-            self.generate_ore(block_coord)
+            gen_ore()
         }
     }
 
-    fn generate_desert(
+    fn generate_desert<F>(
         &self,
         vert_offset: i32,
         block_coord: BlockCoordinate,
-    ) -> perovskite_core::block_id::BlockId {
+        gen_ore: F
+    ) -> perovskite_core::block_id::BlockId
+    where F: Fn() -> perovskite_core::block_id::BlockId{
         if vert_offset > 0 {
             if block_coord.y > 0 {
                 self.air
@@ -402,7 +454,7 @@ impl DefaultMapgen {
             // todo variable depth
             self.desert_stone
         } else {
-            self.generate_ore(block_coord)
+            gen_ore()
         }
     }
 }
@@ -432,6 +484,7 @@ pub(crate) fn build_mapgen(
 
         elevation_noise: ElevationNoise::new(seed),
         biome_noise: BiomeNoise::new(seed),
+        cave_noise: CaveNoise::new(seed),
         tree_density_noise: noise::Billow::new(seed.wrapping_add(2)),
         cactus_density_noise: noise::Billow::new(seed.wrapping_add(5)),
         ores: ores

@@ -68,10 +68,10 @@ where
 fn main() {
     // I don't have a good place to test noise functions. It's easier to just do it in
     // main.rs, although this is rather silly to include in the source tree.
-    // let noise = noise::SuperSimplex::new(3);
+    // let noise: noise::Fbm<noise::SuperSimplex> = noise::Fbm::new(3);
     // let mut v = Vec::new();
     // for i in 0..1000 {
-    //     v.push(noise.get([i as f64 * 1123.0, 2.0 * (i as f64 * 10001.0) % 18.5]));
+    //     v.push(noise.get([i as f64 * 1123.0 - 26., 2.0 * (i as f64 * 10001.0) % 18.5, -217. + 2.0 * (i as f64 * 12071.0) % 62.5]));
     // }
     // println!("{:?}", v);
     // return;

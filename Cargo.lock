@@ -2419,6 +2419,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "splines",
+ "tokio",
  "tracing",
  "tracing-log",
  "tracing-subscriber",

@@ -188,16 +188,18 @@ impl ChatCommandHandler for GrantCommandImpl {
             vec![permission.to_string()]
         };
         // todo support offline players
-        context.player_manager().with_connected_player(user, |p| {
-            for permission in permissions {
-                p.grant_permission(&permission)?;
-            }
-            Ok(())
+        tokio::task::block_in_place(|| {
+            context.player_manager().with_connected_player(user, |p| {
+                for permission in permissions {
+                    p.grant_permission(&permission)?;
+                }
+                Ok(())
+            })
         })?;
         context
             .initiator
             .send_chat_message(ChatMessage::new_server_message(
-                "Permission granted".to_string(),
+                "Permission(s) granted".to_string(),
             ))
             .await?;
         Ok(())
