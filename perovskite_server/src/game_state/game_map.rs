@@ -24,7 +24,7 @@ use smallvec::{smallvec, SmallVec};
 use std::arch::x86_64::__m128;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering, AtomicBool};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -540,7 +540,12 @@ struct MapChunkHolder {
     last_accessed: Mutex<Instant>,
     last_written: Mutex<Instant>,
     block_bloom_filter: cbloom::Filter,
+    // A bit hacky - there are two arcs to the same data - one in the chunk, and one here.
+    // The one in MapChunk is used for strong reads/writes under the control of a RwLock.
+    // This one here is used for weak reads that don't require any consistency guarantees.
     atomic_storage: Arc<[AtomicU32; 4096]>,
+    // This is set only if chunk's state is ready.
+    fast_path_read_ready: AtomicBool,
 }
 impl MapChunkHolder {
     fn new_empty() -> Self {
@@ -555,6 +560,7 @@ impl MapChunkHolder {
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
             block_bloom_filter: cbloom::Filter::with_size_and_hashers(128, 5),
             atomic_storage: Arc::new([ATOMIC_INITIALIZER; 4096]),
+            fast_path_read_ready: AtomicBool::new(false),
         }
     }
 
@@ -632,7 +638,7 @@ impl MapChunkHolder {
 
         self.fill_lighting_for_load(&chunk, light_columns, block_types);
         *guard = HolderState::Ok(chunk);
-
+        self.fast_path_read_ready.store(true, Ordering::Release);
         self.condition.notify_all();
     }
 
@@ -911,19 +917,15 @@ impl ServerGameMap {
     ///
     /// This avoids taking write locks or doing expensive IO, at the expense of sometimes not being able to
     /// actually get the block
-    ///
-    /// TODO rewrite this using the truly weak read method
-    pub fn try_get_block(&self, coord: BlockCoordinate) -> Result<Option<BlockTypeHandle>> {
-        let chunk_guard = match self.try_get_chunk(coord.chunk())? {
-            Some(chunk_guard) => chunk_guard,
-            None => return Ok(None),
-        };
-        let chunk = match chunk_guard.try_get_read()? {
-            Some(chunk) => chunk,
-            None => return Ok(None),
-        };
-        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        Ok(Some(self.block_type_manager().make_blockref(id.into())?))
+    pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockTypeHandle> {
+        let chunk_guard =  self.try_get_chunk(coord.chunk())?;
+        // We don't have a mapchunk lock, so we need actual atomic ordering here
+        if chunk_guard.fast_path_read_ready.load(Ordering::Acquire) {
+            Some(chunk_guard.atomic_storage[coord.offset().as_index()].load(Ordering::Acquire).into())
+        }
+        else {
+            None
+        }
     }
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
@@ -1370,7 +1372,7 @@ impl ServerGameMap {
     fn try_get_chunk<'a>(
         &'a self,
         coord: ChunkCoordinate,
-    ) -> Result<Option<MapChunkOuterGuard<'a>>> {
+    ) -> Option<MapChunkOuterGuard<'a>> {
         let shard = shard_id(coord);
         let guard = self.live_chunks[shard].read();
         // We need this check - if the chunk isn't in memory, we cannot construct a MapChunkOuterGuard for it
@@ -1378,14 +1380,14 @@ impl ServerGameMap {
         //
         // As long as the guard lives, nobody can remove the entry from the map
         if !guard.chunks.contains_key(&coord) {
-            return Ok(None);
+            return None;
         }
-        return Ok(Some(MapChunkOuterGuard {
+        return Some(MapChunkOuterGuard {
             read_guard: guard,
             coord,
             writeback_permit: None,
             force_writeback: false,
-        }));
+        });
     }
 
     fn get_writeback_permit(&self, shard: usize) -> Result<mpsc::Permit<'_, WritebackReq>> {
