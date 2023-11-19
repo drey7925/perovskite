@@ -24,6 +24,7 @@ use smallvec::{smallvec, SmallVec};
 use std::arch::x86_64::__m128;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -33,11 +34,11 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::{run_handler, RwCondvar};
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
 };
+use crate::{run_handler, RwCondvar};
 
 use super::blocks::BlockInteractionResult;
 use super::{
@@ -159,15 +160,16 @@ pub struct MapChunk {
     coord: ChunkCoordinate,
     // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
     // more calls similar to mutate_block_atomically
-    pub(crate) block_ids: Box<[u32; 4096]>,
+    pub(crate) block_ids: Arc<[AtomicU32; 4096]>,
     extended_data: Box<FxHashMap<u16, ExtendedData>>,
     dirty: bool,
 }
 impl MapChunk {
-    fn new(coord: ChunkCoordinate) -> Self {
+    fn new(coord: ChunkCoordinate, storage: Arc<[AtomicU32; 4096]>) -> Self {
+        const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
             coord,
-            block_ids: Box::new([0; 4096]),
+            block_ids: storage,
             extended_data: Default::default(),
             dirty: false,
         }
@@ -199,7 +201,11 @@ impl MapChunk {
         let proto = mapchunk_proto::StoredChunk {
             chunk_data: Some(mapchunk_proto::stored_chunk::ChunkData::V1(
                 mapchunk_proto::ChunkV1 {
-                    block_ids: self.block_ids.to_vec(),
+                    block_ids: self
+                        .block_ids
+                        .iter()
+                        .map(|x| x.load(Ordering::Relaxed))
+                        .collect(),
                     extended_data,
                 },
             )),
@@ -215,7 +221,8 @@ impl MapChunk {
         ext_data: &ExtendedData,
         game_state: &GameState,
     ) -> Result<Option<mapchunk_proto::ExtendedData>> {
-        let id = self.block_ids[block_index];
+        // We're in MapChunk so we have at least a read-level mutex, meaning we can use a relaxed load
+        let id = self.block_ids[block_index].load(Ordering::Relaxed);
         let (block_type, _) = game_state
             .game_map()
             .block_type_manager()
@@ -296,9 +303,10 @@ impl MapChunk {
         block: BlockTypeHandle,
         extended_data: Option<ExtendedData>,
     ) {
-        let old_block = BlockId(self.block_ids[coordinate.as_index()]);
+        // We have a &mut MapChunk, meaning we can use relaxed loads and stores
+        let old_block = BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed));
         let extended_data_was_some = extended_data.is_some();
-        self.block_ids[coordinate.as_index()] = block.into();
+        self.block_ids[coordinate.as_index()].store(block.into(), Ordering::Relaxed);
         let old_ext_data = if let Some(extended_data) = extended_data {
             self.extended_data
                 .insert(coordinate.as_index().try_into().unwrap(), extended_data)
@@ -316,7 +324,13 @@ impl MapChunk {
         if a == b {
             return;
         }
-        self.block_ids.swap(a.as_index(), b.as_index());
+
+        // .swap() would have been nice, but it won't borrowck.
+        let a_id = self.block_ids[a.as_index()].load(Ordering::Relaxed);
+        let b_id = self.block_ids[b.as_index()].load(Ordering::Relaxed);
+        self.block_ids[a.as_index()].store(b_id, Ordering::Relaxed);
+        self.block_ids[b.as_index()].store(a_id, Ordering::Relaxed);
+
         let a_ext = self.extended_data.remove(&(a.as_index() as u16));
         let b_ext = self.extended_data.remove(&(b.as_index() as u16));
         if let Some(a_ext) = a_ext {
@@ -334,10 +348,11 @@ impl MapChunk {
         a_coord: ChunkOffset,
         b_coord: ChunkOffset,
     ) {
-        std::mem::swap(
-            &mut a_chunk.block_ids[a_coord.as_index()],
-            &mut b_chunk.block_ids[b_coord.as_index()],
-        );
+        // std::mem::swap would have been nice, but it won't borrowck.
+        let a_id = a_chunk.block_ids[a_coord.as_index()].load(Ordering::Relaxed);
+        let b_id = b_chunk.block_ids[b_coord.as_index()].load(Ordering::Relaxed);
+        a_chunk.block_ids[a_coord.as_index()].store(b_id, Ordering::Relaxed);
+        b_chunk.block_ids[b_coord.as_index()].store(a_id, Ordering::Relaxed);
 
         // a_chunk and b_chunk cannot alias each other, so no need for an equality check
         let a_ext = a_chunk.extended_data.remove(&(a_coord.as_index() as u16));
@@ -358,7 +373,8 @@ impl MapChunk {
 
     #[inline]
     pub fn get_block(&self, coordinate: ChunkOffset) -> BlockTypeHandle {
-        BlockId(self.block_ids[coordinate.as_index()])
+        // We have a &MapChunk, meaning we can use relaxed loads
+        BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed)).into()
     }
 }
 
@@ -434,10 +450,15 @@ fn parse_v1(
             );
         }
     }
+    const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
+    let block_ids = Arc::new([ATOMIC_INITIALIZER; 4096]);
+    for (i, block_id) in chunk_data.block_ids.iter().enumerate() {
+        block_ids[i].store(*block_id, Ordering::Relaxed);
+    }
     Ok(MapChunk {
         coord: coordinate,
         // Unwrap is safe - this should only fail if the length is wrong, but we checked the length above.
-        block_ids: chunk_data.block_ids.try_into().unwrap(),
+        block_ids,
         extended_data: Box::new(extended_data),
         dirty: false,
     })
@@ -464,7 +485,19 @@ struct MapChunkInnerWriteGuard<'a> {
 }
 impl<'a> MapChunkInnerWriteGuard<'a> {
     fn downgrade(self) -> MapChunkInnerReadGuard<'a> {
-        MapChunkInnerReadGuard { guard: RwLockWriteGuard::downgrade(self.guard) }
+        MapChunkInnerReadGuard {
+            guard: RwLockWriteGuard::downgrade(self.guard),
+        }
+    }
+
+    fn clone_block_ids(&self) -> Box<[u32; 4096]> {
+        self.block_ids
+            .iter()
+            .map(|x| x.load(Ordering::Relaxed))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+            .try_into()
+            .unwrap()
     }
 }
 impl<'a> Deref for MapChunkInnerWriteGuard<'a> {
@@ -478,7 +511,6 @@ impl<'a> DerefMut for MapChunkInnerWriteGuard<'a> {
         self.guard.unwrap_mut()
     }
 }
-
 
 enum HolderState {
     Empty,
@@ -508,9 +540,11 @@ struct MapChunkHolder {
     last_accessed: Mutex<Instant>,
     last_written: Mutex<Instant>,
     block_bloom_filter: cbloom::Filter,
+    atomic_storage: Arc<[AtomicU32; 4096]>,
 }
 impl MapChunkHolder {
     fn new_empty() -> Self {
+        const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
             chunk: RwLock::new(HolderState::Empty),
             condition: RwCondvar::new(),
@@ -520,6 +554,7 @@ impl MapChunkHolder {
             // For now, 128 bytes is a reasonable overhead (a chunk contains 4096 u32s which is 16 KiB already + extended data)
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
             block_bloom_filter: cbloom::Filter::with_size_and_hashers(128, 5),
+            atomic_storage: Arc::new([ATOMIC_INITIALIZER; 4096]),
         }
     }
 
@@ -558,7 +593,7 @@ impl MapChunkHolder {
             }
         }
     }
-    
+
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
     fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_>>> {
@@ -578,14 +613,17 @@ impl MapChunkHolder {
         block_types: &BlockTypeManager,
     ) {
         let mut seen_blocks = FxHashSet::default();
-        for block_id in chunk.block_ids.iter() {
-            if seen_blocks.insert(*block_id) {
+        for block_id in chunk
+            .block_ids
+            .iter()
+            .map(|x| BlockId::from(x.load(Ordering::Relaxed)).base_id())
+        {
+            if seen_blocks.insert(block_id) {
                 // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
                 // on x86_64.
                 // Only insert unique block ids (still need to test this optimization)
                 // TODO fork the bloom filter library and extend it to support constant lengths
-                self.block_bloom_filter
-                    .insert(BlockId::from(*block_id).base_id() as u64);
+                self.block_bloom_filter.insert(block_id as u64);
             }
         }
         let _span = span!("game_map waiting to fill chunk");
@@ -844,7 +882,7 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let chunk = chunk_guard.wait_and_get_for_read()?;
 
-        let id = chunk.block_ids[coord.offset().as_index()];
+        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
         let ext_data = match chunk
             .extended_data
             .get(&coord.offset().as_index().try_into().unwrap())
@@ -864,7 +902,7 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let chunk = chunk_guard.wait_and_get_for_read()?;
 
-        let id = chunk.block_ids[coord.offset().as_index()];
+        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
 
         self.block_type_manager().make_blockref(id.into())
     }
@@ -873,7 +911,7 @@ impl ServerGameMap {
     ///
     /// This avoids taking write locks or doing expensive IO, at the expense of sometimes not being able to
     /// actually get the block
-    /// 
+    ///
     /// TODO rewrite this using the truly weak read method
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Result<Option<BlockTypeHandle>> {
         let chunk_guard = match self.try_get_chunk(coord.chunk())? {
@@ -884,7 +922,7 @@ impl ServerGameMap {
             Some(chunk) => chunk,
             None => return Ok(None),
         };
-        let id = chunk.block_ids[coord.offset().as_index()];
+        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
         Ok(Some(self.block_type_manager().make_blockref(id.into())?))
     }
 
@@ -903,7 +941,7 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
-        let old_id = chunk.block_ids[coord.offset().as_index()];
+        let old_id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
         let old_block = self.block_type_manager().make_blockref(old_id.into())?;
         let old_data = match new_data {
             Some(new_data) => chunk
@@ -913,7 +951,7 @@ impl ServerGameMap {
                 .extended_data
                 .remove(&coord.offset().as_index().try_into().unwrap()),
         };
-        chunk.block_ids[coord.offset().as_index()] = new_id.into();
+        chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
 
         chunk.dirty = true;
         let light_change = self
@@ -995,7 +1033,7 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
-        let old_id = BlockId(chunk.block_ids[coord.offset().as_index()]);
+        let old_id = BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
         let old_block = self.block_type_manager().make_blockref(old_id)?;
         if !predicate(
             old_block,
@@ -1016,8 +1054,8 @@ impl ServerGameMap {
                 .remove(&coord.offset().as_index().try_into().unwrap()),
         };
 
-        let new_id = block.id();
-        chunk.block_ids[coord.offset().as_index()] = new_id.into();
+        let new_id = block;
+        chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
         if old_id != new_id || old_data.is_some() || new_data_was_some {
             chunk.dirty = true;
         }
@@ -1035,11 +1073,11 @@ impl ServerGameMap {
         drop(chunk);
         chunk_guard
             .block_bloom_filter
-            .insert(block.id().base_id() as u64);
+            .insert(block.base_id() as u64);
         self.enqueue_writeback(chunk_guard)?;
         self.broadcast_block_change(BlockUpdate {
             location: coord,
-            new_value: block.id(),
+            new_value: block,
         });
         Ok((CasOutcome::Match, old_block, old_data))
     }
@@ -1102,7 +1140,9 @@ impl ServerGameMap {
 
         let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
 
-        let old_id = chunk.block_ids[offset.as_index()].into();
+        let old_id = chunk.block_ids[offset.as_index()]
+            .load(Ordering::Relaxed)
+            .into();
         let mut block_type = game_map.block_type_manager().make_blockref(old_id)?;
         let closure_result = mutator(&mut block_type, &mut data_holder);
 
@@ -1115,7 +1155,7 @@ impl ServerGameMap {
 
         let new_id = block_type.id();
         if new_id != old_id {
-            chunk.block_ids[offset.as_index()] = new_id.into();
+            chunk.block_ids[offset.as_index()].store(new_id.into(), Ordering::Relaxed);
             chunk.dirty = true;
             holder.block_bloom_filter.insert(new_id.base_id() as u64)
         }
@@ -1302,7 +1342,7 @@ impl ServerGameMap {
             let read_guard = RwLockWriteGuard::downgrade(write_guard);
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
             let chunk_holder = read_guard.chunks.get(&coord).unwrap();
-            match self.load_uncached_or_generate_chunk(coord) {
+            match self.load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone()) {
                 Ok((chunk, force_writeback)) => {
                     chunk_holder.fill(chunk, &read_guard.light_columns, self.block_type_manager());
                     let outer_guard = MapChunkOuterGuard {
@@ -1370,7 +1410,11 @@ impl ServerGameMap {
     // from the DB/mapgen
     // Returns the chunk and a boolean - if true, the chunk was generated and should be written
     // back unconditionally.
-    fn load_uncached_or_generate_chunk(&self, coord: ChunkCoordinate) -> Result<(MapChunk, bool)> {
+    fn load_uncached_or_generate_chunk(
+        &self,
+        coord: ChunkCoordinate,
+        storage: Arc<[AtomicU32; 4096]>,
+    ) -> Result<(MapChunk, bool)> {
         let data = self
             .database
             .get(&KeySpace::MapchunkData.make_key(&coord.as_bytes()))?;
@@ -1381,7 +1425,7 @@ impl ServerGameMap {
             ));
         }
 
-        let mut chunk = MapChunk::new(coord);
+        let mut chunk = MapChunk::new(coord, storage);
         chunk.dirty = true;
         {
             let _span = span!("mapgen running");
@@ -2240,7 +2284,7 @@ impl GameMapTimer {
                                     coord,
                                     Some(&state.neighbor_buffer),
                                     state,
-                                    &mut writeback_permit
+                                    &mut writeback_permit,
                                 )?;
                             }
                             _ => unreachable!(),
@@ -2390,7 +2434,15 @@ impl GameMapTimer {
                     if !self.settings.idle_chunk_after_unchanged
                         || chunk_update >= state.timer_state.prev_tick_time
                     {
-                        self.run_bulk_handler(game_state, holder, &mut chunk, coord, None, state, writeback_permit)?;
+                        self.run_bulk_handler(
+                            game_state,
+                            holder,
+                            &mut chunk,
+                            coord,
+                            None,
+                            state,
+                            writeback_permit,
+                        )?;
                     }
                 }
                 TimerCallback::BulkUpdateWithNeighbors(_) => {
@@ -2430,8 +2482,8 @@ impl GameMapTimer {
                 return Ok(());
             }
         };
-        let upper_old_block_ids = upper_chunk.block_ids.clone();
-        let lower_old_block_ids = lower_chunk.block_ids.clone();
+        let upper_old_block_ids = upper_chunk.clone_block_ids();
+        let lower_old_block_ids = lower_chunk.clone_block_ids();
         match &self.callback {
             TimerCallback::LockedVerticalNeighors(x) => {
                 run_handler!(
@@ -2458,7 +2510,7 @@ impl GameMapTimer {
             game_state,
             upper_coord,
             upper_writeback_permit,
-            state.timer_state.current_tick_time
+            state.timer_state.current_tick_time,
         );
         reconcile_after_bulk_handler(
             &lower_old_block_ids,
@@ -2467,7 +2519,7 @@ impl GameMapTimer {
             game_state,
             lower_coord,
             lower_writeback_permit,
-            state.timer_state.current_tick_time
+            state.timer_state.current_tick_time,
         );
 
         Ok(())
@@ -2486,7 +2538,7 @@ impl GameMapTimer {
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
         let map = game_state.game_map();
         for i in 0..4096 {
-            let block_id = BlockId(chunk.block_ids[i]);
+            let block_id = BlockId(chunk.block_ids[i].load(Ordering::Relaxed));
             assert!(holder
                 .block_bloom_filter
                 .maybe_contains(block_id.base_id() as u64));
@@ -2575,7 +2627,7 @@ impl GameMapTimer {
         state: &ShardState,
         permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     ) -> Result<()> {
-        let old_block_ids = chunk.block_ids.clone();
+        let old_block_ids: Box<[u32; 4096]> = chunk.clone_block_ids();
         match &self.callback {
             TimerCallback::BulkUpdate(cb) => {
                 assert!(neighbor_data.is_none());
@@ -2607,7 +2659,15 @@ impl GameMapTimer {
             }
             _ => unreachable!(),
         };
-        reconcile_after_bulk_handler(&old_block_ids, chunk, holder, game_state, coord, permit, state.timer_state.current_tick_time);
+        reconcile_after_bulk_handler(
+            &old_block_ids,
+            chunk,
+            holder,
+            game_state,
+            coord,
+            permit,
+            state.timer_state.current_tick_time,
+        );
         Ok(())
     }
 
@@ -2650,7 +2710,8 @@ impl GameMapTimer {
                                                     + (z + 16) as usize * 48
                                                     + (y + 16) as usize;
                                                 let i_index = dx * 16 * 16 + dz * 16 + dy;
-                                                buf[o_index] = contents.block_ids[i_index as usize];
+                                                buf[o_index] = contents.block_ids[i_index as usize]
+                                                    .load(Ordering::Relaxed);
                                             }
                                         }
                                     }
@@ -2674,13 +2735,13 @@ fn reconcile_after_bulk_handler(
     game_state: &Arc<GameState>,
     coord: ChunkCoordinate,
     permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
-    update_time: Instant
+    update_time: Instant,
 ) {
     let mut seen_blocks = FxHashSet::default();
     let mut any_updated = false;
     for i in 0..4096 {
         let old_block_id = BlockId::from(old_block_ids[i]);
-        let new_block_id = BlockId::from(chunk.block_ids[i]);
+        let new_block_id = BlockId::from(chunk.block_ids[i].load(Ordering::Relaxed));
         if old_block_id != new_block_id {
             if seen_blocks.insert(new_block_id.base_id()) {
                 // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
@@ -2695,11 +2756,11 @@ fn reconcile_after_bulk_handler(
             any_updated = true;
             game_state.game_map().broadcast_block_change(BlockUpdate {
                 location: coord.with_offset(ChunkOffset::from_index(i)),
-                new_value: BlockId(chunk.block_ids[i]),
+                new_value: new_block_id,
             });
         }
     }
-    
+
     if any_updated {
         permit.take().unwrap().send(WritebackReq::Chunk(coord));
         *holder.last_written.lock() = update_time;
