@@ -246,7 +246,7 @@ async fn do_register_handshake(
             register: true,
             opaque_request: client_state.message.serialize().to_vec(),
             min_protocol_version: MIN_PROTOCOL_VERSION,
-            max_protocol_version: MIN_PROTOCOL_VERSION,
+            max_protocol_version: MAX_PROTOCOL_VERSION,
         })),
     })
     .await?;

@@ -119,6 +119,11 @@ pub mod ores {
     const IRON_PIECE_TEXTURE: TextureName = TextureName("default:iron_piece");
     const IRON_INGOT_TEXTURE: TextureName = TextureName("default:iron_ingot");
 
+    const DIAMOND_ORE: StaticBlockName = StaticBlockName("default:diamond_ore");
+    const DIAMOND_PIECE: StaticItemName = StaticItemName("default:diamond_piece");
+    const DIAMOND_ORE_TEXTURE: TextureName = TextureName("default:diamond_ore");
+    const DIAMOND_PIECE_TEXTURE: TextureName = TextureName("default:diamond_piece");
+
     pub(crate) fn register_ores(game_builder: &mut DefaultGameBuilder) -> Result<()> {
         // todo factor this into a function per-ore
         include_texture_bytes!(
@@ -240,6 +245,56 @@ pub mod ores {
                 },
             ]),
             cave_bias_effect: 0.5,
+            noise_scale: (4., 0.25, 4.),
+        });
+
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            DIAMOND_ORE_TEXTURE,
+            "textures/diamond_ore.png"
+        )?;
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            DIAMOND_PIECE_TEXTURE,
+            "textures/diamond_piece.png"
+        )?;
+        game_builder.game_builder().register_basic_item(
+            DIAMOND_PIECE,
+            "Piece of diamond",
+            DIAMOND_PIECE_TEXTURE,
+            vec![],
+        )?;
+        let diamond_ore = game_builder.game_builder().add_block(
+            BlockBuilder::new(DIAMOND_ORE)
+                .set_cube_appearance(
+                    CubeAppearanceBuilder::new().set_single_texture(DIAMOND_ORE_TEXTURE),
+                )
+                .add_block_group(BRITTLE)
+                .add_block_group(TOOL_REQUIRED)
+                .set_dropped_item_closure(|| (DIAMOND_PIECE, rand::thread_rng().gen_range(1..=2))),
+        )?;
+
+        game_builder.register_ore(OreDefinition {
+            block: diamond_ore.handle,
+            // Use the same schedule as coal
+            noise_cutoff: splines::Spline::from_vec(vec![
+                splines::Key {
+                    value: 0.9,
+                    t: 0.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+                splines::Key {
+                    value: 0.825,
+                    t: 100.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+                splines::Key {
+                    value: 0.775,
+                    t: 400.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+            ]),
+            cave_bias_effect: 0.125,
             noise_scale: (4., 0.25, 4.),
         });
 
