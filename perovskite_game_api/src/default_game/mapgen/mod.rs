@@ -132,7 +132,7 @@ impl CaveNoise {
     // Returns (is_cave, ore_bias)
     fn get(&self, block_coord: BlockCoordinate) -> (bool, f64) {
         const CAVE_NOISE_INPUT_SCALE: f64 = 1.0 / 240.0;
-        const CAVE_SQUASH_FACTOR: f64 = 8.0;
+        const CAVE_SQUASH_FACTOR: f64 = 4.0;
         // If we're at -10 or above, bias against caves. counter_bias ranges from 0.0 to 0.20
         let counter_bias = (block_coord.y as f64 + 20.0).clamp(0.0, 20.0) / 50.0;
         let noise = self.cave.get([
