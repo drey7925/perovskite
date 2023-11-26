@@ -21,7 +21,6 @@ use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
-use std::arch::x86_64::__m128;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU32, Ordering, AtomicBool};
@@ -38,7 +37,8 @@ use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
 };
-use crate::{run_handler, RwCondvar};
+use crate::run_handler;
+use crate::sync::{RwCondvar, AtomicInstant};
 
 use super::blocks::BlockInteractionResult;
 use super::{
@@ -537,8 +537,9 @@ impl HolderState {
 struct MapChunkHolder {
     chunk: RwLock<HolderState>,
     condition: RwCondvar,
-    last_accessed: Mutex<Instant>,
-    last_written: Mutex<Instant>,
+    // TODO - should these go into their own cache line to avoid ping-ponging?
+    last_accessed: AtomicInstant,
+    last_written: AtomicInstant,
     block_bloom_filter: cbloom::Filter,
     // A bit hacky - there are two arcs to the same data - one in the chunk, and one here.
     // The one in MapChunk is used for strong reads/writes under the control of a RwLock.
@@ -553,8 +554,8 @@ impl MapChunkHolder {
         Self {
             chunk: RwLock::new(HolderState::Empty),
             condition: RwCondvar::new(),
-            last_accessed: Mutex::new(Instant::now()),
-            last_written: Mutex::new(Instant::now()),
+            last_accessed: AtomicInstant::new(),
+            last_written: AtomicInstant::new(),
             // TODO: make bloom filter configurable or adaptive
             // For now, 128 bytes is a reasonable overhead (a chunk contains 4096 u32s which is 16 KiB already + extended data)
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
@@ -715,7 +716,7 @@ impl MapChunkHolder {
     }
 
     fn bump_access_time(&self) {
-        *self.last_accessed.lock() = Instant::now();
+        self.last_accessed.update_now_release();
     }
 }
 
@@ -730,7 +731,7 @@ impl<'a> MapChunkOuterGuard<'a> {
     // Naming note - _inner because ServerGameMap first does some error checking and
     // monitoring/stats before calling this.
     fn write_back_inner(mut self) {
-        *self.last_written.lock() = Instant::now();
+        self.last_written.update_now_release();
         self.writeback_permit
             .take()
             .unwrap()
@@ -744,7 +745,7 @@ impl<'a> Drop for MapChunkOuterGuard<'a> {
             // Do so now.
             // If the permit was already taken, we don't need to do anything.
             if let Some(permit) = self.writeback_permit.take() {
-                *self.last_written.lock() = Instant::now();
+                self.last_written.update_now_release();
                 permit.send(WritebackReq::Chunk(self.coord));
             }
         }
@@ -1644,7 +1645,7 @@ impl MapCacheCleanup {
             let mut entries: Vec<_> = lock
                 .chunks
                 .iter()
-                .map(|(k, v)| (*v.last_accessed.lock(), *k))
+                .map(|(k, v)| (v.last_accessed.get_acquire(), *k))
                 .filter(|&entry| (now - entry.0) >= CACHE_CLEAN_MIN_AGE)
                 .collect();
             entries.sort_unstable_by_key(|entry| entry.0);
@@ -2194,8 +2195,8 @@ impl GameMapTimer {
                         if !passed_block_presence {
                             continue;
                         }
-                        let last_update = (*upper_chunk.last_written.lock())
-                            .max(*lower_chunk.last_written.lock());
+                        let last_update = (upper_chunk.last_written.get_acquire())
+                            .max(lower_chunk.last_written.get_acquire());
                         let should_run = !self.settings.idle_chunk_after_unchanged
                             || last_update >= state.timer_state.prev_tick_time;
                         if should_run {
@@ -2389,7 +2390,7 @@ impl GameMapTimer {
                         .iter()
                         .any(|x| chunk.block_bloom_filter.maybe_contains(x.base_id() as u64))
                 {
-                    let last_update = *chunk.last_written.lock();
+                    let last_update = chunk.last_written.get_acquire();
                     let should_run = !self.settings.idle_chunk_after_unchanged
                         || last_update >= state.timer_state.prev_tick_time;
                     if should_run {
@@ -2432,7 +2433,7 @@ impl GameMapTimer {
                     )?;
                 }
                 TimerCallback::BulkUpdate(_) => {
-                    let chunk_update = *holder.last_written.lock();
+                    let chunk_update = holder.last_written.get_acquire();
                     if !self.settings.idle_chunk_after_unchanged
                         || chunk_update >= state.timer_state.prev_tick_time
                     {
@@ -2697,7 +2698,7 @@ impl GameMapTimer {
                             }) {
                                 any_blooms_match = true;
                             }
-                            update_times.push(*neighbor_holder.last_written.lock());
+                            update_times.push(neighbor_holder.last_written.get_acquire());
 
                             if let Some(contents) = neighbor_holder.try_get_read()? {
                                 presence_bitmap |= 1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1));
@@ -2765,7 +2766,7 @@ fn reconcile_after_bulk_handler(
 
     if any_updated {
         permit.take().unwrap().send(WritebackReq::Chunk(coord));
-        *holder.last_written.lock() = update_time;
+        holder.last_written.update_now_release();
     }
 }
 

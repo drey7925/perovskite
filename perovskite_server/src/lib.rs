@@ -21,8 +21,9 @@ pub mod media;
 pub mod network_server;
 pub mod server;
 
+mod sync;
+
 use anyhow::Result;
-use parking_lot::{Condvar, Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::future::Future;
 use tokio::task::JoinHandle;
 
@@ -44,40 +45,4 @@ where
     T::Output: Send + 'static,
 {
     Ok(tokio::task::spawn(task))
-}
-
-pub(crate) struct RwCondvar {
-    c: Condvar,
-    m: Mutex<()>,
-}
-impl RwCondvar {
-    pub(crate) fn new() -> RwCondvar {
-        RwCondvar {
-            c: Condvar::new(),
-            m: Mutex::new(()),
-        }
-    }
-
-    pub(crate) fn wait_reader<T>(&self, g: &mut RwLockReadGuard<'_, T>) {
-        let guard = self.m.lock();
-        RwLockReadGuard::unlocked(g, || {
-            // Move the guard in so it gets unlocked before we re-lock g
-            let mut guard = guard;
-            self.c.wait(&mut guard);
-        });
-    }
-    pub(crate) fn wait_writer<T>(&self, g: &mut RwLockWriteGuard<'_, T>) {
-        let guard = self.m.lock();
-        RwLockWriteGuard::unlocked(g, || {
-            // Move the guard in so it gets unlocked before we re-lock g
-            let mut guard = guard;
-            self.c.wait(&mut guard);
-        });
-    }
-    pub(crate) fn notify_all(&self) {
-        self.c.notify_all();
-    }
-    pub(crate) fn notify_one(&self) {
-        self.c.notify_one();
-    }
 }
