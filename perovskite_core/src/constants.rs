@@ -40,9 +40,10 @@ pub mod blocks {
 
 pub mod item_groups {
     /// Item group for all items that have a wear bar corresponding to physical wear (e.g. pickaxes)
-    /// as opposed to e.g. electrical charge, which could be used in some game plugin
+    /// as opposed to e.g. electrical charge, which could be used in some game plugin.
     ///
-    /// The default game doesn't do anything with this group.
+    /// The default game doesn't do anything with this group. This is only used as a signal for
+    /// other plugins to make this distiction.
     pub const TOOL_WEAR: &str = "default:tool_wear";
 
     /// Items that should not be shown in the creative inventory

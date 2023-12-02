@@ -60,6 +60,15 @@ pub mod block_groups {
     pub const FIBROUS: &str = "default:fibrous";
 }
 
+pub mod item_groups {
+    /// Ores that were extracted from stone and have yet to be processed
+    pub const RAW_ORES: &str = "default:raw_ores";
+    /// Ingots from smelting ore
+    pub const METAL_INGOTS: &str = "default:metal_ingots";
+    /// Gems and crystals directly usable after extracting
+    pub const GEMS: &str = "default:gems";
+}
+
 /// Control of the map generator.
 pub mod mapgen;
 

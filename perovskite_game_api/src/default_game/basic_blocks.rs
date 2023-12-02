@@ -101,7 +101,7 @@ pub mod ores {
 
     use crate::{
         blocks::CubeAppearanceBuilder,
-        default_game::recipes::{RecipeImpl, RecipeSlot},
+        default_game::{recipes::{RecipeImpl, RecipeSlot}, item_groups},
         game_builder::StaticItemName,
     };
 
@@ -118,6 +118,13 @@ pub mod ores {
     const IRON_ORE_TEXTURE: TextureName = TextureName("default:iron_ore");
     const IRON_PIECE_TEXTURE: TextureName = TextureName("default:iron_piece");
     const IRON_INGOT_TEXTURE: TextureName = TextureName("default:iron_ingot");
+
+    const GOLD_ORE: StaticBlockName = StaticBlockName("default:gold_ore");
+    const GOLD_PIECE: StaticItemName = StaticItemName("default:gold_piece");
+    const GOLD_INGOT: StaticItemName = StaticItemName("default:gold_ingot");
+    const GOLD_ORE_TEXTURE: TextureName = TextureName("default:gold_ore");
+    const GOLD_PIECE_TEXTURE: TextureName = TextureName("default:gold_piece");
+    const GOLD_INGOT_TEXTURE: TextureName = TextureName("default:gold_ingot");
 
     const DIAMOND_ORE: StaticBlockName = StaticBlockName("default:diamond_ore");
     const DIAMOND_PIECE: StaticItemName = StaticItemName("default:diamond_piece");
@@ -197,13 +204,13 @@ pub mod ores {
             IRON_PIECE,
             "Piece of iron",
             IRON_PIECE_TEXTURE,
-            vec![],
+            vec![item_groups::RAW_ORES.into()],
         )?;
         game_builder.game_builder().register_basic_item(
             IRON_INGOT,
             "Iron ingot",
             IRON_INGOT_TEXTURE,
-            vec![],
+            vec![item_groups::METAL_INGOTS.into()],
         )?;
         game_builder.smelting_recipes.register_recipe(RecipeImpl {
             slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
@@ -262,7 +269,7 @@ pub mod ores {
             DIAMOND_PIECE,
             "Piece of diamond",
             DIAMOND_PIECE_TEXTURE,
-            vec![],
+            vec![item_groups::GEMS.into()],
         )?;
         let diamond_ore = game_builder.game_builder().add_block(
             BlockBuilder::new(DIAMOND_ORE)
@@ -276,7 +283,6 @@ pub mod ores {
 
         game_builder.register_ore(OreDefinition {
             block: diamond_ore.handle,
-            // Use the same schedule as coal
             noise_cutoff: splines::Spline::from_vec(vec![
                 splines::Key {
                     value: 0.9,
@@ -291,6 +297,67 @@ pub mod ores {
                 splines::Key {
                     value: 0.775,
                     t: 400.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+            ]),
+            cave_bias_effect: 0.125,
+            noise_scale: (4., 0.25, 4.),
+        });
+
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            GOLD_ORE_TEXTURE,
+            "textures/gold_ore.png"
+        )?;
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            GOLD_PIECE_TEXTURE,
+            "textures/gold_piece.png"
+        )?;
+        include_texture_bytes!(
+            &mut game_builder.inner,
+            GOLD_INGOT_TEXTURE,
+            "textures/gold_ingot.png"
+        )?;
+        game_builder.game_builder().register_basic_item(
+            GOLD_PIECE,
+            "Piece of gold",
+            GOLD_PIECE_TEXTURE,
+            vec![item_groups::RAW_ORES.into()],
+        )?;
+        game_builder.game_builder().register_basic_item(
+            GOLD_INGOT,
+            "Gold ingot",
+            GOLD_INGOT_TEXTURE,
+            vec![item_groups::METAL_INGOTS.into()],
+        )?;
+        let gold_ore = game_builder.game_builder().add_block(
+            BlockBuilder::new(GOLD_ORE)
+                .set_cube_appearance(
+                    CubeAppearanceBuilder::new().set_single_texture(GOLD_ORE_TEXTURE),
+                )
+                .add_block_group(BRITTLE)
+                .add_block_group(TOOL_REQUIRED)
+                .set_dropped_item_closure(|| (GOLD_PIECE, rand::thread_rng().gen_range(1..=2))),
+        )?;
+
+        game_builder.register_ore(OreDefinition {
+            block: gold_ore.handle,
+            // Use the same schedule as coal
+            noise_cutoff: splines::Spline::from_vec(vec![
+                splines::Key {
+                    value: 0.9,
+                    t: 0.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+                splines::Key {
+                    value: 0.815,
+                    t: 100.,
+                    interpolation: splines::Interpolation::Linear,
+                },
+                splines::Key {
+                    value: 0.755,
+                    t: 200.,
                     interpolation: splines::Interpolation::Linear,
                 },
             ]),

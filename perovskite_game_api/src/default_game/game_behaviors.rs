@@ -1,6 +1,9 @@
 use anyhow::Result;
 use parking_lot::RwLock;
-use perovskite_core::{constants::permissions::CREATIVE, protocol::items::item_stack};
+use perovskite_core::{
+    constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
+    protocol::items::item_stack,
+};
 use perovskite_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse},
     game_behaviors::InventoryPopupProvider,
@@ -59,6 +62,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         let mut items = game_state
             .item_manager()
             .registered_items()
+            .filter(|item| !item.proto.groups.iter().any(|x| x == HIDDEN_FROM_CREATIVE))
             .map(|x| x.make_max_stack())
             .collect::<Vec<ItemStack>>();
         items.sort_by(|x, y| x.proto.item_name.cmp(&y.proto.item_name));
