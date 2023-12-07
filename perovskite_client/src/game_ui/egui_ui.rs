@@ -242,14 +242,21 @@ impl EguiUi {
                         }
                         Some(proto::ui_element::Element::Inventory(inventory)) => {
                             let mut inventory_manager = client_state.inventories.lock();
-
-                            self.draw_inventory_view(
-                                ui,
-                                inventory.inventory_key,
-                                &mut inventory_manager,
-                                atlas_texture_id,
-                                client_state,
-                            );
+                            egui::CollapsingHeader::new("Inventory (click to expand/collapse)")
+                                .default_open(true)
+                                .id_source(
+                                    egui::Id::new("collapsing_header_inv")
+                                        .with(inventory.inventory_key),
+                                )
+                                .show(ui, |ui| {
+                                    self.draw_inventory_view(
+                                        ui,
+                                        inventory.inventory_key,
+                                        &mut inventory_manager,
+                                        atlas_texture_id,
+                                        client_state,
+                                    );
+                                });
                         }
                         None => {
                             ui.label("Invalid/missing popup item entry");

@@ -365,6 +365,20 @@ pub mod ores {
             noise_scale: (4., 0.25, 4.),
         });
 
+        game_builder.smelting_recipes.register_recipe(RecipeImpl {
+            slots: [RecipeSlot::Exact(GOLD_PIECE.0.to_string())],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: GOLD_INGOT.0.to_string(),
+                    quantity: 1,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
+                },
+            },
+            shapeless: false,
+            metadata: 8,
+        });
+
         Ok(())
     }
 }

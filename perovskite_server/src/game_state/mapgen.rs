@@ -19,6 +19,22 @@ use perovskite_core::coordinates::ChunkCoordinate;
 use super::game_map::MapChunk;
 
 pub trait MapgenInterface: Send + Sync {
-    // todo figure this interface out and document it
+    /// Generate a chunk using this map generator.
+    /// 
+    /// Args:
+    ///     coord: The coordinate of the chunk to generate.
+    ///     chunk: The chunk to fill.
+    /// 
+    /// Implementations should strive to remain consistent, even over
+    /// different versions of the same code. The requisite level of consistency
+    /// is subjective and depends on scale - e.g. noise that affects major topography (like elevation) 
+    /// should be consistent to avoid massive jumps in the map, whereas
+    /// inconsistent noise that affects minor details (like trees) will have a smaller effect
+    /// on the gameplay experience, and inconsistent IID noise that affects single blocks (like
+    /// ore generation) will probably not be noticed.
+    /// 
+    /// Users of the map must NOT assume block-for-block consistency between calls to fill_chunk
+    /// (noting that it will likely be called only once, barring crashes that cause unsaved 
+    /// changes to the map).
     fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk);
 }
