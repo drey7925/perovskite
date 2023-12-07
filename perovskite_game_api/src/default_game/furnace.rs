@@ -7,7 +7,7 @@ use perovskite_server::game_state::{
         BlockInteractionResult, BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData,
         ExtendedDataHolder, InlineContext,
     },
-    client_ui::Popup,
+    client_ui::{Popup, UiElementContainer},
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
     items::{HasInteractionRules, InteractionRuleExt, ItemStack, MaybeStack},
 };
@@ -434,9 +434,9 @@ fn make_furnace_popup(
         perovskite_server::game_state::event::EventInitiator::Player(p) => Ok(Some(
             ctx.new_popup()
                 .title("Furnace")
-                .label("Input material:")
                 .inventory_view_block(
                     FURNACE_INPUT,
+                    "Input:",
                     (1, 1),
                     coord,
                     FURNACE_INPUT.to_string(),
@@ -444,9 +444,9 @@ fn make_furnace_popup(
                     true,
                     false,
                 )?
-                .label("Fuel:")
                 .inventory_view_block(
                     FURNACE_FUEL,
+                    "Fuel:",
                     (1, 1),
                     coord,
                     FURNACE_FUEL.to_string(),
@@ -454,9 +454,9 @@ fn make_furnace_popup(
                     true,
                     false,
                 )?
-                .label("Output:")
                 .inventory_view_block(
                     FURNACE_OUTPUT,
+                    "Output:",
                     (1, 1),
                     coord,
                     FURNACE_OUTPUT.to_string(),
@@ -464,7 +464,13 @@ fn make_furnace_popup(
                     true,
                     false,
                 )?
-                .inventory_view_stored("player_inv", p.player.main_inventory(), true, true)?,
+                .inventory_view_stored(
+                    "player_inv",
+                    "Player inventory:",
+                    p.player.main_inventory(),
+                    true,
+                    true,
+                )?,
         )),
         _ => Ok(None),
     }

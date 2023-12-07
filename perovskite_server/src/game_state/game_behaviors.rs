@@ -155,6 +155,8 @@ impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
 }
 
 mod defaults {
+    use crate::game_state::client_ui::UiElementContainer;
+
     use super::*;
 
     pub(crate) struct DefaultInventoryPopupProvider;
@@ -168,8 +170,7 @@ mod defaults {
         ) -> Result<Popup> {
             Popup::new(game_state)
                 .title("Inventory")
-                .label("Player inventory:")
-                .inventory_view_stored("main", main_inventory_key, true, true)
+                .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)
         }
     }
 }

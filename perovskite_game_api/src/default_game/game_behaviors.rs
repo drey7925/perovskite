@@ -5,7 +5,7 @@ use perovskite_core::{
     protocol::items::item_stack,
 };
 use perovskite_server::game_state::{
-    client_ui::{Popup, PopupAction, PopupResponse},
+    client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     game_behaviors::InventoryPopupProvider,
     inventory::{InventoryKey, VirtualOutputCallbacks},
     items::ItemStack,
@@ -175,27 +175,59 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
             Ok(Popup::new(game_state)
                 .title("Inventory")
                 .text_field("count", "Item count: ", "256", true)
-                .button("update_btn", "Update", true)
-                .button("left", "<--", true)
-                .button("right", "-->", true)
-                .label("Creative items:")
-                .inventory_view_virtual_output("creative", (4, 8), creative_inv_callbacks, false)?
-                .label("Crafting input:")
-                .inventory_view_transient("craft_in", (3, 3), vec![], true, true)?
-                .label("Crafting output:")
-                .inventory_view_virtual_output("craft_out", (1, 1), crafting_callbacks, true)?
-                .label("Player inventory:")
-                .inventory_view_stored("main", main_inventory_key, true, true)?
+                .button("update_btn", "Update count", true)
+                .button("left", "Prev. page", true)
+                .button("right", "Next page", true)
+                .inventory_view_virtual_output(
+                    "creative",
+                    "Creative items:",
+                    (4, 8),
+                    creative_inv_callbacks,
+                    false,
+                )?
+                .side_by_side_layout("Crafting", |ui| {
+                    Ok(ui
+                        .inventory_view_transient(
+                            "craft_in",
+                            "Crafting input:",
+                            (3, 3),
+                            vec![],
+                            true,
+                            true,
+                        )?
+                        .inventory_view_virtual_output(
+                            "craft_out",
+                            "Crafting output:",
+                            (1, 1),
+                            crafting_callbacks,
+                            true,
+                        )?)
+                })?
+                .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?
                 .set_button_callback(button_callback))
         } else {
             Ok(Popup::new(game_state)
                 .title("Inventory")
-                .label("Crafting input:")
-                .inventory_view_transient("craft_in", (3, 3), vec![], true, true)?
-                .label("Crafting output:")
-                .inventory_view_virtual_output("craft_out", (1, 1), crafting_callbacks, true)?
+                .side_by_side_layout("Crafting", |ui| {
+                    Ok(ui
+                        .inventory_view_transient(
+                            "craft_in",
+                            "Crafting input:",
+                            (3, 3),
+                            vec![],
+                            true,
+                            true,
+                        )?
+                        .inventory_view_virtual_output(
+                            "craft_out",
+                            "Crafting output:",
+                            (1, 1),
+                            crafting_callbacks,
+                            true,
+                        )?)
+                })?
                 .label("Player inventory:")
-                .inventory_view_stored("main", main_inventory_key, true, true)?
+                .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?
                 .set_button_callback(button_callback))
         }
     }

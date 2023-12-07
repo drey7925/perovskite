@@ -317,6 +317,10 @@ message StartAuth {
   // 2 - circa 2023-10-20
   //        * Server sends minimal entity definitions (WIP) with only ID/coordinates/velocities
   //        * Client assumes each entity is a player
+  // 3 - circa 2023-12-06
+  //        * side-by-side UI elements
+  //        * client shows fallback messages for unknown UI elements
+  //        * Labels in inventories
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

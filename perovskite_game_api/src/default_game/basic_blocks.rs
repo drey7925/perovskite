@@ -39,7 +39,7 @@ use perovskite_core::{
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
     game_map::{BulkUpdateCallback, TimerState},
-    items::{Item, ItemStack},
+    items::{Item, ItemStack}, client_ui::UiElementContainer,
 };
 
 use super::{
@@ -652,9 +652,9 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => Ok(Some(
                         (ctx.new_popup()
                             .title("Chest")
-                            .label("Chest contents:")
                             .inventory_view_block(
                                 "chest_inv",
+                                "Chest contents:",
                                 (4, 8),
                                 coord,
                                 "chest_inv".to_string(),
@@ -662,9 +662,9 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
                                 true,
                                 false,
                             )?
-                            .label("Player inventory:")
                             .inventory_view_stored(
                                 "player_inv",
+                                "Player inventory:",
                                 p.player.main_inventory(),
                                 true,
                                 true,

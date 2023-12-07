@@ -42,6 +42,7 @@ message InventoryView {
   uint64 inventory_key = 1;
   bool can_place = 2;
   bool can_take = 3;
+  string label = 4;
 }
 
 message UiElement {
@@ -50,7 +51,13 @@ message UiElement {
     TextField text_field = 2;
     Button button = 3;
     InventoryView inventory = 4;
+    SideBySideLayout side_by_side = 5;
   }
+}
+
+message SideBySideLayout {
+  string header = 1;
+  repeated UiElement element = 2;
 }
 
 message PopupDescription {

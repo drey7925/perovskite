@@ -191,6 +191,92 @@ impl EguiUi {
         }
     }
 
+    fn render_element(
+        &mut self,
+        ui: &mut egui::Ui,
+        popup: &PopupDescription,
+        element: &proto::UiElement,
+        id: egui::Id,
+        atlas_texture_id: TextureId,
+        client_state: &ClientState,
+        clicked_button: &mut Option<String>,
+    ) {
+        match &element.element {
+            Some(proto::ui_element::Element::Label(label)) => {
+                ui.label(label);
+            }
+            Some(proto::ui_element::Element::TextField(text_field)) => {
+                let value = self
+                    .text_fields
+                    .entry((popup.popup_id, text_field.key.clone()))
+                    .or_insert(text_field.initial.clone());
+                // todo support multiline, other styling
+                let editor = egui::TextEdit::singleline(value);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    let label = ui.label(text_field.label.clone());
+                    ui.add_enabled(text_field.enabled, editor)
+                        .labelled_by(label.id);
+                });
+            }
+            Some(proto::ui_element::Element::Button(button_def)) => {
+                let button = egui::Button::new(button_def.label.clone());
+                if ui
+                    .add_enabled(button_def.enabled && self.allow_button_interaction, button)
+                    .clicked()
+                {
+                    if self.allow_button_interaction {
+                        *clicked_button = Some(button_def.key.clone());
+                    }
+                }
+            }
+            Some(proto::ui_element::Element::Inventory(inventory)) => {
+                let mut inventory_manager = client_state.inventories.lock();
+                let label = if inventory.label.is_empty() {
+                    "Inventory (click to expand/collapse)"
+                } else {
+                    inventory.label.as_str()
+                };
+                egui::CollapsingHeader::new(label)
+                    .default_open(true)
+                    .id_source(egui::Id::new("collapsing_header_inv").with(inventory.inventory_key))
+                    .show(ui, |ui| {
+                        self.draw_inventory_view(
+                            ui,
+                            inventory.inventory_key,
+                            &mut inventory_manager,
+                            atlas_texture_id,
+                            client_state,
+                        );
+                    });
+            }
+            Some(proto::ui_element::Element::SideBySide(side_by_side)) => {
+                egui::CollapsingHeader::new(&side_by_side.header)
+                    .id_source(id)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                            for (index, sub_element) in side_by_side.element.iter().enumerate() {
+                                self.render_element(
+                                    ui,
+                                    popup,
+                                    sub_element,
+                                    id.with(index),
+                                    atlas_texture_id,
+                                    client_state,
+                                    clicked_button,
+                                );
+                            }
+                        });
+                    });
+            }
+            None => {
+                ui.label(
+                    "Invalid/missing popup item entry. You may need to update your game client.",
+                );
+            }
+        }
+    }
+
     fn draw_popup(
         &mut self,
         popup: &proto::PopupDescription,
@@ -208,60 +294,16 @@ impl EguiUi {
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
 
                 let mut clicked_button = None;
-                for element in &popup.element {
-                    match &element.element {
-                        Some(proto::ui_element::Element::Label(label)) => {
-                            ui.label(label);
-                        }
-                        Some(proto::ui_element::Element::TextField(text_field)) => {
-                            let value = self
-                                .text_fields
-                                .entry((popup.popup_id, text_field.key.clone()))
-                                .or_insert(text_field.initial.clone());
-                            // todo support multiline, other styling
-                            let editor = egui::TextEdit::singleline(value);
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                                let label = ui.label(text_field.label.clone());
-                                ui.add_enabled(text_field.enabled, editor)
-                                    .labelled_by(label.id);
-                            });
-                        }
-                        Some(proto::ui_element::Element::Button(button_def)) => {
-                            let button = egui::Button::new(button_def.label.clone());
-                            if ui
-                                .add_enabled(
-                                    button_def.enabled && self.allow_button_interaction,
-                                    button,
-                                )
-                                .clicked()
-                            {
-                                if self.allow_button_interaction {
-                                    clicked_button = Some(button_def.key.clone());
-                                }
-                            }
-                        }
-                        Some(proto::ui_element::Element::Inventory(inventory)) => {
-                            let mut inventory_manager = client_state.inventories.lock();
-                            egui::CollapsingHeader::new("Inventory (click to expand/collapse)")
-                                .default_open(true)
-                                .id_source(
-                                    egui::Id::new("collapsing_header_inv")
-                                        .with(inventory.inventory_key),
-                                )
-                                .show(ui, |ui| {
-                                    self.draw_inventory_view(
-                                        ui,
-                                        inventory.inventory_key,
-                                        &mut inventory_manager,
-                                        atlas_texture_id,
-                                        client_state,
-                                    );
-                                });
-                        }
-                        None => {
-                            ui.label("Invalid/missing popup item entry");
-                        }
-                    }
+                for (index, element) in popup.element.iter().enumerate() {
+                    self.render_element(
+                        ui,
+                        popup,
+                        element,
+                        egui::Id::new("popup_elem").with(popup.popup_id).with(index),
+                        atlas_texture_id,
+                        client_state,
+                        &mut clicked_button,
+                    );
                 }
                 if let Some(clicked_button) = clicked_button {
                     send_event(
@@ -315,6 +357,13 @@ impl EguiUi {
             })
             .flatten()
         {
+
+            let scale_for_sizing = if client_state.settings.load().render.scale_inventories_with_high_dpi {
+                self.scale
+            } else {
+                1.0
+            };
+
             let x = self.stack_carried_by_mouse_offset.0 + self.last_mouse_position.x;
             let y = self.stack_carried_by_mouse_offset.1 + self.last_mouse_position.y;
             let texture_rect = get_texture(&stack, &self.atlas_coords, &self.item_defs);
@@ -324,8 +373,8 @@ impl EguiUi {
             let position_rect = texture_packer::Rect::new(
                 (x * self.scale) as u32,
                 (y * self.scale) as u32,
-                ((frame_pixels.w - 4) as f32 * self.scale) as u32,
-                ((frame_pixels.h - 4) as f32 * self.scale) as u32,
+                ((frame_pixels.w - 4) as f32 * scale_for_sizing) as u32,
+                ((frame_pixels.h - 4) as f32 * scale_for_sizing) as u32,
             );
 
             let mut builder = FlatTextureDrawBuilder::new();
@@ -379,17 +428,24 @@ impl EguiUi {
         }
 
         let frame_pixels = *self.atlas_coords.get(FRAME_UNSELECTED).unwrap();
+        
         let frame_uv = self.pixel_rect_to_uv(frame_pixels);
-
-        let (inv_rect, _) = ui.allocate_exact_size(
+        
+        let frame_size = if client_state.settings.load().render.scale_inventories_with_high_dpi {
+            vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32)
+        } else {
+            vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32) / self.scale
+        };
+        let inv_rect = egui::Rect::from_min_size(
+            ui.cursor().min,
             vec2(
-                (frame_pixels.w * dims.1) as f32,
-                (frame_pixels.h * dims.0) as f32,
+                frame_size.x * dims.1 as f32,
+                frame_size.y * dims.0 as f32,
             ),
-            Sense::click_and_drag(),
         );
+        ui.allocate_rect(inv_rect, Sense::click_and_drag());
 
-        let frame_size = vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32);
+
         for row in 0..dims.0 {
             for col in 0..dims.1 {
                 let index = ((row * dims.1) + col) as usize;
@@ -398,7 +454,7 @@ impl EguiUi {
                     .sense(Sense::click_and_drag());
 
                 let min_corner = inv_rect.min
-                    + vec2((frame_pixels.w * col) as f32, (frame_pixels.h * row) as f32);
+                    + vec2(frame_size.x * col as f32, frame_size.y * row as f32);
 
                 let frame_rect = egui::Rect::from_min_size(min_corner, frame_size);
                 let drawing_rect = egui::Rect::from_min_size(
@@ -442,16 +498,15 @@ impl EguiUi {
                             if stack.quantity != 1 {
                                 let mut text = stack.quantity.to_string();
                                 let label_rect = egui::Rect::from_min_size(
-                                    min_corner + vec2(40.0, 2.0),
-                                    frame_size - vec2(38.0, 42.0),
+                                    min_corner + frame_size - vec2(36.0, 28.0),
+                                    vec2(36.0, 20.0),
                                 );
                                 ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::TOP),
+                                    egui::Layout::left_to_right(egui::Align::TOP),
                                     |ui| {
                                         ui.style_mut().visuals.extreme_bg_color =
                                             Color32::from_rgba_unmultiplied(0, 0, 0, 128);
                                         ui.style_mut().visuals.window_stroke = Stroke::NONE;
-                                        //ui.put(label_rect, Label::new(text));
                                         ui.put(
                                             label_rect,
                                             TextEdit::singleline(&mut text)
@@ -459,7 +514,7 @@ impl EguiUi {
                                                 .text_color(Color32::WHITE)
                                                 .interactive(false)
                                                 .horizontal_align(egui::Align::Max),
-                                        )
+                                        );
                                     },
                                 );
                             }
