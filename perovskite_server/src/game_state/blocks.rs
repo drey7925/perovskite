@@ -522,6 +522,8 @@ impl BlockTypeManager {
         Ok(manager)
     }
 
+    // TODO - this is a bottleneck for the number of blocks that can be defined due to
+    // database and proto size constraints
     pub(crate) fn to_proto(&self) -> blocks_proto::ServerBlockTypeAssignments {
         let mut result = Vec::new();
         for (name, &id) in self.name_to_base_id_map.iter() {

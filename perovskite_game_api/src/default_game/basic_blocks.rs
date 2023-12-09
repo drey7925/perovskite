@@ -575,13 +575,13 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
             .set_falls_down(true),
     )?;
 
-    let _desert_stone = game_builder.add_block(
+    let desert_stone = game_builder.add_block(
         BlockBuilder::new(DESERT_STONE)
             .add_block_group(BRITTLE)
             .set_cube_single_texture(DESERT_STONE_TEXTURE)
             .set_display_name("Desert stone"),
     )?;
-    let _desert_sand = game_builder.add_block(
+    let desert_sand = game_builder.add_block(
         BlockBuilder::new(DESERT_SAND)
             .add_block_group(GRANULAR)
             .set_cube_single_texture(DESERT_SAND_TEXTURE)
@@ -698,9 +698,11 @@ fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
     make_stairs(game_builder, &stone, true)?;
     make_stairs(game_builder, &glass, true)?;
     make_stairs(game_builder, &dirt, false)?;
+    make_stairs(game_builder, &desert_stone, true)?;
     make_slab(game_builder, &stone, true)?;
     make_slab(game_builder, &glass, true)?;
     make_slab(game_builder, &dirt, false)?;
+    make_slab(game_builder, &desert_stone, true)?;
 
     Ok(())
 }

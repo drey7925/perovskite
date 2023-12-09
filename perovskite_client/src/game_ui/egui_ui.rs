@@ -39,6 +39,7 @@ pub(crate) struct EguiUi {
     chat_open: bool,
     chat_force_request_focus: bool,
     chat_force_cursor_to_end: bool,
+    chat_force_scroll_to_end: bool,
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
@@ -70,6 +71,7 @@ impl EguiUi {
             chat_open: false,
             chat_force_request_focus: false,
             chat_force_cursor_to_end: false,
+            chat_force_scroll_to_end: false,
             inventory_view: None,
             scale: 1.0,
             visible_popups: vec![],
@@ -99,6 +101,7 @@ impl EguiUi {
     pub(crate) fn open_chat(&mut self) {
         self.chat_open = true;
         self.chat_force_request_focus = true;
+        self.chat_force_scroll_to_end = true;
     }
     pub(crate) fn set_allow_inventory_interaction(&mut self, allow: bool) {
         self.allow_inventory_interaction = allow;
@@ -111,6 +114,7 @@ impl EguiUi {
         self.chat_message_input = "/".to_string();
         self.chat_force_request_focus = true;
         self.chat_force_cursor_to_end = true;
+        self.chat_force_scroll_to_end = true;
     }
     pub(crate) fn draw_all_uis(
         &mut self,
@@ -628,6 +632,7 @@ impl EguiUi {
                     let scroll_area = egui::ScrollArea::vertical()
                         .auto_shrink([false, true])
                         .min_scrolled_height(240.0)
+                        .id_source("chat_history")
                         .max_height(240.0);
                     let messages = &chat.message_history;
                     scroll_area.show(ui, |ui| {
@@ -638,9 +643,10 @@ impl EguiUi {
                                 ui.add(egui::Label::new(formatted_message.1).wrap(true));
                             });
                         }
-                        if self.chat_scroll_counter != messages.len() {
+                        if self.chat_scroll_counter != messages.len() || self.chat_force_scroll_to_end {
                             ui.scroll_to_cursor(Some(egui::Align::Max));
                             self.chat_scroll_counter = messages.len();
+                            self.chat_force_scroll_to_end = false;
                         }
                     });
                     let editor = ui.add(
