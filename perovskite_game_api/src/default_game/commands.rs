@@ -15,9 +15,9 @@ use perovskite_server::game_state::{
     items::ItemStack,
 };
 
-use super::DefaultGameBuilder;
+use crate::game_builder::GameBuilder;
 
-pub(crate) fn register_default_commands(game_builder: &mut DefaultGameBuilder) -> Result<()> {
+pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Result<()> {
     game_builder.add_command(
         "whereami",
         Box::new(WhereAmICommand),

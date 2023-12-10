@@ -38,8 +38,9 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
+    client_ui::UiElementContainer,
     game_map::{BulkUpdateCallback, TimerState},
-    items::{Item, ItemStack}, client_ui::UiElementContainer,
+    items::{Item, ItemStack},
 };
 
 use super::{
@@ -47,7 +48,7 @@ use super::{
     mapgen::OreDefinition,
     recipes::RecipeSlot,
     shaped_blocks::{make_slab, make_stairs},
-    DefaultGameBuilder,
+    DefaultGameBuilder, DefaultGameBuilderExtension,
 };
 
 /// Dirt without grass on it.
@@ -101,7 +102,11 @@ pub mod ores {
 
     use crate::{
         blocks::CubeAppearanceBuilder,
-        default_game::{recipes::{RecipeImpl, RecipeSlot}, item_groups},
+        default_game::{
+            item_groups,
+            recipes::{RecipeImpl, RecipeSlot},
+            DefaultGameBuilderExtension,
+        },
         game_builder::StaticItemName,
     };
 
@@ -131,25 +136,21 @@ pub mod ores {
     const DIAMOND_ORE_TEXTURE: TextureName = TextureName("default:diamond_ore");
     const DIAMOND_PIECE_TEXTURE: TextureName = TextureName("default:diamond_piece");
 
-    pub(crate) fn register_ores(game_builder: &mut DefaultGameBuilder) -> Result<()> {
+    pub(crate) fn register_ores(game_builder: &mut GameBuilder) -> Result<()> {
         // todo factor this into a function per-ore
+        include_texture_bytes!(game_builder, COAL_ORE_TEXTURE, "textures/coal_ore.png")?;
         include_texture_bytes!(
-            &mut game_builder.inner,
-            COAL_ORE_TEXTURE,
-            "textures/coal_ore.png"
-        )?;
-        include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             COAL_PIECE_TEXTURE,
             "textures/coal_piece.png"
         )?;
-        game_builder.game_builder().register_basic_item(
+        game_builder.register_basic_item(
             COAL_PIECE,
             "Piece of coal",
             COAL_PIECE_TEXTURE,
             vec![],
         )?;
-        let coal_ore = game_builder.game_builder().add_block(
+        let coal_ore = game_builder.add_block(
             BlockBuilder::new(COAL_ORE)
                 .set_cube_appearance(
                     CubeAppearanceBuilder::new().set_single_texture(COAL_ORE_TEXTURE),
@@ -159,74 +160,69 @@ pub mod ores {
                 .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2))),
         )?;
 
-        game_builder.register_ore(OreDefinition {
-            block: coal_ore.handle,
-            noise_cutoff: splines::Spline::from_vec(vec![
-                splines::Key {
-                    value: 0.5,
-                    t: 0.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-                splines::Key {
-                    value: 0.6,
-                    t: 100.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-            ]),
-            cave_bias_effect: 0.0,
-            noise_scale: (4., 0.25, 4.),
-        });
-        game_builder.smelting_fuels.register_recipe(RecipeImpl {
-            slots: [RecipeSlot::Exact(COAL_PIECE.0.to_string())],
-            result: ItemStack {
-                proto: Default::default(),
-            },
-            shapeless: false,
-            metadata: 16,
-        });
+        game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .register_ore(OreDefinition {
+                block: coal_ore.handle,
+                noise_cutoff: splines::Spline::from_vec(vec![
+                    splines::Key {
+                        value: 0.5,
+                        t: 0.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                    splines::Key {
+                        value: 0.6,
+                        t: 100.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                ]),
+                cave_bias_effect: 0.0,
+                noise_scale: (4., 0.25, 4.),
+            });
+        game_builder.register_smelting_fuel(COAL_PIECE.0.to_string(), 16);
 
+        include_texture_bytes!(game_builder, IRON_ORE_TEXTURE, "textures/iron_ore.png")?;
         include_texture_bytes!(
-            &mut game_builder.inner,
-            IRON_ORE_TEXTURE,
-            "textures/iron_ore.png"
-        )?;
-        include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             IRON_PIECE_TEXTURE,
             "textures/iron_piece.png"
         )?;
         include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             IRON_INGOT_TEXTURE,
             "textures/iron_ingot.png"
         )?;
-        game_builder.game_builder().register_basic_item(
+        game_builder.register_basic_item(
             IRON_PIECE,
             "Piece of iron",
             IRON_PIECE_TEXTURE,
             vec![item_groups::RAW_ORES.into()],
         )?;
-        game_builder.game_builder().register_basic_item(
+        game_builder.register_basic_item(
             IRON_INGOT,
             "Iron ingot",
             IRON_INGOT_TEXTURE,
             vec![item_groups::METAL_INGOTS.into()],
         )?;
-        game_builder.smelting_recipes.register_recipe(RecipeImpl {
-            slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
-            result: ItemStack {
-                proto: protocol::items::ItemStack {
-                    item_name: IRON_INGOT.0.to_string(),
-                    quantity: 1,
-                    current_wear: 0,
-                    quantity_type: Some(QuantityType::Stack(256)),
+        // todo clean this up when ore APIs are more mature
+        game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .smelting_recipes
+            .register_recipe(RecipeImpl {
+                slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
+                result: ItemStack {
+                    proto: protocol::items::ItemStack {
+                        item_name: IRON_INGOT.0.to_string(),
+                        quantity: 1,
+                        current_wear: 0,
+                        quantity_type: Some(QuantityType::Stack(256)),
+                    },
                 },
-            },
-            shapeless: false,
-            metadata: 8,
-        });
+                shapeless: false,
+                metadata: 8,
+            });
 
-        let iron_ore = game_builder.game_builder().add_block(
+        let iron_ore = game_builder.add_block(
             BlockBuilder::new(IRON_ORE)
                 .set_cube_appearance(
                     CubeAppearanceBuilder::new().set_single_texture(IRON_ORE_TEXTURE),
@@ -236,42 +232,44 @@ pub mod ores {
                 .set_dropped_item_closure(|| (IRON_PIECE, rand::thread_rng().gen_range(1..=2))),
         )?;
 
-        game_builder.register_ore(OreDefinition {
-            block: iron_ore.handle,
-            // Use the same schedule as coal
-            noise_cutoff: splines::Spline::from_vec(vec![
-                splines::Key {
-                    value: 0.5,
-                    t: 0.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-                splines::Key {
-                    value: 0.6,
-                    t: 100.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-            ]),
-            cave_bias_effect: 0.5,
-            noise_scale: (4., 0.25, 4.),
-        });
+        game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .register_ore(OreDefinition {
+                block: iron_ore.handle,
+                // Use the same schedule as coal
+                noise_cutoff: splines::Spline::from_vec(vec![
+                    splines::Key {
+                        value: 0.5,
+                        t: 0.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                    splines::Key {
+                        value: 0.6,
+                        t: 100.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                ]),
+                cave_bias_effect: 0.5,
+                noise_scale: (4., 0.25, 4.),
+            });
 
         include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             DIAMOND_ORE_TEXTURE,
             "textures/diamond_ore.png"
         )?;
         include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             DIAMOND_PIECE_TEXTURE,
             "textures/diamond_piece.png"
         )?;
-        game_builder.game_builder().register_basic_item(
+        game_builder.register_basic_item(
             DIAMOND_PIECE,
             "Piece of diamond",
             DIAMOND_PIECE_TEXTURE,
             vec![item_groups::GEMS.into()],
         )?;
-        let diamond_ore = game_builder.game_builder().add_block(
+        let diamond_ore = game_builder.add_block(
             BlockBuilder::new(DIAMOND_ORE)
                 .set_cube_appearance(
                     CubeAppearanceBuilder::new().set_single_texture(DIAMOND_ORE_TEXTURE),
@@ -281,57 +279,55 @@ pub mod ores {
                 .set_dropped_item_closure(|| (DIAMOND_PIECE, rand::thread_rng().gen_range(1..=2))),
         )?;
 
-        game_builder.register_ore(OreDefinition {
-            block: diamond_ore.handle,
-            noise_cutoff: splines::Spline::from_vec(vec![
-                splines::Key {
-                    value: 0.9,
-                    t: 0.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-                splines::Key {
-                    value: 0.825,
-                    t: 100.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-                splines::Key {
-                    value: 0.775,
-                    t: 400.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-            ]),
-            cave_bias_effect: 0.125,
-            noise_scale: (4., 0.25, 4.),
-        });
+        game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .register_ore(OreDefinition {
+                block: diamond_ore.handle,
+                noise_cutoff: splines::Spline::from_vec(vec![
+                    splines::Key {
+                        value: 0.9,
+                        t: 0.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                    splines::Key {
+                        value: 0.825,
+                        t: 100.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                    splines::Key {
+                        value: 0.775,
+                        t: 400.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                ]),
+                cave_bias_effect: 0.125,
+                noise_scale: (4., 0.25, 4.),
+            });
 
+        include_texture_bytes!(game_builder, GOLD_ORE_TEXTURE, "textures/gold_ore.png")?;
         include_texture_bytes!(
-            &mut game_builder.inner,
-            GOLD_ORE_TEXTURE,
-            "textures/gold_ore.png"
-        )?;
-        include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             GOLD_PIECE_TEXTURE,
             "textures/gold_piece.png"
         )?;
         include_texture_bytes!(
-            &mut game_builder.inner,
+            game_builder,
             GOLD_INGOT_TEXTURE,
             "textures/gold_ingot.png"
         )?;
-        game_builder.game_builder().register_basic_item(
+        game_builder.register_basic_item(
             GOLD_PIECE,
             "Piece of gold",
             GOLD_PIECE_TEXTURE,
             vec![item_groups::RAW_ORES.into()],
         )?;
-        game_builder.game_builder().register_basic_item(
+        game_builder.register_basic_item(
             GOLD_INGOT,
             "Gold ingot",
             GOLD_INGOT_TEXTURE,
             vec![item_groups::METAL_INGOTS.into()],
         )?;
-        let gold_ore = game_builder.game_builder().add_block(
+        let gold_ore = game_builder.add_block(
             BlockBuilder::new(GOLD_ORE)
                 .set_cube_appearance(
                     CubeAppearanceBuilder::new().set_single_texture(GOLD_ORE_TEXTURE),
@@ -341,54 +337,60 @@ pub mod ores {
                 .set_dropped_item_closure(|| (GOLD_PIECE, rand::thread_rng().gen_range(1..=2))),
         )?;
 
-        game_builder.register_ore(OreDefinition {
-            block: gold_ore.handle,
-            // Use the same schedule as coal
-            noise_cutoff: splines::Spline::from_vec(vec![
-                splines::Key {
-                    value: 0.9,
-                    t: 0.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-                splines::Key {
-                    value: 0.815,
-                    t: 100.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-                splines::Key {
-                    value: 0.755,
-                    t: 200.,
-                    interpolation: splines::Interpolation::Linear,
-                },
-            ]),
-            cave_bias_effect: 0.125,
-            noise_scale: (4., 0.25, 4.),
-        });
+        game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .register_ore(OreDefinition {
+                block: gold_ore.handle,
+                // Use the same schedule as coal
+                noise_cutoff: splines::Spline::from_vec(vec![
+                    splines::Key {
+                        value: 0.9,
+                        t: 0.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                    splines::Key {
+                        value: 0.815,
+                        t: 100.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                    splines::Key {
+                        value: 0.755,
+                        t: 200.,
+                        interpolation: splines::Interpolation::Linear,
+                    },
+                ]),
+                cave_bias_effect: 0.125,
+                noise_scale: (4., 0.25, 4.),
+            });
 
-        game_builder.smelting_recipes.register_recipe(RecipeImpl {
-            slots: [RecipeSlot::Exact(GOLD_PIECE.0.to_string())],
-            result: ItemStack {
-                proto: protocol::items::ItemStack {
-                    item_name: GOLD_INGOT.0.to_string(),
-                    quantity: 1,
-                    current_wear: 0,
-                    quantity_type: Some(QuantityType::Stack(256)),
+        game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .smelting_recipes
+            .register_recipe(RecipeImpl {
+                slots: [RecipeSlot::Exact(GOLD_PIECE.0.to_string())],
+                result: ItemStack {
+                    proto: protocol::items::ItemStack {
+                        item_name: GOLD_INGOT.0.to_string(),
+                        quantity: 1,
+                        current_wear: 0,
+                        quantity_type: Some(QuantityType::Stack(256)),
+                    },
                 },
-            },
-            shapeless: false,
-            metadata: 8,
-        });
+                shapeless: false,
+                metadata: 8,
+            });
 
         Ok(())
     }
 }
 
-pub(crate) fn register_basic_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
+pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     register_core_blocks(game_builder)?;
-    register_tnt(&mut game_builder.inner)?;
+    register_tnt(game_builder)?;
     ores::register_ores(game_builder)?;
 
     game_builder
+        .extension::<DefaultGameBuilderExtension>()
         .crafting_recipes
         .register_recipe(super::recipes::RecipeImpl {
             slots: [
@@ -496,7 +498,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
 
 static TESTONLY_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-fn register_core_blocks(game_builder: &mut DefaultGameBuilder) -> Result<()> {
+fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, DIRT_TEXTURE, "textures/dirt.png")?;
     include_texture_bytes!(
         game_builder,

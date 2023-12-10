@@ -17,16 +17,17 @@ use std::{
     sync::Arc,
 };
 
-use crate::game_builder::GameBuilder;
+use crate::game_builder::{GameBuilder, GameBuilderExtension};
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 
 use perovskite_core::protocol::items as items_proto;
 use perovskite_server::game_state::items::ItemStack;
 
 use self::{
+    game_settings::DefaultGameSettings,
     mapgen::OreDefinition,
-    recipes::{RecipeBook, RecipeImpl, RecipeSlot}, game_settings::GameSettings,
+    recipes::{RecipeBook, RecipeImpl, RecipeSlot},
 };
 
 /// Blocks defined in the default game.
@@ -76,9 +77,44 @@ pub mod mapgen;
 /// Eventually, hooks will be added so other game content can integrate closely
 /// with default game content (e.g. in the mapgen). For now, this simply wraps
 /// a [GameBuilder].
-pub struct DefaultGameBuilder {
-    inner: GameBuilder,
-    settings: GameSettings,
+pub trait DefaultGameBuilder {
+    /// Initializes the default game in the current game builder.
+    /// This will set the mapgen, game behaviors, inventory menu, register blocks/items, etc.
+    /// 
+    /// If called multiple times, only the first call will have any effect. Subsequent calls
+    /// will be no-ops.
+    fn initialize_default_game(&mut self) -> Result<()>;
+
+    /// Returns an Arc for the crafting recipes in this game.
+    fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>>;
+    /// Registers a new crafting recipe.
+    ///
+    /// If stackable is false, quantity represents item wear. Behavior is undefined if stackable is false,
+    /// the item isn't subject to tool wear, and quantity != 1.
+    ///
+    /// **This API is subject to change.**
+    fn register_crafting_recipe(
+        &mut self,
+        slots: [RecipeSlot; 9],
+        result: String,
+        quantity: u32,
+        quantity_type: Option<items_proto::item_stack::QuantityType>,
+    );
+
+    /// Registers a new smelting fuel
+    /// Args:
+    ///   - fuel_name: Name of the fuel
+    ///   - ticks: Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
+    fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32);
+}
+
+// This is a private type; other plugins cannot name it so they cannot access
+// the extension directly.
+//
+// This ensures that the extension is only made available to plugins via the
+// `DefaultGameBuilder` API.
+struct DefaultGameBuilderExtension {
+    settings: DefaultGameSettings,
 
     crafting_recipes: Arc<RecipeBook<9, ()>>,
     /// Metadata is number of furnace timer ticks (period given by [`furnace::FURNACE_TICK_DURATION`]) that it takes to smelt this recipe
@@ -88,54 +124,33 @@ pub struct DefaultGameBuilder {
     smelting_fuels: Arc<RecipeBook<1, u32>>,
 
     ores: Vec<OreDefinition>,
+    initialized: bool,
 }
-impl Deref for DefaultGameBuilder {
-    type Target = GameBuilder;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-impl DerefMut for DefaultGameBuilder {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-impl DefaultGameBuilder {
-    /// Provides access to the [GameBuilder] that this DefaultGameBuilder is wrapping,
-    /// e.g. to register blocks and items.
-    pub fn game_builder(&mut self) -> &mut GameBuilder {
-        &mut self.inner
-    }
-    /// Creates a new default-game builder using server configuration from the
-    /// command line. If argument parsing fails, usage info is printed to
-    /// the terminal and the process exits.
-    pub fn new_from_commandline() -> Result<DefaultGameBuilder> {
-        Self::new_with_builtins(GameBuilder::from_cmdline()?)
-    }
-    /// Creates a new default-game builder with custom server configuration.
-    #[cfg(feature = "unstable_api")]
-    pub fn new_from_args(
-        args: &perovskite_server::server::ServerArgs,
-    ) -> Result<DefaultGameBuilder> {
-        Self::new_with_builtins(GameBuilder::from_args(args)?)
-    }
-
-    fn new_with_builtins(
-        builder: GameBuilder,
-    ) -> Result<DefaultGameBuilder> {
-        let data_dir = builder.data_dir().clone();
-        let mut builder = DefaultGameBuilder {
-            inner: builder,
+impl Default for DefaultGameBuilderExtension {
+    fn default() -> Self {
+        Self {
+            settings: DefaultGameSettings::default(),
             crafting_recipes: Arc::new(RecipeBook::new()),
             smelting_recipes: Arc::new(RecipeBook::new()),
             smelting_fuels: Arc::new(RecipeBook::new()),
-            ores: Vec::new(),
-            settings: game_settings::load(&data_dir)?,
-        };
-        register_defaults(&mut builder)?;
-        Ok(builder)
+            ores: vec![],
+            initialized: false,
+        }
     }
+}
 
+impl GameBuilderExtension for DefaultGameBuilderExtension {
+    fn pre_run(&mut self, server_builder: &mut perovskite_server::server::ServerBuilder) {
+        tracing::info!("DefaultGame doing pre-run initialization");
+        self.crafting_recipes.sort();
+        self.smelting_recipes.sort();
+
+        let ores = self.ores.drain(..).collect();
+        server_builder.set_mapgen(move |blocks, seed| mapgen::build_mapgen(blocks, seed, ores));
+    }
+}
+
+impl DefaultGameBuilderExtension {
     /// Adds an ore to the mapgen.
     ///
     /// **API skeleton, parameters TBD**
@@ -143,10 +158,31 @@ impl DefaultGameBuilder {
     fn register_ore(&mut self, ore_definition: OreDefinition) {
         self.ores.push(ore_definition);
     }
+}
+
+impl DefaultGameBuilder for GameBuilder {
+
+    fn initialize_default_game(&mut self) -> Result<()> {
+        if self.extension::<DefaultGameBuilderExtension>().initialized {
+            return Ok(());
+        }
+        tracing::info!("DefaultGame doing main initialization");
+        self.extension::<DefaultGameBuilderExtension>().initialized = true;
+        basic_blocks::register_basic_blocks(self)?;
+        game_behaviors::register_game_behaviors(self)?;
+        tools::register_default_tools(self)?;
+        furnace::register_furnace(self)?;
+        foliage::register_foliage(self)?;
+        commands::register_default_commands(self)?;
+        Ok(())
+    }
+    
 
     /// Returns an Arc for the crafting recipes in this game.
-    pub fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>> {
-        self.crafting_recipes.clone()
+    fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>> {
+        self.extension::<DefaultGameBuilderExtension>()
+            .crafting_recipes
+            .clone()
     }
     /// Registers a new crafting recipe.
     ///
@@ -154,64 +190,64 @@ impl DefaultGameBuilder {
     /// the item isn't subject to tool wear, and quantity != 1.
     ///
     /// **This API is subject to change.**
-    pub fn register_crafting_recipe(
+    fn register_crafting_recipe(
         &mut self,
         slots: [RecipeSlot; 9],
         result: String,
         quantity: u32,
         quantity_type: Option<items_proto::item_stack::QuantityType>,
-    ) {
-        self.crafting_recipes.register_recipe(RecipeImpl {
-            slots,
-            result: ItemStack {
-                proto: perovskite_core::protocol::items::ItemStack {
-                    item_name: result,
-                    quantity: if matches!(
+    )  {
+        assert!(
+            self.extension::<DefaultGameBuilderExtension>().initialized,
+            "DefaultGame extension not initialized"
+        );
+        self.extension::<DefaultGameBuilderExtension>()
+            .crafting_recipes
+            .register_recipe(RecipeImpl {
+                slots,
+                result: ItemStack {
+                    proto: perovskite_core::protocol::items::ItemStack {
+                        item_name: result,
+                        quantity: if matches!(
+                            quantity_type,
+                            Some(items_proto::item_stack::QuantityType::Stack(_))
+                        ) {
+                            quantity
+                        } else {
+                            1
+                        },
+                        current_wear: if matches!(
+                            quantity_type,
+                            Some(items_proto::item_stack::QuantityType::Wear(_))
+                        ) {
+                            quantity
+                        } else {
+                            1
+                        },
                         quantity_type,
-                        Some(items_proto::item_stack::QuantityType::Stack(_))
-                    ) {
-                        quantity
-                    } else {
-                        1
                     },
-                    current_wear: if matches!(
-                        quantity_type,
-                        Some(items_proto::item_stack::QuantityType::Wear(_))
-                    ) {
-                        quantity
-                    } else {
-                        1
-                    },
-                    quantity_type,
                 },
-            },
-            shapeless: false,
-            metadata: (),
-        })
+                shapeless: false,
+                metadata: (),
+            })
     }
 
-    /// Starts a game based on this builder.
-    pub fn build_and_run(mut self) -> Result<()> {
-        self.crafting_recipes.sort();
-        self.smelting_recipes.sort();
-
-        let ores = self.ores.drain(..).collect();
-        self.game_builder()
-            .inner
-            .set_mapgen(move |blocks, seed| mapgen::build_mapgen(blocks, seed, ores));
-        self.inner.run_game_server()
+    fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32)  {
+        assert!(
+            self.extension::<DefaultGameBuilderExtension>().initialized,
+            "DefaultGame extension not initialized"
+        );
+        self.extension::<DefaultGameBuilderExtension>()
+            .smelting_fuels
+            .register_recipe(RecipeImpl {
+                slots: [RecipeSlot::Exact(fuel_name.into())],
+                result: ItemStack {
+                    proto: Default::default(),
+                },
+                shapeless: false,
+                metadata: 16,
+            });
     }
-}
-
-fn register_defaults(game_builder: &mut DefaultGameBuilder) -> Result<()> {
-    basic_blocks::register_basic_blocks(game_builder)?;
-    game_behaviors::register_game_behaviors(game_builder)?;
-    recipes::register_test_recipes(game_builder);
-    tools::register_default_tools(game_builder)?;
-    furnace::register_furnace(game_builder)?;
-    foliage::register_foliage(game_builder)?;
-    commands::register_default_commands(game_builder)?;
-    Ok(())
 }
 
 mod commands;

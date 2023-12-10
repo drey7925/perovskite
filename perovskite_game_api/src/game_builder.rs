@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{arch::x86_64, collections::HashMap, path::Path, time::Duration};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    ops::DerefMut,
+    path::Path,
+    time::Duration,
+};
 
 use perovskite_core::{
+    block_id::BlockId,
     constants::{
         block_groups::DEFAULT_GAS, blocks::AIR, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
@@ -81,9 +88,56 @@ impl From<StaticItemName> for ItemName {
 use perovskite_server::server as server_api;
 
 use crate::{
-    blocks::{BlockBuilder, BuiltBlock, FallingBlocksPropagator, LiquidPropagator, FallingBlocksChunkEdgePropagator},
+    blocks::{
+        BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator, FallingBlocksPropagator,
+        LiquidPropagator,
+    },
     maybe_export,
 };
+
+mod private {
+    use std::any::Any;
+
+    // This trait is needed to provide both downcasting to a concrete extension type,
+    // and to also allow dynamic calls to common methods (e.g. pre_run).
+    //
+    // To do this, we need to get two different vtables for the object:
+    // * One for the Any trait, so we can downcast it
+    // * One for the GameBuilderExtension trait, so we can call its common methods
+    // If we did this via GameBuilderExtension: Any, we would need an upcast which is not currently stabilized
+    // (https://github.com/rust-lang/rust/issues/65991) or some other shenanigans that were hard to reason about,
+    // got messy, and didn't work fully
+    //
+    // Instead, we create a new trait that gets a generic impl; as long as we have a &dyn GameBuilderExtension,
+    // we can call (via dynamic dispatch) a concrete as_any which gets us a fat pointer with the appropriate vtable
+    // for the concrete impl of Any for the actual concrete extension type.
+    //
+    // Note that this trait is private, so it can't be used outside of this module - we don't want unusual impls or
+    // outside usages.
+    //
+    // Also note that this is not in a performance-critical path, so I don't mind the dynamic dispatch
+    pub trait AsAny: Any + Send + Sync + 'static {
+        fn as_any(&mut self) -> &mut dyn Any;
+    }
+    impl<T: Any + Send + Sync + 'static> AsAny for T {
+        fn as_any(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+}
+
+pub trait GameBuilderExtension: private::AsAny {
+    /// Called before the server starts running
+    /// At this point, there is no longer an opportunity to interact with other
+    /// plugins
+    ///
+    /// Impl notes as to why:
+    /// * We need this trait to be object-safe and walk the typemap
+    /// * It has to use an impl of GameBuilderExtension as its receiver type
+    /// * If a &mut self is available, then the entire GameBuilder is borrowed and
+    ///   cannot be used (in particular, its extensions map is unsafe to access)
+    fn pre_run(&mut self, server_builder: &mut ServerBuilder);
+}
 
 /// Stable API for building and configuring a game.
 ///
@@ -95,6 +149,8 @@ pub struct GameBuilder {
     pub(crate) air_block: BlockTypeHandle,
     pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockTypeHandle>>,
     pub(crate) falling_blocks: Vec<BlockTypeHandle>,
+    // See https://stackoverflow.com/a/50280285/1424875 for rationale for double-boxing
+    pub(crate) extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -158,15 +214,14 @@ impl GameBuilder {
                     idle_chunk_after_unchanged: false,
                     ..Default::default()
                 },
-                // TimerCallback::BulkUpdate(Box::new(FallingBlocksPropagator {
-                //     blocks: self.falling_blocks.clone(),
-                //     air: self.air_block,
-                // })),
                 TimerCallback::LockedVerticalNeighors(Box::new(FallingBlocksChunkEdgePropagator {
                     blocks: self.falling_blocks.clone(),
-                    air: self.air_block, 
-                }))
+                    air: self.air_block,
+                })),
             );
+        }
+        for extension in self.extensions.values_mut() {
+            extension.pre_run(&mut self.inner);
         }
 
         Ok(())
@@ -203,6 +258,7 @@ impl GameBuilder {
             air_block,
             liquids_by_flow_time: HashMap::new(),
             falling_blocks: vec![],
+            extensions: HashMap::new(),
         })
     }
     /// Registers a block and its corresponding item in the game.
@@ -281,6 +337,22 @@ impl GameBuilder {
 
     pub fn data_dir(&self) -> &std::path::PathBuf {
         self.inner.data_dir()
+    }
+
+    /// Returns an extension that can be used to provide additional functionality or APIs
+    /// for a specific plugin (e.g. default_game providing ore generation to other plugins that want
+    /// to generate ores) without the core GameBuilder needing to be aware of it *a priori*.
+    pub fn extension<T: GameBuilderExtension + Any + Default + 'static>(&mut self) -> &mut T {
+        self.extensions
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()))
+            .as_any()
+            .downcast_mut::<T>()
+            .unwrap()
+    }
+
+    pub fn air_block(&self) -> BlockId {
+        self.air_block
     }
 }
 

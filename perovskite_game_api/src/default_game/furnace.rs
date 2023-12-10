@@ -15,7 +15,7 @@ use prost::Message;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder},
-    game_builder::{StaticBlockName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, TextureName},
     include_texture_bytes,
 };
 
@@ -23,7 +23,7 @@ use super::{
     basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE},
     block_groups::BRITTLE,
     recipes::{RecipeBook, RecipeImpl, RecipeSlot},
-    DefaultGameBuilder,
+    DefaultGameBuilder, DefaultGameBuilderExtension,
 };
 
 /// Furnace that's not current lit
@@ -238,20 +238,20 @@ impl FurnaceTimerCallback {
     }
 }
 
-pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<()> {
-    include_texture_bytes!(game_builder.inner, FURNACE_TEXTURE, "textures/furnace.png")?;
+pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
+    include_texture_bytes!(game_builder, FURNACE_TEXTURE, "textures/furnace.png")?;
     include_texture_bytes!(
-        game_builder.inner,
+        game_builder,
         FURNACE_FRONT_TEXTURE,
         "textures/furnace_front.png"
     )?;
     include_texture_bytes!(
-        game_builder.inner,
+        game_builder,
         FURNACE_ON_FRONT_TEXTURE,
         "textures/furnace_on_front.png"
     )?;
 
-    let furnace_off_block = game_builder.inner.add_block(
+    let furnace_off_block = game_builder.add_block(
         BlockBuilder::new(FURNACE)
             .add_block_group(BRITTLE)
             .set_cube_appearance(
@@ -275,7 +275,7 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
                 bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
             })),
     )?;
-    let furnace_on_block = game_builder.inner.add_block(
+    let furnace_on_block = game_builder.add_block(
         BlockBuilder::new(FURNACE_ON)
             .add_block_group(BRITTLE)
             .add_item_group(HIDDEN_FROM_CREATIVE)
@@ -304,12 +304,18 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
     )?;
 
     let timer_handler = FurnaceTimerCallback {
-        recipes: game_builder.smelting_recipes.clone(),
-        fuels: game_builder.smelting_fuels.clone(),
+        recipes: game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .smelting_recipes
+            .clone(),
+        fuels: game_builder
+            .extension::<DefaultGameBuilderExtension>()
+            .smelting_fuels
+            .clone(),
         furnace_off_handle: furnace_off_block.handle.0,
         furnace_on_handle: furnace_on_block.handle.0,
     };
-    game_builder.inner.inner.add_timer(
+    game_builder.inner.add_timer(
         "default:furnace_timer",
         TimerSettings {
             interval: FURNACE_TICK_DURATION,
@@ -321,45 +327,6 @@ pub(crate) fn register_furnace(game_builder: &mut DefaultGameBuilder) -> Result<
         },
         TimerCallback::PerBlockLocked(Box::new(timer_handler)),
     );
-    // testonly
-    game_builder.smelting_fuels.register_recipe(RecipeImpl {
-        slots: [RecipeSlot::Group("testonly_wet".to_string())],
-        result: ItemStack {
-            proto: Default::default(),
-        },
-        shapeless: false,
-        metadata: 10,
-    });
-    game_builder.smelting_recipes.register_recipe(RecipeImpl {
-        slots: [RecipeSlot::Exact(DIRT_WITH_GRASS.0.to_string())],
-        result: ItemStack {
-            proto: perovskite_core::protocol::items::ItemStack {
-                item_name: DIRT.0.to_string(),
-                quantity: 1,
-                current_wear: 1,
-                quantity_type: Some(
-                    perovskite_core::protocol::items::item_stack::QuantityType::Stack(256),
-                ),
-            },
-        },
-        shapeless: false,
-        metadata: 4,
-    });
-    game_builder.smelting_recipes.register_recipe(RecipeImpl {
-        slots: [RecipeSlot::Exact(DIRT.0.to_string())],
-        result: ItemStack {
-            proto: perovskite_core::protocol::items::ItemStack {
-                item_name: STONE.0.to_string(),
-                quantity: 1,
-                current_wear: 1,
-                quantity_type: Some(
-                    perovskite_core::protocol::items::item_stack::QuantityType::Stack(256),
-                ),
-            },
-        },
-        shapeless: false,
-        metadata: 20,
-    });
     Ok(())
 }
 

@@ -2,7 +2,7 @@ use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode, TextureCropping,
     },
-    game_builder::{BlockName, FALLBACK_UNKNOWN_TEXTURE_NAME},
+    game_builder::{BlockName, FALLBACK_UNKNOWN_TEXTURE_NAME, GameBuilder},
 };
 use anyhow::{Context, Result};
 use perovskite_core::{
@@ -23,7 +23,7 @@ fn convert_or_fallback(tex: &Option<TextureReference>) -> TextureReference {
 
 /// Registers a new block that acts like stairs of the given block
 pub fn make_stairs(
-    game_builder: &mut DefaultGameBuilder,
+    game_builder: &mut GameBuilder,
     base: &BuiltBlock,
     craftable: bool,
 ) -> Result<BuiltBlock> {
@@ -74,7 +74,7 @@ pub fn make_stairs(
 
 /// Registers a new block that acts like a slab of the given block
 pub fn make_slab(
-    game_builder: &mut DefaultGameBuilder,
+    game_builder: &mut GameBuilder,
     base: &BuiltBlock,
     craftable: bool,
 ) -> Result<BuiltBlock> {
@@ -122,7 +122,7 @@ pub fn make_slab(
 }
 
 fn make_derived_block_core(
-    game_builder: &mut DefaultGameBuilder,
+    game_builder: &mut GameBuilder,
     base: &BuiltBlock,
     short_suffix: &str,
     display_suffix: &str,
@@ -130,11 +130,9 @@ fn make_derived_block_core(
 ) -> Result<BuiltBlock> {
     let block_type = game_builder
         .inner
-        .inner
         .blocks()
         .get_block(&base.handle.0)?;
     let item = game_builder
-        .inner
         .inner
         .items()
         .get_item(&base.item_name.0)
@@ -152,7 +150,7 @@ fn make_derived_block_core(
     .set_display_name(item.proto.display_name.clone() + display_suffix)
     .set_allow_light_propagation(true)
     .add_block_groups(block_type.0.client_info.groups.iter().cloned());
-    let built_block = game_builder.inner.add_block(block_builder)?;
+    let built_block = game_builder.add_block(block_builder)?;
 
     Ok(built_block)
 }

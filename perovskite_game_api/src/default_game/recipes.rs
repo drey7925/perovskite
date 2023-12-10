@@ -19,6 +19,12 @@ use super::basic_blocks::DIRT_WITH_GRASS;
 /// When a recipe is added, the recipe book is no longer considered sorted until [`sort()`](#method.sort)
 /// is called. When the book is not sorted, ambiguous matches are broken arbitrarily.
 pub struct RecipeBook<const N: usize, T: Clone> {
+    // TODO: This uses a RwLock because we need to be able to fill and sort it.
+    // However, it shouldn't be edited after game startup.
+    // Can we create some kind of mutex that becomes read-only with no contention/ping-pong
+    // once the game starts up?
+    // (something like `oncemutex` but allowing one to lock and unlock multiple times before explicitly
+    // transitioning to the "very fast concurrent reads after the first lock is over" state???)
     recipes: RwLock<Vec<RecipeImpl<N, T>>>,
 }
 impl<const N: usize, T: Clone> RecipeBook<N, T> {
@@ -139,39 +145,3 @@ impl<const N: usize, T> RecipeImpl<N, T> {
     }
 }
 
-pub(crate) fn register_test_recipes(game_builder: &mut super::DefaultGameBuilder) {
-    use RecipeSlot::*;
-    // testonly
-    game_builder.register_crafting_recipe(
-        [
-            Group("testonly_wet".to_string()),
-            Exact("default:dirt".to_string()),
-            Empty,
-            Empty,
-            Empty,
-            Empty,
-            Empty,
-            Empty,
-            Empty,
-        ],
-        DIRT_WITH_GRASS.0.to_string(),
-        1,
-        Some(items_proto::item_stack::QuantityType::Stack(256)),
-    );
-    game_builder.register_crafting_recipe(
-        [
-            Group("testonly_wet".to_string()),
-            Group("testonly_wet".to_string()),
-            Exact("default:dirt".to_string()),
-            Exact("default:dirt".to_string()),
-            Empty,
-            Empty,
-            Empty,
-            Empty,
-            Empty,
-        ],
-        DIRT_WITH_GRASS.0.to_string(),
-        2,
-        Some(items_proto::item_stack::QuantityType::Stack(256)),
-    );
-}

@@ -13,18 +13,24 @@ use perovskite_server::game_state::{
 };
 use std::sync::Arc;
 
-use super::{recipes::RecipeBook, DefaultGameBuilder};
+use crate::game_builder::GameBuilder;
 
-pub(crate) fn register_game_behaviors(game_builder: &mut DefaultGameBuilder) -> Result<()> {
-    let recipe_book = game_builder.crafting_recipes.clone();
-    let behaviors = game_builder.inner.inner.game_behaviors_mut();
-    behaviors.make_inventory_popup = Box::new(DefaultGameInventoryPopupProvider { recipe_book });
-    behaviors.super_users = game_builder.settings.super_users.iter().cloned().collect();
+use super::{recipes::RecipeBook, DefaultGameBuilder, DefaultGameBuilderExtension};
+
+pub(crate) fn register_game_behaviors(game_builder: &mut GameBuilder) -> Result<()> {
+    let extension = game_builder.extension::<DefaultGameBuilderExtension>();
+    let recipe_book = extension.crafting_recipes.clone();
+    let spawn_location = extension.settings.spawn_location.into();
+    let super_users = extension.settings.super_users.iter().cloned().collect();
+
     {
-        let spawn_location = game_builder.settings.spawn_location.into();
+        let behaviors = game_builder.inner.game_behaviors_mut();
+
+        behaviors.make_inventory_popup =
+            Box::new(DefaultGameInventoryPopupProvider { recipe_book });
+        behaviors.super_users = super_users;
         behaviors.spawn_location = Box::new(move |_| spawn_location);
     }
-
     Ok(())
 }
 

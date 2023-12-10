@@ -3,7 +3,7 @@ use perovskite_server::game_state::items::ItemStack;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
-    game_builder::{StaticBlockName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, TextureName},
     include_texture_bytes,
 };
 
@@ -27,22 +27,14 @@ pub const CACTUS: StaticBlockName = StaticBlockName("default:cactus");
 pub const CACTUS_TOP_TEX: TextureName = TextureName("default:cactus_top");
 pub const CACTUS_SIDE_TEX: TextureName = TextureName("default:cactus_side");
 
-pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
-    include_texture_bytes!(
-        builder.inner,
-        MAPLE_TREE_TOP_TEX,
-        "textures/maple_tree_top.png"
-    )?;
-    include_texture_bytes!(
-        builder.inner,
-        MAPLE_TREE_SIDE_TEX,
-        "textures/maple_tree_side.png"
-    )?;
-    include_texture_bytes!(builder.inner, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
-    include_texture_bytes!(builder.inner, TALL_GRASS_TEX, "textures/tall_grass.png")?;
-    include_texture_bytes!(builder.inner, CACTUS_TOP_TEX, "textures/cactus_top.png")?;
-    include_texture_bytes!(builder.inner, CACTUS_SIDE_TEX, "textures/cactus_side.png")?;
-    builder.game_builder().add_block(
+pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
+    include_texture_bytes!(builder, MAPLE_TREE_TOP_TEX, "textures/maple_tree_top.png")?;
+    include_texture_bytes!(builder, MAPLE_TREE_SIDE_TEX, "textures/maple_tree_side.png")?;
+    include_texture_bytes!(builder, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
+    include_texture_bytes!(builder, TALL_GRASS_TEX, "textures/tall_grass.png")?;
+    include_texture_bytes!(builder, CACTUS_TOP_TEX, "textures/cactus_top.png")?;
+    include_texture_bytes!(builder, CACTUS_SIDE_TEX, "textures/cactus_side.png")?;
+    builder.add_block(
         BlockBuilder::new(MAPLE_TREE)
             .add_block_group(FIBROUS)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
@@ -54,7 +46,7 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
                 MAPLE_TREE_SIDE_TEX,
             )),
     )?;
-    builder.game_builder().add_block(
+    builder.add_block(
         BlockBuilder::new(TALL_GRASS)
             .set_plant_like_appearance(
                 PlantLikeAppearanceBuilder::new().set_texture(TALL_GRASS_TEX),
@@ -64,32 +56,19 @@ pub(crate) fn register_foliage(builder: &mut DefaultGameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .set_no_drops(),
     )?;
-    builder.smelting_fuels.register_recipe(recipes::Recipe {
-        slots: [RecipeSlot::Exact(MAPLE_TREE.0.to_string())],
-        result: ItemStack {
-            proto: Default::default(),
-        },
-        shapeless: false,
-        metadata: 8,
-    });
-    builder.smelting_fuels.register_recipe(recipes::Recipe {
-        slots: [RecipeSlot::Exact(MAPLE_LEAVES.0.to_string())],
-        result: ItemStack {
-            proto: Default::default(),
-        },
-        shapeless: false,
-        metadata: 1,
-    });
-    BlockBuilder::new(MAPLE_LEAVES)
-        .add_block_group(FIBROUS)
-        .set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(MAPLE_LEAVES_TEX)
-                .set_needs_transparency(),
-        )
-        .set_allow_light_propagation(true)
-        .build_and_deploy_into(builder.game_builder())?;
-    builder.game_builder().add_block(
+    builder.register_smelting_fuel(MAPLE_TREE.0, 8);
+    builder.register_smelting_fuel(MAPLE_TREE.0, 1);
+    builder.add_block(
+        BlockBuilder::new(MAPLE_LEAVES)
+            .add_block_group(FIBROUS)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(MAPLE_LEAVES_TEX)
+                    .set_needs_transparency(),
+            )
+            .set_allow_light_propagation(true),
+    )?;
+    builder.add_block(
         BlockBuilder::new(CACTUS)
             .add_block_group(FIBROUS)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(

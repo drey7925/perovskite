@@ -15,7 +15,7 @@ use super::block_groups::BRITTLE;
 /// Registers a new pickaxe based on the given materials
 /// **This API is subject to change.**
 pub(crate) fn register_pickaxe(
-    game_builder: &mut super::DefaultGameBuilder,
+    game_builder: &mut super::GameBuilder,
     texture: TextureName,
     name: impl Into<String>,
     display_name: impl Into<String>,
@@ -57,11 +57,11 @@ pub(crate) fn register_pickaxe(
         tap_handler: None,
         place_handler: None,
     };
-    game_builder.inner.inner.items_mut().register_item(item)
+    game_builder.inner.items_mut().register_item(item)
 }
 
 fn register_superuser_pickaxe(
-    game_builder: &mut super::DefaultGameBuilder,
+    game_builder: &mut super::GameBuilder,
     texture: TextureName,
     name: impl Into<String>,
     display_name: impl Into<String>,
@@ -69,7 +69,7 @@ fn register_superuser_pickaxe(
 ) -> Result<()> {
     // TODO: consider implementing this using an ItemBuilder
     
-    let air = game_builder.inner.air_block;
+    let air = game_builder.air_block;
     let item = Item {
         proto: items_proto::ItemDef {
             short_name: name.into(),
@@ -110,7 +110,7 @@ fn register_superuser_pickaxe(
         tap_handler: None,
         place_handler: None,
     };
-    game_builder.inner.inner.items_mut().register_item(item)
+    game_builder.inner.items_mut().register_item(item)
 }
 
 /// Registers a new pickaxe based on the given materials
@@ -119,10 +119,10 @@ pub(crate) fn register_shovel() -> Result<()> {
     todo!()
 }
 
-pub(crate) fn register_default_tools(game_builder: &mut super::DefaultGameBuilder) -> Result<()> {
+pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> Result<()> {
     let test_pick_texture = TextureName("textures/test_pickaxe.png");
     include_texture_bytes!(
-        game_builder.inner,
+        game_builder,
         test_pick_texture,
         "textures/test_pickaxe.png"
     )?;

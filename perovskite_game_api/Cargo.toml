@@ -32,15 +32,33 @@ ron = "0.8.0"
 serde = { version = "1.0.163", features = ["derive"] }
 cgmath = "0.18.0"
 tokio = { version = "1.29.1", features = ["full", "tracing"] }
+type-map = "0.5.0"
 
 [features]
-default = ["default_game"]
+default = ["default_game", "circuits"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
+
 # Provides a simple default game, centered around exploration, small-scale resource
 # collection, mining, building, etc. This game may expand over time.
+#
+# It also provides the following abstractions/functionality (WIP):
+# * Recipe book for crafting/smelting
+# * A basic furnate that follows the recipe book
+# * A simple inventory UI with creative support and a crafting tool
+# * Map generator implementation
+# * Helpers for defining tools
+# * Useful commands for game administration
 default_game = []
+
+# Provides a plugin for making digital circuits that have simple in-game behaviors. Still a WIP
+circuits = []
+
+# Provides a unified definition for colored blocks, so different plugins can interoperate with dyes and related.
+# Still a WIP
+colors = []
+
 # If enabled, server will detect deadlocks and log them.
 deadlock_detection = ["perovskite_server/deadlock_detection"]
 # Performance tracing

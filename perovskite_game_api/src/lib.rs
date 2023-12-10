@@ -42,6 +42,10 @@ pub use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOf
 #[cfg(feature = "default_game")]
 pub mod default_game;
 
+/// Provides digital circuits that can be used in the default game.
+#[cfg(feature = "circuits")]
+pub mod circuits;
+
 #[macro_export]
 #[cfg(doc)]
 macro_rules! maybe_export {

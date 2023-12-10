@@ -14,8 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use noise::NoiseFn;
-use perovskite_game_api::default_game::DefaultGameBuilder;
+use perovskite_game_api::{default_game::DefaultGameBuilder, game_builder::GameBuilder};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::{prelude::*, registry::LookupSpan};
 
@@ -68,6 +67,7 @@ where
 fn main() {
     // I don't have a good place to test noise functions. It's easier to just do it in
     // main.rs, although this is rather silly to include in the source tree.
+    // use noise::NoiseFn;
     // let noise: noise::Fbm<noise::SuperSimplex> = noise::Fbm::new(3);
     // let mut v = Vec::new();
     // for i in 0..1000 {
@@ -91,6 +91,7 @@ fn main() {
         )
         .init();
 
-    let game = DefaultGameBuilder::new_from_commandline().unwrap();
-    game.build_and_run().unwrap();
+    let mut game = GameBuilder::from_cmdline().unwrap();
+    game.initialize_default_game().unwrap();
+    game.run_game_server().unwrap();
 }
