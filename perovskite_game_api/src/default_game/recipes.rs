@@ -1,10 +1,7 @@
 use perovskite_server::game_state::items::{Item, ItemManager, ItemStack};
-use perovskite_core::protocol::items as items_proto;
 use parking_lot::RwLock;
 
 use crate::maybe_export;
-
-use super::basic_blocks::DIRT_WITH_GRASS;
 
 /// Holds crafting/smelting/etc recipes.
 ///

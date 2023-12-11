@@ -34,7 +34,7 @@ use crate::{
         game_map::{TimerCallback, TimerSettings},
         items::ItemManager,
         mapgen::MapgenInterface,
-        GameState,
+        GameState, GameStateExtension,
     },
     media::MediaManager,
     network_server::grpc_service::PerovskiteGameServerImpl,
@@ -149,6 +149,7 @@ pub struct ServerBuilder {
     game_behaviors: GameBehaviors,
     commands: CommandManager,
     data_dir: PathBuf,
+    extensions: type_map::concurrent::TypeMap
 }
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
@@ -186,6 +187,7 @@ impl ServerBuilder {
             game_behaviors: Default::default(),
             commands: CommandManager::new(),
             data_dir: args.data_dir.clone(),
+            extensions: type_map::concurrent::TypeMap::new()
         })
     }
     pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
@@ -234,13 +236,13 @@ impl ServerBuilder {
         self.mapgen = Some(Box::new(mapgen))
     }
 
-    pub fn build(self) -> Result<Server> {
+    pub fn build(mut self) -> Result<Server> {
         let addr = SocketAddr::new(
             // Bind to all interfaces (v4 and v6) by default
             self.args.bind_addr.unwrap_or(IpAddr::from_str("::")?),
             self.args.port,
         );
-
+        self.blocks.pre_build()?;
         let blocks = Arc::new(self.blocks);
         blocks.save_to(self.db.as_ref())?;
         let _rt_guard = self.runtime.enter();
@@ -253,6 +255,7 @@ impl ServerBuilder {
             self.mapgen.with_context(|| "Mapgen not specified")?,
             self.game_behaviors,
             self.commands,
+            self.extensions
         )?;
         for (name, settings, callback) in self.map_timers {
             game_state.game_map().register_timer(name, settings, callback)?;
@@ -266,5 +269,14 @@ impl ServerBuilder {
 
     pub fn data_dir(&self) -> &PathBuf {
         &self.data_dir
+    }
+
+    /// Adds an extension to the server's game state.
+    /// This extension can be accessed through [crate::game_state::GameState::extension].
+    pub fn add_extension<T: GameStateExtension>(&mut self, extension: T) {
+        if self.extensions.contains::<T>() {
+            panic!("Extension already added");
+        }
+        self.extensions.insert(extension);
     }
 }

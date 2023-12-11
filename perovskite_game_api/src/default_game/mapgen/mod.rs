@@ -6,15 +6,13 @@ use std::{
 use noise::{MultiFractal, NoiseFn};
 use perovskite_core::{
     constants::blocks::AIR,
-    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
+    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset}, block_id::BlockId,
 };
 use perovskite_server::game_state::{
     blocks::{BlockTypeHandle, BlockTypeManager},
     game_map::MapChunk,
     mapgen::MapgenInterface,
 };
-
-use crate::blocks::BlockTypeHandleWrapper;
 
 use super::{
     basic_blocks::{DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, STONE, WATER},
@@ -151,7 +149,7 @@ impl CaveNoise {
 /// An ore that the mapgen should generate. Note: This struct is subject to being extended with new fields
 /// in the future
 pub struct OreDefinition {
-    pub block: BlockTypeHandleWrapper,
+    pub block: BlockId,
     /// When the generated noise is larger than this value, the ore is generated.
     /// TODO figure out and document the range of the noise
     /// This is expressed as a spline with the input being the depth at which we are generating ore.
@@ -249,7 +247,7 @@ impl DefaultMapgen {
             ];
             let sample = noise.get(noise_coord);
             if sample > cutoff {
-                return ore.block.0;
+                return ore.block;
             }
         }
 

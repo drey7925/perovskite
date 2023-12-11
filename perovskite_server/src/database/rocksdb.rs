@@ -75,4 +75,15 @@ impl GameDatabase for RocksDbBackend {
     fn flush(&self) -> Result<()> {
         self.db.flush().with_context(|| "RocksDB flush failed")
     }
+
+    fn read_prefix(&self, prefix: &[u8], callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>) -> Result<()> {
+        let _span = span!("db read prefix");
+        let mut opts = ReadOptions::default();
+        opts.fill_cache(false);
+        for x in self.db.prefix_iterator(prefix) {
+            let (k, v) = x?;
+            callback(&k, &v)?;
+        }
+        Ok(())
+    }
 }

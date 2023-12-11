@@ -39,12 +39,12 @@ pub struct ItemInteractionResult {
     pub obtained_items: Vec<ItemStack>,
 }
 /// (handler context, coordinate of the block, the item stack in use)
-pub type BlockInteractionHandler = dyn Fn(HandlerContext, BlockCoordinate, &ItemStack) -> Result<ItemInteractionResult>
+pub type BlockInteractionHandler = dyn Fn(&HandlerContext, BlockCoordinate, &ItemStack) -> Result<ItemInteractionResult>
     + Send
     + Sync;
 /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
 /// The anchor block is the existing block that the player was pointing to when they clicked the place button.
-pub type PlaceHandler = dyn Fn(HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>>
+pub type PlaceHandler = dyn Fn(&HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>>
     + Send
     + Sync;
 
@@ -482,7 +482,7 @@ impl InteractionRuleExt for proto::InteractionRule {
 }
 
 pub(crate) fn default_dig_handler(
-    ctx: HandlerContext,
+    ctx: &HandlerContext,
     coord: BlockCoordinate,
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
@@ -543,7 +543,7 @@ lazy_static! {
 }
 
 pub(crate) fn default_tap_handler(
-    ctx: HandlerContext,
+    ctx: &HandlerContext,
     coord: BlockCoordinate,
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {

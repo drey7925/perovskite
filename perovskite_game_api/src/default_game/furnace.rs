@@ -267,7 +267,7 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_rotate_laterally(),
             )
             .set_display_name("Furnace")
-            .set_modifier(Box::new(|bt| {
+            .add_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
@@ -294,7 +294,7 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
             .set_light_emission(8)
             .set_display_name("Lit furnace (should not see this)")
             .set_dropped_item(FURNACE.0, 1)
-            .set_modifier(Box::new(|bt| {
+            .add_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(make_furnace_popup));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
@@ -305,15 +305,15 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
 
     let timer_handler = FurnaceTimerCallback {
         recipes: game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .smelting_recipes
             .clone(),
         fuels: game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .smelting_fuels
             .clone(),
-        furnace_off_handle: furnace_off_block.handle.0,
-        furnace_on_handle: furnace_on_block.handle.0,
+        furnace_off_handle: furnace_off_block.id,
+        furnace_on_handle: furnace_on_block.id,
     };
     game_builder.inner.add_timer(
         "default:furnace_timer",
@@ -321,7 +321,7 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
             interval: FURNACE_TICK_DURATION,
             shards: 32,
             spreading: 1.0,
-            block_types: vec![furnace_off_block.handle.0, furnace_on_block.handle.0],
+            block_types: vec![furnace_off_block.id, furnace_on_block.id],
             per_block_probability: 1.0,
             ..Default::default()
         },

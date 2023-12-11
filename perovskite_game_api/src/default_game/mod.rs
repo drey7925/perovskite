@@ -109,9 +109,9 @@ pub trait DefaultGameBuilder {
 }
 
 // This is a private type; other plugins cannot name it so they cannot access
-// the extension directly.
+// the builder_extension directly.
 //
-// This ensures that the extension is only made available to plugins via the
+// This ensures that the builder_extension is only made available to plugins via the
 // `DefaultGameBuilder` API.
 struct DefaultGameBuilderExtension {
     settings: DefaultGameSettings,
@@ -163,11 +163,11 @@ impl DefaultGameBuilderExtension {
 impl DefaultGameBuilder for GameBuilder {
 
     fn initialize_default_game(&mut self) -> Result<()> {
-        if self.extension::<DefaultGameBuilderExtension>().initialized {
+        if self.builder_extension::<DefaultGameBuilderExtension>().initialized {
             return Ok(());
         }
         tracing::info!("DefaultGame doing main initialization");
-        self.extension::<DefaultGameBuilderExtension>().initialized = true;
+        self.builder_extension::<DefaultGameBuilderExtension>().initialized = true;
         basic_blocks::register_basic_blocks(self)?;
         game_behaviors::register_game_behaviors(self)?;
         tools::register_default_tools(self)?;
@@ -180,7 +180,7 @@ impl DefaultGameBuilder for GameBuilder {
 
     /// Returns an Arc for the crafting recipes in this game.
     fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>> {
-        self.extension::<DefaultGameBuilderExtension>()
+        self.builder_extension::<DefaultGameBuilderExtension>()
             .crafting_recipes
             .clone()
     }
@@ -198,10 +198,10 @@ impl DefaultGameBuilder for GameBuilder {
         quantity_type: Option<items_proto::item_stack::QuantityType>,
     )  {
         assert!(
-            self.extension::<DefaultGameBuilderExtension>().initialized,
-            "DefaultGame extension not initialized"
+            self.builder_extension::<DefaultGameBuilderExtension>().initialized,
+            "DefaultGame builder_extension not initialized"
         );
-        self.extension::<DefaultGameBuilderExtension>()
+        self.builder_extension::<DefaultGameBuilderExtension>()
             .crafting_recipes
             .register_recipe(RecipeImpl {
                 slots,
@@ -234,10 +234,10 @@ impl DefaultGameBuilder for GameBuilder {
 
     fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32)  {
         assert!(
-            self.extension::<DefaultGameBuilderExtension>().initialized,
-            "DefaultGame extension not initialized"
+            self.builder_extension::<DefaultGameBuilderExtension>().initialized,
+            "DefaultGame builder_extension not initialized"
         );
-        self.extension::<DefaultGameBuilderExtension>()
+        self.builder_extension::<DefaultGameBuilderExtension>()
             .smelting_fuels
             .register_recipe(RecipeImpl {
                 slots: [RecipeSlot::Exact(fuel_name.into())],
@@ -245,7 +245,7 @@ impl DefaultGameBuilder for GameBuilder {
                     proto: Default::default(),
                 },
                 shapeless: false,
-                metadata: 16,
+                metadata: ticks,
             });
     }
 }

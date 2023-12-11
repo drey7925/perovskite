@@ -2402,6 +2402,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bitvec",
  "cgmath",
  "console-subscriber",
  "dhat",
@@ -2424,7 +2425,6 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "tracing-tracy",
- "type-map",
 ]
 
 [[package]]
@@ -2466,6 +2466,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracy-client 0.15.2",
+ "type-map",
  "uuid",
  "vec3D",
 ]

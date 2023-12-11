@@ -25,6 +25,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
+use rustc_hash::FxHashMap;
 
 use crate::database::database_engine::{GameDatabase, KeySpace};
 
@@ -80,7 +81,7 @@ impl AddAssign for BlockInteractionResult {
 }
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
-pub type FullHandler = dyn Fn(HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
+pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
     + Send
     + Sync;
 /// Takes (handler context, mutable reference to the block type in the map,
@@ -386,9 +387,12 @@ pub struct BlockTypeManager {
     block_types: Vec<BlockType>,
     name_to_base_id_map: HashMap<String, u32>,
     unique_id: usize,
+
     // Separate copy of BlockType.client_info.allow_light_propagation, packed densely in order
     // to be more cache friendly
+    init_complete: bool,
     light_propagation: bitvec::vec::BitVec,
+    fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
 }
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
@@ -396,7 +400,9 @@ impl BlockTypeManager {
             block_types: Vec::new(),
             name_to_base_id_map: HashMap::new(),
             unique_id: BLOCK_TYPE_MANAGER_ID.fetch_add(1, Ordering::Relaxed),
+            init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            fast_block_groups: FxHashMap::default(),
         }
     }
 
@@ -447,7 +453,8 @@ impl BlockTypeManager {
 
                 block.client_info.id = id.base_id();
                 info!("Registering block {} as {:?}", block.short_name(), id);
-                self.light_propagation.set(id.index(), block.client_info.allow_light_propagation);
+                self.light_propagation
+                    .set(id.index(), block.client_info.allow_light_propagation);
                 *existing = block;
                 id
             }
@@ -479,7 +486,9 @@ impl BlockTypeManager {
             block_types: Vec::new(),
             name_to_base_id_map: HashMap::new(),
             unique_id: BLOCK_TYPE_MANAGER_ID.fetch_add(1, Ordering::Relaxed),
+            init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            fast_block_groups: FxHashMap::default(),
         };
         let max_index = block_proto
             .block_type
@@ -546,7 +555,7 @@ impl BlockTypeManager {
         db: &dyn GameDatabase,
         allow_create: bool,
     ) -> Result<BlockTypeManager> {
-        match db.get(&KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY))? {
+        match db.get(&KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY_LEGACY))? {
             Some(x) => {
                 let result = BlockTypeManager::from_proto(
                     blocks_proto::ServerBlockTypeAssignments::decode(x.borrow())?,
@@ -568,7 +577,7 @@ impl BlockTypeManager {
     }
     pub(crate) fn save_to(&self, db: &dyn GameDatabase) -> Result<()> {
         db.put(
-            &KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY),
+            &KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY_LEGACY),
             &self.to_proto().encode_to_vec(),
         )?;
         db.flush()
@@ -578,7 +587,6 @@ impl BlockTypeManager {
     /// [`BlockTypeManager`] and [`BlockTypeName`] for an example of where this should be used.
     pub fn make_block_name(&self, name: String) -> BlockTypeName {
         BlockTypeName {
-            manager_unique_id: self.unique_id,
             name,
             base_id: AtomicU32::new(u32::MAX),
         }
@@ -610,9 +618,63 @@ impl BlockTypeManager {
             None
         }
     }
+
+    /// Registers the name of a block group to be available using [`block_group`].
+    ///
+    /// Note that not all block groups need to be registered this way. However, if
+    /// a plugin expects to check whether a block_id is in a group in a performance-critical
+    /// situation (e.g. tight loop), using [`has_block_group`] will avoid multiple hashtable
+    /// lookups and vector scans in the normal block ID -> block def -> group list process.
+    pub fn register_block_group(&mut self, block_group: &str) {
+        self.fast_block_groups
+            .insert(block_group.to_string(), bitvec::vec::BitVec::new());
+    }
+
+    /// Returns a block group by name, or None if the block group is not registered.
+    /// 
+    /// The block group must have been registered using [`register_block_group`]. Simply
+    /// being defined in a block type is not enough.
+    /// 
+    /// Panics:
+    /// This function will panic if called before the game starts up.
+    pub fn block_group<'a>(&'a self, block_group: &str) -> Option<FastBlockGroup<'a>> {
+        self
+                .fast_block_groups
+                .get(block_group).map(|x| FastBlockGroup {
+            blocks: x
+        })
+    }
+
+    // Performs some last setup before the block manager becomes immutable.
+    pub(crate) fn pre_build(&mut self) -> Result<()> {
+        for (name, group) in self.fast_block_groups.iter_mut() {
+            group.resize(self.block_types.len(), false);
+            for (index, block) in self.block_types.iter().enumerate() {
+                if block.client_info.groups.contains(name) {
+                    group.set(index, true);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-const BLOCK_MANAGER_META_KEY: &[u8] = b"block_types";
+pub struct FastBlockGroup<'a> {
+    blocks: &'a bitvec::vec::BitVec,
+}
+impl FastBlockGroup<'_> {
+    /// Returns true if the block is in the group, or false if the block is not in the group
+    /// and/or the block ID is out of range.
+    pub fn contains(&self, block_id: BlockId) -> bool {
+        *self
+            .blocks
+            .get(block_id.index())
+            .as_deref()
+            .unwrap_or(&false)
+    }
+}
+
+const BLOCK_MANAGER_META_KEY_LEGACY: &[u8] = b"block_types";
 
 const E: blocks_proto::Empty = blocks_proto::Empty {};
 
@@ -668,7 +730,9 @@ fn make_unknown_block_serverside(
             allow_light_propagation: false,
         },
         extended_data_handling: ExtDataHandling::ServerSide,
-        deserialize_extended_data_handler: Some(Box::new(unknown_block_deserialize_data_passthrough)),
+        deserialize_extended_data_handler: Some(Box::new(
+            unknown_block_deserialize_data_passthrough,
+        )),
         serialize_extended_data_handler: Some(Box::new(unknown_block_serialize_data_passthrough)),
         extended_data_to_client_side: None,
         dig_handler_full: None,
@@ -714,17 +778,14 @@ impl TryAsHandle for BlockTypeHandle {
 /// This can be used to allow blocks to have circular dependencies on each other through their
 /// respective handlers. See the doc for [`BlockTypeManager`] for details and a motivating example.
 pub struct BlockTypeName {
-    // Used to ensure that a BlockTypeName is used with the correct BlockTypeManager
-    manager_unique_id: usize,
     name: String,
     base_id: AtomicU32,
 }
 impl Clone for BlockTypeName {
     fn clone(&self) -> Self {
         Self {
-            manager_unique_id: self.manager_unique_id,
             name: self.name.clone(),
-            base_id: AtomicU32::new(self.base_id.load(Ordering::SeqCst)),
+            base_id: AtomicU32::new(self.base_id.load(Ordering::Relaxed)),
         }
     }
 }
@@ -736,5 +797,13 @@ impl TryAsHandle for BlockTypeName {
 impl TryAsHandle for &str {
     fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
         manager.get_by_name(self)
+    }
+}
+impl BlockTypeName {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            base_id: AtomicU32::new(u32::MAX),
+        }
     }
 }

@@ -282,13 +282,14 @@ impl MapChunk {
         coordinate: ChunkCoordinate,
         bytes: &[u8],
         game_state: Arc<GameState>,
+        storage: Arc<[AtomicU32; 4096]>,
     ) -> Result<MapChunk> {
         let _span = span!("parse chunk");
         let proto = mapchunk_proto::StoredChunk::decode(bytes)
             .with_context(|| "MapChunk proto serialization failed")?;
         match proto.chunk_data {
             Some(mapchunk_proto::stored_chunk::ChunkData::V1(chunk_data)) => {
-                parse_v1(chunk_data, coordinate, game_state)
+                parse_v1(chunk_data, coordinate, game_state, storage)
             }
             None => bail!("Missing chunk_data or unrecognized format"),
         }
@@ -382,6 +383,7 @@ fn parse_v1(
     chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
     game_state: Arc<GameState>,
+    storage: Arc<[AtomicU32; 4096]>,
 ) -> std::result::Result<MapChunk, anyhow::Error> {
     let mut extended_data = FxHashMap::default();
     ensure!(
@@ -451,14 +453,13 @@ fn parse_v1(
         }
     }
     const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
-    let block_ids = Arc::new([ATOMIC_INITIALIZER; 4096]);
     for (i, block_id) in chunk_data.block_ids.iter().enumerate() {
-        block_ids[i].store(*block_id, Ordering::Relaxed);
+        storage[i].store(*block_id, Ordering::Relaxed);
     }
     Ok(MapChunk {
         coord: coordinate,
         // Unwrap is safe - this should only fail if the length is wrong, but we checked the length above.
-        block_ids,
+        block_ids: storage.clone(),
         extended_data: Box::new(extended_data),
         dirty: false,
     })
@@ -904,7 +905,8 @@ impl ServerGameMap {
         ))
     }
 
-    /// Gets a block + variant without its extended data
+    /// Gets a block + variant without its extended data. This will perform a data load if the chunk
+    /// is not loaded
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockTypeHandle> {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let chunk = chunk_guard.wait_and_get_for_read()?;
@@ -918,6 +920,9 @@ impl ServerGameMap {
     ///
     /// This avoids taking write locks or doing expensive IO, at the expense of sometimes not being able to
     /// actually get the block
+    /// 
+    /// However, it will still wait to get a read lock for the chunk map itself. The only circumstances
+    /// where this should fail is if the chunk is unloaded.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockTypeHandle> {
         let chunk_guard =  self.try_get_chunk(coord.chunk())?;
         // We don't have a mapchunk lock, so we need actual atomic ordering here
@@ -1174,7 +1179,7 @@ impl ServerGameMap {
         if new_id != old_id {
             game_map.broadcast_block_change(BlockUpdate {
                 location: chunk.coord.with_offset(offset),
-                new_value: block_type.id(),
+                new_value: block_type,
             });
         }
 
@@ -1280,7 +1285,7 @@ impl ServerGameMap {
                 initiator: initiator.clone(),
                 game_state: self.game_state(),
             };
-            result += run_handler!(|| (full_handler)(ctx, coord, tool), "block_full", initiator,)?;
+            result += run_handler!(|| (full_handler)(&ctx, coord, tool), "block_full", initiator,)?;
         }
 
         Ok(result)
@@ -1423,7 +1428,7 @@ impl ServerGameMap {
             .get(&KeySpace::MapchunkData.make_key(&coord.as_bytes()))?;
         if let Some(data) = data {
             return Ok((
-                MapChunk::deserialize(coord, &data, self.game_state())?,
+                MapChunk::deserialize(coord, &data, self.game_state(), storage)?,
                 false,
             ));
         }

@@ -161,9 +161,9 @@ pub mod ores {
         )?;
 
         game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
-                block: coal_ore.handle,
+                block: coal_ore.id,
                 noise_cutoff: splines::Spline::from_vec(vec![
                     splines::Key {
                         value: 0.5,
@@ -206,7 +206,7 @@ pub mod ores {
         )?;
         // todo clean this up when ore APIs are more mature
         game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .smelting_recipes
             .register_recipe(RecipeImpl {
                 slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
@@ -233,9 +233,9 @@ pub mod ores {
         )?;
 
         game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
-                block: iron_ore.handle,
+                block: iron_ore.id,
                 // Use the same schedule as coal
                 noise_cutoff: splines::Spline::from_vec(vec![
                     splines::Key {
@@ -280,9 +280,9 @@ pub mod ores {
         )?;
 
         game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
-                block: diamond_ore.handle,
+                block: diamond_ore.id,
                 noise_cutoff: splines::Spline::from_vec(vec![
                     splines::Key {
                         value: 0.9,
@@ -338,9 +338,9 @@ pub mod ores {
         )?;
 
         game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
-                block: gold_ore.handle,
+                block: gold_ore.id,
                 // Use the same schedule as coal
                 noise_cutoff: splines::Spline::from_vec(vec![
                     splines::Key {
@@ -364,7 +364,7 @@ pub mod ores {
             });
 
         game_builder
-            .extension::<DefaultGameBuilderExtension>()
+            .builder_extension::<DefaultGameBuilderExtension>()
             .smelting_recipes
             .register_recipe(RecipeImpl {
                 slots: [RecipeSlot::Exact(GOLD_PIECE.0.to_string())],
@@ -390,7 +390,7 @@ pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()
     ores::register_ores(game_builder)?;
 
     game_builder
-        .extension::<DefaultGameBuilderExtension>()
+        .builder_extension::<DefaultGameBuilderExtension>()
         .crafting_recipes
         .register_recipe(super::recipes::RecipeImpl {
             slots: [
@@ -456,7 +456,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
     builder.add_block(
         BlockBuilder::new(TNT)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
-            .set_modifier(Box::new(move |block_type| {
+            .add_modifier(Box::new(move |block_type| {
                 block_type.tap_handler_full = Some(Box::new(move |ctx, coord, tool| {
                     if tool.is_some_and(|tool| tool.proto.item_name == "default:superuser_pickaxe")
                     {
@@ -648,7 +648,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         BlockBuilder::new(CHEST)
             .set_cube_single_texture(CHEST_TEXTURE)
             .set_display_name("Unlocked chest")
-            .set_modifier(Box::new(|bt| {
+            .add_modifier(Box::new(|bt| {
                 bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => Ok(Some(

@@ -49,7 +49,6 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
-use cgmath::InnerSpace;
 use cgmath::Vector3;
 use cgmath::Zero;
 use parking_lot::MutexGuard;
@@ -1247,7 +1246,7 @@ impl InboundWorker {
                     run_handler!(
                         || {
                             item_handler(
-                                ctx,
+                                &ctx,
                                 coord,
                                 stack.as_ref().unwrap_or(&items::NO_TOOL_STACK),
                             )
@@ -1389,7 +1388,7 @@ impl InboundWorker {
                             let new_stack = run_handler!(
                                 || {
                                     handler(
-                                        ctx,
+                                        &ctx,
                                         place_message
                                             .block_coord
                                             .clone()

@@ -76,6 +76,7 @@ pub struct GameState {
     player_state_resync: tokio::sync::watch::Sender<()>,
     entities: EntityManager,
     server_start_time: Instant,
+    extensions: type_map::concurrent::TypeMap,
 }
 
 impl GameState {
@@ -87,7 +88,8 @@ impl GameState {
         media: MediaManager,
         mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
         game_behaviors: GameBehaviors,
-        commands: CommandManager
+        commands: CommandManager,
+        extensions: type_map::concurrent::TypeMap,
     ) -> Result<Arc<Self>> {
         // TODO figure out a way to replace unwrap with error propagation
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
@@ -113,6 +115,7 @@ impl GameState {
             player_state_resync: tokio::sync::watch::channel(()).0,
             entities: EntityManager::new(weak.clone()),
             server_start_time: Instant::now(),
+            extensions,
         }))
     }
 
@@ -146,6 +149,19 @@ impl GameState {
     /// This will kick all players off.
     pub fn start_shutdown(&self) {
         self.early_shutdown.cancel();
+    }
+
+    /// Returns an extension that a plugin registered with [crate::server::ServerBuilder::add_extension],
+    /// typically at some point during its initialization.
+    /// 
+    /// This is meant for use by a plugin with its own extension (to access its own data).
+    /// 
+    /// A more ergonomic API for *consumers* of a plugin would be to use a mixin trait:
+    /// * Create a new public trait and implement it for GameState (coherence rules allow you to implement 
+    ///   your own trait)
+    /// * In the implementation of the trait, call this method to get access to the desired plugin data
+    pub fn extension<T: GameStateExtension>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
     }
 
     // Shut down things that handle events (e.g. map, database)
@@ -251,6 +267,9 @@ where
             return Ok(None);
         }
     }
+}
+
+pub trait GameStateExtension: Send + Sync + 'static {
 }
 
 fn put_double_meta_value(db: &dyn GameDatabase, name: &[u8], value: f64) -> Result<()> {

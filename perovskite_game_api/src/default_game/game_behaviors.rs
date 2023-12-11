@@ -18,7 +18,7 @@ use crate::game_builder::GameBuilder;
 use super::{recipes::RecipeBook, DefaultGameBuilder, DefaultGameBuilderExtension};
 
 pub(crate) fn register_game_behaviors(game_builder: &mut GameBuilder) -> Result<()> {
-    let extension = game_builder.extension::<DefaultGameBuilderExtension>();
+    let extension = game_builder.builder_extension::<DefaultGameBuilderExtension>();
     let recipe_book = extension.crafting_recipes.clone();
     let spawn_location = extension.settings.spawn_location.into();
     let super_users = extension.settings.super_users.iter().cloned().collect();

@@ -131,7 +131,7 @@ fn make_derived_block_core(
     let block_type = game_builder
         .inner
         .blocks()
-        .get_block(&base.handle.0)?;
+        .get_block(&base.id)?;
     let item = game_builder
         .inner
         .items()

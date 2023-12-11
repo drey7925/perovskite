@@ -129,13 +129,13 @@ mod private {
 pub trait GameBuilderExtension: private::AsAny {
     /// Called before the server starts running
     /// At this point, there is no longer an opportunity to interact with other
-    /// plugins
-    ///
-    /// Impl notes as to why:
-    /// * We need this trait to be object-safe and walk the typemap
-    /// * It has to use an impl of GameBuilderExtension as its receiver type
-    /// * If a &mut self is available, then the entire GameBuilder is borrowed and
-    ///   cannot be used (in particular, its extensions map is unsafe to access)
+    /// plugins' extensions (their pre_run may already have been called)
+    /// 
+    /// This is the last opportunity for a plugin to modify the parts of the game-state
+    /// that are immutable after init (e.g. defined blocks, defined items, etc)
+    /// 
+    /// If there are any extensions that should be made available through the GameState,
+    /// then they should be added to the ServerBuilder via [ServerBuilder::add_extension]
     fn pre_run(&mut self, server_builder: &mut ServerBuilder);
 }
 
@@ -149,8 +149,10 @@ pub struct GameBuilder {
     pub(crate) air_block: BlockTypeHandle,
     pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockTypeHandle>>,
     pub(crate) falling_blocks: Vec<BlockTypeHandle>,
-    // See https://stackoverflow.com/a/50280285/1424875 for rationale for double-boxing
-    pub(crate) extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
+    // We cannot use a typemap here because we want to be able to iterate
+    // over all the extensions for various things like pre_run
+    pub(crate) builder_extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
+    
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -220,7 +222,7 @@ impl GameBuilder {
                 })),
             );
         }
-        for extension in self.extensions.values_mut() {
+        for extension in self.builder_extensions.values_mut() {
             extension.pre_run(&mut self.inner);
         }
 
@@ -258,7 +260,7 @@ impl GameBuilder {
             air_block,
             liquids_by_flow_time: HashMap::new(),
             falling_blocks: vec![],
-            extensions: HashMap::new(),
+            builder_extensions: HashMap::new(),
         })
     }
     /// Registers a block and its corresponding item in the game.
@@ -339,11 +341,11 @@ impl GameBuilder {
         self.inner.data_dir()
     }
 
-    /// Returns an extension that can be used to provide additional functionality or APIs
+    /// Returns an extension that holds state for additional functionality or APIs
     /// for a specific plugin (e.g. default_game providing ore generation to other plugins that want
     /// to generate ores) without the core GameBuilder needing to be aware of it *a priori*.
-    pub fn extension<T: GameBuilderExtension + Any + Default + 'static>(&mut self) -> &mut T {
-        self.extensions
+    pub fn builder_extension<T: GameBuilderExtension + Any + Default + 'static>(&mut self) -> &mut T {
+        self.builder_extensions
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(T::default()))
             .as_any()
@@ -362,7 +364,7 @@ impl GameBuilder {
 ///
 /// This macro takes the following parameters:
 /// * Mutable reference to [GameBuilder]
-/// * Texture name ([Tex] object)
+/// * Texture name ([TextureName] object)
 /// * File name (string literal)
 #[macro_export]
 macro_rules! include_texture_bytes {

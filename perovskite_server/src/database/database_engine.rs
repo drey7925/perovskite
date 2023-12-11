@@ -54,17 +54,6 @@ impl KeySpace {
     }
 }
 
-/// advisory hint of the store type
-/// Stores are always in order
-pub(crate) enum StoreDurability {
-    // This store can be buffered in memory, coalesced, etc
-    Low,
-    // This store should flush data to the database backend
-    High,
-    // This should force flushing data to disk
-    Maximum,
-}
-
 pub(crate) trait GameDatabase: Send + Sync {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     /// Same as get, but does not keep the value cached in memory.
@@ -76,6 +65,8 @@ pub(crate) trait GameDatabase: Send + Sync {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
     fn delete(&self, key: &[u8]) -> Result<()>;
     fn flush(&self) -> Result<()>;
+
+    fn read_prefix(&self, prefix: &[u8], callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>) -> Result<()>;
 }
 
 /// Test-only game database
@@ -105,6 +96,15 @@ impl GameDatabase for InMemGameDabase {
     }
 
     fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn read_prefix(&self, prefix: &[u8], callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>) -> Result<()> {
+        for (key, value) in self.data.lock().iter() {
+            if key.starts_with(prefix) {
+                callback(key, value)?;
+            }
+        }
         Ok(())
     }
 }
