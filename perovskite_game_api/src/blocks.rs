@@ -169,7 +169,7 @@ enum VariantEffect {
     Liquid,
 }
 
-/// Returned by [BlockBuilder::build_and_deploy_into()]
+/// Represents a block built by [GameBuilder::add_block]
 pub struct BuiltBlock {
     /// The ID of the block
     pub id: BlockId,

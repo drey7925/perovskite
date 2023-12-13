@@ -210,6 +210,12 @@ pub struct BlockType {
     /// Also note that if the item has its own dig handler, that item's dig handler is responsible for calling the
     /// dig_block on the map. The item does not need to dig the same block that was originally dug, e.g. it may dig no block,
     /// a different block than the originally dug one, or multiple blocks.
+    /// 
+    /// **Important:** This is racy, and by the time the handler is invoked, the block may have changed.
+    /// Furthermore, if the inline handler is also set and does change the block, that inline handler's effect
+    /// will also be visible.
+    /// However, if this handler is called, it is guaranteed that at some recent point, this block *was* at the given
+    /// coordinates (even if changed by a race or by its own inline handler), and someone tried to dig it.
     pub dig_handler_full: Option<Box<FullHandler>>,
     /// Called when the block is dug. To update the block on the map, assign a new value to the BlockTypeRef.
     /// To update extended data, use the DerefMut trait on ExtendedDataHolder
@@ -585,8 +591,8 @@ impl BlockTypeManager {
 
     /// Creates a BlockTypeName that refers to the indicated block. See the doc for
     /// [`BlockTypeManager`] and [`BlockTypeName`] for an example of where this should be used.
-    pub fn make_block_name(&self, name: String) -> BlockTypeName {
-        BlockTypeName {
+    pub fn make_block_name(&self, name: String) -> FastBlockName {
+        FastBlockName {
             name,
             base_id: AtomicU32::new(u32::MAX),
         }
@@ -594,7 +600,7 @@ impl BlockTypeManager {
 
     /// Tries to resolve a BlockTypeName from `make_block_name()`. If a block with a matching
     /// name was registered, returns a handle to it. Otherwise, returns None.
-    pub fn resolve_name(&self, block_name: &BlockTypeName) -> Option<BlockTypeHandle> {
+    pub fn resolve_name(&self, block_name: &FastBlockName) -> Option<BlockTypeHandle> {
         let cached = block_name.base_id.load(Ordering::Relaxed);
         if cached == u32::MAX {
             // Need to fill the cache.
@@ -777,11 +783,18 @@ impl TryAsHandle for BlockTypeHandle {
 ///
 /// This can be used to allow blocks to have circular dependencies on each other through their
 /// respective handlers. See the doc for [`BlockTypeManager`] for details and a motivating example.
-pub struct BlockTypeName {
+/// 
+/// For performance, this struct caches the result of the lookup. The caching logic uses atomics, so
+/// only a non-mutable & reference is needed to use this struct.
+/// 
+/// There is no protection against accidentally using a FastBlockName with two different block type
+/// managers, if there are somehow two perovskite worlds runninng in the same process and sharing
+/// objects. However, that should be a rare case.
+pub struct FastBlockName {
     name: String,
     base_id: AtomicU32,
 }
-impl Clone for BlockTypeName {
+impl Clone for FastBlockName {
     fn clone(&self) -> Self {
         Self {
             name: self.name.clone(),
@@ -789,7 +802,7 @@ impl Clone for BlockTypeName {
         }
     }
 }
-impl TryAsHandle for BlockTypeName {
+impl TryAsHandle for FastBlockName {
     fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
         manager.resolve_name(self)
     }
@@ -799,7 +812,7 @@ impl TryAsHandle for &str {
         manager.get_by_name(self)
     }
 }
-impl BlockTypeName {
+impl FastBlockName {
     pub fn new(name: String) -> Self {
         Self {
             name,

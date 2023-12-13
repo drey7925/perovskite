@@ -10,11 +10,13 @@ use crate::{
 use anyhow::Result;
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, BlockTypeName},
+    blocks::{BlockInteractionResult, FastBlockName, FullHandler, InlineContext, InlineHandler},
     event::HandlerContext,
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
+
+use self::events::CircuitHandlerContext;
 
 mod wire;
 
@@ -39,6 +41,13 @@ pub enum ConnectivityRotation {
     RotateNeswWithVariant,
 }
 
+/// The connectivity of a block - a relative coordinate and rotation mode
+/// indicating whether that relative coordinate gets rotated with the variant.
+/// 
+/// Connections are made when blocks reciprocally connect to each other. For example,
+/// a block with connectivity [BlockConnectivity::unrotated(0, 1, 0)] will connect to
+/// a block with connectivity [BlockConnectivity::unrotated(0, -1, 0)] when the two blocks
+/// are adjacent.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlockConnectivity {
     pub dx: i8,
@@ -47,6 +56,7 @@ pub struct BlockConnectivity {
     pub rotation_mode: ConnectivityRotation,
 }
 impl BlockConnectivity {
+    /// Constructs a new connectivity. Coordinates are not rotated
     pub const fn unrotated(dx: i8, dy: i8, dz: i8) -> Self {
         Self {
             dx,
@@ -55,6 +65,7 @@ impl BlockConnectivity {
             rotation_mode: ConnectivityRotation::NoRotation,
         }
     }
+    /// Constructs a new connectivity. Coordinates are rotated based on the variant, same as [crate::blocks::CubeAppearanceBuilder::set_rotate_laterally]
     pub const fn rotated_nesw_with_variant(dx: i8, dy: i8, dz: i8) -> Self {
         Self {
             dx,
@@ -63,6 +74,9 @@ impl BlockConnectivity {
             rotation_mode: ConnectivityRotation::RotateNeswWithVariant,
         }
     }
+    /// Computes the coordinates that this connectivity connects to.
+    ///
+    /// variant is the source block's variant
     pub fn eval(&self, coord: BlockCoordinate, variant: u16) -> Option<BlockCoordinate> {
         let (dx, dz) = match (self.rotation_mode, variant % 4) {
             (ConnectivityRotation::NoRotation, _) => (self.dx, self.dz),
@@ -85,7 +99,77 @@ struct CircuitBlockProperties {
 }
 
 pub trait CircuitBlockCallbacks: Send + Sync + 'static {
-    fn update_connectivity(&self, ctx: &CircuitHandlerContext<'_>, coord: BlockCoordinate) -> Result<()>;
+    /// Called when another block is placed or removed in the vicinity, and may affect
+    /// the connections made by *this* block.
+    ///
+    /// If this block needs to react in some way (e.g. changing its appearance), it should
+    /// do so in this function. To do so, it can use [`get_live_connectivities`] and react accordingly
+    /// (e.g. by updating its variant). Note that updating a variant from this callback is inherently racy
+    /// because another thread could have updated or dug the block - it is wise
+    /// to use compare_and_set_block_predicate. See examples in this crate's source code, e.g. impls in in wire.rs
+    /// (which is a private API, but is worth looking at as an example).
+    fn update_connectivity(
+        &self,
+        ctx: &CircuitHandlerContext<'_>,
+        coord: BlockCoordinate,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// TODO add parameters and document
+    fn on_incoming_edge(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Get the connections being made to the given block at the given coordinate.
+pub fn get_live_connectivities(
+    ctx: &CircuitHandlerContext<'_>,
+    coord: BlockCoordinate,
+) -> smallvec::SmallVec<[BlockConnectivity; 8]> {
+    let circuit_extension = ctx.inner.extension::<CircuitGameStateExtension>().unwrap();
+
+    let block_id = match ctx.game_map().try_get_block(coord) {
+        Some(b) => b,
+        None => {
+            tracing::warn!("We're in a block's event handler, but its chunk is unloaded");
+            return smallvec::smallvec![];
+        }
+    };
+    let connectivity_rules = match circuit_extension.basic_properties.get(&block_id.base_id()) {
+        Some(p) => &p.connectivity,
+        None => {
+            tracing::warn!("block {:?} has no circuit properties but was registered with the circuits plugin", block_id);
+            return smallvec::smallvec![];
+        }
+    };
+    let mut result = smallvec::smallvec![];
+    for connectivity in connectivity_rules {
+        // The variant is irrelevant for wires
+        let neighbor_coord = match connectivity.eval(coord, block_id.variant()) {
+            Some(c) => c,
+            None => continue,
+        };
+        let neighbor_block = match ctx.inner.game_map().try_get_block(neighbor_coord) {
+            Some(b) => b,
+            None => continue,
+        };
+        let neighbor_properties = match circuit_extension
+            .basic_properties
+            .get(&neighbor_block.base_id())
+        {
+            Some(p) => p,
+            None => continue,
+        };
+        if neighbor_properties
+            .connectivity
+            .iter()
+            .any(|x| x.eval(neighbor_coord, neighbor_block.variant()) == Some(coord))
+        {
+            result.push(*connectivity);
+        }
+    }
+    result
 }
 
 /// Private state for the circuits plugin
@@ -94,17 +178,6 @@ struct CircuitGameStateExtension {
     callbacks: FxHashMap<u32, Box<dyn CircuitBlockCallbacks>>,
 }
 impl GameStateExtension for CircuitGameStateExtension {}
-
-/// A context to be used for circuits related callbacks.
-pub struct CircuitHandlerContext<'a> {
-    pub inner: &'a HandlerContext<'a>,
-}
-impl<'a> Deref for CircuitHandlerContext<'a> {
-    type Target = HandlerContext<'a>;
-    fn deref(&self) -> &Self::Target {
-        self.inner
-    }
-}
 
 pub trait CircuitGameBuilder {
     /// Initialize the circuits content of the plugin:
@@ -163,8 +236,12 @@ impl CircuitGameBuilerPrivate for GameBuilder {
             .insert(on.id.base_id(), properties.clone());
         inner.basic_properties.insert(off.id.base_id(), properties);
 
-        inner.callbacks.insert(on.id.base_id(), make_wire_callbacks(on.id));
-        inner.callbacks.insert(off.id.base_id(), make_wire_callbacks(off.id));
+        inner
+            .callbacks
+            .insert(on.id.base_id(), make_wire_callbacks(on.id));
+        inner
+            .callbacks
+            .insert(off.id.base_id(), make_wire_callbacks(off.id));
 
         Ok(())
     }
@@ -203,40 +280,49 @@ pub trait CircuitBlockBuilder {
 impl CircuitBlockBuilder for BlockBuilder {
     fn register_circuit_callbacks(self) -> BlockBuilder {
         self.add_modifier(Box::new(move |bt| {
-            let old_handler = bt.dig_handler_full.take();
+            let old_full_handler: Option<&'static FullHandler> =
+                match bt.dig_handler_full.take().map(Box::leak) {
+                    Some(x) => Some(x),
+                    None => None,
+                };
+            let block_name = FastBlockName::new(bt.client_info.short_name.clone());
             bt.dig_handler_full = Some(Box::new(move |ctx, coord, tool_stack| {
                 // Run the initial handler first, so that the map is updated before the circuit
                 // callbacks are invoked
                 // However, we need the old ID to figure out which nearby blocks need updates
-                let old_id = ctx.game_map().try_get_block(coord).unwrap();
-                let result = match &old_handler {
+                let old_result = match &old_full_handler {
                     Some(old_handler) => old_handler(ctx, coord, tool_stack),
                     None => Ok(BlockInteractionResult::default()),
                 };
-                if let Err(e) = dispatch::dig(old_id, coord, &dispatch::make_circuit_context(&ctx)) {
-                    tracing::error!("Error in dig handler: {}", e);
+                if let Err(e) = dispatch::dig(
+                    ctx.block_types()
+                        .resolve_name(&block_name)
+                        .expect("block name not found, yet we're in its handler"),
+                    coord,
+                    &events::make_root_context(&ctx),
+                ) {
+                    tracing::error!("Error in circuits dig handler: {}", e);
                 }
-                result
+                old_result
             }));
 
             bt.client_info
                 .groups
                 .push(constants::CIRCUITS_GROUP.to_string());
-        })).add_item_modifier(
-            Box::new(|item| {
-                let old_handler = item.place_handler.take();
-                item.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
-                    let result = match &old_handler {
-                        Some(old_handler) => old_handler(ctx, coord, anchor, tool_stack),
-                        None => Ok(None),
-                    };
-                    if let Err(e) = dispatch::place(coord, &dispatch::make_circuit_context(&ctx)) {
-                        tracing::error!("Error in place handler: {}", e);
-                    }
-                    result
-                }))
-            })
-        )
+        }))
+        .add_item_modifier(Box::new(|item| {
+            let old_handler = item.place_handler.take();
+            item.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
+                let result = match &old_handler {
+                    Some(old_handler) => old_handler(ctx, coord, anchor, tool_stack),
+                    None => Ok(None),
+                };
+                if let Err(e) = dispatch::place(coord, &events::make_root_context(&ctx)) {
+                    tracing::error!("Error in place handler: {}", e);
+                }
+                result
+            }))
+        }))
     }
 }
 mod dispatch {
@@ -244,22 +330,15 @@ mod dispatch {
     use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
     use perovskite_server::game_state::event::HandlerContext;
 
-    use super::{constants::CIRCUITS_GROUP, CircuitGameStateExtension, CircuitHandlerContext};
+    use super::{
+        constants::CIRCUITS_GROUP, events::CircuitHandlerContext, CircuitGameStateExtension,
+    };
 
-    pub(crate) fn make_circuit_context<'a>(
-        ctx: &'a HandlerContext<'a>,
-    ) -> CircuitHandlerContext<'a> {
-        CircuitHandlerContext { inner: ctx }
-    }
-
-    pub(crate) fn dig(old_block_id: BlockId, coord: BlockCoordinate, ctx: &CircuitHandlerContext<'_>) -> Result<()> {
-        let block_id = match ctx.game_map().try_get_block(coord) {
-            Some(x) => x,
-            None => {
-                tracing::warn!("We're in a block's event handler, but its chunk is unloaded");
-                return Ok(());
-            }
-        };
+    pub(crate) fn dig(
+        old_block_id: BlockId,
+        coord: BlockCoordinate,
+        ctx: &CircuitHandlerContext<'_>,
+    ) -> Result<()> {
         let ext = ctx
             .extension::<CircuitGameStateExtension>()
             .expect("circuits gamestate extension not found");
@@ -267,16 +346,16 @@ mod dispatch {
             .block_types()
             .block_group(CIRCUITS_GROUP)
             .expect("circuits group not found");
-        let connectivity = match ext.basic_properties.get(&block_id.base_id()) {
+        let connectivity = match ext.basic_properties.get(&old_block_id.base_id()) {
             Some(properties) => &properties.connectivity,
             None => {
-                tracing::warn!("block {:?} has no circuit properties but was registered with the circuits plugin", block_id);
+                tracing::warn!("block {:?} has no circuit properties but was registered with the circuits plugin", old_block_id);
                 return Ok(());
             }
         };
 
         for connection in connectivity {
-            let neighbor = match connection.eval(coord, block_id.variant()) {
+            let neighbor = match connection.eval(coord, old_block_id.variant()) {
                 Some(neighbor) => neighbor,
                 None => continue,
             };
@@ -327,8 +406,8 @@ mod dispatch {
             }
         };
 
-        for connection in dbg!(connectivity) {
-            let neighbor = match dbg!(connection.eval(coord, block_id.variant())) {
+        for connection in connectivity {
+            let neighbor = match connection.eval(coord, block_id.variant()) {
                 Some(neighbor) => neighbor,
                 None => continue,
             };
@@ -336,7 +415,7 @@ mod dispatch {
                 Some(x) => x,
                 None => continue,
             };
-            if dbg!(!circuits_group.contains(neighbor_block)) {
+            if !circuits_group.contains(neighbor_block) {
                 continue;
             }
             let neighbor_callbacks = match ext.callbacks.get(&neighbor_block.base_id()) {
@@ -355,5 +434,65 @@ mod dispatch {
         self_callbacks.update_connectivity(ctx, coord)?;
 
         Ok(())
+    }
+}
+
+/// The circuits plugin requires events to be associated with a context, which tracks
+/// who initiated the event as well as (yet to be defined) ratelimiting/anti-DoS/recursion limiting
+/// measures.
+pub mod events {
+    use std::ops::Deref;
+
+    use perovskite_core::coordinates::BlockCoordinate;
+    use perovskite_server::game_state::event::HandlerContext;
+
+    /// A context to be used for circuits related callbacks.
+    pub struct CircuitHandlerContext<'a> {
+        pub inner: &'a HandlerContext<'a>,
+    }
+    impl<'a> Deref for CircuitHandlerContext<'a> {
+        type Target = HandlerContext<'a>;
+        fn deref(&self) -> &Self::Target {
+            self.inner
+        }
+    }
+
+    /// Creates a new root context for the circuits plugin
+    pub fn make_root_context<'a>(ctx: &'a HandlerContext) -> CircuitHandlerContext<'a> {
+        CircuitHandlerContext { inner: ctx }
+    }
+
+    pub enum EdgeType {
+        /// A signal is being driven from low to high
+        Rising,
+        /// A signal is being driven from high to low
+        Falling,
+        /// The caller is unsure of what kind of edge is being triggered,
+        /// but wants any connected nets to be recalculated.
+        Unknown,
+    }
+
+    /// Signals that a block's digital output is (potentially) changing.
+    /// This can be for any reason, such as a button being pressed, a sensor's
+    /// state changing, or a block being placed with an initial high output state.
+    ///
+    /// If the connection is made directly to another block, an event will be delivered
+    /// directly to it. If the connection is made to a wire, the wire will be recalculated
+    /// and any connected inputs will be signalled if the net's state transitioned.
+    ///
+    /// If edge is set to Rising or Falling, then net recalculations may be skipped as an
+    /// optimization. It's always safe to set `[EdgeType::Unknown]`.
+    ///
+    /// Args:
+    ///     coord: The coordinate of the block whose output is changing
+    ///     connection: The coordinate of the block that the output is connected to
+    ///     edge: The type of edge that triggered the signal.
+    pub fn transmit_edge(
+        ctx: &CircuitHandlerContext<'_>,
+        coord: BlockCoordinate,
+        connection: BlockCoordinate,
+        _edge: EdgeType,
+    ) {
+        // TODO: use the edge type as an optimization hint
     }
 }

@@ -13,8 +13,9 @@ use crate::{
 };
 
 use super::{
-    BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks, CircuitBlockProperties,
-    CircuitGameBuilerPrivate, CircuitGameStateExtension, CircuitHandlerContext,
+    get_live_connectivities, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
+    CircuitBlockProperties, CircuitGameBuilerPrivate, CircuitGameStateExtension,
+    CircuitHandlerContext,
 };
 
 pub const WIRE_BLOCK_OFF: StaticBlockName = StaticBlockName("circuits:wire_off");
@@ -153,50 +154,6 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn update_wire_connectivity(
-    ctx: &CircuitHandlerContext<'_>,
-    coord: BlockCoordinate,
-    base_id: BlockId,
-) -> Result<()> {
-    let mut resulting_variant = 0;
-    let circuit_extension = ctx.inner.extension::<CircuitGameStateExtension>().unwrap();
-
-    for (connectivity, self_variant) in WIRE_CONNECTIVITY_RULES {
-        // The variant is irrelevant for wires
-        let neighbor_coord = match connectivity.eval(coord, 0) {
-            Some(c) => c,
-            None => continue,
-        };
-        let neighbor_block = match ctx.inner.game_map().try_get_block(neighbor_coord) {
-            Some(b) => b,
-            None => continue,
-        };
-        let neighbor_properties = match circuit_extension
-            .basic_properties
-            .get(&neighbor_block.base_id())
-        {
-            Some(p) => p,
-            None => continue,
-        };
-        if neighbor_properties
-            .connectivity
-            .iter()
-            .any(|x| x.eval(neighbor_coord, neighbor_block.variant()) == Some(coord))
-        {
-            resulting_variant |= self_variant;
-        }
-    }
-    ctx.game_map().compare_and_set_block_predicate(
-        coord,
-        |block, _, _| Ok(block.base_id() == base_id.base_id()),
-        base_id
-            .with_variant(resulting_variant as u16)
-            .context("Invalid variant generated")?,
-        None,
-    )?;
-    Ok(())
-}
-
 pub(crate) struct WireCallbacksImpl {
     pub(crate) base_id: BlockId,
 }
@@ -206,6 +163,23 @@ impl CircuitBlockCallbacks for WireCallbacksImpl {
         ctx: &CircuitHandlerContext<'_>,
         coord: BlockCoordinate,
     ) -> Result<()> {
-        update_wire_connectivity(ctx, coord, self.base_id)
+        let mut resulting_variant = 0;
+
+        let connectivities = get_live_connectivities(ctx, coord);
+
+        for (connectivity, self_variant) in WIRE_CONNECTIVITY_RULES {
+            if connectivities.contains(&connectivity) {
+                resulting_variant |= self_variant;
+            }
+        }
+        ctx.game_map().compare_and_set_block_predicate(
+            coord,
+            |block, _, _| Ok(block.base_id() == self.base_id.base_id()),
+            self.base_id
+                .with_variant(resulting_variant as u16)
+                .context("Invalid variant generated")?,
+            None,
+        )?;
+        Ok(())
     }
 }

@@ -1104,7 +1104,7 @@ impl ServerGameMap {
     /// Warning: If the mutator panics, the extended data may be lost.
     pub fn mutate_block_atomically<F, T>(&self, coord: BlockCoordinate, mutator: F) -> Result<T>
     where
-        F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
+        F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
@@ -1252,8 +1252,8 @@ impl ServerGameMap {
         get_block_full_handler: G,
     ) -> Result<BlockInteractionResult>
     where
-        F: FnOnce(&blocks::BlockType) -> Option<&blocks::InlineHandler>,
-        G: FnOnce(&blocks::BlockType) -> Option<&blocks::FullHandler>,
+        F: Fn(&blocks::BlockType) -> Option<&blocks::InlineHandler>,
+        G: Fn(&blocks::BlockType) -> Option<&blocks::FullHandler>,
     {
         let game_state = self.game_state();
         let tick = game_state.tick();
@@ -1278,6 +1278,8 @@ impl ServerGameMap {
                 Ok((blocktype, Default::default()))
             }
         })?;
+
+        // possible future optimization: If we don't have an inline handler, don't bother locking, just use try_get_block
         // we need this to happen outside of mutate_block_atomically (which holds a chunk lock) to avoid a deadlock.
         if let Some(full_handler) = get_block_full_handler(blocktype) {
             let ctx = HandlerContext {
