@@ -2,9 +2,12 @@
 // wires need to actually search through their topology to propagate effects near-instantaneously.
 // Therefore there's a lot of special logic in here that won't apply to other blocks.
 
+use std::collections::VecDeque;
+
 use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::event::HandlerContext;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
@@ -15,7 +18,7 @@ use crate::{
 use super::{
     get_live_connectivities, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitBlockProperties, CircuitGameBuilerPrivate, CircuitGameStateExtension,
-    CircuitHandlerContext,
+    CircuitHandlerContext, PinState,
 };
 
 pub const WIRE_BLOCK_OFF: StaticBlockName = StaticBlockName("circuits:wire_off");
@@ -32,25 +35,26 @@ const VARIANT_XMINUS_ABOVE: u32 = 32;
 const VARIANT_ZPLUS_ABOVE: u32 = 64;
 const VARIANT_ZMINUS_ABOVE: u32 = 128;
 
-const WIRE_CONNECTIVITY_RULES: [(BlockConnectivity, u32); 12] = [
+// IDs are the variants that should be enabled when this connection is made
+const WIRE_CONNECTIVITY_RULES: [BlockConnectivity; 12] = [
     // Connections on the same level
-    (BlockConnectivity::unrotated(1, 0, 0), VARIANT_XPLUS),
-    (BlockConnectivity::unrotated(-1, 0, 0), VARIANT_XMINUS),
-    (BlockConnectivity::unrotated(0, 0, 1), VARIANT_ZPLUS),
-    (BlockConnectivity::unrotated(0, 0, -1), VARIANT_ZMINUS),
+    BlockConnectivity::unrotated(1, 0, 0, VARIANT_XPLUS),
+    BlockConnectivity::unrotated(-1, 0, 0, VARIANT_XMINUS),
+    BlockConnectivity::unrotated(0, 0, 1, VARIANT_ZPLUS),
+    BlockConnectivity::unrotated(0, 0, -1, VARIANT_ZMINUS),
     // Connections to one above
-    (BlockConnectivity::unrotated(1, 1, 0), VARIANT_XPLUS_ABOVE),
-    (BlockConnectivity::unrotated(-1, 1, 0), VARIANT_XMINUS_ABOVE),
-    (BlockConnectivity::unrotated(0, 1, 1), VARIANT_ZPLUS_ABOVE),
-    (BlockConnectivity::unrotated(0, 1, -1), VARIANT_ZMINUS_ABOVE),
+    BlockConnectivity::unrotated(1, 1, 0, VARIANT_XPLUS_ABOVE),
+    BlockConnectivity::unrotated(-1, 1, 0, VARIANT_XMINUS_ABOVE),
+    BlockConnectivity::unrotated(0, 1, 1, VARIANT_ZPLUS_ABOVE),
+    BlockConnectivity::unrotated(0, 1, -1, VARIANT_ZMINUS_ABOVE),
     // Connections to one below
     // We don't need another variant because these don't draw anything different
     // from the normal same-height variants, but we do need to allow connectivity to
     // one spot down
-    (BlockConnectivity::unrotated(1, -1, 0), VARIANT_XPLUS),
-    (BlockConnectivity::unrotated(-1, -1, 0), VARIANT_XMINUS),
-    (BlockConnectivity::unrotated(0, -1, 1), VARIANT_ZPLUS),
-    (BlockConnectivity::unrotated(0, -1, -1), VARIANT_ZMINUS),
+    BlockConnectivity::unrotated(1, -1, 0, VARIANT_XPLUS),
+    BlockConnectivity::unrotated(-1, -1, 0, VARIANT_XMINUS),
+    BlockConnectivity::unrotated(0, -1, 1, VARIANT_ZPLUS),
+    BlockConnectivity::unrotated(0, -1, -1, VARIANT_ZMINUS),
 ];
 
 fn build_wire_aabox(texture: TextureName) -> AxisAlignedBoxesAppearanceBuilder {
@@ -144,10 +148,10 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     builder.register_wire_private(
-        wire_off,
         wire_on,
+        wire_off,
         CircuitBlockProperties {
-            connectivity: WIRE_CONNECTIVITY_RULES.iter().map(|(c, _)| *c).collect(),
+            connectivity: WIRE_CONNECTIVITY_RULES.to_vec(),
         },
     )?;
 
@@ -156,6 +160,7 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
 
 pub(crate) struct WireCallbacksImpl {
     pub(crate) base_id: BlockId,
+    pub(crate) state: PinState,
 }
 impl CircuitBlockCallbacks for WireCallbacksImpl {
     fn update_connectivity(
@@ -167,19 +172,143 @@ impl CircuitBlockCallbacks for WireCallbacksImpl {
 
         let connectivities = get_live_connectivities(ctx, coord);
 
-        for (connectivity, self_variant) in WIRE_CONNECTIVITY_RULES {
+        for connectivity in WIRE_CONNECTIVITY_RULES {
             if connectivities.contains(&connectivity) {
-                resulting_variant |= self_variant;
+                resulting_variant |= connectivity.id;
             }
         }
-        ctx.game_map().compare_and_set_block_predicate(
-            coord,
-            |block, _, _| Ok(block.base_id() == self.base_id.base_id()),
-            self.base_id
-                .with_variant(resulting_variant as u16)
-                .context("Invalid variant generated")?,
-            None,
-        )?;
+        
+        let extension = ctx.circuits_ext();
+        let on_base_id = extension.basic_wire_on.0;
+        let off_base_id = extension.basic_wire_off.0;
+        ctx.game_map().mutate_block_atomically(coord, |block, _| {
+            // It's important to check against both the on and off base ids
+            // A state transition might have happened from another callback
+            if block.base_id() == off_base_id || block.base_id() == on_base_id {
+                *block = block
+                    .with_variant(resulting_variant as u16)
+                    .context("Invalid variant generated")?;
+            }
+
+            Ok(())
+        })?;
         Ok(())
     }
+
+    fn sample_pin(
+        &self,
+        _ctx: &CircuitHandlerContext<'_>,
+        _coord: BlockCoordinate,
+        _destination: BlockCoordinate,
+    ) -> super::PinState {
+        self.state
+    }
+}
+
+pub(crate) fn recalculate_wire(
+    ctx: &CircuitHandlerContext<'_>,
+    // The first block in the wire that got signalled
+    first_wire: BlockCoordinate,
+    // The coordinate of the block that signalled us
+    who_signalled: BlockCoordinate,
+    new_state: super::PinState,
+) -> Result<()> {
+    // TODO: use the edge type as an optimization hint
+    // Essentially, do a breadth-first search of the wire, starting at first_wire. Signal all
+    // blocks that are attached and undergo a transition, with the exception of the one that
+    // signalled us on the same exact port.
+
+    let circuits_ext = ctx.circuits_ext();
+
+    // Visited blocks that we need to signal: (dest, from) -> callback to signal
+    let mut need_transition_signals: FxHashMap<
+        (BlockCoordinate, BlockCoordinate),
+        &Box<dyn CircuitBlockCallbacks>,
+    > = FxHashMap::default();
+    // Visited wires
+    let mut visited: FxHashSet<BlockCoordinate> = FxHashSet::default();
+    // (dest, prev)
+    // For a wire, we just explore dest
+    // For a non-wire block, we sample that block's signal driven into dest
+    let mut queue: VecDeque<(BlockCoordinate, BlockCoordinate)> = VecDeque::new();
+
+    queue.push_back((first_wire, who_signalled));
+
+    // let starting_block = match ctx.game_map().try_get_block(first_wire) {
+    //     Some(block) => block,
+    //     None => {
+    //         return Ok(());
+    //     }
+    // };
+    // if starting_block.base_id() == circuits_ext.basic_wire_off.0 && new_state == PinState::Low {
+    //     // We're already off, so we don't need to do anything
+    //     return Ok(());
+    // }
+    // if starting_block.base_id() == circuits_ext.basic_wire_on.0 && new_state == PinState::High {
+    //     // We're already on, so we don't need to do anything
+    //     return Ok(());
+    // }
+
+    let mut any_driven_high = false;
+    while let Some((coord, prev)) = queue.pop_front() {
+        let block = match ctx.game_map().try_get_block(coord) {
+            Some(block) => block,
+            None => {
+                continue;
+            }
+        };
+
+        if block.base_id() == circuits_ext.basic_wire_off.0
+            || block.base_id() == circuits_ext.basic_wire_on.0
+        {
+            if visited.contains(&coord) {
+                continue;
+            }
+            visited.insert(coord);
+            for connectivity in WIRE_CONNECTIVITY_RULES {
+                if let Some(neighbor) = connectivity.eval(coord, 0) {
+                    queue.push_back((neighbor, coord));
+                }
+            }
+        } else {
+            // Not a wire.
+            let callbacks = match circuits_ext.callbacks.get(&block.base_id()) {
+                Some(callbacks) => callbacks,
+                None => {
+                    continue;
+                }
+            };
+            // prev is the wire we just explored
+            let drive = callbacks.sample_pin(ctx, coord, prev);
+            if drive == super::PinState::High {
+                any_driven_high = true;
+            }
+
+            // todo optimize based on the actual transition
+            need_transition_signals.insert((coord, prev), callbacks);
+        }
+    }
+    for coord in visited {
+        ctx.game_map().mutate_block_atomically(coord, |block, _| {
+            if any_driven_high && block.base_id() == circuits_ext.basic_wire_off.0 {
+                *block = circuits_ext.basic_wire_on.with_variant(block.variant())?;
+            }
+            if (!any_driven_high) && block.base_id() == circuits_ext.basic_wire_on.0 {
+                *block = circuits_ext.basic_wire_off.with_variant(block.variant())?;
+            }
+            Ok(())
+        })?;
+    }
+
+    let pin_state = if any_driven_high {
+        super::PinState::High
+    } else {
+        super::PinState::Low
+    };
+
+    for ((coord, prev), callbacks) in need_transition_signals {
+        callbacks.on_incoming_edge(ctx, coord, prev, pin_state)?;
+    }
+
+    Ok(())
 }

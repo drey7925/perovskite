@@ -210,7 +210,7 @@ pub struct BlockType {
     /// Also note that if the item has its own dig handler, that item's dig handler is responsible for calling the
     /// dig_block on the map. The item does not need to dig the same block that was originally dug, e.g. it may dig no block,
     /// a different block than the originally dug one, or multiple blocks.
-    /// 
+    ///
     /// **Important:** This is racy, and by the time the handler is invoked, the block may have changed.
     /// Furthermore, if the inline handler is also set and does change the block, that inline handler's effect
     /// will also be visible.
@@ -637,18 +637,16 @@ impl BlockTypeManager {
     }
 
     /// Returns a block group by name, or None if the block group is not registered.
-    /// 
+    ///
     /// The block group must have been registered using [`register_block_group`]. Simply
     /// being defined in a block type is not enough.
-    /// 
+    ///
     /// Panics:
     /// This function will panic if called before the game starts up.
     pub fn block_group<'a>(&'a self, block_group: &str) -> Option<FastBlockGroup<'a>> {
-        self
-                .fast_block_groups
-                .get(block_group).map(|x| FastBlockGroup {
-            blocks: x
-        })
+        self.fast_block_groups
+            .get(block_group)
+            .map(|x| FastBlockGroup { blocks: x })
     }
 
     // Performs some last setup before the block manager becomes immutable.
@@ -669,6 +667,35 @@ pub struct FastBlockGroup<'a> {
     blocks: &'a bitvec::vec::BitVec,
 }
 impl FastBlockGroup<'_> {
+    /// Returns true if the block is in the group, or false if the block is not in the group
+    /// and/or the block ID is out of range.
+    pub fn contains(&self, block_id: BlockId) -> bool {
+        *self
+            .blocks
+            .get(block_id.index())
+            .as_deref()
+            .unwrap_or(&false)
+    }
+    /// Clone the block group into an owned version
+    fn to_owned(&self) -> OwnedFastBlockGroup {
+        OwnedFastBlockGroup {
+            blocks: self.blocks.clone(),
+        }
+    }
+}
+
+pub struct OwnedFastBlockGroup {
+    blocks: bitvec::vec::BitVec,
+}
+impl OwnedFastBlockGroup {
+    /// Construct a placeholder, for ease of constructing game state extensions
+    /// during the pre-build phase. Contains no blocks.
+    pub fn new_empty() -> Self {
+        Self {
+            blocks: bitvec::vec::BitVec::new(),
+        }
+    }
+
     /// Returns true if the block is in the group, or false if the block is not in the group
     /// and/or the block ID is out of range.
     pub fn contains(&self, block_id: BlockId) -> bool {
@@ -783,10 +810,10 @@ impl TryAsHandle for BlockTypeHandle {
 ///
 /// This can be used to allow blocks to have circular dependencies on each other through their
 /// respective handlers. See the doc for [`BlockTypeManager`] for details and a motivating example.
-/// 
+///
 /// For performance, this struct caches the result of the lookup. The caching logic uses atomics, so
 /// only a non-mutable & reference is needed to use this struct.
-/// 
+///
 /// There is no protection against accidentally using a FastBlockName with two different block type
 /// managers, if there are somehow two perovskite worlds runninng in the same process and sharing
 /// objects. However, that should be a rare case.
