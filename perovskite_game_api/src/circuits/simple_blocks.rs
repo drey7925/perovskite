@@ -10,8 +10,8 @@ use crate::{
 };
 
 use super::{
-    get_pin_state, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
-    CircuitGameBuilder,
+    get_incoming_pin_states, get_pin_state, BlockConnectivity, CircuitBlockBuilder,
+    CircuitBlockCallbacks, CircuitGameBuilder,
 };
 
 const CIRCUITS_SOURCE_BLOCK: StaticBlockName = StaticBlockName("circuits:source");
@@ -83,21 +83,13 @@ impl CircuitBlockCallbacks for SimpleLampCallbacks {
         &self,
         ctx: &super::events::CircuitHandlerContext<'_>,
         coord: perovskite_core::coordinates::BlockCoordinate,
-        from: perovskite_core::coordinates::BlockCoordinate,
-        state: super::PinState,
+        _from: perovskite_core::coordinates::BlockCoordinate,
+        _state: super::PinState,
     ) -> Result<()> {
-        let mut any_high = false;
-        for connection in CIRCUITS_SOURCE_CONNECTIVITIES {
-            let neighbor = match connection.eval(coord, 0) {
-                Some(neighbor) => neighbor,
-                None => continue,
-            };
-            if get_pin_state(ctx, neighbor, coord) == super::PinState::High {
-                any_high = true;
-                break;
-            }
-        }
-        let desired = if any_high {
+        let desired = if get_incoming_pin_states(ctx, coord)
+            .iter()
+            .any(|(_, _, state)| state == &super::PinState::High)
+        {
             self.lamp_on
         } else {
             self.lamp_off

@@ -170,12 +170,8 @@ impl CircuitBlockCallbacks for WireCallbacksImpl {
     ) -> Result<()> {
         let mut resulting_variant = 0;
 
-        let connectivities = get_live_connectivities(ctx, coord);
-
-        for connectivity in WIRE_CONNECTIVITY_RULES {
-            if connectivities.contains(&connectivity) {
-                resulting_variant |= connectivity.id;
-            }
+        for (connectivity, _) in get_live_connectivities(ctx, coord) {
+            resulting_variant |= connectivity.id;
         }
         
         let extension = ctx.circuits_ext();

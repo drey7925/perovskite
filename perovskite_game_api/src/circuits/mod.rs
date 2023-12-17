@@ -188,10 +188,13 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
 }
 
 /// Get the connections being made to the given block at the given coordinate.
+/// 
+/// This includes only those connections that actually connect to a block which is able to connect back.
+#[inline]
 pub fn get_live_connectivities(
     ctx: &CircuitHandlerContext<'_>,
     coord: BlockCoordinate,
-) -> smallvec::SmallVec<[BlockConnectivity; 8]> {
+) -> smallvec::SmallVec<[(BlockConnectivity, BlockCoordinate); 8]> {
     let circuit_extension = ctx.circuits_ext();
 
     let block_id = match ctx.game_map().try_get_block(coord) {
@@ -234,7 +237,64 @@ pub fn get_live_connectivities(
             .iter()
             .any(|x| x.eval(neighbor_coord, neighbor_block.variant()) == Some(coord))
         {
-            result.push(*connectivity);
+            result.push((*connectivity, neighbor_coord));
+        }
+    }
+    result
+}
+
+
+/// Get the connections being made to the given block at the given coordinate.
+/// 
+/// This includes only those connections that actually connect to a block which is able to connect back.
+#[inline]
+pub fn get_incoming_pin_states(
+    ctx: &CircuitHandlerContext<'_>,
+    coord: BlockCoordinate,
+) -> smallvec::SmallVec<[(BlockConnectivity, BlockCoordinate, PinState); 8]> {
+    let circuit_extension = ctx.circuits_ext();
+
+    let block_id = match ctx.game_map().try_get_block(coord) {
+        Some(b) => b,
+        None => {
+            tracing::warn!("We're in a block's event handler, but its chunk is unloaded");
+            return smallvec::smallvec![];
+        }
+    };
+    let connectivity_rules = match circuit_extension.basic_properties.get(&block_id.base_id()) {
+        Some(p) => &p.connectivity,
+        None => {
+            tracing::warn!(
+                "block {:?} has no circuit properties but was registered with the circuits plugin",
+                block_id
+            );
+            return smallvec::smallvec![];
+        }
+    };
+    let mut result = smallvec::smallvec![];
+    for connectivity in connectivity_rules {
+        // The variant is irrelevant for wires
+        let neighbor_coord = match connectivity.eval(coord, block_id.variant()) {
+            Some(c) => c,
+            None => continue,
+        };
+        let neighbor_block = match ctx.inner.game_map().try_get_block(neighbor_coord) {
+            Some(b) => b,
+            None => continue,
+        };
+        let neighbor_properties = match circuit_extension
+            .basic_properties
+            .get(&neighbor_block.base_id())
+        {
+            Some(p) => p,
+            None => continue,
+        };
+        if neighbor_properties
+            .connectivity
+            .iter()
+            .any(|x| x.eval(neighbor_coord, neighbor_block.variant()) == Some(coord))
+        {
+            result.push((*connectivity, neighbor_coord, get_pin_state(ctx, neighbor_coord, coord)));
         }
     }
     result
@@ -606,6 +666,10 @@ pub mod events {
     }
     impl CircuitHandlerContext<'_> {
         pub fn consume_ttl(&self) -> Self {
+            if self.ttl == 0 {
+                // TODO: we need a better way of handling this
+                panic!("ttl exceeded");
+            }
             CircuitHandlerContext {
                 inner: self.inner,
                 ttl: self.ttl - 1,
