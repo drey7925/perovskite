@@ -350,7 +350,7 @@ impl CircuitGameBuilder for GameBuilder {
 
         self.inner
             .blocks_mut()
-            .register_block_group(constants::CIRCUITS_GROUP);
+            .register_fast_block_group(constants::CIRCUITS_GROUP);
 
         wire::register_wire(self)?;
         simple_blocks::register_simple_blocks(self)?;
@@ -532,7 +532,7 @@ mod dispatch {
         let ext = ctx.circuits_ext();
         let circuits_group = ctx
             .block_types()
-            .block_group(CIRCUITS_GROUP)
+            .fast_block_group(CIRCUITS_GROUP)
             .expect("circuits group not found");
         let connectivity = match ext.basic_properties.get(&old_block_id.base_id()) {
             Some(properties) => &properties.connectivity,
@@ -585,7 +585,7 @@ mod dispatch {
             .expect("circuits gamestate extension not found");
         let circuits_group = ctx
             .block_types()
-            .block_group(CIRCUITS_GROUP)
+            .fast_block_group(CIRCUITS_GROUP)
             .expect("circuits group not found");
         let connectivity = match ext.basic_properties.get(&block_id.base_id()) {
             Some(properties) => &properties.connectivity,

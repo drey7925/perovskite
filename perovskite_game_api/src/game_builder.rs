@@ -23,7 +23,7 @@ use std::{
 use perovskite_core::{
     block_id::BlockId,
     constants::{
-        block_groups::DEFAULT_GAS, blocks::AIR, items::default_item_interaction_rules,
+        block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE}, blocks::AIR, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
     protocol::{
@@ -89,7 +89,7 @@ use perovskite_server::server as server_api;
 
 use crate::{
     blocks::{
-        BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator, FallingBlocksPropagator,
+        BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator,
         LiquidPropagator,
     },
     maybe_export,
@@ -183,6 +183,7 @@ impl GameBuilder {
     }
 
     fn pre_build(&mut self) -> Result<()> {
+        self.inner.blocks_mut().register_fast_block_group(TRIVIALLY_REPLACEABLE);
         for (&period, liquid_group) in self.liquids_by_flow_time.iter() {
             self.inner.add_timer(
                 format!("liquid_flow_{}", period.as_micros()),
@@ -249,7 +250,7 @@ impl GameBuilder {
             render_info: Some(RenderInfo::Empty(EMPTY)),
             physics_info: Some(PhysicsInfo::Air(EMPTY)),
             base_dig_time: 1.0,
-            groups: vec![DEFAULT_GAS.to_string()],
+            groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
             wear_multiplier: 1.0,
             light_emission: 0,
             allow_light_propagation: true,

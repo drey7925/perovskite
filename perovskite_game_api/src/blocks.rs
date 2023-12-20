@@ -20,7 +20,7 @@ use anyhow::Result;
 use perovskite_core::{
     block_id::BlockId,
     constants::{
-        block_groups::{self, DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID},
+        block_groups::{self, DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID, TRIVIALLY_REPLACEABLE},
         items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
@@ -555,7 +555,6 @@ impl BlockBuilder {
             item_name,
         })
     }
-
 }
 
 #[derive(Clone)]
@@ -722,51 +721,6 @@ pub mod variants {
     }
 }
 
-pub(crate) struct FallingBlocksPropagator {
-    pub(crate) blocks: Vec<BlockId>,
-    pub(crate) air: BlockTypeHandle,
-}
-impl BulkUpdateCallback for FallingBlocksPropagator {
-    fn bulk_update_callback(
-        &self,
-        _ctx: &HandlerContext,
-        _chunk_coordinate: ChunkCoordinate,
-        _timer_state: &TimerState,
-        chunk: &mut MapChunk,
-        _neighbors: Option<&ChunkNeighbors>,
-    ) -> Result<()> {
-        println!("Propagating falling blocks");
-        // consider whether we might have enough falling blocks that a linear scan becomes slow
-        for x in 0..16 {
-            for z in 0..16 {
-                // This doesn't cover edges. Edges are inherently more expensive.
-                for y in (0..15).rev() {
-                    // Reverse iteration isn't the most efficient, but 16 entries of four bytes
-                    // is 64 bytes, which fits in a cache line.
-                    //
-                    // Y covers 0 to 15. The block just above this Y covers 1 to 16.
-                    let bottom = ChunkOffset { x, y, z };
-                    let top = ChunkOffset { x, y: y + 1, z };
-                    let bottom_block = chunk.get_block(bottom);
-                    let top_block = chunk.get_block(top);
-                    // TODO this shouldn't just check for air - it should check for
-                    // liquids and any other blocks that opt into being crushed by
-                    // falling objects.
-                    //
-                    // This might take some design work, including additional callbacks
-                    // added to the block type that the falling block falls into
-                    if bottom_block == self.air
-                        && top_block != self.air
-                        && self.blocks.contains(&top_block)
-                    {
-                        chunk.swap_blocks(bottom, top);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
 pub(crate) struct FallingBlocksChunkEdgePropagator {
     pub(crate) blocks: Vec<BlockId>,
     pub(crate) air: BlockTypeHandle,
@@ -774,13 +728,18 @@ pub(crate) struct FallingBlocksChunkEdgePropagator {
 impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
     fn vertical_neighbor_callback(
         &self,
-        _ctx: &HandlerContext,
+        ctx: &HandlerContext,
         _upper: ChunkCoordinate,
         _lower: ChunkCoordinate,
         upper_chunk: &mut MapChunk,
         lower_chunk: &mut MapChunk,
         _timer_state: &TimerState,
     ) -> Result<()> {
+        let replaceable_blocks = ctx
+            .block_types()
+            .fast_block_group(TRIVIALLY_REPLACEABLE)
+            .expect("Missing replaceable block group");
+
         let blocks = self.blocks.iter().map(|&b| b.base_id()).collect::<Vec<_>>();
         //println!("Propagating falling blocks");
         // consider whether we might have enough falling blocks that a linear scan becomes slow
@@ -796,18 +755,16 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                     let top = ChunkOffset { x, y: y + 1, z };
                     let bottom_block = upper_chunk.get_block(bottom);
                     let top_block = upper_chunk.get_block(top);
-                    // TODO this shouldn't just check for air - it should check for
-                    // liquids and any other blocks that opt into being crushed by
-                    // falling objects.
-                    //
-                    // This might take some design work, including additional callbacks
+                    // TODO enhance this. we need some additional callbacks
                     // added to the block type that the falling block falls into, to
-                    // actually damage/break the bottom block.
-                    if bottom_block == self.air
-                        && top_block != self.air
+                    // actually damage/break the bottom block. For now we just replace it
+                    // with the falling block and leave air where the falling block fell from
+                    if top_block != self.air
+                        && replaceable_blocks.contains(bottom_block)
                         && blocks.contains(&top_block.base_id())
                     {
                         upper_chunk.swap_blocks(bottom, top);
+                        upper_chunk.set_block(top, self.air, None);
                     }
                 }
                 // then the seam
@@ -815,9 +772,9 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                 let upper_coord = ChunkOffset { x, y: 0, z };
                 let bottom_block = lower_chunk.get_block(lower_coord);
                 let top_block = upper_chunk.get_block(upper_coord);
-                if bottom_block == self.air
-                    && top_block != self.air
-                    && blocks.contains(&top_block.base_id())
+                if top_block != self.air
+                        && replaceable_blocks.contains(bottom_block)
+                        && blocks.contains(&top_block.base_id())
                 {
                     MapChunk::swap_blocks_across_chunks(
                         lower_chunk,
@@ -825,6 +782,7 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                         lower_coord,
                         upper_coord,
                     );
+                    upper_chunk.set_block(upper_coord, self.air, None);
                 }
 
                 // and now for the lower chunk
@@ -834,11 +792,12 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                     let bottom_block: BlockId = lower_chunk.get_block(bottom);
                     let top_block = lower_chunk.get_block(top);
 
-                    if bottom_block.equals_ignore_variant(self.air)
-                        && !top_block.equals_ignore_variant(self.air)
+                    if top_block != self.air
+                        && replaceable_blocks.contains(bottom_block)
                         && blocks.contains(&top_block.base_id())
                     {
                         lower_chunk.swap_blocks(bottom, top);
+                        lower_chunk.set_block(top, self.air, None);
                     }
                 }
             }

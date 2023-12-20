@@ -26,7 +26,7 @@ use crate::{
 use anyhow::Result;
 use perovskite_core::{
     constants::{
-        block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
+        block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
         item_groups::HIDDEN_FROM_CREATIVE,
     },
     coordinates::ChunkOffset,
@@ -604,6 +604,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
+        .add_block_group(TRIVIALLY_REPLACEABLE)
         .add_item_group("testonly_wet")
         .set_cube_appearance(
             CubeAppearanceBuilder::new()

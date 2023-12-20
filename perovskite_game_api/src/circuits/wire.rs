@@ -230,21 +230,6 @@ pub(crate) fn recalculate_wire(
 
     queue.push_back((first_wire, who_signalled));
 
-    // let starting_block = match ctx.game_map().try_get_block(first_wire) {
-    //     Some(block) => block,
-    //     None => {
-    //         return Ok(());
-    //     }
-    // };
-    // if starting_block.base_id() == circuits_ext.basic_wire_off.0 && new_state == PinState::Low {
-    //     // We're already off, so we don't need to do anything
-    //     return Ok(());
-    // }
-    // if starting_block.base_id() == circuits_ext.basic_wire_on.0 && new_state == PinState::High {
-    //     // We're already on, so we don't need to do anything
-    //     return Ok(());
-    // }
-
     let mut any_driven_high = false;
     while let Some((coord, prev)) = queue.pop_front() {
         let block = match ctx.game_map().try_get_block(coord) {
@@ -261,10 +246,8 @@ pub(crate) fn recalculate_wire(
                 continue;
             }
             visited.insert(coord);
-            for connectivity in WIRE_CONNECTIVITY_RULES {
-                if let Some(neighbor) = connectivity.eval(coord, 0) {
-                    queue.push_back((neighbor, coord));
-                }
+            for (_, neighbor) in get_live_connectivities(ctx, coord) {
+                queue.push_back((neighbor, coord));
             }
         } else {
             // Not a wire.

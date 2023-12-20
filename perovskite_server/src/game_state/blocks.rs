@@ -631,7 +631,7 @@ impl BlockTypeManager {
     /// a plugin expects to check whether a block_id is in a group in a performance-critical
     /// situation (e.g. tight loop), using [`has_block_group`] will avoid multiple hashtable
     /// lookups and vector scans in the normal block ID -> block def -> group list process.
-    pub fn register_block_group(&mut self, block_group: &str) {
+    pub fn register_fast_block_group(&mut self, block_group: &str) {
         self.fast_block_groups
             .insert(block_group.to_string(), bitvec::vec::BitVec::new());
     }
@@ -643,7 +643,7 @@ impl BlockTypeManager {
     ///
     /// Panics:
     /// This function will panic if called before the game starts up.
-    pub fn block_group<'a>(&'a self, block_group: &str) -> Option<FastBlockGroup<'a>> {
+    pub fn fast_block_group<'a>(&'a self, block_group: &str) -> Option<FastBlockGroup<'a>> {
         self.fast_block_groups
             .get(block_group)
             .map(|x| FastBlockGroup { blocks: x })

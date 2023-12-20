@@ -24,6 +24,8 @@ pub mod block_groups {
     pub const DEFAULT_LIQUID: &str = "default:liquid";
     /// Block group for all gas-like blocks (e.g. air, clouds)
     pub const DEFAULT_GAS: &str = "default:gas";
+    /// Blocks that can be replaced by a conflicting block placement (e.g. water, air)
+    pub const TRIVIALLY_REPLACEABLE: &str = "default:trivially_replaceable";
 
     /// Blocks that cannot be dug by hand or using a generic non-tool item
     pub const TOOL_REQUIRED: &str = "default:tool_required";
