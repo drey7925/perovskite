@@ -40,7 +40,7 @@ use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
     client_ui::UiElementContainer,
     game_map::{BulkUpdateCallback, TimerState},
-    items::{Item, ItemStack},
+    items::{Item, ItemStack}, event::HandlerContext,
 };
 
 use super::{
@@ -707,32 +707,4 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     make_slab(game_builder, &desert_stone, true)?;
 
     Ok(())
-}
-
-struct TestSpamDirtStoneCallback {
-    dirt: BlockTypeHandle,
-    stone: BlockTypeHandle,
-}
-impl BulkUpdateCallback for TestSpamDirtStoneCallback {
-    fn bulk_update_callback(
-        &self,
-        _chunk_coordinate: perovskite_core::coordinates::ChunkCoordinate,
-        _staet: &TimerState,
-        _game_state: &std::sync::Arc<perovskite_server::game_state::GameState>,
-        chunk: &mut perovskite_server::game_state::game_map::MapChunk,
-        _neighbors: Option<&perovskite_server::game_state::game_map::ChunkNeighbors>,
-    ) -> Result<()> {
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..16 {
-                    if chunk.get_block(ChunkOffset { x, y, z }) == self.dirt.id() {
-                        chunk.set_block(ChunkOffset { x, y, z }, self.stone, None);
-                    } else if chunk.get_block(ChunkOffset { x, y, z }) == self.stone.id() {
-                        chunk.set_block(ChunkOffset { x, y, z }, self.dirt, None);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
 }

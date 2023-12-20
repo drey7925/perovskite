@@ -1902,11 +1902,13 @@ pub trait BulkUpdateCallback: Send + Sync {
     ///    present.*
     ///
     /// Performance tip: Iterating in x/z/y (y on the innermost loop) order is the most cache-friendly order possible.
+    ///
+    /// **Warning**: Trying to access the map via ctx can cause deadlocks
     fn bulk_update_callback(
         &self,
+        ctx: &HandlerContext<'_>,
         chunk_coordinate: ChunkCoordinate,
         timer_state: &TimerState,
-        game_state: &Arc<GameState>,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
     ) -> Result<()>;
@@ -1923,12 +1925,12 @@ pub trait VerticalNeighborTimerCallback: Send + Sync {
     /// Performance tip: Iterating in x/z/y (y on the innermost loop) order is the most cache-friendly order possible.
     fn vertical_neighbor_callback(
         &self,
+        ctx: &HandlerContext<'_>,
         upper: ChunkCoordinate,
         lower: ChunkCoordinate,
         upper_chunk: &mut MapChunk,
         lower_chunk: &mut MapChunk,
         timer_state: &TimerState,
-        game_state: &Arc<GameState>,
     ) -> Result<()>;
 }
 
@@ -2494,16 +2496,23 @@ impl GameMapTimer {
         };
         let upper_old_block_ids = upper_chunk.clone_block_ids();
         let lower_old_block_ids = lower_chunk.clone_block_ids();
+        
+        let ctx = HandlerContext {
+            tick: 0,
+            initiator: EventInitiator::Engine,
+            game_state: game_state.clone(),
+        };
+        
         match &self.callback {
             TimerCallback::LockedVerticalNeighors(x) => {
                 run_handler!(
                     || x.vertical_neighbor_callback(
+                        &ctx,
                         upper_coord,
                         lower_coord,
                         &mut upper_chunk,
                         &mut lower_chunk,
                         &state.timer_state,
-                        game_state,
                     ),
                     "vertical_neighbor_timer",
                     &EventInitiator::Engine
@@ -2638,14 +2647,19 @@ impl GameMapTimer {
         permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     ) -> Result<()> {
         let old_block_ids: Box<[u32; 4096]> = chunk.clone_block_ids();
+        let ctx = HandlerContext {
+            tick: 0,
+            initiator: EventInitiator::Engine,
+            game_state: game_state.clone(),
+        };
         match &self.callback {
             TimerCallback::BulkUpdate(cb) => {
                 assert!(neighbor_data.is_none());
                 run_handler!(
                     || cb.bulk_update_callback(
+                        &ctx,
                         coord,
                         &state.timer_state,
-                        game_state,
                         chunk,
                         neighbor_data
                     ),
@@ -2657,9 +2671,9 @@ impl GameMapTimer {
                 assert!(neighbor_data.is_some());
                 run_handler!(
                     || cb.bulk_update_callback(
+                        &ctx,
                         coord,
                         &state.timer_state,
-                        game_state,
                         chunk,
                         neighbor_data
                     ),

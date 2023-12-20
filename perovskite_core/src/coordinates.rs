@@ -129,6 +129,9 @@ pub struct ChunkOffset {
     pub z: u8,
 }
 impl ChunkOffset {
+    pub fn new(x: u8, y: u8, z: u8) -> Self {
+        Self { x, y, z }
+    }
     #[inline(always)]
     fn debug_check(&self) {
         debug_assert!(self.x < 16);

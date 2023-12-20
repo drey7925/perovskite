@@ -16,6 +16,7 @@
 
 use std::collections::HashSet;
 use std::iter::once;
+use std::sync::Weak;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1230,7 +1231,8 @@ impl InboundWorker {
                     .with_context(|| "Item slot was out of bounds")?;
 
                 let initiator = EventInitiator::Player(PlayerInitiator {
-                    player: &self.context.player_context,
+                    player: &self.context.player_context.player,
+                    weak: Arc::downgrade(&self.context.player_context.player),
                     position: player_position,
                 });
 
@@ -1366,6 +1368,7 @@ impl InboundWorker {
 
                         let initiator = EventInitiator::Player(PlayerInitiator {
                             player: &self.context.player_context,
+                            weak: Arc::downgrade(&self.context.player_context.player),
                             position: place_message
                                 .position
                                 .as_ref()
@@ -1605,6 +1608,7 @@ impl InboundWorker {
             .with_context(|| "Missing block_coord")?;
         let initiator = EventInitiator::Player(PlayerInitiator {
             player: &self.context.player_context,
+            weak: Arc::downgrade(&self.context.player_context.player),
             position: interact_message
                 .position
                 .as_ref()

@@ -516,6 +516,7 @@ impl PlayerContext {
     pub fn make_initiator(&self) -> EventInitiator<'_> {
         EventInitiator::Player(PlayerInitiator {
             player: &self.player,
+            weak: Arc::downgrade(&self.player),
             position: self.last_position(),
         })
     }

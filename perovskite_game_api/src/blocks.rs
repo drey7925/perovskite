@@ -729,9 +729,9 @@ pub(crate) struct FallingBlocksPropagator {
 impl BulkUpdateCallback for FallingBlocksPropagator {
     fn bulk_update_callback(
         &self,
+        _ctx: &HandlerContext,
         _chunk_coordinate: ChunkCoordinate,
         _timer_state: &TimerState,
-        _game_state: &Arc<GameState>,
         chunk: &mut MapChunk,
         _neighbors: Option<&ChunkNeighbors>,
     ) -> Result<()> {
@@ -774,12 +774,12 @@ pub(crate) struct FallingBlocksChunkEdgePropagator {
 impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
     fn vertical_neighbor_callback(
         &self,
+        _ctx: &HandlerContext,
         _upper: ChunkCoordinate,
         _lower: ChunkCoordinate,
         upper_chunk: &mut MapChunk,
         lower_chunk: &mut MapChunk,
         _timer_state: &TimerState,
-        _game_state: &Arc<GameState>,
     ) -> Result<()> {
         let blocks = self.blocks.iter().map(|&b| b.base_id()).collect::<Vec<_>>();
         //println!("Propagating falling blocks");
@@ -854,9 +854,9 @@ pub(crate) struct LiquidPropagator {
 impl BulkUpdateCallback for LiquidPropagator {
     fn bulk_update_callback(
         &self,
+        _ctx: &HandlerContext,
         chunk_coordinate: ChunkCoordinate,
         _timer_state: &TimerState,
-        _game_state: &Arc<GameState>,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
     ) -> Result<()> {

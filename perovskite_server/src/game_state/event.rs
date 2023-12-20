@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::sync::Weak;
 use std::{num::NonZeroU64, sync::Arc};
 
 use anyhow::Result;
@@ -24,7 +25,9 @@ use perovskite_core::coordinates::PlayerPositionUpdate;
 use tracing::warn;
 
 use super::blocks::BlockTypeManager;
-use super::{game_map::ServerGameMap, items::ItemManager, player::Player, GameState, client_ui::Popup};
+use super::{
+    client_ui::Popup, game_map::ServerGameMap, items::ItemManager, player::Player, GameState,
+};
 
 // Private, lightweight representation of who initiated an event.
 // This is used to reconcile responses in the game stream to the requests
@@ -35,6 +38,39 @@ pub(crate) struct ClientEventContext {
     seq: u64,
 }
 
+#[derive(Clone)]
+pub struct WeakPlayerRef {
+    player: Weak<Player>,
+    name: String,
+    pub position: PlayerPositionUpdate,
+}
+impl WeakPlayerRef {
+    pub fn try_to_run<T>(&self, f: impl FnOnce(&Player) -> T) -> Option<T> {
+        if let Some(player) = self.player.upgrade() {
+            Some(f(&player))
+        } else {
+            None
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+}
+impl Debug for WeakPlayerRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WeakPlayerRef")
+            .field(
+                "player",
+                &self
+                    .try_to_run(|p| p.name().to_string())
+                    .unwrap_or("None".to_string()),
+            )
+            .field("position", &self.position)
+            .finish()
+    }
+}
+
 /// Who initiated an event
 #[derive(Clone, Debug)]
 pub enum EventInitiator<'a> {
@@ -42,27 +78,36 @@ pub enum EventInitiator<'a> {
     Engine,
     /// Event was initiated by a player, and a reference to that player is provided
     Player(PlayerInitiator<'a>),
+    /// Event was initiated by a player, but we are running in a deferred context.
+    /// To avoid deadlock/shutdown issues, the player object may not be available.
+    WeakPlayerRef(WeakPlayerRef),
     /// Event was initiated by a plugin, and the plugin wants to indicate that it
     /// was the originator. The exact semantics of this variant are still TBD, and
     /// a plugin can still set Engine without being incorrect
-    /// 
+    ///
     /// So far, this is mostly used for error messages and indicating what plugin
     /// sent a chat message to a user.
-    Plugin(String)
+    Plugin(String),
 }
 impl EventInitiator<'_> {
     pub fn position(&self) -> Option<PlayerPositionUpdate> {
         match self {
             EventInitiator::Engine => None,
             EventInitiator::Player(p) => Some(p.position),
-            EventInitiator::Plugin(_) => None
+            EventInitiator::WeakPlayerRef(p) => Some(p.position),
+            EventInitiator::Plugin(_) => None,
         }
     }
     pub async fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
         match self {
             EventInitiator::Engine => warn!("Attempted to send chat message to engine"),
             EventInitiator::Player(p) => p.player.send_chat_message(message).await?,
-            EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin")
+            EventInitiator::WeakPlayerRef(p) => {
+                if let Some(player) = p.player.upgrade() {
+                    player.send_chat_message(message).await?
+                }
+            }
+            EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin"),
         }
         Ok(())
     }
@@ -70,7 +115,8 @@ impl EventInitiator<'_> {
         match self {
             EventInitiator::Engine => "engine",
             EventInitiator::Player(p) => p.player.name(),
-            EventInitiator::Plugin(_) => "plugin"
+            EventInitiator::WeakPlayerRef(p) => &p.name,
+            EventInitiator::Plugin(_) => "plugin",
         }
     }
     /// Checks if the player has the given permission. If the initiator is not a player, then
@@ -79,7 +125,23 @@ impl EventInitiator<'_> {
         match self {
             EventInitiator::Engine => true,
             EventInitiator::Player(p) => p.player.has_permission(permission),
-            EventInitiator::Plugin(_) => false
+            EventInitiator::WeakPlayerRef(p) => p
+                .try_to_run(|p| p.has_permission(permission))
+                .unwrap_or(false),
+            EventInitiator::Plugin(_) => true,
+        }
+    }
+
+    fn clone_to_static(&self) -> EventInitiator<'static> {
+        match self {
+            EventInitiator::Engine => EventInitiator::Engine,
+            EventInitiator::Player(p) => EventInitiator::WeakPlayerRef(WeakPlayerRef {
+                player: p.weak.clone(),
+                name: p.player.name.clone(),
+                position: p.position,
+            }),
+            EventInitiator::WeakPlayerRef(p) => EventInitiator::WeakPlayerRef(p.clone()),
+            EventInitiator::Plugin(s) => EventInitiator::Plugin(s.clone()),
         }
     }
 }
@@ -89,6 +151,7 @@ impl EventInitiator<'_> {
 pub struct PlayerInitiator<'a> {
     /// The player that initiated the event
     pub player: &'a Player,
+    pub(crate) weak: Weak<Player>,
     /// The player's reported position and face direction *at the time that they initiated the event*
     /// Note that this is not necessarily the same as the player's current position, or as any position reported
     /// by the player's periodic position updates.
@@ -124,6 +187,21 @@ impl<'a> HandlerContext<'a> {
     /// Creates a new popup
     pub fn new_popup(&self) -> Popup {
         Popup::new(self.game_state.clone())
+    }
+    pub fn run_deferred<F>(&self, f: F)
+    where
+        F: FnOnce(&HandlerContext) -> Result<()> + 'static + Send,
+    {
+        let our_clone = HandlerContext {
+            tick: self.tick,
+            initiator: self.initiator.clone_to_static(),
+            game_state: self.game_state.clone(),
+        };
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = f(&our_clone) {
+                tracing::error!("Error in deferred function: {}", e);
+            }
+        });
     }
 }
 impl Deref for HandlerContext<'_> {
