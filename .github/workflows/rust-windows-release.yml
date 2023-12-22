@@ -15,7 +15,9 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build --release
+      run: |
+        choco install protoc
+        cargo build --release
     - name: Upload the artifacts
       uses: skx/github-action-publish-binaries@master
       env:
