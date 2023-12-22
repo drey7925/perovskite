@@ -17,7 +17,7 @@ jobs:
     - name: Build
       run: |
         choco install protoc
-        cargo build --release
+        cargo build --release --bin perovskite_client
     - name: Upload the artifacts
       uses: skx/github-action-publish-binaries@master
       env:
