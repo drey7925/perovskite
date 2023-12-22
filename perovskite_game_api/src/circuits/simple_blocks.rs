@@ -2,19 +2,24 @@ use std::time::Duration;
 
 use anyhow::Result;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
-use perovskite_server::game_state::{game_map::{BulkUpdateCallback, TimerCallback, TimerSettings}, event::HandlerContext};
+use perovskite_server::game_state::{
+    event::HandlerContext,
+    game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
+};
 
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
     },
+    default_game::basic_blocks::DIRT,
     game_builder::{StaticBlockName, TextureName},
     include_texture_bytes,
 };
 
 use super::{
-    get_incoming_pin_states, get_pin_state, BlockConnectivity, CircuitBlockBuilder,
-    CircuitBlockCallbacks, CircuitGameBuilder, PinState, events::{transmit_edge, CircuitHandlerContext, make_root_context},
+    events::{make_root_context, transmit_edge},
+    get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
+    CircuitGameBuilder, PinState,
 };
 
 const CIRCUITS_SOURCE_BLOCK: StaticBlockName = StaticBlockName("circuits:source");
@@ -64,6 +69,20 @@ impl CircuitBlockCallbacks for SourceBlockCallbacks {
         _destination: perovskite_core::coordinates::BlockCoordinate,
     ) -> super::PinState {
         self.0
+    }
+
+    fn on_overheat(
+        &self,
+        ctx: &HandlerContext,
+        coord: perovskite_core::coordinates::BlockCoordinate,
+    ) {
+        // todo use something other than dirt
+        if let Err(e) =
+            ctx.game_map()
+                .set_block(coord, ctx.block_types().get_by_name(DIRT.0).unwrap(), None)
+        {
+            eprintln!("Error setting block: {}", e);
+        }
     }
 }
 

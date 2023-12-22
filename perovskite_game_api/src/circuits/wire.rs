@@ -17,7 +17,7 @@ use crate::{
 use super::{
     get_live_connectivities, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitBlockProperties, CircuitGameBuilerPrivate, CircuitGameStateExtension,
-    CircuitHandlerContext, PinState,
+    CircuitHandlerContext, PinState, events::send_device_overheat,
 };
 
 pub const WIRE_BLOCK_OFF: StaticBlockName = StaticBlockName("circuits:wire_off");
@@ -200,13 +200,18 @@ impl CircuitBlockCallbacks for WireCallbacksImpl {
     }
 }
 
+/// The maximum number of wire blocks that can be driven by a source.
+/// If this is exceeded, then any attempts to drive the wire will lead to
+/// an overheat signal for the driving device.
+pub const MAX_WIRE_FANOUT: usize = 256;
+
 pub(crate) fn recalculate_wire(
     ctx: &CircuitHandlerContext<'_>,
     // The first block in the wire that got signalled
     first_wire: BlockCoordinate,
     // The coordinate of the block that signalled us
     who_signalled: BlockCoordinate,
-    new_state: super::PinState,
+    _new_state: super::PinState,
 ) -> Result<()> {
     // TODO: use the edge type as an optimization hint
     // Essentially, do a breadth-first search of the wire, starting at first_wire. Signal all
@@ -220,8 +225,8 @@ pub(crate) fn recalculate_wire(
         (BlockCoordinate, BlockCoordinate),
         &Box<dyn CircuitBlockCallbacks>,
     > = FxHashMap::default();
-    // Visited wires
-    let mut visited: FxHashSet<BlockCoordinate> = FxHashSet::default();
+
+    let mut visited_wires: FxHashSet<BlockCoordinate> = FxHashSet::default();
     // (dest, prev)
     // For a wire, we just explore dest
     // For a non-wire block, we sample that block's signal driven into dest
@@ -241,10 +246,20 @@ pub(crate) fn recalculate_wire(
         if block.base_id() == circuits_ext.basic_wire_off.0
             || block.base_id() == circuits_ext.basic_wire_on.0
         {
-            if visited.contains(&coord) {
+            if visited_wires.contains(&coord) {
                 continue;
             }
-            visited.insert(coord);
+            visited_wires.insert(coord);
+
+            if visited_wires.len() > MAX_WIRE_FANOUT {
+                // Too many wires.
+                // TODO: offer either a buffer or a "low capacitance wire"
+                // that players can use to work around this in-game
+                send_device_overheat(ctx, who_signalled);
+                any_driven_high = false;
+                break;
+            }
+
             for (_, neighbor) in get_live_connectivities(ctx, coord) {
                 queue.push_back((neighbor, coord));
             }
@@ -266,7 +281,7 @@ pub(crate) fn recalculate_wire(
             need_transition_signals.insert((coord, prev), callbacks);
         }
     }
-    for coord in visited {
+    for coord in visited_wires {
         ctx.game_map().mutate_block_atomically(coord, |block, _| {
             if any_driven_high && block.base_id() == circuits_ext.basic_wire_off.0 {
                 *block = circuits_ext.basic_wire_on.with_variant(block.variant())?;

@@ -56,6 +56,10 @@ default_game = []
 # Provides a plugin for making digital circuits that have simple in-game behaviors. Still a WIP
 circuits = []
 
+# Provides basic agriculture functionality that other plugins can use. Relies on default_game for
+# dirt and other interactions
+agriculture = ["default_game"]
+
 # Provides a unified definition for colored blocks, so different plugins can interoperate with dyes and related.
 # Still a WIP
 colors = []

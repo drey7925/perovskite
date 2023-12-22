@@ -1,5 +1,3 @@
-// placeholders for circuits
-
 use std::ops::Deref;
 
 use crate::{
@@ -185,10 +183,31 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     ) -> PinState {
         PinState::Low
     }
+
+    /// Called when this block should break down.
+    /// 
+    /// This happens to an arbitrary block in a combinational loop if it keeps looping enough times to
+    /// exceed the TTL of its context.
+    /// 
+    /// It also happens if a block tries to drive too many standard wires.
+    ///
+    /// In-game, this should act as if the block were overloaded, overheating, etc.
+    /// This should do something that breaks a combinational loop or similar, e.g. by causing
+    /// the block to enter a broken, useless state.
+    /// 
+    /// **Warning:** If this leads to the block being replaced, care should be taken that this doesn't lead to
+    /// new circuit callbacks (e.g. edges) being triggered, as that can cause infinite recursion of on_overheat
+    /// events.
+    /// 
+    /// **Warning:** The context passed here is intentionally a base perovskite HandlerContext, not a circuit handler context.
+    /// Making a new circuit handler context is a good way to cause infinite recursion or a deadlock.
+    fn on_overheat(&self, _ctx: &HandlerContext, _coord: BlockCoordinate) {
+        // By default, do nothing
+    }
 }
 
 /// Get the connections being made to the given block at the given coordinate.
-/// 
+///
 /// This includes only those connections that actually connect to a block which is able to connect back.
 #[inline]
 pub fn get_live_connectivities(
@@ -243,9 +262,8 @@ pub fn get_live_connectivities(
     result
 }
 
-
 /// Get the connections being made to the given block at the given coordinate.
-/// 
+///
 /// This includes only those connections that actually connect to a block which is able to connect back.
 #[inline]
 pub fn get_incoming_pin_states(
@@ -294,7 +312,11 @@ pub fn get_incoming_pin_states(
             .iter()
             .any(|x| x.eval(neighbor_coord, neighbor_block.variant()) == Some(coord))
         {
-            result.push((*connectivity, neighbor_coord, get_pin_state(ctx, neighbor_coord, coord)));
+            let state = match get_pin_state(ctx, neighbor_coord, coord) {
+                PinReading::Valid(x) => x,
+                _ => continue,
+            };
+            result.push((*connectivity, neighbor_coord, state));
         }
     }
     result
@@ -665,14 +687,14 @@ pub mod events {
         }
     }
     impl CircuitHandlerContext<'_> {
-        pub fn consume_ttl(&self) -> Self {
+        pub fn consume_ttl(&self) -> Option<Self> {
             if self.ttl == 0 {
-                // TODO: we need a better way of handling this
-                panic!("ttl exceeded");
-            }
-            CircuitHandlerContext {
-                inner: self.inner,
-                ttl: self.ttl - 1,
+                None
+            } else {
+                Some(CircuitHandlerContext {
+                    inner: self.inner,
+                    ttl: self.ttl - 1,
+                })
             }
         }
 
@@ -717,6 +739,14 @@ pub mod events {
         from_coord: BlockCoordinate,
         new_state: PinState,
     ) -> Result<()> {
+        let next_ctx = match ctx.consume_ttl() {
+            Some(x) => x,
+            None => {
+                send_device_overheat(ctx, from_coord);
+                return Ok(());
+            }
+        };
+
         let dest = match ctx.game_map().try_get_block(dest_coord) {
             Some(x) => x,
             None => return Ok(()),
@@ -726,9 +756,7 @@ pub mod events {
         if dest.base_id() == circuits_ext.basic_wire_off.0
             || dest.base_id() == circuits_ext.basic_wire_on.0
         {
-            if let Err(e) =
-                wire::recalculate_wire(&ctx.consume_ttl(), dest_coord, from_coord, new_state)
-            {
+            if let Err(e) = wire::recalculate_wire(&next_ctx, dest_coord, from_coord, new_state) {
                 tracing::error!("failed to recalculate wire: {}", e);
             }
             return Ok(());
@@ -742,36 +770,80 @@ pub mod events {
                 return Ok(());
             }
         };
-        dest_callbacks.on_incoming_edge(&ctx.consume_ttl(), dest_coord, from_coord, new_state)?;
+        dest_callbacks.on_incoming_edge(&next_ctx, dest_coord, from_coord, new_state)?;
 
         Ok(())
     }
+
+    pub(super) fn send_device_overheat(ctx: &CircuitHandlerContext<'_>, coord: BlockCoordinate) {
+        let block = match ctx.game_map().try_get_block(coord) {
+            Some(x) => x,
+            None => {
+                tracing::warn!(
+                    "We're in a block's overheat handler, but its chunk (coord {:?}) is unloaded",
+                    coord
+                );
+                return;
+            }
+        };
+        let circuits_ext = ctx.circuits_ext();
+        let callbacks = match circuits_ext.callbacks.get(&block.base_id()) {
+            Some(x) => x,
+            None => {
+                tracing::warn!(
+                    "We're in a block's overheat handler, but the block ({:?}) has no circuit callbacks", block
+                );
+                return;
+            }
+        };
+        callbacks.on_overheat(ctx.inner, coord);
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+/// Result of [`get_pin_state`]
+pub enum PinReading {
+    /// Pin was successfully read, and has this state
+    Valid(PinState),
+    /// The block could not be read (e.g. unloaded chunk, edge of map, etc)
+    CantGetBlock,
+    /// The block at that location is not a circuit block. Note that this is currently not returned
+    /// when that block is a circuit block but lacks the necessary connectivity in its connectivity table.
+    NotCircuitBlock,
+    /// The ttl of the context ran out
+    TtlExceeded,
 }
 
 /// Returns the state of the pin at the given coordinate.
 ///
 /// Args:
+///     ctx: The circuit context for this operation
 ///     coord: The coordinate of the block whose output is being sampled
 ///     into: The coordinate of the block that the output in question is connected to
+/// Returns:
+///     The state of the pin
 pub fn get_pin_state(
     ctx: &events::CircuitHandlerContext<'_>,
     coord: BlockCoordinate,
     into: BlockCoordinate,
-) -> PinState {
+) -> PinReading {
     let block = match ctx.game_map().try_get_block(coord) {
         Some(block) => block,
         None => {
-            return PinState::Low;
+            return PinReading::CantGetBlock;
         }
     };
     let callbacks = match ctx.circuits_ext().callbacks.get(&block.base_id()) {
         Some(callbacks) => callbacks,
         None => {
-            return PinState::Low;
+            return PinReading::NotCircuitBlock;
         }
     };
-
-    callbacks
-        .sample_pin(&ctx.consume_ttl(), coord, into)
-
+    let next_ctx = match ctx.consume_ttl() {
+        Some(x) => x,
+        None => {
+            return PinReading::TtlExceeded;
+        }
+    };
+    PinReading::Valid(callbacks.sample_pin(&next_ctx, coord, into))
 }
