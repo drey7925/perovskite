@@ -180,11 +180,13 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             ))
             .set_dropped_item(LAMP_ON_BLOCK.0, 1)
             .set_display_name("Oscillator")
+            .set_allow_light_propagation(true)
             .register_circuit_callbacks(),
     )?;
     let oscillator_on_block = builder.add_block(
         BlockBuilder::new(OSCILLATOR_ON_BLOCK)
             .set_light_emission(4)
+            .set_allow_light_propagation(true)
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
                 AaBoxProperties::new_single_tex(
                     CIRCUITS_ON_TEXTURE,

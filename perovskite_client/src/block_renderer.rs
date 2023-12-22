@@ -905,6 +905,7 @@ impl BlockRenderer {
                     vtx,
                     idx,
                     e,
+                    0,
                     chunk_data.lightmap()[neighbor_index],
                     0.0,
                     CUBE_FACE_BRIGHTNESS_BIASES[i],
@@ -913,7 +914,6 @@ impl BlockRenderer {
         }
     }
 
-    
     // made crate-visible for the sake of entities
     pub(crate) fn emit_single_cube_simple(
         &self,
@@ -924,20 +924,20 @@ impl BlockRenderer {
         idx: &mut Vec<u32>,
     ) {
         for i in 0..6 {
-                emit_cube_face_vk(
-                    pos,
-                    textures[i],
-                    self.texture_atlas.dimensions(),
-                    CUBE_EXTENTS_FACE_ORDER[i],
-                    vtx,
-                    idx,
-                    e,
-                    // TODO proper brightness for entities
-                    0xf0,
-                    0.0,
-                    CUBE_FACE_BRIGHTNESS_BIASES[i],
-                );
-            
+            emit_cube_face_vk(
+                pos,
+                textures[i],
+                self.texture_atlas.dimensions(),
+                CUBE_EXTENTS_FACE_ORDER[i],
+                vtx,
+                idx,
+                e,
+                // TODO proper brightness for entities
+                0xf0,
+                0x00,
+                0.0,
+                CUBE_FACE_BRIGHTNESS_BIASES[i],
+            );
         }
     }
 
@@ -969,6 +969,7 @@ impl BlockRenderer {
                 idx,
                 e,
                 chunk_data.lightmap()[offset.as_extended_index()],
+                0x00,
                 plantlike_render_info.wave_effect_scale,
                 1.0,
             );
@@ -1021,6 +1022,7 @@ impl BlockRenderer {
                     idx,
                     e,
                     chunk_data.lightmap()[neighbor_index],
+                    chunk_data.lightmap()[offset.as_extended_index()],
                     0.0,
                     CUBE_FACE_BRIGHTNESS_BIASES[i],
                 );
@@ -1064,7 +1066,8 @@ impl BlockRenderer {
                 &mut vtx,
                 &mut idx,
                 e,
-                255,
+                0xff,
+                0x00,
                 0.0,
                 1.0,
             );
@@ -1349,6 +1352,7 @@ pub(crate) fn emit_cube_face_vk(
     idx_buf: &mut Vec<u32>,
     e: CubeExtents,
     encoded_brightness: u8,
+    encoded_brightness_2: u8,
     horizontal_wave: f32,
     brightness_bias: f32,
 ) {
@@ -1367,11 +1371,13 @@ pub(crate) fn emit_cube_face_vk(
     let tr = Vector2::new(r, t);
     let br = Vector2::new(r, b);
 
-    let brightness_upper = (encoded_brightness >> 4) as usize;
-    let brightness_lower = (encoded_brightness & 0x0F) as usize;
+    let (global_brightness_1, brightness_1) = get_brightnesses(encoded_brightness, brightness_bias);
+    let (global_brightness_2, brightness_2) =
+        get_brightnesses(encoded_brightness_2, brightness_bias);
 
-    let global_brightness = GLOBAL_BRIGHTNESS_TABLE[brightness_upper];
-    let brightness = BRIGHTNESS_TABLE[brightness_lower] * brightness_bias;
+    let brightness = brightness_1.max(brightness_2);
+    let global_brightness = global_brightness_1.max(global_brightness_2);
+
     let normal = e.normals[face.index()];
     let normal = vec3(normal.0 as f32, -normal.1 as f32, normal.2 as f32).normalize();
     let mut vertices = match face {
@@ -1381,7 +1387,7 @@ pub(crate) fn emit_cube_face_vk(
                 normal,
                 tl,
                 brightness,
-                global_brightness,
+                global_brightness.max(global_brightness_2),
                 0.0,
             ),
             make_cgv(
@@ -1389,7 +1395,7 @@ pub(crate) fn emit_cube_face_vk(
                 normal,
                 bl,
                 brightness,
-                global_brightness,
+                global_brightness.max(global_brightness_2),
                 0.0,
             ),
             make_cgv(
@@ -1725,6 +1731,16 @@ pub(crate) fn emit_cube_face_vk(
     let mut indices = vec![si, si + 1, si + 2, si, si + 2, si + 3];
     vert_buf.append(&mut vertices);
     idx_buf.append(&mut indices);
+}
+
+#[inline]
+fn get_brightnesses(encoded_brightness: u8, brightness_bias: f32) -> (f32, f32) {
+    let brightness_upper = (encoded_brightness >> 4) as usize;
+    let brightness_lower = (encoded_brightness & 0x0F) as usize;
+
+    let global_brightness = GLOBAL_BRIGHTNESS_TABLE[brightness_upper];
+    let brightness = BRIGHTNESS_TABLE[brightness_lower] * brightness_bias;
+    (global_brightness, brightness)
 }
 
 trait TexRefHelper {
