@@ -6,7 +6,6 @@ use std::collections::VecDeque;
 
 use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
-use perovskite_server::game_state::event::HandlerContext;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
