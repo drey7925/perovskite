@@ -20,8 +20,7 @@ jobs:
         choco install ninja
         cargo build --release --bin perovskite_client
     - name: Upload the artifacts
-      uses: skx/github-action-publish-binaries@master
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: AButler/upload-release-assets@v3.0
       with:
-        args: 'target/release/perovskite-*'
+        files: "target/release/perovskite_client.exe"
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
