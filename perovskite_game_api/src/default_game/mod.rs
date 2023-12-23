@@ -163,11 +163,15 @@ impl DefaultGameBuilderExtension {
 impl DefaultGameBuilder for GameBuilder {
 
     fn initialize_default_game(&mut self) -> Result<()> {
-        if self.builder_extension::<DefaultGameBuilderExtension>().initialized {
+        let data_dir = self.data_dir().clone();
+        let ext = self.builder_extension::<DefaultGameBuilderExtension>();
+        if ext.initialized {
             return Ok(());
         }
+
         tracing::info!("DefaultGame doing main initialization");
-        self.builder_extension::<DefaultGameBuilderExtension>().initialized = true;
+        ext.settings = game_settings::load(&data_dir)?;
+        ext.initialized = true;
         basic_blocks::register_basic_blocks(self)?;
         game_behaviors::register_game_behaviors(self)?;
         tools::register_default_tools(self)?;

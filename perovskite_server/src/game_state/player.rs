@@ -115,7 +115,6 @@ impl Player {
                 );
             }
         }
-
         effective_permissions.extend(
             game_state
                 .game_behaviors

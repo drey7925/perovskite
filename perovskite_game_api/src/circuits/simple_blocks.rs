@@ -81,7 +81,7 @@ impl CircuitBlockCallbacks for SourceBlockCallbacks {
             ctx.game_map()
                 .set_block(coord, ctx.block_types().get_by_name(DIRT.0).unwrap(), None)
         {
-            eprintln!("Error setting block: {}", e);
+            tracing::error!("Error setting block: {}", e);
         }
     }
 }

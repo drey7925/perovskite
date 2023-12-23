@@ -326,8 +326,8 @@ impl PhysicsState {
                 );
                 self.bump_decay = self.bump_decay.max(new_pos.y - pre_bump_y);
                 if self.settings.load().render.physics_debug {
-                    println!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
-                    println!("bump decay: {}", self.bump_decay);
+                    log::info!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
+                    log::info!("bump decay: {}", self.bump_decay);
                 }
             }
         }

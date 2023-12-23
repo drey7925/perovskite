@@ -741,7 +741,6 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
             .expect("Missing replaceable block group");
 
         let blocks = self.blocks.iter().map(|&b| b.base_id()).collect::<Vec<_>>();
-        //println!("Propagating falling blocks");
         // consider whether we might have enough falling blocks that a linear scan becomes slow
         for x in 0..16 {
             for z in 0..16 {

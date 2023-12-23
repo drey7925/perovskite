@@ -531,7 +531,7 @@ impl GameRenderer {
                                 None
                             }
                             Err(e) => {
-                                println!("failed to flush future: {e}");
+                                log::error!("failed to flush future: {e}");
                                 None
                             }
                         };
