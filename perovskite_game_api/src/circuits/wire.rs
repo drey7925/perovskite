@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 
 use anyhow::{Context, Result};
-use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
+use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate, constants::item_groups::HIDDEN_FROM_CREATIVE};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -143,6 +143,7 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
             .set_inventory_texture(WIRE_TEXTURE_ON)
             .set_dropped_item(WIRE_BLOCK_OFF.0, 1)
             .set_light_emission(2)
+            .add_item_group(HIDDEN_FROM_CREATIVE)
             .register_circuit_callbacks(),
     )?;
 

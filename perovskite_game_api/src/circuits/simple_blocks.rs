@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
+use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset, constants::item_groups::HIDDEN_FROM_CREATIVE};
 use perovskite_server::game_state::{
     event::HandlerContext,
     game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
@@ -181,6 +181,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             .set_cube_appearance(
                 CubeAppearanceBuilder::new().set_single_texture(CIRCUITS_ON_TEXTURE),
             )
+            .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_dropped_item(LAMP_OFF_BLOCK.0, 1)
             .register_circuit_callbacks(),
     )?;
@@ -217,6 +218,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
                 (-0.2, 0.2),
             ))
             .set_display_name("Oscillator (on)")
+            .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
             .register_circuit_callbacks(),
     )?;
