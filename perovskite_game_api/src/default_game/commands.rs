@@ -326,14 +326,16 @@ impl ChatCommandHandler for TeleportCommand {
 struct TestonlyBenchmarkCommand;
 #[async_trait]
 impl ChatCommandHandler for TestonlyBenchmarkCommand {
-    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
         {
             let start = Instant::now();
             let sgm = context.game_map();
             let mut oks = 0;
             tokio::task::block_in_place(|| {
                 for _ in 0..1000000 {
-                    if std::hint::black_box(sgm.try_get_block(BlockCoordinate::new(0, 0, 0))).is_some() {
+                    if std::hint::black_box(sgm.try_get_block(BlockCoordinate::new(0, 0, 0)))
+                        .is_some()
+                    {
                         oks += 1;
                     };
                 }
@@ -344,7 +346,9 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 .initiator()
                 .send_chat_message(ChatMessage::new_server_message(format!(
                     "Fastpath took {} ms ({:?} per iter), {} ok",
-                    (end - start).as_millis(), (end-start) / 1000000, oks
+                    (end - start).as_millis(),
+                    (end - start) / 1000000,
+                    oks
                 )))
                 .await?;
         }
@@ -356,7 +360,11 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 for i in 0..100 {
                     for j in 0..100 {
                         for k in 0..100 {
-                            if std::hint::black_box(sgm.try_get_block(BlockCoordinate::new(i, j, k))).is_some() {
+                            if std::hint::black_box(
+                                sgm.try_get_block(BlockCoordinate::new(i, j, k)),
+                            )
+                            .is_some()
+                            {
                                 oks += 1;
                             };
                         }
@@ -369,7 +377,9 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 .initiator()
                 .send_chat_message(ChatMessage::new_server_message(format!(
                     "Fastpath moving took {} ms ({:?} per iter), {} ok",
-                    (end - start).as_millis(), (end-start) / 1000000, oks
+                    (end - start).as_millis(),
+                    (end - start) / 1000000,
+                    oks
                 )))
                 .await?;
         }
@@ -390,7 +400,9 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 .initiator()
                 .send_chat_message(ChatMessage::new_server_message(format!(
                     "Slowpath took {} ms ({:?} per iter), {} ok",
-                    (end - start).as_millis(), (end-start) / 1000000, oks
+                    (end - start).as_millis(),
+                    (end - start) / 1000000,
+                    oks
                 )))
                 .await?;
         }
@@ -402,7 +414,9 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 for i in 0..100 {
                     for j in 0..100 {
                         for k in 0..100 {
-                            if std::hint::black_box(sgm.get_block(BlockCoordinate::new(i, j, k))).is_ok() {
+                            if std::hint::black_box(sgm.get_block(BlockCoordinate::new(i, j, k)))
+                                .is_ok()
+                            {
                                 oks += 1;
                             };
                         }
@@ -415,7 +429,9 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 .initiator()
                 .send_chat_message(ChatMessage::new_server_message(format!(
                     "Slowpath moving took {} ms ({:?} per iter), {} ok",
-                    (end - start).as_millis(), (end-start) / 1000000, oks
+                    (end - start).as_millis(),
+                    (end - start) / 1000000,
+                    oks
                 )))
                 .await?;
         }

@@ -1,17 +1,11 @@
-use std::ops::Deref;
-
 use crate::{
     blocks::{BlockBuilder, BuiltBlock},
-    default_game::DefaultGameBuilder,
     game_builder::{GameBuilder, GameBuilderExtension},
 };
 use anyhow::Result;
-use perovskite_core::{
-    block_id::{self, BlockId},
-    coordinates::BlockCoordinate,
-};
+use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, FastBlockName, FullHandler, InlineContext, InlineHandler},
+    blocks::{BlockInteractionResult, FastBlockName, FullHandler},
     event::HandlerContext,
     GameStateExtension,
 };
@@ -138,8 +132,8 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     /// (which is a private API, but is worth looking at as an example).
     fn update_connectivity(
         &self,
-        ctx: &CircuitHandlerContext<'_>,
-        coord: BlockCoordinate,
+        _ctx: &CircuitHandlerContext<'_>,
+        _coord: BlockCoordinate,
     ) -> Result<()> {
         Ok(())
     }
@@ -153,10 +147,10 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     /// further optimizations are added).
     fn on_incoming_edge(
         &self,
-        ctx: &CircuitHandlerContext<'_>,
-        coordinate: BlockCoordinate,
-        from: BlockCoordinate,
-        state: PinState,
+        _ctx: &CircuitHandlerContext<'_>,
+        _coordinate: BlockCoordinate,
+        _from: BlockCoordinate,
+        _state: PinState,
     ) -> Result<()> {
         Ok(())
     }
@@ -187,20 +181,20 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     }
 
     /// Called when this block should break down.
-    /// 
+    ///
     /// This happens to an arbitrary block in a combinational loop if it keeps looping enough times to
     /// exceed the TTL of its context.
-    /// 
+    ///
     /// It also happens if a block tries to drive too many standard wires.
     ///
     /// In-game, this should act as if the block were overloaded, overheating, etc.
     /// This should do something that breaks a combinational loop or similar, e.g. by causing
     /// the block to enter a broken, useless state.
-    /// 
+    ///
     /// **Warning:** If this leads to the block being replaced, care should be taken that this doesn't lead to
     /// new circuit callbacks (e.g. edges) being triggered, as that can cause infinite recursion of on_overheat
     /// events.
-    /// 
+    ///
     /// **Warning:** The context passed here is intentionally a base perovskite HandlerContext, not a circuit handler context.
     /// Making a new circuit handler context is a good way to cause infinite recursion or a deadlock.
     fn on_overheat(&self, _ctx: &HandlerContext, _coord: BlockCoordinate) {

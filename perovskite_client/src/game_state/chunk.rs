@@ -16,7 +16,6 @@
 
 use std::ops::{Deref, RangeInclusive};
 
-
 use cgmath::{vec4, ElementWise, Matrix4, Vector3, Vector4};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
 use perovskite_core::lighting::Lightfield;
@@ -32,7 +31,6 @@ use crate::block_renderer::{BlockRenderer, ClientBlockTypeManager, VkChunkVertex
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use prost::Message;
 
-
 pub(crate) trait ChunkDataView {
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18];
     fn lightmap(&self) -> &[u8; 18 * 18 * 18];
@@ -40,7 +38,6 @@ pub(crate) trait ChunkDataView {
         self.block_ids()[offset.as_extended_index()]
     }
 }
-
 
 pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView for LockedChunkDataView<'_> {
@@ -188,9 +185,7 @@ impl ClientChunk {
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<bool> {
         let data = self.chunk_data();
         let vertex_data = match data.0.data_state {
-            BlockIdState::NeedProcessing => {
-                Some(renderer.mesh_chunk(&data)?)
-            }
+            BlockIdState::NeedProcessing => Some(renderer.mesh_chunk(&data)?),
             BlockIdState::NoRender => None,
             BlockIdState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
             BlockIdState::AuditNoRender => {

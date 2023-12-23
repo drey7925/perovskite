@@ -8,17 +8,15 @@ use std::{
 
 use anyhow::Result;
 use cgmath::InnerSpace;
-use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
 use parking_lot::{Condvar, Mutex};
+use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
 use crate::{
     block_renderer::ClientBlockTypeManager,
-    game_state::{
-        chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors
-    },
+    game_state::{chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors},
 };
 
 // Responsible for reconciling a chunk with data from other nearby chunks (e.g. lighting, neighbor calculations)
@@ -283,7 +281,7 @@ pub(crate) fn propagate_neighbor_data(
     neighbors: &FastChunkNeighbors,
     scratchpad: &mut [u8; 48 * 48 * 48],
 ) -> Result<bool> {
-        if let Some(current_chunk) = neighbors.center() {
+    if let Some(current_chunk) = neighbors.center() {
         let mut current_chunk = current_chunk.chunk_data_mut();
         {
             let _span = span!("chunk precheck");
@@ -386,7 +384,8 @@ pub(crate) fn propagate_neighbor_data(
             // Indices are reversed in order to achieve better cache locality
             // x is the minor index, z is intermediate, and y is the major index
 
-            let mut light_propagation_cache: bitvec::BitArr!(for 48*48*48) = bitvec::array::BitArray::ZERO;
+            let mut light_propagation_cache: bitvec::BitArr!(for 48*48*48) =
+                bitvec::array::BitArray::ZERO;
 
             for x_coarse in -1i32..=1 {
                 for z_coarse in -1i32..=1 {
@@ -411,12 +410,15 @@ pub(crate) fn propagate_neighbor_data(
                                     // consider unrolling this loop
                                     let mut global_light =
                                         global_inbound_lights.get(x_fine as u8, z_fine as u8);
-                                    for (y_fine, &block_id) in subslice.iter().enumerate().rev().take(16)
+                                    for (y_fine, &block_id) in
+                                        subslice.iter().enumerate().rev().take(16)
                                     {
                                         let y = y_coarse * 16 + y_fine as i32;
-                                        let propagates_light = block_manager.propagates_light(block_id);
+                                        let propagates_light =
+                                            block_manager.propagates_light(block_id);
                                         light_propagation_cache.set(
-                                            ((x + 16) * 48 * 48 + (z + 16) * 48 + (y + 16)) as usize,
+                                            ((x + 16) * 48 * 48 + (z + 16) * 48 + (y + 16))
+                                                as usize,
                                             propagates_light,
                                         );
                                         let light_emission = block_manager.light_emission(block_id);
@@ -445,7 +447,8 @@ pub(crate) fn propagate_neighbor_data(
             }
 
             let propagates_light_check = |x: i32, y: i32, z: i32| {
-                light_propagation_cache[(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
+                light_propagation_cache
+                    [(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
             };
 
             // Then, while the queue is non-empty, attempt to propagate light

@@ -24,10 +24,7 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::PlayerPositionUpdate;
 use tracing::warn;
 
-use super::blocks::BlockTypeManager;
-use super::{
-    client_ui::Popup, game_map::ServerGameMap, items::ItemManager, player::Player, GameState,
-};
+use super::{client_ui::Popup, player::Player, GameState};
 
 // Private, lightweight representation of who initiated an event.
 // This is used to reconcile responses in the game stream to the requests

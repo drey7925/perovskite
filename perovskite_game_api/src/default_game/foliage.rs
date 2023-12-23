@@ -1,5 +1,4 @@
 use anyhow::Result;
-use perovskite_server::game_state::items::ItemStack;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
@@ -7,11 +6,7 @@ use crate::{
     include_texture_bytes,
 };
 
-use super::{
-    block_groups::FIBROUS,
-    recipes::{self, RecipeSlot},
-    DefaultGameBuilder,
-};
+use super::{block_groups::FIBROUS, DefaultGameBuilder};
 
 pub const MAPLE_TREE: StaticBlockName = StaticBlockName("default:maple_tree");
 pub const MAPLE_TREE_TOP_TEX: TextureName = TextureName("default:maple_tree_top");

@@ -15,7 +15,6 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    ops::DerefMut,
     path::Path,
     time::Duration,
 };
@@ -23,7 +22,9 @@ use std::{
 use perovskite_core::{
     block_id::BlockId,
     constants::{
-        block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE}, blocks::AIR, items::default_item_interaction_rules,
+        block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
+        blocks::AIR,
+        items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
     protocol::{
@@ -89,10 +90,7 @@ impl From<StaticItemName> for ItemName {
 use perovskite_server::server as server_api;
 
 use crate::{
-    blocks::{
-        BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator,
-        LiquidPropagator,
-    },
+    blocks::{BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator, LiquidPropagator},
     maybe_export,
 };
 
@@ -131,10 +129,10 @@ pub trait GameBuilderExtension: private::AsAny {
     /// Called before the server starts running
     /// At this point, there is no longer an opportunity to interact with other
     /// plugins' extensions (their pre_run may already have been called)
-    /// 
+    ///
     /// This is the last opportunity for a plugin to modify the parts of the game-state
     /// that are immutable after init (e.g. defined blocks, defined items, etc)
-    /// 
+    ///
     /// If there are any extensions that should be made available through the GameState,
     /// then they should be added to the ServerBuilder via [ServerBuilder::add_extension]
     fn pre_run(&mut self, server_builder: &mut ServerBuilder);
@@ -153,7 +151,6 @@ pub struct GameBuilder {
     // We cannot use a typemap here because we want to be able to iterate
     // over all the extensions for various things like pre_run
     pub(crate) builder_extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
-    
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -184,7 +181,9 @@ impl GameBuilder {
     }
 
     fn pre_build(&mut self) -> Result<()> {
-        self.inner.blocks_mut().register_fast_block_group(TRIVIALLY_REPLACEABLE);
+        self.inner
+            .blocks_mut()
+            .register_fast_block_group(TRIVIALLY_REPLACEABLE);
         for (&period, liquid_group) in self.liquids_by_flow_time.iter() {
             self.inner.add_timer(
                 format!("liquid_flow_{}", period.as_micros()),
@@ -346,7 +345,9 @@ impl GameBuilder {
     /// Returns an extension that holds state for additional functionality or APIs
     /// for a specific plugin (e.g. default_game providing ore generation to other plugins that want
     /// to generate ores) without the core GameBuilder needing to be aware of it *a priori*.
-    pub fn builder_extension<T: GameBuilderExtension + Any + Default + 'static>(&mut self) -> &mut T {
+    pub fn builder_extension<T: GameBuilderExtension + Any + Default + 'static>(
+        &mut self,
+    ) -> &mut T {
         self.builder_extensions
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(T::default()))

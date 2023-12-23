@@ -94,7 +94,8 @@ fn main() {
     let mut game = GameBuilder::from_cmdline().unwrap();
     game.initialize_default_game().unwrap();
 
-    #[cfg(feature = "circuits")] {
+    #[cfg(feature = "circuits")]
+    {
         use perovskite_game_api::circuits::CircuitGameBuilder;
         game.initialize_circuits().unwrap();
     }

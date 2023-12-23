@@ -191,7 +191,7 @@ pub(crate) async fn connect_game(
             Err(e) => log::error!("Inbound loop crashed: {e:?}"),
         }
     });
-    
+
     progress.send((0.9, "Waiting for initial game state...".to_string()))?;
     initial_state_notification.notified().await;
     tokio::spawn(async move {

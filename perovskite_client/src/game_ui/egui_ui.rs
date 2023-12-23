@@ -361,8 +361,12 @@ impl EguiUi {
             })
             .flatten()
         {
-
-            let scale_for_sizing = if client_state.settings.load().render.scale_inventories_with_high_dpi {
+            let scale_for_sizing = if client_state
+                .settings
+                .load()
+                .render
+                .scale_inventories_with_high_dpi
+            {
                 self.scale
             } else {
                 1.0
@@ -432,23 +436,24 @@ impl EguiUi {
         }
 
         let frame_pixels = *self.atlas_coords.get(FRAME_UNSELECTED).unwrap();
-        
+
         let frame_uv = self.pixel_rect_to_uv(frame_pixels);
-        
-        let frame_size = if client_state.settings.load().render.scale_inventories_with_high_dpi {
+
+        let frame_size = if client_state
+            .settings
+            .load()
+            .render
+            .scale_inventories_with_high_dpi
+        {
             vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32)
         } else {
             vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32) / self.scale
         };
         let inv_rect = egui::Rect::from_min_size(
             ui.cursor().min,
-            vec2(
-                frame_size.x * dims.1 as f32,
-                frame_size.y * dims.0 as f32,
-            ),
+            vec2(frame_size.x * dims.1 as f32, frame_size.y * dims.0 as f32),
         );
         ui.allocate_rect(inv_rect, Sense::click_and_drag());
-
 
         for row in 0..dims.0 {
             for col in 0..dims.1 {
@@ -457,8 +462,8 @@ impl EguiUi {
                     .uv(frame_uv)
                     .sense(Sense::click_and_drag());
 
-                let min_corner = inv_rect.min
-                    + vec2(frame_size.x * col as f32, frame_size.y * row as f32);
+                let min_corner =
+                    inv_rect.min + vec2(frame_size.x * col as f32, frame_size.y * row as f32);
 
                 let frame_rect = egui::Rect::from_min_size(min_corner, frame_size);
                 let drawing_rect = egui::Rect::from_min_size(
@@ -643,7 +648,9 @@ impl EguiUi {
                                 ui.add(egui::Label::new(formatted_message.1).wrap(true));
                             });
                         }
-                        if self.chat_scroll_counter != messages.len() || self.chat_force_scroll_to_end {
+                        if self.chat_scroll_counter != messages.len()
+                            || self.chat_force_scroll_to_end
+                        {
                             ui.scroll_to_cursor(Some(egui::Align::Max));
                             self.chat_scroll_counter = messages.len();
                             self.chat_force_scroll_to_end = false;

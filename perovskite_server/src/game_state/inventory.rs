@@ -286,7 +286,7 @@ impl InventoryManager {
             // Unwrap is safe - we inserted every key we encountered.
             .map(|key| locks.get(key).unwrap().get())
             .collect::<Result<Vec<_>>>()?;
-        
+
         let result = mutator(&mut inventories);
         for (key, new_inventory) in keys.iter().zip(inventories.into_iter()) {
             match new_inventory {

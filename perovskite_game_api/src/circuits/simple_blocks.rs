@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset, constants::item_groups::HIDDEN_FROM_CREATIVE};
+use perovskite_core::{
+    block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE, coordinates::ChunkOffset,
+};
 use perovskite_server::game_state::{
     event::HandlerContext,
     game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},

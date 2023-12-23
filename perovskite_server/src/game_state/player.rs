@@ -17,7 +17,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     ops::Deref,
-    pin::Pin,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
@@ -40,7 +39,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,
-    network_server::auth::AuthOutcome,
 };
 
 use super::{

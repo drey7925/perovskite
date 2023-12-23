@@ -6,7 +6,8 @@ use parking_lot::Mutex;
 use vulkano::{
     command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents},
     image::SampleCount,
-    render_pass::Subpass, sampler::SamplerCreateInfo,
+    render_pass::Subpass,
+    sampler::SamplerCreateInfo,
 };
 use winit::{event::WindowEvent, event_loop::EventLoopWindowTarget};
 
@@ -66,12 +67,13 @@ impl EguiAdapter {
         sampler_create_info.mag_filter = vulkano::sampler::Filter::Nearest;
         sampler_create_info.min_filter = vulkano::sampler::Filter::Linear;
 
-        let atlas_texture_id = gui_adapter.register_user_image_view(atlas.clone_image_view(), sampler_create_info);
+        let atlas_texture_id =
+            gui_adapter.register_user_image_view(atlas.clone_image_view(), sampler_create_info);
 
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
         let flat_overlay_pipeline =
             flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
-        
+
         set_up_fonts(&mut gui_adapter.egui_ctx);
 
         Ok(EguiAdapter {
@@ -140,15 +142,11 @@ fn set_up_fonts(egui_ctx: &mut egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NotoSans-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!(
-            "../../fonts/NotoSans-Light.ttf"
-        )),
+        egui::FontData::from_static(include_bytes!("../../fonts/NotoSans-Light.ttf")),
     );
     fonts.font_data.insert(
         "NotoSansJP-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!(
-            "../../fonts/NotoSansJP-Light.ttf"
-        )),
+        egui::FontData::from_static(include_bytes!("../../fonts/NotoSansJP-Light.ttf")),
     );
     fonts
         .families

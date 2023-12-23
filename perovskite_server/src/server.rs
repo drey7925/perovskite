@@ -149,7 +149,7 @@ pub struct ServerBuilder {
     game_behaviors: GameBehaviors,
     commands: CommandManager,
     data_dir: PathBuf,
-    extensions: type_map::concurrent::TypeMap
+    extensions: type_map::concurrent::TypeMap,
 }
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
@@ -187,7 +187,7 @@ impl ServerBuilder {
             game_behaviors: Default::default(),
             commands: CommandManager::new(),
             data_dir: args.data_dir.clone(),
-            extensions: type_map::concurrent::TypeMap::new()
+            extensions: type_map::concurrent::TypeMap::new(),
         })
     }
     pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
@@ -255,10 +255,12 @@ impl ServerBuilder {
             self.mapgen.with_context(|| "Mapgen not specified")?,
             self.game_behaviors,
             self.commands,
-            self.extensions
+            self.extensions,
         )?;
         for (name, settings, callback) in self.map_timers {
-            game_state.game_map().register_timer(name, settings, callback)?;
+            game_state
+                .game_map()
+                .register_timer(name, settings, callback)?;
         }
         Server::new(self.runtime, game_state, addr)
     }

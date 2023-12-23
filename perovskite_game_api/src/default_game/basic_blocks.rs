@@ -29,7 +29,6 @@ use perovskite_core::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
         item_groups::HIDDEN_FROM_CREATIVE,
     },
-    coordinates::ChunkOffset,
     protocol::{
         self,
         blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
@@ -37,10 +36,9 @@ use perovskite_core::{
     },
 };
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, BlockTypeHandle, ExtDataHandling},
+    blocks::{BlockInteractionResult, ExtDataHandling},
     client_ui::UiElementContainer,
-    game_map::{BulkUpdateCallback, TimerState},
-    items::{Item, ItemStack}, event::HandlerContext,
+    items::{Item, ItemStack},
 };
 
 use super::{
@@ -139,11 +137,7 @@ pub mod ores {
     pub(crate) fn register_ores(game_builder: &mut GameBuilder) -> Result<()> {
         // todo factor this into a function per-ore
         include_texture_bytes!(game_builder, COAL_ORE_TEXTURE, "textures/coal_ore.png")?;
-        include_texture_bytes!(
-            game_builder,
-            COAL_PIECE_TEXTURE,
-            "textures/coal_piece.png"
-        )?;
+        include_texture_bytes!(game_builder, COAL_PIECE_TEXTURE, "textures/coal_piece.png")?;
         game_builder.register_basic_item(
             COAL_PIECE,
             "Piece of coal",
@@ -182,16 +176,8 @@ pub mod ores {
         game_builder.register_smelting_fuel(COAL_PIECE.0.to_string(), 16);
 
         include_texture_bytes!(game_builder, IRON_ORE_TEXTURE, "textures/iron_ore.png")?;
-        include_texture_bytes!(
-            game_builder,
-            IRON_PIECE_TEXTURE,
-            "textures/iron_piece.png"
-        )?;
-        include_texture_bytes!(
-            game_builder,
-            IRON_INGOT_TEXTURE,
-            "textures/iron_ingot.png"
-        )?;
+        include_texture_bytes!(game_builder, IRON_PIECE_TEXTURE, "textures/iron_piece.png")?;
+        include_texture_bytes!(game_builder, IRON_INGOT_TEXTURE, "textures/iron_ingot.png")?;
         game_builder.register_basic_item(
             IRON_PIECE,
             "Piece of iron",
@@ -305,16 +291,8 @@ pub mod ores {
             });
 
         include_texture_bytes!(game_builder, GOLD_ORE_TEXTURE, "textures/gold_ore.png")?;
-        include_texture_bytes!(
-            game_builder,
-            GOLD_PIECE_TEXTURE,
-            "textures/gold_piece.png"
-        )?;
-        include_texture_bytes!(
-            game_builder,
-            GOLD_INGOT_TEXTURE,
-            "textures/gold_ingot.png"
-        )?;
+        include_texture_bytes!(game_builder, GOLD_PIECE_TEXTURE, "textures/gold_piece.png")?;
+        include_texture_bytes!(game_builder, GOLD_INGOT_TEXTURE, "textures/gold_ingot.png")?;
         game_builder.register_basic_item(
             GOLD_PIECE,
             "Piece of gold",
@@ -583,7 +561,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_single_texture(DESERT_STONE_TEXTURE)
             .set_display_name("Desert stone"),
     )?;
-    let desert_sand = game_builder.add_block(
+    let _desert_sand = game_builder.add_block(
         BlockBuilder::new(DESERT_SAND)
             .add_block_group(GRANULAR)
             .set_cube_single_texture(DESERT_SAND_TEXTURE)

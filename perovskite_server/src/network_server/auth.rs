@@ -24,7 +24,7 @@ use opaque_ke::{
 use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
     protocol::game_rpc::{
-        stream_to_client::ServerMessage, stream_to_server::ClientMessage, Nop, StreamToClient,
+        stream_to_client::ServerMessage, stream_to_server::ClientMessage, StreamToClient,
         StreamToServer,
     },
 };

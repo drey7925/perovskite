@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use crate::game_builder::{GameBuilder, GameBuilderExtension};
 
-use anyhow::{ensure, Result};
+use anyhow::Result;
 
 use perovskite_core::protocol::items as items_proto;
 use perovskite_server::game_state::items::ItemStack;
@@ -80,7 +77,7 @@ pub mod mapgen;
 pub trait DefaultGameBuilder {
     /// Initializes the default game in the current game builder.
     /// This will set the mapgen, game behaviors, inventory menu, register blocks/items, etc.
-    /// 
+    ///
     /// If called multiple times, only the first call will have any effect. Subsequent calls
     /// will be no-ops.
     fn initialize_default_game(&mut self) -> Result<()>;
@@ -161,7 +158,6 @@ impl DefaultGameBuilderExtension {
 }
 
 impl DefaultGameBuilder for GameBuilder {
-
     fn initialize_default_game(&mut self) -> Result<()> {
         let data_dir = self.data_dir().clone();
         let ext = self.builder_extension::<DefaultGameBuilderExtension>();
@@ -180,7 +176,6 @@ impl DefaultGameBuilder for GameBuilder {
         commands::register_default_commands(self)?;
         Ok(())
     }
-    
 
     /// Returns an Arc for the crafting recipes in this game.
     fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>> {
@@ -200,9 +195,10 @@ impl DefaultGameBuilder for GameBuilder {
         result: String,
         quantity: u32,
         quantity_type: Option<items_proto::item_stack::QuantityType>,
-    )  {
+    ) {
         assert!(
-            self.builder_extension::<DefaultGameBuilderExtension>().initialized,
+            self.builder_extension::<DefaultGameBuilderExtension>()
+                .initialized,
             "DefaultGame builder_extension not initialized"
         );
         self.builder_extension::<DefaultGameBuilderExtension>()
@@ -236,9 +232,10 @@ impl DefaultGameBuilder for GameBuilder {
             })
     }
 
-    fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32)  {
+    fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32) {
         assert!(
-            self.builder_extension::<DefaultGameBuilderExtension>().initialized,
+            self.builder_extension::<DefaultGameBuilderExtension>()
+                .initialized,
             "DefaultGame builder_extension not initialized"
         );
         self.builder_extension::<DefaultGameBuilderExtension>()

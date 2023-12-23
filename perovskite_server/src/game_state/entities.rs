@@ -2,11 +2,14 @@
 // Actual optimizations will follow based on real-world profiling once
 // entities are implemented and have some use-cases.
 
-use std::{sync::{atomic::AtomicU64, Weak}, time::Instant};
+use std::{
+    sync::{atomic::AtomicU64, Weak},
+    time::Instant,
+};
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use cgmath::Vector3;
-use parking_lot::{RwLock, RwLockReadGuard, MappedRwLockReadGuard};
+use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 
 use super::GameState;
 
@@ -51,13 +54,21 @@ impl DrivenEntity {
     pub fn id(&self) -> EntityId {
         self.entity_id
     }
-    pub fn drive(&mut self, position: Vector3<f64>, velocity: Vector3<f64>, calculated_at: Instant) {
+    pub fn drive(
+        &mut self,
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+        calculated_at: Instant,
+    ) {
         self.position = position;
         self.velocity = velocity;
         self.last_update = calculated_at;
     }
     pub fn sample(&self) -> (Vector3<f64>, Vector3<f64>) {
-        (self.position + (self.velocity * (Instant::now() - self.last_update).as_secs_f64()), self.velocity)
+        (
+            self.position + (self.velocity * (Instant::now() - self.last_update).as_secs_f64()),
+            self.velocity,
+        )
     }
     pub fn updated_since(&self, cutoff: Instant) -> bool {
         self.last_update > cutoff
@@ -70,18 +81,22 @@ struct EntityManagerInner {
 }
 
 pub(crate) struct EntityManager {
-    inner: RwLock<EntityManagerInner>
+    inner: RwLock<EntityManagerInner>,
 }
 impl EntityManager {
     pub(crate) fn new(game_state: Weak<GameState>) -> Self {
         Self {
             inner: RwLock::new(EntityManagerInner {
                 driven_entities: Vec::new(),
-                game_state
+                game_state,
             }),
         }
     }
-    pub(crate) fn insert_entity(&self, position: Vector3<f64>, velocity: Vector3<f64>) -> Result<EntityId> {
+    pub(crate) fn insert_entity(
+        &self,
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+    ) -> Result<EntityId> {
         let entity_id = EntityId::next();
         let mut lock = self.inner.write();
         lock.driven_entities.push(DrivenEntity {
@@ -94,7 +109,12 @@ impl EntityManager {
         Ok(entity_id)
     }
 
-    pub(crate) fn drive_entity(&self, id: EntityId, position: Vector3<f64>, velocity: Vector3<f64>) -> Result<()> {
+    pub(crate) fn drive_entity(
+        &self,
+        id: EntityId,
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+    ) -> Result<()> {
         // TODO this is extremely suboptimal for performance, but it works for now
         // We shouldn't be doing a linear search for an entity here
         //
@@ -113,7 +133,10 @@ impl EntityManager {
         // TODO this is extremely suboptimal for performance, but it works for now before we scale the entity mechanism
         //
         // In particular: This requires O(N) time to both scan when driving, and when removing
-        self.inner.write().driven_entities.retain(|entity| entity.entity_id != entity_id);
+        self.inner
+            .write()
+            .driven_entities
+            .retain(|entity| entity.entity_id != entity_id);
     }
 
     pub(crate) fn contents(&self) -> MappedRwLockReadGuard<Vec<DrivenEntity>> {

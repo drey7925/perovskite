@@ -1,4 +1,4 @@
-use std::{collections::HashMap, panic::AssertUnwindSafe};
+use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 use itertools::Itertools;
@@ -9,7 +9,7 @@ use perovskite_core::{
 use tonic::async_trait;
 
 use crate::{
-    game_state::event::{EventInitiator, HandlerContext, PlayerInitiator},
+    game_state::event::{EventInitiator, HandlerContext},
     run_async_handler,
 };
 

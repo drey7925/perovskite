@@ -94,7 +94,7 @@ pub mod textures {
 }
 
 /// Built-in permissions that can be granted to a player.
-/// 
+///
 /// This is not an exhaustive list of permissions, and plugins may define
 /// new permissions of their own. However, plugins may want to use these
 /// for consistency where possible.
@@ -120,7 +120,7 @@ pub mod permissions {
     /// The player can tap blocks and interact (the F key by default). While this can modify the world, it does so in
     /// more limited ways (e.g. tapping a block might cause some in-world automation designed by other players
     /// to run, but generally won't modify the world substantially in the way mining and placing would)
-    /// 
+    ///
     /// This controls whether the user can click buttons in server-defined popups as well.
     pub const TAP_INTERACT: &str = "default:tap_interact";
     /// The player may actually log in.
@@ -136,14 +136,8 @@ pub mod permissions {
     pub const CHAT: &str = "default:chat";
 
     /// The set of permissions that affect client behavior. Only these are sent to clients
-    pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] = &[
-        FLY,
-        FAST_MOVE,
-        NOCLIP,
-        DIG_PLACE,
-        TAP_INTERACT,
-        INVENTORY
-    ];
+    pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] =
+        &[FLY, FAST_MOVE, NOCLIP, DIG_PLACE, TAP_INTERACT, INVENTORY];
 
     pub const ALL_PERMISSIONS: [&'static str; 13] = [
         FLY,
@@ -158,22 +152,22 @@ pub mod permissions {
         LOG_IN,
         WORLD_STATE,
         INVENTORY,
-        CHAT
+        CHAT,
     ];
-    
+
     /// Prefix for permissions that can be self-granted on request, used for
     /// /elevate. Intended to allow an admin to have permissions without them having
     /// an effect at all times.
-    /// 
+    ///
     /// e.g. a player having `eligible:default:bypass_inventory_checks` would by default
     /// be subject to inventory checks, but could use /elevate default:bypass_inventory_checks
-    /// (command TBD and to be implemented) to *temporarily* enable that permission 
-    /// 
+    /// (command TBD and to be implemented) to *temporarily* enable that permission
+    ///
     /// This is implemented in perovskite_server and doesn't require any special handling
     /// in plugins when doing permission checks for actions. Once an eligible permission
     /// is activated with /elevate, that permission will show up when calling permission check functions
     /// on the player without the eligible: prefix.
-    /// 
+    ///
     /// However, plugins may check eligible permissions for their own purposes if they wish to.
     pub const ELIGIBLE_PREFIX: &str = "eligible:";
 }

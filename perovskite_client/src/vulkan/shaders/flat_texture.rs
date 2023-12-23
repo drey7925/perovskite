@@ -37,7 +37,7 @@ use vulkano::{
 
 use crate::vulkan::{
     shaders::{vert_2d, PipelineProvider, PipelineWrapper},
-    CommandBufferBuilder, Texture2DHolder, VulkanWindow, VulkanContext,
+    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
 };
 
 use super::{frag_simple, vert_2d::UniformData};

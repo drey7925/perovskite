@@ -6,7 +6,10 @@ pub trait ItemStackExt {
 }
 impl ItemStackExt for crate::protocol::items::ItemStack {
     fn stackable(&self) -> bool {
-        matches!(self.quantity_type, Some(items_proto::item_stack::QuantityType::Stack(_)))
+        matches!(
+            self.quantity_type,
+            Some(items_proto::item_stack::QuantityType::Stack(_))
+        )
     }
     fn max_stack(&self) -> u32 {
         match self.quantity_type {

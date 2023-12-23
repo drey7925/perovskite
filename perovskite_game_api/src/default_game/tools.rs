@@ -1,8 +1,11 @@
 use anyhow::Result;
 use perovskite_core::{
-    constants::{block_groups::{DEFAULT_SOLID, INSTANT_DIG}, item_groups::TOOL_WEAR},
+    constants::{
+        block_groups::{DEFAULT_SOLID, INSTANT_DIG},
+        item_groups::TOOL_WEAR,
+    },
     protocol::{
-        items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule, Empty},
+        items::{self as items_proto, interaction_rule::DigBehavior, Empty, InteractionRule},
         render::TextureReference,
     },
 };
@@ -39,9 +42,7 @@ pub(crate) fn register_pickaxe(
                 },
                 InteractionRule {
                     block_group: vec![INSTANT_DIG.to_string()],
-                    dig_behavior: Some(DigBehavior::InstantDigOneshot(
-                        Empty {},
-                    )),
+                    dig_behavior: Some(DigBehavior::InstantDigOneshot(Empty {})),
                     tool_wear: 0,
                 },
                 InteractionRule {
@@ -68,7 +69,7 @@ fn register_superuser_pickaxe(
     durability: u32,
 ) -> Result<()> {
     // TODO: consider implementing this using an ItemBuilder
-    
+
     let air = game_builder.air_block;
     let item = Item {
         proto: items_proto::ItemDef {
@@ -87,9 +88,7 @@ fn register_superuser_pickaxe(
                 },
                 InteractionRule {
                     block_group: vec![INSTANT_DIG.to_string()],
-                    dig_behavior: Some(DigBehavior::InstantDigOneshot(
-                        Empty {},
-                    )),
+                    dig_behavior: Some(DigBehavior::InstantDigOneshot(Empty {})),
                     tool_wear: 0,
                 },
                 InteractionRule {
@@ -105,7 +104,10 @@ fn register_superuser_pickaxe(
             let (old_block, _) = ctx.game_map().set_block(coord, air, None)?;
             let (block, variant) = ctx.block_types().get_block(&old_block)?;
             tracing::info!("superuser pickaxe dug {}:{:x}", block.short_name(), variant);
-            Ok(ItemInteractionResult { updated_tool: Some(tool.clone()), obtained_items: vec![] })
+            Ok(ItemInteractionResult {
+                updated_tool: Some(tool.clone()),
+                obtained_items: vec![],
+            })
         })),
         tap_handler: None,
         place_handler: None,
@@ -121,11 +123,7 @@ pub(crate) fn register_shovel() -> Result<()> {
 
 pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> Result<()> {
     let test_pick_texture = TextureName("textures/test_pickaxe.png");
-    include_texture_bytes!(
-        game_builder,
-        test_pick_texture,
-        "textures/test_pickaxe.png"
-    )?;
+    include_texture_bytes!(game_builder, test_pick_texture, "textures/test_pickaxe.png")?;
     register_pickaxe(
         game_builder,
         test_pick_texture,

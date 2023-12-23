@@ -1,16 +1,15 @@
 use crate::{
     blocks::{
-        AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode, TextureCropping,
+        AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode,
+        TextureCropping,
     },
-    game_builder::{BlockName, FALLBACK_UNKNOWN_TEXTURE_NAME, GameBuilder},
+    game_builder::{BlockName, GameBuilder, FALLBACK_UNKNOWN_TEXTURE_NAME},
 };
 use anyhow::{Context, Result};
-use perovskite_core::{
-    protocol::{
-        blocks::{block_type_def::RenderInfo, CubeRenderInfo},
-        items::item_stack::QuantityType,
-        render::TextureReference,
-    },
+use perovskite_core::protocol::{
+    blocks::{block_type_def::RenderInfo, CubeRenderInfo},
+    items::item_stack::QuantityType,
+    render::TextureReference,
 };
 
 use super::{recipes::RecipeSlot, DefaultGameBuilder};
@@ -128,10 +127,7 @@ fn make_derived_block_core(
     display_suffix: &str,
     appearance_builder: impl Fn(&CubeRenderInfo) -> AxisAlignedBoxesAppearanceBuilder,
 ) -> Result<BuiltBlock> {
-    let block_type = game_builder
-        .inner
-        .blocks()
-        .get_block(&base.id)?;
+    let block_type = game_builder.inner.blocks().get_block(&base.id)?;
     let item = game_builder
         .inner
         .items()

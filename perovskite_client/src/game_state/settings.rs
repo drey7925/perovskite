@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 const SETTINGS_RON_FILE: &str = "settings.ron";
 
-
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub(crate) struct RenderSettings {
@@ -16,7 +15,7 @@ pub(crate) struct RenderSettings {
     pub(crate) testonly_noop_meshing: bool,
     pub(crate) physics_debug: bool,
     pub(crate) preferred_gpu: String,
-    pub(crate) scale_inventories_with_high_dpi: bool
+    pub(crate) scale_inventories_with_high_dpi: bool,
 }
 
 impl Default for RenderSettings {
@@ -28,7 +27,7 @@ impl Default for RenderSettings {
             testonly_noop_meshing: false,
             physics_debug: false,
             preferred_gpu: String::from(""),
-            scale_inventories_with_high_dpi: false
+            scale_inventories_with_high_dpi: false,
         }
     }
 }
@@ -44,8 +43,7 @@ pub(crate) struct GameSettings {
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
-        let project_dirs = project_dirs()
-            .context("couldn't find config dir")?;
+        let project_dirs = project_dirs().context("couldn't find config dir")?;
         let config_dir = project_dirs.config_dir();
         if !config_dir.exists() {
             create_dir_all(config_dir)?;
@@ -82,24 +80,24 @@ pub(crate) fn project_dirs() -> Option<directories::ProjectDirs> {
     directories::ProjectDirs::from("foo", "drey7925", "perovskite")
 }
 
-    /// Replaces the user's home directory with an environment variable.
-    /// Selfishly, I use this to avoid showing my username when publicly streaming
-    /// a development session that might show the client log.
-    pub fn clean_path(path: PathBuf) -> String {
-        let user_dirs = directories::UserDirs::new();
-        if let Some(user_dirs) = user_dirs {
-            if cfg!(target_os = "windows") {
-                path.strip_prefix(user_dirs.home_dir())
-                    .map(|p| format!("%UserProfile%\\{}", p.display()))
-                    .unwrap_or(path.display().to_string())
-            } else if cfg!(target_os = "linux") {
-                path.strip_prefix(user_dirs.home_dir())
-                    .map(|p| format!("$HOME/{}", p.display()))
-                    .unwrap_or(path.display().to_string())
-            } else {
-                path.display().to_string()
-            }
+/// Replaces the user's home directory with an environment variable.
+/// Selfishly, I use this to avoid showing my username when publicly streaming
+/// a development session that might show the client log.
+pub fn clean_path(path: PathBuf) -> String {
+    let user_dirs = directories::UserDirs::new();
+    if let Some(user_dirs) = user_dirs {
+        if cfg!(target_os = "windows") {
+            path.strip_prefix(user_dirs.home_dir())
+                .map(|p| format!("%UserProfile%\\{}", p.display()))
+                .unwrap_or(path.display().to_string())
+        } else if cfg!(target_os = "linux") {
+            path.strip_prefix(user_dirs.home_dir())
+                .map(|p| format!("$HOME/{}", p.display()))
+                .unwrap_or(path.display().to_string())
         } else {
             path.display().to_string()
         }
+    } else {
+        path.display().to_string()
     }
+}

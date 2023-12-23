@@ -17,7 +17,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rocksdb::{Options, DB, ReadOptions};
+use rocksdb::{Options, ReadOptions, DB};
 use tracy_client::span;
 
 use super::database_engine::GameDatabase;
@@ -57,7 +57,9 @@ impl GameDatabase for RocksDbBackend {
         let _span = span!("db get nontemporal");
         let mut opts = ReadOptions::default();
         opts.fill_cache(false);
-        self.db.get_opt(key, &opts).with_context(|| "RocksDB get failed")
+        self.db
+            .get_opt(key, &opts)
+            .with_context(|| "RocksDB get failed")
     }
 
     fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
@@ -76,7 +78,11 @@ impl GameDatabase for RocksDbBackend {
         self.db.flush().with_context(|| "RocksDB flush failed")
     }
 
-    fn read_prefix(&self, prefix: &[u8], callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>) -> Result<()> {
+    fn read_prefix(
+        &self,
+        prefix: &[u8],
+        callback: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,
+    ) -> Result<()> {
         let _span = span!("db read prefix");
         let mut opts = ReadOptions::default();
         opts.fill_cache(false);

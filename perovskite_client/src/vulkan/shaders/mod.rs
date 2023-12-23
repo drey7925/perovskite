@@ -17,7 +17,7 @@
 use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
 
-use super::{CommandBufferBuilder, VulkanWindow, VulkanContext};
+use super::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 
 pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
@@ -205,7 +205,9 @@ pub(crate) trait PipelineProvider
 where
     Self: Sized,
 {
-    type DrawCall<'a> where Self: 'a;
+    type DrawCall<'a>
+    where
+        Self: 'a;
     type PerPipelineConfig<'a>
     where
         Self: 'a;
@@ -223,5 +225,5 @@ pub(crate) struct SceneState {
     pub(crate) vp_matrix: Matrix4<f32>,
     pub(crate) global_light_color: [f32; 3],
     pub(crate) clear_color: [f32; 4],
-    pub(crate) global_light_direction: Vector3<f32>
+    pub(crate) global_light_direction: Vector3<f32>,
 }

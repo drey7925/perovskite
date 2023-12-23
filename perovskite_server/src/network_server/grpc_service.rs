@@ -176,7 +176,6 @@ async fn game_stream_impl(
                 .map_err(|_| anyhow::Error::msg("Failed to send auth error"));
         }
     };
-    
 
     if SERVER_MIN_PROTOCOL_VERSION > auth_outcome.max_protocol_version {
         bail!("Client is too old");

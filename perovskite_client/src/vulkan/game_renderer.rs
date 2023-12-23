@@ -38,9 +38,10 @@ use winit::{
 };
 
 use crate::{
+    block_renderer::{VkChunkPass, VkChunkVertexData},
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
-    net_client, block_renderer::{VkChunkVertexData, VkChunkPass},
+    net_client,
 };
 
 use super::{
@@ -135,7 +136,10 @@ impl ActiveGame {
             self.cube_draw_calls.push(CubeGeometryDrawCall {
                 models: VkChunkVertexData {
                     solid_opaque: None,
-                    transparent: Some(VkChunkPass { vtx: vtx.clone(), idx: idx.clone() }),
+                    transparent: Some(VkChunkPass {
+                        vtx: vtx.clone(),
+                        idx: idx.clone(),
+                    }),
                     translucent: None,
                 },
                 model_matrix: translation,
@@ -147,11 +151,10 @@ impl ActiveGame {
             self.client_state.chunks.renderable_chunks_cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
-        self.cube_draw_calls.extend(
-            chunk_lock
-                .iter()
-                .filter_map(|(coord, chunk)| chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)),
-        );
+        self.cube_draw_calls
+            .extend(chunk_lock.iter().filter_map(|(coord, chunk)| {
+                chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)
+            }));
         plot!(
             "chunk_rate",
             self.cube_draw_calls.len() as f64 / chunk_lock.len() as f64

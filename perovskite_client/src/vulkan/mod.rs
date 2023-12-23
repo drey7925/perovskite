@@ -38,7 +38,7 @@ use vulkano::{
         physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue,
         QueueCreateInfo,
     },
-    format::{Format, FormatFeatures, NumericType, ClearValue},
+    format::{ClearValue, Format, FormatFeatures, NumericType},
     image::{
         view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
@@ -135,7 +135,10 @@ impl VulkanWindow {
         self.vk_ctx.clone()
     }
 
-    pub(crate) fn create(event_loop: &EventLoop<()>, settings: &Arc<ArcSwap<GameSettings>>) -> Result<VulkanWindow> {
+    pub(crate) fn create(
+        event_loop: &EventLoop<()>,
+        settings: &Arc<ArcSwap<GameSettings>>,
+    ) -> Result<VulkanWindow> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
         let required_extensions = vulkano_win::required_extensions(&library);
@@ -181,8 +184,12 @@ impl VulkanWindow {
             ..Features::empty()
         };
 
-        let (physical_device, queue_family_index) =
-            select_physical_device(&instance, &surface, &device_extensions, &settings.load().render.preferred_gpu)?;
+        let (physical_device, queue_family_index) = select_physical_device(
+            &instance,
+            &surface,
+            &device_extensions,
+            &settings.load().render.preferred_gpu,
+        )?;
 
         let (vk_device, mut queues) = Device::new(
             physical_device.clone(),

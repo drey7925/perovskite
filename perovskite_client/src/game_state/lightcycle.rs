@@ -1,4 +1,4 @@
-use cgmath::{Vector3, Deg, Angle};
+use cgmath::{Angle, Deg, Vector3};
 use perovskite_core::time::TimeState;
 use splines::{Interpolation, Key, Spline};
 
@@ -54,10 +54,14 @@ impl LightCycle {
         }
     }
     pub(crate) fn get_sky_color(&self) -> Vector3<f32> {
-        self.sky_color.clamped_sample(self.time_state.time_of_day() as f32).unwrap_or(Vector3::new(0.0, 0.0, 0.0))
+        self.sky_color
+            .clamped_sample(self.time_state.time_of_day() as f32)
+            .unwrap_or(Vector3::new(0.0, 0.0, 0.0))
     }
     pub(crate) fn get_light_color(&self) -> Vector3<f32> {
-        self.light_color.clamped_sample(self.time_state.time_of_day() as f32).unwrap_or(Vector3::new(0.0, 0.0, 0.0))
+        self.light_color
+            .clamped_sample(self.time_state.time_of_day() as f32)
+            .unwrap_or(Vector3::new(0.0, 0.0, 0.0))
     }
     pub(crate) fn get_light_direction(&self) -> Vector3<f32> {
         let sun_angle = Deg(360.) * (self.time_state.time_of_day() as f32);
@@ -66,15 +70,18 @@ impl LightCycle {
             sun_angle.sin(),
             // At midnight, 1.0 (down in vulkan)
             sun_angle.cos(),
-            0.
+            0.,
         )
     }
     pub(crate) fn get_colors(&self) -> (Vector3<f32>, Vector3<f32>, Vector3<f32>) {
-        (self.get_sky_color(), self.get_light_color(), self.get_light_direction())
+        (
+            self.get_sky_color(),
+            self.get_light_color(),
+            self.get_light_direction(),
+        )
     }
 
     pub(crate) fn time_state_mut(&mut self) -> &mut TimeState {
         &mut self.time_state
     }
 }
-

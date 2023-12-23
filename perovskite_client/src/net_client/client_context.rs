@@ -1,20 +1,23 @@
 use std::{
     backtrace,
-    collections::{HashMap, hash_map::Entry},
+    collections::{hash_map::Entry, HashMap},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use crate::{game_state::{
-    chunk::SnappyDecodeHelper, items::ClientInventory, ClientState, GameAction, entities::GameEntity,
-}, net_client::{MIN_PROTOCOL_VERSION, MAX_PROTOCOL_VERSION}};
+use crate::{
+    game_state::{
+        chunk::SnappyDecodeHelper, entities::GameEntity, items::ClientInventory, ClientState,
+        GameAction,
+    },
+    net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
+};
 use anyhow::Result;
 use cgmath::{vec3, InnerSpace};
 use futures::StreamExt;
 use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
-    constants::permissions,
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
@@ -33,7 +36,7 @@ pub(crate) async fn make_contexts(
     action_receiver: mpsc::Receiver<GameAction>,
     // Not yet used, only one protocol version is supported
     protocol_version: u32,
-    initial_state_notification: Arc<tokio::sync::Notify>
+    initial_state_notification: Arc<tokio::sync::Notify>,
 ) -> Result<(InboundContext, OutboundContext)> {
     let cancellation = client_state.shutdown.clone();
 
@@ -65,7 +68,7 @@ pub(crate) async fn make_contexts(
         neighbor_propagator_handles,
         snappy_helper: SnappyDecodeHelper::new(),
         protocol_version,
-        initial_state_notification
+        initial_state_notification,
     };
 
     let outbound = OutboundContext {
@@ -625,39 +628,56 @@ impl InboundContext {
         Ok(())
     }
 
-    async fn handle_client_state_update(&mut self, state_update: &rpc::SetClientState) -> Result<()> {
+    async fn handle_client_state_update(
+        &mut self,
+        state_update: &rpc::SetClientState,
+    ) -> Result<()> {
         self.initial_state_notification.notify_one();
         self.client_state.handle_server_update(state_update)
     }
 
     async fn handle_entity_movement(&mut self, movement: &rpc::EntityMovement) -> Result<()> {
         if movement.remove {
-            if self.client_state.entities.lock().entities.remove(&movement.entity_id).is_none() {
+            if self
+                .client_state
+                .entities
+                .lock()
+                .entities
+                .remove(&movement.entity_id)
+                .is_none()
+            {
                 self.send_bugcheck(format!(
                     "Got remove for non-existent entity {}",
                     movement.entity_id
-                )).await?;
+                ))
+                .await?;
             }
-            return Ok(())
+            return Ok(());
         }
 
         let position = match &movement.position {
             Some(position) => position.try_into()?,
             None => {
-                return self.send_bugcheck(format!(
-                    "Got move for entity {} with no position",
-                    movement.entity_id
-                )).await
+                return self
+                    .send_bugcheck(format!(
+                        "Got move for entity {} with no position",
+                        movement.entity_id
+                    ))
+                    .await
             }
         };
-        match self.client_state.entities.lock().entities.entry(movement.entity_id) {
+        match self
+            .client_state
+            .entities
+            .lock()
+            .entities
+            .entry(movement.entity_id)
+        {
             Entry::Occupied(mut entry) => {
                 entry.get_mut().position = position;
-            },
+            }
             Entry::Vacant(entry) => {
-                entry.insert(GameEntity {
-                    position,
-                });
+                entry.insert(GameEntity { position });
             }
         }
 

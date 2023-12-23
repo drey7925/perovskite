@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use anyhow::Result;
 use perovskite_core::{
@@ -46,13 +46,11 @@ use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
     game_map::{
-        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings,
-        TimerState, VerticalNeighborTimerCallback,
+        BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerState,
+        VerticalNeighborTimerCallback,
     },
     items::{HasInteractionRules, InteractionRuleExt, Item, ItemStack},
-    GameState,
 };
-use rand::Rng;
 
 use crate::{
     game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
@@ -772,8 +770,8 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                 let bottom_block = lower_chunk.get_block(lower_coord);
                 let top_block = upper_chunk.get_block(upper_coord);
                 if top_block != self.air
-                        && replaceable_blocks.contains(bottom_block)
-                        && blocks.contains(&top_block.base_id())
+                    && replaceable_blocks.contains(bottom_block)
+                    && blocks.contains(&top_block.base_id())
                 {
                     MapChunk::swap_blocks_across_chunks(
                         lower_chunk,

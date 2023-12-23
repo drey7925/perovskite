@@ -6,7 +6,7 @@ pub struct ChatMessage {
     timestamp: Instant,
     origin: String,
     origin_color: (u8, u8, u8),
-    text: String
+    text: String,
 }
 
 impl ChatMessage {

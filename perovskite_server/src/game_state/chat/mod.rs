@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use perovskite_core::{chat::ChatMessage, constants::permissions};
-use tokio::{sync::broadcast, task::block_in_place};
+use tokio::sync::broadcast;
 
 use self::commands::CommandManager;
 
@@ -37,10 +37,8 @@ impl ChatState {
             if !initiator.check_permission_if_player(permissions::CHAT) {
                 initiator
                     .send_chat_message(
-                        ChatMessage::new_server_message(format!(
-                            "You are not permitted to chat."
-                        ))
-                        .with_color((255, 0, 0)),
+                        ChatMessage::new_server_message(format!("You are not permitted to chat."))
+                            .with_color((255, 0, 0)),
                     )
                     .await?;
                 bail!("Insufficient permissions");

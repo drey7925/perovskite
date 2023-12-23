@@ -18,7 +18,6 @@ use std::{
     any::Any,
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap, HashSet},
-    fmt::Debug,
     ops::{AddAssign, Deref, DerefMut},
     sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
@@ -36,7 +35,7 @@ use super::{
     items::{Item, ItemManager, ItemStack},
 };
 use perovskite_core::{
-    block_id::{BlockError, BlockId, BLOCK_VARIANT_MASK},
+    block_id::{BlockError, BlockId},
     constants::blocks::AIR,
     coordinates::BlockCoordinate,
     protocol::blocks as blocks_proto,
@@ -265,7 +264,7 @@ impl BlockType {
     }
 
     pub fn block_type_ref(&self, variant: u16) -> Result<BlockTypeHandle> {
-        if let Some(unique_id) = self.block_type_manager_id {
+        if let Some(_unique_id) = self.block_type_manager_id {
             Ok(self.id(variant)?)
         } else {
             bail!(BlockError::BlockNotRegistered(

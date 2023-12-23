@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
-use cgmath::{vec3, Matrix4, SquareMatrix, Deg};
+use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 use image::{DynamicImage, RgbaImage};
-use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef};
+use perovskite_core::{
+    block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
+};
 use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -20,8 +22,9 @@ use vulkano::{
 };
 
 use crate::{
-    block_renderer::{BlockRenderer, ClientBlockTypeManager, VkChunkPass, VkChunkVertexData},
-    game_state::chunk::{ChunkDataView, ChunkOffsetExt}, vulkan::shaders::SceneState,
+    block_renderer::{BlockRenderer, VkChunkPass, VkChunkVertexData},
+    game_state::chunk::{ChunkDataView, ChunkOffsetExt},
+    vulkan::shaders::SceneState,
 };
 
 use super::{
@@ -30,7 +33,7 @@ use super::{
         cube_geometry::{
             BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
         },
-        PipelineProvider, PipelineWrapper,
+        PipelineWrapper,
     },
     Texture2DHolder, VulkanContext,
 };
@@ -54,7 +57,11 @@ impl MiniBlockRenderer {
         air_block: BlockId,
     ) -> Result<Self> {
         // All compliant GPUs should be able to render to R8G8B8A8_SRGB
-        let render_pass = make_render_pass(ctx.vk_device.clone(), Format::R8G8B8A8_SRGB, ctx.depth_format)?;
+        let render_pass = make_render_pass(
+            ctx.vk_device.clone(),
+            Format::R8G8B8A8_SRGB,
+            ctx.depth_format,
+        )?;
         let target_image = AttachmentImage::with_usage(
             ctx.allocator(),
             surface_size,
@@ -68,8 +75,7 @@ impl MiniBlockRenderer {
         let target_image = ImageView::new(target_image, create_info)?;
 
         let depth_buffer = ImageView::new_default(
-            AttachmentImage::transient(ctx.allocator(), surface_size, ctx.depth_format)
-                .unwrap(),
+            AttachmentImage::transient(ctx.allocator(), surface_size, ctx.depth_format).unwrap(),
         )?;
 
         let framebuffer_create_info = FramebufferCreateInfo {
@@ -117,7 +123,6 @@ impl MiniBlockRenderer {
         block_id: BlockId,
         block_def: &BlockTypeDef,
     ) -> Result<DynamicImage> {
-        
         let mut vtx = vec![];
         let mut idx = vec![];
 
@@ -140,7 +145,10 @@ impl MiniBlockRenderer {
         let mut commands = self.ctx.start_command_buffer()?;
         commands.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into()), Some(self.ctx.depth_clear_value())],
+                clear_values: vec![
+                    Some([0.0, 0.0, 0.0, 0.0].into()),
+                    Some(self.ctx.depth_clear_value()),
+                ],
                 ..RenderPassBeginInfo::framebuffer(self.framebuffer.clone())
             },
             SubpassContents::Inline,
@@ -206,7 +214,7 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
 
 lazy_static::lazy_static! {
     static ref SCENE_STATE: SceneState = {
-        let projection = cgmath::perspective(Deg(45.0), 1.0, 0.01, 1000.);
+        let _projection = cgmath::perspective(Deg(45.0), 1.0, 0.01, 1000.);
         let projection = cgmath::ortho(-1., 1., -1., 1., -2., 2.);
         let rotation = Matrix4::from_angle_x(Deg(30.0)) * Matrix4::from_angle_y(Deg(45.0));
         let translation = Matrix4::from_translation(vec3(0.0, 0.0, -1.0));

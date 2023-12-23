@@ -1,6 +1,5 @@
 use parking_lot::{Condvar, Mutex, RwLockReadGuard, RwLockWriteGuard};
 
-
 pub(crate) struct RwCondvar {
     c: Condvar,
     m: Mutex<()>,
@@ -40,7 +39,7 @@ impl RwCondvar {
 /// An atomic variation of std::time::Instant, able to count
 /// about 584 years from when it is constructed with new.
 /// It cannot represent times before when it was constructed.
-/// 
+///
 /// TODO: On machines that do not support 64-bit atomics,
 /// provide a fallback that uses a mutex instead.
 pub(crate) struct AtomicInstant {

@@ -17,6 +17,7 @@
 pub mod blocks;
 pub mod chat;
 pub mod client_ui;
+pub mod entities;
 pub mod event;
 pub mod game_behaviors;
 pub mod game_map;
@@ -25,7 +26,6 @@ pub mod inventory;
 pub mod items;
 pub mod mapgen;
 pub mod player;
-pub mod entities;
 
 #[cfg(test)]
 pub mod tests;
@@ -50,8 +50,8 @@ use crate::media::MediaManager;
 use crate::network_server::auth::AuthService;
 
 use self::blocks::BlockTypeManager;
-use self::chat::ChatState;
 use self::chat::commands::CommandManager;
+use self::chat::ChatState;
 use self::entities::EntityManager;
 use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
@@ -153,11 +153,11 @@ impl GameState {
 
     /// Returns an extension that a plugin registered with [crate::server::ServerBuilder::add_extension],
     /// typically at some point during its initialization.
-    /// 
+    ///
     /// This is meant for use by a plugin with its own extension (to access its own data).
-    /// 
+    ///
     /// A more ergonomic API for *consumers* of a plugin would be to use a mixin trait:
-    /// * Create a new public trait and implement it for GameState (coherence rules allow you to implement 
+    /// * Create a new public trait and implement it for GameState (coherence rules allow you to implement
     ///   your own trait)
     /// * In the implementation of the trait, call this method to get access to the desired plugin data
     pub fn extension<T: GameStateExtension>(&self) -> Option<&T> {
@@ -269,8 +269,7 @@ where
     }
 }
 
-pub trait GameStateExtension: Send + Sync + 'static {
-}
+pub trait GameStateExtension: Send + Sync + 'static {}
 
 fn put_double_meta_value(db: &dyn GameDatabase, name: &[u8], value: f64) -> Result<()> {
     let mut key = b"double_".to_vec();

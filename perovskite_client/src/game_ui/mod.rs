@@ -7,12 +7,12 @@ use std::{
 use image::{DynamicImage, RgbImage};
 use parking_lot::Mutex;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
-use texture_packer::{exporter::ImageExporter, importer::ImageImporter, Rect, TexturePacker};
+use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
 use anyhow::{Error, Result};
 
 use crate::{
-    block_renderer::{AsyncMediaLoader, BlockRenderer},
+    block_renderer::BlockRenderer,
     cache::CacheManager,
     game_state::items::ClientItemManager,
     vulkan::{mini_renderer::MiniBlockRenderer, Texture2DHolder, VulkanContext},

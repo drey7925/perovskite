@@ -1,5 +1,5 @@
-use perovskite_server::game_state::items::{Item, ItemManager, ItemStack};
 use parking_lot::RwLock;
+use perovskite_server::game_state::items::{Item, ItemManager, ItemStack};
 
 use crate::maybe_export;
 
@@ -141,4 +141,3 @@ impl<const N: usize, T> RecipeImpl<N, T> {
         true
     }
 }
-

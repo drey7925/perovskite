@@ -7,10 +7,7 @@ use crate::{
 };
 
 use anyhow::Result;
-use perovskite_core::{
-    block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE,
-    protocol::blocks::AxisAlignedBoxes,
-};
+use perovskite_core::{block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE};
 use perovskite_server::game_state::{blocks::FastBlockName, event::HandlerContext};
 use smallvec::SmallVec;
 
@@ -487,11 +484,11 @@ fn delayed_edge(
 
             let variant_count = variant >> 3;
             let new_variant = (variant & 0x7) | ((variant_count.saturating_sub(1)) << 3);
-            
+
             let is_off = block.equals_ignore_variant(off);
             let is_on = block.equals_ignore_variant(on);
-            
-            if is_off || is_on{
+
+            if is_off || is_on {
                 if state == super::PinState::High {
                     if variant_count == 0 {
                         tracing::warn!("deferred edge but no pending edges");
@@ -506,7 +503,7 @@ fn delayed_edge(
                     return Ok((is_on, new_variant));
                 }
             }
-            
+
             Ok((false, 0))
         })?;
     if edge_happened {
@@ -589,8 +586,7 @@ impl CircuitBlockCallbacks for DffImpl {
             } else {
                 variant & !DFF_GATE_INPUT_CLOCK_WAS_HIGH_VARIANT_BIT
             };
-            if block.equals_ignore_variant(self.off) || block.equals_ignore_variant(self.on)
-            {
+            if block.equals_ignore_variant(self.off) || block.equals_ignore_variant(self.on) {
                 if pending_count > 8 {
                     *block = ctx.block_types().resolve_name(&self.broken).unwrap();
                     return Ok(false);

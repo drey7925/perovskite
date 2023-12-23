@@ -58,7 +58,7 @@ pub struct Item {
     /// If the block should still be dug in the normal way, this handler is responsible for
     /// calling game_map().dig_block(...). It may call that function multiple times, e.g.
     /// if a tool digs multiple coordinates in one activation.
-    /// 
+    ///
     /// Note - if a plugin calls game_map().dig_block directly, then this handler will not be called.
     ///
     /// If None, the current item stack will not be updated, and the block's dig handler will be run.
@@ -145,13 +145,18 @@ impl Item {
     }
 }
 
-fn eval_interaction_rules<'a>(rules: &'a [proto::InteractionRule], block_type: &BlockType) -> Option<&'a proto::InteractionRule> {
+fn eval_interaction_rules<'a>(
+    rules: &'a [proto::InteractionRule],
+    block_type: &BlockType,
+) -> Option<&'a proto::InteractionRule> {
     let block_groups = block_type
         .client_info
         .groups
         .iter()
         .collect::<FxHashSet<_>>();
-    rules.iter().find(|rule| rule.block_group.iter().all(|x| block_groups.contains(x)))
+    rules
+        .iter()
+        .find(|rule| rule.block_group.iter().all(|x| block_groups.contains(x)))
 }
 
 impl HasInteractionRules for &Item {
@@ -520,8 +525,9 @@ impl HasInteractionRules for Option<&Item> {
     }
 }
 
-lazy_static!{
-    static ref DEFAULT_INTERACTION_RULES: Vec<proto::InteractionRule> = default_item_interaction_rules();
+lazy_static! {
+    static ref DEFAULT_INTERACTION_RULES: Vec<proto::InteractionRule> =
+        default_item_interaction_rules();
 }
 
 pub(crate) const NO_TOOL: &str = "internal:no_tool";

@@ -1,12 +1,10 @@
-use std::{
-    ops::{BitXor, Range},
-    sync::Arc,
-};
+use std::{ops::BitXor, sync::Arc};
 
 use noise::{MultiFractal, NoiseFn};
 use perovskite_core::{
+    block_id::BlockId,
     constants::blocks::AIR,
-    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset}, block_id::BlockId,
+    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
 use perovskite_server::game_state::{
     blocks::{BlockTypeHandle, BlockTypeManager},
@@ -16,7 +14,7 @@ use perovskite_server::game_state::{
 
 use super::{
     basic_blocks::{DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, STONE, WATER},
-    foliage::{MAPLE_LEAVES, MAPLE_TREE, CACTUS},
+    foliage::{CACTUS, MAPLE_LEAVES, MAPLE_TREE},
 };
 
 const ELEVATION_FINE_INPUT_SCALE: f64 = 1.0 / 60.0;
@@ -212,15 +210,15 @@ impl MapgenInterface for DefaultMapgen {
                         chunk.set_block(offset, self.air, None);
                         continue;
                     }
-                    let gen_ore = || {
-                        self.generate_ore(block_coord, cave_ore_bias)
-                    };
+                    let gen_ore = || self.generate_ore(block_coord, cave_ore_bias);
 
                     let block = match biome {
                         Biome::DefaultGrassy => {
                             self.generate_default_biome(vert_offset, block_coord, gen_ore)
                         }
-                        Biome::SandyBeach => self.generate_sandy_beach(vert_offset, block_coord, gen_ore),
+                        Biome::SandyBeach => {
+                            self.generate_sandy_beach(vert_offset, block_coord, gen_ore)
+                        }
                         Biome::Desert => self.generate_desert(vert_offset, block_coord, gen_ore),
                     };
                     chunk.set_block(offset, block, None);
@@ -293,17 +291,18 @@ impl DefaultMapgen {
                     .checked_add(i)
                     .zip((chunk_coord.z * 16).checked_add(j));
                 if let Some((x, z)) = block_xz {
-                    let (y, biome) =
-                        if x.div_euclid(16) == chunk_coord.x && z.div_euclid(16) == chunk_coord.z {
-                            (
-                                heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize] as i32,
-                                biome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
-                            )
-                        } else {
-                            let elevation = self.elevation_noise.get(x, z);
-                            let biome = self.biome_noise.get(x, z, elevation);
-                            (elevation as i32, biome)
-                        };
+                    let (y, biome) = if x.div_euclid(16) == chunk_coord.x
+                        && z.div_euclid(16) == chunk_coord.z
+                    {
+                        (
+                            heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize] as i32,
+                            biome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
+                        )
+                    } else {
+                        let elevation = self.elevation_noise.get(x, z);
+                        let biome = self.biome_noise.get(x, z, elevation);
+                        (elevation as i32, biome)
+                    };
                     if y <= 0 {
                         continue;
                     }
@@ -318,19 +317,22 @@ impl DefaultMapgen {
                             if tree_value < tree_cutoff {
                                 self.make_tree(chunk_coord, chunk, x, y, z);
                             }
-                        },
+                        }
                         Biome::Desert => {
-                            let cactus_value = self.fast_uniform_2d(x, z, self.seed.wrapping_add(1));
+                            let cactus_value =
+                                self.fast_uniform_2d(x, z, self.seed.wrapping_add(1));
                             let cactus_cutoff = self.cactus_density_noise.get([
                                 (x as f64) * CACTUS_DENSITY_INPUT_SCALE,
                                 (z as f64) * CACTUS_DENSITY_INPUT_SCALE,
                             ]) * CACTUS_DENSITY_OUTPUT_SCALE
                                 + CACTUS_DENSITY_OUTPUT_OFFSET;
                             if cactus_value < cactus_cutoff {
-                                let cactus_height =  (2.0 * self.fast_uniform_2d(x, z, self.seed.wrapping_add(2)) + 2.5) as i32;
+                                let cactus_height =
+                                    (2.0 * self.fast_uniform_2d(x, z, self.seed.wrapping_add(2))
+                                        + 2.5) as i32;
                                 self.make_cactus(chunk_coord, chunk, x, y, z, cactus_height);
                             }
-                        },
+                        }
                         Biome::SandyBeach => {
                             // TODO beach plants?
                         }
@@ -372,29 +374,31 @@ impl DefaultMapgen {
 
     // Generate a cactus at the given location. The y coordinate represents the dirt block just below the cactus.
     fn make_cactus(
-            &self,
-            chunk_coord: ChunkCoordinate,
-            chunk: &mut MapChunk,
-            x: i32,
-            y: i32,
-            z: i32,
-            height: i32
-        ) {
-            for h in 1..=height {
-                let coord = BlockCoordinate::new(x, y + h, z);
-                if coord.chunk() == chunk_coord {
-                    chunk.set_block(coord.offset(), self.cactus, None);
-                }
+        &self,
+        chunk_coord: ChunkCoordinate,
+        chunk: &mut MapChunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        height: i32,
+    ) {
+        for h in 1..=height {
+            let coord = BlockCoordinate::new(x, y + h, z);
+            if coord.chunk() == chunk_coord {
+                chunk.set_block(coord.offset(), self.cactus, None);
             }
         }
+    }
 
     fn generate_default_biome<F>(
         &self,
         vert_offset: i32,
         block_coord: BlockCoordinate,
-        gen_ore: F
+        gen_ore: F,
     ) -> perovskite_core::block_id::BlockId
-    where F: Fn() -> perovskite_core::block_id::BlockId {
+    where
+        F: Fn() -> perovskite_core::block_id::BlockId,
+    {
         if vert_offset > 0 {
             if block_coord.y > 0 {
                 self.air
@@ -415,9 +419,11 @@ impl DefaultMapgen {
         &self,
         vert_offset: i32,
         block_coord: BlockCoordinate,
-        gen_ore: F
+        gen_ore: F,
     ) -> perovskite_core::block_id::BlockId
-    where F: Fn() -> perovskite_core::block_id::BlockId {
+    where
+        F: Fn() -> perovskite_core::block_id::BlockId,
+    {
         if vert_offset > 0 {
             if block_coord.y > 0 {
                 self.air
@@ -436,9 +442,11 @@ impl DefaultMapgen {
         &self,
         vert_offset: i32,
         block_coord: BlockCoordinate,
-        gen_ore: F
+        gen_ore: F,
     ) -> perovskite_core::block_id::BlockId
-    where F: Fn() -> perovskite_core::block_id::BlockId{
+    where
+        F: Fn() -> perovskite_core::block_id::BlockId,
+    {
         if vert_offset > 0 {
             if block_coord.y > 0 {
                 self.air

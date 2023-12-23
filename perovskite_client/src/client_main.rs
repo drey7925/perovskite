@@ -14,8 +14,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-
 use anyhow::Result;
 use clap::Parser;
 use winit::event_loop::EventLoop;

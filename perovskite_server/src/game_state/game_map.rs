@@ -51,7 +51,7 @@ use super::{
     GameState,
 };
 
-use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use perovskite_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::map as mapchunk_proto,
@@ -2762,7 +2762,7 @@ fn reconcile_after_bulk_handler(
     game_state: &Arc<GameState>,
     coord: ChunkCoordinate,
     permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
-    update_time: Instant,
+    _update_time: Instant,
 ) {
     let mut seen_blocks = FxHashSet::default();
     let mut any_updated = false;

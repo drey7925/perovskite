@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 use std::iter::once;
-use std::sync::Weak;
+
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Duration;

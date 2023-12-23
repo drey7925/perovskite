@@ -135,7 +135,6 @@ impl ChunkColumn {
         assert!(self.present.remove(&chunk_y).is_some());
     }
 
-
     /// Returns a cursor that starts in a state where it can propagate light *into* the given chunk
     /// from the previous chunk above it.
     pub fn cursor_into(&self, chunk_y: i32) -> ChunkColumnCursor<'_> {
@@ -144,7 +143,8 @@ impl ChunkColumn {
             .present
             .range((chunk_y + 1)..)
             .next()
-            .map(|(pos, guard)| (*pos, guard.read())).unzip();
+            .map(|(pos, guard)| (*pos, guard.read()))
+            .unzip();
 
         let current = self.present.get(&chunk_y).unwrap().write();
         ChunkColumnCursor {

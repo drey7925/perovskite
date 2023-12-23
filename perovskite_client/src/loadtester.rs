@@ -23,9 +23,7 @@ pub struct Loadtester {
 }
 impl Loadtester {
     pub fn new() -> Self {
-        let settings = Arc::new(ArcSwap::new(
-            GameSettings::default().into(),
-        ));
+        let settings = Arc::new(ArcSwap::new(GameSettings::default().into()));
         Self {
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -33,8 +31,11 @@ impl Loadtester {
                 .unwrap(),
             workers: vec![],
             vk_ctx: Arc::new(
-                VulkanWindow::create(Box::<EventLoop<()>>::leak(Box::new(EventLoop::new())), &settings)
-                    .unwrap(),
+                VulkanWindow::create(
+                    Box::<EventLoop<()>>::leak(Box::new(EventLoop::new())),
+                    &settings,
+                )
+                .unwrap(),
             ),
             settings,
             cancel: CancellationToken::new(),
@@ -81,16 +82,19 @@ impl Loadtester {
                     phys.set_position(new_pos);
                     pos
                 };
-                cs.actions.send(crate::game_state::GameAction::Dig(DigTapAction {
-                    target: BlockCoordinate::new(pos.x as i32, pos.y as i32, pos.z as i32),
-                    prev: None,
-                    item_slot: 0,
-                    player_pos: PlayerPositionUpdate {
-                        position: pos,
-                        velocity: Vector3::zero(),
-                        face_direction: (0., 0.),
-                    },
-                })).await.unwrap();
+                cs.actions
+                    .send(crate::game_state::GameAction::Dig(DigTapAction {
+                        target: BlockCoordinate::new(pos.x as i32, pos.y as i32, pos.z as i32),
+                        prev: None,
+                        item_slot: 0,
+                        player_pos: PlayerPositionUpdate {
+                            position: pos,
+                            velocity: Vector3::zero(),
+                            face_direction: (0., 0.),
+                        },
+                    }))
+                    .await
+                    .unwrap();
             }
             panic!();
         }))

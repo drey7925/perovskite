@@ -40,16 +40,17 @@ pub mod perovskite {
         pub mod ui {
             tonic::include_proto!("perovskite.protocol.ui");
         }
-        pub const DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("perovskite_descriptor");
+        pub const DESCRIPTOR_SET: &[u8] =
+            tonic::include_file_descriptor_set!("perovskite_descriptor");
     }
 }
 pub use perovskite::protocol;
 
+pub mod auth;
 pub mod block_id;
+pub mod chat;
 pub mod constants;
 pub mod coordinates;
-pub mod auth;
 pub mod items;
 pub mod lighting;
-pub mod chat;
 pub mod time;

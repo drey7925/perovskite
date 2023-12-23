@@ -14,18 +14,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::panic::AssertUnwindSafe;
-use std::future::Future;
 use anyhow::Error;
 use futures::FutureExt;
-
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 
 use super::event::EventInitiator;
 
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
 /// Currently a no-op
 #[inline]
-pub(crate) fn run_handler_impl<T, F>(closure: F, name: &str, _initiator: &EventInitiator<'_>) -> anyhow::Result<T>
+pub(crate) fn run_handler_impl<T, F>(
+    closure: F,
+    name: &str,
+    _initiator: &EventInitiator<'_>,
+) -> anyhow::Result<T>
 where
     F: FnOnce() -> anyhow::Result<T>,
 {
@@ -38,12 +41,10 @@ where
 
 #[macro_export]
 macro_rules! run_handler {
-    ($closure:expr, $name:literal, $initiator:expr $(,)?) => {
-        {
-            let _span = tracy_client::span!(concat!($name, " handler"));
-            $crate::game_state::handlers::run_handler_impl($closure, $name, $initiator)
-        }
-    };
+    ($closure:expr, $name:literal, $initiator:expr $(,)?) => {{
+        let _span = tracy_client::span!(concat!($name, " handler"));
+        $crate::game_state::handlers::run_handler_impl($closure, $name, $initiator)
+    }};
 }
 
 pub(crate) async fn run_async_handler_impl<T, F>(
@@ -52,16 +53,14 @@ pub(crate) async fn run_async_handler_impl<T, F>(
     _initiator: &EventInitiator<'_>,
 ) -> anyhow::Result<T>
 where
-    F: Future<Output = anyhow::Result<T>>
+    F: Future<Output = anyhow::Result<T>>,
 {
     // todo clean up AssertUnwindSafe if possible
     match AssertUnwindSafe(future).catch_unwind().await {
         Ok(x) => x,
         Err(_e) => Err(Error::msg(format!("Handler {} panicked", name))),
     }
-    
 }
-
 
 #[macro_export]
 macro_rules! run_async_handler {

@@ -14,13 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod client_main;
 pub(crate) mod block_renderer;
+pub(crate) mod cache;
+pub mod client_main;
 pub mod game_state;
 pub(crate) mod game_ui;
 pub(crate) mod main_menu;
 pub(crate) mod net_client;
 pub mod vulkan;
-pub(crate) mod cache;
 
 pub mod loadtester;

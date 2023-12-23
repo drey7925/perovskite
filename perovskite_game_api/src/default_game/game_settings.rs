@@ -30,7 +30,8 @@ pub(crate) fn load(data_dir: &PathBuf) -> Result<DefaultGameSettings> {
         log::info!("No settings found; using defaults");
         return Ok(Default::default());
     }
-    let config = ron::from_str::<DefaultGameSettings>(&std::fs::read_to_string(&config_file)?).unwrap();
+    let config =
+        ron::from_str::<DefaultGameSettings>(&std::fs::read_to_string(&config_file)?).unwrap();
     log::info!("Loaded settings from {}", config_file.display());
     Ok(config)
 }

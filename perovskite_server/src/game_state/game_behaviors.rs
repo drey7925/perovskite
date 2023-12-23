@@ -10,11 +10,7 @@ use perovskite_core::{
 use tonic::async_trait;
 
 use super::{
-    client_ui::Popup,
-    event::HandlerContext,
-    inventory::InventoryKey,
-    player::{Player, PlayerContext},
-    GameState,
+    client_ui::Popup, event::HandlerContext, inventory::InventoryKey, player::Player, GameState,
 };
 
 pub trait InventoryPopupProvider: Send + Sync + 'static {

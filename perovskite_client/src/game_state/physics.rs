@@ -19,7 +19,6 @@ use std::{ops::RangeInclusive, sync::Arc, time::Duration};
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3};
 use perovskite_core::{
-    chat::{ChatMessage, CLIENT_INTERNAL_MESSAGE_COLOR, SERVER_MESSAGE_COLOR},
     constants::permissions,
     coordinates::BlockCoordinate,
     protocol::blocks::{

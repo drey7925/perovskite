@@ -93,7 +93,6 @@ impl MainMenu {
                 egui::ComboBox::from_id_source(label.id)
                     .selected_text("Select...")
                     .show_ui(ui, |ui| {
-                        
                         let mut fake_selectable = self.host_field.clone();
                         ui.selectable_value(
                             &mut fake_selectable,
@@ -101,11 +100,7 @@ impl MainMenu {
                             "Select...",
                         );
                         for server in self.previous_servers.iter().rev() {
-                            ui.selectable_value(
-                                &mut self.host_field,
-                                server.clone(),
-                                server,
-                            );
+                            ui.selectable_value(&mut self.host_field, server.clone(), server);
                         }
                     });
             });

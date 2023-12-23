@@ -32,7 +32,6 @@ use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
 use anyhow::{ensure, Context, Error, Result};
-use image::DynamicImage;
 
 use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;

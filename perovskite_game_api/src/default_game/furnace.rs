@@ -19,12 +19,7 @@ use crate::{
     include_texture_bytes,
 };
 
-use super::{
-    basic_blocks::{DIRT, DIRT_WITH_GRASS, STONE},
-    block_groups::BRITTLE,
-    recipes::{RecipeBook, RecipeImpl, RecipeSlot},
-    DefaultGameBuilder, DefaultGameBuilderExtension,
-};
+use super::{block_groups::BRITTLE, recipes::RecipeBook, DefaultGameBuilderExtension};
 
 /// Furnace that's not current lit
 pub const FURNACE: StaticBlockName = StaticBlockName("default:furnace");

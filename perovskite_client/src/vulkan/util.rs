@@ -66,6 +66,10 @@ pub(crate) fn select_physical_device(
             }
         })
         .with_context(|| "no device available")?;
-    log::info!("Selected GPU: {:?}, queue family index: {}", selected_gpu.properties().device_name, queue_family_index);
+    log::info!(
+        "Selected GPU: {:?}, queue family index: {}",
+        selected_gpu.properties().device_name,
+        queue_family_index
+    );
     Ok((selected_gpu, queue_family_index))
 }

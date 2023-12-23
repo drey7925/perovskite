@@ -5,7 +5,9 @@
 use std::collections::VecDeque;
 
 use anyhow::{Context, Result};
-use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate, constants::item_groups::HIDDEN_FROM_CREATIVE};
+use perovskite_core::{
+    block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE, coordinates::BlockCoordinate,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -15,9 +17,9 @@ use crate::{
 };
 
 use super::{
-    get_live_connectivities, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
-    CircuitBlockProperties, CircuitGameBuilerPrivate, CircuitGameStateExtension,
-    CircuitHandlerContext, PinState, events::send_device_overheat,
+    events::send_device_overheat, get_live_connectivities, BlockConnectivity, CircuitBlockBuilder,
+    CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilerPrivate, CircuitHandlerContext,
+    PinState,
 };
 
 pub const WIRE_BLOCK_OFF: StaticBlockName = StaticBlockName("circuits:wire_off");
@@ -173,7 +175,7 @@ impl CircuitBlockCallbacks for WireCallbacksImpl {
         for (connectivity, _) in get_live_connectivities(ctx, coord) {
             resulting_variant |= connectivity.id;
         }
-        
+
         let extension = ctx.circuits_ext();
         let on_base_id = extension.basic_wire_on.0;
         let off_base_id = extension.basic_wire_off.0;
