@@ -834,6 +834,11 @@ impl TryAsHandle for FastBlockName {
         manager.resolve_name(self)
     }
 }
+impl TryAsHandle for &FastBlockName {
+    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
+        manager.resolve_name(self)
+    }
+}
 impl TryAsHandle for &str {
     fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
         manager.get_by_name(self)

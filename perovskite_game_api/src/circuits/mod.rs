@@ -21,6 +21,8 @@ use self::events::CircuitHandlerContext;
 
 mod simple_blocks;
 mod wire;
+// Todo: consider making this pub if it has useful abstractions for custom gates
+mod gates;
 
 /// Constants for blocks that are part of the circuits mechanism
 ///
@@ -87,10 +89,10 @@ impl BlockConnectivity {
         let (dx, dz) = match (self.rotation_mode, variant % 4) {
             (ConnectivityRotation::NoRotation, _) => (self.dx, self.dz),
             (ConnectivityRotation::RotateNeswWithVariant, 0) => (self.dx, self.dz),
-            (ConnectivityRotation::RotateNeswWithVariant, 1) => (-self.dz, self.dx),
+            (ConnectivityRotation::RotateNeswWithVariant, 1) => (self.dz, -self.dx),
             (ConnectivityRotation::RotateNeswWithVariant, 2) => (-self.dx, -self.dz),
-            (ConnectivityRotation::RotateNeswWithVariant, 3) => (self.dz, -self.dx),
-            _ => return None,
+            (ConnectivityRotation::RotateNeswWithVariant, 3) => (-self.dz, self.dx),
+            _ => unreachable!("shouldn't happen, variant % 4 should always be in [0, 3]"),
         };
         coord.try_delta(dx as i32, self.dy as i32, dz as i32)
     }
@@ -376,6 +378,7 @@ impl CircuitGameBuilder for GameBuilder {
 
         wire::register_wire(self)?;
         simple_blocks::register_simple_blocks(self)?;
+        gates::register_base_gates(self)?;
         Ok(())
     }
     fn define_circuit_callbacks(
@@ -594,7 +597,6 @@ mod dispatch {
     }
 
     pub(crate) fn place(coord: BlockCoordinate, ctx: &CircuitHandlerContext<'_>) -> Result<()> {
-        println!("place {:?}", coord);
         let block_id = match ctx.game_map().try_get_block(coord) {
             Some(x) => x,
             None => {
@@ -649,7 +651,6 @@ mod dispatch {
                     continue;
                 }
             };
-            println!("neighbor {:?}", neighbor);
             neighbor_callbacks.update_connectivity(ctx, neighbor)?;
             let outbound_state = callbacks.sample_pin(ctx, coord, neighbor);
             transmit_edge(ctx, neighbor, coord, outbound_state)?;

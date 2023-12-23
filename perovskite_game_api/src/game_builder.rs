@@ -48,7 +48,7 @@ use perovskite_server::{
 use anyhow::Result;
 
 /// Type-safe newtype wrapper for a texture name
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextureName(pub &'static str);
 
 impl From<TextureName> for TextureReference {
@@ -63,6 +63,7 @@ impl From<TextureName> for TextureReference {
 pub(crate) const FALLBACK_UNKNOWN_TEXTURE_NAME: TextureName = TextureName(FALLBACK_UNKNOWN_TEXTURE);
 
 /// Type-safe newtype wrapper for a const/static block name
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StaticBlockName(pub &'static str);
 /// Type-safe wrapper for a block name
 pub struct BlockName(pub String);

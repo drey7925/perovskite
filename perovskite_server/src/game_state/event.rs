@@ -188,6 +188,9 @@ impl<'a> HandlerContext<'a> {
     pub fn new_popup(&self) -> Popup {
         Popup::new(self.game_state.clone())
     }
+    /// Runs the given function in a new blocking task in the background.
+    /// run_deferred returns immediately. This can be used e.g. in a timer while locks are held;
+    /// if the deferred task needs the same locks, it'll wait in the background for them to be released.
     pub fn run_deferred<F>(&self, f: F)
     where
         F: FnOnce(&HandlerContext) -> Result<()> + 'static + Send,
@@ -199,6 +202,24 @@ impl<'a> HandlerContext<'a> {
         };
         tokio::task::spawn_blocking(move || {
             if let Err(e) = f(&our_clone) {
+                tracing::error!("Error in deferred function: {}", e);
+            }
+        });
+    }
+
+    pub fn run_deferred_delayed(
+        &self,
+        delay: std::time::Duration,
+        f: impl FnOnce(&HandlerContext) -> Result<()> + 'static + Send,
+    ) {
+        let our_clone = HandlerContext {
+            tick: self.tick,
+            initiator: self.initiator.clone_to_static(),
+            game_state: self.game_state.clone(),
+        };
+        tokio::task::spawn(async move {
+            tokio::time::sleep(delay).await;
+            if let Err(e) = tokio::task::block_in_place(move || f(&our_clone)) {
                 tracing::error!("Error in deferred function: {}", e);
             }
         });

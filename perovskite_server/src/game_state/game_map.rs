@@ -23,7 +23,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicU32, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -33,12 +33,12 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
+use crate::run_handler;
+use crate::sync::{AtomicInstant, RwCondvar};
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
 };
-use crate::run_handler;
-use crate::sync::{RwCondvar, AtomicInstant};
 
 use super::blocks::BlockInteractionResult;
 use super::{
@@ -920,16 +920,19 @@ impl ServerGameMap {
     ///
     /// This avoids taking write locks or doing expensive IO, at the expense of sometimes not being able to
     /// actually get the block
-    /// 
+    ///
     /// However, it will still wait to get a read lock for the chunk map itself. The only circumstances
     /// where this should fail is if the chunk is unloaded.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockTypeHandle> {
-        let chunk_guard =  self.try_get_chunk(coord.chunk())?;
+        let chunk_guard = self.try_get_chunk(coord.chunk())?;
         // We don't have a mapchunk lock, so we need actual atomic ordering here
         if chunk_guard.fast_path_read_ready.load(Ordering::Acquire) {
-            Some(chunk_guard.atomic_storage[coord.offset().as_index()].load(Ordering::Acquire).into())
-        }
-        else {
+            Some(
+                chunk_guard.atomic_storage[coord.offset().as_index()]
+                    .load(Ordering::Acquire)
+                    .into(),
+            )
+        } else {
             None
         }
     }
@@ -1287,7 +1290,11 @@ impl ServerGameMap {
                 initiator: initiator.clone(),
                 game_state: self.game_state(),
             };
-            result += run_handler!(|| (full_handler)(&ctx, coord, tool), "block_full", initiator,)?;
+            result += run_handler!(
+                || (full_handler)(&ctx, coord, tool),
+                "block_full",
+                initiator,
+            )?;
         }
 
         Ok(result)
@@ -1377,10 +1384,7 @@ impl ServerGameMap {
     }
 
     #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]
-    fn try_get_chunk<'a>(
-        &'a self,
-        coord: ChunkCoordinate,
-    ) -> Option<MapChunkOuterGuard<'a>> {
+    fn try_get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Option<MapChunkOuterGuard<'a>> {
         let shard = shard_id(coord);
         let guard = self.live_chunks[shard].read();
         // We need this check - if the chunk isn't in memory, we cannot construct a MapChunkOuterGuard for it
@@ -1716,15 +1720,14 @@ impl GameMapWriteback {
             match lock.chunks.get(&coord) {
                 Some(chunk_holder) => {
                     if let Some(mut chunk) = chunk_holder.try_get_write()? {
-                        if !chunk.dirty {
-                            warn!("Writeback thread got chunk {:?} but it wasn't dirty", coord);
+                        if chunk.dirty {
+                            self.map.database.put(
+                                &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
+                                &chunk
+                                    .serialize(ChunkUsage::Server, &self.map.game_state())?
+                                    .encode_to_vec(),
+                            )?;
                         }
-                        self.map.database.put(
-                            &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
-                            &chunk
-                                .serialize(ChunkUsage::Server, &self.map.game_state())?
-                                .encode_to_vec(),
-                        )?;
                         chunk.dirty = false;
                     } else {
                         warn!(
@@ -2496,13 +2499,13 @@ impl GameMapTimer {
         };
         let upper_old_block_ids = upper_chunk.clone_block_ids();
         let lower_old_block_ids = lower_chunk.clone_block_ids();
-        
+
         let ctx = HandlerContext {
             tick: 0,
             initiator: EventInitiator::Engine,
             game_state: game_state.clone(),
         };
-        
+
         match &self.callback {
             TimerCallback::LockedVerticalNeighors(x) => {
                 run_handler!(
