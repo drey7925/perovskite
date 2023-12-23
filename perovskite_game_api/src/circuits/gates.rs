@@ -16,8 +16,8 @@ use smallvec::SmallVec;
 
 use super::{
     events::{make_root_context, transmit_edge},
-    get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
-    CircuitBlockProperties, CircuitGameBuilder,
+    get_incoming_pin_states, get_pin_state, BlockConnectivity, CircuitBlockBuilder,
+    CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilder,
 };
 
 const SIDE_TEX: TextureName = TextureName("circuits:gate_side");
@@ -177,11 +177,11 @@ impl CircuitBlockCallbacks for CombinationalGateImpl {
 const OUTPUT_CONNECTVIITY: BlockConnectivity =
     BlockConnectivity::rotated_nesw_with_variant(0, 0, -1, 0);
 const LEFT_CONNECTIVITY: BlockConnectivity =
-    BlockConnectivity::rotated_nesw_with_variant(-1, 0, 0, 0b100);
+    BlockConnectivity::rotated_nesw_with_variant(1, 0, 0, 0b100);
 const FRONT_CONNECTIVITY: BlockConnectivity =
     BlockConnectivity::rotated_nesw_with_variant(0, 0, 1, 0b010);
 const RIGHT_CONNECTIVITY: BlockConnectivity =
-    BlockConnectivity::rotated_nesw_with_variant(1, 0, 0, 0b001);
+    BlockConnectivity::rotated_nesw_with_variant(-1, 0, 0, 0b001);
 
 /// Registers a new gate. Its on and off textures must already be registered.
 pub fn register_combinational_gate(
@@ -319,6 +319,7 @@ pub(crate) fn register_base_gates(builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     register_delay_gate(builder)?;
+    register_dff(builder)?;
 
     builder.add_block(
         BlockBuilder::new(BROKEN_GATE)
@@ -366,6 +367,18 @@ const DELAY_GATE_PROPERTIES: CombinationalGate = CombinationalGate {
     connects_front: true,
     connects_right: false,
 };
+const DFF_PROPERTIES: CombinationalGate = CombinationalGate {
+    description: "D Flip-Flop",
+    off_name: StaticBlockName("circuits:dff_off"),
+    on_name: StaticBlockName("circuits:dff_on"),
+    off_texture: TextureName("circuits:dff_off"),
+    on_texture: TextureName("circuits:dff_on"),
+    // 001, 011, 100, 110: left xor right, front is dont care
+    truth_table: 0,
+    connects_left: false,
+    connects_front: true,
+    connects_right: true,
+};
 
 const DELAY_GATE_INPUT_WAS_HIGH_VARIANT_BIT: u16 = 4;
 
@@ -409,9 +422,9 @@ impl CircuitBlockCallbacks for DelayGateImpl {
                 if variant != new_variant {
                     let new_variant_with_counter = (new_variant & 0x7) | (pending_count << 3);
                     *block = block.with_variant(new_variant_with_counter)?;
-                    return Ok(true)    
+                    return Ok(true);
                 }
-                return Ok(false)
+                return Ok(false);
             } else {
                 // race condition, wrong block is there
                 return Ok(false);
@@ -473,20 +486,26 @@ fn delayed_edge(
 
             let variant_count = variant >> 3;
             let new_variant = (variant & 0x7) | ((variant_count.saturating_sub(1)) << 3);
-
-            if state == super::PinState::High && block.equals_ignore_variant(off) {
-                if variant_count == 0 {
-                    tracing::warn!("deferred edge but no pending edges");
+            
+            let is_off = block.equals_ignore_variant(off);
+            let is_on = block.equals_ignore_variant(on);
+            
+            if is_off || is_on{
+                if state == super::PinState::High {
+                    if variant_count == 0 {
+                        tracing::warn!("deferred edge but no pending edges");
+                    }
+                    *block = on.with_variant(new_variant)?;
+                    return Ok((is_off, new_variant));
+                } else if state == super::PinState::Low {
+                    if variant_count == 0 {
+                        tracing::warn!("deferred edge but no pending edges");
+                    }
+                    *block = off.with_variant(new_variant)?;
+                    return Ok((is_on, new_variant));
                 }
-                *block = on.with_variant(new_variant)?;
-                return Ok((true, new_variant));
-            } else if state == super::PinState::Low && block.equals_ignore_variant(on) {
-                if variant_count == 0 {
-                    tracing::warn!("deferred edge but no pending edges");
-                }
-                *block = off.with_variant(new_variant)?;
-                return Ok((true, new_variant));
             }
+            
             Ok((false, 0))
         })?;
     if edge_happened {
@@ -521,5 +540,133 @@ fn register_delay_gate(builder: &mut GameBuilder) -> Result<()> {
         })
     })?;
 
+    Ok(())
+}
+
+const DFF_GATE_INPUT_CLOCK_WAS_HIGH_VARIANT_BIT: u16 = 4;
+struct DffImpl {
+    on: BlockId,
+    off: BlockId,
+    broken: FastBlockName,
+}
+impl CircuitBlockCallbacks for DffImpl {
+    fn on_incoming_edge(
+        &self,
+        ctx: &super::events::CircuitHandlerContext<'_>,
+        coord: perovskite_core::coordinates::BlockCoordinate,
+        from: perovskite_core::coordinates::BlockCoordinate,
+        clock_state: super::PinState,
+    ) -> Result<()> {
+        let block = match ctx.game_map().try_get_block(coord) {
+            Some(block) => block,
+            None => return Ok(()),
+        };
+        let self_variant = block.variant();
+        if RIGHT_CONNECTIVITY.eval(coord, self_variant) != Some(from) {
+            return Ok(());
+        }
+        // at this point, we've verified that the incoming edge is on the clock pin.
+        // Let's sample the data pin
+        let data_pin_neighbor = match FRONT_CONNECTIVITY.eval(coord, self_variant) {
+            Some(neighbor) => neighbor,
+            None => {
+                return Ok(());
+            }
+        };
+
+        let data_pin_state = match get_pin_state(ctx, data_pin_neighbor, coord) {
+            super::PinReading::Valid(x) => x,
+            _ => super::PinState::Low,
+        };
+
+        let should_signal = ctx.game_map().mutate_block_atomically(coord, |block, _| {
+            let variant = block.variant();
+            let pending_count = variant >> 3;
+
+            let new_variant = if clock_state == super::PinState::High {
+                variant | DFF_GATE_INPUT_CLOCK_WAS_HIGH_VARIANT_BIT
+            } else {
+                variant & !DFF_GATE_INPUT_CLOCK_WAS_HIGH_VARIANT_BIT
+            };
+            if block.equals_ignore_variant(self.off) || block.equals_ignore_variant(self.on)
+            {
+                if pending_count > 8 {
+                    *block = ctx.block_types().resolve_name(&self.broken).unwrap();
+                    return Ok(false);
+                }
+                if variant != new_variant {
+                    let new_pending_count = if clock_state == super::PinState::High {
+                        pending_count + 1
+                    } else {
+                        pending_count
+                    };
+                    let new_variant_with_counter = (new_variant & 0x7) | (new_pending_count << 3);
+                    *block = block.with_variant(new_variant_with_counter)?;
+                    return Ok(clock_state == super::PinState::High);
+                }
+                return Ok(false);
+            } else {
+                // race condition, wrong block is there
+                return Ok(false);
+            }
+        })?;
+
+        if should_signal {
+            let on = self.on;
+            let off = self.off;
+            ctx.run_deferred_delayed(Duration::from_millis(100), move |ctx| {
+                delayed_edge(ctx, coord, on, off, data_pin_state)
+            })
+        }
+
+        Ok(())
+    }
+
+    fn sample_pin(
+        &self,
+        ctx: &super::events::CircuitHandlerContext<'_>,
+        coord: perovskite_core::coordinates::BlockCoordinate,
+        destination: perovskite_core::coordinates::BlockCoordinate,
+    ) -> super::PinState {
+        let block = match ctx.game_map().try_get_block(coord) {
+            Some(block) => block,
+            None => return super::PinState::Low,
+        };
+        let self_variant = block.variant();
+        if OUTPUT_CONNECTVIITY.eval(coord, self_variant) != Some(destination) {
+            return super::PinState::Low;
+        }
+
+        if block.equals_ignore_variant(self.on) {
+            super::PinState::High
+        } else {
+            super::PinState::Low
+        }
+    }
+
+    fn on_overheat(
+        &self,
+        ctx: &perovskite_server::game_state::event::HandlerContext,
+        coord: perovskite_core::coordinates::BlockCoordinate,
+    ) {
+        ctx.game_map().set_block(coord, &self.broken, None).unwrap();
+    }
+}
+
+fn register_dff(builder: &mut GameBuilder) -> Result<()> {
+    include_texture_bytes!(builder, DFF_PROPERTIES.off_texture, "textures/dff_top.png")?;
+    include_texture_bytes!(
+        builder,
+        DFF_PROPERTIES.on_texture,
+        "textures/dff_top_on.png"
+    )?;
+
+    register_gate(builder, DFF_PROPERTIES, |off, on| {
+        Box::new(DffImpl {
+            on,
+            off,
+            broken: FastBlockName::new(BROKEN_GATE.0.to_string()),
+        })
+    })?;
     Ok(())
 }
