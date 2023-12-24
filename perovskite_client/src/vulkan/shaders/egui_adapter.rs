@@ -63,9 +63,11 @@ impl EguiAdapter {
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
 
-        let mut sampler_create_info = SamplerCreateInfo::default();
-        sampler_create_info.mag_filter = vulkano::sampler::Filter::Nearest;
-        sampler_create_info.min_filter = vulkano::sampler::Filter::Linear;
+        let sampler_create_info = vulkano::sampler::SamplerCreateInfo {
+            mag_filter: vulkano::sampler::Filter::Nearest,
+            min_filter: vulkano::sampler::Filter::Linear,
+            ..Default::default()
+        };
 
         let atlas_texture_id =
             gui_adapter.register_user_image_view(atlas.clone_image_view(), sampler_create_info);

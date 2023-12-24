@@ -435,7 +435,7 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         f: impl FnOnce(SideBySideLayoutBuilder) -> Result<SideBySideLayoutBuilder>,
     ) -> Result<Self> {
         let builder = SideBySideLayoutBuilder {
-            popup: &mut self.deref_to_popup(),
+            popup: self.deref_to_popup(),
             widgets: vec![],
         };
         let result = f(builder)?;

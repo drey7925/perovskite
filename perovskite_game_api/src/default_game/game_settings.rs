@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::Path;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
@@ -23,7 +23,7 @@ impl Default for DefaultGameSettings {
     }
 }
 
-pub(crate) fn load(data_dir: &PathBuf) -> Result<DefaultGameSettings> {
+pub(crate) fn load(data_dir: &Path) -> Result<DefaultGameSettings> {
     let config_file = data_dir.join(FILENAME);
     log::info!("Loading settings from {}", config_file.display());
     if !config_file.exists() {

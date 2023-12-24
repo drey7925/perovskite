@@ -139,7 +139,7 @@ pub mod permissions {
     pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] =
         &[FLY, FAST_MOVE, NOCLIP, DIG_PLACE, TAP_INTERACT, INVENTORY];
 
-    pub const ALL_PERMISSIONS: [&'static str; 13] = [
+    pub const ALL_PERMISSIONS: [&str; 13] = [
         FLY,
         FAST_MOVE,
         NOCLIP,

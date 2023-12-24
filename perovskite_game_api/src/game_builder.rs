@@ -350,7 +350,7 @@ impl GameBuilder {
     ) -> &mut T {
         self.builder_extensions
             .entry(TypeId::of::<T>())
-            .or_insert_with(|| Box::new(T::default()))
+            .or_insert_with(|| Box::<T>::default())
             .as_any()
             .downcast_mut::<T>()
             .unwrap()

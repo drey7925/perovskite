@@ -305,7 +305,7 @@ async fn initialize_protocol_state(
 
     let message = {
         let player_state = context.player_context.state.lock();
-        make_client_state_update_message(&context, player_state, true)?
+        make_client_state_update_message(context, player_state, true)?
     };
     outbound_tx
         .send(Ok(message))
@@ -314,7 +314,7 @@ async fn initialize_protocol_state(
 
     if context.effective_protocol_version != SERVER_MAX_PROTOCOL_VERSION {
         context.player_context.send_chat_message(ChatMessage::new_server_message(
-            format!("Your client is out of date and you may not be able to use all server features. Please consider updating.")
+            "Your client is out of date and you may not be able to use all server features. Please consider updating.".to_string()
         )).await?;
     }
     Ok(())
@@ -1923,8 +1923,7 @@ lazy_static::lazy_static! {
     };
     // chunk distance -> max index where we would encounter it
     static ref MAX_INDEX_FOR_DISTANCE: Vec<usize> = {
-        let mut v = vec![];
-        v.resize((LOAD_LAZY_DISTANCE + 1) as usize, 0);
+        let mut v = vec![0; (LOAD_LAZY_DISTANCE + 1) as usize];
         for (i, &(x, y, z)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate() {
             let distance = (x.abs() + y.abs() + z.abs()) as usize;
             v[distance] = v[distance].max(i);

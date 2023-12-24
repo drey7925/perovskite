@@ -43,11 +43,7 @@ pub struct WeakPlayerRef {
 }
 impl WeakPlayerRef {
     pub fn try_to_run<T>(&self, f: impl FnOnce(&Player) -> T) -> Option<T> {
-        if let Some(player) = self.player.upgrade() {
-            Some(f(&player))
-        } else {
-            None
-        }
+        self.player.upgrade().map(|player| f(&player))
     }
 
     pub fn name(&self) -> &str {

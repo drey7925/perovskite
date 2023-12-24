@@ -37,8 +37,10 @@ impl ChatState {
             if !initiator.check_permission_if_player(permissions::CHAT) {
                 initiator
                     .send_chat_message(
-                        ChatMessage::new_server_message(format!("You are not permitted to chat."))
-                            .with_color((255, 0, 0)),
+                        ChatMessage::new_server_message(
+                            "You are not permitted to chat.".to_string(),
+                        )
+                        .with_color((255, 0, 0)),
                     )
                     .await?;
                 bail!("Insufficient permissions");
@@ -77,7 +79,7 @@ impl ChatState {
                 message,
                 HandlerContext {
                     tick: game_state.tick(),
-                    initiator: initiator,
+                    initiator,
                     game_state,
                 },
             )

@@ -5,7 +5,7 @@ use futures::Future;
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::{pin, Pin},
 };
 
@@ -68,7 +68,7 @@ impl CacheManager {
 
     pub(crate) async fn load_media_by_name(&mut self, media_name: &str) -> Result<Vec<u8>> {
         let extension = media_name
-            .rsplit_once(".")
+            .rsplit_once('.')
             .map(|(_, ext)| ".".to_owned() + ext)
             .unwrap_or("".to_string());
         if let Some(hash) = self.file_hashes.get(media_name).copied() {
@@ -77,7 +77,7 @@ impl CacheManager {
                 self.try_get_cached(&extension, &hash, Some(&hash))
             })?;
             if let Some(data) = data {
-                return Ok(data);
+                Ok(data)
             } else {
                 let loaded_data = self
                     .loader
@@ -128,9 +128,9 @@ impl CacheManager {
         if let Some(hash) = hash {
             // For block appearances, the id hash is based on the render info and the content hashes feeding into it.
             // We don't know the content hash.
-            return self.try_get_cached("png", &hash, None);
+            self.try_get_cached("png", &hash, None)
         } else {
-            return Ok(None);
+            Ok(None)
         }
     }
 
@@ -167,7 +167,7 @@ impl CacheManager {
                             path.display(),
                             hex::encode(actual_hash)
                         );
-                        std::fs::rename(&path, &path.with_extension("corrupt")).unwrap();
+                        std::fs::rename(&path, path.with_extension("corrupt")).unwrap();
                         return Ok(None);
                     }
                 }
@@ -279,14 +279,14 @@ impl CacheManager {
     }
 }
 
-fn get_cache_path(expected_hash: &[u8; 32], cache_dir: &PathBuf, extension: &str) -> PathBuf {
+fn get_cache_path(expected_hash: &[u8; 32], cache_dir: &Path, extension: &str) -> PathBuf {
     let hash_hex = hex::encode(expected_hash);
     assert!(hash_hex.len() == 64);
     let prefix = hash_hex[0..2].to_string();
     let suffix = hash_hex[2..].to_string();
-    let path = cache_dir
+
+    cache_dir
         .join(prefix)
         .join(suffix)
-        .with_extension(extension);
-    path
+        .with_extension(extension)
 }

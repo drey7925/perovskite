@@ -129,8 +129,8 @@ pub(crate) async fn connect_game(
 
     progress.send((0.6, "Setting up block renderer...".to_string()))?;
     let block_renderer = {
-        let mut cache_manager_lock = cache_manager.lock();
-        BlockRenderer::new(block_types.clone(), &mut cache_manager_lock, window).await?
+        let cache_manager_lock = cache_manager.lock();
+        BlockRenderer::new(block_types.clone(), cache_manager_lock, window).await?
     };
 
     progress.send((0.7, "Loading item definitions...".to_string()))?;
@@ -148,7 +148,7 @@ pub(crate) async fn connect_game(
     progress.send((0.8, "Loading item textures...".to_string()))?;
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
-        &mut cache_manager,
+        &cache_manager,
         window.clone_context(),
         &block_renderer,
     )

@@ -227,10 +227,9 @@ impl EguiUi {
                 if ui
                     .add_enabled(button_def.enabled && self.allow_button_interaction, button)
                     .clicked()
+                    && self.allow_button_interaction
                 {
-                    if self.allow_button_interaction {
-                        *clicked_button = Some(button_def.key.clone());
-                    }
+                    *clicked_button = Some(button_def.key.clone());
                 }
             }
             Some(proto::ui_element::Element::Inventory(inventory)) => {

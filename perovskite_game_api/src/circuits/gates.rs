@@ -121,7 +121,7 @@ impl CircuitBlockCallbacks for CombinationalGateImpl {
                 let variant = block.variant();
                 if result_is_high && block.equals_ignore_variant(self.off) {
                     *block = self.on.with_variant(variant)?;
-                    return Ok((true, variant));
+                    Ok((true, variant))
                 } else if !result_is_high && block.equals_ignore_variant(self.on) {
                     *block = self.off.with_variant(variant)?;
                     return Ok((true, variant));
@@ -422,10 +422,10 @@ impl CircuitBlockCallbacks for DelayGateImpl {
                     *block = block.with_variant(new_variant_with_counter)?;
                     return Ok(true);
                 }
-                return Ok(false);
+                Ok(false)
             } else {
                 // race condition, wrong block is there
-                return Ok(false);
+                Ok(false)
             }
         })?;
 
@@ -601,10 +601,10 @@ impl CircuitBlockCallbacks for DffImpl {
                     *block = block.with_variant(new_variant_with_counter)?;
                     return Ok(clock_state == super::PinState::High);
                 }
-                return Ok(false);
+                Ok(false)
             } else {
                 // race condition, wrong block is there
-                return Ok(false);
+                Ok(false)
             }
         })?;
 

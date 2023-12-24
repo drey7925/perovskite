@@ -219,7 +219,7 @@ impl GameState {
     /// Sets the time of day. 0 is midnight, 1 is the next midnight.
     pub fn set_time_of_day(&self, time_of_day: f64) {
         self.time_state.lock().set_time(time_of_day);
-        if let Err(_) = self.player_state_resync.send(()) {
+        if self.player_state_resync.send(()).is_err() {
             tracing::info!("Player resync had no closures waiting for it.");
             // pass, nobody was listening.
         }
@@ -261,11 +261,9 @@ where
                     String::from_utf8_lossy(name)
                 )
             }
-            return Ok(Some(value));
+            Ok(Some(value))
         }
-        None => {
-            return Ok(None);
-        }
+        None => Ok(None),
     }
 }
 

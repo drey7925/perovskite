@@ -78,7 +78,7 @@ impl BiomeNoise {
                 return Biome::Desert;
             }
         }
-        return Biome::DefaultGrassy;
+        Biome::DefaultGrassy
     }
 }
 struct ElevationNoise {

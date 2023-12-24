@@ -70,8 +70,11 @@ impl GameBehaviors {
                     .iter()
                     .map(|x| ELIGIBLE_PREFIX.to_owned() + x),
             );
-            Cow::to_mut(&mut permissions)
-                .extend([FLY.to_owned(), FAST_MOVE.to_owned(), NOCLIP.to_owned()].into_iter())
+            Cow::to_mut(&mut permissions).extend([
+                FLY.to_owned(),
+                FAST_MOVE.to_owned(),
+                NOCLIP.to_owned(),
+            ])
         }
         permissions
     }

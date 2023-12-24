@@ -83,11 +83,11 @@ impl CommandManager {
         Self { commands }
     }
     pub fn add_command(&mut self, name: String, command: ChatCommand) -> Result<()> {
-        if self.commands.contains_key(&name) {
-            bail!("Command already exists");
-        } else {
-            self.commands.insert(name, command);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.commands.entry(name) {
+            e.insert(command);
             Ok(())
+        } else {
+            bail!("Command already exists");
         }
     }
     /// Handles a command, sending errors back to the user
@@ -136,6 +136,12 @@ impl CommandManager {
                 bail!("Command name was empty");
             }
         }
+    }
+}
+
+impl Default for CommandManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -328,7 +334,7 @@ impl ChatCommandHandler for ElevateCommandImpl {
                     }
                     player_initiator
                         .player
-                        .grant_temporary_permission(&params[1])?;
+                        .grant_temporary_permission(params[1])?;
                     context
                         .initiator
                         .send_chat_message(ChatMessage::new_server_message(

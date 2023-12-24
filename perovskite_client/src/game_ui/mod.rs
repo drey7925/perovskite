@@ -123,7 +123,7 @@ async fn build_texture_atlas(
 
                         let cached_content = cache_manager
                             .lock()
-                            .try_get_block_appearance(&block_def)
+                            .try_get_block_appearance(block_def)
                             .unwrap();
                         if let Some(content) = cached_content {
                             rendered_block_textures
@@ -142,7 +142,7 @@ async fn build_texture_atlas(
                             .unwrap();
                         cache_manager
                             .lock()
-                            .insert_block_appearance(&block_def, bytes)
+                            .insert_block_appearance(block_def, bytes)
                             .unwrap();
                         rendered_block_textures.lock().insert(name, block_tex);
                     }

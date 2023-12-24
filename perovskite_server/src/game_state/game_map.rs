@@ -166,7 +166,6 @@ pub struct MapChunk {
 }
 impl MapChunk {
     fn new(coord: ChunkCoordinate, storage: Arc<[AtomicU32; 4096]>) -> Self {
-        const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
             coord,
             block_ids: storage,
@@ -375,7 +374,7 @@ impl MapChunk {
     #[inline]
     pub fn get_block(&self, coordinate: ChunkOffset) -> BlockTypeHandle {
         // We have a &MapChunk, meaning we can use relaxed loads
-        BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed)).into()
+        BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed))
     }
 }
 
@@ -452,7 +451,6 @@ fn parse_v1(
             );
         }
     }
-    const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
     for (i, block_id) in chunk_data.block_ids.iter().enumerate() {
         storage[i].store(*block_id, Ordering::Relaxed);
     }
@@ -551,6 +549,8 @@ struct MapChunkHolder {
 }
 impl MapChunkHolder {
     fn new_empty() -> Self {
+        // We're OK with allowing this lint; we really do want this atomic copied 4096 times.
+        #[allow(clippy::declare_interior_mutable_const)]
         const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
             chunk: RwLock::new(HolderState::Empty),
@@ -779,6 +779,15 @@ impl MapShard {
     }
 }
 
+#[repr(align(64))]
+struct CachelineAligned<T>(T);
+impl<T> Deref for CachelineAligned<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Represents the entire map of the world.
 /// This struct provides safe interior mutability - a shared reference
 /// is sufficient to read and write it. Locking is done at an implementation-defined
@@ -787,7 +796,9 @@ pub struct ServerGameMap {
     game_state: Weak<GameState>,
     database: Arc<dyn GameDatabase>,
     // sharded 16 ways based on the coarse hash of the chunk
-    live_chunks: [RwLock<MapShard>; NUM_LOCK_SHARDS],
+    // Each one is 72 bytes, so we pad them out to a whole cacheline. This wastes a bit of space, unfortunately
+    // However, it means that one shard's lock control word isn't aliasing with the data of other shards.
+    live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_LOCK_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
     writeback_senders: [mpsc::Sender<WritebackReq>; NUM_LOCK_SHARDS],
@@ -816,7 +827,7 @@ impl ServerGameMap {
         let result = Arc::new(ServerGameMap {
             game_state: game_state.clone(),
             database,
-            live_chunks: std::array::from_fn(|_| RwLock::new(MapShard::empty())),
+            live_chunks: std::array::from_fn(|_| CachelineAligned(RwLock::new(MapShard::empty()))),
             block_type_manager,
             block_update_sender,
             writeback_senders: writeback_senders.try_into().unwrap(),
@@ -1164,7 +1175,7 @@ impl ServerGameMap {
                 .insert(offset.as_index().try_into().unwrap(), new_data);
         }
 
-        let new_id = block_type.id();
+        let new_id = block_type;
         if new_id != old_id {
             chunk.block_ids[offset.as_index()].store(new_id.into(), Ordering::Relaxed);
             chunk.dirty = true;
@@ -2528,7 +2539,7 @@ impl GameMapTimer {
         reconcile_after_bulk_handler(
             &upper_old_block_ids,
             &mut upper_chunk,
-            &upper_holder,
+            upper_holder,
             game_state,
             upper_coord,
             upper_writeback_permit,
@@ -2537,7 +2548,7 @@ impl GameMapTimer {
         reconcile_after_bulk_handler(
             &lower_old_block_ids,
             &mut lower_chunk,
-            &lower_holder,
+            lower_holder,
             game_state,
             lower_coord,
             lower_writeback_permit,

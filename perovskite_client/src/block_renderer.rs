@@ -524,7 +524,7 @@ pub(crate) struct BlockRenderer {
 impl BlockRenderer {
     pub(crate) async fn new(
         block_defs: Arc<ClientBlockTypeManager>,
-        cache_manager: &mut CacheManager,
+        mut cache_manager: parking_lot::MutexGuard<'_, CacheManager>,
         ctx: &VulkanContext,
     ) -> Result<BlockRenderer> {
         let mut all_texture_names = HashSet::new();

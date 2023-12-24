@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::game_builder::GameBuilder;
 
-use super::{recipes::RecipeBook, DefaultGameBuilder, DefaultGameBuilderExtension};
+use super::{recipes::RecipeBook, DefaultGameBuilderExtension};
 
 pub(crate) fn register_game_behaviors(game_builder: &mut GameBuilder) -> Result<()> {
     let extension = game_builder.builder_extension::<DefaultGameBuilderExtension>();
@@ -192,22 +192,21 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                     false,
                 )?
                 .side_by_side_layout("Crafting", |ui| {
-                    Ok(ui
-                        .inventory_view_transient(
-                            "craft_in",
-                            "Crafting input:",
-                            (3, 3),
-                            vec![],
-                            true,
-                            true,
-                        )?
-                        .inventory_view_virtual_output(
-                            "craft_out",
-                            "Crafting output:",
-                            (1, 1),
-                            crafting_callbacks,
-                            true,
-                        )?)
+                    ui.inventory_view_transient(
+                        "craft_in",
+                        "Crafting input:",
+                        (3, 3),
+                        vec![],
+                        true,
+                        true,
+                    )?
+                    .inventory_view_virtual_output(
+                        "craft_out",
+                        "Crafting output:",
+                        (1, 1),
+                        crafting_callbacks,
+                        true,
+                    )
                 })?
                 .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?
                 .set_button_callback(button_callback))
@@ -215,22 +214,21 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
             Ok(Popup::new(game_state)
                 .title("Inventory")
                 .side_by_side_layout("Crafting", |ui| {
-                    Ok(ui
-                        .inventory_view_transient(
-                            "craft_in",
-                            "Crafting input:",
-                            (3, 3),
-                            vec![],
-                            true,
-                            true,
-                        )?
-                        .inventory_view_virtual_output(
-                            "craft_out",
-                            "Crafting output:",
-                            (1, 1),
-                            crafting_callbacks,
-                            true,
-                        )?)
+                    ui.inventory_view_transient(
+                        "craft_in",
+                        "Crafting input:",
+                        (3, 3),
+                        vec![],
+                        true,
+                        true,
+                    )?
+                    .inventory_view_virtual_output(
+                        "craft_out",
+                        "Crafting output:",
+                        (1, 1),
+                        crafting_callbacks,
+                        true,
+                    )
                 })?
                 .label("Player inventory:")
                 .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?

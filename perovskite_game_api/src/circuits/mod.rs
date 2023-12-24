@@ -507,7 +507,7 @@ impl CircuitBlockBuilder for BlockBuilder {
                         .resolve_name(&block_name)
                         .expect("block name not found, yet we're in its handler"),
                     coord,
-                    &events::make_root_context(&ctx),
+                    &events::make_root_context(ctx),
                 ) {
                     tracing::error!("Error in circuits dig handler: {}", e);
                 }
@@ -525,7 +525,7 @@ impl CircuitBlockBuilder for BlockBuilder {
                     Some(old_handler) => old_handler(ctx, coord, anchor, tool_stack),
                     None => Ok(None),
                 };
-                if let Err(e) = dispatch::place(coord, &events::make_root_context(&ctx)) {
+                if let Err(e) = dispatch::place(coord, &events::make_root_context(ctx)) {
                     tracing::error!("Error in place handler: {}", e);
                 }
                 result

@@ -631,7 +631,7 @@ impl PlayerManager {
                 bail!("Player {name} not connected");
             }
             let player = lock.get(name).unwrap();
-            closure(&player)
+            closure(player)
         })
     }
 
@@ -642,7 +642,7 @@ impl PlayerManager {
         tokio::task::block_in_place(|| {
             let lock = self.active_players.read();
             for (_, player) in lock.iter() {
-                closure(&player)?;
+                closure(player)?;
             }
             Ok(())
         })
@@ -655,7 +655,7 @@ impl PlayerManager {
     {
         let lock = tokio::task::block_in_place(|| self.active_players.read());
         for (_, player) in lock.iter() {
-            closure(&player).await?;
+            closure(player).await?;
         }
         Ok(())
     }
