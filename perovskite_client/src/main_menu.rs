@@ -41,12 +41,12 @@ impl MainMenu {
         };
         let egui_gui = egui_winit_vulkano::Gui::new_with_subpass(
             event_loop,
-            ctx.swapchain().surface().clone(),
+            ctx.swapchain_surface(),
             ctx.clone_queue(),
             Subpass::from(ctx.clone_render_pass(), 1)
                 .context("Could not find subpass 0")
                 .unwrap(),
-            ctx.swapchain().image_format(),
+            ctx.swapchain_format(),
             gui_config,
         );
         let settings_guard = settings.load();

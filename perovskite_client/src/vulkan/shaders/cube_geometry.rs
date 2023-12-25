@@ -116,7 +116,7 @@ pub(crate) enum BlockRenderPass {
 impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWrapper {
     type PassIdentifier = BlockRenderPass;
     fn draw<L>(
-        &mut self,
+        &self,
         builder: &mut CommandBufferBuilder<L>,
         draw_calls: &mut [CubeGeometryDrawCall],
         pass: BlockRenderPass,
@@ -168,7 +168,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
     }
 
     fn bind<L>(
-        &mut self,
+        &self,
         ctx: &VulkanContext,
         per_frame_config: SceneState,
         command_buf_builder: &mut CommandBufferBuilder<L>,
@@ -340,7 +340,7 @@ impl PipelineProvider for CubePipelineProvider {
     ) -> Result<CubePipelineWrapper> {
         self.build_pipeline(
             &wnd.vk_ctx,
-            wnd.viewport.clone(),
+            wnd.viewport.load().as_ref().clone(),
             wnd.render_pass.clone(),
             config,
         )

@@ -154,7 +154,7 @@ pub(crate) struct FlatTexPipelineWrapper {
 impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapper {
     type PassIdentifier = ();
     fn draw<L>(
-        &mut self,
+        &self,
         builder: &mut CommandBufferBuilder<L>,
         calls: &'a [FlatTextureDrawCall],
         _pass: (),
@@ -170,7 +170,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
     }
 
     fn bind<L>(
-        &mut self,
+        &self,
         ctx: &crate::vulkan::VulkanContext,
         _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder<L>,
@@ -227,6 +227,8 @@ impl PipelineProvider for FlatTexPipelineProvider {
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
                 .viewport
+                .load()
+                .as_ref()
                 .clone()]))
             .fragment_shader(self.fs.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::disabled())
@@ -254,7 +256,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
                 ..Default::default()
             },
             UniformData {
-                device_w_h: ctx.viewport.dimensions,
+                device_w_h: ctx.viewport.load().dimensions,
             },
         )
         .with_context(|| "Failed to make buffer for uniforms")?;

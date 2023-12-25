@@ -186,14 +186,14 @@ pub(crate) trait PipelineWrapper<T, U> {
     type PassIdentifier;
     /// Actually draw. The pipeline must have been bound using bind.
     fn draw<L>(
-        &mut self,
+        &self,
         builder: &mut CommandBufferBuilder<L>,
         draw_calls: T,
         pass: Self::PassIdentifier,
     ) -> Result<()>;
     /// Bind the pipeline. Must be called each frame before draw
     fn bind<L>(
-        &mut self,
+        &self,
         ctx: &VulkanContext,
         per_frame_config: U,
         command_buf_builder: &mut CommandBufferBuilder<L>,

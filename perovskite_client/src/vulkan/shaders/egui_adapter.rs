@@ -55,10 +55,10 @@ impl EguiAdapter {
         };
         let mut gui_adapter = Gui::new_with_subpass(
             event_loop,
-            ctx.swapchain.surface().clone(),
+            ctx.swapchain.load().surface().clone(),
             ctx.queue.clone(),
             Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
-            ctx.swapchain.image_format(),
+            ctx.swapchain.load().image_format(),
             config,
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
@@ -94,40 +94,40 @@ impl EguiAdapter {
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
         client_state: &ClientState,
     ) -> Result<()> {
-        let mut egui = self.egui_ui.lock();
-        self.gui_adapter.begin_frame();
-        egui.draw_all_uis(
-            &self.gui_adapter.egui_ctx,
-            self.atlas_texture_id,
-            client_state,
-        );
-        let cmdbuf = self
-            .gui_adapter
-            .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
+        // let mut egui = self.egui_ui.lock();
+        // self.gui_adapter.begin_frame();
+        // egui.draw_all_uis(
+        //     &self.gui_adapter.egui_ctx,
+        //     self.atlas_texture_id,
+        //     client_state,
+        // );
+        // let cmdbuf = self
+        //     .gui_adapter
+        //     .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
         builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
-        builder.execute_commands(cmdbuf)?;
+        // builder.execute_commands(cmdbuf)?;
 
-        if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
-            let mut secondary_builder = AutoCommandBufferBuilder::secondary(
-                &ctx.command_buffer_allocator,
-                ctx.queue.queue_family_index(),
-                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-                CommandBufferInheritanceInfo {
-                    render_pass: Some(
-                        Subpass::from(ctx.render_pass.clone(), 1)
-                            .with_context(|| "Render subpass 1 not found")?
-                            .into(),
-                    ),
-                    ..Default::default()
-                },
-            )?;
-            self.flat_overlay_pipeline
-                .bind(ctx, (), &mut secondary_builder, ())
-                .unwrap();
-            self.flat_overlay_pipeline
-                .draw(&mut secondary_builder, &[draw_call], ())?;
-            builder.execute_commands(secondary_builder.build()?)?;
-        }
+        // if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
+        //     let mut secondary_builder = AutoCommandBufferBuilder::secondary(
+        //         &ctx.command_buffer_allocator,
+        //         ctx.queue.queue_family_index(),
+        //         vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+        //         CommandBufferInheritanceInfo {
+        //             render_pass: Some(
+        //                 Subpass::from(ctx.render_pass.clone(), 1)
+        //                     .with_context(|| "Render subpass 1 not found")?
+        //                     .into(),
+        //             ),
+        //             ..Default::default()
+        //         },
+        //     )?;
+        //     self.flat_overlay_pipeline
+        //         .bind(ctx, (), &mut secondary_builder, ())
+        //         .unwrap();
+        //     self.flat_overlay_pipeline
+        //         .draw(&mut secondary_builder, &[draw_call], ())?;
+        //     builder.execute_commands(secondary_builder.build()?)?;
+        // }
 
         Ok(())
     }

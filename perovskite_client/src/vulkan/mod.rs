@@ -47,7 +47,7 @@ use vulkano::{
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sampler::{Filter, Sampler, SamplerCreateInfo},
-    swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
+    swapchain::{Surface, Swapchain, SwapchainCreateInfo, SwapchainCreationError},
     sync::GpuFuture,
     Version,
 };
@@ -109,15 +109,14 @@ impl VulkanContext {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
     render_pass: Arc<RenderPass>,
-    swapchain: Arc<Swapchain>,
-    swapchain_images: Vec<Arc<SwapchainImage>>,
-    framebuffers: Vec<Arc<Framebuffer>>,
+    swapchain: ArcSwap<Swapchain>,
+    swapchain_images: ArcSwap<Vec<Arc<SwapchainImage>>>,
+    framebuffers: ArcSwap<Vec<Arc<Framebuffer>>>,
     window: Arc<Window>,
-    viewport: Viewport,
+    viewport: ArcSwap<Viewport>,
 }
 impl Deref for VulkanWindow {
     type Target = VulkanContext;
@@ -268,19 +267,20 @@ impl VulkanWindow {
                 depth_format,
             }),
             render_pass,
-            swapchain,
-            swapchain_images,
-            framebuffers,
+            swapchain: ArcSwap::new(swapchain),
+            swapchain_images: ArcSwap::new(Arc::new(swapchain_images)),
+            framebuffers: ArcSwap::new(Arc::new(framebuffers)),
             window,
-            viewport,
+            viewport: ArcSwap::new(Arc::new(viewport)),
         })
     }
 
-    fn recreate_swapchain(&mut self, size: PhysicalSize<u32>) -> Result<()> {
+    fn recreate_swapchain(&self, size: PhysicalSize<u32>) -> Result<()> {
         let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
-        let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
+        let old_swapchain = self.swapchain.load().clone();
+        let (new_swapchain, new_images) = match old_swapchain.recreate(SwapchainCreateInfo {
             image_extent: size.into(),
-            ..self.swapchain.create_info()
+            ..old_swapchain.create_info()
         }) {
             Ok(r) => r,
             Err(SwapchainCreationError::ImageExtentNotSupported {
@@ -296,14 +296,15 @@ impl VulkanWindow {
             }
             Err(e) => panic!("failed to recreate swapchain: {e}"),
         };
-        self.swapchain = new_swapchain;
-        self.swapchain_images = new_images.clone();
-        self.framebuffers = get_framebuffers_with_depth(
-            &new_images,
-            &self.memory_allocator,
-            self.render_pass.clone(),
-            self.depth_format,
-        );
+        self.swapchain.store(new_swapchain);
+        self.swapchain_images.store(Arc::new(new_images.clone()));
+        self.framebuffers
+            .store(Arc::new(get_framebuffers_with_depth(
+                &new_images,
+                &self.memory_allocator,
+                self.render_pass.clone(),
+                self.depth_format,
+            )));
         Ok(())
     }
 
@@ -324,12 +325,15 @@ impl VulkanWindow {
     }
 
     pub(crate) fn window_size(&self) -> (u32, u32) {
-        let dims = self.viewport.dimensions;
+        let dims = self.viewport.load().dimensions;
         (dims[0] as u32, dims[1] as u32)
     }
 
-    pub(crate) fn swapchain(&self) -> &Swapchain {
-        self.swapchain.as_ref()
+    pub(crate) fn swapchain_surface(&self) -> Arc<Surface> {
+        self.swapchain.load().surface().clone()
+    }
+    pub(crate) fn swapchain_format(&self) -> Format {
+        self.color_format
     }
 
     pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {
