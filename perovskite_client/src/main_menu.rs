@@ -92,6 +92,7 @@ impl MainMenu {
                 let label = ui.label("Recent servers: ");
                 egui::ComboBox::from_id_source(label.id)
                     .selected_text("Select...")
+                    .width(256.0)
                     .show_ui(ui, |ui| {
                         let mut fake_selectable = self.host_field.clone();
                         ui.selectable_value(
@@ -118,7 +119,10 @@ impl MainMenu {
 
             let connect_button = egui::Button::new("Connect");
             let connect_enabled = matches!(game_state, GameState::MainMenu);
-            if ui.add_enabled(connect_enabled, connect_button).clicked() {
+            let button_response = ui.add_enabled(connect_enabled, connect_button);
+            if button_response.clicked()
+                || (connect_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            {
                 self.settings.rcu(|x| {
                     let old = x.clone();
                     let mut new = GameSettings {
@@ -173,7 +177,9 @@ impl MainMenu {
                     .show(&self.egui_gui.egui_ctx, |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
                         ui.label(message);
-                        if ui.button("OK").clicked() {
+                        if ui.button("OK").clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
                             *game_state = GameState::MainMenu;
                         }
                     });
