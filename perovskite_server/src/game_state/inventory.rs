@@ -519,10 +519,7 @@ impl<T> InventoryView<T> {
                 .game_map()
                 .mutate_block_atomically(coord, |_, ext_data| {
                     if ext_data.is_none() {
-                        *(ext_data.deref_mut()) = Some(ExtendedData {
-                            custom_data: None,
-                            inventories: hashbrown::HashMap::new(),
-                        });
+                        *(ext_data.deref_mut()) = Some(Default::default());
                     }
                     let inv = ext_data
                         .as_mut()

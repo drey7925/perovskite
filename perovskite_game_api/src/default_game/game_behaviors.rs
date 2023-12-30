@@ -1,6 +1,7 @@
 use anyhow::Result;
 use parking_lot::RwLock;
 use perovskite_core::{
+    chat::{ChatMessage, SERVER_ERROR_COLOR},
     constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
     protocol::items::item_stack,
 };
@@ -35,6 +36,8 @@ pub(crate) fn register_game_behaviors(game_builder: &mut GameBuilder) -> Result<
 }
 
 struct CreativeInvState {
+    all_items: Vec<ItemStack>,
+    last_search: String,
     items: Vec<ItemStack>,
     offset: usize,
 }
@@ -73,7 +76,12 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
             .collect::<Vec<ItemStack>>();
         items.sort_by(|x, y| x.proto.item_name.cmp(&y.proto.item_name));
 
-        let creative_state_for_peek = Arc::new(RwLock::new(CreativeInvState { items, offset: 0 }));
+        let creative_state_for_peek = Arc::new(RwLock::new(CreativeInvState {
+            all_items: items.clone(),
+            last_search: String::new(),
+            items,
+            offset: 0,
+        }));
         let creative_state_for_take = creative_state_for_peek.clone();
         let creative_state_for_update = creative_state_for_peek.clone();
         let creative_inv_callbacks = VirtualOutputCallbacks {
@@ -147,8 +155,89 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                                 .get("count")
                                 .and_then(|x| x.parse::<u32>().ok())
                             {
+                                let mut lock = creative_state_for_update.write();
+
+                                let query = response
+                                    .textfield_values
+                                    .get("search")
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .trim()
+                                    .to_string();
+                                if lock.last_search != query {
+                                    lock.last_search = query.to_string();
+
+                                    let re = match regex::RegexBuilder::new(&query)
+                                        .case_insensitive(true)
+                                        .build()
+                                    {
+                                        Ok(x) => x,
+                                        Err(regex::Error::Syntax(s)) => {
+                                            response
+                                                .ctx
+                                                .initiator()
+                                                .send_chat_message(
+                                                    ChatMessage::new_server_message(format!(
+                                                        "Invalid search query syntax: {}",
+                                                        s
+                                                    ))
+                                                    .with_color(SERVER_ERROR_COLOR),
+                                                )
+                                                .unwrap();
+                                            regex::RegexBuilder::new(".*").build().unwrap()
+                                        }
+                                        Err(regex::Error::CompiledTooBig(_)) => {
+                                            response
+                                                .ctx
+                                                .initiator()
+                                                .send_chat_message(
+                                                    ChatMessage::new_server_message(
+                                                        "Search query too large/complex"
+                                                            .to_string(),
+                                                    )
+                                                    .with_color(SERVER_ERROR_COLOR),
+                                                )
+                                                .unwrap();
+                                            regex::RegexBuilder::new(".*").build().unwrap()
+                                        }
+                                        Err(_) => {
+                                            response
+                                                .ctx
+                                                .initiator()
+                                                .send_chat_message(
+                                                    ChatMessage::new_server_message(
+                                                        "Unknown error parsing search query"
+                                                            .to_string(),
+                                                    )
+                                                    .with_color(SERVER_ERROR_COLOR),
+                                                )
+                                                .unwrap();
+                                            regex::RegexBuilder::new(".*").build().unwrap()
+                                        }
+                                    };
+                                    lock.items = lock
+                                        .all_items
+                                        .iter()
+                                        .filter(|x| {
+                                            re.is_match(&x.proto.item_name)
+                                                || response
+                                                    .ctx
+                                                    .item_manager()
+                                                    .get_item(x.proto.item_name.as_str())
+                                                    .map_or(false, |x| {
+                                                        x.proto
+                                                            .groups
+                                                            .iter()
+                                                            .any(|x| re.is_match(x))
+                                                            || re.is_match(&x.proto.display_name)
+                                                    })
+                                        })
+                                        .cloned()
+                                        .collect();
+                                    lock.offset = 0;
+                                }
+
                                 if count >= 1 {
-                                    let mut lock = creative_state_for_update.write();
                                     for item in lock.items.iter_mut() {
                                         item.proto.quantity = match item.proto.quantity_type {
                                             Some(item_stack::QuantityType::Stack(x)) => {
@@ -180,10 +269,13 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         if has_creative {
             Ok(Popup::new(game_state)
                 .title("Inventory")
-                .text_field("count", "Item count: ", "256", true)
-                .button("update_btn", "Update count", true)
-                .button("left", "Prev. page", true)
-                .button("right", "Next page", true)
+                .text_field("search", "Filter: ", "", true)
+                .text_field("count", "Creative stack size: ", "256", true)
+                .button("update_btn", "Update", true)
+                .side_by_side_layout("Navigation", |p| {
+                    Ok(p.button("left", "Prev. page", true)
+                        .button("right", "Next page", true))
+                })?
                 .inventory_view_virtual_output(
                     "creative",
                     "Creative items:",

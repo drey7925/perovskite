@@ -91,13 +91,26 @@ impl EventInitiator<'_> {
             EventInitiator::Plugin(_) => None,
         }
     }
-    pub async fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
+    pub async fn send_chat_message_async(&self, message: ChatMessage) -> Result<()> {
         match self {
             EventInitiator::Engine => warn!("Attempted to send chat message to engine"),
-            EventInitiator::Player(p) => p.player.send_chat_message(message).await?,
+            EventInitiator::Player(p) => p.player.send_chat_message_async(message).await?,
             EventInitiator::WeakPlayerRef(p) => {
                 if let Some(player) = p.player.upgrade() {
-                    player.send_chat_message(message).await?
+                    player.send_chat_message_async(message).await?
+                }
+            }
+            EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin"),
+        }
+        Ok(())
+    }
+    pub fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
+        match self {
+            EventInitiator::Engine => warn!("Attempted to send chat message to engine"),
+            EventInitiator::Player(p) => p.player.send_chat_message(message)?,
+            EventInitiator::WeakPlayerRef(p) => {
+                if let Some(player) = p.player.upgrade() {
+                    player.send_chat_message(message)?;
                 }
             }
             EventInitiator::Plugin(_) => warn!("Attempted to send chat message to plugin"),
@@ -135,6 +148,15 @@ impl EventInitiator<'_> {
             }),
             EventInitiator::WeakPlayerRef(p) => EventInitiator::WeakPlayerRef(p.clone()),
             EventInitiator::Plugin(s) => EventInitiator::Plugin(s.clone()),
+        }
+    }
+
+    pub fn player_name(&self) -> Option<&str> {
+        match self {
+            EventInitiator::Engine => None,
+            EventInitiator::Player(p) => Some(p.player.name()),
+            EventInitiator::WeakPlayerRef(p) => Some(&p.name),
+            EventInitiator::Plugin(_) => None,
         }
     }
 }
@@ -220,6 +242,7 @@ impl<'a> HandlerContext<'a> {
 }
 impl Deref for HandlerContext<'_> {
     type Target = GameState;
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.game_state
     }

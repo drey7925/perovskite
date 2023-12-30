@@ -6,6 +6,7 @@ use std::{
 use self::private::UiElementContainerPrivate;
 
 use super::{
+    event::HandlerContext,
     inventory::{
         BorrowedStack, InventoryKey, InventoryView, InventoryViewId, VirtualOutputCallbacks,
     },
@@ -81,11 +82,13 @@ pub enum PopupAction {
 
 /// Passed when a callback is invoked
 /// Contents TBD
-pub struct PopupResponse {
+pub struct PopupResponse<'a> {
     /// The key of the button that was clicked
     pub user_action: PopupAction,
     /// The values of all textfields
     pub textfield_values: HashMap<String, String>,
+    /// Handler context
+    pub ctx: HandlerContext<'a>,
 }
 
 type InventoryUpdateCallback = Box<dyn Fn(&Popup) + Send + Sync>;

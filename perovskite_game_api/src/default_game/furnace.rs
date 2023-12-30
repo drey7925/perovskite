@@ -76,7 +76,7 @@ impl TimerInlineCallback for FurnaceTimerCallback {
         let mut set_dirty = false;
         let extended_data = data.get_or_insert_with(|| ExtendedData {
             custom_data: Some(Box::<FurnaceState>::default()),
-            inventories: hashbrown::HashMap::new(),
+            ..Default::default()
         });
         let state: &mut FurnaceState = match extended_data
             .custom_data

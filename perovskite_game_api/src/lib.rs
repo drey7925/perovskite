@@ -46,6 +46,9 @@ pub mod default_game;
 #[cfg(feature = "circuits")]
 pub mod circuits;
 
+#[cfg(feature = "agriculture")]
+pub mod farming;
+
 #[macro_export]
 #[cfg(doc)]
 macro_rules! maybe_export {

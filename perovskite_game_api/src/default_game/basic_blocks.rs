@@ -19,15 +19,21 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
         MatterType, PlantLikeAppearanceBuilder,
     },
+    default_game::{
+        basic_blocks::ores::{IRON_INGOT, IRON_PIECE},
+        item_groups,
+    },
     game_builder::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, TextureName,
     },
 };
 use anyhow::Result;
 use perovskite_core::{
+    chat::{ChatMessage, SERVER_ERROR_COLOR},
     constants::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
         item_groups::HIDDEN_FROM_CREATIVE,
+        permissions,
     },
     protocol::{
         self,
@@ -36,7 +42,7 @@ use perovskite_core::{
     },
 };
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, ExtDataHandling},
+    blocks::{BlockInteractionResult, ExtDataHandling, ExtendedData},
     client_ui::UiElementContainer,
     items::{Item, ItemStack},
 };
@@ -67,6 +73,8 @@ pub const DESERT_SAND: StaticBlockName = StaticBlockName("default:desert_sand");
 pub const GLASS: StaticBlockName = StaticBlockName("default:glass");
 /// Unlocked chest.
 pub const CHEST: StaticBlockName = StaticBlockName("default:chest");
+/// Locked chest.
+pub const LOCKED_CHEST: StaticBlockName = StaticBlockName("default:locked_chest");
 
 /// Torch
 pub const TORCH: StaticBlockName = StaticBlockName("default:torch");
@@ -87,8 +95,12 @@ const DESERT_STONE_TEXTURE: TextureName = TextureName("default:desert_stone");
 const DESERT_SAND_TEXTURE: TextureName = TextureName("default:desert_sand");
 const GLASS_TEXTURE: TextureName = TextureName("default:glass");
 const WATER_TEXTURE: TextureName = TextureName("default:water");
-// TODO real chest texture
-const CHEST_TEXTURE: TextureName = TextureName("default:chest");
+
+const CHEST_SIDE_TEXTURE: TextureName = TextureName("default:chest_side");
+const CHEST_TOP_TEXTURE: TextureName = TextureName("default:chest_top");
+const CHEST_FRONT_TEXTURE: TextureName = TextureName("default:chest_front");
+const LOCKED_CHEST_FRONT_TEXTURE: TextureName = TextureName("default:chest_front_locked");
+
 const TORCH_TEXTURE: TextureName = TextureName("default:torch");
 const TNT_TEXTURE: TextureName = TextureName("default:tnt");
 const TESTONLY_UNKNOWN_TEX: TextureName = TextureName("default:testonly_unknown");
@@ -110,29 +122,29 @@ pub mod ores {
 
     use super::*;
 
-    const COAL_ORE: StaticBlockName = StaticBlockName("default:coal_ore");
-    const COAL_PIECE: StaticItemName = StaticItemName("default:coal_piece");
-    const COAL_ORE_TEXTURE: TextureName = TextureName("default:coal_ore");
-    const COAL_PIECE_TEXTURE: TextureName = TextureName("default:coal_piece");
+    pub const COAL_ORE: StaticBlockName = StaticBlockName("default:coal_ore");
+    pub const COAL_PIECE: StaticItemName = StaticItemName("default:coal_piece");
+    pub const COAL_ORE_TEXTURE: TextureName = TextureName("default:coal_ore");
+    pub const COAL_PIECE_TEXTURE: TextureName = TextureName("default:coal_piece");
 
-    const IRON_ORE: StaticBlockName = StaticBlockName("default:iron_ore");
-    const IRON_PIECE: StaticItemName = StaticItemName("default:iron_piece");
-    const IRON_INGOT: StaticItemName = StaticItemName("default:iron_ingot");
-    const IRON_ORE_TEXTURE: TextureName = TextureName("default:iron_ore");
-    const IRON_PIECE_TEXTURE: TextureName = TextureName("default:iron_piece");
-    const IRON_INGOT_TEXTURE: TextureName = TextureName("default:iron_ingot");
+    pub const IRON_ORE: StaticBlockName = StaticBlockName("default:iron_ore");
+    pub const IRON_PIECE: StaticItemName = StaticItemName("default:iron_piece");
+    pub const IRON_INGOT: StaticItemName = StaticItemName("default:iron_ingot");
+    pub const IRON_ORE_TEXTURE: TextureName = TextureName("default:iron_ore");
+    pub const IRON_PIECE_TEXTURE: TextureName = TextureName("default:iron_piece");
+    pub const IRON_INGOT_TEXTURE: TextureName = TextureName("default:iron_ingot");
 
-    const GOLD_ORE: StaticBlockName = StaticBlockName("default:gold_ore");
-    const GOLD_PIECE: StaticItemName = StaticItemName("default:gold_piece");
-    const GOLD_INGOT: StaticItemName = StaticItemName("default:gold_ingot");
-    const GOLD_ORE_TEXTURE: TextureName = TextureName("default:gold_ore");
-    const GOLD_PIECE_TEXTURE: TextureName = TextureName("default:gold_piece");
-    const GOLD_INGOT_TEXTURE: TextureName = TextureName("default:gold_ingot");
+    pub const GOLD_ORE: StaticBlockName = StaticBlockName("default:gold_ore");
+    pub const GOLD_PIECE: StaticItemName = StaticItemName("default:gold_piece");
+    pub const GOLD_INGOT: StaticItemName = StaticItemName("default:gold_ingot");
+    pub const GOLD_ORE_TEXTURE: TextureName = TextureName("default:gold_ore");
+    pub const GOLD_PIECE_TEXTURE: TextureName = TextureName("default:gold_piece");
+    pub const GOLD_INGOT_TEXTURE: TextureName = TextureName("default:gold_ingot");
 
-    const DIAMOND_ORE: StaticBlockName = StaticBlockName("default:diamond_ore");
-    const DIAMOND_PIECE: StaticItemName = StaticItemName("default:diamond_piece");
-    const DIAMOND_ORE_TEXTURE: TextureName = TextureName("default:diamond_ore");
-    const DIAMOND_PIECE_TEXTURE: TextureName = TextureName("default:diamond_piece");
+    pub const DIAMOND_ORE: StaticBlockName = StaticBlockName("default:diamond_ore");
+    pub const DIAMOND_PIECE: StaticItemName = StaticItemName("default:diamond_piece");
+    pub const DIAMOND_ORE_TEXTURE: TextureName = TextureName("default:diamond_ore");
+    pub const DIAMOND_PIECE_TEXTURE: TextureName = TextureName("default:diamond_piece");
 
     pub(crate) fn register_ores(game_builder: &mut GameBuilder) -> Result<()> {
         // todo factor this into a function per-ore
@@ -173,7 +185,7 @@ pub mod ores {
                 cave_bias_effect: 0.0,
                 noise_scale: (4., 0.25, 4.),
             });
-        game_builder.register_smelting_fuel(COAL_PIECE.0.to_string(), 16);
+        game_builder.register_smelting_fuel(RecipeSlot::Exact(COAL_PIECE.0.to_string()), 16);
 
         include_texture_bytes!(game_builder, IRON_ORE_TEXTURE, "textures/iron_ore.png")?;
         include_texture_bytes!(game_builder, IRON_PIECE_TEXTURE, "textures/iron_piece.png")?;
@@ -500,7 +512,19 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
-    include_texture_bytes!(game_builder, CHEST_TEXTURE, "textures/chest_side.png")?;
+    include_texture_bytes!(game_builder, CHEST_SIDE_TEXTURE, "textures/chest_side.png")?;
+    include_texture_bytes!(game_builder, CHEST_TOP_TEXTURE, "textures/chest_top.png")?;
+    include_texture_bytes!(
+        game_builder,
+        CHEST_FRONT_TEXTURE,
+        "textures/chest_front.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        LOCKED_CHEST_FRONT_TEXTURE,
+        "textures/chest_front_locked.png"
+    )?;
+
     include_texture_bytes!(game_builder, TORCH_TEXTURE, "textures/torch.png")?;
 
     include_texture_bytes!(
@@ -622,39 +646,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_light_emission(8),
     )?;
 
-    // testonly
-    game_builder.add_block(
-        BlockBuilder::new(CHEST)
-            .set_cube_single_texture(CHEST_TEXTURE)
-            .set_display_name("Unlocked chest")
-            .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
-                    perovskite_server::game_state::event::EventInitiator::Player(p) => Ok(Some(
-                        (ctx.new_popup()
-                            .title("Chest")
-                            .inventory_view_block(
-                                "chest_inv",
-                                "Chest contents:",
-                                (4, 8),
-                                coord,
-                                "chest_inv".to_string(),
-                                true,
-                                true,
-                                false,
-                            )?
-                            .inventory_view_stored(
-                                "player_inv",
-                                "Player inventory:",
-                                p.player.main_inventory(),
-                                true,
-                                true,
-                            ))?,
-                    )),
-                    _ => Ok(None),
-                }))
-            })),
-    )?;
+    register_chest(game_builder)?;
 
     game_builder.add_block(
         BlockBuilder::new(StaticBlockName("testonly:aabb_geometry_test"))
@@ -669,7 +661,6 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 (-0.3, 0.5),
             )),
     )?;
-
     game_builder.add_block(
         BlockBuilder::new(StaticBlockName("testonly:aabb_geometry_test2")).set_cube_appearance(
             CubeAppearanceBuilder::new().set_single_texture(TESTONLY_UNKNOWN_TEX),
@@ -686,4 +677,182 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     make_slab(game_builder, &desert_stone, true)?;
 
     Ok(())
+}
+
+fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
+    game_builder.add_block(
+        BlockBuilder::new(CHEST)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_individual_textures(
+                        CHEST_SIDE_TEXTURE,
+                        CHEST_SIDE_TEXTURE,
+                        CHEST_TOP_TEXTURE,
+                        CHEST_TOP_TEXTURE,
+                        CHEST_FRONT_TEXTURE,
+                        CHEST_SIDE_TEXTURE,
+                    )
+                    .set_rotate_laterally(),
+            )
+            .set_display_name("Unlocked chest")
+            .add_modifier(Box::new(|bt| {
+                bt.extended_data_handling = ExtDataHandling::ServerSide;
+                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
+                    perovskite_server::game_state::event::EventInitiator::Player(p) => {
+                        Ok(Some(make_chest_popup(&ctx, coord, p)?))
+                    }
+                    _ => Ok(None),
+                }))
+            })),
+    )?;
+
+    const LOCKED_CHEST_OWNER: &str = "default:locked_chest:owner";
+
+    game_builder.add_block(
+        BlockBuilder::new(LOCKED_CHEST)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_individual_textures(
+                        CHEST_SIDE_TEXTURE,
+                        CHEST_SIDE_TEXTURE,
+                        CHEST_TOP_TEXTURE,
+                        CHEST_TOP_TEXTURE,
+                        LOCKED_CHEST_FRONT_TEXTURE,
+                        CHEST_SIDE_TEXTURE,
+                    )
+                    .set_rotate_laterally(),
+            )
+            .set_display_name("Locked chest")
+            .add_modifier(Box::new(|bt| {
+                bt.extended_data_handling = ExtDataHandling::ServerSide;
+                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
+                    perovskite_server::game_state::event::EventInitiator::Player(p) => {
+                        let (_, owner) =
+                            ctx.game_map().get_block_with_extended_data(coord, |data| {
+                                data.simple_data.get(LOCKED_CHEST_OWNER).cloned()
+                            })?;
+
+                        let owner_matches = if let Some(owner) = &owner {
+                            owner == p.player.name()
+                        } else {
+                            true
+                        };
+
+                        if owner_matches
+                            || p.player
+                                .has_permission(permissions::BYPASS_INVENTORY_CHECKS)
+                        {
+                            Ok(Some(make_chest_popup(&ctx, coord, p)?))
+                        } else {
+                            // unwrap is safe - if owner were none, we would have given access to the chest
+                            p.player.send_chat_message(
+                                ChatMessage::new_server_message(format!(
+                                    "Only {} can open this chest",
+                                    owner.unwrap()
+                                ))
+                                .with_color(SERVER_ERROR_COLOR),
+                            )?;
+                            Ok(None)
+                        }
+                    }
+                    _ => Ok(None),
+                }))
+            }))
+            .add_item_modifier(Box::new(|it| {
+                let old_place_handler = it.place_handler.take().unwrap();
+                it.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
+                    let result = old_place_handler(ctx, coord, anchor, tool_stack)?;
+                    if let Some(player) = ctx.initiator().player_name() {
+                        ctx.game_map()
+                            .mutate_block_atomically(coord, |_, extended_data| {
+                                let data = extended_data.get_or_insert_with(ExtendedData::default);
+                                data.simple_data
+                                    .insert(LOCKED_CHEST_OWNER.to_string(), player.to_string());
+                                Ok(())
+                            })?;
+                    }
+                    Ok(result)
+                }));
+            })),
+    )?;
+    game_builder
+        .builder_extension::<DefaultGameBuilderExtension>()
+        .crafting_recipes
+        .register_recipe(super::recipes::RecipeImpl {
+            slots: [
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+            ],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: CHEST.0.to_string(),
+                    quantity: 1,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
+                },
+            },
+            shapeless: false,
+            metadata: (),
+        });
+    game_builder
+        .builder_extension::<DefaultGameBuilderExtension>()
+        .crafting_recipes
+        .register_recipe(super::recipes::RecipeImpl {
+            slots: [
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Exact(IRON_INGOT.0.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+            ],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: LOCKED_CHEST.0.to_string(),
+                    quantity: 1,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
+                },
+            },
+            shapeless: false,
+            metadata: (),
+        });
+    Ok(())
+}
+
+fn make_chest_popup(
+    ctx: &perovskite_server::game_state::event::HandlerContext<'_>,
+    coord: perovskite_core::coordinates::BlockCoordinate,
+    p: &perovskite_server::game_state::event::PlayerInitiator<'_>,
+) -> Result<perovskite_server::game_state::client_ui::Popup, anyhow::Error> {
+    Ok((ctx
+        .new_popup()
+        .title("Chest")
+        .inventory_view_block(
+            "chest_inv",
+            "Chest contents:",
+            (4, 8),
+            coord,
+            "chest_inv".to_string(),
+            true,
+            true,
+            false,
+        )?
+        .inventory_view_stored(
+            "player_inv",
+            "Player inventory:",
+            p.player.main_inventory(),
+            true,
+            true,
+        ))?)
 }

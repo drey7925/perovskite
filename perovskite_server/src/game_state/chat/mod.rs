@@ -36,7 +36,7 @@ impl ChatState {
         } else {
             if !initiator.check_permission_if_player(permissions::CHAT) {
                 initiator
-                    .send_chat_message(
+                    .send_chat_message_async(
                         ChatMessage::new_server_message(
                             "You are not permitted to chat.".to_string(),
                         )

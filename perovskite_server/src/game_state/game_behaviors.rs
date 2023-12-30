@@ -148,7 +148,7 @@ impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
             "Welcome! Currently connected players: {}",
             connected_players.iter().sorted().join(", ")
         ));
-        req.send_chat_message(individual_message).await?;
+        req.send_chat_message_async(individual_message).await?;
         Ok(())
     }
 }

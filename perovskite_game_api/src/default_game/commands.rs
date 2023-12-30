@@ -72,7 +72,7 @@ impl ChatCommandHandler for WhereAmICommand {
     async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
         if let EventInitiator::Player(p) = context.initiator() {
             p.player
-                .send_chat_message(ChatMessage::new_server_message(format!(
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
                     "You are at {:?}",
                     p.position.position
                 )))
@@ -109,7 +109,7 @@ impl ChatCommandHandler for GiveMeCommand {
                 .mutate_inventory_atomically(&player_inventory, |inv| Ok(inv.try_insert(stack)))?;
             if leftover.is_some() {
                 p.player
-                    .send_chat_message(
+                    .send_chat_message_async(
                         ChatMessage::new_server_message("Not enough space in inventory")
                             .with_color(SERVER_WARNING_COLOR),
                     )
@@ -133,7 +133,7 @@ async fn make_stack(item: &str, mut count: u32, context: &HandlerContext<'_>) ->
     if !item.stackable() && count != 1 {
         context
             .initiator()
-            .send_chat_message(
+            .send_chat_message_async(
                 ChatMessage::new_server_message("Item is not stackable, setting count to 1")
                     .with_color(SERVER_WARNING_COLOR),
             )
@@ -176,7 +176,7 @@ impl ChatCommandHandler for GiveCommand {
         if leftover.is_some() {
             context
                 .initiator()
-                .send_chat_message(
+                .send_chat_message_async(
                     ChatMessage::new_server_message("Not enough space in inventory")
                         .with_color(SERVER_WARNING_COLOR),
                 )
@@ -344,7 +344,7 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
             let end = Instant::now();
             context
                 .initiator()
-                .send_chat_message(ChatMessage::new_server_message(format!(
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
                     "Fastpath took {} ms ({:?} per iter), {} ok",
                     (end - start).as_millis(),
                     (end - start) / 1000000,
@@ -375,7 +375,7 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
             let end = Instant::now();
             context
                 .initiator()
-                .send_chat_message(ChatMessage::new_server_message(format!(
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
                     "Fastpath moving took {} ms ({:?} per iter), {} ok",
                     (end - start).as_millis(),
                     (end - start) / 1000000,
@@ -398,7 +398,7 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
             let end = Instant::now();
             context
                 .initiator()
-                .send_chat_message(ChatMessage::new_server_message(format!(
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
                     "Slowpath took {} ms ({:?} per iter), {} ok",
                     (end - start).as_millis(),
                     (end - start) / 1000000,
@@ -427,7 +427,7 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
             let end = Instant::now();
             context
                 .initiator()
-                .send_chat_message(ChatMessage::new_server_message(format!(
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
                     "Slowpath moving took {} ms ({:?} per iter), {} ok",
                     (end - start).as_millis(),
                     (end - start) / 1000000,

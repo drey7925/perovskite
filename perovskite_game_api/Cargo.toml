@@ -34,9 +34,10 @@ serde = { version = "1.0.163", features = ["derive"] }
 cgmath = "0.18.0"
 tokio = { version = "1.29.1", features = ["full", "tracing"] }
 smallvec = "1.11.2"
+regex = "1.10.2"
 
 [features]
-default = ["default_game", "circuits"]
+default = ["default_game", "agriculture", "circuits"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []

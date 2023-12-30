@@ -313,7 +313,7 @@ async fn initialize_protocol_state(
         .map_err(|_| Error::msg("Could not send outbound message (initial state)"))?;
 
     if context.effective_protocol_version != SERVER_MAX_PROTOCOL_VERSION {
-        context.player_context.send_chat_message(ChatMessage::new_server_message(
+        context.player_context.send_chat_message_async(ChatMessage::new_server_message(
             "Your client is out of date and you may not be able to use all server features. Please consider updating.".to_string()
         )).await?;
     }
@@ -673,7 +673,7 @@ impl MapChunkSender {
                 // The player somehow got an inf/nan position, so respawn them
                 self.context
                     .player_context
-                    .send_chat_message(ChatMessage::new_server_message(
+                    .send_chat_message_async(ChatMessage::new_server_message(
                         "Your position is borked. Respawning you.",
                     ))
                     .await?;
@@ -684,7 +684,7 @@ impl MapChunkSender {
                 // The position is finite but it's out of bounds
                 self.context
                     .player_context
-                    .send_chat_message(ChatMessage::new_server_message(
+                    .send_chat_message_async(ChatMessage::new_server_message(
                         "You've hit the edge of the map.",
                     ))
                     .await?;
@@ -1499,6 +1499,11 @@ impl InboundWorker {
         };
         let updates = tokio::task::block_in_place(|| -> anyhow::Result<_> {
             let _span = span!("handle_popup_response");
+            let ctx = HandlerContext {
+                tick: self.context.game_state.tick(),
+                initiator: self.context.player_context.make_initiator(),
+                game_state: self.context.game_state.clone(),
+            };
             let mut player_state = self.context.player_context.state.lock();
             let mut updates = vec![];
             if action.closed {
@@ -1515,12 +1520,17 @@ impl InboundWorker {
                 .iter_mut()
                 .find(|x| x.id() == action.popup_id)
             {
-                popup.handle_response(
-                    PopupResponse {
-                        user_action,
-                        textfield_values: action.text_fields.clone(),
-                    },
-                    self.context.player_context.main_inventory(),
+                run_handler!(
+                    || popup.handle_response(
+                        PopupResponse {
+                            user_action,
+                            textfield_values: action.text_fields.clone(),
+                            ctx: ctx.clone(),
+                        },
+                        self.context.player_context.main_inventory(),
+                    ),
+                    "popup_response",
+                    &ctx.initiator
                 )?;
                 for view in popup.inventory_views().values() {
                     updates.push(make_inventory_update(
@@ -1532,12 +1542,17 @@ impl InboundWorker {
                     )?);
                 }
             } else if player_state.inventory_popup.id() == action.popup_id {
-                player_state.inventory_popup.handle_response(
-                    PopupResponse {
-                        user_action,
-                        textfield_values: action.text_fields.clone(),
-                    },
-                    self.context.player_context.main_inventory(),
+                run_handler!(
+                    || player_state.inventory_popup.handle_response(
+                        PopupResponse {
+                            user_action,
+                            textfield_values: action.text_fields.clone(),
+                            ctx: ctx.clone(),
+                        },
+                        self.context.player_context.main_inventory(),
+                    ),
+                    "popup_response",
+                    &ctx.initiator
                 )?;
                 for view in player_state.inventory_popup.inventory_views().values() {
                     updates.push(make_inventory_update(

@@ -2416,6 +2416,7 @@ dependencies = [
  "perovskite_server",
  "prost",
  "rand 0.8.5",
+ "regex",
  "ron",
  "rustc-hash",
  "serde",

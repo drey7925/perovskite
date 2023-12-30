@@ -48,11 +48,24 @@ pub struct ExtendedData {
     /// particular location. Use `downcast_ref` to try to get the inner data
     /// of the Any as a concrete type.
     pub custom_data: Option<CustomData>,
+
+    /// Simple key-value storage associated with a block.
+    pub simple_data: HashMap<String, String>,
+
     /// Inventories that can be shown in inventory views
     /// Note that nothing here prevents you from messing with inventories that are still
     /// visible in popups.
     /// TODO: switch back to std hashmap once get_many_mut is stabilized
     pub inventories: hashbrown::HashMap<String, Inventory>,
+}
+impl Default for ExtendedData {
+    fn default() -> Self {
+        Self {
+            custom_data: None,
+            simple_data: HashMap::new(),
+            inventories: hashbrown::HashMap::new(),
+        }
+    }
 }
 
 /// The result of interacting with (e.g. digging/tapping) a block.

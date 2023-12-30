@@ -270,6 +270,7 @@ impl MapChunk {
             Ok(Some(mapchunk_proto::ExtendedData {
                 offset_in_chunk: block_index.try_into().unwrap(),
                 serialized_data: serialized_custom_data.unwrap_or_default(),
+                simple_storage: ext_data.simple_data.clone(),
                 inventories,
             }))
         } else {
@@ -394,12 +395,13 @@ fn parse_v1(
         offset_in_chunk,
         serialized_data,
         inventories,
-    } in chunk_data.extended_data.iter()
+        simple_storage,
+    } in chunk_data.extended_data.into_iter()
     {
-        ensure!(*offset_in_chunk < 4096);
-        let offset = ChunkOffset::from_index(*offset_in_chunk as usize);
+        ensure!(offset_in_chunk < 4096);
+        let offset = ChunkOffset::from_index(offset_in_chunk as usize);
         let block_coord = coordinate.with_offset(offset);
-        let block_id = *chunk_data.block_ids.get(*offset_in_chunk as usize).expect(
+        let block_id = *chunk_data.block_ids.get(offset_in_chunk as usize).expect(
             "Block IDs vec lookup failed, even though bounds check passed. This should not happen.",
         );
         let (block_def, _) = game_state
@@ -423,9 +425,10 @@ fn parse_v1(
         };
         if let Some(ref deserialize) = block_def.deserialize_extended_data_handler {
             extended_data.insert(
-                (*offset_in_chunk).try_into().unwrap(),
+                offset_in_chunk.try_into().unwrap(),
                 ExtendedData {
-                    custom_data: deserialize(handler_context, serialized_data)?,
+                    custom_data: deserialize(handler_context, &serialized_data)?,
+                    simple_data: simple_storage,
                     inventories: inventories
                         .iter()
                         .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))
@@ -440,9 +443,10 @@ fn parse_v1(
                 );
             }
             extended_data.insert(
-                (*offset_in_chunk).try_into().unwrap(),
+                offset_in_chunk.try_into().unwrap(),
                 ExtendedData {
                     custom_data: None,
+                    simple_data: simple_storage,
                     inventories: inventories
                         .iter()
                         .map(|(k, v)| Ok((k.clone(), Inventory::from_proto(v.clone(), None)?)))

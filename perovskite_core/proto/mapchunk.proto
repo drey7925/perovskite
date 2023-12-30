@@ -27,6 +27,8 @@ message ExtendedData {
     bytes serialized_data = 2;
     // Inventories stored in a block
     map<string, perovskite.protocol.items.Inventory> inventories = 3;
+    // Simple key-value storage
+    map<string, string> simple_storage = 4;
 }
 
 message ChunkV1 {

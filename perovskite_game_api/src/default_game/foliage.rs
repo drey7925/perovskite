@@ -1,12 +1,18 @@
 use anyhow::Result;
+use perovskite_core::protocol::items::item_stack::QuantityType;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
-    game_builder::{GameBuilder, StaticBlockName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, StaticItemName, TextureName},
     include_texture_bytes,
 };
 
-use super::{block_groups::FIBROUS, DefaultGameBuilder};
+use super::{
+    block_groups::{self, FIBROUS, TREE_TRUNK},
+    item_groups,
+    recipes::RecipeSlot,
+    DefaultGameBuilder,
+};
 
 pub const MAPLE_TREE: StaticBlockName = StaticBlockName("default:maple_tree");
 pub const MAPLE_TREE_TOP_TEX: TextureName = TextureName("default:maple_tree_top");
@@ -15,6 +21,9 @@ pub const MAPLE_TREE_SIDE_TEX: TextureName = TextureName("default:maple_tree_sid
 pub const MAPLE_LEAVES: StaticBlockName = StaticBlockName("default:maple_leaves");
 pub const MAPLE_LEAVES_TEX: TextureName = TextureName("default:maple_leaves");
 
+pub const MAPLE_PLANKS: StaticBlockName = StaticBlockName("default:maple_planks");
+pub const MAPLE_PLANKS_TEX: TextureName = TextureName("default:maple_planks");
+
 pub const TALL_GRASS: StaticBlockName = StaticBlockName("default:tall_grass");
 pub const TALL_GRASS_TEX: TextureName = TextureName("default:tall_grass");
 
@@ -22,16 +31,23 @@ pub const CACTUS: StaticBlockName = StaticBlockName("default:cactus");
 pub const CACTUS_TOP_TEX: TextureName = TextureName("default:cactus_top");
 pub const CACTUS_SIDE_TEX: TextureName = TextureName("default:cactus_side");
 
+pub const STICK_ITEM: StaticItemName = StaticItemName("default:stick");
+pub const STICK_TEX: TextureName = TextureName("default:stick");
+
 pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(builder, MAPLE_TREE_TOP_TEX, "textures/maple_tree_top.png")?;
     include_texture_bytes!(builder, MAPLE_TREE_SIDE_TEX, "textures/maple_tree_side.png")?;
     include_texture_bytes!(builder, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
+    include_texture_bytes!(builder, MAPLE_PLANKS_TEX, "textures/maple_planks.png")?;
     include_texture_bytes!(builder, TALL_GRASS_TEX, "textures/tall_grass.png")?;
     include_texture_bytes!(builder, CACTUS_TOP_TEX, "textures/cactus_top.png")?;
     include_texture_bytes!(builder, CACTUS_SIDE_TEX, "textures/cactus_side.png")?;
+    include_texture_bytes!(builder, STICK_TEX, "textures/stick.png")?;
     builder.add_block(
         BlockBuilder::new(MAPLE_TREE)
-            .add_block_group(FIBROUS)
+            .add_block_group(block_groups::TREE_TRUNK)
+            .add_block_group(block_groups::FIBROUS)
+            .add_item_group(item_groups::TREE_TRUNK)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 MAPLE_TREE_SIDE_TEX,
                 MAPLE_TREE_SIDE_TEX,
@@ -51,11 +67,61 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .set_no_drops(),
     )?;
-    builder.register_smelting_fuel(MAPLE_TREE.0, 8);
-    builder.register_smelting_fuel(MAPLE_TREE.0, 1);
+    builder.register_smelting_fuel(RecipeSlot::Group(item_groups::TREE_TRUNK.to_string()), 8);
+    builder.register_smelting_fuel(RecipeSlot::Group(item_groups::TREE_LEAVES.to_string()), 1);
+
+    builder.register_smelting_fuel(RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()), 2);
+
+    builder.register_basic_item(STICK_ITEM, "Wooden stick", STICK_TEX, vec![])?;
+
+    builder.add_block(
+        BlockBuilder::new(MAPLE_PLANKS)
+            .add_block_group(block_groups::WOOD_PLANKS)
+            .add_block_group(block_groups::FIBROUS)
+            .add_item_group(item_groups::WOOD_PLANKS)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(MAPLE_PLANKS_TEX))
+            .set_display_name("Maple planks"),
+    )?;
+
+    builder.register_crafting_recipe(
+        [
+            RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        STICK_ITEM.0.to_string(),
+        4,
+        Some(QuantityType::Stack(256)),
+    );
+
+    builder.register_crafting_recipe(
+        [
+            RecipeSlot::Exact(MAPLE_TREE.0.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        MAPLE_PLANKS.0.to_string(),
+        4,
+        Some(QuantityType::Stack(256)),
+    );
+
     builder.add_block(
         BlockBuilder::new(MAPLE_LEAVES)
             .add_block_group(FIBROUS)
+            .add_block_group(block_groups::TREE_LEAVES)
+            .add_item_group(item_groups::TREE_LEAVES)
             .set_cube_appearance(
                 CubeAppearanceBuilder::new()
                     .set_single_texture(MAPLE_LEAVES_TEX)

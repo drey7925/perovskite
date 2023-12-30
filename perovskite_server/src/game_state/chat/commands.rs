@@ -96,7 +96,7 @@ impl CommandManager {
         if let Err(e) = self.try_handle_command(message, &context).await {
             context
                 .initiator
-                .send_chat_message(
+                .send_chat_message_async(
                     ChatMessage::new_server_message(format!("Command failed: {:?}", e))
                         .with_color((255, 0, 0)),
                 )
@@ -161,7 +161,7 @@ impl ChatCommandHandler for HelpCommandImpl {
             .join("\n");
         context
             .initiator
-            .send_chat_message(ChatMessage::new_server_message(content))
+            .send_chat_message_async(ChatMessage::new_server_message(content))
             .await?;
         Ok(())
     }
@@ -204,7 +204,7 @@ impl ChatCommandHandler for GrantCommandImpl {
         })?;
         context
             .initiator
-            .send_chat_message(ChatMessage::new_server_message(
+            .send_chat_message_async(ChatMessage::new_server_message(
                 "Permission(s) granted".to_string(),
             ))
             .await?;
@@ -267,7 +267,7 @@ impl ChatCommandHandler for RevokeCommandImpl {
         }
         context
             .initiator()
-            .send_chat_message(ChatMessage::new_server_message(
+            .send_chat_message_async(ChatMessage::new_server_message(
                 "Permission revoked".to_string(),
             ))
             .await?;
@@ -304,14 +304,14 @@ impl ChatCommandHandler for ElevateCommandImpl {
                 if eligible.is_empty() {
                     context
                         .initiator()
-                        .send_chat_message(ChatMessage::new_server_message(
+                        .send_chat_message_async(ChatMessage::new_server_message(
                             "You are not eligible for any permissions",
                         ))
                         .await?;
                 } else {
                     context
                         .initiator()
-                        .send_chat_message(ChatMessage::new_server_message(format!(
+                        .send_chat_message_async(ChatMessage::new_server_message(format!(
                             "You are eligible for the following permissions: {}",
                             eligible
                         )))
@@ -323,7 +323,7 @@ impl ChatCommandHandler for ElevateCommandImpl {
                     player_initiator.player.clear_temporary_permissions()?;
                     context
                         .initiator
-                        .send_chat_message(ChatMessage::new_server_message(
+                        .send_chat_message_async(ChatMessage::new_server_message(
                             "Temporary permissions cleared",
                         ))
                         .await?;
@@ -337,7 +337,7 @@ impl ChatCommandHandler for ElevateCommandImpl {
                         .grant_temporary_permission(params[1])?;
                     context
                         .initiator
-                        .send_chat_message(ChatMessage::new_server_message(
+                        .send_chat_message_async(ChatMessage::new_server_message(
                             "Temporary permission granted",
                         ))
                         .await?;
@@ -380,7 +380,7 @@ impl ChatCommandHandler for ListPermissionsImpl {
                 // List all defined permissions
                 context
                     .initiator
-                    .send_chat_message(ChatMessage::new_server_message(format!(
+                    .send_chat_message_async(ChatMessage::new_server_message(format!(
                         "All defined permissions: {}",
                         context
                             .game_behaviors()
@@ -413,7 +413,7 @@ impl ChatCommandHandler for ListPermissionsImpl {
                             );
                             Ok(ChatMessage::new_server_message(message))
                         })?;
-                context.initiator.send_chat_message(message).await?;
+                context.initiator.send_chat_message_async(message).await?;
             }
             _ => {
                 bail!("Incorrect usage: should be /permissions <playername> or /permissions");

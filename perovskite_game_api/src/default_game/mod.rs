@@ -56,6 +56,13 @@ pub mod block_groups {
     pub const GRANULAR: &str = "default:granular";
     /// Woody blocks that are best removed with an axe, e.g. wood
     pub const FIBROUS: &str = "default:fibrous";
+
+    /// Blocks that form the trunks of trees
+    pub const TREE_TRUNK: &str = "default:tree_trunk";
+    /// Wood planks from any type of tree
+    pub const WOOD_PLANKS: &str = "default:wood_planks";
+    /// Leaves of a tree
+    pub const TREE_LEAVES: &str = "default:tree_leaves";
 }
 
 pub mod item_groups {
@@ -65,6 +72,10 @@ pub mod item_groups {
     pub const METAL_INGOTS: &str = "default:metal_ingots";
     /// Gems and crystals directly usable after extracting
     pub const GEMS: &str = "default:gems";
+
+    pub use super::block_groups::TREE_LEAVES;
+    pub use super::block_groups::TREE_TRUNK;
+    pub use super::block_groups::WOOD_PLANKS;
 }
 
 /// Control of the map generator.
@@ -102,7 +113,7 @@ pub trait DefaultGameBuilder {
     /// Args:
     ///   - fuel_name: Name of the fuel
     ///   - ticks: Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
-    fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32);
+    fn register_smelting_fuel(&mut self, fuel: RecipeSlot, ticks: u32);
 }
 
 // This is a private type; other plugins cannot name it so they cannot access
@@ -232,7 +243,7 @@ impl DefaultGameBuilder for GameBuilder {
             })
     }
 
-    fn register_smelting_fuel(&mut self, fuel_name: impl Into<String>, ticks: u32) {
+    fn register_smelting_fuel(&mut self, fuel: RecipeSlot, ticks: u32) {
         assert!(
             self.builder_extension::<DefaultGameBuilderExtension>()
                 .initialized,
@@ -241,7 +252,7 @@ impl DefaultGameBuilder for GameBuilder {
         self.builder_extension::<DefaultGameBuilderExtension>()
             .smelting_fuels
             .register_recipe(RecipeImpl {
-                slots: [RecipeSlot::Exact(fuel_name.into())],
+                slots: [fuel],
                 result: ItemStack {
                     proto: Default::default(),
                 },

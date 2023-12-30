@@ -242,8 +242,12 @@ impl Player {
         Ok(player)
     }
 
-    pub async fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
+    pub async fn send_chat_message_async(&self, message: ChatMessage) -> Result<()> {
         self.sender.chat_messages.send(message).await?;
+        Ok(())
+    }
+    pub fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
+        self.sender.chat_messages.blocking_send(message)?;
         Ok(())
     }
 
