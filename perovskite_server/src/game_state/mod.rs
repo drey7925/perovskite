@@ -58,6 +58,16 @@ use self::inventory::InventoryManager;
 use self::items::ItemManager;
 use self::player::PlayerManager;
 
+/// The main struct representing a Perovskite server.
+///
+/// It contains the state of the server, including the map, the players, the inventory, etc.
+///
+/// Note that the game state is usually held in an Arc, and the reference count is used for
+/// coordinating server shutdown. This means that if you hold a reference to the game state
+/// and do not track shutdown, *the server will hang on shutdown and fail to flush data*.
+///
+/// **If you hold an Arc, you must await `await_start_shutdown` (possibly in a `tokio::select!` in your
+/// main loop) or otherwise detect a shutdown, at which point you must do any cleanup actions and drop your Arc.**
 pub struct GameState {
     data_dir: PathBuf,
     map: Arc<ServerGameMap>,
@@ -149,6 +159,11 @@ impl GameState {
     /// This will kick all players off.
     pub fn start_shutdown(&self) {
         self.early_shutdown.cancel();
+    }
+
+    /// Returns true if the server is in the process of shutting down.
+    pub fn is_shutting_down(&self) -> bool {
+        self.early_shutdown.is_cancelled()
     }
 
     /// Returns an extension that a plugin registered with [crate::server::ServerBuilder::add_extension],

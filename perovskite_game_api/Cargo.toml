@@ -36,8 +36,10 @@ tokio = { version = "1.29.1", features = ["full", "tracing"] }
 smallvec = "1.11.2"
 regex = "1.10.2"
 
+serenity = { version = "0.12.0", optional = true }
+
 [features]
-default = ["default_game", "agriculture", "circuits"]
+default = ["default_game", "agriculture", "circuits", "discord"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
@@ -73,3 +75,7 @@ tracy = ["perovskite_server/tracy", "tracing-tracy/enable"]
 dhat-heap = []
 # tokio-console; Requires RUSTFLAGS="--cfg tokio_unstable"
 tokio-console = ["dep:console-subscriber"]
+
+# Connects game chat and other events to a discord channel. WIP.
+# Requires rust 1.74.0 or higher
+discord = ["dep:serenity"]

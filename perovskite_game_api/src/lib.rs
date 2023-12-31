@@ -49,6 +49,9 @@ pub mod circuits;
 #[cfg(feature = "agriculture")]
 pub mod farming;
 
+#[cfg(feature = "discord")]
+pub mod discord;
+
 #[macro_export]
 #[cfg(doc)]
 macro_rules! maybe_export {

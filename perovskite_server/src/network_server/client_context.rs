@@ -782,6 +782,7 @@ impl BlockEventSender {
         }
         // Drain and batch as many updates as possible
         // TODO coalesce
+        // TODO consider using recv_many after bumping the tokio version
         while updates.len() < MAX_UPDATE_BATCH_SIZE {
             match self.block_events.try_recv() {
                 Ok(update) => {

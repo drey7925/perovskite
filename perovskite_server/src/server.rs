@@ -150,6 +150,7 @@ pub struct ServerBuilder {
     commands: CommandManager,
     data_dir: PathBuf,
     extensions: type_map::concurrent::TypeMap,
+    startup_actions: Vec<Box<dyn FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static>>,
 }
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
@@ -188,6 +189,7 @@ impl ServerBuilder {
             commands: CommandManager::new(),
             data_dir: args.data_dir.clone(),
             extensions: type_map::concurrent::TypeMap::new(),
+            startup_actions: Vec::new(),
         })
     }
     pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
@@ -262,6 +264,9 @@ impl ServerBuilder {
                 .game_map()
                 .register_timer(name, settings, callback)?;
         }
+        for action in self.startup_actions {
+            action(&game_state)?;
+        }
         Server::new(self.runtime, game_state, addr)
     }
 
@@ -280,5 +285,12 @@ impl ServerBuilder {
             panic!("Extension already added");
         }
         self.extensions.insert(extension);
+    }
+
+    pub fn register_startup_action(
+        &mut self,
+        action: impl FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static,
+    ) {
+        self.startup_actions.push(Box::new(action));
     }
 }
