@@ -60,6 +60,8 @@ struct DiscordEventHandler {
     config: DiscordConfig,
 }
 
+const DISCORD_ORIGINATOR: &str = "[discord]";
+
 #[async_trait::async_trait]
 impl EventHandler for DiscordEventHandler {
     async fn ready(&self, ctx: serenity::client::Context, ready: serenity::model::gateway::Ready) {
@@ -113,7 +115,7 @@ impl EventHandler for DiscordEventHandler {
         self.game_state
             .chat()
             .broadcast_chat_message(ChatMessage::new(
-                "[discord]",
+                DISCORD_ORIGINATOR,
                 format!("{}: {}", msg.author.name, msg.content),
             ))
             .unwrap();
@@ -134,8 +136,8 @@ async fn run_outbound_loop(
             msg = chat_messages.recv() => {
                 match msg {
                     Ok(msg) => {
-                        if msg.origin() != "[discord]" {
-                            channel.say(&ctx, msg.text()).await.unwrap();
+                        if msg.origin() != DISCORD_ORIGINATOR {
+                            channel.say(&ctx, format!("{}: {}", msg.origin(), msg.text())).await.unwrap();
                         }
                     }
                     Err(e) => {
