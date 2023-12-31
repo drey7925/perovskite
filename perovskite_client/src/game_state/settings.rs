@@ -16,6 +16,7 @@ pub(crate) struct RenderSettings {
     pub(crate) physics_debug: bool,
     pub(crate) preferred_gpu: String,
     pub(crate) scale_inventories_with_high_dpi: bool,
+    pub(crate) fov_degrees: f64,
 }
 
 impl Default for RenderSettings {
@@ -28,6 +29,7 @@ impl Default for RenderSettings {
             physics_debug: false,
             preferred_gpu: String::from(""),
             scale_inventories_with_high_dpi: false,
+            fov_degrees: 75.0,
         }
     }
 }

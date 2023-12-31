@@ -220,8 +220,12 @@ impl InputState {
         } else if let &WindowEvent::MouseInput { state, button, .. } = event {
             match state {
                 ElementState::Pressed => {
-                    self.active_keybinds.insert(Keybind::MouseButton(button));
-                    self.new_presses.insert(Keybind::MouseButton(button));
+                    if self.mouse_captured {
+                        self.active_keybinds.insert(Keybind::MouseButton(button));
+                        self.new_presses.insert(Keybind::MouseButton(button));
+                    } else {
+                        self.mouse_captured = true;
+                    }
                 }
                 ElementState::Released => {
                     self.active_keybinds.remove(&Keybind::MouseButton(button));

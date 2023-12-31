@@ -506,7 +506,13 @@ impl ClientState {
             * cgmath::Matrix4::from_angle_y(Deg(180.) - Deg(az));
         // TODO figure out why this is needed
         let coordinate_correction = cgmath::Matrix4::from_nonuniform_scale(-1., 1., 1.);
-        let projection = cgmath::perspective(Deg(45.0), aspect_ratio, 0.01, 1000.);
+
+        let projection = cgmath::perspective(
+            Deg(self.settings.load().render.fov_degrees),
+            aspect_ratio,
+            0.01,
+            1000.,
+        );
         let view_proj_matrix = (projection * coordinate_correction * rotation)
             .cast()
             .unwrap();
