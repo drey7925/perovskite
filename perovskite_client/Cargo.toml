@@ -4,6 +4,10 @@ version = "0.0.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Game client"
+authors = ["drey7925 <drey@dreyclimbs.rocks>"]
+repository = "https://github.com/drey7925/perovskite"
+categories = ["games"]
+maintenance = { status = "experimental" }
 
 [dependencies]
 argon2 = "0.4.1"

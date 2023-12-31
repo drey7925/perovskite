@@ -3,7 +3,12 @@ name = "perovskite_game_api"
 version = "0.0.2"
 edition = "2021"
 license = "Apache-2.0"
-description = "Multiplayer voxel game written in Rust - API for game content"
+description = "Multiplayer voxel game written in Rust - default game content + plugin API"
+authors = ["drey7925 <drey@dreyclimbs.rocks>"]
+repository = "https://github.com/drey7925/perovskite"
+categories = ["game-engines", "games"]
+maintenance = { status = "experimental" }
+
 
 [dependencies]
 

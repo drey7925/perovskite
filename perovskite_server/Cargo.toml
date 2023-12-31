@@ -4,6 +4,10 @@ version = "0.0.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Game server"
+authors = ["drey7925 <drey@dreyclimbs.rocks>"]
+repository = "https://github.com/drey7925/perovskite"
+categories = ["game-engines"]
+maintenance = { status = "experimental" }
 
 [dependencies]
 anyhow = "1.0.70"
