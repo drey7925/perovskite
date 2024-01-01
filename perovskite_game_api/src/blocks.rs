@@ -86,7 +86,7 @@ impl DroppedItem {
                 Ok(BlockInteractionResult {
                     item_stacks: closure(),
                     tool_wear: match rule {
-                        Some(rule) => rule.tool_wear(block_type)?,
+                        Some(rule) => rule.computed_tool_wear(block_type)?,
                         None => 0,
                     },
                 })

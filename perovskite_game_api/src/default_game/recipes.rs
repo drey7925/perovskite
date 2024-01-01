@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use perovskite_server::game_state::items::{Item, ItemManager, ItemStack};
+use smallvec::SmallVec;
 
 use crate::maybe_export;
 
@@ -116,7 +117,7 @@ impl<const N: usize, T> RecipeImpl<N, T> {
     }
     pub(crate) fn matches(&self, stacks: &[Option<&Item>; N]) -> bool {
         if self.shapeless {
-            todo!("shapeless solver not written");
+            return self.matches_shapeless(stacks);
         } else {
             for (j, stack) in stacks.iter().enumerate() {
                 match &self.slots[j] {
@@ -139,5 +140,124 @@ impl<const N: usize, T> RecipeImpl<N, T> {
             }
         }
         true
+    }
+
+    fn matches_shapeless(&self, stacks: &[Option<&Item>; N]) -> bool {
+        // Ugh, this is basically a boolean satisfiability problem.
+
+        // small checks first
+        // Count non-empty slots and non-empty stacks. If mismatched, false.
+        if stacks.iter().flatten().count()
+            != self
+                .slots
+                .iter()
+                .filter(|x| **x != RecipeSlot::Empty)
+                .count()
+        {
+            return false;
+        }
+
+        let mut remaining_stacks: smallvec::SmallVec<[_; 16]> =
+            stacks.iter().filter_map(|x| *x).collect();
+
+        // First, try to match exact matches and remove them from the list
+        for slot in &self.slots {
+            if let RecipeSlot::Exact(item) = slot {
+                if let Some(index) = remaining_stacks
+                    .iter()
+                    .position(|x| &x.proto.short_name == item)
+                {
+                    remaining_stacks.swap_remove(index);
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        let remaining_slots: smallvec::SmallVec<[_; 16]> = self
+            .slots
+            .iter()
+            .filter_map(|x| match x {
+                RecipeSlot::Empty => None,
+                RecipeSlot::Group(group) => Some(group),
+                RecipeSlot::Exact(_) => None,
+            })
+            .collect();
+        assert!(remaining_slots.len() == remaining_stacks.len());
+
+        match remaining_slots.len() {
+            0 => return true,
+            1 => {
+                let slot = remaining_slots[0];
+                return remaining_stacks[0].proto.groups.contains(slot);
+            }
+            2 => {
+                let slot1 = remaining_slots[0];
+                let slot2 = remaining_slots[1];
+                return (remaining_stacks[0].proto.groups.contains(slot1)
+                    && remaining_stacks[1].proto.groups.contains(slot2))
+                    || (remaining_stacks[0].proto.groups.contains(slot2)
+                        && remaining_stacks[1].proto.groups.contains(slot1));
+            }
+            _ => {}
+        }
+        tracing::error!(
+            "Too many shapeless slots to match to groups, todo implement graph matching here"
+        );
+        false
+    }
+}
+
+mod test {
+    use perovskite_core::protocol;
+    use perovskite_server::game_state::items::{Item, ItemStack};
+
+    use super::{RecipeImpl, RecipeSlot};
+
+    #[test]
+    fn test_shapeless() {
+        let item_1 = Item {
+            proto: protocol::items::ItemDef {
+                short_name: "a".into(),
+                groups: vec!["a".into()],
+                ..Default::default()
+            },
+            dig_handler: None,
+            tap_handler: None,
+            place_handler: None,
+        };
+        let item_2 = Item {
+            proto: protocol::items::ItemDef {
+                short_name: "b".into(),
+                groups: vec!["b".into()],
+                ..Default::default()
+            },
+            dig_handler: None,
+            tap_handler: None,
+            place_handler: None,
+        };
+
+        let recipe = RecipeImpl {
+            slots: [
+                RecipeSlot::Group("a".into()),
+                RecipeSlot::Exact("b".into()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+            ],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    ..Default::default()
+                },
+            },
+            shapeless: true,
+            metadata: (),
+        };
+
+        assert!(!recipe.matches(&[None, None, None, None]));
+        assert!(!recipe.matches(&[Some(&item_1), None, None, None]));
+        assert!(!recipe.matches(&[Some(&item_1), Some(&item_1), Some(&item_2), None]));
+
+        assert!(recipe.matches(&[Some(&item_1), Some(&item_2), None, None]));
+        assert!(recipe.matches(&[None, Some(&item_2), None, Some(&item_1)]));
     }
 }

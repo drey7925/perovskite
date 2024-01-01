@@ -375,7 +375,7 @@ fn furnace_dig_handler(
         Ok(BlockInteractionResult {
             item_stacks: vec![ctx.items().get_item(FURNACE.0).unwrap().singleton_stack()],
             tool_wear: match rule {
-                Some(rule) => rule.tool_wear(block_type)?,
+                Some(rule) => rule.computed_tool_wear(block_type)?,
                 None => 0,
             },
         })

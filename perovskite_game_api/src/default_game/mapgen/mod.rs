@@ -11,10 +11,11 @@ use perovskite_server::game_state::{
     game_map::MapChunk,
     mapgen::MapgenInterface,
 };
+use rand::seq::SliceRandom;
 
 use super::{
     basic_blocks::{DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, STONE, WATER},
-    foliage::{CACTUS, MAPLE_LEAVES, MAPLE_TREE},
+    foliage::{CACTUS, MAPLE_LEAVES, MAPLE_TREE, TALL_GRASS, TERRESTRIAL_FLOWERS},
 };
 
 const ELEVATION_FINE_INPUT_SCALE: f64 = 1.0 / 60.0;
@@ -22,6 +23,7 @@ const ELEVATION_FINE_OUTPUT_SCALE: f64 = 10.0;
 const ELEVATION_COARSE_INPUT_SCALE: f64 = 1.0 / 800.0;
 const ELEVATION_COARSE_OUTPUT_SCALE: f64 = 60.0;
 const ELEVATION_OFFSET: f64 = 20.0;
+
 const TREE_DENSITY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const TREE_DENSITY_OUTPUT_SCALE: f64 = 0.0625;
 const TREE_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
@@ -29,10 +31,18 @@ const CACTUS_DENSITY_INPUT_SCALE: f64 = 1.0 / 120.0;
 const CACTUS_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
 const CACTUS_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
 
+const TALL_GRASS_DENSITY_INPUT_SCALE: f64 = 1.0 / 120.0;
+const TALL_GRASS_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
+const TALL_GRASS_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
+
+const FLOWER_DENSITY_INPUT_SCALE: f64 = 1.0 / 240.0;
+const FLOWER_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
+const FLOWER_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
+
 const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
 
-// Next seed offset: 7
+// Next seed offset: 9
 
 #[derive(Clone, Copy, Debug)]
 enum Biome {
@@ -175,10 +185,16 @@ struct DefaultMapgen {
     maple_tree: BlockTypeHandle,
     maple_leaves: BlockTypeHandle,
     cactus: BlockTypeHandle,
+    tall_grass: BlockTypeHandle,
+    flowers: Vec<BlockTypeHandle>,
 
     elevation_noise: ElevationNoise,
     tree_density_noise: noise::Billow<noise::SuperSimplex>,
+
+    flower_density_noise: noise::Billow<noise::SuperSimplex>,
     cactus_density_noise: noise::Billow<noise::SuperSimplex>,
+    tall_grass_density_noise: noise::Billow<noise::SuperSimplex>,
+
     biome_noise: BiomeNoise,
     cave_noise: CaveNoise,
     ores: Vec<(OreDefinition, noise::SuperSimplex)>,
@@ -316,6 +332,42 @@ impl DefaultMapgen {
                                 + TREE_DENSITY_OUTPUT_OFFSET;
                             if tree_value < tree_cutoff {
                                 self.make_tree(chunk_coord, chunk, x, y, z);
+                            }
+
+                            let flower_value =
+                                self.fast_uniform_2d(x, z, self.seed.wrapping_add(3));
+                            let flower_cutoff = self.flower_density_noise.get([
+                                (x as f64) * FLOWER_DENSITY_INPUT_SCALE,
+                                (z as f64) * FLOWER_DENSITY_INPUT_SCALE,
+                            ]) * FLOWER_DENSITY_OUTPUT_SCALE
+                                + FLOWER_DENSITY_OUTPUT_OFFSET;
+                            if flower_value < flower_cutoff {
+                                self.make_simple_foliage(
+                                    chunk_coord,
+                                    chunk,
+                                    x,
+                                    y,
+                                    z,
+                                    *self.flowers.choose(&mut rand::thread_rng()).unwrap(),
+                                );
+                            }
+
+                            let tall_grass_value =
+                                self.fast_uniform_2d(x, z, self.seed.wrapping_add(4));
+                            let tall_grass_cutoff = self.flower_density_noise.get([
+                                (x as f64) * FLOWER_DENSITY_INPUT_SCALE,
+                                (z as f64) * FLOWER_DENSITY_INPUT_SCALE,
+                            ]) * FLOWER_DENSITY_OUTPUT_SCALE
+                                + FLOWER_DENSITY_OUTPUT_OFFSET;
+                            if tall_grass_value < tall_grass_cutoff {
+                                self.make_simple_foliage(
+                                    chunk_coord,
+                                    chunk,
+                                    x,
+                                    y,
+                                    z,
+                                    self.tall_grass,
+                                );
                             }
                         }
                         Biome::Desert => {
@@ -463,6 +515,21 @@ impl DefaultMapgen {
             gen_ore()
         }
     }
+
+    fn make_simple_foliage(
+        &self,
+        chunk_coord: ChunkCoordinate,
+        chunk: &mut MapChunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        block: BlockId,
+    ) {
+        let coord = BlockCoordinate::new(x, y + 1, z);
+        if coord.chunk() == chunk_coord {
+            chunk.set_block(coord.offset(), block, None);
+        }
+    }
 }
 
 pub(crate) fn build_mapgen(
@@ -486,12 +553,21 @@ pub(crate) fn build_mapgen(
             .unwrap(),
         maple_tree: blocks.get_by_name(MAPLE_TREE.0).expect("maple_tree"),
         maple_leaves: blocks.get_by_name(MAPLE_LEAVES.0).expect("maple_leaves"),
+        tall_grass: blocks.get_by_name(TALL_GRASS.0).expect("tall_grass"),
+
+        flowers: TERRESTRIAL_FLOWERS
+            .iter()
+            .map(|f| blocks.get_by_name(f.0 .0).expect("flower missing"))
+            .collect(),
+
         cactus: blocks.get_by_name(CACTUS.0).expect("cactus"),
 
         elevation_noise: ElevationNoise::new(seed),
         biome_noise: BiomeNoise::new(seed),
         cave_noise: CaveNoise::new(seed),
         tree_density_noise: noise::Billow::new(seed.wrapping_add(2)),
+        flower_density_noise: noise::Billow::new(seed.wrapping_add(7)),
+        tall_grass_density_noise: noise::Billow::new(seed.wrapping_add(8)),
         cactus_density_noise: noise::Billow::new(seed.wrapping_add(5)),
         ores: ores
             .into_iter()

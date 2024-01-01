@@ -107,6 +107,7 @@ pub trait DefaultGameBuilder {
         result: String,
         quantity: u32,
         quantity_type: Option<items_proto::item_stack::QuantityType>,
+        shapeless: bool,
     );
 
     /// Registers a new smelting fuel
@@ -206,6 +207,7 @@ impl DefaultGameBuilder for GameBuilder {
         result: String,
         quantity: u32,
         quantity_type: Option<items_proto::item_stack::QuantityType>,
+        shapeless: bool,
     ) {
         assert!(
             self.builder_extension::<DefaultGameBuilderExtension>()
@@ -238,7 +240,7 @@ impl DefaultGameBuilder for GameBuilder {
                         quantity_type,
                     },
                 },
-                shapeless: false,
+                shapeless,
                 metadata: (),
             })
     }

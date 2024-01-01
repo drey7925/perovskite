@@ -403,7 +403,7 @@ pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()
                     quantity_type: Some(QuantityType::Stack(256)),
                 },
             },
-            shapeless: false,
+            shapeless: true,
             metadata: (),
         });
 

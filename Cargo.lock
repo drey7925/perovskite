@@ -2625,6 +2625,7 @@ dependencies = [
  "parking_lot",
  "perovskite_core",
  "perovskite_server",
+ "petgraph",
  "prost",
  "rand 0.8.5",
  "regex",

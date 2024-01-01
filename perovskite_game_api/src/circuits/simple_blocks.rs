@@ -264,14 +264,10 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             off: oscillator_off_block.id,
         })),
     );
-    #[cfg(feature = "colors")]
-    {
-        register_colored_lamps(builder)?;
-    }
+    register_colored_lamps(builder)?;
     Ok(())
 }
 
-#[cfg(feature = "colors")]
 fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     use crate::game_builder::{BlockName, TextureName};
 

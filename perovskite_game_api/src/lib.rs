@@ -52,7 +52,10 @@ pub mod farming;
 #[cfg(feature = "discord")]
 pub mod discord;
 
-#[cfg(feature = "colors")]
+/// Provides colors that can be used in the default game, as well as
+/// a unified set of items representing dyes in different colors.
+/// Also provides functionality to colorize textures automatically,
+/// allowing one base texture to be used for multiple blocks in different colors.
 pub mod colors;
 
 #[macro_export]

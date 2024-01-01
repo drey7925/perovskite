@@ -66,6 +66,24 @@ pub fn make_stairs(
             built_block.item_name.0.clone(),
             4,
             Some(QuantityType::Stack(256)),
+            false,
+        );
+        game_builder.register_crafting_recipe(
+            [
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                base_item.clone(),
+                RecipeSlot::Empty,
+                base_item.clone(),
+                base_item.clone(),
+                base_item.clone(),
+                base_item.clone(),
+                base_item.clone(),
+            ],
+            built_block.item_name.0.clone(),
+            4,
+            Some(QuantityType::Stack(256)),
+            false,
         );
     }
     Ok(built_block)
@@ -115,6 +133,7 @@ pub fn make_slab(
             built_block.item_name.0.clone(),
             6,
             Some(QuantityType::Stack(256)),
+            false,
         );
     }
     Ok(built_block)

@@ -42,10 +42,11 @@ smallvec = "1.11.2"
 regex = "1.10.2"
 
 serenity = { version = "0.12.0", optional = true }
-image = { version = "0.24.7", optional = true }
+image = { version = "0.24.7" }
+petgraph = "0.6.4"
 
 [features]
-default = ["default_game", "colors", "agriculture", "circuits", "discord"]
+default = ["default_game", "agriculture", "circuits", "discord"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
@@ -69,9 +70,6 @@ circuits = []
 # dirt and other interactions
 agriculture = ["default_game"]
 
-# Provides a unified definition for colored blocks, so different plugins can interoperate with dyes and related.
-# Still a WIP
-colors = ["dep:image"]
 
 # If enabled, server will detect deadlocks and log them.
 deadlock_detection = ["perovskite_server/deadlock_detection"]

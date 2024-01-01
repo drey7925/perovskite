@@ -449,7 +449,7 @@ pub trait InteractionRuleExt {
     fn dig_time(&self, block: &BlockType) -> Option<Duration>;
 
     /// Returns the tool wear obtained from digging with this rule
-    fn tool_wear(&self, block: &BlockType) -> Result<u32>;
+    fn computed_tool_wear(&self, block: &BlockType) -> Result<u32>;
 }
 impl InteractionRuleExt for proto::InteractionRule {
     fn matches(&self, block_type: &BlockType) -> bool {
@@ -470,7 +470,7 @@ impl InteractionRuleExt for proto::InteractionRule {
         }
     }
 
-    fn tool_wear(&self, block: &BlockType) -> Result<u32> {
+    fn computed_tool_wear(&self, block: &BlockType) -> Result<u32> {
         let product = self.tool_wear as f64 * block.client_info.wear_multiplier;
         ensure!(
             product.is_finite(),

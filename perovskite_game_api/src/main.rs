@@ -106,10 +106,7 @@ fn main() {
         discord::connect(&mut game).unwrap();
     }
 
-    #[cfg(feature = "colors")]
-    {
-        colors::register_dyes(&mut game).unwrap();
-    }
+    colors::register_dyes(&mut game).unwrap();
 
     game.run_game_server().unwrap();
 }
