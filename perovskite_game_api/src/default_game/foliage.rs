@@ -173,6 +173,7 @@ fn register_flowers(builder: &mut GameBuilder) -> Result<()> {
                 .set_plant_like_appearance(PlantLikeAppearanceBuilder::new().set_texture(texture))
                 .set_display_name(display_name)
                 .set_inventory_texture(texture)
+                .add_block_group(foliage_groups::FLOWERS)
                 .set_allow_light_propagation(true)
                 .add_modifier(Box::new(|block: &mut BlockType| {
                     block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));

@@ -230,6 +230,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                                                             .iter()
                                                             .any(|x| re.is_match(x))
                                                             || re.is_match(&x.proto.display_name)
+                                                            || re.is_match(&x.proto.short_name)
                                                     })
                                         })
                                         .cloned()
