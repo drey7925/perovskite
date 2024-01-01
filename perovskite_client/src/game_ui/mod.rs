@@ -106,7 +106,7 @@ async fn build_texture_atlas(
                 handles.push(s.spawn(|| {
                     let mut renderer = MiniBlockRenderer::new(
                         ctx,
-                        [128, 128],
+                        [64, 64],
                         block_renderer.atlas(),
                         block_renderer.block_types().air_block(),
                     )
@@ -153,11 +153,11 @@ async fn build_texture_atlas(
     let config = texture_packer::TexturePackerConfig {
         // todo tweak these or make into a setting
         allow_rotation: false,
-        max_width: 1024,
-        max_height: 1024,
-        border_padding: 2,
-        texture_padding: 2,
-        texture_extrusion: 2,
+        max_width: 4096,
+        max_height: 4096,
+        border_padding: 1,
+        texture_padding: 1,
+        texture_extrusion: 1,
         trim: false,
         texture_outlines: false,
     };

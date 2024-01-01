@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
-    game_builder::{GameBuilder, StaticBlockName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 
@@ -24,8 +24,8 @@ use super::{
 
 pub const WIRE_BLOCK_OFF: StaticBlockName = StaticBlockName("circuits:wire_off");
 pub const WIRE_BLOCK_ON: StaticBlockName = StaticBlockName("circuits:wire_on");
-pub const WIRE_TEXTURE_OFF: TextureName = TextureName("circuits:wire_off");
-pub const WIRE_TEXTURE_ON: TextureName = TextureName("circuits:wire_on");
+pub const WIRE_TEXTURE_OFF: StaticTextureName = StaticTextureName("circuits:wire_off");
+pub const WIRE_TEXTURE_ON: StaticTextureName = StaticTextureName("circuits:wire_on");
 
 const VARIANT_XPLUS: u32 = 1;
 const VARIANT_XMINUS: u32 = 2;
@@ -58,7 +58,7 @@ const WIRE_CONNECTIVITY_RULES: [BlockConnectivity; 12] = [
     BlockConnectivity::unrotated(0, -1, -1, VARIANT_ZMINUS),
 ];
 
-fn build_wire_aabox(texture: TextureName) -> AxisAlignedBoxesAppearanceBuilder {
+fn build_wire_aabox(texture: StaticTextureName) -> AxisAlignedBoxesAppearanceBuilder {
     let prototype = AaBoxProperties::new_single_tex(
         texture,
         crate::blocks::TextureCropping::AutoCrop,

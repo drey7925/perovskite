@@ -1762,7 +1762,6 @@ impl GameMapWriteback {
         Ok(())
     }
 
-    // TODO - consider bumping tokio to 1.35 and using Receiver.recv_many
     async fn gather(&mut self) -> Option<Vec<ChunkCoordinate>> {
         let mut entries = Vec::new();
         let should_coalesce = tokio::select! {

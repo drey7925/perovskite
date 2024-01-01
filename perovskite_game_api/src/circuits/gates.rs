@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
-    game_builder::{GameBuilder, StaticBlockName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 
@@ -17,14 +17,14 @@ use super::{
     CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilder,
 };
 
-const SIDE_TEX: TextureName = TextureName("circuits:gate_side");
-const SIDE_PIN_TEX: TextureName = TextureName("circuits:gate_side_pin");
-const BOTTOM_TEX: TextureName = TextureName("circuits:gate_bottom");
+const SIDE_TEX: StaticTextureName = StaticTextureName("circuits:gate_side");
+const SIDE_PIN_TEX: StaticTextureName = StaticTextureName("circuits:gate_side_pin");
+const BOTTOM_TEX: StaticTextureName = StaticTextureName("circuits:gate_bottom");
 
 const BROKEN_GATE: StaticBlockName = StaticBlockName("circuits:broken_gate");
-const BROKEN_TOP_TEX: TextureName = TextureName("circuits:broken_gate_top");
+const BROKEN_TOP_TEX: StaticTextureName = StaticTextureName("circuits:broken_gate_top");
 
-fn get_side_tex(connects: bool) -> TextureName {
+fn get_side_tex(connects: bool) -> StaticTextureName {
     if connects {
         SIDE_PIN_TEX
     } else {
@@ -38,8 +38,8 @@ pub struct CombinationalGate {
     description: &'static str,
     off_name: StaticBlockName,
     on_name: StaticBlockName,
-    off_texture: TextureName,
-    on_texture: TextureName,
+    off_texture: StaticTextureName,
+    on_texture: StaticTextureName,
     /// The truth table for the gate. Each bit is 0 or 1, eight elements indexed by three bits of input state.
     /// e.g. left on, front off, right off is bit 4 (0b100)
     /// Output is always on the back.
@@ -53,8 +53,8 @@ const AND_GATE_CONFIG: CombinationalGate = CombinationalGate {
     description: "And gate",
     off_name: StaticBlockName("circuits:and_gate_off"),
     on_name: StaticBlockName("circuits:and_gate_on"),
-    off_texture: TextureName("circuits:and_gate_off"),
-    on_texture: TextureName("circuits:and_gate_on"),
+    off_texture: StaticTextureName("circuits:and_gate_off"),
+    on_texture: StaticTextureName("circuits:and_gate_on"),
     // 101 and 111: left and right on, front is dont care
     truth_table: (1 << 0b101) | (1 << 0b111),
     connects_left: true,
@@ -66,8 +66,8 @@ const NOT_GATE_CONFIG: CombinationalGate = CombinationalGate {
     description: "Not gate",
     off_name: StaticBlockName("circuits:not_gate_off"),
     on_name: StaticBlockName("circuits:not_gate_on"),
-    off_texture: TextureName("circuits:not_gate_off"),
-    on_texture: TextureName("circuits:not_gate_on"),
+    off_texture: StaticTextureName("circuits:not_gate_off"),
+    on_texture: StaticTextureName("circuits:not_gate_on"),
     // front should be low, otherwise don't care
     truth_table: (1 << 0b000) | (1 << 0b001) | (1 << 0b100) | (1 << 0b101),
     connects_left: false,
@@ -79,8 +79,8 @@ const XOR_GATE_CONFIG: CombinationalGate = CombinationalGate {
     description: "Xor gate",
     off_name: StaticBlockName("circuits:xor_gate_off"),
     on_name: StaticBlockName("circuits:xor_gate_on"),
-    off_texture: TextureName("circuits:xor_gate_off"),
-    on_texture: TextureName("circuits:xor_gate_on"),
+    off_texture: StaticTextureName("circuits:xor_gate_off"),
+    on_texture: StaticTextureName("circuits:xor_gate_on"),
     // 001, 011, 100, 110: left xor right, front is dont care
     truth_table: (1 << 0b001) | (1 << 0b011) | (1 << 0b100) | (1 << 0b110),
     connects_left: true,
@@ -357,8 +357,8 @@ const DELAY_GATE_PROPERTIES: CombinationalGate = CombinationalGate {
     description: "Delay gate",
     off_name: StaticBlockName("circuits:delay_gate_off"),
     on_name: StaticBlockName("circuits:delay_gate_on"),
-    off_texture: TextureName("circuits:delay_gate_off"),
-    on_texture: TextureName("circuits:delay_gate_on"),
+    off_texture: StaticTextureName("circuits:delay_gate_off"),
+    on_texture: StaticTextureName("circuits:delay_gate_on"),
     // 001, 011, 100, 110: left xor right, front is dont care
     truth_table: 0,
     connects_left: false,
@@ -369,8 +369,8 @@ const DFF_PROPERTIES: CombinationalGate = CombinationalGate {
     description: "D Flip-Flop",
     off_name: StaticBlockName("circuits:dff_off"),
     on_name: StaticBlockName("circuits:dff_on"),
-    off_texture: TextureName("circuits:dff_off"),
-    on_texture: TextureName("circuits:dff_on"),
+    off_texture: StaticTextureName("circuits:dff_off"),
+    on_texture: StaticTextureName("circuits:dff_on"),
     // 001, 011, 100, 110: left xor right, front is dont care
     truth_table: 0,
     connects_left: false,

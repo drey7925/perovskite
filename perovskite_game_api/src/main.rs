@@ -14,7 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use perovskite_game_api::{default_game::DefaultGameBuilder, discord, game_builder::GameBuilder};
+use perovskite_game_api::{
+    colors, default_game::DefaultGameBuilder, discord, game_builder::GameBuilder,
+};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::{prelude::*, registry::LookupSpan};
 
@@ -102,6 +104,11 @@ fn main() {
     #[cfg(feature = "discord")]
     {
         discord::connect(&mut game).unwrap();
+    }
+
+    #[cfg(feature = "colors")]
+    {
+        colors::register_dyes(&mut game).unwrap();
     }
 
     game.run_game_server().unwrap();

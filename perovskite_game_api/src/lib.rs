@@ -52,6 +52,9 @@ pub mod farming;
 #[cfg(feature = "discord")]
 pub mod discord;
 
+#[cfg(feature = "colors")]
+pub mod colors;
+
 #[macro_export]
 #[cfg(doc)]
 macro_rules! maybe_export {

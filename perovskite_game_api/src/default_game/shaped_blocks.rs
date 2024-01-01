@@ -145,7 +145,15 @@ fn make_derived_block_core(
     .set_axis_aligned_boxes_appearance(appearance)
     .set_display_name(item.proto.display_name.clone() + display_suffix)
     .set_allow_light_propagation(true)
-    .add_block_groups(block_type.0.client_info.groups.iter().cloned());
+    .add_block_groups(
+        block_type
+            .0
+            .client_info
+            .groups
+            .iter()
+            .chain([].iter())
+            .cloned(),
+    );
     let built_block = game_builder.add_block(block_builder)?;
 
     Ok(built_block)

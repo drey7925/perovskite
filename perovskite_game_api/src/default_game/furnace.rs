@@ -15,7 +15,7 @@ use prost::Message;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder},
-    game_builder::{GameBuilder, StaticBlockName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 
@@ -28,9 +28,9 @@ pub const FURNACE_ON: StaticBlockName = StaticBlockName("default:furnace_on");
 /// How long a single furnace tick takes.
 pub const FURNACE_TICK_DURATION: Duration = Duration::from_millis(250);
 
-const FURNACE_TEXTURE: TextureName = TextureName("default:furnace");
-const FURNACE_FRONT_TEXTURE: TextureName = TextureName("default:furnace_front");
-const FURNACE_ON_FRONT_TEXTURE: TextureName = TextureName("default:furnace_on_front");
+const FURNACE_TEXTURE: StaticTextureName = StaticTextureName("default:furnace");
+const FURNACE_FRONT_TEXTURE: StaticTextureName = StaticTextureName("default:furnace_front");
+const FURNACE_ON_FRONT_TEXTURE: StaticTextureName = StaticTextureName("default:furnace_on_front");
 
 /// Extended data for a furnace. One tick is 0.25 seconds.
 #[derive(Clone, Message)]

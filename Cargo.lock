@@ -2618,6 +2618,7 @@ dependencies = [
  "dhat",
  "env_logger",
  "hashbrown 0.14.2",
+ "image",
  "log",
  "mimalloc",
  "noise",

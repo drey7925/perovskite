@@ -24,7 +24,7 @@ use crate::{
         item_groups,
     },
     game_builder::{
-        include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, TextureName,
+        include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
     },
 };
 use anyhow::Result;
@@ -86,24 +86,25 @@ pub const WATER: StaticBlockName = StaticBlockName("default:water");
 /// test only, no crafting recipe, not finalized
 pub const TNT: StaticBlockName = StaticBlockName("default:tnt");
 
-const DIRT_TEXTURE: TextureName = TextureName("default:dirt");
-const DIRT_GRASS_SIDE_TEXTURE: TextureName = TextureName("default:dirt_grass_side");
-const GRASS_TOP_TEXTURE: TextureName = TextureName("default:grass_top");
-const STONE_TEXTURE: TextureName = TextureName("default:stone");
-const SAND_TEXTURE: TextureName = TextureName("default:sand");
-const DESERT_STONE_TEXTURE: TextureName = TextureName("default:desert_stone");
-const DESERT_SAND_TEXTURE: TextureName = TextureName("default:desert_sand");
-const GLASS_TEXTURE: TextureName = TextureName("default:glass");
-const WATER_TEXTURE: TextureName = TextureName("default:water");
+const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
+const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_grass_side");
+const GRASS_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:grass_top");
+const STONE_TEXTURE: StaticTextureName = StaticTextureName("default:stone");
+const SAND_TEXTURE: StaticTextureName = StaticTextureName("default:sand");
+const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:desert_stone");
+const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
+const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
+const WATER_TEXTURE: StaticTextureName = StaticTextureName("default:water");
 
-const CHEST_SIDE_TEXTURE: TextureName = TextureName("default:chest_side");
-const CHEST_TOP_TEXTURE: TextureName = TextureName("default:chest_top");
-const CHEST_FRONT_TEXTURE: TextureName = TextureName("default:chest_front");
-const LOCKED_CHEST_FRONT_TEXTURE: TextureName = TextureName("default:chest_front_locked");
+const CHEST_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:chest_side");
+const CHEST_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:chest_top");
+const CHEST_FRONT_TEXTURE: StaticTextureName = StaticTextureName("default:chest_front");
+const LOCKED_CHEST_FRONT_TEXTURE: StaticTextureName =
+    StaticTextureName("default:chest_front_locked");
 
-const TORCH_TEXTURE: TextureName = TextureName("default:torch");
-const TNT_TEXTURE: TextureName = TextureName("default:tnt");
-const TESTONLY_UNKNOWN_TEX: TextureName = TextureName("default:testonly_unknown");
+const TORCH_TEXTURE: StaticTextureName = StaticTextureName("default:torch");
+const TNT_TEXTURE: StaticTextureName = StaticTextureName("default:tnt");
+const TESTONLY_UNKNOWN_TEX: StaticTextureName = StaticTextureName("default:testonly_unknown");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -124,27 +125,27 @@ pub mod ores {
 
     pub const COAL_ORE: StaticBlockName = StaticBlockName("default:coal_ore");
     pub const COAL_PIECE: StaticItemName = StaticItemName("default:coal_piece");
-    pub const COAL_ORE_TEXTURE: TextureName = TextureName("default:coal_ore");
-    pub const COAL_PIECE_TEXTURE: TextureName = TextureName("default:coal_piece");
+    pub const COAL_ORE_TEXTURE: StaticTextureName = StaticTextureName("default:coal_ore");
+    pub const COAL_PIECE_TEXTURE: StaticTextureName = StaticTextureName("default:coal_piece");
 
     pub const IRON_ORE: StaticBlockName = StaticBlockName("default:iron_ore");
     pub const IRON_PIECE: StaticItemName = StaticItemName("default:iron_piece");
     pub const IRON_INGOT: StaticItemName = StaticItemName("default:iron_ingot");
-    pub const IRON_ORE_TEXTURE: TextureName = TextureName("default:iron_ore");
-    pub const IRON_PIECE_TEXTURE: TextureName = TextureName("default:iron_piece");
-    pub const IRON_INGOT_TEXTURE: TextureName = TextureName("default:iron_ingot");
+    pub const IRON_ORE_TEXTURE: StaticTextureName = StaticTextureName("default:iron_ore");
+    pub const IRON_PIECE_TEXTURE: StaticTextureName = StaticTextureName("default:iron_piece");
+    pub const IRON_INGOT_TEXTURE: StaticTextureName = StaticTextureName("default:iron_ingot");
 
     pub const GOLD_ORE: StaticBlockName = StaticBlockName("default:gold_ore");
     pub const GOLD_PIECE: StaticItemName = StaticItemName("default:gold_piece");
     pub const GOLD_INGOT: StaticItemName = StaticItemName("default:gold_ingot");
-    pub const GOLD_ORE_TEXTURE: TextureName = TextureName("default:gold_ore");
-    pub const GOLD_PIECE_TEXTURE: TextureName = TextureName("default:gold_piece");
-    pub const GOLD_INGOT_TEXTURE: TextureName = TextureName("default:gold_ingot");
+    pub const GOLD_ORE_TEXTURE: StaticTextureName = StaticTextureName("default:gold_ore");
+    pub const GOLD_PIECE_TEXTURE: StaticTextureName = StaticTextureName("default:gold_piece");
+    pub const GOLD_INGOT_TEXTURE: StaticTextureName = StaticTextureName("default:gold_ingot");
 
     pub const DIAMOND_ORE: StaticBlockName = StaticBlockName("default:diamond_ore");
     pub const DIAMOND_PIECE: StaticItemName = StaticItemName("default:diamond_piece");
-    pub const DIAMOND_ORE_TEXTURE: TextureName = TextureName("default:diamond_ore");
-    pub const DIAMOND_PIECE_TEXTURE: TextureName = TextureName("default:diamond_piece");
+    pub const DIAMOND_ORE_TEXTURE: StaticTextureName = StaticTextureName("default:diamond_ore");
+    pub const DIAMOND_PIECE_TEXTURE: StaticTextureName = StaticTextureName("default:diamond_piece");
 
     pub(crate) fn register_ores(game_builder: &mut GameBuilder) -> Result<()> {
         // todo factor this into a function per-ore

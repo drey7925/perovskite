@@ -14,7 +14,7 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
     },
     default_game::basic_blocks::DIRT,
-    game_builder::{StaticBlockName, TextureName},
+    game_builder::{StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 
@@ -30,8 +30,8 @@ const LAMP_ON_BLOCK: StaticBlockName = StaticBlockName("circuits:simple_lamp_on"
 const OSCILLATOR_ON_BLOCK: StaticBlockName = StaticBlockName("circuits:oscillator_on");
 const OSCILLATOR_OFF_BLOCK: StaticBlockName = StaticBlockName("circuits:oscillator_off");
 
-const CIRCUITS_ON_TEXTURE: TextureName = TextureName("circuits:source");
-const CIRCUITS_OFF_TEXTURE: TextureName = TextureName("circuits:lamp_off");
+const CIRCUITS_ON_TEXTURE: StaticTextureName = StaticTextureName("circuits:source");
+const CIRCUITS_OFF_TEXTURE: StaticTextureName = StaticTextureName("circuits:lamp_off");
 
 const CIRCUITS_SOURCE_CONNECTIVITIES: [BlockConnectivity; 4] = [
     BlockConnectivity::unrotated(1, 0, 0, 0),

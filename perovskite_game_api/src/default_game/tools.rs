@@ -11,7 +11,7 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::items::{Item, ItemInteractionResult};
 
-use crate::{game_builder::TextureName, include_texture_bytes};
+use crate::{game_builder::StaticTextureName, include_texture_bytes};
 
 use super::block_groups::BRITTLE;
 
@@ -19,7 +19,7 @@ use super::block_groups::BRITTLE;
 /// **This API is subject to change.**
 pub(crate) fn register_pickaxe(
     game_builder: &mut super::GameBuilder,
-    texture: TextureName,
+    texture: StaticTextureName,
     name: impl Into<String>,
     display_name: impl Into<String>,
     durability: u32,
@@ -63,7 +63,7 @@ pub(crate) fn register_pickaxe(
 
 fn register_superuser_pickaxe(
     game_builder: &mut super::GameBuilder,
-    texture: TextureName,
+    texture: StaticTextureName,
     name: impl Into<String>,
     display_name: impl Into<String>,
     durability: u32,
@@ -122,7 +122,7 @@ pub(crate) fn register_shovel() -> Result<()> {
 }
 
 pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> Result<()> {
-    let test_pick_texture = TextureName("textures/test_pickaxe.png");
+    let test_pick_texture = StaticTextureName("textures/test_pickaxe.png");
     include_texture_bytes!(game_builder, test_pick_texture, "textures/test_pickaxe.png")?;
     register_pickaxe(
         game_builder,

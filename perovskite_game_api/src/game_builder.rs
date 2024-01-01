@@ -49,19 +49,42 @@ use perovskite_server::{
 use anyhow::Result;
 
 /// Type-safe newtype wrapper for a texture name
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TextureName(pub &'static str);
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TextureName(pub String);
 
-impl From<TextureName> for TextureReference {
-    fn from(value: TextureName) -> Self {
+/// Type-safe newtype wrapper for a texture name
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StaticTextureName(pub &'static str);
+
+impl From<StaticTextureName> for TextureReference {
+    fn from(value: StaticTextureName) -> Self {
         TextureReference {
             texture_name: value.0.to_string(),
             crop: None,
         }
     }
 }
+impl From<TextureName> for TextureReference {
+    fn from(value: TextureName) -> Self {
+        TextureReference {
+            texture_name: value.0,
+            crop: None,
+        }
+    }
+}
+impl From<StaticTextureName> for TextureName {
+    fn from(value: StaticTextureName) -> Self {
+        TextureName(value.0.to_string())
+    }
+}
+impl From<&TextureName> for TextureName {
+    fn from(value: &TextureName) -> Self {
+        value.clone()
+    }
+}
 
-pub(crate) const FALLBACK_UNKNOWN_TEXTURE_NAME: TextureName = TextureName(FALLBACK_UNKNOWN_TEXTURE);
+pub(crate) const FALLBACK_UNKNOWN_TEXTURE_NAME: StaticTextureName =
+    StaticTextureName(FALLBACK_UNKNOWN_TEXTURE);
 
 /// Type-safe newtype wrapper for a const/static block name
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -278,14 +301,14 @@ impl GameBuilder {
     /// nothing were held in the hand.
     pub fn register_basic_item(
         &mut self,
-        short_name: StaticItemName,
+        short_name: impl Into<ItemName>,
         display_name: impl Into<String>,
-        texture: TextureName,
+        texture: impl Into<TextureReference>,
         groups: Vec<String>,
     ) -> Result<()> {
         self.inner.items_mut().register_item(Item {
             proto: ItemDef {
-                short_name: short_name.0.to_string(),
+                short_name: short_name.into().0.to_string(),
                 display_name: display_name.into(),
                 inventory_texture: Some(texture.into()),
                 groups,
@@ -321,21 +344,26 @@ impl GameBuilder {
     /// if it is a duplicate
     pub fn register_texture_file(
         &mut self,
-        tex_name: TextureName,
+        tex_name: impl Into<TextureName>,
         file_path: impl AsRef<Path>,
     ) -> Result<()> {
         self.inner
             .media_mut()
-            .register_from_file(tex_name.0, file_path)
+            // TODO - this is wretched and should be refactored
+            .register_from_file(&tex_name.into().0, file_path)
     }
 
     /// Adds a texture to the game with data passed as bytes.
     /// tex_name must be unique across all textures; an error will be returned
     /// if it is a duplicate
-    pub fn register_texture_bytes(&mut self, tex_name: TextureName, data: &[u8]) -> Result<()> {
+    pub fn register_texture_bytes(
+        &mut self,
+        tex_name: impl Into<TextureName>,
+        data: &[u8],
+    ) -> Result<()> {
         self.inner
             .media_mut()
-            .register_from_memory(tex_name.0, data)
+            .register_from_memory(&tex_name.into().0, data)
     }
 
     pub fn data_dir(&self) -> &std::path::PathBuf {
