@@ -593,8 +593,8 @@ impl BlockRenderer {
         let config = texture_packer::TexturePackerConfig {
             // todo break these out into config
             allow_rotation: false,
-            max_width: 512,
-            max_height: 512,
+            max_width: 4096,
+            max_height: 4096,
             border_padding: 2,
             texture_padding: 2,
             texture_extrusion: 2,

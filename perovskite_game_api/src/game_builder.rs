@@ -72,6 +72,14 @@ impl From<TextureName> for TextureReference {
         }
     }
 }
+impl From<&TextureName> for TextureReference {
+    fn from(value: &TextureName) -> Self {
+        TextureReference {
+            texture_name: value.0.to_string(),
+            crop: None,
+        }
+    }
+}
 impl From<StaticTextureName> for TextureName {
     fn from(value: StaticTextureName) -> Self {
         TextureName(value.0.to_string())
@@ -89,7 +97,9 @@ pub(crate) const FALLBACK_UNKNOWN_TEXTURE_NAME: StaticTextureName =
 /// Type-safe newtype wrapper for a const/static block name
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StaticBlockName(pub &'static str);
+
 /// Type-safe wrapper for a block name
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlockName(pub String);
 impl From<StaticBlockName> for BlockName {
     fn from(value: StaticBlockName) -> Self {

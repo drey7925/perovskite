@@ -264,6 +264,62 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             off: oscillator_off_block.id,
         })),
     );
+    #[cfg(feature = "colors")]
+    {
+        register_colored_lamps(builder)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "colors")]
+fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
+    use crate::game_builder::{BlockName, TextureName};
+
+    let base_on_image = image::load_from_memory(include_bytes!("textures/lamp_on_base.png"))?;
+    let base_off_image = image::load_from_memory(include_bytes!("textures/lamp_off_base.png"))?;
+    let mask_image =
+        image::load_from_memory(include_bytes!("textures/lamp_color_mask.png"))?.to_luma8();
+    for color in crate::colors::ALL_COLORS {
+        let colorized_on = color.colorize_to_png_with_mask(&base_on_image, &mask_image)?;
+        let colorized_off = color.colorize_to_png_with_mask(&base_off_image, &mask_image)?;
+
+        let on_texture = TextureName(format!("circuits:lamp_{}_on", color.as_string()));
+        let off_texture = TextureName(format!("circuits:lamp_{}_off", color.as_string()));
+        builder.register_texture_bytes(&on_texture, &colorized_on)?;
+        builder.register_texture_bytes(&off_texture, &colorized_off)?;
+
+        let on_block_name = BlockName(format!("circuits:lamp_{}_on", color.as_string()));
+        let off_block_name = BlockName(format!("circuits:lamp_{}_off", color.as_string()));
+
+        let off_block = builder.add_block(
+            BlockBuilder::new(off_block_name.clone())
+                .set_light_emission(0)
+                .set_display_name(format!("{} lamp", color.as_display_string()))
+                .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&off_texture))
+                .register_circuit_callbacks(),
+        )?;
+        let on_block = builder.add_block(
+            BlockBuilder::new(on_block_name.clone())
+                .set_light_emission(15)
+                .set_display_name(format!("{} lamp (on)", color.as_display_string()))
+                .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&on_texture))
+                .add_item_group(HIDDEN_FROM_CREATIVE)
+                .set_dropped_item(&off_block_name.0, 1)
+                .register_circuit_callbacks(),
+        )?;
+        for id in [off_block.id, on_block.id] {
+            builder.define_circuit_callbacks(
+                id,
+                Box::new(SimpleLampCallbacks {
+                    lamp_off: off_block.id,
+                    lamp_on: on_block.id,
+                }),
+                super::CircuitBlockProperties {
+                    connectivity: CIRCUITS_SOURCE_CONNECTIVITIES.to_vec(),
+                },
+            )?;
+        }
+    }
 
     Ok(())
 }
