@@ -146,7 +146,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
     )?;
     shaped_blocks::make_slab(builder, &maple_planks, true)?;
     shaped_blocks::make_stairs(builder, &maple_planks, true)?;
-    shaped_blocks::make_slab(builder, &maple_trunk, false)?;
-    shaped_blocks::make_stairs(builder, &maple_trunk, false)?;
+    shaped_blocks::make_slab(builder, &maple_trunk, true)?;
+    shaped_blocks::make_stairs(builder, &maple_trunk, true)?;
     Ok(())
 }
