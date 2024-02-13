@@ -57,7 +57,7 @@ const _PLAYER_COLLISIONBOX_CORNERS: [Vector3<f64>; 8] = [
 ];
 const TRAVERSABLE_BUMP_HEIGHT_LANDED: f64 = 0.51;
 const TRAVERSABLE_BUMP_HEIGHT_MIDAIR: f64 = 0.2;
-const WALK_SPEED: f64 = 3.0;
+const FLY_SPEED: f64 = 6.0;
 const JUMP_VELOCITY: f64 = 6.0;
 // Not quite earth gravity; tuned for a natural feeling
 const GRAVITY_ACCEL: f64 = 16.;
@@ -428,7 +428,7 @@ impl PhysicsState {
         collisions: bool,
         client_state: &ClientState,
     ) {
-        let distance = delta.as_secs_f64() * WALK_SPEED * 4.0;
+        let distance = delta.as_secs_f64() * FLY_SPEED * 4.0;
 
         let mut target_pos = self.apply_movement_input(self.pos, input, distance);
         if input.is_pressed(BoundAction::Jump) {

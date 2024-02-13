@@ -322,6 +322,8 @@ pub struct GameRenderer {
 
     main_menu: Mutex<MainMenu>,
     rt: Arc<tokio::runtime::Runtime>,
+
+    warned_about_capture_issue: bool,
 }
 impl GameRenderer {
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<GameRenderer> {
@@ -343,6 +345,7 @@ impl GameRenderer {
             game: Mutex::new(GameState::MainMenu),
             main_menu: Mutex::new(main_menu),
             rt,
+            warned_about_capture_issue: false,
         })
     }
 
@@ -411,17 +414,43 @@ impl GameRenderer {
                                     size.height / 2,
                                 ))
                                 .unwrap();
-                            self.ctx
+                            let mode = if cfg!(target_os = "macos") {
+                                winit::window::CursorGrabMode::Locked
+                            } else {
+                                winit::window::CursorGrabMode::Confined
+                            };
+                            match self
+                                .ctx
                                 .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::Confined)
-                                .unwrap();
+                                .set_cursor_grab(mode)
+                            {
+                                Ok(_) => (),
+                                Err(_) => {
+                                    if !self.warned_about_capture_issue {
+                                        self.warned_about_capture_issue = true;
+                                        log::warn!(
+                                            "Failed to grab cursor, falling back to non-confined. This message will only display once per session."
+                                        )
+                                    }
+                                }
+                            }
                             self.ctx.window.set_cursor_visible(false);
                         } else {
                             self.ctx.window.set_cursor_visible(true);
-                            self.ctx
+                            // todo this is actually fallible, and some window managers get unhappy
+                            match self.ctx
                                 .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None)
-                                .unwrap();
+                                .set_cursor_grab(winit::window::CursorGrabMode::None) {
+                                Ok(_) => (),
+                                Err(_) => {
+                                    if !self.warned_about_capture_issue {
+                                        self.warned_about_capture_issue = true;
+                                        log::warn!(
+                                            "Failed to release cursor, falling back to non-confined. This message will only display once per session."
+                                        )
+                                    }
+                                }
+                                }
                         }
                     } else {
                         self.ctx
