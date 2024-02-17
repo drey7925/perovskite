@@ -114,6 +114,8 @@ pub(crate) struct ClientBlockTypeManager {
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
     solid_opaque_blocks: bv::BitVec,
+    transparent_render_blocks: bv::BitVec,
+    translucent_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
 }
 impl ClientBlockTypeManager {
@@ -134,6 +136,12 @@ impl ClientBlockTypeManager {
 
         let mut solid_opaque_blocks = bv::BitVec::new();
         solid_opaque_blocks.resize(BlockId(max_id).index() + 1, false);
+
+        let mut transparent_render_blocks = bv::BitVec::new();
+        transparent_render_blocks.resize(BlockId(max_id).index() + 1, false);
+
+        let mut translucent_render_blocks = bv::BitVec::new();
+        translucent_render_blocks.resize(BlockId(max_id).index() + 1, false);
 
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
@@ -167,6 +175,33 @@ impl ClientBlockTypeManager {
                     solid_opaque_blocks.set(id.index(), true);
                 }
             }
+
+            let is_transparent = match &def.render_info {
+                Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
+                    *x == CubeRenderMode::Transparent.into()
+                }
+                // plant-like blocks always go into the transparent pass
+                Some(RenderInfo::PlantLike(_)) => true,
+                // axis-aligned boxes always go into the transparent pass
+                Some(RenderInfo::AxisAlignedBoxes(_)) => true,
+                Some(_) | None => false,
+            };
+
+            if is_transparent {
+                transparent_render_blocks.set(id.index(), true);
+            }
+
+            let is_translucent = def.render_info.as_ref().is_some_and(|x| match x {
+                RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. }) => {
+                    *x == CubeRenderMode::Translucent.into()
+                }
+                _ => false,
+            });
+
+            if is_translucent {
+                translucent_render_blocks.set(id.index(), true);
+            }
+
             light_emitters[id.index()] = light_emission;
             block_defs[id.index()] = Some(def);
         }
@@ -181,6 +216,8 @@ impl ClientBlockTypeManager {
             light_propagators,
             light_emitters,
             solid_opaque_blocks,
+            transparent_render_blocks,
+            translucent_render_blocks,
             name_to_id,
         })
     }
@@ -212,6 +249,7 @@ impl ClientBlockTypeManager {
     }
 
     /// Determines whether this block propagates light
+    #[inline]
     pub(crate) fn propagates_light(&self, id: BlockId) -> bool {
         // Optimization note: This is called from the neighbor propagation code, which is single-threaded for
         // consistency. Unlike mesh generation, which can be parallelized to as many cores as are available, this
@@ -232,7 +270,7 @@ impl ClientBlockTypeManager {
             false
         }
     }
-
+    #[inline]
     pub(crate) fn light_emission(&self, id: BlockId) -> u8 {
         if id.index() < self.light_emitters.len() {
             self.light_emitters[id.index()]
@@ -240,13 +278,32 @@ impl ClientBlockTypeManager {
             0
         }
     }
-
+    #[inline]
     pub(crate) fn is_solid_opaque(&self, id: BlockId) -> bool {
         if id.index() < self.solid_opaque_blocks.len() {
             self.solid_opaque_blocks[id.index()]
         } else {
             // unknown blocks are solid opaque
             true
+        }
+    }
+    #[inline]
+    pub(crate) fn is_transparent_render(&self, id: BlockId) -> bool {
+        if id.index() < self.transparent_render_blocks.len() {
+            self.transparent_render_blocks[id.index()]
+        } else {
+            // unknown blocks are solid opaque
+            false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_translucent_render(&self, id: BlockId) -> bool {
+        if id.index() < self.translucent_render_blocks.len() {
+            self.translucent_render_blocks[id.index()]
+        } else {
+            // unknown blocks are solid opaque
+            false
         }
     }
 }
@@ -484,6 +541,14 @@ impl VkChunkVertexData {
             None
         }
     }
+
+    fn empty() -> VkChunkVertexData {
+        VkChunkVertexData {
+            solid_opaque: None,
+            transparent: None,
+            translucent: None,
+        }
+    }
 }
 
 fn get_texture(
@@ -690,63 +755,49 @@ impl BlockRenderer {
 
     pub(crate) fn mesh_chunk(&self, chunk_data: &LockedChunkDataView) -> Result<VkChunkVertexData> {
         let _span = span!("meshing");
+
+        {
+            let _span = span!("shell precheck");
+            let mut all_solid = true;
+            // if all edges have solid blocks, all interior geometry is hidden
+            for x in -1..17 {
+                for z in -1..17 {
+                    for y in -1..17 {
+                        if (x == -1 || x == 16) || (y == -1 || y == 16) || (z == -1 || z == 16) {
+                            let id = chunk_data.block_ids()[(x, y, z).as_extended_index()];
+                            if !self.block_types().is_solid_opaque(id) {
+                                all_solid = false;
+                            }
+                        }
+                    }
+                }
+            }
+            if all_solid {
+                //println!("discarding all_solid");
+                return Ok(VkChunkVertexData::empty());
+            }
+        }
+
         Ok(VkChunkVertexData {
             solid_opaque: self.mesh_chunk_subpass(
                 chunk_data,
-                |block| match block.render_info {
-                    Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
-                        x == CubeRenderMode::SolidOpaque.into()
-                    }
-                    Some(_) | None => false,
-                },
-                |_block, neighbor| {
-                    neighbor.is_some_and(|neighbor| match neighbor.render_info {
-                        Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
-                            x == CubeRenderMode::SolidOpaque.into()
-                        }
-                        Some(_) | None => false,
-                    })
-                },
+                |id| self.block_types().is_solid_opaque(id),
+                |_block, neighbor| self.block_defs.is_solid_opaque(neighbor),
             )?,
             transparent: self.mesh_chunk_subpass(
                 chunk_data,
-                |block| match block.render_info {
-                    Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
-                        x == CubeRenderMode::Transparent.into()
-                    }
-                    // plant-like blocks always go into the transparent pass
-                    Some(RenderInfo::PlantLike(_)) => true,
-                    // axis-aligned boxes always go into the transparent pass
-                    Some(RenderInfo::AxisAlignedBoxes(_)) => true,
-                    Some(_) | None => false,
-                },
+                |block| self.block_defs.is_transparent_render(block),
                 |block, neighbor| {
-                    neighbor.is_some_and(|neighbor| {
-                        BlockId(block.id).equals_ignore_variant(BlockId(neighbor.id))
-                    })
+                    block.equals_ignore_variant(neighbor)
+                        || self.block_defs.is_solid_opaque(neighbor)
                 },
             )?,
             translucent: self.mesh_chunk_subpass(
                 chunk_data,
-                |block| match block.render_info {
-                    Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
-                        x == CubeRenderMode::Translucent.into()
-                    }
-                    Some(_) | None => false,
-                },
+                |block| self.block_defs.is_translucent_render(block),
                 |block, neighbor| {
-                    neighbor.is_some_and(|neighbor| {
-                        if BlockId(block.id).equals_ignore_variant(BlockId(neighbor.id)) {
-                            return true;
-                        }
-                        match &neighbor.render_info {
-                            Some(RenderInfo::Cube(x)) => {
-                                x.render_mode() == CubeRenderMode::SolidOpaque
-                            }
-                            Some(_) => false,
-                            None => false,
-                        }
-                    })
+                    block.equals_ignore_variant(neighbor)
+                        || self.block_defs.is_solid_opaque(neighbor)
                 },
             )?,
         })
@@ -762,8 +813,8 @@ impl BlockRenderer {
         suppress_face_when: G,
     ) -> Result<Option<VkChunkPass>>
     where
-        F: Fn(&BlockTypeDef) -> bool,
-        G: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+        F: Fn(BlockId) -> bool,
+        G: Fn(BlockId, BlockId) -> bool,
     {
         let _span = span!("mesh subpass");
         let mut vtx = Vec::new();
@@ -772,11 +823,13 @@ impl BlockRenderer {
             for z in 0..16 {
                 for y in 0..16 {
                     let offset = ChunkOffset { x, y, z };
-                    let (id, block) = self.get_block(chunk_data.block_ids(), offset);
+                    let id = self.get_block_id(chunk_data.block_ids(), offset);
 
-                    if include_block_when(block) {
+                    if include_block_when(id) {
                         self.render_single_block(
-                            block,
+                            self.block_types()
+                                .get_blockdef(id)
+                                .unwrap_or_else(|| self.block_defs.get_fallback_blockdef()),
                             id,
                             offset,
                             chunk_data,
@@ -801,7 +854,7 @@ impl BlockRenderer {
         idx: &mut Vec<u32>,
         suppress_face_when: &G,
     ) where
-        G: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+        G: Fn(BlockId, BlockId) -> bool,
     {
         match &block.render_info {
             Some(RenderInfo::Cube(cube_render_info)) => {
@@ -843,7 +896,7 @@ impl BlockRenderer {
         render_info: &CubeRenderInfo,
         suppress_face_when: F,
     ) where
-        F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+        F: Fn(BlockId, BlockId) -> bool,
     {
         let e = get_cube_extents(render_info, id, chunk_data, offset);
 
@@ -879,7 +932,7 @@ impl BlockRenderer {
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
     ) where
-        F: Fn(&BlockTypeDef, Option<&BlockTypeDef>) -> bool,
+        F: Fn(BlockId, BlockId) -> bool,
     {
         for i in 0..6 {
             let (n_x, n_y, n_z) = e.normals[i];
@@ -890,11 +943,7 @@ impl BlockRenderer {
             )
                 .as_extended_index();
             if e.force_face(i)
-                || !suppress_face_when(
-                    block,
-                    self.block_defs
-                        .get_blockdef(chunk_data.block_ids()[neighbor_index]),
-                )
+                || !suppress_face_when(BlockId(block.id), chunk_data.block_ids()[neighbor_index])
             {
                 emit_cube_face_vk(
                     pos,
@@ -1041,6 +1090,10 @@ impl BlockRenderer {
             .get_blockdef(block_id)
             .unwrap_or_else(|| self.block_defs.get_fallback_blockdef());
         (block_id, def)
+    }
+
+    fn get_block_id(&self, ids: &[BlockId; 18 * 18 * 18], coord: ChunkOffset) -> BlockId {
+        ids[coord.as_extended_index()]
     }
 
     pub(crate) fn make_pointee_cube(
