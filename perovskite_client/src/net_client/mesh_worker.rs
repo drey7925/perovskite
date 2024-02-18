@@ -323,14 +323,14 @@ pub(crate) fn propagate_neighbor_data(
                     }
                 }
             }
-            if current_chunk
-                .block_ids()
-                .iter()
-                .all(|&x| block_manager.is_solid_opaque(x))
-            {
-                current_chunk.set_state(crate::game_state::chunk::BlockIdState::NoRender);
-                return Ok(true);
-            }
+            // if current_chunk
+            //     .block_ids()
+            //     .iter()
+            //     .all(|&x| block_manager.is_solid_opaque(x))
+            // {
+            //     current_chunk.set_state(crate::game_state::chunk::BlockIdState::NoRender);
+            //     return Ok(true);
+            // }
         }
 
         {

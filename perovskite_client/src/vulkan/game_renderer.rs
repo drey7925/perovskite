@@ -65,6 +65,8 @@ pub(crate) struct ActiveGame {
     client_state: Arc<ClientState>,
     // Held across frames to avoid constant reallocations
     cube_draw_calls: Vec<CubeGeometryDrawCall>,
+    // Likewise
+    occlusion_culling_field: Box<[bool; crate::game_state::chunk::OCCLUSION_GRID_SIZE]>,
 }
 
 impl ActiveGame {
@@ -141,6 +143,7 @@ impl ActiveGame {
                         idx: idx.clone(),
                     }),
                     translucent: None,
+                    bottom_all_solid: false
                 },
                 model_matrix: translation,
             })
@@ -151,9 +154,20 @@ impl ActiveGame {
             self.client_state.chunks.renderable_chunks_cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
+
+        let mut chunks: Vec<(&_, &_)> = chunk_lock.iter().collect();
+        // sort by distance
+        chunks.sort_by_key(|(coord, _)| {
+            (((coord.x * 16) as f64 - player_position.x).powi(2)
+                + ((coord.y * 16) as f64 - player_position.y).powi(2)
+                + ((coord.z * 16) as f64 - player_position.z).powi(2)) as i64
+        });
+        
+        self.occlusion_culling_field.fill(false);
+
         self.cube_draw_calls
-            .extend(chunk_lock.iter().filter_map(|(coord, chunk)| {
-                chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)
+            .extend(chunks.into_iter().filter_map(|(coord, chunk)| {
+                chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix, &mut self.occlusion_culling_field)
             }));
         plot!(
             "chunk_rate",
@@ -663,6 +677,7 @@ async fn connect_impl(
         client_state,
         egui_adapter: None,
         cube_draw_calls: vec![],
+        occlusion_culling_field: Box::new([false; crate::game_state::chunk::OCCLUSION_GRID_SIZE]),
     };
 
     Ok(game)

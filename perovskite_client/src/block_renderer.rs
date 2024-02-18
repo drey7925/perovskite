@@ -532,6 +532,7 @@ pub(crate) struct VkChunkVertexData {
     pub(crate) solid_opaque: Option<VkChunkPass>,
     pub(crate) transparent: Option<VkChunkPass>,
     pub(crate) translucent: Option<VkChunkPass>,
+    pub(crate) bottom_all_solid: bool,
 }
 impl VkChunkVertexData {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
@@ -542,11 +543,12 @@ impl VkChunkVertexData {
         }
     }
 
-    fn empty() -> VkChunkVertexData {
+    fn empty(bottom_all_solid: bool) -> VkChunkVertexData {
         VkChunkVertexData {
             solid_opaque: None,
             transparent: None,
             translucent: None,
+            bottom_all_solid,
         }
     }
 }
@@ -756,6 +758,7 @@ impl BlockRenderer {
     pub(crate) fn mesh_chunk(&self, chunk_data: &LockedChunkDataView) -> Result<VkChunkVertexData> {
         let _span = span!("meshing");
 
+        let mut bottom_all_solid = true;
         {
             let _span = span!("shell precheck");
             let mut all_solid = true;
@@ -770,11 +773,18 @@ impl BlockRenderer {
                             }
                         }
                     }
+                    if x != -1 && x != 16  && z != -1 && z != 16 {
+                        let id = chunk_data.block_ids()[(x, 0, z).as_extended_index()];
+                        if !self.block_types().is_solid_opaque(id) {
+                            bottom_all_solid = false;
+                        }
+                    }
+
                 }
             }
             if all_solid {
                 //println!("discarding all_solid");
-                return Ok(VkChunkVertexData::empty());
+                return Ok(VkChunkVertexData::empty(true));
             }
         }
 
@@ -800,6 +810,7 @@ impl BlockRenderer {
                         || self.block_defs.is_solid_opaque(neighbor)
                 },
             )?,
+            bottom_all_solid,
         })
     }
 
@@ -1157,6 +1168,7 @@ impl BlockRenderer {
                 solid_opaque: None,
                 transparent: Some(VkChunkPass { vtx, idx }),
                 translucent: None,
+                bottom_all_solid: false,
             },
         })
     }

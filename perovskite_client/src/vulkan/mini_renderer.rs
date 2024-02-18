@@ -167,6 +167,7 @@ impl MiniBlockRenderer {
                     solid_opaque: None,
                     transparent: Some(pass),
                     translucent: None,
+                    bottom_all_solid: false,
                 },
                 model_matrix: Matrix4::identity(),
             };

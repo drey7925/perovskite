@@ -128,6 +128,9 @@ impl SnappyDecodeHelper {
     }
 }
 
+pub(crate) const OCCLUSION_GRID: u32 = 1024;
+pub(crate) const OCCLUSION_GRID_SIZE: usize = 1048576;
+
 /// State of a chunk on the client
 ///
 /// Data flow and locking are as follows:
@@ -275,6 +278,7 @@ impl ClientChunk {
         coord: ChunkCoordinate,
         player_position: Vector3<f64>,
         view_proj_matrix: Matrix4<f32>,
+        occlusion: &mut [bool; OCCLUSION_GRID_SIZE],
     ) -> Option<CubeGeometryDrawCall> {
         // We calculate the transform in f64, and *then* narrow to f32
         // Otherwise, we get catastrophic cancellation when far from the origin
@@ -294,16 +298,21 @@ impl ClientChunk {
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
-        if Self::check_frustum(view_proj_matrix * translation) {
-            self.cached_vertex_data.lock().as_ref().and_then(|x| {
+
+        self.cached_vertex_data.lock().as_ref().and_then(|x| {
+            if Self::check_frustum_and_occlusion(
+                view_proj_matrix * translation,
+                occlusion,
+                x.bottom_all_solid,
+            ) {
                 Some(CubeGeometryDrawCall {
                     models: x.clone_if_nonempty()?,
                     model_matrix: translation,
                 })
-            })
-        } else {
-            None
-        }
+            } else {
+                None
+            }
+        })
     }
 
     pub(crate) fn get_occlusion(&self, block_types: &ClientBlockTypeManager) -> Lightfield {
@@ -323,7 +332,11 @@ impl ClientChunk {
         occlusion
     }
 
-    fn check_frustum(transformation: Matrix4<f32>) -> bool {
+    fn check_frustum_and_occlusion(
+        transformation: Matrix4<f32>,
+        occlusion: &mut [bool; OCCLUSION_GRID_SIZE],
+        draw_to_occlusion: bool,
+    ) -> bool {
         #[inline]
         fn mvmul4(matrix: Matrix4<f32>, vector: Vector4<f32>) -> Vector4<f32> {
             // This is the implementation hidden behind the simd feature gate
@@ -347,6 +360,13 @@ impl ClientChunk {
             vec4(17.0, 1.0, 17.0, 1.),
             vec4(-1.0, -17.0, 17.0, 1.),
             vec4(17.0, -17.0, 17.0, 1.),
+        ];
+
+        const BTM_CORNERS: [Vector4<f32>; 4] = [
+            vec4(-0.5, 0.5, -0.5, 1.),
+            vec4(15.5, 0.5, -0.5, 1.),
+            vec4(-0.5, 0.5, 15.5, 1.),
+            vec4(15.5, 0.5, 15.5, 1.),
         ];
         let mut ndc_min = vec4(f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut ndc_max = vec4(
@@ -381,9 +401,92 @@ impl ClientChunk {
         //
         // This check is a bit conservative; it's possible that one point is in front of the camera, but not within
         // the frustum, while other points cause the overlap check to pass. However, it's good enough for now.
-        ndc_max.w > 0.0
+        if !(ndc_max.w > 0.0
             && overlaps(ndc_min.x, ndc_max.x, -1., 1.)
-            && overlaps(ndc_min.y, ndc_max.y, -1., 1.)
+            && overlaps(ndc_min.y, ndc_max.y, -1., 1.))
+        {
+            // Failed the frustum culling check
+            return false;
+        }
+        // check occlusion
+        fn ndc2arr(f: f32) -> u32 {
+            ((((f / 2.0) + 0.5) * OCCLUSION_GRID as f32) as u32).clamp(0, 511)
+        }
+        fn arr2ndc(i: u32) -> f32 {
+            ((i as f32) / OCCLUSION_GRID as f32) * 2.0 - 1.0
+        }
+        fn normalize(ndc: Vector4<f32>) -> Option<Vector4<f32>> {
+            if ndc.w.abs() < 0.000001 {
+                None
+            } else {
+                Some(ndc / ndc.w.abs())
+            }
+        }
+        let mut all_occluded = true;
+        for y in ndc2arr(ndc_min.y)..=ndc2arr(ndc_max.y) {
+            for x in ndc2arr(ndc_min.x)..=ndc2arr(ndc_max.x) {
+                if !occlusion[(y * OCCLUSION_GRID + x) as usize] {
+                    all_occluded = false;
+                }
+            }
+        }
+        if all_occluded {
+            //println!("all occluded");
+            return false;
+        }
+
+        if draw_to_occlusion {
+            let mut bcorners = [
+                mvmul4(transformation, BTM_CORNERS[0]),
+                mvmul4(transformation, BTM_CORNERS[1]),
+                mvmul4(transformation, BTM_CORNERS[2]),
+                mvmul4(transformation, BTM_CORNERS[3]),
+            ];
+            for corner in &mut bcorners {
+                match normalize(*corner) {
+                    Some(ndc) => {
+                        *corner = ndc;
+                    }
+                    None => return true,
+                }
+            }
+            let t1 = [bcorners[0], bcorners[1], bcorners[2]];
+            let t2 = [bcorners[0], bcorners[2], bcorners[3]];
+
+            draw_triangle(t1, occlusion);
+            draw_triangle(t2, occlusion);
+            fn lerp(imin: f32, imax: f32, ival: f32, omin: f32, omax: f32) -> f32 {
+                omin + (omax - omin) * (ival - imin) / (imax - imin)
+            }
+
+            fn draw_triangle(mut t: [Vector4<f32>; 3], occlusion: &mut [bool]) {
+                // adapted from https://gabrielgambetta.com/computer-graphics-from-scratch/07-filled-triangles.html
+                if t[1].y < t[0].y {
+                    t.swap(0, 1);
+                }
+                if t[2].y < t[0].y {
+                    t.swap(0, 2);
+                }
+                if t[2].y < t[1].y {
+                    t.swap(1, 2);
+                }
+                for y in ndc2arr(t[0].y)..=ndc2arr(t[2].y) {
+                    let bound1 = if y < ndc2arr(t[1].y) {
+                        lerp(t[0].y, t[1].y, arr2ndc(y), t[0].x, t[1].x)
+                    } else {
+                        lerp(t[1].y, t[2].y, arr2ndc(y), t[1].x, t[2].x)
+                    };
+                    let bound2 = lerp(t[0].y, t[2].y, arr2ndc(y), t[0].x, t[2].x);
+                    let minbound = bound1.min(bound2);
+                    let maxbound = bound1.max(bound2);
+                    for x in ndc2arr(minbound)..=ndc2arr(maxbound) {
+                        occlusion[(y * OCCLUSION_GRID + x) as usize] = true;
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     pub(crate) fn get_single(&self, offset: ChunkOffset) -> BlockId {
