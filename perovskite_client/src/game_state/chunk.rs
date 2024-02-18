@@ -401,6 +401,10 @@ impl ClientChunk {
     pub(crate) fn chunk_data_mut(&self) -> ChunkDataViewMut<'_> {
         ChunkDataViewMut(self.chunk_data.write())
     }
+
+    pub(crate) fn cached_vertex_data(&self) -> &Mutex<Option<VkChunkVertexData>> {
+        &self.cached_vertex_data
+    }
 }
 
 fn get_occlusion_for_proto(

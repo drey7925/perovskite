@@ -165,6 +165,8 @@ impl MiniBlockRenderer {
             let draw_call = CubeGeometryDrawCall {
                 models: VkChunkVertexData {
                     solid_opaque: None,
+                    solv: None,
+                    soli: None,
                     transparent: Some(pass),
                     translucent: None,
                 },

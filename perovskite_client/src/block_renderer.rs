@@ -530,6 +530,8 @@ impl VkChunkPass {
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexData {
     pub(crate) solid_opaque: Option<VkChunkPass>,
+    pub(crate) solv: Option<Vec<CubeGeometryVertex>>,
+    pub(crate) soli: Option<Vec<u32>>,
     pub(crate) transparent: Option<VkChunkPass>,
     pub(crate) translucent: Option<VkChunkPass>,
 }
@@ -545,6 +547,8 @@ impl VkChunkVertexData {
     fn empty() -> VkChunkVertexData {
         VkChunkVertexData {
             solid_opaque: None,
+            solv: None,
+            soli: None,
             transparent: None,
             translucent: None,
         }
@@ -777,29 +781,34 @@ impl BlockRenderer {
                 return Ok(VkChunkVertexData::empty());
             }
         }
+        let opaque = self.mesh_chunk_subpass(
+            chunk_data,
+            |id| self.block_types().is_solid_opaque(id),
+            |_block, neighbor| self.block_defs.is_solid_opaque(neighbor),
+        );
+        let transparent = self.mesh_chunk_subpass(
+            chunk_data,
+            |block| self.block_defs.is_transparent_render(block),
+            |block, neighbor| {
+                block.equals_ignore_variant(neighbor)
+                    || self.block_defs.is_solid_opaque(neighbor)
+            },
+        );
+        let translucent = self.mesh_chunk_subpass(
+            chunk_data,
+            |block| self.block_defs.is_translucent_render(block),
+            |block, neighbor| {
+                block.equals_ignore_variant(neighbor)
+                    || self.block_defs.is_solid_opaque(neighbor)
+            },
+        );
 
         Ok(VkChunkVertexData {
-            solid_opaque: self.mesh_chunk_subpass(
-                chunk_data,
-                |id| self.block_types().is_solid_opaque(id),
-                |_block, neighbor| self.block_defs.is_solid_opaque(neighbor),
-            )?,
-            transparent: self.mesh_chunk_subpass(
-                chunk_data,
-                |block| self.block_defs.is_transparent_render(block),
-                |block, neighbor| {
-                    block.equals_ignore_variant(neighbor)
-                        || self.block_defs.is_solid_opaque(neighbor)
-                },
-            )?,
-            translucent: self.mesh_chunk_subpass(
-                chunk_data,
-                |block| self.block_defs.is_translucent_render(block),
-                |block, neighbor| {
-                    block.equals_ignore_variant(neighbor)
-                        || self.block_defs.is_solid_opaque(neighbor)
-                },
-            )?,
+            solid_opaque: None,
+            solv: Some(opaque.0),
+            soli: Some(opaque.1),
+            transparent: VkChunkPass::from_buffers(transparent.0, transparent.1, &self.allocator)?,
+            translucent: VkChunkPass::from_buffers(translucent.0, translucent.1, &self.allocator)?,
         })
     }
 
@@ -811,7 +820,7 @@ impl BlockRenderer {
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
         // This only applies to cube blocks.
         suppress_face_when: G,
-    ) -> Result<Option<VkChunkPass>>
+    ) -> (Vec<CubeGeometryVertex>, Vec<u32>) 
     where
         F: Fn(BlockId) -> bool,
         G: Fn(BlockId, BlockId) -> bool,
@@ -841,7 +850,7 @@ impl BlockRenderer {
                 }
             }
         }
-        VkChunkPass::from_buffers(vtx, idx, self.allocator())
+        (vtx, idx)
     }
 
     pub(crate) fn render_single_block<G>(
@@ -1155,6 +1164,8 @@ impl BlockRenderer {
             model_matrix: Matrix4::from_translation(offset.cast().unwrap()),
             models: VkChunkVertexData {
                 solid_opaque: None,
+                solv: None,
+                soli: None,
                 transparent: Some(VkChunkPass { vtx, idx }),
                 translucent: None,
             },

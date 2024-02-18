@@ -14,18 +14,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use anyhow::{Context, Result};
 
 use arc_swap::ArcSwap;
+use cgmath::{vec3, ElementWise, Matrix4, Vector3};
 use log::info;
 
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::{
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::PrimaryAutoCommandBuffer,
+    memory::allocator::{AllocationCreateInfo, MemoryUsage},
     render_pass::Framebuffer,
     swapchain::{self, AcquireError, SwapchainPresentInfo},
     sync::{future::FenceSignalFuture, FlushError, GpuFuture},
@@ -46,7 +49,7 @@ use crate::{
 
 use super::{
     shaders::{
-        cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
+        cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall, CubeGeometryVertex},
         egui_adapter::{self, EguiAdapter},
         flat_texture, PipelineProvider, PipelineWrapper,
     },
@@ -65,6 +68,10 @@ pub(crate) struct ActiveGame {
     client_state: Arc<ClientState>,
     // Held across frames to avoid constant reallocations
     cube_draw_calls: Vec<CubeGeometryDrawCall>,
+
+    bigmesh_vertex: Option<Subbuffer<[CubeGeometryVertex]>>,
+    bigmesh_index: Option<Subbuffer<[u32]>>,
+    bigmesh_position: cgmath::Vector3<f64>,
 }
 
 impl ActiveGame {
@@ -136,6 +143,8 @@ impl ActiveGame {
             self.cube_draw_calls.push(CubeGeometryDrawCall {
                 models: VkChunkVertexData {
                     solid_opaque: None,
+                    solv: None,
+                    soli: None,
                     transparent: Some(VkChunkPass {
                         vtx: vtx.clone(),
                         idx: idx.clone(),
@@ -160,22 +169,146 @@ impl ActiveGame {
             self.cube_draw_calls.len() as f64 / chunk_lock.len() as f64
         );
 
-        if !self.cube_draw_calls.is_empty() {
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    scene_state,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Opaque,
+        self.cube_pipeline
+            .bind(
+                ctx,
+                scene_state,
+                &mut command_buf_builder,
+                BlockRenderPass::Opaque,
+            )
+            .unwrap();
+        if self
+            .client_state
+            .input
+            .lock()
+            .is_pressed(crate::game_state::input::BoundAction::PhysicsDebug)
+        {
+            // rebuild the bigmesh
+            let _span = span!("Rebuilding bigmesh");
+            let start = std::time::Instant::now();
+            let mut vertices = vec![];
+            let mut indices = vec![];
+            let mut ccount = 0;
+
+            let mut v_count = 0;
+            let mut i_count = 0;
+            for (coord, chunk) in chunk_lock.iter() {
+                let l = chunk.cached_vertex_data();
+                let l = l.lock();
+                if let Some(data) = l.deref() {
+                    if data.solv.is_some() {
+                        v_count += data.solv.as_ref().unwrap().len();
+                        i_count += data.soli.as_ref().unwrap().len();
+                    }
+                }
+            }
+            vertices.reserve(v_count);
+            indices.reserve(i_count);
+
+            for (coord, chunk) in chunk_lock.iter() {
+                let offset = vec3(
+                    coord.x as f64 * 16.0,
+                    coord.y as f64 * 16.0,
+                    coord.z as f64 * 16.0,
+                );
+                let delta_offset: Vector3<f32> = (offset - player_position).cast().unwrap();
+                self.bigmesh_position = player_position;
+                let l = chunk.cached_vertex_data();
+                let l = l.lock();
+                if let Some(data) = l.deref() {
+                    if let Some(solv) = &data.solv {
+                        ccount += 1;
+                        let v_offset = vertices.len();
+                        vertices.extend(solv.iter().map(|v| CubeGeometryVertex {
+                            position: [
+                                v.position[0] + delta_offset.x,
+                                v.position[1] - delta_offset.y,
+                                v.position[2] + delta_offset.z,
+                            ],
+                            ..*v
+                        }));
+                        indices.extend(
+                            data.soli
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .map(|i| i + v_offset as u32),
+                        );
+                    }
+                }
+            }
+            let vlen = vertices.len();
+            let ilen = indices.len();
+            {
+                let _span = span!("vtx");
+                self.bigmesh_vertex = Some(
+                    Buffer::from_iter(
+                        ctx.allocator(),
+                        BufferCreateInfo {
+                            usage: BufferUsage::VERTEX_BUFFER,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo {
+                            usage: MemoryUsage::Upload,
+                            ..Default::default()
+                        },
+                        vertices.into_iter(),
+                    )
+                    .unwrap(),
+                );
+            }
+            {
+                let _span = span!("idx");
+                self.bigmesh_index = Some(
+                    Buffer::from_iter(
+                        ctx.allocator(),
+                        BufferCreateInfo {
+                            usage: BufferUsage::INDEX_BUFFER,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo {
+                            usage: MemoryUsage::Upload,
+                            ..Default::default()
+                        },
+                        indices.into_iter(),
+                    )
+                    .unwrap(),
+                );
+                println!(
+                    "Rebuilt bigmesh in {:?}; vertices: {vlen}, indices: {ilen}, chunks {ccount}",
+                    start.elapsed()
+                );
+            }
+        }
+        if self.bigmesh_index.is_some() {
+            let mut bigmesh_holder = [CubeGeometryDrawCall {
+                models: VkChunkVertexData {
+                    solid_opaque: Some(VkChunkPass {
+                        vtx: self.bigmesh_vertex.clone().unwrap(),
+                        idx: self.bigmesh_index.clone().unwrap(),
+                    }),
+                    solv: None,
+                    soli: None,
+                    transparent: None,
+                    translucent: None,
+                },
+                model_matrix: Matrix4::from_translation(
+                    (self.bigmesh_position - player_position)
+                        .mul_element_wise(vec3(1.0, -1.0, 1.0)),
                 )
-                .unwrap();
+                .cast()
+                .unwrap(),
+            }];
+
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
+                    &mut bigmesh_holder,
                     BlockRenderPass::Opaque,
                 )
                 .unwrap();
+        }
+        if !self.cube_draw_calls.is_empty() {
             self.cube_pipeline
                 .bind(
                     ctx,
@@ -663,6 +796,9 @@ async fn connect_impl(
         client_state,
         egui_adapter: None,
         cube_draw_calls: vec![],
+        bigmesh_vertex: None,
+        bigmesh_index: None,
+        bigmesh_position: Vector3::new(0.0, 0.0, 0.0),
     };
 
     Ok(game)
