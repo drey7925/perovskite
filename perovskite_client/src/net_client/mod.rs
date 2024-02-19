@@ -109,7 +109,7 @@ pub(crate) async fn connect_game(
     let texture_loader = GrpcTextureLoader {
         connection: connection.clone(),
     };
-    let mut cache_manager = Arc::new(Mutex::new(CacheManager::new(
+    let cache_manager = Arc::new(Mutex::new(CacheManager::new(
         media_list.into_inner(),
         Box::new(texture_loader),
     )?));

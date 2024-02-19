@@ -248,6 +248,45 @@ impl MeshWorker {
         Ok(())
     }
 }
+
+// Responsible for turning a single chunk into a mesh
+pub(crate) struct MeshBatcher {
+    client_state: Arc<ClientState>,
+    shutdown: CancellationToken,
+    // There is no run token, because these workers can be run in parallel
+}
+impl MeshBatcher {
+    pub(crate) fn run_batcher(self: Arc<Self>) -> Result<()> {
+        tracy_client::set_thread_name!("async_mesh_batcher");
+        while !self.shutdown.is_cancelled() {
+            // Sleep for a bit to allow more work to accumulate
+            std::thread::sleep(Duration::from_millis(50));
+            let pos = self.client_state.weakly_ordered_last_position().position;
+            self.client_state
+                .chunks
+                .do_batch_round(pos, self.client_state.block_renderer.allocator())?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn new(clone: Arc<ClientState>) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+        let worker = Arc::new(Self {
+            client_state: clone,
+            shutdown: CancellationToken::new(),
+        });
+        let handle = {
+            let worker_clone = worker.clone();
+            tokio::task::spawn_blocking(move || worker_clone.run_batcher())
+        };
+        (worker, handle)
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.shutdown.cancel();
+    }
+}
+
 const MESH_BATCH_SIZE: usize = 32;
 const NPROP_BATCH_SIZE: usize = 128;
 

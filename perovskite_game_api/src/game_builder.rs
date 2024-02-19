@@ -247,7 +247,7 @@ impl GameBuilder {
                     block_types: self.falling_blocks.clone(),
                     per_block_probability: 1.0,
                     ignore_block_type_presence_check: true,
-                    idle_chunk_after_unchanged: false,
+                    idle_chunk_after_unchanged: true,
                     ..Default::default()
                 },
                 TimerCallback::LockedVerticalNeighors(Box::new(FallingBlocksChunkEdgePropagator {

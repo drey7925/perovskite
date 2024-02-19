@@ -4,7 +4,7 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_server::game_state::GameState;
 use serde::{Deserialize, Serialize};
 use serenity::{
-    all::{GatewayIntents, Guild, GuildChannel},
+    all::{GatewayIntents, GuildChannel},
     client::EventHandler,
 };
 

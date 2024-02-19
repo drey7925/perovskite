@@ -4,7 +4,7 @@ use crate::game_builder::{
     BlockName, GameBuilder, ItemName, StaticBlockName, StaticTextureName, TextureName,
 };
 use anyhow::{ensure, Result};
-use image::{imageops::colorops, Rgba};
+use image::Rgba;
 
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

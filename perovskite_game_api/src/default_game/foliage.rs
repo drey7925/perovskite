@@ -3,11 +3,11 @@ use perovskite_core::protocol::{
     blocks::{block_type_def::PhysicsInfo, Empty},
     items::item_stack::QuantityType,
 };
-use perovskite_server::game_state::{blocks::BlockType, items::ItemStack};
+use perovskite_server::game_state::blocks::BlockType;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
-    game_builder::{GameBuilder, StaticBlockName, StaticItemName, StaticTextureName, TextureName},
+    game_builder::{GameBuilder, StaticBlockName, StaticItemName, StaticTextureName},
     include_texture_bytes,
 };
 

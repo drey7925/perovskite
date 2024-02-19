@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use cgmath::{Deg, Zero};
+use cgmath::{vec3, Deg, ElementWise, InnerSpace, Vector3, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
@@ -35,16 +35,20 @@ use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracy_client::span;
+use vulkano::memory::allocator::{FreeListAllocator, GenericMemoryAllocator};
 use winit::event::Event;
 
 use crate::block_renderer::{fallback_texture, BlockRenderer, ClientBlockTypeManager};
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
+use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
 
 use self::chat::ChatState;
-use self::chunk::{ChunkDataView, SnappyDecodeHelper};
+use self::chunk::{
+    ChunkDataView, MeshBatch, MeshBatchBuilder, SnappyDecodeHelper, TARGET_BATCH_OCCUPANCY,
+};
 use self::entities::EntityManager;
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
@@ -113,6 +117,7 @@ pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
     light_columns: parking_lot::RwLock<LightColumnMap>,
+    mesh_batches: parking_lot::Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
@@ -120,6 +125,7 @@ impl ChunkManager {
             chunks: parking_lot::RwLock::new(FxHashMap::default()),
             renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
             light_columns: parking_lot::RwLock::new(FxHashMap::default()),
+            mesh_batches: parking_lot::Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -149,6 +155,9 @@ impl ChunkManager {
             let _span = span!("Acquire global chunk lock");
             self.chunks.write()
         };
+        if let Some(chunk) = chunks_lock.get(coord) {
+            self.spill(chunk, &chunks_lock);
+        }
         let mut render_chunks_lock = {
             let _span = span!("Acquire global renderable chunk lock");
             self.renderable_chunks.write()
@@ -314,6 +323,7 @@ impl ChunkManager {
         // use of chunks is likewise scoped to the physics code)
         let src = self.chunks.read();
         if let Some(chunk) = src.get(&coord) {
+            self.spill(chunk, &src);
             if chunk.mesh_with(renderer)? {
                 // We take the lock after mesh_with to keep the lock scope as short as possible
                 // and avoid blocking the render thread
@@ -327,6 +337,111 @@ impl ChunkManager {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    pub(crate) fn do_batch_round(
+        &self,
+        player_pos: Vector3<f64>,
+        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+    ) -> Result<()> {
+        let _span = span!("batch_round");
+        let mut chunks = self.chunks.read();
+        let mut keys = chunks.keys().cloned().collect::<Vec<_>>();
+        keys.sort_unstable_by_key(|coord| {
+            let world_coord = vec3(
+                coord.x as f64 * 16.0 + 8.0,
+                coord.y as f64 * 16.0 + 8.0,
+                coord.z as f64 * 16.0 + 8.0,
+            );
+            (player_pos - world_coord).magnitude2() as i64
+        });
+        'outer: for (counter, coord) in keys.into_iter().enumerate() {
+            let world_coord = vec3(
+                coord.x as f64 * 16.0 + 8.0,
+                coord.y as f64 * 16.0 + 8.0,
+                coord.z as f64 * 16.0 + 8.0,
+            );
+            if (player_pos - world_coord).magnitude() > 30.0 {
+                let chunk = match chunks.get(&coord) {
+                    Some(chunk) => chunk,
+                    None => continue 'outer,
+                };
+                // Don't touch chunks that were meshed very recently
+                if chunk.last_meshed().elapsed() < Duration::from_secs(3) {
+                    continue 'outer;
+                }
+                if let Some(chunk_data) = chunk.data_for_batch() {
+                    let mut batches = self.mesh_batches.lock();
+                    batches.1.append(coord, chunk_data);
+                    chunk.set_batch(batches.1.id());
+
+                    if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
+                        let builder = std::mem::replace(&mut batches.1, MeshBatchBuilder::new());
+                        batches.0.insert(builder.id(), builder.build(allocator)?);
+                    }
+
+                    continue 'outer;
+                }
+            }
+            if counter % 100 == 99 {
+                RwLockReadGuard::bump(&mut chunks);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn make_batched_draw_calls(
+        &self,
+        player_position: Vector3<f64>,
+    ) -> (Vec<CubeGeometryDrawCall>, FxHashSet<ChunkCoordinate>) {
+        let mut calls = vec![];
+        let mut handled = FxHashSet::default();
+        let mut chunks = self.chunks.read();
+        let batches = self.mesh_batches.lock();
+        for batch in batches.0.values() {
+            calls.push(batch.make_draw_call(player_position));
+            for coord in batch.coords() {
+                if !handled.insert(*coord) {
+                    //log::warn!("Already handled chunk {:?}", coord);
+                }
+            }
+        }
+        (calls, handled)
+    }
+
+    fn spill(&self, chunk: &ClientChunk, chunks: &FxHashMap<ChunkCoordinate, Arc<ClientChunk>>) {
+        {
+            let _span = span!("batch_spill");
+            // Possibly spill a mesh batch if necessary
+            let mut batch_lock = self.mesh_batches.lock();
+            if let Some(batch_id) = chunk.spill_back_to_solo() {
+                if batch_lock.1.id() == batch_id {
+                    // We are spilling the current batch builder itself
+                    let mut builder = MeshBatchBuilder::new();
+                    std::mem::swap(&mut batch_lock.1, &mut builder);
+                    for spilled_coord in builder.chunks() {
+                        if let Some(spilled_chunk) = chunks.get(&spilled_coord) {
+                            spilled_chunk.spill_back_to_solo();
+                        }
+                    }
+                } else {
+                    // We are spilling a finished batch
+                    let spilled_batch = batch_lock.0.remove(&batch_id).unwrap();
+                    let _batch_finished = false;
+                    for spilled_coord in spilled_batch.coords() {
+                        if let Some(spilled_chunk) = chunks.get(spilled_coord) {
+                            spilled_chunk.spill_back_to_solo();
+                            if batch_lock.1.occupancy() < TARGET_BATCH_OCCUPANCY {
+                                if let Some(data) = spilled_chunk.data_for_batch() {
+                                    batch_lock.1.append(*spilled_coord, data);
+                                    spilled_chunk.set_batch(batch_lock.1.id());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -470,7 +585,6 @@ impl ClientState {
     /// Returns the player's last position without requiring the physics lock (which could cause a lock order violation)
     /// This may be a frame behind
     pub(crate) fn weakly_ordered_last_position(&self) -> PlayerPositionUpdate {
-        let _lock = self.physics_state.lock();
         *self.last_position_weak.lock()
     }
 

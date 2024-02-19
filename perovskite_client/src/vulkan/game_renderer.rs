@@ -38,7 +38,7 @@ use winit::{
 };
 
 use crate::{
-    block_renderer::{VkChunkPass, VkChunkVertexData},
+    block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
@@ -134,9 +134,9 @@ impl ActiveGame {
 
         for translation in entity_translations {
             self.cube_draw_calls.push(CubeGeometryDrawCall {
-                models: VkChunkVertexData {
+                models: VkChunkVertexDataGpu {
                     solid_opaque: None,
-                    transparent: Some(VkChunkPass {
+                    transparent: Some(VkChunkPassGpu {
                         vtx: vtx.clone(),
                         idx: idx.clone(),
                     }),
@@ -151,9 +151,27 @@ impl ActiveGame {
             self.client_state.chunks.renderable_chunks_cloned_view()
         };
         plot!("total_chunks", chunk_lock.len() as f64);
+
+        let (batched_calls, batched_handled) = self
+            .client_state
+            .chunks
+            .make_batched_draw_calls(player_position);
+        if !self
+            .client_state
+            .input
+            .lock()
+            .is_pressed(crate::game_state::input::BoundAction::PhysicsDebug)
+        {
+            self.cube_draw_calls.extend(batched_calls);
+        }
+
         self.cube_draw_calls
             .extend(chunk_lock.iter().filter_map(|(coord, chunk)| {
-                chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)
+                if !batched_handled.contains(coord) {
+                    chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)
+                } else {
+                    None
+                }
             }));
         plot!(
             "chunk_rate",

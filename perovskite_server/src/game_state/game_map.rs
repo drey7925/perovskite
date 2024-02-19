@@ -773,12 +773,14 @@ fn shard_id(coord: ChunkCoordinate) -> usize {
 struct MapShard {
     chunks: FxHashMap<ChunkCoordinate, MapChunkHolder>,
     light_columns: FxHashMap<(i32, i32), ChunkColumn>,
+    entities: entities::EntityShard,
 }
 impl MapShard {
-    fn empty() -> MapShard {
+    fn new(shard: usize, db: Arc<dyn GameDatabase>) -> MapShard {
         MapShard {
             chunks: FxHashMap::default(),
             light_columns: FxHashMap::default(),
+            entities: entities::EntityShard::new(shard, db),
         }
     }
 }
@@ -830,8 +832,10 @@ impl ServerGameMap {
 
         let result = Arc::new(ServerGameMap {
             game_state: game_state.clone(),
-            database,
-            live_chunks: std::array::from_fn(|_| CachelineAligned(RwLock::new(MapShard::empty()))),
+            database: database.clone(),
+            live_chunks: std::array::from_fn(|shard| {
+                CachelineAligned(RwLock::new(MapShard::new(shard, database.clone())))
+            }),
             block_type_manager,
             block_update_sender,
             writeback_senders: writeback_senders.try_into().unwrap(),
@@ -2870,6 +2874,132 @@ impl ServerGameMap {
         timer.spawn_shards(self.game_state().clone(), shards)?;
         timer_controller.timers.insert(name, timer);
         Ok(())
+    }
+}
+
+/// This implementation is EXTREMELY unstable while it is under active development.
+/// Do not assume any functionality or performance guarantees while different techniques
+/// are under investigation.
+mod entities {
+    use std::sync::Arc;
+
+    use rustc_hash::FxHashMap;
+
+    use crate::database::database_engine::GameDatabase;
+
+    /// This entity is present and valid
+    const CONTROL_PRESENT: u8 = 1;
+    /// This entity should remain loaded even when it's in unloaded chunks
+    const CONTROL_STICKY: u8 = 2;
+    const ID_MASK: u64 = (1 << 48) - 1;
+
+    /// The core of entity data. For performance reasons, this is stored in struct-of-arrays
+    /// form, so that SIMD operations can be used to access it.
+    /// For now, these are just standard vectors, with further SIMD optimizations coming later.
+    /// The in-memory representation is subject to change and other code should not assume any particular
+    /// layout.
+    struct EntityCoreArray {
+        // The next index to insert into. It may either be an unused slot or at the end of the arrays
+        next_insert: usize,
+        // The physical len of the arrays. It is always a multiple of 16
+        len: usize,
+        next_id: u64,
+        // Lookup table from ID to index. This should only be used for scalar operations on a single entity (or a few)
+        id_lookup: FxHashMap<u64, usize>,
+
+        // Entity ID, unique, assigned by the server. Only 48 bits available to allow for possible
+        // packing later
+        id: Vec<u64>,
+        // Flags
+        control: Vec<u8>,
+        // Position
+        x: Vec<f64>,
+        y: Vec<f64>,
+        z: Vec<f64>,
+        // Velocity
+        xv: Vec<f32>,
+        yv: Vec<f32>,
+        zv: Vec<f32>,
+        // Acceleration
+        ax: Vec<f32>,
+        ay: Vec<f32>,
+        az: Vec<f32>,
+        // Face direction, given as a vector to avoid doing trig in the loop
+        facedir_x: Vec<f32>,
+        facedir_z: Vec<f32>,
+
+        move_time_remaining: Vec<f32>,
+    }
+    impl EntityCoreArray {
+        /// Checks some preconditions that we want to assume on the vectors to make
+        /// iteration faster.
+        fn check_preconditions(&self) {
+            // We assume that all vectors have the same length.
+            assert_eq!(self.id.len(), self.len);
+            assert_eq!(self.control.len(), self.len);
+            assert_eq!(self.x.len(), self.len);
+            assert_eq!(self.y.len(), self.len);
+            assert_eq!(self.z.len(), self.len);
+            assert_eq!(self.xv.len(), self.len);
+            assert_eq!(self.yv.len(), self.len);
+            assert_eq!(self.zv.len(), self.len);
+            assert_eq!(self.facedir_x.len(), self.len);
+            assert_eq!(self.facedir_z.len(), self.len);
+        }
+
+        fn apply_velocity_update(&mut self, delta_time: f32) {
+            self.check_preconditions();
+            // Building SIMD masks is expensive. I suspect that it's cheaper to just update everything, including
+            // entries whose control flag is not set, rather than branch
+            // Of course, this will require substantial benchmarking and tuning.
+            for i in 0..self.len {
+                let dt = self.move_time_remaining[i].min(delta_time);
+                self.move_time_remaining[i] -= dt;
+                self.x[i] += (self.xv[i] * dt + 0.5 * self.ax[i] * dt * dt) as f64;
+                self.y[i] += (self.yv[i] * dt + 0.5 * self.ay[i] * dt * dt) as f64;
+                self.z[i] += (self.zv[i] * dt + 0.5 * self.az[i] * dt * dt) as f64;
+                self.xv[i] += self.ax[i] * dt;
+                self.yv[i] += self.ay[i] * dt;
+                self.zv[i] += self.az[i] * dt;
+            }
+        }
+
+        fn new() -> EntityCoreArray {
+            EntityCoreArray {
+                next_insert: 0,
+                len: 0,
+                next_id: 0,
+                id_lookup: FxHashMap::default(),
+                id: vec![],
+                control: vec![],
+                x: vec![],
+                y: vec![],
+                z: vec![],
+                xv: vec![],
+                yv: vec![],
+                zv: vec![],
+                ax: vec![],
+                ay: vec![],
+                az: vec![],
+                facedir_x: vec![],
+                facedir_z: vec![],
+                move_time_remaining: vec![],
+            }
+        }
+    }
+
+    /// The entities stored in a shard of the game map.
+    pub(super) struct EntityShard {
+        db: Arc<dyn GameDatabase>,
+        // currently, all entities share a single core array. This may change in the future
+        core: EntityCoreArray,
+    }
+    impl EntityShard {
+        pub(super) fn new(shard: usize, db: Arc<dyn GameDatabase>) -> EntityShard {
+            tracing::warn!("FIXME: Need to load entities from DB for {shard}");
+            let core = EntityCoreArray::new();
+            EntityShard { db, core }
+        }
     }
 }
 

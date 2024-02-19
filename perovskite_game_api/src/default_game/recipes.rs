@@ -1,6 +1,5 @@
 use parking_lot::RwLock;
 use perovskite_server::game_state::items::{Item, ItemManager, ItemStack};
-use smallvec::SmallVec;
 
 use crate::maybe_export;
 

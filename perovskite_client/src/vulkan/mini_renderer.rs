@@ -22,7 +22,7 @@ use vulkano::{
 };
 
 use crate::{
-    block_renderer::{BlockRenderer, VkChunkPass, VkChunkVertexData},
+    block_renderer::{BlockRenderer, VkChunkPassGpu, VkChunkVertexDataGpu},
     game_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
 };
@@ -153,7 +153,7 @@ impl MiniBlockRenderer {
             },
             SubpassContents::Inline,
         )?;
-        let pass = VkChunkPass::from_buffers(vtx, idx, self.ctx.allocator())?;
+        let pass = VkChunkPassGpu::from_buffers(vtx, idx, self.ctx.allocator())?;
 
         if let Some(pass) = pass {
             self.cube_pipeline.bind(
@@ -163,7 +163,7 @@ impl MiniBlockRenderer {
                 BlockRenderPass::Transparent,
             )?;
             let draw_call = CubeGeometryDrawCall {
-                models: VkChunkVertexData {
+                models: VkChunkVertexDataGpu {
                     solid_opaque: None,
                     transparent: Some(pass),
                     translucent: None,

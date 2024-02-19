@@ -27,12 +27,14 @@ pub(crate) enum KeySpace {
     Plugin,
     /// Inventory storage (may eventually become transactional,
     /// but at the moment it's possible for an "atomic" change to be partially committed
-    /// with an unluckily-timed crash
+    /// with an unluckily-timed crash)
     Inventory,
     /// Player data (posiition, inventory, etc)
     Player,
     /// User metadata (login, etc)
     UserMeta,
+    /// Entities
+    Entity,
 }
 impl KeySpace {
     pub(crate) fn make_key(&self, key: &[u8]) -> Vec<u8> {
@@ -50,6 +52,7 @@ impl KeySpace {
             KeySpace::Inventory => b'i',
             KeySpace::UserMeta => b'u',
             KeySpace::Player => b'P',
+            KeySpace::Entity => b'e',
         }
     }
 }

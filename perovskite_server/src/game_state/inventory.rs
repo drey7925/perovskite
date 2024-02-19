@@ -34,7 +34,7 @@ use tokio::sync::broadcast;
 use tracing::trace;
 use tracy_client::span;
 
-use super::{blocks::ExtendedData, GameState};
+use super::GameState;
 
 /// Opaque unique identifier for an inventory.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]

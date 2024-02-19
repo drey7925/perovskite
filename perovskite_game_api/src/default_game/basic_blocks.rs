@@ -19,10 +19,7 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
         MatterType, PlantLikeAppearanceBuilder,
     },
-    default_game::{
-        basic_blocks::ores::{IRON_INGOT, IRON_PIECE},
-        item_groups,
-    },
+    default_game::{basic_blocks::ores::IRON_INGOT, item_groups},
     game_builder::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
     },

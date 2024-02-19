@@ -7,7 +7,6 @@ use vulkano::{
     command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents},
     image::SampleCount,
     render_pass::Subpass,
-    sampler::SamplerCreateInfo,
 };
 use winit::{event::WindowEvent, event_loop::EventLoopWindowTarget};
 

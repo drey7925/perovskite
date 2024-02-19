@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
 
-use super::mesh_worker::{propagate_neighbor_data, MeshWorker, NeighborPropagator};
+use super::mesh_worker::{propagate_neighbor_data, MeshBatcher, MeshWorker, NeighborPropagator};
 
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
@@ -56,6 +56,8 @@ pub(crate) async fn make_contexts(
         neighbor_propagator_handles.push(handle);
     }
 
+    let (batcher, batcher_handle) = MeshBatcher::new(client_state.clone());
+
     let inbound = InboundContext {
         outbound_tx: tx_send.clone(),
         inbound_rx: stream,
@@ -66,6 +68,8 @@ pub(crate) async fn make_contexts(
         mesh_worker_handles,
         neighbor_propagators: neighbor_propagators.clone(),
         neighbor_propagator_handles,
+        batcher,
+        batcher_handle,
         snappy_helper: SnappyDecodeHelper::new(),
         protocol_version,
         initial_state_notification,
@@ -292,6 +296,9 @@ pub(crate) struct InboundContext {
     neighbor_propagator_handles:
         futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
 
+    batcher: Arc<MeshBatcher>,
+    batcher_handle: tokio::task::JoinHandle<Result<()>>,
+
     snappy_helper: SnappyDecodeHelper,
     protocol_version: u32,
 
@@ -365,6 +372,19 @@ impl InboundContext {
                         }
                     }
                     return result.unwrap()?;
+                },
+                result = &mut self.batcher_handle => {
+                    match &result {
+                        Ok(Err(e)) => {
+                            log::error!("Mesh batcher crashed: {e:?}");
+                        },
+                        Ok(Ok(_)) => {
+                            log::info!("Mesh batcher exiting");
+                        },
+                        Err(e) => {
+                            log::error!("Error awaiting mesh batcher: {e:?}");
+                        }
+                    }
                 }
             };
         }
@@ -376,6 +396,7 @@ impl InboundContext {
         for worker in self.neighbor_propagators.iter() {
             worker.cancel();
         }
+        self.batcher.cancel();
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {

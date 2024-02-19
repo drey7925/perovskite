@@ -14,9 +14,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::{Deref, RangeInclusive};
+use std::ops::{Deref, DerefMut, RangeInclusive};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
-use cgmath::{vec4, ElementWise, Matrix4, Vector3, Vector4};
+use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
 use perovskite_core::lighting::Lightfield;
 use perovskite_core::protocol::game_rpc as rpc_proto;
@@ -26,9 +29,17 @@ use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 use anyhow::{ensure, Context, Result};
 
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tracy_client::span;
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::memory::allocator::{
+    AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryUsage,
+};
 
-use crate::block_renderer::{BlockRenderer, ClientBlockTypeManager, VkChunkVertexData};
-use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
+use crate::block_renderer::{
+    BlockRenderer, ClientBlockTypeManager, VkChunkPassCpu, VkChunkPassGpu, VkChunkVertexDataCpu,
+    VkChunkVertexDataGpu,
+};
+use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use prost::Message;
 
 pub(crate) trait ChunkDataView {
@@ -127,6 +138,13 @@ impl SnappyDecodeHelper {
         }
     }
 }
+pub(crate) const TARGET_BATCH_OCCUPANCY: usize = 32;
+
+struct ChunkMesh {
+    solo_cpu: Option<VkChunkVertexDataCpu>,
+    solo_gpu: Option<VkChunkVertexDataGpu>,
+    batch: Option<u64>,
+}
 
 /// State of a chunk on the client
 ///
@@ -145,7 +163,10 @@ impl SnappyDecodeHelper {
 pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
     chunk_data: RwLock<ChunkData>,
-    cached_vertex_data: Mutex<Option<VkChunkVertexData>>,
+    chunk_mesh: Mutex<ChunkMesh>,
+    last_meshed: Mutex<Instant>,
+    // Speedup hint only
+    has_solo_hint: AtomicBool,
 }
 impl ClientChunk {
     pub(crate) fn from_proto(
@@ -176,10 +197,20 @@ impl ClientChunk {
                     data_state: BlockIdState::NeedProcessing,
                     lightmap: Box::new([0; 18 * 18 * 18]),
                 }),
-                cached_vertex_data: Mutex::new(None),
+                chunk_mesh: Mutex::new(ChunkMesh {
+                    solo_cpu: None,
+                    solo_gpu: None,
+                    batch: None,
+                }),
+                last_meshed: Mutex::new(Instant::now()),
+                has_solo_hint: AtomicBool::new(false),
             },
             occlusion,
         ))
+    }
+
+    pub(crate) fn last_meshed(&self) -> Instant {
+        *self.last_meshed.lock()
     }
 
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<bool> {
@@ -199,11 +230,22 @@ impl ClientChunk {
                 Some(result)
             }
         };
+        *self.last_meshed.lock() = Instant::now();
         if let Some(vertex_data) = vertex_data {
-            *self.cached_vertex_data.lock() = Some(vertex_data);
+            *self.chunk_mesh.lock() = ChunkMesh {
+                solo_cpu: Some(vertex_data.clone()),
+                solo_gpu: Some(vertex_data.to_gpu(renderer.allocator())?),
+                batch: None,
+            };
+            self.has_solo_hint.store(true, Ordering::Relaxed);
             Ok(true)
         } else {
-            *self.cached_vertex_data.lock() = None;
+            *self.chunk_mesh.lock() = ChunkMesh {
+                solo_cpu: None,
+                solo_gpu: None,
+                batch: None,
+            };
+            self.has_solo_hint.store(false, Ordering::Relaxed);
             Ok(false)
         }
     }
@@ -219,6 +261,27 @@ impl ClientChunk {
             }
         }
         result
+    }
+
+    pub(crate) fn data_for_batch(&self) -> Option<VkChunkVertexDataCpu> {
+        let lock = self.chunk_mesh.lock();
+        if lock.batch.is_some() {
+            // Already in a batch
+            return None;
+        }
+        lock.solo_cpu.clone()
+    }
+
+    pub(crate) fn set_batch(&self, id: u64) {
+        self.has_solo_hint.store(false, Ordering::Relaxed);
+        *self.last_meshed.lock() = Instant::now();
+        self.chunk_mesh.lock().batch = Some(id);
+    }
+
+    pub(crate) fn spill_back_to_solo(&self) -> Option<u64> {
+        self.has_solo_hint.store(true, Ordering::Relaxed);
+        *self.last_meshed.lock() = Instant::now();
+        self.chunk_mesh.lock().batch.take()
     }
 
     pub(crate) fn update_from(
@@ -270,6 +333,7 @@ impl ClientChunk {
 
         Ok(old_id != new_id)
     }
+
     pub(crate) fn make_draw_call(
         &self,
         coord: ChunkCoordinate,
@@ -295,11 +359,10 @@ impl ClientChunk {
             .mul_element_wise(Vector3::new(1., -1., 1.));
         let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
         if Self::check_frustum(view_proj_matrix * translation) {
-            self.cached_vertex_data.lock().as_ref().and_then(|x| {
-                Some(CubeGeometryDrawCall {
-                    models: x.clone_if_nonempty()?,
-                    model_matrix: translation,
-                })
+            let lock = self.chunk_mesh.lock();
+            lock.solo_gpu.as_ref().map(|solo_gpu| CubeGeometryDrawCall {
+                models: solo_gpu.clone(),
+                model_matrix: translation,
             })
         } else {
             None
@@ -420,6 +483,216 @@ fn get_occlusion_for_proto(
         }
     }
     occlusion
+}
+
+static NEXT_MESH_BATCH_ID: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct MeshBatch {
+    id: u64,
+    solid_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
+    solid_idx: Option<Subbuffer<[u32]>>,
+    transparent_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
+    transparent_idx: Option<Subbuffer<[u32]>>,
+    translucent_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
+    translucent_idx: Option<Subbuffer<[u32]>>,
+
+    chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
+    base_position: Vector3<f64>,
+}
+impl MeshBatch {
+    pub(crate) fn coords(&self) -> &[ChunkCoordinate] {
+        &self.chunks
+    }
+    pub(crate) fn make_draw_call(&self, player_position: Vector3<f64>) -> CubeGeometryDrawCall {
+        let matrix = Matrix4::from_translation(
+            (self.base_position - player_position).mul_element_wise(vec3(1.0, -1.0, 1.0)),
+        );
+        CubeGeometryDrawCall {
+            models: VkChunkVertexDataGpu {
+                solid_opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
+                    Some(VkChunkPassGpu {
+                        vtx: self.solid_vtx.as_ref().unwrap().clone(),
+                        idx: self.solid_idx.as_ref().unwrap().clone(),
+                    })
+                } else {
+                    None
+                },
+
+                transparent: if self.transparent_vtx.is_some() && self.transparent_idx.is_some() {
+                    Some(VkChunkPassGpu {
+                        vtx: self.transparent_vtx.as_ref().unwrap().clone(),
+                        idx: self.transparent_idx.as_ref().unwrap().clone(),
+                    })
+                } else {
+                    None
+                },
+
+                translucent: if self.translucent_vtx.is_some() && self.translucent_idx.is_some() {
+                    Some(VkChunkPassGpu {
+                        vtx: self.translucent_vtx.as_ref().unwrap().clone(),
+                        idx: self.translucent_idx.as_ref().unwrap().clone(),
+                    })
+                } else {
+                    None
+                },
+            },
+            model_matrix: matrix.cast().unwrap(),
+        }
+    }
+}
+
+pub(crate) struct MeshBatchBuilder {
+    id: u64,
+    solid_vtx: Vec<CubeGeometryVertex>,
+    solid_idx: Vec<u32>,
+    transparent_vtx: Vec<CubeGeometryVertex>,
+    transparent_idx: Vec<u32>,
+    translucent_vtx: Vec<CubeGeometryVertex>,
+    translucent_idx: Vec<u32>,
+    base_position: Vector3<f64>,
+    chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
+}
+impl MeshBatchBuilder {
+    pub(crate) fn new() -> MeshBatchBuilder {
+        MeshBatchBuilder {
+            id: NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64,
+            // rough initial estimate, but should be good enough for now
+            solid_vtx: Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 4000),
+            solid_idx: Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 6000),
+            transparent_vtx: Vec::new(),
+            transparent_idx: Vec::new(),
+            translucent_vtx: Vec::new(),
+            translucent_idx: Vec::new(),
+            base_position: Vector3::zero(),
+            chunks: smallvec::SmallVec::new(),
+        }
+    }
+    pub(crate) fn occupancy(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub(crate) fn chunks(&self) -> &[ChunkCoordinate] {
+        &self.chunks
+    }
+
+    fn extend_buffer(
+        input: &VkChunkPassCpu,
+        vtx: &mut Vec<CubeGeometryVertex>,
+        idx: &mut Vec<u32>,
+        delta_offset: Vector3<f32>,
+    ) {
+        let base_index = vtx.len();
+        vtx.extend(input.vtx.iter().map(|v| CubeGeometryVertex {
+            position: [
+                v.position[0] + delta_offset.x,
+                v.position[1] - delta_offset.y,
+                v.position[2] + delta_offset.z,
+            ],
+            ..*v
+        }));
+        idx.extend(input.idx.iter().map(|idx| idx + base_index as u32));
+    }
+
+    pub(crate) fn append(&mut self, coord: ChunkCoordinate, cpu: VkChunkVertexDataCpu) {
+        let _span = span!("batch_append");
+        let chunk_pos = vec3(
+            coord.x as f64 * 16.0,
+            coord.y as f64 * 16.0,
+            coord.z as f64 * 16.0,
+        );
+        if self.base_position == Vector3::zero() {
+            self.base_position = chunk_pos;
+        }
+        if let Some(opaque) = cpu.solid_opaque.as_ref() {
+            Self::extend_buffer(
+                opaque,
+                &mut self.solid_vtx,
+                &mut self.solid_idx,
+                (chunk_pos - self.base_position).cast().unwrap(),
+            );
+        }
+        if let Some(transparent) = cpu.transparent.as_ref() {
+            Self::extend_buffer(
+                transparent,
+                &mut self.transparent_vtx,
+                &mut self.transparent_idx,
+                (chunk_pos - self.base_position).cast().unwrap(),
+            );
+        }
+        if let Some(translucent) = cpu.translucent.as_ref() {
+            Self::extend_buffer(
+                translucent,
+                &mut self.translucent_vtx,
+                &mut self.translucent_idx,
+                (chunk_pos - self.base_position).cast().unwrap(),
+            );
+        }
+        self.chunks.push(coord);
+    }
+
+    pub(crate) fn build(
+        self,
+        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+    ) -> Result<MeshBatch> {
+        fn build_vertex(
+            buf: Vec<CubeGeometryVertex>,
+            allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+        ) -> Result<Option<Subbuffer<[CubeGeometryVertex]>>> {
+            if buf.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(Buffer::from_iter(
+                    allocator,
+                    BufferCreateInfo {
+                        usage: BufferUsage::VERTEX_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        usage: MemoryUsage::Upload,
+                        ..Default::default()
+                    },
+                    buf.into_iter(),
+                )?))
+            }
+        }
+
+        fn build_index(
+            buf: Vec<u32>,
+            allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+        ) -> Result<Option<Subbuffer<[u32]>>> {
+            if buf.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(Buffer::from_iter(
+                    allocator,
+                    BufferCreateInfo {
+                        usage: BufferUsage::INDEX_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        usage: MemoryUsage::Upload,
+                        ..Default::default()
+                    },
+                    buf.into_iter(),
+                )?))
+            }
+        }
+        Ok(MeshBatch {
+            id: self.id,
+            solid_vtx: build_vertex(self.solid_vtx, allocator)?,
+            solid_idx: build_index(self.solid_idx, allocator)?,
+            transparent_vtx: build_vertex(self.transparent_vtx, allocator)?,
+            transparent_idx: build_index(self.transparent_idx, allocator)?,
+            translucent_vtx: build_vertex(self.translucent_vtx, allocator)?,
+            translucent_idx: build_index(self.translucent_idx, allocator)?,
+            base_position: self.base_position,
+            chunks: self.chunks.clone(),
+        })
+    }
 }
 
 pub(crate) trait ChunkOffsetExt {

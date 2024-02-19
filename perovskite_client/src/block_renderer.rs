@@ -484,20 +484,34 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
 ];
 
 #[derive(Clone)]
-pub(crate) struct VkChunkPass {
+pub(crate) struct VkChunkPassCpu {
+    pub(crate) vtx: Vec<CubeGeometryVertex>,
+    pub(crate) idx: Vec<u32>,
+}
+impl VkChunkPassCpu {
+    fn to_gpu(
+        self,
+        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+    ) -> Result<Option<VkChunkPassGpu>> {
+        VkChunkPassGpu::from_buffers(self.vtx, self.idx, allocator)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct VkChunkPassGpu {
     pub(crate) vtx: Subbuffer<[CubeGeometryVertex]>,
     pub(crate) idx: Subbuffer<[u32]>,
 }
-impl VkChunkPass {
+impl VkChunkPassGpu {
     pub(crate) fn from_buffers(
         vtx: Vec<CubeGeometryVertex>,
         idx: Vec<u32>,
         allocator: &StandardMemoryAllocator,
-    ) -> Result<Option<VkChunkPass>> {
+    ) -> Result<Option<VkChunkPassGpu>> {
         if vtx.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(VkChunkPass {
+            Ok(Some(VkChunkPassGpu {
                 vtx: Buffer::from_iter(
                     allocator,
                     BufferCreateInfo {
@@ -528,12 +542,12 @@ impl VkChunkPass {
 }
 
 #[derive(Clone)]
-pub(crate) struct VkChunkVertexData {
-    pub(crate) solid_opaque: Option<VkChunkPass>,
-    pub(crate) transparent: Option<VkChunkPass>,
-    pub(crate) translucent: Option<VkChunkPass>,
+pub(crate) struct VkChunkVertexDataGpu {
+    pub(crate) solid_opaque: Option<VkChunkPassGpu>,
+    pub(crate) transparent: Option<VkChunkPassGpu>,
+    pub(crate) translucent: Option<VkChunkPassGpu>,
 }
-impl VkChunkVertexData {
+impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
         if self.solid_opaque.is_some() || self.transparent.is_some() || self.translucent.is_some() {
             Some(self.clone())
@@ -542,12 +556,48 @@ impl VkChunkVertexData {
         }
     }
 
-    fn empty() -> VkChunkVertexData {
-        VkChunkVertexData {
+    pub(crate) fn empty() -> VkChunkVertexDataGpu {
+        VkChunkVertexDataGpu {
             solid_opaque: None,
             transparent: None,
             translucent: None,
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct VkChunkVertexDataCpu {
+    pub(crate) solid_opaque: Option<VkChunkPassCpu>,
+    pub(crate) transparent: Option<VkChunkPassCpu>,
+    pub(crate) translucent: Option<VkChunkPassCpu>,
+}
+impl VkChunkVertexDataCpu {
+    fn empty() -> VkChunkVertexDataCpu {
+        VkChunkVertexDataCpu {
+            solid_opaque: None,
+            transparent: None,
+            translucent: None,
+        }
+    }
+
+    pub(crate) fn to_gpu(
+        self,
+        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+    ) -> Result<VkChunkVertexDataGpu> {
+        Ok(VkChunkVertexDataGpu {
+            solid_opaque: match self.solid_opaque {
+                Some(x) => x.to_gpu(allocator)?,
+                None => None,
+            },
+            transparent: match self.transparent {
+                Some(x) => x.to_gpu(allocator)?,
+                None => None,
+            },
+            translucent: match self.translucent {
+                Some(x) => x.to_gpu(allocator)?,
+                None => None,
+            },
+        })
     }
 }
 
@@ -753,7 +803,10 @@ impl BlockRenderer {
         &self.allocator
     }
 
-    pub(crate) fn mesh_chunk(&self, chunk_data: &LockedChunkDataView) -> Result<VkChunkVertexData> {
+    pub(crate) fn mesh_chunk(
+        &self,
+        chunk_data: &LockedChunkDataView,
+    ) -> Result<VkChunkVertexDataCpu> {
         let _span = span!("meshing");
 
         {
@@ -773,17 +826,16 @@ impl BlockRenderer {
                 }
             }
             if all_solid {
-                //println!("discarding all_solid");
-                return Ok(VkChunkVertexData::empty());
+                return Ok(VkChunkVertexDataCpu::empty());
             }
         }
 
-        Ok(VkChunkVertexData {
+        Ok(VkChunkVertexDataCpu {
             solid_opaque: self.mesh_chunk_subpass(
                 chunk_data,
                 |id| self.block_types().is_solid_opaque(id),
                 |_block, neighbor| self.block_defs.is_solid_opaque(neighbor),
-            )?,
+            ),
             transparent: self.mesh_chunk_subpass(
                 chunk_data,
                 |block| self.block_defs.is_transparent_render(block),
@@ -791,7 +843,7 @@ impl BlockRenderer {
                     block.equals_ignore_variant(neighbor)
                         || self.block_defs.is_solid_opaque(neighbor)
                 },
-            )?,
+            ),
             translucent: self.mesh_chunk_subpass(
                 chunk_data,
                 |block| self.block_defs.is_translucent_render(block),
@@ -799,7 +851,7 @@ impl BlockRenderer {
                     block.equals_ignore_variant(neighbor)
                         || self.block_defs.is_solid_opaque(neighbor)
                 },
-            )?,
+            ),
         })
     }
 
@@ -811,7 +863,7 @@ impl BlockRenderer {
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
         // This only applies to cube blocks.
         suppress_face_when: G,
-    ) -> Result<Option<VkChunkPass>>
+    ) -> Option<VkChunkPassCpu>
     where
         F: Fn(BlockId) -> bool,
         G: Fn(BlockId, BlockId) -> bool,
@@ -841,7 +893,11 @@ impl BlockRenderer {
                 }
             }
         }
-        VkChunkPass::from_buffers(vtx, idx, self.allocator())
+        if vtx.is_empty() {
+            None
+        } else {
+            Some(VkChunkPassCpu { vtx, idx })
+        }
     }
 
     pub(crate) fn render_single_block<G>(
@@ -1153,9 +1209,9 @@ impl BlockRenderer {
             .mul_element_wise(Vector3::new(1., -1., 1.));
         Ok(CubeGeometryDrawCall {
             model_matrix: Matrix4::from_translation(offset.cast().unwrap()),
-            models: VkChunkVertexData {
+            models: VkChunkVertexDataGpu {
                 solid_opaque: None,
-                transparent: Some(VkChunkPass { vtx, idx }),
+                transparent: Some(VkChunkPassGpu { vtx, idx }),
                 translucent: None,
             },
         })

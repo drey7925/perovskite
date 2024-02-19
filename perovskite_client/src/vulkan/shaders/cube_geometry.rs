@@ -39,7 +39,7 @@ use vulkano::{
 };
 
 use crate::{
-    block_renderer::VkChunkVertexData,
+    block_renderer::VkChunkVertexDataGpu,
     vulkan::{
         shaders::{frag_lighting, vert_3d::ModelMatrix},
         CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
@@ -82,7 +82,7 @@ pub(crate) struct CubeGeometryVertex {
     pub(crate) wave_horizontal: f32,
 }
 pub(crate) struct CubeGeometryDrawCall {
-    pub(crate) models: VkChunkVertexData,
+    pub(crate) models: VkChunkVertexDataGpu,
     pub(crate) model_matrix: Matrix4<f32>,
 }
 
