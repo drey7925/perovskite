@@ -53,7 +53,7 @@ use crate::vulkan::shaders::{
 
 use super::{frag_lighting_sparse, SceneState};
 
-#[derive(BufferContents, Vertex, Copy, Clone, Debug)]
+#[derive(BufferContents, Vertex, Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub(crate) struct CubeGeometryVertex {
     /// Position, given relative to the origin of the chunk in world space.

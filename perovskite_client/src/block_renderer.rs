@@ -483,7 +483,7 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
     CubeFace::PlantXMinusZMinus,
 ];
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkPassCpu {
     pub(crate) vtx: Vec<CubeGeometryVertex>,
     pub(crate) idx: Vec<u32>,
@@ -565,7 +565,7 @@ impl VkChunkVertexDataGpu {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
     pub(crate) solid_opaque: Option<VkChunkPassCpu>,
     pub(crate) transparent: Option<VkChunkPassCpu>,

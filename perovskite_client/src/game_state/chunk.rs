@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::{Deref, DerefMut, RangeInclusive};
+use std::ops::{Deref, RangeInclusive};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -168,6 +168,14 @@ pub(crate) struct ClientChunk {
     // Speedup hint only
     has_solo_hint: AtomicBool,
 }
+
+#[derive(PartialEq, Eq)]
+pub(crate) enum MeshResult {
+    NewMesh(Option<u64>),
+    SameMesh,
+    EmptyMesh(Option<u64>),
+}
+
 impl ClientChunk {
     pub(crate) fn from_proto(
         proto: rpc_proto::MapChunk,
@@ -213,8 +221,9 @@ impl ClientChunk {
         *self.last_meshed.lock()
     }
 
-    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<bool> {
+    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<MeshResult> {
         let data = self.chunk_data();
+
         let vertex_data = match data.0.data_state {
             BlockIdState::NeedProcessing => Some(renderer.mesh_chunk(&data)?),
             BlockIdState::NoRender => None,
@@ -231,22 +240,28 @@ impl ClientChunk {
             }
         };
         *self.last_meshed.lock() = Instant::now();
+        let mut mesh_lock = self.chunk_mesh.lock();
+        let old_batch = mesh_lock.batch;
         if let Some(vertex_data) = vertex_data {
-            *self.chunk_mesh.lock() = ChunkMesh {
-                solo_cpu: Some(vertex_data.clone()),
-                solo_gpu: Some(vertex_data.to_gpu(renderer.allocator())?),
-                batch: None,
-            };
-            self.has_solo_hint.store(true, Ordering::Relaxed);
-            Ok(true)
+            if Some(&vertex_data) == mesh_lock.solo_cpu.as_ref() {
+                Ok(MeshResult::SameMesh)
+            } else {
+                *mesh_lock = ChunkMesh {
+                    solo_cpu: Some(vertex_data.clone()),
+                    solo_gpu: Some(vertex_data.to_gpu(renderer.allocator())?),
+                    batch: None,
+                };
+                self.has_solo_hint.store(true, Ordering::Relaxed);
+                Ok(MeshResult::NewMesh(old_batch))
+            }
         } else {
-            *self.chunk_mesh.lock() = ChunkMesh {
+            *mesh_lock = ChunkMesh {
                 solo_cpu: None,
                 solo_gpu: None,
                 batch: None,
             };
             self.has_solo_hint.store(false, Ordering::Relaxed);
-            Ok(false)
+            Ok(MeshResult::EmptyMesh(old_batch))
         }
     }
 
@@ -275,13 +290,22 @@ impl ClientChunk {
     pub(crate) fn set_batch(&self, id: u64) {
         self.has_solo_hint.store(false, Ordering::Relaxed);
         *self.last_meshed.lock() = Instant::now();
-        self.chunk_mesh.lock().batch = Some(id);
+        let mut lock = self.chunk_mesh.lock();
+        lock.batch = Some(id);
     }
 
-    pub(crate) fn spill_back_to_solo(&self) -> Option<u64> {
+    pub(crate) fn get_batch(&self) -> Option<u64> {
+        self.chunk_mesh.lock().batch
+    }
+
+    pub(crate) fn spill_back_to_solo(&self, expecting: u64) -> Option<u64> {
         self.has_solo_hint.store(true, Ordering::Relaxed);
         *self.last_meshed.lock() = Instant::now();
-        self.chunk_mesh.lock().batch.take()
+        let mut lock = self.chunk_mesh.lock();
+        if lock.batch.is_some_and(|b| b != expecting) {
+            panic!("Expected batch {:?}, got {:?}", expecting, lock.batch);
+        }
+        lock.batch.take()
     }
 
     pub(crate) fn update_from(

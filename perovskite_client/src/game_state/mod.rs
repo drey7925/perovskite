@@ -47,7 +47,8 @@ use crate::vulkan::shaders::SceneState;
 
 use self::chat::ChatState;
 use self::chunk::{
-    ChunkDataView, MeshBatch, MeshBatchBuilder, SnappyDecodeHelper, TARGET_BATCH_OCCUPANCY,
+    ChunkDataView, MeshBatch, MeshBatchBuilder, MeshResult, SnappyDecodeHelper,
+    TARGET_BATCH_OCCUPANCY,
 };
 use self::entities::EntityManager;
 use self::input::{BoundAction, InputState};
@@ -156,7 +157,10 @@ impl ChunkManager {
             self.chunks.write()
         };
         if let Some(chunk) = chunks_lock.get(coord) {
-            self.spill(chunk, &chunks_lock);
+            // todo this is racy
+            if let Some(batch) = chunk.get_batch() {
+                self.spill(&chunks_lock, batch, "remove");
+            }
         }
         let mut render_chunks_lock = {
             let _span = span!("Acquire global renderable chunk lock");
@@ -323,16 +327,30 @@ impl ChunkManager {
         // use of chunks is likewise scoped to the physics code)
         let src = self.chunks.read();
         if let Some(chunk) = src.get(&coord) {
-            self.spill(chunk, &src);
-            if chunk.mesh_with(renderer)? {
-                // We take the lock after mesh_with to keep the lock scope as short as possible
-                // and avoid blocking the render thread
-                let mut dst = self.renderable_chunks.write();
-                dst.insert(coord, chunk.clone());
-            } else {
-                // Likewise.
-                let mut dst = self.renderable_chunks.write();
-                dst.remove(&coord);
+            match chunk.mesh_with(renderer)? {
+                MeshResult::SameMesh => {
+                    // todo we shouldn't need to spill here, but if we do, we get artifacts with
+                    // double-rendered water. Why?
+                    // Is this a bug here, or does the spill here just mask a bug elsewhere?
+                    //self.spill(chunk, &src, "samemesh");
+                }
+                MeshResult::NewMesh(batch) => {
+                    // We take the lock after mesh_with to keep the lock scope as short as possible
+                    // and avoid blocking the render thread
+                    let mut dst = self.renderable_chunks.write();
+                    dst.insert(coord, chunk.clone());
+                    if let Some(batch) = batch {
+                        self.spill(&src, batch, "newmesh");
+                    }
+                }
+                MeshResult::EmptyMesh(batch) => {
+                    // Likewise.
+                    let mut dst = self.renderable_chunks.write();
+                    dst.remove(&coord);
+                    if let Some(batch) = batch {
+                        self.spill(&src, batch, "emptymesh");
+                    }
+                }
             }
             Ok(true)
         } else {
@@ -348,15 +366,20 @@ impl ChunkManager {
         let _span = span!("batch_round");
         let mut chunks = self.chunks.read();
         let mut keys = chunks.keys().cloned().collect::<Vec<_>>();
+        // Sort with closest items at the end
         keys.sort_unstable_by_key(|coord| {
             let world_coord = vec3(
                 coord.x as f64 * 16.0 + 8.0,
                 coord.y as f64 * 16.0 + 8.0,
                 coord.z as f64 * 16.0 + 8.0,
             );
-            (player_pos - world_coord).magnitude2() as i64
+            -1 * ((player_pos - world_coord).magnitude2() as i64)
         });
-        'outer: for (counter, coord) in keys.into_iter().enumerate() {
+        let mut counter = 0;
+        let mut needs_resort = true;
+
+        'outer: while let Some(coord) = keys.pop() {
+            counter += 1;
             let world_coord = vec3(
                 coord.x as f64 * 16.0 + 8.0,
                 coord.y as f64 * 16.0 + 8.0,
@@ -368,19 +391,47 @@ impl ChunkManager {
                     None => continue 'outer,
                 };
                 // Don't touch chunks that were meshed very recently
-                if chunk.last_meshed().elapsed() < Duration::from_secs(3) {
+                // 500 milliseconds is our target for a round of chunk loading, so we'll wait that long as a starting point
+                if chunk.last_meshed().elapsed() < Duration::from_millis(500) {
                     continue 'outer;
                 }
+
                 if let Some(chunk_data) = chunk.data_for_batch() {
-                    let mut batches = self.mesh_batches.lock();
-                    batches.1.append(coord, chunk_data);
-                    chunk.set_batch(batches.1.id());
-
-                    if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
-                        let builder = std::mem::replace(&mut batches.1, MeshBatchBuilder::new());
-                        batches.0.insert(builder.id(), builder.build(allocator)?);
+                    // We want to keep some locality so we'll work on the chunks closest to the one we just picked.
+                    if needs_resort {
+                        keys.sort_unstable_by_key(|next_coord| {
+                            let next_coord_f64 = vec3(
+                                next_coord.x as f64 * 16.0 + 8.0,
+                                next_coord.y as f64 * 16.0 + 8.0,
+                                next_coord.z as f64 * 16.0 + 8.0,
+                            );
+                            let current_coord_f64 = vec3(
+                                coord.x as f64 * 16.0 + 8.0,
+                                coord.y as f64 * 16.0 + 8.0,
+                                coord.z as f64 * 16.0 + 8.0,
+                            );
+                            -1 * ((next_coord_f64 - current_coord_f64).magnitude2() as i64)
+                        });
+                        needs_resort = false;
                     }
+                    {
+                        let _span = span!("batch_one_chunk");
+                        let mut batches = {
+                            let _span = span!("get batches lock");
+                            self.mesh_batches.lock()
+                        };
+                        batches.1.append(coord, chunk_data);
+                        chunk.set_batch(batches.1.id());
 
+                        if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
+                            let builder =
+                                std::mem::replace(&mut batches.1, MeshBatchBuilder::new());
+                            batches.0.insert(builder.id(), builder.build(allocator)?);
+                            // We're going to start a new batch. As soon as we put an item into it, we should
+                            // try to get some locality around it.
+                            needs_resort = true;
+                        }
+                    }
                     continue 'outer;
                 }
             }
@@ -397,47 +448,67 @@ impl ChunkManager {
     ) -> (Vec<CubeGeometryDrawCall>, FxHashSet<ChunkCoordinate>) {
         let mut calls = vec![];
         let mut handled = FxHashSet::default();
-        let mut chunks = self.chunks.read();
         let batches = self.mesh_batches.lock();
-        for batch in batches.0.values() {
+        for (_id, batch) in batches.0.iter() {
             calls.push(batch.make_draw_call(player_position));
             for coord in batch.coords() {
                 if !handled.insert(*coord) {
                     //log::warn!("Already handled chunk {:?}", coord);
                 }
+                // It's tempting to verify that chunk_batch == Some(*id) here, but that's not always true
+                // Due to the concurrency of the chunk manager, there is a race condition - we could have removed
+                // the batch assignment of this chunk but not yet gotten far enough through spilling. (note that we don't have the chunk lock,
+                // only the subordinate render-only chunk lock).
+                //
+                // This is also why we return a hashset - it's the only authoritative data on what chunks we *actually* rendered from batches. Since
+                // batches themselves are immutable, if we encounter a batch here, we know that we at least have a consistent view of it.
+                //
+                // The following snippet can be used for debugging to see the rate of this race condition.
+                //
+                // let (chunk_batch, reason) = chunks.get(coord).unwrap().get_batch_debug();
+                // if chunk_batch != Some(*id) {
+                //     println!(
+                //         "Chunk {:?} should be in batch {:?}, was in {:?}, reason {:?}",
+                //         coord, chunk_batch, id, reason
+                //     );
+                // }
             }
         }
         (calls, handled)
     }
 
-    fn spill(&self, chunk: &ClientChunk, chunks: &FxHashMap<ChunkCoordinate, Arc<ClientChunk>>) {
+    fn spill(
+        &self,
+        chunks: &FxHashMap<ChunkCoordinate, Arc<ClientChunk>>,
+        batch_id: u64,
+        reason: &str,
+    ) {
         {
             let _span = span!("batch_spill");
             // Possibly spill a mesh batch if necessary
             let mut batch_lock = self.mesh_batches.lock();
-            if let Some(batch_id) = chunk.spill_back_to_solo() {
-                if batch_lock.1.id() == batch_id {
-                    // We are spilling the current batch builder itself
-                    let mut builder = MeshBatchBuilder::new();
-                    std::mem::swap(&mut batch_lock.1, &mut builder);
-                    for spilled_coord in builder.chunks() {
-                        if let Some(spilled_chunk) = chunks.get(&spilled_coord) {
-                            spilled_chunk.spill_back_to_solo();
-                        }
+            if batch_lock.1.id() == batch_id {
+                // We are spilling the current batch builder itself
+                let mut builder = MeshBatchBuilder::new();
+                std::mem::swap(&mut batch_lock.1, &mut builder);
+                for spilled_coord in builder.chunks() {
+                    if let Some(spilled_chunk) = chunks.get(&spilled_coord) {
+                        spilled_chunk.spill_back_to_solo(batch_id);
                     }
-                } else {
-                    // We are spilling a finished batch
-                    let spilled_batch = batch_lock.0.remove(&batch_id).unwrap();
+                }
+            } else {
+                // We are spilling a finished batch. It's possible we may not find this batch, in case a different thread spilled it already.
+                if let Some(spilled_batch) = batch_lock.0.remove(&batch_id) {
                     let _batch_finished = false;
                     for spilled_coord in spilled_batch.coords() {
                         if let Some(spilled_chunk) = chunks.get(spilled_coord) {
-                            spilled_chunk.spill_back_to_solo();
-                            if batch_lock.1.occupancy() < TARGET_BATCH_OCCUPANCY {
-                                if let Some(data) = spilled_chunk.data_for_batch() {
-                                    batch_lock.1.append(*spilled_coord, data);
-                                    spilled_chunk.set_batch(batch_lock.1.id());
-                                }
-                            }
+                            spilled_chunk.spill_back_to_solo(batch_id);
+                            // if batch_lock.1.occupancy() < TARGET_BATCH_OCCUPANCY {
+                            //     if let Some(data) = spilled_chunk.data_for_batch() {
+                            //         batch_lock.1.append(*spilled_coord, data);
+                            //         spilled_chunk.set_batch(batch_lock.1.id());
+                            //     }
+                            // }
                         }
                     }
                 }
