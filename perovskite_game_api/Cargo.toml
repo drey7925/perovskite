@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_game_api"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - default game content + plugin API"
@@ -12,8 +12,8 @@ maintenance = { status = "experimental" }
 
 [dependencies]
 
-perovskite_server = { path = "../perovskite_server", version = "0.0.2" }
-perovskite_core = { path = "../perovskite_core", version = "0.0.2" }
+perovskite_server = { path = "../perovskite_server", version = "0.0.3" }
+perovskite_core = { path = "../perovskite_core", version = "0.0.3" }
 anyhow = "1.0.70"
 bitvec = "1.0.1"
 env_logger = "0.10.0"
