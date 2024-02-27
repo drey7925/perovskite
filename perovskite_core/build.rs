@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/players.proto",
                 "proto/render.proto",
                 "proto/ui.proto",
+                "proto/entities.proto",
             ],
             &["proto"],
         )?;

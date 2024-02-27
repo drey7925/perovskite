@@ -423,13 +423,6 @@ impl BlockTypeManager {
             fast_block_groups: FxHashMap::default(),
         }
     }
-
-    pub(crate) fn make_blockref(&self, id: BlockId) -> Result<BlockTypeHandle> {
-        if id.index() >= self.block_types.len() {
-            bail!(BlockError::IdNotFound(id.into()));
-        }
-        Ok(id)
-    }
     /// Given a handle, return the block.
     pub fn get_block(&self, handle: &BlockTypeHandle) -> Result<(&BlockType, u16)> {
         self.get_block_by_id(*handle)
