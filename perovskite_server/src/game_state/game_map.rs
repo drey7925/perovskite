@@ -40,6 +40,8 @@ use crate::{
     game_state::inventory::Inventory,
 };
 
+use self::entities::EntityShard;
+
 use super::blocks::BlockInteractionResult;
 use super::{
     blocks::{
@@ -773,14 +775,12 @@ fn shard_id(coord: ChunkCoordinate) -> usize {
 struct MapShard {
     chunks: FxHashMap<ChunkCoordinate, MapChunkHolder>,
     light_columns: FxHashMap<(i32, i32), ChunkColumn>,
-    entities: entities::EntityShard,
 }
 impl MapShard {
-    fn new(shard: usize, db: Arc<dyn GameDatabase>) -> MapShard {
+    fn new(shard: usize) -> MapShard {
         MapShard {
             chunks: FxHashMap::default(),
             light_columns: FxHashMap::default(),
-            entities: entities::EntityShard::new(shard, db),
         }
     }
 }
@@ -805,6 +805,10 @@ pub struct ServerGameMap {
     // Each one is 72 bytes, so we pad them out to a whole cacheline. This wastes a bit of space, unfortunately
     // However, it means that one shard's lock control word isn't aliasing with the data of other shards.
     live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_LOCK_SHARDS],
+    // For now, entity shards are kept outside the chunk shards and sharded by ID rather than coordinate.
+    // This avoids needing to "hand off" entities as they move around.
+    // This may be worth revisiting later.
+    entity_shards: [CachelineAligned<RwLock<EntityShard>>; NUM_LOCK_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
     writeback_senders: [mpsc::Sender<WritebackReq>; NUM_LOCK_SHARDS],
@@ -834,7 +838,10 @@ impl ServerGameMap {
             game_state: game_state.clone(),
             database: database.clone(),
             live_chunks: std::array::from_fn(|shard| {
-                CachelineAligned(RwLock::new(MapShard::new(shard, database.clone())))
+                CachelineAligned(RwLock::new(MapShard::new(shard)))
+            }),
+            entity_shards: std::array::from_fn(|shard| {
+                CachelineAligned(RwLock::new(EntityShard::new(shard, database.clone())))
             }),
             block_type_manager,
             block_update_sender,
@@ -919,9 +926,41 @@ impl ServerGameMap {
         };
 
         Ok((
-            self.block_type_manager().make_blockref(id.into())?,
+            id.into(),
             ext_data,
         ))
+    }
+
+    fn get_block_with_extended_data_no_load<F, T>(
+        &self,
+        coord: BlockCoordinate,
+        extended_data_callback: F,
+    ) -> Result<Option<(BlockTypeHandle, Option<T>)>>
+    where
+        F: FnOnce(&ExtendedData) -> Option<T>,
+    {
+        let chunk_guard = match self.try_get_chunk(coord.chunk()) {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let chunk = match chunk_guard.try_get_read()? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+
+        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
+        let ext_data = match chunk
+            .extended_data
+            .get(&coord.offset().as_index().try_into().unwrap())
+        {
+            Some(x) => extended_data_callback(x),
+            None => None,
+        };
+
+        Ok(Some((
+            BlockId(id),
+            ext_data,
+        )))
     }
 
     /// Gets a block + variant without its extended data. This will perform a data load if the chunk
@@ -931,8 +970,7 @@ impl ServerGameMap {
         let chunk = chunk_guard.wait_and_get_for_read()?;
 
         let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-
-        self.block_type_manager().make_blockref(id.into())
+        Ok(id.into())
     }
 
     /// Attempts to get a block without its extended data. Will not attempt to load blocks on cache misses
@@ -972,7 +1010,7 @@ impl ServerGameMap {
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        let old_block = self.block_type_manager().make_blockref(old_id.into())?;
+        let old_block = old_id.into();
         let old_data = match new_data {
             Some(new_data) => chunk
                 .extended_data
@@ -1064,7 +1102,7 @@ impl ServerGameMap {
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
-        let old_block = self.block_type_manager().make_blockref(old_id)?;
+        let old_block = old_id.into();
         if !predicate(
             old_block,
             chunk
@@ -1170,11 +1208,10 @@ impl ServerGameMap {
 
         let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
 
-        let old_id = chunk.block_ids[offset.as_index()]
+        let mut old_id = chunk.block_ids[offset.as_index()]
             .load(Ordering::Relaxed)
             .into();
-        let mut block_type = game_map.block_type_manager().make_blockref(old_id)?;
-        let closure_result = mutator(&mut block_type, &mut data_holder);
+        let closure_result = mutator(&mut old_id, &mut data_holder);
 
         let extended_data_dirty = data_holder.dirty();
         if let Some(new_data) = extended_data {
@@ -1183,7 +1220,7 @@ impl ServerGameMap {
                 .insert(offset.as_index().try_into().unwrap(), new_data);
         }
 
-        let new_id = block_type;
+        let new_id = old_id;
         if new_id != old_id {
             chunk.block_ids[offset.as_index()].store(new_id.into(), Ordering::Relaxed);
             chunk.dirty = true;
@@ -1201,7 +1238,7 @@ impl ServerGameMap {
         if new_id != old_id {
             game_map.broadcast_block_change(BlockUpdate {
                 location: chunk.coord.with_offset(offset),
-                new_value: block_type,
+                new_value: old_id,
             });
         }
 
@@ -2881,16 +2918,128 @@ impl ServerGameMap {
 /// Do not assume any functionality or performance guarantees while different techniques
 /// are under investigation.
 mod entities {
-    use std::sync::Arc;
+    use std::{ops::DerefMut, pin::Pin, sync::Arc, time::Duration};
 
+    use cgmath::{vec3, Vector3, Zero};
+    use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
     use rustc_hash::FxHashMap;
 
-    use crate::database::database_engine::GameDatabase;
+    use crate::{database::database_engine::GameDatabase, game_state::{blocks::{BlockTypeHandle, ExtendedData}, GameState}};
+
+    use super::ServerGameMap;
 
     /// This entity is present and valid
     const CONTROL_PRESENT: u8 = 1;
     /// This entity should remain loaded even when it's in unloaded chunks
     const CONTROL_STICKY: u8 = 2;
+
+    /// This entity has a coroutine controlling it.
+    const CONTROL_AUTONOMOUS: u8 = 4;
+    /// This entity should follow simple physics without needing a coroutine to drive it.
+    const CONTROL_SIMPLE_PHYSICS: u8 = 8;
+
+    /// This entity has no upcoming move and needs a move to be calculated
+    const CONTROL_AUTONOMOUS_NEEDS_CALC: u8 = 16;
+
+    // Note that if an entity has neither CONTROL_AUTONOMOUS nor CONTROL_SIMPLE_PHYSICS, it will
+    // only move when programatically requested to do so by a caller
+
+    enum EntityMove {
+        /// Once the current movement ends, start the specified movement.
+        /// This will give the smoothest animation.
+        QueueUpMovement(Movement),
+        /// Get rid of the current movement, set the position, start the new movement immediately, and queue up the following movement (if it's Some).
+        ResetMovement(Vector3<f64>, Movement, Option<Movement>),
+        /// Despawn the entity immediately
+        ImmediateDespawn,
+        /// Ask again later, in this many seconds
+        AskAgainLater(f32),
+    }
+
+    /// A single step in the path plan for an entity.
+    /// At the moment, the entity core array can only hold a single step at a time.
+    struct Movement {
+        velocity: Vector3<f32>,
+        acceleration: Vector3<f32>,
+        move_time: f32,
+    }
+    impl Movement {
+        /// Returns a movement that will stop and stay at the current position forever.
+        /// This movement takes a very long time, so the entity will not move, and will
+        /// not have its control coroutine called again.
+        fn stop_and_stay() -> Self {
+            Self {
+                velocity: Vector3::zero(),
+                acceleration: Vector3::zero(),
+                move_time: f32::MAX,
+            }
+        }
+    }
+
+    /// Services available to the entity coroutine.
+    ///
+    /// This is the ONLY way that coroutines should interact with the game state.
+    ///
+    /// It's technically possible for a coroutine to sneak an Arc<GameState> or similar into its own
+    /// state and try to use it - however **that will likely lead to deadlocks**.
+    struct EntityCoroutineServices<'a> {
+        map: &'a ServerGameMap,
+    }
+    impl<'a> EntityCoroutineServices<'a> {
+        /// Gets the block at the specified coordinate, or None if the chunk isn't loaded.
+        /// Forwards to the game map's try_get_block.
+        fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
+            self.map.try_get_block(coord)
+        }
+
+        /// Gets the block and its extended data at the specified coordinate.
+        /// Forwards to the game map's get_block_with_extended_data.
+        /// 
+        /// Warning: This is slow, and may be removed or modified in the future if
+        /// a better design is found.
+        /// In particular, this takes too many locks and can block indefinitely
+        /// in the face of contention against poorly written plugins.
+        /// 
+        /// On the other hand, try_get_block only contends against engine write locks
+        /// which are rarer and better behaved with bounded amounts of work.
+        /// 
+        /// Returns: 
+        ///   * Err if the chunk is in an error state (rare, usually due to database corruption or IO errors)
+        ///   * Ok(None) if the chunk isn't loaded
+        ///   * Otherwise Ok(Some((block, extended_data))) where extended_data is None if the callback returns None or if
+        /// the block doesn't have extended data
+        fn slow_get_block_with_extended_data<F, T>(
+            &self,
+            coord: BlockCoordinate,
+            extended_data_callback: F,
+        ) -> anyhow::Result<Option<(BlockTypeHandle, Option<T>)>>
+        where
+            F: FnOnce(&ExtendedData) -> Option<T> {
+                self.map.get_block_with_extended_data_no_load(coord, extended_data_callback)
+            }
+    }
+
+    /// Warning: This trait is not stable and may change in the future. If `coroutine_trait` is stabilized,
+    /// it may replace this trait. Regardless, it can still evolve quickly.
+    trait EntityCoroutine: Send + Sync + 'static {
+        /// Called when the entity's next move needs to be planned.
+        ///
+        /// Args:
+        ///   * current_position: The current position of the entity
+        ///   * whence: The position of the entity at the time when the current move finishes. The returned move will start from approximately that place.
+        ///   * when: The time (seconds from now) when the current move finishes. The returned move will start at that time.
+        ///
+        /// Returns:
+        ///     The next move for the entity
+        fn plan_move(
+            self: Pin<&mut Self>,
+            current_position: Vector3<f64>,
+            whence: Vector3<f64>,
+            when: f32,
+        ) -> Movement;
+        
+    }
+
     const ID_MASK: u64 = (1 << 48) - 1;
 
     /// The core of entity data. For performance reasons, this is stored in struct-of-arrays
@@ -2921,14 +3070,29 @@ mod entities {
         yv: Vec<f32>,
         zv: Vec<f32>,
         // Acceleration
-        ax: Vec<f32>,
-        ay: Vec<f32>,
-        az: Vec<f32>,
-        // Face direction, given as a vector to avoid doing trig in the loop
-        facedir_x: Vec<f32>,
-        facedir_z: Vec<f32>,
+        xa: Vec<f32>,
+        ya: Vec<f32>,
+        za: Vec<f32>,
+        // Face direction, radians
+        theta_y: Vec<f32>,
+        // The total time for the current move
+        move_time: Vec<f32>,
+        // The time remaining in the current move
+        move_time_elapsed: Vec<f32>,
+        recalc_in: Vec<f32>,
 
-        move_time_remaining: Vec<f32>,
+        // Buffer one additional move so we don't have to stop while waiting for it to be calculated
+        next_xv: Vec<f32>,
+        next_yv: Vec<f32>,
+        next_zv: Vec<f32>,
+        next_xa: Vec<f32>,
+        next_ya: Vec<f32>,
+        next_za: Vec<f32>,
+        next_theta_y: Vec<f32>,
+        next_move_time: Vec<f32>,
+
+        // TODO: Once thin_box is stabilized, we can use it here
+        coroutine: Vec<Option<Pin<Box<dyn EntityCoroutine>>>>,
     }
     impl EntityCoreArray {
         /// Checks some preconditions that we want to assume on the vectors to make
@@ -2943,24 +3107,97 @@ mod entities {
             assert_eq!(self.xv.len(), self.len);
             assert_eq!(self.yv.len(), self.len);
             assert_eq!(self.zv.len(), self.len);
-            assert_eq!(self.facedir_x.len(), self.len);
-            assert_eq!(self.facedir_z.len(), self.len);
+            assert_eq!(self.xa.len(), self.len);
+            assert_eq!(self.ya.len(), self.len);
+            assert_eq!(self.za.len(), self.len);
+            assert_eq!(self.theta_y.len(), self.len);
+            assert_eq!(self.move_time_elapsed.len(), self.len);
+            assert_eq!(self.recalc_in.len(), self.len);
+            assert_eq!(self.next_xv.len(), self.len);
+            assert_eq!(self.next_yv.len(), self.len);
+            assert_eq!(self.next_zv.len(), self.len);
+            assert_eq!(self.next_xa.len(), self.len);
+            assert_eq!(self.next_ya.len(), self.len);
+            assert_eq!(self.next_za.len(), self.len);
+            assert_eq!(self.next_theta_y.len(), self.len);
+            assert_eq!(self.next_move_time.len(), self.len);
         }
 
-        fn apply_velocity_update(&mut self, delta_time: f32) {
+        fn update_times(&mut self, delta_time: Duration) -> Duration {
             self.check_preconditions();
-            // Building SIMD masks is expensive. I suspect that it's cheaper to just update everything, including
-            // entries whose control flag is not set, rather than branch
-            // Of course, this will require substantial benchmarking and tuning.
+            let delta_time = delta_time.as_secs_f32();
+            assert!(delta_time >= 0.0);
+            let mut next_event = std::f32::MAX;
+
             for i in 0..self.len {
-                let dt = self.move_time_remaining[i].min(delta_time);
-                self.move_time_remaining[i] -= dt;
-                self.x[i] += (self.xv[i] * dt + 0.5 * self.ax[i] * dt * dt) as f64;
-                self.y[i] += (self.yv[i] * dt + 0.5 * self.ay[i] * dt * dt) as f64;
-                self.z[i] += (self.zv[i] * dt + 0.5 * self.az[i] * dt * dt) as f64;
-                self.xv[i] += self.ax[i] * dt;
-                self.yv[i] += self.ay[i] * dt;
-                self.zv[i] += self.az[i] * dt;
+                self.move_time_elapsed[i] += delta_time;
+                self.recalc_in[i] -= delta_time;
+                next_event = next_event
+                    .min((self.move_time[i] - self.move_time_elapsed[i]).max(0.0))
+                    .min(self.recalc_in[i]);
+
+                // if we finished a move
+                if self.move_time_elapsed[i] >= self.move_time[i] {
+                    // Then we're going to need a new move to be queued up soon
+                    self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    // Apply the effect of the current move we just finished
+                    self.x[i] = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
+                    self.y[i] = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
+                    self.z[i] = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
+                    // And move the next move into the current one
+                    self.xv[i] = self.next_xv[i];
+                    self.yv[i] = self.next_yv[i];
+                    self.zv[i] = self.next_zv[i];
+                    self.xa[i] = self.next_xa[i];
+                    self.ya[i] = self.next_ya[i];
+                    self.za[i] = self.next_za[i];
+                    self.theta_y[i] = self.next_theta_y[i];
+                    self.move_time[i] = self.next_move_time[i];
+                    self.move_time_elapsed[i] = 0.0;
+                    // And reset the next move to be a stop-and-stay
+                    self.next_xa[i] = 0.0;
+                    self.next_ya[i] = 0.0;
+                    self.next_za[i] = 0.0;
+                    self.next_xv[i] = 0.0;
+                    self.next_yv[i] = 0.0;
+                    self.next_zv[i] = 0.0;
+                    self.next_move_time[i] = f32::MAX;
+                }
+            }
+            Duration::from_secs_f32(next_event)
+        }
+
+        /// Run coroutines present on entities that need coroutine based recalcs.
+        ///
+        /// Args:
+        ///   * if_remaining_time_less: Only run coroutines if the remaining move time is less than this parameter.
+        ///     This allows a simple prioritization of coroutines that are in greater danger of running out of move time.
+        fn run_coroutines(&mut self, if_remaining_time_less: Duration) {
+            let if_time_less = if_remaining_time_less.as_secs_f32();
+            self.check_preconditions();
+            for i in 0..self.len {
+                if self.control[i] & CONTROL_AUTONOMOUS_NEEDS_CALC == 0 {
+                    continue;
+                }
+                if self.recalc_in[i] > 0.0 {
+                    continue;
+                }
+                let remaining_time = self.move_time[i] - self.move_time_elapsed[i];
+                if remaining_time > if_time_less {
+                    continue;
+                }
+                if let Some(coroutine) = self.coroutine[i].as_mut() {
+                    // do some kinematics
+                    let estimated_x = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
+                    let estimated_y = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
+                    let estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
+                    coroutine.as_mut().plan_move(
+                        vec3(self.x[i], self.y[i], self.z[i]),
+                        vec3(estimated_x, estimated_y, estimated_z),
+                        remaining_time,
+                    );
+                    self.coroutine[i] = None;
+                }
             }
         }
 
@@ -2978,16 +3215,30 @@ mod entities {
                 xv: vec![],
                 yv: vec![],
                 zv: vec![],
-                ax: vec![],
-                ay: vec![],
-                az: vec![],
-                facedir_x: vec![],
-                facedir_z: vec![],
-                move_time_remaining: vec![],
+                xa: vec![],
+                ya: vec![],
+                za: vec![],
+                theta_y: vec![],
+                move_time: vec![],
+                move_time_elapsed: vec![],
+                recalc_in: vec![],
+                next_xv: vec![],
+                next_yv: vec![],
+                next_zv: vec![],
+                next_xa: vec![],
+                next_ya: vec![],
+                next_za: vec![],
+                next_theta_y: vec![],
+                next_move_time: vec![],
+                coroutine: vec![],
             }
         }
     }
-
+    /// Project a coordinate into the future.
+    #[inline]
+    fn qproj(s: f64, v: f32, a: f32, t: f32) -> f64 {
+        s + (v * t + 0.5 * a * t * t) as f64
+    }
     /// The entities stored in a shard of the game map.
     pub(super) struct EntityShard {
         db: Arc<dyn GameDatabase>,
