@@ -63,7 +63,8 @@ use log::info;
 use log::warn;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use perovskite_core::protocol::coordinates::Angles;
+use perovskite_core::protocol::coordinates as coords_proto;
+use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::game_rpc as proto;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
@@ -867,7 +868,7 @@ fn make_client_state_update_message(
             Some(PlayerPosition {
                 position: Some(player_state.last_position.position.try_into()?),
                 velocity: Some(Vector3::zero().try_into()?),
-                face_direction: Some(Angles {
+                face_direction: Some(coords_proto::Angles {
                     deg_azimuth: 0.,
                     deg_elevation: 0.,
                 }),
@@ -1843,10 +1844,12 @@ impl EntityEventSender {
             let still_valid = entities.iter().map(DrivenEntity::id).collect();
             let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
             for entity_id in to_remove {
-                messages.push(proto::EntityMovement {
-                    entity_id: entity_id.client_id(),
-                    position: None,
-                    velocity: None,
+                messages.push(entities_proto::EntityUpdate {
+                    // hacky ID separation for now
+                    id: entity_id.client_id() | (1 << 47),
+                    current_move: None,
+                    current_move_time: 0.0,
+                    next_move: None,
                     remove: true,
                 });
                 self.observed_ids.remove(entity_id);
@@ -1862,10 +1865,22 @@ impl EntityEventSender {
                 {
                     self.observed_ids.insert(entity.id());
                     let (position, velocity) = entity.sample();
-                    messages.push(proto::EntityMovement {
-                        entity_id: entity.id().client_id(),
-                        position: Some(position.try_into()?),
-                        velocity: Some(velocity.try_into()?),
+                    messages.push(entities_proto::EntityUpdate {
+                        id: entity.id().client_id() | (1 << 47),
+
+                        current_move: Some(entities_proto::EntityMove {
+                            start_position: Some(position.try_into()?),
+                            velocity: Some(
+                                velocity.cast().context("Invalid velocity")?.try_into()?,
+                            ),
+                            // A quick way to test movement and the update rate of this tick
+                            //velocity: Some(cgmath::vec3(0.0, 1.0, 0.0).try_into()?),
+                            acceleration: Some(coords_proto::Vec3F::default()),
+                            total_time_seconds: f32::MAX,
+                            face_direction: 0.0,
+                        }),
+                        current_move_time: 0.0,
+                        next_move: None,
                         remove: false,
                     });
                 }
@@ -1877,7 +1892,7 @@ impl EntityEventSender {
             self.outbound_tx
                 .send(Ok(StreamToClient {
                     tick,
-                    server_message: Some(ServerMessage::EntityMovement(message)),
+                    server_message: Some(ServerMessage::EntityUpdate(message)),
                 }))
                 .await?;
         }

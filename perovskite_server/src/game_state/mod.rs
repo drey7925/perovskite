@@ -52,7 +52,7 @@ use crate::network_server::auth::AuthService;
 use self::blocks::BlockTypeManager;
 use self::chat::commands::CommandManager;
 use self::chat::ChatState;
-use self::entities::EntityManager;
+use self::entities::TestonlyEntityManager;
 use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
@@ -84,7 +84,7 @@ pub struct GameState {
     auth: AuthService,
     time_state: Mutex<TimeState>,
     player_state_resync: tokio::sync::watch::Sender<()>,
-    entities: EntityManager,
+    entities: TestonlyEntityManager,
     server_start_time: Instant,
     extensions: type_map::concurrent::TypeMap,
 }
@@ -123,7 +123,7 @@ impl GameState {
             auth: AuthService::create(db).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
             player_state_resync: tokio::sync::watch::channel(()).0,
-            entities: EntityManager::new(weak.clone()),
+            entities: TestonlyEntityManager::new(weak.clone()),
             server_start_time: Instant::now(),
             extensions,
         }))
@@ -227,7 +227,7 @@ impl GameState {
         &self.time_state
     }
 
-    pub(crate) fn entities(&self) -> &EntityManager {
+    pub(crate) fn entities(&self) -> &TestonlyEntityManager {
         &self.entities
     }
 
