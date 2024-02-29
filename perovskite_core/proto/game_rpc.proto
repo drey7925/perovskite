@@ -322,6 +322,9 @@ message StartAuth {
   //        * side-by-side UI elements
   //        * client shows fallback messages for unknown UI elements
   //        * Labels in inventories
+  // 4 - circa 2024-02-28
+  //        * MVP of entity kinematics.
+  //        * Entity appearance, definition, interactions *NOT* present in this version.
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }
