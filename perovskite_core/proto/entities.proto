@@ -27,17 +27,23 @@ message EntityMove {
     perovskite.protocol.coordinates.Vec3F velocity = 2;
     // The acceleration of the movement
     perovskite.protocol.coordinates.Vec3F acceleration = 3;
-    // The time elapsed since the start of the movement at the time it was sent by the server.
-    float elapsed_time_seconds = 4;
     // The total time scheduled for the movement.
-    float total_time_seconds = 5;
+    float total_time_seconds = 4;
     // The face direction (about the vertical Y axis) in radians
-    float face_direction = 6;
+    float face_direction = 5;
 
 }
 
-message EntityInstance {
+message EntityUpdate {
+    // The unique ID of the entity.
     uint64 id = 1;
+    // The current move that the entity is doing now
     EntityMove current_move = 2;
-    EntityMove next_move = 3;
+    // How long the entity has been moving in this current move (in seconds)
+    float current_move_time = 3;
+    // The next move that the entity will be doing
+    EntityMove next_move = 4;
+    // If true, the entity should stop being displayed. If so, ignore all other fields
+    bool remove = 5;
+    // todo later - appearance, including the ability to change the appearance on demand
 }
