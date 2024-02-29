@@ -22,6 +22,7 @@ import "coordinates.proto";
 import "blocks.proto";
 import "items.proto";
 import "ui.proto";
+import "entities.proto";
 
 service PerovskiteGame {
   // Represents a stream carrying game events.
@@ -145,8 +146,8 @@ message StreamToClient {
     perovskite.protocol.ui.PopupDescription show_popup = 87;
     // Client should display a chat message
     ChatMessage chat_message = 88;
-    // An entity moved. This part of the protocol is under development
-    EntityMovement entity_movement = 89;
+    // An entity changed in some way. This part of the protocol is under development
+    perovskite.protocol.entities.EntityUpdate entity_update = 89;
 
     // The server->client message sent as part of registration in the OPAQUE
     // protocol
@@ -336,17 +337,4 @@ message ChatMessage {
 
   // The actual text to display
   string message = 3;
-}
-
-message EntityMovement {
-  // The entity ID
-  uint64 entity_id = 1;
-  // The entity's position
-  perovskite.protocol.coordinates.Vec3D position = 2;
-  // The entity's velocity
-  perovskite.protocol.coordinates.Vec3D velocity = 3;
-  // Whether the entity should stop being displayed. If so, ignore all other fields
-  bool remove = 4;
-  // TODO appearance/texture/etc (only on first appearance)
-  // TODO network lag compensation?
 }

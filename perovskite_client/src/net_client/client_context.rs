@@ -7,8 +7,10 @@ use std::{
 
 use crate::{
     game_state::{
-        chunk::SnappyDecodeHelper, entities::GameEntity, items::ClientInventory, ClientState,
-        GameAction,
+        chunk::SnappyDecodeHelper,
+        entities::{self, GameEntity},
+        items::ClientInventory,
+        ClientState, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
@@ -19,6 +21,7 @@ use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
+    protocol::entities as entities_proto,
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
 
@@ -434,8 +437,8 @@ impl InboundContext {
             Some(rpc::stream_to_client::ServerMessage::ShutdownMessage(msg)) => {
                 *self.client_state.pending_error.lock() = Some(msg.clone());
             }
-            Some(rpc::stream_to_client::ServerMessage::EntityMovement(movement)) => {
-                self.handle_entity_movement(movement).await?;
+            Some(rpc::stream_to_client::ServerMessage::EntityUpdate(update)) => {
+                self.handle_entity_update(update).await?;
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);
@@ -657,48 +660,62 @@ impl InboundContext {
         self.client_state.handle_server_update(state_update)
     }
 
-    async fn handle_entity_movement(&mut self, movement: &rpc::EntityMovement) -> Result<()> {
-        if movement.remove {
+    async fn handle_entity_update(&mut self, update: &entities_proto::EntityUpdate) -> Result<()> {
+        if update.remove {
             if self
                 .client_state
                 .entities
                 .lock()
                 .entities
-                .remove(&movement.entity_id)
+                .remove(&update.id)
                 .is_none()
             {
-                self.send_bugcheck(format!(
-                    "Got remove for non-existent entity {}",
-                    movement.entity_id
-                ))
-                .await?;
+                self.send_bugcheck(format!("Got remove for non-existent entity {}", update.id))
+                    .await?;
             }
             return Ok(());
         }
 
-        let position = match &movement.position {
+        let current_move: entities::EntityMove = match &update.current_move {
             Some(position) => position.try_into()?,
             None => {
                 return self
                     .send_bugcheck(format!(
                         "Got move for entity {} with no position",
-                        movement.entity_id
+                        update.id
                     ))
                     .await
             }
         };
-        match self
-            .client_state
-            .entities
-            .lock()
-            .entities
-            .entry(movement.entity_id)
-        {
+        if !update.current_move_time.is_finite() {
+            return self
+                .send_bugcheck(format!(
+                    "Got move for entity {} with invalid current_move_time",
+                    update.id
+                ))
+                .await;
+        }
+
+        let next_move = update
+            .next_move
+            .as_ref()
+            .map(|x| x.try_into())
+            .transpose()?;
+
+        match self.client_state.entities.lock().entities.entry(update.id) {
             Entry::Occupied(mut entry) => {
-                entry.get_mut().position = position;
+                // TODO we need to correct for network delay here
+                entry
+                    .get_mut()
+                    .update(current_move, update.current_move_time, next_move);
             }
             Entry::Vacant(entry) => {
-                entry.insert(GameEntity { position });
+                entry.insert(GameEntity::new(
+                    update.id,
+                    current_move,
+                    update.current_move_time,
+                    next_move,
+                )?);
             }
         }
 

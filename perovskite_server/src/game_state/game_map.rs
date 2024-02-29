@@ -925,10 +925,7 @@ impl ServerGameMap {
             None => None,
         };
 
-        Ok((
-            id.into(),
-            ext_data,
-        ))
+        Ok((id.into(), ext_data))
     }
 
     fn get_block_with_extended_data_no_load<F, T>(
@@ -957,10 +954,7 @@ impl ServerGameMap {
             None => None,
         };
 
-        Ok(Some((
-            BlockId(id),
-            ext_data,
-        )))
+        Ok(Some((BlockId(id), ext_data)))
     }
 
     /// Gets a block + variant without its extended data. This will perform a data load if the chunk
@@ -2918,13 +2912,20 @@ impl ServerGameMap {
 /// Do not assume any functionality or performance guarantees while different techniques
 /// are under investigation.
 mod entities {
-    use std::{ops::DerefMut, pin::Pin, sync::Arc, time::Duration};
+    use std::{
+        pin::Pin,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use cgmath::{vec3, Vector3, Zero};
     use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
     use rustc_hash::FxHashMap;
 
-    use crate::{database::database_engine::GameDatabase, game_state::{blocks::{BlockTypeHandle, ExtendedData}, GameState}};
+    use crate::{
+        database::database_engine::GameDatabase,
+        game_state::blocks::{BlockTypeHandle, ExtendedData},
+    };
 
     use super::ServerGameMap;
 
@@ -2941,10 +2942,48 @@ mod entities {
     /// This entity has no upcoming move and needs a move to be calculated
     const CONTROL_AUTONOMOUS_NEEDS_CALC: u8 = 16;
 
+    /// This entity has a coroutine, but it's suspended while waiting for a completion from tokio
+    const CONTROL_SUSPENDED: u8 = 32;
+
+    struct Completion<T: Send + Sync + 'static> {
+        /// The entity ID we'll deliver the result to
+        entity_id: u64,
+        /// The index in the entity array. If we don't find the given ID there, we'll drop the completion.
+        index: usize,
+        /// The result we're delivering.
+        result: T,
+    }
+
+    // A deferred call to be invoked on a tokio executor
+    struct LockDeferredCall<T: Send + Sync + 'static> {
+        // TODO future scaffolding, not yet implemented
+        //
+        // Design notes: This represents the future that we want to invoke on a Tokio
+        // executor.
+        //
+        // An EntityCoroutineServices method requiring locks would *try* to get the lock it wants.
+        // If it can't get the lock immediately, it will return a _ScheduleMapLockRequest
+        // with a LockDeferredCall that the coroutine should return as-is. The deferred call should
+        // do the intended task in a blocking manner.
+        //
+        // Once this happens, the entity loop code should queue up a tokio task that will
+        // 1. call the deferred call, obtaining a result
+        // 2. prepare a completion, and send it over the mpsc sender (TODO decide whether a sender
+        // or a permit, as a matter of flow control)
+        //     The decision for permit vs sender is non-trivial. If it's a permit, then we get to
+        //     do flow control here in the entity system (but we may need to rerun the coroutine since
+        //     we'll have nowhere to put the deferred call in cases of backpressure)
+        //     If it's a sender, then backlogs will lead to tasks building up in tokio. We may need to
+        //     keep an eye on the number of outstanding tokio tasks and avoid invoking coroutines when
+        //     facing such a backlog. This can probably be itself deferred for a future version.
+        deferred_call: Box<dyn FnOnce() -> T>,
+        sender: Option<tokio::sync::mpsc::Sender<Completion<T>>>,
+    }
+
     // Note that if an entity has neither CONTROL_AUTONOMOUS nor CONTROL_SIMPLE_PHYSICS, it will
     // only move when programatically requested to do so by a caller
-
-    enum EntityMove {
+    #[non_exhaustive]
+    pub enum EntityMove {
         /// Once the current movement ends, start the specified movement.
         /// This will give the smoothest animation.
         QueueUpMovement(Movement),
@@ -2954,23 +2993,46 @@ mod entities {
         ImmediateDespawn,
         /// Ask again later, in this many seconds
         AskAgainLater(f32),
+        /// Stop moving, and stop calling the coroutine asking for more moves, until
+        /// manually re-enabled from non-coroutine code
+        StopCoroutineControl,
+    }
+
+    pub enum CoroutineResult {
+        /// The coroutine returned successfully
+        Successful(EntityMove),
+
+        #[allow(private_interfaces)]
+        #[doc(hidden)]
+        /// Schedule a future call to the coroutine at a later point in time when a map
+        /// chunk can be locked. This cannot be constructed by hand.
+        ///
+        /// At the moment, this schedules onto a tokio task pool as a blocking task.
+        _Deferred(LockDeferredCall<EntityMove>),
+    }
+    impl From<EntityMove> for CoroutineResult {
+        fn from(m: EntityMove) -> Self {
+            Self::Successful(m)
+        }
     }
 
     /// A single step in the path plan for an entity.
     /// At the moment, the entity core array can only hold a single step at a time.
-    struct Movement {
+    pub struct Movement {
         velocity: Vector3<f32>,
         acceleration: Vector3<f32>,
+        face_direction: f32,
         move_time: f32,
     }
     impl Movement {
         /// Returns a movement that will stop and stay at the current position forever.
         /// This movement takes a very long time, so the entity will not move, and will
         /// not have its control coroutine called again.
-        fn stop_and_stay() -> Self {
+        fn stop_and_stay(face_direction: f32) -> Self {
             Self {
                 velocity: Vector3::zero(),
                 acceleration: Vector3::zero(),
+                face_direction,
                 move_time: f32::MAX,
             }
         }
@@ -2994,16 +3056,16 @@ mod entities {
 
         /// Gets the block and its extended data at the specified coordinate.
         /// Forwards to the game map's get_block_with_extended_data.
-        /// 
-        /// Warning: This is slow, and may be removed or modified in the future if
-        /// a better design is found.
+        ///
+        /// Warning: THIS IS TEMPORARY. The deferred API should be used when ready
+        ///
         /// In particular, this takes too many locks and can block indefinitely
         /// in the face of contention against poorly written plugins.
-        /// 
+        ///
         /// On the other hand, try_get_block only contends against engine write locks
         /// which are rarer and better behaved with bounded amounts of work.
-        /// 
-        /// Returns: 
+        ///
+        /// Returns:
         ///   * Err if the chunk is in an error state (rare, usually due to database corruption or IO errors)
         ///   * Ok(None) if the chunk isn't loaded
         ///   * Otherwise Ok(Some((block, extended_data))) where extended_data is None if the callback returns None or if
@@ -3014,9 +3076,11 @@ mod entities {
             extended_data_callback: F,
         ) -> anyhow::Result<Option<(BlockTypeHandle, Option<T>)>>
         where
-            F: FnOnce(&ExtendedData) -> Option<T> {
-                self.map.get_block_with_extended_data_no_load(coord, extended_data_callback)
-            }
+            F: FnOnce(&ExtendedData) -> Option<T>,
+        {
+            self.map
+                .get_block_with_extended_data_no_load(coord, extended_data_callback)
+        }
     }
 
     /// Warning: This trait is not stable and may change in the future. If `coroutine_trait` is stabilized,
@@ -3036,8 +3100,7 @@ mod entities {
             current_position: Vector3<f64>,
             whence: Vector3<f64>,
             when: f32,
-        ) -> Movement;
-        
+        ) -> CoroutineResult;
     }
 
     const ID_MASK: u64 = (1 << 48) - 1;
@@ -3053,6 +3116,9 @@ mod entities {
         // The physical len of the arrays. It is always a multiple of 16
         len: usize,
         next_id: u64,
+
+        base_time: Instant,
+
         // Lookup table from ID to index. This should only be used for scalar operations on a single entity (or a few)
         id_lookup: FxHashMap<u64, usize>,
 
@@ -3061,6 +3127,9 @@ mod entities {
         id: Vec<u64>,
         // Flags
         control: Vec<u8>,
+        // Tracks the last modification that actually conveys new information (e.g. to a client)
+        // Simply exhausting a move and starting the next queued move does not count.
+        last_nontrivial_modification: Vec<u64>,
         // Position
         x: Vec<f64>,
         y: Vec<f64>,
@@ -3101,6 +3170,7 @@ mod entities {
             // We assume that all vectors have the same length.
             assert_eq!(self.id.len(), self.len);
             assert_eq!(self.control.len(), self.len);
+            assert_eq!(self.last_nontrivial_modification.len(), self.len);
             assert_eq!(self.x.len(), self.len);
             assert_eq!(self.y.len(), self.len);
             assert_eq!(self.z.len(), self.len);
@@ -3139,7 +3209,9 @@ mod entities {
                 // if we finished a move
                 if self.move_time_elapsed[i] >= self.move_time[i] {
                     // Then we're going to need a new move to be queued up soon
-                    self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    if self.control[i] & CONTROL_AUTONOMOUS != 0 {
+                        self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    }
                     // Apply the effect of the current move we just finished
                     self.x[i] = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
                     self.y[i] = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
@@ -3172,11 +3244,16 @@ mod entities {
         /// Args:
         ///   * if_remaining_time_less: Only run coroutines if the remaining move time is less than this parameter.
         ///     This allows a simple prioritization of coroutines that are in greater danger of running out of move time.
+        ///
+        /// TODO: more and better scheduling/prioritization algorithms
         fn run_coroutines(&mut self, if_remaining_time_less: Duration) {
             let if_time_less = if_remaining_time_less.as_secs_f32();
             self.check_preconditions();
             for i in 0..self.len {
-                if self.control[i] & CONTROL_AUTONOMOUS_NEEDS_CALC == 0 {
+                if self.control[i]
+                    & (CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS | CONTROL_PRESENT)
+                    != (CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS | CONTROL_PRESENT)
+                {
                     continue;
                 }
                 if self.recalc_in[i] > 0.0 {
@@ -3191,12 +3268,67 @@ mod entities {
                     let estimated_x = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
                     let estimated_y = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
                     let estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
-                    coroutine.as_mut().plan_move(
+                    match coroutine.as_mut().plan_move(
                         vec3(self.x[i], self.y[i], self.z[i]),
                         vec3(estimated_x, estimated_y, estimated_z),
                         remaining_time,
-                    );
-                    self.coroutine[i] = None;
+                    ) {
+                        CoroutineResult::Successful(EntityMove::QueueUpMovement(movement)) => {
+                            self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                            self.next_xv[i] = movement.velocity.x;
+                            self.next_yv[i] = movement.velocity.y;
+                            self.next_zv[i] = movement.velocity.z;
+                            self.next_xa[i] = movement.acceleration.x;
+                            self.next_ya[i] = movement.acceleration.y;
+                            self.next_za[i] = movement.acceleration.z;
+                            self.next_theta_y[i] = movement.face_direction;
+                            self.next_move_time[i] = movement.move_time;
+                            self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                        }
+                        CoroutineResult::Successful(EntityMove::AskAgainLater(delay)) => {
+                            self.recalc_in[i] = delay;
+                        }
+                        CoroutineResult::Successful(EntityMove::ImmediateDespawn) => {
+                            self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                            // todo notify watchers that the entity is despawning
+                            log::warn!(
+                                "Entity {} is being despawned; notification not yet implemented",
+                                self.id[i]
+                            );
+                            self.control[i] = 0;
+                        }
+                        CoroutineResult::Successful(EntityMove::ResetMovement(pos, m1, m2)) => {
+                            self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                            self.x[i] = pos.x;
+                            self.y[i] = pos.y;
+                            self.z[i] = pos.z;
+                            self.xv[i] = m1.velocity.x;
+                            self.yv[i] = m1.velocity.y;
+                            self.zv[i] = m1.velocity.z;
+                            self.xa[i] = m1.acceleration.x;
+                            self.ya[i] = m1.acceleration.y;
+                            self.za[i] = m1.acceleration.z;
+                            self.theta_y[i] = m1.face_direction;
+                            self.move_time[i] = m1.move_time;
+                            self.move_time_elapsed[i] = 0.0;
+                            self.recalc_in[i] = 0.0;
+                            if let Some(m2) = m2 {
+                                self.next_xv[i] = m2.velocity.x;
+                                self.next_yv[i] = m2.velocity.y;
+                                self.next_zv[i] = m2.velocity.z;
+                                self.next_xa[i] = m2.acceleration.x;
+                                self.next_ya[i] = m2.acceleration.y;
+                                self.next_za[i] = m2.acceleration.z;
+                                self.next_theta_y[i] = m2.face_direction;
+                                self.next_move_time[i] = m2.move_time;
+                            }
+                        }
+                        CoroutineResult::Successful(EntityMove::StopCoroutineControl) => {
+                            self.control[i] &=
+                                !(CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS);
+                        }
+                        CoroutineResult::_Deferred(_) => todo!(),
+                    }
                 }
             }
         }
@@ -3209,6 +3341,7 @@ mod entities {
                 id_lookup: FxHashMap::default(),
                 id: vec![],
                 control: vec![],
+                last_nontrivial_modification: vec![],
                 x: vec![],
                 y: vec![],
                 z: vec![],
@@ -3231,7 +3364,20 @@ mod entities {
                 next_theta_y: vec![],
                 next_move_time: vec![],
                 coroutine: vec![],
+                base_time: Instant::now(),
             }
+        }
+
+        fn to_offset(&self, when: Instant) -> u64 {
+            let offset = when
+                .duration_since(self.base_time)
+                .as_nanos()
+                .try_into()
+                .unwrap();
+            if offset & (1 << 63) != 0 {
+                tracing::warn!("Offset {offset} from {:?} is halfway to overflowing a u64 nanos counter. Either you've managed a very impressive uptime, or something's gone wrong.", self.base_time);
+            }
+            offset
         }
     }
     /// Project a coordinate into the future.

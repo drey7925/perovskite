@@ -80,10 +80,16 @@ struct EntityManagerInner {
     driven_entities: Vec<DrivenEntity>,
 }
 
-pub(crate) struct EntityManager {
+// Will be replaced by the optimized implementation in game_map.
+// For now, this holds the entities for players.
+// My plan is to implement real entities using the optimized implementation,
+// and then move player entity handling into there later.
+// For now, we set the 1<<47 bit in the ID for entities coming from this slow
+// implementation.
+pub(crate) struct TestonlyEntityManager {
     inner: RwLock<EntityManagerInner>,
 }
-impl EntityManager {
+impl TestonlyEntityManager {
     pub(crate) fn new(game_state: Weak<GameState>) -> Self {
         Self {
             inner: RwLock::new(EntityManagerInner {
