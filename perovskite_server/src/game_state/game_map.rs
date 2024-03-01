@@ -40,7 +40,7 @@ use crate::{
     game_state::inventory::Inventory,
 };
 
-use self::entities::EntityShard;
+use self::entities::{EntityShard, EntityShardWorker};
 
 use super::blocks::BlockInteractionResult;
 use super::{
@@ -767,9 +767,11 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
     }
 }
 
-const NUM_LOCK_SHARDS: usize = 16;
+const NUM_CHUNK_SHARDS: usize = 16;
+// todo scale up
+const NUM_ENTITY_SHARDS: usize = 1;
 fn shard_id(coord: ChunkCoordinate) -> usize {
-    (coord.coarse_hash_no_y() % NUM_LOCK_SHARDS as u64) as usize
+    (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
 }
 
 struct MapShard {
@@ -804,18 +806,20 @@ pub struct ServerGameMap {
     // sharded 16 ways based on the coarse hash of the chunk
     // Each one is 72 bytes, so we pad them out to a whole cacheline. This wastes a bit of space, unfortunately
     // However, it means that one shard's lock control word isn't aliasing with the data of other shards.
-    live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_LOCK_SHARDS],
+    live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_CHUNK_SHARDS],
     // For now, entity shards are kept outside the chunk shards and sharded by ID rather than coordinate.
     // This avoids needing to "hand off" entities as they move around.
     // This may be worth revisiting later.
-    entity_shards: [CachelineAligned<RwLock<EntityShard>>; NUM_LOCK_SHARDS],
+    // TODO: Multiple shards.
+    entity_shards: [CachelineAligned<EntityShard>; NUM_ENTITY_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
-    writeback_senders: [mpsc::Sender<WritebackReq>; NUM_LOCK_SHARDS],
+    writeback_senders: [mpsc::Sender<WritebackReq>; NUM_CHUNK_SHARDS],
     shutdown: CancellationToken,
-    writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_LOCK_SHARDS],
-    cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_LOCK_SHARDS],
+    writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
+    cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
     timer_controller: Mutex<Option<TimerController>>,
+    entity_workers: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_ENTITY_SHARDS],
 }
 impl ServerGameMap {
     pub(crate) fn new(
@@ -826,7 +830,7 @@ impl ServerGameMap {
         let (block_update_sender, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
         let mut writeback_senders = vec![];
         let mut writeback_receivers = vec![];
-        for _ in 0..NUM_LOCK_SHARDS {
+        for _ in 0..NUM_CHUNK_SHARDS {
             let (sender, receiver) = mpsc::channel(WRITEBACK_QUEUE_SIZE);
             writeback_senders.push(sender);
             writeback_receivers.push(receiver);
@@ -841,7 +845,7 @@ impl ServerGameMap {
                 CachelineAligned(RwLock::new(MapShard::new(shard)))
             }),
             entity_shards: std::array::from_fn(|shard| {
-                CachelineAligned(RwLock::new(EntityShard::new(shard, database.clone())))
+                CachelineAligned(EntityShard::new(shard, database.clone()))
             }),
             block_type_manager,
             block_update_sender,
@@ -850,6 +854,7 @@ impl ServerGameMap {
             writeback_handles: std::array::from_fn(|_| Mutex::new(None)),
             cleanup_handles: std::array::from_fn(|_| Mutex::new(None)),
             timer_controller: None.into(),
+            entity_workers: std::array::from_fn(|_| Mutex::new(None)),
         });
         for (i, receiver) in writeback_receivers.into_iter().enumerate() {
             let mut writeback = GameMapWriteback {
@@ -873,6 +878,15 @@ impl ServerGameMap {
                 cache_cleanup.run_loop().await
             })?;
             *result.cleanup_handles[i].lock() = Some(cleanup_handle);
+        }
+
+        for i in 0..NUM_ENTITY_SHARDS {
+            let mut entity_worker = EntityShardWorker::new(result.clone(), i, cancellation.clone());
+            let entity_worker_handle =
+                crate::spawn_async(&format!("entity_worker_{}", i), async move {
+                    entity_worker.run_loop().await
+                })?;
+            *result.entity_workers[i].lock() = Some(entity_worker_handle);
         }
 
         let timer_controller = TimerController {
@@ -1088,7 +1102,7 @@ impl ServerGameMap {
     where
         F: FnOnce(BlockTypeHandle, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
     {
-        let block = block
+        let new_id = block
             .as_handle(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
@@ -1115,8 +1129,6 @@ impl ServerGameMap {
                 .extended_data
                 .remove(&coord.offset().as_index().try_into().unwrap()),
         };
-
-        let new_id = block;
         chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
         if old_id != new_id || old_data.is_some() || new_data_was_some {
             chunk.dirty = true;
@@ -1135,11 +1147,11 @@ impl ServerGameMap {
         drop(chunk);
         chunk_guard
             .block_bloom_filter
-            .insert(block.base_id() as u64);
+            .insert(new_id.base_id() as u64);
         self.enqueue_writeback(chunk_guard)?;
         self.broadcast_block_change(BlockUpdate {
             location: coord,
-            new_value: block,
+            new_value: new_id,
         });
         Ok((CasOutcome::Match, old_block, old_data))
     }
@@ -1202,10 +1214,11 @@ impl ServerGameMap {
 
         let mut data_holder = ExtendedDataHolder::new(&mut extended_data);
 
-        let mut old_id = chunk.block_ids[offset.as_index()]
+        let old_id = chunk.block_ids[offset.as_index()]
             .load(Ordering::Relaxed)
             .into();
-        let closure_result = mutator(&mut old_id, &mut data_holder);
+        let mut new_id = old_id;
+        let closure_result = mutator(&mut new_id, &mut data_holder);
 
         let extended_data_dirty = data_holder.dirty();
         if let Some(new_data) = extended_data {
@@ -1214,7 +1227,6 @@ impl ServerGameMap {
                 .insert(offset.as_index().try_into().unwrap(), new_data);
         }
 
-        let new_id = old_id;
         if new_id != old_id {
             chunk.block_ids[offset.as_index()].store(new_id.into(), Ordering::Relaxed);
             chunk.dirty = true;
@@ -1232,7 +1244,7 @@ impl ServerGameMap {
         if new_id != old_id {
             game_map.broadcast_block_change(BlockUpdate {
                 location: chunk.coord.with_offset(offset),
-                new_value: old_id,
+                new_value: new_id,
             });
         }
 
@@ -1597,7 +1609,14 @@ impl ServerGameMap {
     }
 
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        for i in 0..NUM_LOCK_SHARDS {
+        // Shut down entities first, in case they modify the map
+        // We'll flush it anyway, but this is a best practice regardless
+        for i in 0..NUM_ENTITY_SHARDS {
+            let entity_handle = self.entity_workers[i].lock().take();
+            entity_handle.unwrap().await??;
+        }
+
+        for i in 0..NUM_CHUNK_SHARDS {
             let writeback_handle = self.writeback_handles[i].lock().take();
             writeback_handle.unwrap().await??;
 
@@ -1610,7 +1629,7 @@ impl ServerGameMap {
     }
 
     pub(crate) fn flush(&self) {
-        for shard in 0..NUM_LOCK_SHARDS {
+        for shard in 0..NUM_CHUNK_SHARDS {
             let mut lock = self.live_chunks[shard].write();
             let coords: Vec<_> = lock.chunks.keys().copied().collect();
             log::info!(
@@ -2080,13 +2099,13 @@ impl GameMapTimer {
         let mut tasks = self.tasks.blocking_lock();
         // Hacky: Delay 0.1 seconds to allow shards to start up
         let first_run = Instant::now() + Duration::from_millis(100);
-        for coarse_shard in 0..NUM_LOCK_SHARDS {
+        for coarse_shard in 0..NUM_CHUNK_SHARDS {
             for fine_shard in 0..fine_shards_per_coarse {
                 let start_time = first_run
                     + (self.settings.interval.mul_f64(
                         self.settings.spreading
                             * (fine_shard + fine_shards_per_coarse * coarse_shard) as f64
-                            / (fine_shards_per_coarse * NUM_LOCK_SHARDS) as f64,
+                            / (fine_shards_per_coarse * NUM_CHUNK_SHARDS) as f64,
                     ));
                 {
                     let cloned_self = self.clone();
@@ -2894,7 +2913,7 @@ impl ServerGameMap {
     ) -> Result<()> {
         let mut guard = self.timer_controller.lock();
         let timer_controller = guard.as_mut().unwrap();
-        let shards = (settings.shards - 1) / NUM_LOCK_SHARDS + 1;
+        let shards = (settings.shards - 1) / NUM_CHUNK_SHARDS + 1;
         let timer = Arc::new(GameMapTimer {
             name: name.clone(),
             callback,
@@ -2918,9 +2937,13 @@ mod entities {
         time::{Duration, Instant},
     };
 
+    use anyhow::Result;
     use cgmath::{vec3, Vector3, Zero};
+    use parking_lot::RwLock;
     use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
     use rustc_hash::FxHashMap;
+    use tokio_util::sync::CancellationToken;
+    use tracy_client::span;
 
     use crate::{
         database::database_engine::GameDatabase,
@@ -3194,6 +3217,11 @@ mod entities {
         }
 
         fn update_times(&mut self, delta_time: Duration) -> Duration {
+            let _span = span!("entity_update_times");
+
+            // TODO remove this later
+            tracing::info!("Updating times for {} entities", self.len);
+
             self.check_preconditions();
             let delta_time = delta_time.as_secs_f32();
             assert!(delta_time >= 0.0);
@@ -3204,7 +3232,7 @@ mod entities {
                 self.recalc_in[i] -= delta_time;
                 next_event = next_event
                     .min((self.move_time[i] - self.move_time_elapsed[i]).max(0.0))
-                    .min(self.recalc_in[i]);
+                    .min(self.recalc_in[i].max(0.0));
 
                 // if we finished a move
                 if self.move_time_elapsed[i] >= self.move_time[i] {
@@ -3236,7 +3264,17 @@ mod entities {
                     self.next_move_time[i] = f32::MAX;
                 }
             }
-            Duration::from_secs_f32(next_event)
+            // Duration is unhappy with f32::MAX. Let's clamp it to a reasonable time to wait
+            // for the next event.
+            const MAX_WAIT_TIME: f32 = 10.0;
+
+            // TODO remove this logspam
+            let next_event = Duration::from_secs_f32(next_event.min(MAX_WAIT_TIME));
+            tracing::info!(
+                "Finished entity time update, next event in {:?}",
+                next_event
+            );
+            next_event
         }
 
         /// Run coroutines present on entities that need coroutine based recalcs.
@@ -3246,8 +3284,12 @@ mod entities {
         ///     This allows a simple prioritization of coroutines that are in greater danger of running out of move time.
         ///
         /// TODO: more and better scheduling/prioritization algorithms
-        fn run_coroutines(&mut self, if_remaining_time_less: Duration) {
-            let if_time_less = if_remaining_time_less.as_secs_f32();
+        fn run_coroutines(&mut self, if_remaining_time_less: f32) {
+            let _span = span!("entity_run_coroutines");
+            // TODO remove this logspam
+            tracing::info!("Running coroutines for {} entities", self.len);
+            let start = Instant::now();
+
             self.check_preconditions();
             for i in 0..self.len {
                 if self.control[i]
@@ -3260,7 +3302,7 @@ mod entities {
                     continue;
                 }
                 let remaining_time = self.move_time[i] - self.move_time_elapsed[i];
-                if remaining_time > if_time_less {
+                if remaining_time > if_remaining_time_less {
                     continue;
                 }
                 if let Some(coroutine) = self.coroutine[i].as_mut() {
@@ -3331,6 +3373,14 @@ mod entities {
                     }
                 }
             }
+
+            // TODO remove this logspam
+            let time = start.elapsed();
+            tracing::info!(
+                "Finished coroutines for {} entities, took {:?}",
+                self.len,
+                time
+            );
         }
 
         fn new() -> EntityCoreArray {
@@ -3389,13 +3439,70 @@ mod entities {
     pub(super) struct EntityShard {
         db: Arc<dyn GameDatabase>,
         // currently, all entities share a single core array. This may change in the future
-        core: EntityCoreArray,
+        core: RwLock<EntityCoreArray>,
     }
     impl EntityShard {
         pub(super) fn new(shard: usize, db: Arc<dyn GameDatabase>) -> EntityShard {
             tracing::warn!("FIXME: Need to load entities from DB for {shard}");
-            let core = EntityCoreArray::new();
+            let core = RwLock::new(EntityCoreArray::new());
             EntityShard { db, core }
+        }
+        // The following APIs are temporary for testing
+    }
+
+    pub(crate) struct EntityShardWorker {
+        map: Arc<ServerGameMap>,
+        shard: usize,
+        cancellation: CancellationToken,
+    }
+    impl EntityShardWorker {
+        pub(crate) fn new(
+            map: Arc<ServerGameMap>,
+            shard: usize,
+            cancellation: CancellationToken,
+        ) -> EntityShardWorker {
+            EntityShardWorker {
+                map,
+                shard,
+                cancellation,
+            }
+        }
+
+        pub(crate) async fn run_loop(&mut self) -> Result<()> {
+            let mut last_iteration = Instant::now();
+            let mut coroutine_irtl = f32::MAX;
+            while !self.cancellation.is_cancelled() {
+                let now = Instant::now();
+                let dt = now.duration_since(last_iteration);
+
+                let next_awakening = {
+                    let mut lock = self.map.entity_shards[self.shard].core.write();
+                    lock.run_coroutines(coroutine_irtl);
+                    let next_event_delta = lock.update_times(dt);
+                    drop(lock);
+                    let next_event = now + next_event_delta;
+
+                    const SCHEDULING_BUFFER: Duration = Duration::from_millis(100);
+                    next_event - SCHEDULING_BUFFER
+                };
+
+                last_iteration = now;
+                // TODO figure out a scheduling policy here
+                coroutine_irtl = f32::MAX;
+
+                if next_awakening > now {
+                    // TODO: This should use select! and some signal that lets us detect
+                    // new entries, as well as cancellations
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(next_awakening.into()) => {}
+                        _ = self.cancellation.cancelled() => {
+                            tracing::info!("Entity worker for shard {} shutting down", self.shard);
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(())
         }
     }
 }
