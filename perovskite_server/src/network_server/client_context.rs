@@ -504,9 +504,7 @@ impl MapChunkSender {
         level = "trace",
         skip(self, update, bump_index),
         fields(
-        player_name = %self.context.player_context.name(),
-            budget = %update.chunks_to_send,
-            player_chunk
+            player_name = %self.context.player_context.name()
         ),
     )]
     async fn handle_position_update(

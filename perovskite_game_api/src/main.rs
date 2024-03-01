@@ -43,9 +43,11 @@ where
     for<'a> S: LookupSpan<'a>,
 {
     Box::new(
-        tracing_tracy::TracyLayer::new().with_filter(tracing_subscriber::filter::filter_fn(|x| {
-            x.module_path().is_some_and(|x| x.contains("perovskite"))
-        })),
+        tracing_tracy::TracyLayer::new(tracing_tracy::DefaultConfig::default()).with_filter(
+            tracing_subscriber::filter::filter_fn(|x| {
+                x.module_path().is_some_and(|x| x.contains("perovskite"))
+            }),
+        ),
     )
 }
 
