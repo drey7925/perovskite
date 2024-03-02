@@ -1,15 +1,21 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, pin::Pin};
 
 use anyhow::{bail, Result};
+use cgmath::Vector3;
 use itertools::Itertools;
 use perovskite_core::{
+    block_id::BlockId,
     chat::ChatMessage,
     constants::permissions::{self, ELIGIBLE_PREFIX},
+    coordinates::BlockCoordinate,
 };
 use tonic::async_trait;
 
 use crate::{
-    game_state::event::{EventInitiator, HandlerContext},
+    game_state::{
+        entities::{CoroutineResult, EntityCoroutine, EntityCoroutineServices, Movement},
+        event::{EventInitiator, HandlerContext},
+    },
     run_async_handler,
 };
 
@@ -80,6 +86,15 @@ impl CommandManager {
                         .to_string(),
             },
         );
+
+        commands.insert(
+            "entity_test".to_string(),
+            ChatCommand {
+                action: Box::new(SpawnTestEntityCommand),
+                help_text: "spawns a test entity at the player's location.".to_string(),
+            },
+        );
+
         Self { commands }
     }
     pub fn add_command(&mut self, name: String, command: ChatCommand) -> Result<()> {
@@ -421,5 +436,73 @@ impl ChatCommandHandler for ListPermissionsImpl {
         }
 
         Ok(())
+    }
+}
+
+struct SpawnTestEntityCommand;
+#[async_trait]
+impl ChatCommandHandler for SpawnTestEntityCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let id = context.entities().new_entity(
+            context.initiator().position().unwrap().position,
+            Some(Box::pin(TestEntityCoro {})),
+        );
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(format!(
+                "Spawned entity {id}"
+            )))
+            .await
+    }
+}
+
+struct TestEntityCoro {}
+impl EntityCoroutine for TestEntityCoro {
+    fn plan_move(
+        self: Pin<&mut Self>,
+        services: &EntityCoroutineServices<'_>,
+        _current_position: Vector3<f64>,
+        whence: Vector3<f64>,
+        _when: f32,
+    ) -> CoroutineResult {
+        println!("Planning move from {whence:?}");
+        let start_pos = BlockCoordinate::new(
+            whence.x.round() as i32,
+            whence.y.round() as i32,
+            whence.z.round() as i32,
+        );
+        let mut clear_dist = 0;
+        for i in 1..5 {
+            if let Some(coord) = start_pos.try_delta(0, 0, i) {
+                if let Some(id) = services.try_get_block(coord) {
+                    if id == BlockId(0) {
+                        clear_dist = i;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+        println!("Clear dist: {clear_dist}");
+        if clear_dist > 0 {
+            let time = clear_dist as f32;
+            CoroutineResult::Successful(
+                crate::game_state::entities::EntityMoveDecision::QueueUpMovement(Movement {
+                    velocity: Vector3::new(0.0, 0.0, 1.0),
+                    acceleration: Vector3::new(0.0, 0.0, 0.0),
+                    face_direction: 0.0,
+                    move_time: time,
+                }),
+            )
+        } else {
+            CoroutineResult::Successful(
+                crate::game_state::entities::EntityMoveDecision::QueueUpMovement(Movement {
+                    velocity: Vector3::new(0.0, 0.0, 0.0),
+                    acceleration: Vector3::new(0.0, 0.0, 0.0),
+                    face_direction: 0.0,
+                    move_time: 1.0,
+                }),
+            )
+        }
     }
 }

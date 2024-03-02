@@ -24,7 +24,10 @@ pub mod server;
 mod sync;
 
 use anyhow::Result;
-use std::future::Future;
+use std::{
+    future::Future,
+    ops::{Deref, DerefMut},
+};
 use tokio::task::JoinHandle;
 
 #[cfg(tokio_unstable)]
@@ -45,4 +48,18 @@ where
     T::Output: Send + 'static,
 {
     Ok(tokio::task::spawn(task))
+}
+
+#[repr(align(64))]
+struct CachelineAligned<T>(T);
+impl<T> Deref for CachelineAligned<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T> DerefMut for CachelineAligned<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
