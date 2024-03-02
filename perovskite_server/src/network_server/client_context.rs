@@ -24,8 +24,8 @@ use std::time::Instant;
 
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
-use crate::game_state::entities::DrivenEntity;
-use crate::game_state::entities::EntityId;
+use crate::game_state::entities::IterEntity;
+use crate::game_state::entities::Movement;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
@@ -147,7 +147,11 @@ impl PlayerCoroutinePack {
             self.context
                 .game_state
                 .entities()
-                .remove_entity(self.context.player_context.entity_id);
+                .remove(self.context.player_context.entity_id)
+                .map_err(|e| {
+                    log::error!("Error removing player entity: {:?}", e);
+                    e
+                });
         })?;
 
         Ok(())
@@ -252,7 +256,7 @@ pub(crate) async fn make_client_contexts(
     let entity_sender = EntityEventSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
-        observed_ids: FxHashSet::default(),
+        present_ids: FxHashSet::default(),
         last_update: game_state.server_start_time(),
     };
 
@@ -1331,10 +1335,15 @@ impl InboundWorker {
                 self.context
                     .player_context
                     .update_client_position_state(pos, update.hotbar_slot);
-                self.context.game_state.entities().drive_entity(
+                self.context.game_state.entities().set_kinematics(
                     self.context.player_context.entity_id,
-                    pos.position,
-                    pos.velocity,
+                    pos_update
+                        .position
+                        .as_ref()
+                        .context("Missing position")?
+                        .try_into()?,
+                    Movement::stop_and_stay(0.0),
+                    None,
                 )?;
             }
             None => {
@@ -1802,12 +1811,12 @@ impl MiscOutboundWorker {
 struct EntityEventSender {
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
     context: Arc<SharedContext>,
-    observed_ids: FxHashSet<EntityId>,
+    present_ids: FxHashSet<u64>,
     last_update: Instant,
 }
 impl EntityEventSender {
     async fn entity_sender_loop(&mut self) -> Result<()> {
-        if self.context.effective_protocol_version < 2 {
+        if self.context.effective_protocol_version < 4 {
             tracing::info!(
                 "Client {} is using an unsupported protocol version, ignoring entity events",
                 self.context.id
@@ -1835,54 +1844,76 @@ impl EntityEventSender {
         let messages = {
             let mut messages = vec![];
 
-            let entities = self.context.game_state.entities().contents();
+            let entities = self.context.game_state.entities();
 
             // TODO this is suboptimal
-            let known_to_us = self.observed_ids.iter().cloned().collect::<HashSet<_>>();
-            let still_valid = entities.iter().map(DrivenEntity::id).collect();
+            let known_to_us = self.present_ids.iter().cloned().collect::<HashSet<_>>();
+            let mut still_valid = HashSet::new();
+
+            for shard in entities.shards() {
+                shard.for_each_entity(None, |entity: IterEntity| {
+                    still_valid.insert(entity.id);
+                    if entity.id == self.context.player_context.entity_id {
+                        return Ok(());
+                    }
+                    if entity.last_nontrivial_modification < self.last_update {
+                        return Ok(());
+                    }
+                    self.present_ids.insert(entity.id);
+                    messages.push(entities_proto::EntityUpdate {
+                        id: entity.id,
+                        current_move: Some(entities_proto::EntityMove {
+                            start_position: Some(entity.starting_position.try_into()?),
+                            velocity: Some(
+                                entity
+                                    .current_move
+                                    .velocity
+                                    .cast()
+                                    .context("Invalid velocity")?
+                                    .try_into()?,
+                            ),
+                            acceleration: Some(
+                                entity
+                                    .current_move
+                                    .acceleration
+                                    .cast()
+                                    .context("Invalid acceleration")?
+                                    .try_into()?,
+                            ),
+                            total_time_seconds: entity.current_move.move_time,
+                            face_direction: entity.current_move.face_direction,
+                        }),
+                        current_move_time: entity.current_move_elapsed,
+                        next_move: entity.next_move.and_then(|m| {
+                            let start_position = entity
+                                .current_move
+                                .pos_after(entity.starting_position, entity.current_move.move_time);
+                            Some(entities_proto::EntityMove {
+                                start_position: Some(start_position.try_into().ok()?),
+                                velocity: Some(m.velocity.try_into().ok()?),
+                                acceleration: Some(m.acceleration.try_into().ok()?),
+                                total_time_seconds: m.move_time,
+                                face_direction: m.face_direction,
+                            })
+                        }),
+                        remove: false,
+                    });
+                    Ok(())
+                })?;
+            }
             let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
-            for entity_id in to_remove {
+
+            for &entity_id in to_remove.into_iter() {
                 messages.push(entities_proto::EntityUpdate {
-                    // hacky ID separation for now
-                    id: entity_id.client_id() | (1 << 47),
+                    id: entity_id,
                     current_move: None,
                     current_move_time: 0.0,
                     next_move: None,
                     remove: true,
                 });
-                self.observed_ids.remove(entity_id);
+                self.present_ids.remove(&entity_id);
             }
 
-            for entity in entities.iter() {
-                if entity.id() == self.context.player_context.entity_id {
-                    continue;
-                }
-
-                if !self.observed_ids.contains(&entity.id())
-                    || entity.updated_since(self.last_update)
-                {
-                    self.observed_ids.insert(entity.id());
-                    let (position, velocity) = entity.sample();
-                    messages.push(entities_proto::EntityUpdate {
-                        id: entity.id().client_id() | (1 << 47),
-
-                        current_move: Some(entities_proto::EntityMove {
-                            start_position: Some(position.try_into()?),
-                            velocity: Some(
-                                velocity.cast().context("Invalid velocity")?.try_into()?,
-                            ),
-                            // A quick way to test movement and the update rate of this tick
-                            //velocity: Some(cgmath::vec3(0.0, 1.0, 0.0).try_into()?),
-                            acceleration: Some(coords_proto::Vec3F::default()),
-                            total_time_seconds: f32::MAX,
-                            face_direction: 0.0,
-                        }),
-                        current_move_time: 0.0,
-                        next_move: None,
-                        remove: false,
-                    });
-                }
-            }
             messages
         };
         let tick = self.context.game_state.tick();

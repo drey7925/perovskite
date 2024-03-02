@@ -43,7 +43,6 @@ use crate::{
 
 use super::{
     client_ui::Popup,
-    entities::EntityId,
     event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
     GameState,
@@ -67,7 +66,7 @@ pub struct Player {
     sender: PlayerEventSender,
     game_state: Arc<GameState>,
     // TODO - refactor according to the final design of entities
-    pub(crate) entity_id: EntityId,
+    pub(crate) entity_id: u64,
 }
 
 impl Player {
@@ -127,9 +126,7 @@ impl Player {
             .with_context(|| "Missing last_position in StoredPlayer")?
             .try_into()?;
 
-        let entity_id = game_state
-            .entities
-            .insert_entity(position, Vector3::zero())?;
+        let entity_id = game_state.entities().new_entity(position, None);
 
         Ok(Player {
             name: proto.name.clone(),
@@ -192,9 +189,7 @@ impl Player {
             .collect();
 
         let position = (game_state.game_behaviors().spawn_location)(name);
-        let entity_id = game_state
-            .entities
-            .insert_entity(position, Vector3::zero())?;
+        let entity_id = game_state.entities().new_entity(position, None);
 
         let player = Player {
             name: name.to_string(),
