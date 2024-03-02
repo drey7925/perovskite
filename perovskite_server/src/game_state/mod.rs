@@ -52,7 +52,6 @@ use crate::network_server::auth::AuthService;
 use self::blocks::BlockTypeManager;
 use self::chat::commands::CommandManager;
 use self::chat::ChatState;
-use self::entities::TestonlyEntityManager;
 use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
@@ -84,7 +83,7 @@ pub struct GameState {
     auth: AuthService,
     time_state: Mutex<TimeState>,
     player_state_resync: tokio::sync::watch::Sender<()>,
-    entities: TestonlyEntityManager,
+    entities: Arc<entities::EntityManager>,
     server_start_time: Instant,
     extensions: type_map::concurrent::TypeMap,
 }
@@ -107,7 +106,7 @@ impl GameState {
         // If we don't have a time of day yet, start in the morning.
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
         let day_length = game_behaviors.day_length;
-        Ok(Arc::new_cyclic(|weak| Self {
+        let result = Arc::new_cyclic(|weak| Self {
             data_dir,
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
             mapgen,
@@ -120,13 +119,15 @@ impl GameState {
             early_shutdown: CancellationToken::new(),
             mapgen_seed,
             game_behaviors,
-            auth: AuthService::create(db).unwrap(),
+            auth: AuthService::create(db.clone()).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
             player_state_resync: tokio::sync::watch::channel(()).0,
-            entities: TestonlyEntityManager::new(weak.clone()),
+            entities: Arc::new(entities::EntityManager::new(db.clone())),
             server_start_time: Instant::now(),
             extensions,
-        }))
+        });
+        result.entities.clone().start_workers(result.clone());
+        Ok(result)
     }
 
     /// Gets the map for this game.
@@ -182,8 +183,10 @@ impl GameState {
     // Shut down things that handle events (e.g. map, database)
     // and wait for them to safely flush data.
     pub(crate) async fn finish_shutdown(&self) {
+        self.entities.request_shutdown();
         self.map.request_shutdown();
         self.player_manager.request_shutdown();
+        self.entities.await_shutdown().await.unwrap();
         self.map.await_shutdown().await.unwrap();
         self.player_manager.await_shutdown().await.unwrap();
         put_double_meta_value(
@@ -215,6 +218,10 @@ impl GameState {
         &self.game_behaviors
     }
 
+    pub fn entities(&self) -> &entities::EntityManager {
+        &self.entities
+    }
+
     pub fn chat(&self) -> &ChatState {
         &self.chat
     }
@@ -225,10 +232,6 @@ impl GameState {
 
     pub(crate) fn time_state(&self) -> &Mutex<TimeState> {
         &self.time_state
-    }
-
-    pub(crate) fn entities(&self) -> &TestonlyEntityManager {
-        &self.entities
     }
 
     /// Sets the time of day. 0 is midnight, 1 is the next midnight.
