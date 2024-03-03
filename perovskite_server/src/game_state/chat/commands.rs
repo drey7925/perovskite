@@ -443,10 +443,13 @@ struct SpawnTestEntityCommand;
 #[async_trait]
 impl ChatCommandHandler for SpawnTestEntityCommand {
     async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
-        let id = context.entities().new_entity(
-            context.initiator().position().unwrap().position,
-            Some(Box::pin(TestEntityCoro {})),
-        );
+        let id = context
+            .entities()
+            .new_entity(
+                context.initiator().position().unwrap().position,
+                Some(Box::pin(TestEntityCoro {})),
+            )
+            .await;
         context
             .initiator()
             .send_chat_message_async(ChatMessage::new_server_message(format!(

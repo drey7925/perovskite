@@ -148,10 +148,7 @@ impl PlayerCoroutinePack {
                 .game_state
                 .entities()
                 .remove(self.context.player_context.entity_id)
-                .map_err(|e| {
-                    log::error!("Error removing player entity: {:?}", e);
-                    e
-                });
+                .await;
         })?;
 
         Ok(())
@@ -1138,7 +1135,8 @@ impl InboundWorker {
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
-                self.handle_pos_update(message.client_tick, pos_update)?;
+                self.handle_pos_update(message.client_tick, pos_update)
+                    .await?;
             }
             Some(proto::stream_to_server::ClientMessage::BugCheck(bug_check)) => {
                 error!("Client bug check: {:?}", bug_check);
@@ -1296,7 +1294,7 @@ impl InboundWorker {
         Ok(())
     }
 
-    fn handle_pos_update(&mut self, _tick: u64, update: &proto::ClientUpdate) -> Result<()> {
+    async fn handle_pos_update(&mut self, _tick: u64, update: &proto::ClientUpdate) -> Result<()> {
         match &update.position {
             Some(pos_update) => {
                 let (az, el) = match &pos_update.face_direction {
@@ -1335,16 +1333,20 @@ impl InboundWorker {
                 self.context
                     .player_context
                     .update_client_position_state(pos, update.hotbar_slot);
-                self.context.game_state.entities().set_kinematics(
-                    self.context.player_context.entity_id,
-                    pos_update
-                        .position
-                        .as_ref()
-                        .context("Missing position")?
-                        .try_into()?,
-                    Movement::stop_and_stay(0.0),
-                    None,
-                )?;
+                self.context
+                    .game_state
+                    .entities()
+                    .set_kinematics(
+                        self.context.player_context.entity_id,
+                        pos_update
+                            .position
+                            .as_ref()
+                            .context("Missing position")?
+                            .try_into()?,
+                        Movement::stop_and_stay(0.0),
+                        None,
+                    )
+                    .await;
             }
             None => {
                 warn!("No position in update message from client");
@@ -1897,6 +1899,7 @@ impl EntityEventSender {
                             })
                         }),
                         remove: false,
+                        mod_count: entity.mod_count,
                     });
                     Ok(())
                 })?;
@@ -1910,6 +1913,7 @@ impl EntityEventSender {
                     current_move_time: 0.0,
                     next_move: None,
                     remove: true,
+                    mod_count: 0,
                 });
                 self.present_ids.remove(&entity_id);
             }
