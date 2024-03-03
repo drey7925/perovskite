@@ -76,6 +76,7 @@ pub(crate) struct GameEntity {
     pub(crate) current_move: EntityMove,
     current_move_started: Instant,
     pub(crate) next_move: EntityMove,
+    pub(crate) mod_count: u64,
 }
 impl GameEntity {
     pub(crate) fn advance_state(&mut self) {
@@ -100,9 +101,13 @@ impl GameEntity {
         current_move: EntityMove,
         current_move_elapsed: f32,
         next_move: Option<EntityMove>,
+        mod_count: u64,
     ) {
-        self.current_move = current_move;
-        self.current_move_started = Instant::now() - Duration::from_secs_f32(current_move_elapsed);
+        if self.mod_count != mod_count {
+            self.current_move = current_move;
+            self.current_move_started =
+                Instant::now() - Duration::from_secs_f32(current_move_elapsed);
+        }
         if let Some(next_move) = next_move {
             self.next_move = next_move;
         } else {
@@ -111,6 +116,7 @@ impl GameEntity {
                     .qproj(self.current_move.total_time_seconds),
             )
         }
+        self.mod_count = mod_count;
     }
 
     pub(crate) fn as_transform(&self, base_position: Vector3<f64>) -> cgmath::Matrix4<f32> {
@@ -139,6 +145,7 @@ impl GameEntity {
             current_move,
             current_move_started: Instant::now()
                 - Duration::try_from_secs_f32(current_move_elapsed)?,
+            mod_count: u64::MAX,
         })
     }
 }

@@ -45,5 +45,8 @@ message EntityUpdate {
     EntityMove next_move = 4;
     // If true, the entity should stop being displayed. If so, ignore all other fields
     bool remove = 5;
+    // Number of moves processed
+    uint64 mod_count = 6;
+
     // todo later - appearance, including the ability to change the appearance on demand
 }

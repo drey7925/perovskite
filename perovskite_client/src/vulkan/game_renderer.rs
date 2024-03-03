@@ -121,8 +121,9 @@ impl ActiveGame {
 
         let (entity_translations, vtx, idx) = {
             let mut entity_coords = vec![];
-            let entity_lock = self.client_state.entities.lock();
-            for entity in entity_lock.entities.values() {
+            let mut entity_lock = self.client_state.entities.lock();
+            for entity in entity_lock.entities.values_mut() {
+                entity.advance_state();
                 entity_coords.push(entity.as_transform(player_position))
             }
             (
