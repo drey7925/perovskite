@@ -355,10 +355,10 @@ impl DefaultMapgen {
                             let tall_grass_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(4));
                             let tall_grass_cutoff = self.flower_density_noise.get([
-                                (x as f64) * FLOWER_DENSITY_INPUT_SCALE,
-                                (z as f64) * FLOWER_DENSITY_INPUT_SCALE,
-                            ]) * FLOWER_DENSITY_OUTPUT_SCALE
-                                + FLOWER_DENSITY_OUTPUT_OFFSET;
+                                (x as f64) * TALL_GRASS_DENSITY_INPUT_SCALE,
+                                (z as f64) * TALL_GRASS_DENSITY_INPUT_SCALE,
+                            ]) * TALL_GRASS_DENSITY_OUTPUT_SCALE
+                                + TALL_GRASS_DENSITY_OUTPUT_OFFSET;
                             if tall_grass_value < tall_grass_cutoff {
                                 self.make_simple_foliage(
                                     chunk_coord,

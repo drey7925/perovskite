@@ -126,7 +126,7 @@ impl Player {
             .with_context(|| "Missing last_position in StoredPlayer")?
             .try_into()?;
 
-        let entity_id = game_state.entities().new_entity(position, None);
+        let entity_id = game_state.entities().new_entity_blocking(position, None);
 
         Ok(Player {
             name: proto.name.clone(),
@@ -189,7 +189,7 @@ impl Player {
             .collect();
 
         let position = (game_state.game_behaviors().spawn_location)(name);
-        let entity_id = game_state.entities().new_entity(position, None);
+        let entity_id = game_state.entities().new_entity_blocking(position, None);
 
         let player = Player {
             name: name.to_string(),
@@ -595,14 +595,18 @@ impl PlayerManager {
         // TODO - optimization: This is IO done under the global player lock
         // Maybe something like the game map double locks?
         let player = match self.db.get(&Self::db_key(name))? {
-            Some(player_proto) => Player::from_server_proto(
-                self.game_state(),
-                &StoredPlayer::decode(player_proto.as_slice())?,
-                sender,
-            )?,
+            Some(player_proto) => tokio::task::block_in_place(|| {
+                Player::from_server_proto(
+                    self.game_state(),
+                    &StoredPlayer::decode(player_proto.as_slice())?,
+                    sender,
+                )
+            })?,
             None => {
                 log::info!("New player {name} joining");
-                let player = Player::new_player(name, self.game_state(), sender)?;
+                let player = tokio::task::block_in_place(|| {
+                    Player::new_player(name, self.game_state(), sender)
+                })?;
                 self.write_back(&player)?;
                 player
             }

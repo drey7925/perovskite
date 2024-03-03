@@ -705,9 +705,12 @@ impl InboundContext {
         match self.client_state.entities.lock().entities.entry(update.id) {
             Entry::Occupied(mut entry) => {
                 // TODO we need to correct for network delay here
-                entry
-                    .get_mut()
-                    .update(current_move, update.current_move_time, next_move);
+                entry.get_mut().update(
+                    current_move,
+                    update.current_move_time,
+                    next_move,
+                    update.mod_count,
+                );
             }
             Entry::Vacant(entry) => {
                 entry.insert(GameEntity::new(
