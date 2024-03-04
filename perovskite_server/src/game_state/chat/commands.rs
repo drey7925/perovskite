@@ -9,6 +9,7 @@ use perovskite_core::{
     constants::permissions::{self, ELIGIBLE_PREFIX},
     coordinates::BlockCoordinate,
 };
+use rand::Rng;
 use tonic::async_trait;
 
 use crate::{
@@ -443,6 +444,23 @@ struct SpawnTestEntityCommand;
 #[async_trait]
 impl ChatCommandHandler for SpawnTestEntityCommand {
     async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if message.contains("many") {
+            context.run_deferred(|ctx| {
+                let mut rng = rand::thread_rng();
+                for _ in 0..1000 {
+                    let _ = ctx.entities().new_entity_blocking(
+                        ctx.initiator().position().unwrap().position
+                            + Vector3::new(
+                                rng.gen_range(-0.25..0.25),
+                                0.0,
+                                rng.gen_range(-0.25..0.25),
+                            ),
+                        Some(Box::pin(TestEntityCoro {})),
+                    );
+                }
+                Ok(())
+            });
+        }
         let id = context
             .entities()
             .new_entity(
@@ -468,7 +486,7 @@ impl EntityCoroutine for TestEntityCoro {
         whence: Vector3<f64>,
         _when: f32,
     ) -> CoroutineResult {
-        println!("Planning move from {whence:?}");
+        //println!("Planning move from {whence:?}");
         let start_pos = BlockCoordinate::new(
             whence.x.round() as i32,
             whence.y.round() as i32,
@@ -486,7 +504,7 @@ impl EntityCoroutine for TestEntityCoro {
             }
             break;
         }
-        println!("Clear dist: {clear_dist}");
+        //println!("Clear dist: {clear_dist}");
         if clear_dist > 0 {
             let time = clear_dist as f32;
             CoroutineResult::Successful(
