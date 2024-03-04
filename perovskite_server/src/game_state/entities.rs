@@ -451,9 +451,6 @@ impl EntityCoreArray {
     /// TODO: more and better scheduling/prioritization algorithms
     fn run_coroutines(&mut self, services: &EntityCoroutineServices<'_>, delta_time: f32) {
         let _span = span!("entity_run_coroutines");
-        // TODO remove this logspam
-        tracing::info!("Running coroutines for {} entities", self.len);
-
         self.check_preconditions();
         for i in 0..self.len {
             self.run_coro_single(i, services, delta_time);
@@ -676,10 +673,14 @@ impl EntityCoreArray {
             self.next_theta_y.swap_remove(i);
             self.next_move_time.swap_remove(i);
             self.coroutine.swap_remove(i);
+            self.mod_count.swap_remove(i);
             // fix up the id lookup since we rearranged stuff
             if i != self.len {
                 self.id_lookup.insert(self.id[i], i);
             }
+            // For debugging only
+            // Note that other check_preconditions() calls actually help guide the optimizer
+            self.check_preconditions();
             Ok(())
         } else {
             Err(EntityError::NotFound)
@@ -791,11 +792,6 @@ impl EntityCoreArray {
                 remaining_time,
             ) {
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMovement(movement)) => {
-                    println!("Queueing up movement for entity {}", self.id[i]);
-                    println!(
-                        "Current movement time: {} of {}, next {}",
-                        self.move_time_elapsed[i], self.move_time[i], movement.move_time
-                    );
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
                     self.next_xv[i] = movement.velocity.x;
                     self.next_yv[i] = movement.velocity.y;
@@ -815,11 +811,6 @@ impl EntityCoreArray {
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ImmediateDespawn) => {
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
-                    // todo notify watchers that the entity is despawning
-                    log::warn!(
-                        "Entity {} is being despawned; notification not yet implemented",
-                        self.id[i]
-                    );
                     self.control[i] = 0;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ResetMovement(pos, m1, m2)) => {
