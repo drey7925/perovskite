@@ -46,7 +46,7 @@ image = { version = "0.24.7" }
 petgraph = "0.6.4"
 
 [features]
-default = ["default_game", "agriculture", "circuits", "discord"]
+default = ["default_game", "agriculture", "circuits", "discord", "carts"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
@@ -65,6 +65,9 @@ default_game = []
 
 # Provides a plugin for making digital circuits that have simple in-game behaviors. Still a WIP
 circuits = []
+
+# Carts that operate on rails. These rely on circuits for signalling and control.
+carts = ["circuits"]
 
 # Provides basic agriculture functionality that other plugins can use. Relies on default_game for
 # dirt and other interactions

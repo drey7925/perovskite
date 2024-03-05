@@ -52,6 +52,10 @@ pub mod farming;
 #[cfg(feature = "discord")]
 pub mod discord;
 
+/// Carts on rails
+#[cfg(feature = "carts")]
+pub mod carts;
+
 /// Provides colors that can be used in the default game, as well as
 /// a unified set of items representing dyes in different colors.
 /// Also provides functionality to colorize textures automatically,
