@@ -157,6 +157,7 @@ fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
 fn vec2b(v: cgmath::Vector3<f64>) -> BlockCoordinate {
     BlockCoordinate::new(v.x as i32, v.y as i32, v.z as i32)
 }
+type Flt = f64;
 
 /// A segment of track where we know we can run
 #[derive(Copy, Clone, Debug)]
@@ -164,9 +165,11 @@ struct TrackClearance {
     from: BlockCoordinate,
     to: BlockCoordinate,
     // The maximum speed we can run in this track segment
-    max_speed: f32,
+    max_speed: Flt,
     // test only
     seg_id: u64,
+    // How far along the segment we start (in block units), used for slicing a segment into pieces.
+    offset: Flt,
 }
 // test only
 static NEXT_SEGMENT_ID: AtomicU64 = AtomicU64::new(0);
@@ -176,28 +179,37 @@ impl TrackClearance {
             + (self.from.y - self.to.y).abs() as u32
             + (self.from.z - self.to.z).abs() as u32
     }
-    fn distance(&self) -> f32 {
-        let dx = self.from.x as f32 - self.to.x as f32;
-        let dy = self.from.y as f32 - self.to.y as f32;
-        let dz = self.from.z as f32 - self.to.z as f32;
+    fn distance(&self) -> Flt {
+        let dx = self.from.x as Flt - self.to.x as Flt;
+        let dy = self.from.y as Flt - self.to.y as Flt;
+        let dz = self.from.z as Flt - self.to.z as Flt;
         (dx * dx + dy * dy + dz * dz).sqrt()
+    }
+    fn with_offset(&self, offset: Flt) -> Self {
+        Self {
+            from: self.from,
+            to: self.to,
+            max_speed: self.max_speed,
+            seg_id: self.seg_id,
+            offset,
+        }
     }
 }
 
-const MAX_ACCEL: f32 = 450.0;
+const MAX_ACCEL: Flt = 45.0;
 struct CartCoroutine {
     config: CartsGameBuilderExtension,
     // Segments where we've already calculated a braking curve. (clearance, starting speed, acceleration, time)
     // currently unused and empty
-    scheduled_segments: VecDeque<(TrackClearance, f32, f32, f32)>,
+    scheduled_segments: VecDeque<(TrackClearance, Flt, Flt, Flt)>,
     // Segments where we don't yet have a braking curve
     unplanned_segments: VecDeque<TrackClearance>,
     // The current coordinate where we're going to scan next
     scan_position: BlockCoordinate,
     // The last speed post we encountered while scanning
-    last_speed_post_indication: f32,
+    last_speed_post_indication: Flt,
     // The last velocity we already delivered to the entity system
-    last_speed: f32,
+    last_speed: Flt,
     // debug only
     spawn_time: Instant,
 }
@@ -245,6 +257,7 @@ impl EntityCoroutine for CartCoroutine {
                     to: self.scan_position,
                     max_speed: self.last_speed_post_indication,
                     seg_id: NEXT_SEGMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    offset: 0.0,
                 };
                 self.unplanned_segments.push_back(empty_segment);
             }
@@ -283,7 +296,7 @@ impl EntityCoroutine for CartCoroutine {
         // todo optimize this later
 
         // The maximum speed we can be moving at the end of the current track segment.
-        let mut max_exit_speed: f32 = 0.0;
+        let mut max_exit_speed: Flt = 0.0;
         // If true, we hit the max track speed for at least one segment. Otherwise, our braking curve is affected by
         // unknown track segments that we haven't scanned yet, and hence is not certain yet.
         let mut segments_schedulable = false;
@@ -321,10 +334,10 @@ impl EntityCoroutine for CartCoroutine {
             self.unplanned_segments.pop_front();
         }
 
-        let mut last_speed = self
+        let mut last_seg_speed = self
             .scheduled_segments
             .back()
-            .map(|x| x.1)
+            .map(|x| x.1 + x.2 * x.3)
             .unwrap_or(self.last_speed);
         for (seg, max_exit_speed) in schedulable_segments.into_iter() {
             // TODO - we should slice up the segment, rather than having a slow acceleration over the whole segment
@@ -334,25 +347,162 @@ impl EntityCoroutine for CartCoroutine {
             //
             // accelerating from last_velocity to max_exit_speed
             // vf^2 = vi^2 + 2a(d)
+
             let distance = seg.distance();
             if distance < 1e-6 {
                 continue;
             }
-            let desired_accel = (max_exit_speed * max_exit_speed - last_speed * last_speed)
-                / (2.0 * distance as f32);
-            let actual_accel = desired_accel.clamp(-MAX_ACCEL, MAX_ACCEL);
-            let actual_speed =
-                (last_speed * last_speed + 2.0 * actual_accel * distance as f32).sqrt();
-            let time = if actual_speed != last_speed {
-                (actual_speed - last_speed) / actual_accel
-            } else {
-                distance / actual_speed
-            };
-            println!("> planned segment {}, enter at {last_speed}, want exit at {max_exit_speed}, got exit at {actual_speed}, len {distance}, desired accel {desired_accel}, actual accel {actual_accel}, time {time}", seg.seg_id);
 
-            self.scheduled_segments
-                .push_back((seg, last_speed, actual_accel, time));
-            last_speed = actual_speed;
+            if (max_exit_speed - seg.max_speed).abs() < 1e-3
+                && (last_seg_speed - seg.max_speed).abs() < 1e-3
+            {
+                // Case 1: We're cleared for the max speed through the whole segment
+                println!(">> case 1");
+                self.scheduled_segments.push_back((
+                    seg,
+                    last_seg_speed,
+                    /*accel=*/ 0.0,
+                    distance / last_seg_speed,
+                ));
+                last_seg_speed = seg.max_speed;
+            } else if (max_exit_speed - seg.max_speed).abs() < 1e-3 {
+                println!(">> case 2");
+                // Case 2: We're cleared to exit at track speed, but we start at a lower speed.
+                // We'll accelerate right away and then spend the rest of the segment running at full speed.
+                // vf^2 = vi^2 + 2a(d)
+                let accel_distance = ((seg.max_speed * seg.max_speed)
+                    - (last_seg_speed * last_seg_speed))
+                    / (2.0 * MAX_ACCEL);
+                if accel_distance > distance {
+                    println!(">>> 2a partial accel");
+                    // We can't get to the max exit speed in this segment, so we'll just accelerate as much as we can.
+                    // again, vf^2 = vi^2 + 2a(d)
+                    let actual_exit_speed =
+                        (last_seg_speed * last_seg_speed + 2.0 * MAX_ACCEL * distance).sqrt();
+                    // Push a single segment with this resulting acceleration
+                    self.scheduled_segments.push_back((
+                        seg,
+                        last_seg_speed,
+                        MAX_ACCEL,
+                        (actual_exit_speed - last_seg_speed) / MAX_ACCEL,
+                    ));
+                    println!(
+                        ">>> 2a speed {} accel {} time {}",
+                        actual_exit_speed,
+                        MAX_ACCEL,
+                        (seg.max_speed - last_seg_speed) / MAX_ACCEL
+                    );
+                    last_seg_speed = actual_exit_speed;
+                } else {
+                    println!(">>> 2b full accel");
+                    // We can get to the max exit speed in this segment.
+                    // We'll push two segments: One for the acceleration, and one for the rest
+                    // Accel until we hit the max speed
+                    self.scheduled_segments.push_back((
+                        seg,
+                        last_seg_speed,
+                        MAX_ACCEL,
+                        (seg.max_speed - last_seg_speed) / MAX_ACCEL,
+                    ));
+                    println!(
+                        ">>> 2b speed {} accel {} time {}",
+                        last_seg_speed,
+                        MAX_ACCEL,
+                        (seg.max_speed - last_seg_speed) / MAX_ACCEL
+                    );
+                    // and then coast the rest of the distance
+                    if (distance - accel_distance) > 1e-3 {
+                        self.scheduled_segments.push_back((
+                            seg.with_offset(accel_distance),
+                            seg.max_speed,
+                            0.0,
+                            (distance - accel_distance) / seg.max_speed,
+                        ));
+                        println!(
+                            ">>> 2b speed {} accel {} time {}",
+                            seg.max_speed,
+                            0.0,
+                            (distance - accel_distance) / seg.max_speed
+                        );
+                    }
+                    last_seg_speed = seg.max_speed;
+                }
+            } else if (last_seg_speed - seg.max_speed).abs() < 1e-3 {
+                println!(">> case 3");
+                // Case 3: We entered at max speed, but we have to decelerate to a lower speed by the end of this segment.
+                let decel_distance = (last_seg_speed * last_seg_speed
+                    - max_exit_speed * max_exit_speed)
+                    / (2.0 * MAX_ACCEL);
+                if decel_distance > distance {
+                    println!(">>> Oops, emergency brake time :3");
+                    // This shouldn't happen. Let's just pretend it didn't.
+                    // Calculate the desired acceleration to safely return to the speed curve
+                    let emergency_accel = (last_seg_speed * last_seg_speed
+                        - max_exit_speed * max_exit_speed)
+                        / (2.0 * distance);
+                    self.scheduled_segments.push_back((
+                        seg,
+                        last_seg_speed,
+                        emergency_accel,
+                        (max_exit_speed - last_seg_speed) / emergency_accel,
+                    ));
+                    println!(
+                        ">>> 3e speed {} accel {} time {}",
+                        last_seg_speed,
+                        emergency_accel,
+                        (max_exit_speed - last_seg_speed) / emergency_accel
+                    );
+                    last_seg_speed = max_exit_speed;
+                } else {
+                    println!(">>> 3a partial decel");
+                    // Operate at max speed while we can, then decelerate
+                    self.scheduled_segments.push_back((
+                        seg,
+                        last_seg_speed,
+                        0.0,
+                        (distance - decel_distance) / last_seg_speed,
+                    ));
+                    println!(
+                        ">>> 3a speed {} accel {} time {}",
+                        last_seg_speed,
+                        0.0,
+                        (distance - decel_distance) / last_seg_speed
+                    );
+                    if decel_distance > 0.01 {
+                        self.scheduled_segments.push_back((
+                            seg.with_offset(decel_distance),
+                            last_seg_speed,
+                            -MAX_ACCEL,
+                            (last_seg_speed - max_exit_speed) / MAX_ACCEL,
+                        ));
+                        println!(
+                            ">>> 3a speed {} accel {} time {}",
+                            last_seg_speed,
+                            -MAX_ACCEL,
+                            (last_seg_speed - max_exit_speed) / MAX_ACCEL
+                        );
+                    }
+                    last_seg_speed = max_exit_speed;
+                }
+            } else {
+                println!(">> case 4 - unfinished");
+                let desired_accel = (max_exit_speed * max_exit_speed
+                    - last_seg_speed * last_seg_speed)
+                    / (2.0 * distance as Flt);
+                let actual_accel = desired_accel.clamp(-MAX_ACCEL, MAX_ACCEL);
+                let actual_speed =
+                    (last_seg_speed * last_seg_speed + 2.0 * actual_accel * distance as Flt).sqrt();
+                let time = if (actual_speed - last_seg_speed).abs() < 1e-3 {
+                    (actual_speed - last_seg_speed) / actual_accel
+                } else {
+                    distance / actual_speed
+                };
+                println!("> planned segment {}, enter at {last_seg_speed}, want exit at {max_exit_speed}, got exit at {actual_speed}, len {distance}, desired accel {desired_accel}, actual accel {actual_accel}, time {time}", seg.seg_id);
+
+                self.scheduled_segments
+                    .push_back((seg, last_seg_speed, actual_accel, time));
+                last_seg_speed = actual_speed;
+            }
         }
 
         println!("scan position: {:?}", self.scan_position);
@@ -381,13 +531,19 @@ impl EntityCoroutine for CartCoroutine {
                 "returning a movement, speed is {}, accel is {}, time is {}",
                 self.last_speed, segment.2, segment.3
             );
+            println!(
+                "seg position: {:?} @ {}, actually {:?}",
+                b2vec(segment.0.from),
+                segment.0.offset,
+                whence
+            );
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
                 perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMovement(
                     Movement {
-                        velocity: cgmath::Vector3::new(0.0, 0.0, segment.1),
-                        acceleration: cgmath::Vector3::new(0.0, 0.0, segment.2),
+                        velocity: cgmath::Vector3::new(0.0, 0.0, segment.1 as f32),
+                        acceleration: cgmath::Vector3::new(0.0, 0.0, segment.2 as f32),
                         face_direction: 0.0,
-                        move_time: segment.3,
+                        move_time: segment.3 as f32,
                     },
                 ),
             );
