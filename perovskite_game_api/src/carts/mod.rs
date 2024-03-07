@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 
 // This is a temporary implementation used while developing the entity system
 use anyhow::Result;
@@ -142,6 +142,7 @@ impl ChatCommandHandler for CartSpawner {
                     // Until we encounter a speed post, proceed at minimal safe speed
                     last_speed_post_indication: 0.5,
                     last_speed: 0.0,
+                    spawn_time: Instant::now(),
                 })),
             )
             .await;
@@ -164,16 +165,26 @@ struct TrackClearance {
     to: BlockCoordinate,
     // The maximum speed we can run in this track segment
     max_speed: f32,
+    // test only
+    seg_id: u64,
 }
+// test only
+static NEXT_SEGMENT_ID: AtomicU64 = AtomicU64::new(0);
 impl TrackClearance {
     fn manhattan_dist(&self) -> u32 {
         (self.from.x - self.to.x).abs() as u32
             + (self.from.y - self.to.y).abs() as u32
             + (self.from.z - self.to.z).abs() as u32
     }
+    fn distance(&self) -> f32 {
+        let dx = self.from.x as f32 - self.to.x as f32;
+        let dy = self.from.y as f32 - self.to.y as f32;
+        let dz = self.from.z as f32 - self.to.z as f32;
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    }
 }
 
-const MAX_ACCEL: f32 = 4.5;
+const MAX_ACCEL: f32 = 450.0;
 struct CartCoroutine {
     config: CartsGameBuilderExtension,
     // Segments where we've already calculated a braking curve. (clearance, starting speed, acceleration, time)
@@ -187,6 +198,8 @@ struct CartCoroutine {
     last_speed_post_indication: f32,
     // The last velocity we already delivered to the entity system
     last_speed: f32,
+    // debug only
+    spawn_time: Instant,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -204,7 +217,11 @@ impl EntityCoroutine for CartCoroutine {
         for seg in self.unplanned_segments.iter() {
             step_count += seg.manhattan_dist();
         }
-        println!("==========");
+        println!(
+            "{:?} ========== planning {} seconds in advance",
+            self.spawn_time.elapsed(),
+            when
+        );
         println!(
             "cart coro: step_count = {}. {} in braking curve, {} unplanned",
             step_count,
@@ -215,7 +232,7 @@ impl EntityCoroutine for CartCoroutine {
         // hacky clean up
         let mut force_speed_post = false;
         // todo tune
-        while step_count < 256
+        while step_count < 1024
             && (self.scheduled_segments.len() + self.unplanned_segments.len()) < 16
         {
             if self.unplanned_segments.is_empty()
@@ -227,6 +244,7 @@ impl EntityCoroutine for CartCoroutine {
                     from: self.scan_position,
                     to: self.scan_position,
                     max_speed: self.last_speed_post_indication,
+                    seg_id: NEXT_SEGMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 };
                 self.unplanned_segments.push_back(empty_segment);
             }
@@ -249,13 +267,13 @@ impl EntityCoroutine for CartCoroutine {
             }
 
             if speed_post_block == Some(self.config.speedpost_1) {
-                self.last_speed_post_indication = 1.0;
+                self.last_speed_post_indication = 0.2;
                 force_speed_post = true;
             } else if speed_post_block == Some(self.config.speedpost_2) {
                 self.last_speed_post_indication = 2.0;
                 force_speed_post = true;
             } else if speed_post_block == Some(self.config.speedpost_3) {
-                self.last_speed_post_indication = 30.0;
+                self.last_speed_post_indication = 50.0;
                 force_speed_post = true;
             }
         }
@@ -265,7 +283,7 @@ impl EntityCoroutine for CartCoroutine {
         // todo optimize this later
 
         // The maximum speed we can be moving at the end of the current track segment.
-        let mut max_exit_speed = 0.0;
+        let mut max_exit_speed: f32 = 0.0;
         // If true, we hit the max track speed for at least one segment. Otherwise, our braking curve is affected by
         // unknown track segments that we haven't scanned yet, and hence is not certain yet.
         let mut segments_schedulable = false;
@@ -273,15 +291,16 @@ impl EntityCoroutine for CartCoroutine {
 
         // Iterate in reverse of track order
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
-            let distance = seg.manhattan_dist();
+            max_exit_speed = max_exit_speed.min(seg.max_speed);
+            let distance = seg.distance();
             // vf^2 = vi^2 + 2a(d)
             let mut max_entry_speed =
-                (max_exit_speed * max_exit_speed + 2.0 * MAX_ACCEL * distance as f32).sqrt();
-
+                (max_exit_speed * max_exit_speed + 2.0 * MAX_ACCEL * distance).sqrt();
+            println!("> unplanned segment {}, enter at {max_entry_speed}, exit at {max_exit_speed}, seg max speed {}, len {distance}", seg.seg_id, seg.max_speed);
             if max_entry_speed > seg.max_speed {
                 max_entry_speed = seg.max_speed;
             }
-            println!("> unplanned segment, enter at {max_entry_speed}, exit at {max_exit_speed}, len {distance}");
+
             // Record the segment if it's schedulable, or if it's the only segment we have
             if segments_schedulable || idx == 0 {
                 // Record the actual speed we need to stay under as we exit this segment
@@ -315,8 +334,8 @@ impl EntityCoroutine for CartCoroutine {
             //
             // accelerating from last_velocity to max_exit_speed
             // vf^2 = vi^2 + 2a(d)
-            let distance = seg.manhattan_dist();
-            if distance == 0 {
+            let distance = seg.distance();
+            if distance < 1e-6 {
                 continue;
             }
             let desired_accel = (max_exit_speed * max_exit_speed - last_speed * last_speed)
@@ -324,8 +343,12 @@ impl EntityCoroutine for CartCoroutine {
             let actual_accel = desired_accel.clamp(-MAX_ACCEL, MAX_ACCEL);
             let actual_speed =
                 (last_speed * last_speed + 2.0 * actual_accel * distance as f32).sqrt();
-            let time = (actual_speed - last_speed) / actual_accel;
-            println!("> planned segment, enter at {last_speed}, want exit at {max_exit_speed}, got exit at {actual_speed}, len {distance}, desired accel {desired_accel}, actual accel {actual_accel}, time {time}");
+            let time = if actual_speed != last_speed {
+                (actual_speed - last_speed) / actual_accel
+            } else {
+                distance / actual_speed
+            };
+            println!("> planned segment {}, enter at {last_speed}, want exit at {max_exit_speed}, got exit at {actual_speed}, len {distance}, desired accel {desired_accel}, actual accel {actual_accel}, time {time}", seg.seg_id);
 
             self.scheduled_segments
                 .push_back((seg, last_speed, actual_accel, time));
@@ -355,8 +378,8 @@ impl EntityCoroutine for CartCoroutine {
             self.last_speed = segment.1 + (segment.2 * segment.3);
 
             println!(
-                "returning a movement, speed is {}, accel is {}",
-                self.last_speed, segment.2
+                "returning a movement, speed is {}, accel is {}, time is {}",
+                self.last_speed, segment.2, segment.3
             );
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
                 perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMovement(
