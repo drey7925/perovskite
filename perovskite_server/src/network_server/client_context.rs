@@ -1862,7 +1862,14 @@ impl EntityEventSender {
                         return Ok(());
                     }
                     self.present_ids.insert(entity.id);
-                    messages.push(entities_proto::EntityUpdate {
+                    println!(
+                        "sending modcount {}, current time {}/{}, next time {}",
+                        entity.mod_count,
+                        entity.current_move_elapsed,
+                        entity.current_move.move_time,
+                        entity.next_move.as_ref().map_or(-9999.0, |m| m.move_time)
+                    );
+                    let message = entities_proto::EntityUpdate {
                         id: entity.id,
                         current_move: Some(entities_proto::EntityMove {
                             start_position: Some(entity.starting_position.try_into()?),
@@ -1900,7 +1907,8 @@ impl EntityEventSender {
                         }),
                         remove: false,
                         mod_count: entity.mod_count,
-                    });
+                    };
+                    messages.push((message));
                     Ok(())
                 })?;
             }

@@ -77,17 +77,30 @@ pub(crate) struct GameEntity {
     current_move_started: Instant,
     pub(crate) next_move: EntityMove,
     pub(crate) mod_count: u64,
+
+    // debug only
+    created: Instant,
 }
 impl GameEntity {
     pub(crate) fn advance_state(&mut self) {
         let now = Instant::now();
         let elapsed = (now - self.current_move_started).as_secs_f32();
         if elapsed > self.current_move.total_time_seconds {
+            //println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
             // total_time_seconds can't be NaN, inf, or overly large since otherwise we wouldn't ever complete the move
+            // So this should be safe.
             self.current_move_started +=
                 Duration::from_secs_f32(self.current_move.total_time_seconds);
 
             self.current_move = self.next_move;
+
+            if self.current_move.total_time_seconds == f32::MAX {
+                //println!("Staying forever");
+                self.mod_count = u64::MAX;
+            } else {
+                //println!("Advancing, {} seconds left", self.current_move.total_time_seconds);
+            }
+
             // And consume the next move
             self.next_move = EntityMove::stay_forever(
                 self.current_move
@@ -103,14 +116,29 @@ impl GameEntity {
         next_move: Option<EntityMove>,
         mod_count: u64,
     ) {
+        //println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
+        //println!("incoming mod count: {}, current mod count: {}", mod_count, self.mod_count);
+        //println!("current move elapsed: {}", current_move_elapsed);
+        //println!("currtent move time: {}", current_move.total_time_seconds);
+        //println!("next move time: {}", next_move.as_ref().map_or(-9999.0, |m| m.total_time_seconds));
+        //println!("available buffer: {}", self.current_move.total_time_seconds - current_move_elapsed + next_move.as_ref().map_or(0.0, |m| m.total_time_seconds));
+
         if self.mod_count != mod_count {
+            //println!("updating current move");
             self.current_move = current_move;
+        }
+        if self.mod_count != mod_count && (self.mod_count + 1 != mod_count) {
+            //println!("Retiming");
+            let old_cms = self.current_move_started;
             self.current_move_started =
                 Instant::now() - Duration::from_secs_f32(current_move_elapsed);
+            //println!("Delta: {}", (self.current_move_started - old_cms).as_secs_f32());
         }
         if let Some(next_move) = next_move {
+            //println!("updating next move");
             self.next_move = next_move;
         } else {
+            //println!("Missing next move");
             self.next_move = EntityMove::stay_forever(
                 self.current_move
                     .qproj(self.current_move.total_time_seconds),
@@ -138,6 +166,11 @@ impl GameEntity {
         current_move_elapsed: f32,
         next_move: Option<EntityMove>,
     ) -> Result<GameEntity> {
+        //println!("+++ @ {} +++", Instant::now().elapsed().as_secs_f32());
+        //println!("current move elapsed: {}", current_move_elapsed);
+        //println!("current move time: {}", current_move.total_time_seconds);
+        //println!("next move time: {}", next_move.as_ref().map_or(-9999.0, |m| m.total_time_seconds));
+
         Ok(Self {
             next_move: next_move.unwrap_or(EntityMove::stay_forever(
                 current_move.qproj(current_move.total_time_seconds),
@@ -146,6 +179,8 @@ impl GameEntity {
             current_move_started: Instant::now()
                 - Duration::try_from_secs_f32(current_move_elapsed)?,
             mod_count: u64::MAX,
+
+            created: Instant::now(),
         })
     }
 }
