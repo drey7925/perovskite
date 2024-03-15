@@ -253,7 +253,7 @@ pub(crate) async fn make_client_contexts(
     let entity_sender = EntityEventSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
-        present_ids: FxHashSet::default(),
+        sent_entities: FxHashMap::default(),
         last_update: game_state.server_start_time(),
     };
 
@@ -1344,7 +1344,7 @@ impl InboundWorker {
                             .context("Missing position")?
                             .try_into()?,
                         Movement::stop_and_stay(0.0),
-                        None,
+                        crate::game_state::entities::InitialMoveQueue::SingleMove(None),
                     )
                     .await;
             }
@@ -1813,7 +1813,8 @@ impl MiscOutboundWorker {
 struct EntityEventSender {
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
     context: Arc<SharedContext>,
-    present_ids: FxHashSet<u64>,
+    // entity id -> last sequence number we've sent
+    sent_entities: FxHashMap<u64, u64>,
     last_update: Instant,
 }
 impl EntityEventSender {
@@ -1828,7 +1829,7 @@ impl EntityEventSender {
         }
 
         // TODO - optimize this with actual awakenings based on relevant entities
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut interval = tokio::time::interval(Duration::from_millis(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -1843,13 +1844,14 @@ impl EntityEventSender {
         Ok(())
     }
     async fn do_tick(&mut self) -> Result<()> {
+        // todo - this requires optimization
         let messages = {
             let mut messages = vec![];
 
             let entities = self.context.game_state.entities();
 
             // TODO this is suboptimal
-            let known_to_us = self.present_ids.iter().cloned().collect::<HashSet<_>>();
+            let known_to_us = self.sent_entities.keys().cloned().collect::<HashSet<_>>();
             let mut still_valid = HashSet::new();
 
             for shard in entities.shards() {
@@ -1861,54 +1863,48 @@ impl EntityEventSender {
                     if entity.last_nontrivial_modification < self.last_update {
                         return Ok(());
                     }
-                    self.present_ids.insert(entity.id);
-                    println!(
-                        "sending modcount {}, current time {}/{}, next time {}",
-                        entity.mod_count,
-                        entity.current_move_elapsed,
-                        entity.current_move.move_time,
-                        entity.next_move.as_ref().map_or(-9999.0, |m| m.move_time)
-                    );
+
+                    let last_sent_sequence = self.sent_entities.get(&entity.id).cloned();
+                    let last_available_sequence = entity
+                        .next_moves
+                        .last()
+                        .map(|m| m.sequence)
+                        .unwrap_or(entity.current_move.sequence);
+
+                    if last_sent_sequence == Some(last_available_sequence) {
+                        // Client's view of this entity is up to date
+                        return Ok(());
+                    }
+                    self.sent_entities
+                        .insert(entity.id, last_available_sequence);
+
+                    let mut moves_to_send = Vec::with_capacity(8);
+                    let mut pos = entity.starting_position;
+                    for m in std::iter::once(&entity.current_move).chain(entity.next_moves.iter()) {
+                        if m.sequence > last_sent_sequence.unwrap_or(0) {
+                            moves_to_send.push(entities_proto::EntityMove {
+                                sequence: m.sequence,
+                                start_position: Some(pos.try_into()?),
+                                velocity: Some(m.movement.velocity.try_into()?),
+                                acceleration: Some(m.movement.acceleration.try_into()?),
+                                face_direction: m.movement.face_direction,
+                                total_time_seconds: m.movement.move_time,
+                            });
+                        }
+
+                        pos = m.movement.pos_after_move(pos);
+                    }
+
                     let message = entities_proto::EntityUpdate {
                         id: entity.id,
-                        current_move: Some(entities_proto::EntityMove {
-                            start_position: Some(entity.starting_position.try_into()?),
-                            velocity: Some(
-                                entity
-                                    .current_move
-                                    .velocity
-                                    .cast()
-                                    .context("Invalid velocity")?
-                                    .try_into()?,
-                            ),
-                            acceleration: Some(
-                                entity
-                                    .current_move
-                                    .acceleration
-                                    .cast()
-                                    .context("Invalid acceleration")?
-                                    .try_into()?,
-                            ),
-                            total_time_seconds: entity.current_move.move_time,
-                            face_direction: entity.current_move.face_direction,
-                        }),
-                        current_move_time: entity.current_move_elapsed,
-                        next_move: entity.next_move.and_then(|m| {
-                            let start_position = entity
-                                .current_move
-                                .pos_after(entity.starting_position, entity.current_move.move_time);
-                            Some(entities_proto::EntityMove {
-                                start_position: Some(start_position.try_into().ok()?),
-                                velocity: Some(m.velocity.try_into().ok()?),
-                                acceleration: Some(m.acceleration.try_into().ok()?),
-                                total_time_seconds: m.move_time,
-                                face_direction: m.face_direction,
-                            })
-                        }),
+                        planned_move: moves_to_send,
                         remove: false,
-                        mod_count: entity.mod_count,
+                        current_move_sequence: entity.current_move.sequence,
+                        // This has already been corrected for delta_bias in cases where a move began
+                        // in the middle of a poll cycle
+                        current_move_progress: entity.current_move_elapsed,
                     };
-                    messages.push((message));
+                    messages.push(message);
                     Ok(())
                 })?;
             }
@@ -1917,13 +1913,12 @@ impl EntityEventSender {
             for &entity_id in to_remove.into_iter() {
                 messages.push(entities_proto::EntityUpdate {
                     id: entity_id,
-                    current_move: None,
-                    current_move_time: 0.0,
-                    next_move: None,
+                    planned_move: vec![],
+                    current_move_sequence: 0,
+                    current_move_progress: 0.0,
                     remove: true,
-                    mod_count: 0,
                 });
-                self.present_ids.remove(&entity_id);
+                self.sent_entities.remove(&entity_id);
             }
 
             messages

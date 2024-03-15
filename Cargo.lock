@@ -614,6 +614,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "circular-buffer"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8da9d36ad01a07a2c380bdece16e418820ffa8eda01d3debed9bff3f296a84f"
+
+[[package]]
 name = "clang-sys"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2545,6 +2551,7 @@ dependencies = [
  "bitvec",
  "cbloom",
  "cgmath",
+ "circular-buffer",
  "clap",
  "directories",
  "egui",
@@ -2649,9 +2656,11 @@ version = "0.0.3"
 dependencies = [
  "anyhow",
  "argon2",
+ "arrayvec",
  "bitvec",
  "cbloom",
  "cgmath",
+ "circular-buffer",
  "clap",
  "ctor",
  "env_logger",

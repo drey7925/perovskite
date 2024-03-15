@@ -20,17 +20,9 @@ pub(crate) struct EntityMove {
     acceleration: Vector3<f32>,
     total_time_seconds: f32,
     face_direction: f32,
+    seq: u64,
 }
 impl EntityMove {
-    fn stay_forever(position: Vector3<f64>) -> EntityMove {
-        EntityMove {
-            start_pos: position,
-            velocity: vec3(0.0, 0.0, 0.0),
-            acceleration: vec3(0.0, 0.0, 0.0),
-            total_time_seconds: f32::MAX,
-            face_direction: 0.0,
-        }
-    }
     fn qproj(&self, time: f32) -> Vector3<f64> {
         vec3(
             qproj(self.start_pos.x, self.velocity.x, self.acceleration.x, time),
@@ -67,16 +59,18 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
                 .try_into()?,
             total_time_seconds: value.total_time_seconds,
             face_direction: value.face_direction,
+            seq: value.sequence,
         })
     }
 }
 
 pub(crate) struct GameEntity {
     // todo refine
-    pub(crate) current_move: EntityMove,
+    // 9 should be enough, server has a queue depth of 8
+    pub(crate) move_queue: circular_buffer::CircularBuffer<9, EntityMove>,
     current_move_started: Instant,
-    pub(crate) next_move: EntityMove,
-    pub(crate) mod_count: u64,
+    pub(crate) current_move_sequence: u64,
+    pub fallback_position: Vector3<f64>,
 
     // debug only
     created: Instant,
@@ -85,66 +79,79 @@ impl GameEntity {
     pub(crate) fn advance_state(&mut self) {
         let now = Instant::now();
         let elapsed = (now - self.current_move_started).as_secs_f32();
-        if elapsed > self.current_move.total_time_seconds {
-            //println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
-            // total_time_seconds can't be NaN, inf, or overly large since otherwise we wouldn't ever complete the move
-            // So this should be safe.
-            self.current_move_started +=
-                Duration::from_secs_f32(self.current_move.total_time_seconds);
 
-            self.current_move = self.next_move;
-
-            if self.current_move.total_time_seconds == f32::MAX {
-                //println!("Staying forever");
-                self.mod_count = u64::MAX;
-            } else {
-                //println!("Advancing, {} seconds left", self.current_move.total_time_seconds);
-            }
-
-            // And consume the next move
-            self.next_move = EntityMove::stay_forever(
-                self.current_move
-                    .qproj(self.current_move.total_time_seconds),
+        if self
+            .move_queue
+            .front()
+            .is_some_and(|m| elapsed > m.total_time_seconds)
+        {
+            println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
+            println!(
+                "remaining buffer: {:?}",
+                self.move_queue
+                    .iter()
+                    .map(|m| m.total_time_seconds)
+                    .sum::<f32>()
             );
+            let popped_move = self.move_queue.pop_front().unwrap();
+            self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
+            self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
         }
     }
 
     pub(crate) fn update(
         &mut self,
-        current_move: EntityMove,
-        current_move_elapsed: f32,
-        next_move: Option<EntityMove>,
-        mod_count: u64,
-    ) {
-        //println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
-        //println!("incoming mod count: {}, current mod count: {}", mod_count, self.mod_count);
-        //println!("current move elapsed: {}", current_move_elapsed);
-        //println!("currtent move time: {}", current_move.total_time_seconds);
-        //println!("next move time: {}", next_move.as_ref().map_or(-9999.0, |m| m.total_time_seconds));
-        //println!("available buffer: {}", self.current_move.total_time_seconds - current_move_elapsed + next_move.as_ref().map_or(0.0, |m| m.total_time_seconds));
+        update: &entities_proto::EntityUpdate,
+    ) -> Result<(), &'static str> {
+        println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
+        println!(
+            "Got {} -> {}, while CMS is {}",
+            update
+                .planned_move
+                .iter()
+                .map(|m| m.sequence)
+                .min()
+                .unwrap(),
+            update
+                .planned_move
+                .iter()
+                .map(|m| m.sequence)
+                .max()
+                .unwrap(),
+            self.current_move_sequence
+        );
 
-        if self.mod_count != mod_count {
-            //println!("updating current move");
-            self.current_move = current_move;
+        while self
+            .move_queue
+            .front()
+            .is_some_and(|m| m.seq < update.current_move_sequence)
+        {
+            self.move_queue.pop_front().unwrap();
         }
-        if self.mod_count != mod_count && (self.mod_count + 1 != mod_count) {
-            //println!("Retiming");
-            let old_cms = self.current_move_started;
+        for m in &update.planned_move {
+            self.move_queue.push_back(m.try_into().map_err(|_| {
+                dbg!(m);
+
+                "invalid planned move"
+            })?);
+        }
+
+        if update.current_move_sequence != self.current_move_sequence {
+            println!(
+                "retiming {} -> {}",
+                self.current_move_sequence, update.current_move_sequence
+            );
+            println!(
+                "{:?} -> {:?}",
+                self.current_move_started,
+                Instant::now() - Duration::from_secs_f32(update.current_move_progress)
+            );
+            self.current_move_sequence = update.current_move_sequence;
             self.current_move_started =
-                Instant::now() - Duration::from_secs_f32(current_move_elapsed);
-            //println!("Delta: {}", (self.current_move_started - old_cms).as_secs_f32());
+                Instant::now() - Duration::from_secs_f32(update.current_move_progress);
         }
-        if let Some(next_move) = next_move {
-            //println!("updating next move");
-            self.next_move = next_move;
-        } else {
-            //println!("Missing next move");
-            self.next_move = EntityMove::stay_forever(
-                self.current_move
-                    .qproj(self.current_move.total_time_seconds),
-            )
-        }
-        self.mod_count = mod_count;
+
+        Ok(())
     }
 
     pub(crate) fn as_transform(&self, base_position: Vector3<f64>) -> cgmath::Matrix4<f32> {
@@ -155,31 +162,37 @@ impl GameEntity {
         .unwrap()
     }
 
-    fn position(&self) -> Vector3<f64> {
+    pub(crate) fn position(&self) -> Vector3<f64> {
         let time = (Instant::now() - self.current_move_started).as_secs_f32();
-        self.current_move.qproj(time)
+        self.move_queue
+            .front()
+            .map(|m| m.qproj(time))
+            .unwrap_or(self.fallback_position)
     }
 
-    pub(crate) fn new(
-        _id: u64,
-        current_move: EntityMove,
-        current_move_elapsed: f32,
-        next_move: Option<EntityMove>,
-    ) -> Result<GameEntity> {
-        //println!("+++ @ {} +++", Instant::now().elapsed().as_secs_f32());
-        //println!("current move elapsed: {}", current_move_elapsed);
-        //println!("current move time: {}", current_move.total_time_seconds);
-        //println!("next move time: {}", next_move.as_ref().map_or(-9999.0, |m| m.total_time_seconds));
+    pub(crate) fn from_proto(update: &entities_proto::EntityUpdate) -> Result<GameEntity, &str> {
+        if update.planned_move.is_empty() {
+            return Err("Empty move plan");
+        }
+        let mut queue = circular_buffer::CircularBuffer::new();
+        for planned_move in &update.planned_move {
+            queue.push_back(planned_move.try_into().map_err(|_| {
+                dbg!(planned_move);
 
-        Ok(Self {
-            next_move: next_move.unwrap_or(EntityMove::stay_forever(
-                current_move.qproj(current_move.total_time_seconds),
-            )),
-            current_move,
+                "invalid planned move"
+            })?);
+        }
+        println!("cms: {:?}", update.current_move_progress);
+        Ok(GameEntity {
+            fallback_position: queue
+                .back()
+                .map(|m: &EntityMove| m.qproj(m.total_time_seconds))
+                .unwrap(),
+            move_queue: queue,
             current_move_started: Instant::now()
-                - Duration::try_from_secs_f32(current_move_elapsed)?,
-            mod_count: u64::MAX,
-
+                - Duration::try_from_secs_f32(update.current_move_progress)
+                    .map_err(|_| "invalid current move progress")?,
+            current_move_sequence: update.current_move_sequence,
             created: Instant::now(),
         })
     }

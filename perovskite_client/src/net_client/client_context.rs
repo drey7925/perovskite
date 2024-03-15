@@ -676,50 +676,23 @@ impl InboundContext {
             return Ok(());
         }
 
-        let current_move: entities::EntityMove = match &update.current_move {
-            Some(position) => position.try_into()?,
-            None => {
-                return self
-                    .send_bugcheck(format!(
-                        "Got move for entity {} with no position",
-                        update.id
-                    ))
-                    .await
-            }
-        };
-        if !update.current_move_time.is_finite() {
-            return self
-                .send_bugcheck(format!(
-                    "Got move for entity {} with invalid current_move_time",
-                    update.id
-                ))
-                .await;
-        }
-
-        let next_move = update
-            .next_move
-            .as_ref()
-            .map(|x| x.try_into())
-            .transpose()?;
-
-        match self.client_state.entities.lock().entities.entry(update.id) {
+        let outcome = match self.client_state.entities.lock().entities.entry(update.id) {
             Entry::Occupied(mut entry) => {
                 // TODO we need to correct for network delay here
-                entry.get_mut().update(
-                    current_move,
-                    update.current_move_time,
-                    next_move,
-                    update.mod_count,
-                );
+                entry.get_mut().update(update)
             }
-            Entry::Vacant(entry) => {
-                entry.insert(GameEntity::new(
-                    update.id,
-                    current_move,
-                    update.current_move_time,
-                    next_move,
-                )?);
-            }
+            Entry::Vacant(entry) => match GameEntity::from_proto(update) {
+                Ok(x) => {
+                    entry.insert(x);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            },
+        };
+
+        if let Err(e) = outcome {
+            self.send_bugcheck(format!("Failed to handle entity update: {:?}", e))
+                .await?;
         }
 
         Ok(())
