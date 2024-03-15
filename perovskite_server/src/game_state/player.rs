@@ -43,6 +43,7 @@ use crate::{
 
 use super::{
     client_ui::Popup,
+    entities::{EntityTypeId, CLASS_PLAYER_ENTITY},
     event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
     GameState,
@@ -126,7 +127,14 @@ impl Player {
             .with_context(|| "Missing last_position in StoredPlayer")?
             .try_into()?;
 
-        let entity_id = game_state.entities().new_entity_blocking(position, None);
+        let entity_id = game_state.entities().new_entity_blocking(
+            position,
+            None,
+            EntityTypeId {
+                class: CLASS_PLAYER_ENTITY,
+                data: Some(proto.name.as_bytes().into()),
+            },
+        );
 
         Ok(Player {
             name: proto.name.clone(),
@@ -189,7 +197,14 @@ impl Player {
             .collect();
 
         let position = (game_state.game_behaviors().spawn_location)(name);
-        let entity_id = game_state.entities().new_entity_blocking(position, None);
+        let entity_id = game_state.entities().new_entity_blocking(
+            position,
+            None,
+            EntityTypeId {
+                class: CLASS_PLAYER_ENTITY,
+                data: Some(name.as_bytes().into()),
+            },
+        );
 
         let player = Player {
             name: name.to_string(),

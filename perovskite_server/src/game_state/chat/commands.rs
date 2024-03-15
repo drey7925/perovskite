@@ -14,7 +14,10 @@ use tonic::async_trait;
 
 use crate::{
     game_state::{
-        entities::{CoroutineResult, EntityCoroutine, EntityCoroutineServices, Movement},
+        entities::{
+            CoroutineResult, EntityCoroutine, EntityCoroutineServices, EntityTypeId, Movement,
+            CLASS_BIKESHED_DEEP_QUEUE_ENTITY, CLASS_BIKESHED_GENERIC_ENTITY,
+        },
         event::{EventInitiator, HandlerContext},
     },
     run_async_handler,
@@ -456,6 +459,10 @@ impl ChatCommandHandler for SpawnTestEntityCommand {
                                 rng.gen_range(-0.25..0.25),
                             ),
                         Some(Box::pin(TestEntityCoro {})),
+                        EntityTypeId {
+                            class: CLASS_BIKESHED_GENERIC_ENTITY,
+                            data: None,
+                        },
                     );
                 }
                 Ok(())
@@ -466,6 +473,10 @@ impl ChatCommandHandler for SpawnTestEntityCommand {
             .new_entity(
                 context.initiator().position().unwrap().position,
                 Some(Box::pin(TestEntityCoro {})),
+                EntityTypeId {
+                    class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+                    data: None,
+                },
             )
             .await;
         context
@@ -485,6 +496,7 @@ impl EntityCoroutine for TestEntityCoro {
         _current_position: Vector3<f64>,
         whence: Vector3<f64>,
         _when: f32,
+        _queue_space: usize,
     ) -> CoroutineResult {
         //println!("Planning move from {whence:?}");
         let start_pos = BlockCoordinate::new(
@@ -508,7 +520,7 @@ impl EntityCoroutine for TestEntityCoro {
         if clear_dist > 0 {
             let time = clear_dist as f32;
             CoroutineResult::Successful(
-                crate::game_state::entities::EntityMoveDecision::QueueUpMovement(Movement {
+                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(Movement {
                     velocity: Vector3::new(0.0, 0.0, 1.0),
                     acceleration: Vector3::new(0.0, 0.0, 0.0),
                     face_direction: 0.0,
@@ -517,7 +529,7 @@ impl EntityCoroutine for TestEntityCoro {
             )
         } else {
             CoroutineResult::Successful(
-                crate::game_state::entities::EntityMoveDecision::QueueUpMovement(Movement {
+                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(Movement {
                     velocity: Vector3::new(0.0, 0.0, 0.0),
                     acceleration: Vector3::new(0.0, 0.0, 0.0),
                     face_direction: 0.0,

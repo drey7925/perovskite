@@ -13,6 +13,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use cgmath::{vec3, Vector3, Zero};
+use circular_buffer::CircularBuffer;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
     block_id::BlockId, coordinates::BlockCoordinate, protocol::entities::EntityMove,
@@ -40,7 +41,7 @@ const CONTROL_AUTONOMOUS: u8 = 4;
 /// This entity should follow simple physics without needing a coroutine to drive it.
 const CONTROL_SIMPLE_PHYSICS: u8 = 8;
 
-/// This entity has no upcoming move and needs a move to be calculated
+/// This entity has space in its move queue and needs a move to be calculated
 const CONTROL_AUTONOMOUS_NEEDS_CALC: u8 = 16;
 
 /// This entity has a coroutine, but it's suspended while waiting for a completion from tokio
@@ -142,12 +143,13 @@ impl EntityManager {
         &self,
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
+        entity_def: EntityTypeId,
     ) -> u64 {
         let id = self.assign_next_id();
         let shard = self.get_shard(id);
         shard
             .pending_actions_tx
-            .send(EntityAction::Insert(id, position, coroutine))
+            .send(EntityAction::Insert(id, position, coroutine, entity_def))
             .await
             .context("Entity receiver disappeared")
             .unwrap();
@@ -157,12 +159,13 @@ impl EntityManager {
         &self,
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
+        entity_def: EntityTypeId,
     ) -> u64 {
         let id = self.assign_next_id();
         let shard = self.get_shard(id);
         shard
             .pending_actions_tx
-            .blocking_send(EntityAction::Insert(id, position, coroutine))
+            .blocking_send(EntityAction::Insert(id, position, coroutine, entity_def))
             .context("Entity receiver disappeared")
             .unwrap();
         id
@@ -195,7 +198,7 @@ impl EntityManager {
         id: u64,
         position: Vector3<f64>,
         current: Movement,
-        next: Option<Movement>,
+        next: InitialMoveQueue,
     ) {
         let shard = self.get_shard(id);
         shard
@@ -211,7 +214,7 @@ impl EntityManager {
         id: u64,
         position: Vector3<f64>,
         current: Movement,
-        next: Option<Movement>,
+        next: InitialMoveQueue,
     ) {
         let shard = self.get_shard(id);
         shard
@@ -220,18 +223,43 @@ impl EntityManager {
             .context("Entity receiver disappeared")
             .unwrap();
     }
+
+    fn get_by_type(&self, entity_type: EntityTypeId) -> &EntityDef {
+        if entity_type.class == CLASS_BIKESHED_DEEP_QUEUE_ENTITY {
+            &FAKE_DEEP_DEF
+        } else {
+            &FAKE_SHALLOW_DEF
+        }
+    }
 }
+
+static FAKE_SHALLOW_DEF: EntityDef = EntityDef {
+    short_name: String::new(),
+    move_queue_type: MoveQueueType::SingleMove,
+};
+static FAKE_DEEP_DEF: EntityDef = EntityDef {
+    short_name: String::new(),
+    move_queue_type: MoveQueueType::Buffer8,
+};
 
 // Note that if an entity has neither CONTROL_AUTONOMOUS nor CONTROL_SIMPLE_PHYSICS, it will
 // only move when programatically requested to do so by a caller
 #[non_exhaustive]
 pub enum EntityMoveDecision {
-    /// Once the current movement ends, start the specified movement.
-    /// This will give the smoothest animation.
-    QueueUpMovement(Movement),
+    /// Add this movement to the queue.
+    /// Queueing movements will give the smoothest animation as long as the queue
+    /// is not allowed to be exhausted
+    QueueSingleMovement(Movement),
+    /// Add these movements to the queue.
+    ///
+    /// Note: The type of this variant may change, e.g. if we decide to avoid
+    /// memory allocations
+    QueueUpMultiple(Vec<Movement>),
     /// Get rid of the current movement, set the position, start the new movement immediately, and queue up the following movement (if it's Some).
     /// Note that this may lead to visual glitches due to unsmoothed movement and network latency.
-    ResetMovement(Vector3<f64>, Movement, Option<Movement>),
+    ///
+    /// This can be used to change the type of move queue if needed.
+    ResetMovement(Vector3<f64>, Movement, InitialMoveQueue),
     /// Despawn the entity immediately
     ImmediateDespawn,
     /// Ask again later, in this many seconds
@@ -259,8 +287,12 @@ impl From<EntityMoveDecision> for CoroutineResult {
     }
 }
 
+pub(crate) struct StoredMovement {
+    pub(crate) sequence: u64,
+    pub(crate) movement: Movement,
+}
+
 /// A single step in the path plan for an entity.
-/// At the moment, the entity core array can only hold a single step at a time.
 pub struct Movement {
     pub velocity: Vector3<f32>,
     pub acceleration: Vector3<f32>,
@@ -286,6 +318,32 @@ impl Movement {
             qproj(start.z, self.velocity.z, self.acceleration.z, time),
         )
     }
+    pub fn pos_after_move(&self, start: Vector3<f64>) -> Vector3<f64> {
+        self.pos_after(start, self.move_time)
+    }
+}
+
+const LARGEST_POSSIBLE_QUEUE_SIZE: usize = 8;
+
+pub enum InitialMoveQueue {
+    /// Store up a single movement. If none, the callback will be reinvoked shortly
+    SingleMove(Option<Movement>),
+    /// Store up to eight moves. If the input has cardinality less than 8, the callback
+    /// will be reinvoked shortly
+    // Impl note: We expect this to be used fairly rarely, since most entities should
+    // avoid reinitializing their movement queue too often. Also, we want to keep the
+    // size of the return enum from CoroutineResult small, so we box this.
+    Buffer8(Box<arrayvec::ArrayVec<Movement, 8>>),
+    // TODO: Deeper buffers if necessary. 8 moves of one block each take less than 100 msec
+    // when running an entity at the target max speed of 320 km/h
+}
+impl InitialMoveQueue {
+    fn has_slack(&self) -> bool {
+        match self {
+            InitialMoveQueue::SingleMove(m) => m.is_none(),
+            InitialMoveQueue::Buffer8(m) => m.len() < 8,
+        }
+    }
 }
 
 /// Services available to the entity coroutine.
@@ -301,7 +359,8 @@ impl<'a> EntityCoroutineServices<'a> {
     /// Gets the block at the specified coordinate, or None if the chunk isn't loaded.
     /// Forwards to the game map's try_get_block.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
-        self.map.try_get_block(coord)
+        // TODO restore
+        tokio::task::block_in_place(|| Some(self.map.get_block(coord).unwrap()))
     }
 }
 
@@ -314,6 +373,7 @@ pub trait EntityCoroutine: Send + Sync + 'static {
     ///   * current_position: The current position of the entity
     ///   * whence: The position of the entity at the time when the current move finishes. The returned move will start from approximately that place.
     ///   * when: The time (seconds from now) when the current move finishes. The returned move will start at that time.
+    ///   * queue_space: The amount of space available in the move queue
     ///
     /// Returns:
     ///     The next move for the entity
@@ -323,10 +383,77 @@ pub trait EntityCoroutine: Send + Sync + 'static {
         current_position: Vector3<f64>,
         whence: Vector3<f64>,
         when: f32,
+        queue_space: usize,
     ) -> CoroutineResult;
 }
 
 const ID_MASK: u64 = (1 << 48) - 1;
+
+enum MoveQueue {
+    SingleMove(Option<StoredMovement>),
+    Buffer8(Box<circular_buffer::CircularBuffer<8, StoredMovement>>),
+}
+impl MoveQueue {
+    fn pop(&mut self) -> Option<StoredMovement> {
+        match self {
+            MoveQueue::SingleMove(m) => m.take(),
+            MoveQueue::Buffer8(b) => {
+                let m = b.pop_front();
+                b.make_contiguous();
+                m
+            }
+        }
+    }
+    fn remaining_capacity(&self) -> usize {
+        match self {
+            MoveQueue::SingleMove(x) => {
+                if x.is_some() {
+                    0
+                } else {
+                    1
+                }
+            }
+            MoveQueue::Buffer8(b) => b.capacity() - b.len(),
+        }
+    }
+
+    /// Pushes a movement into the queue. If the queue is full, this will panic.
+    fn push(&mut self, movement: StoredMovement) {
+        match self {
+            MoveQueue::SingleMove(x) => {
+                assert!(x.is_none());
+                *x = Some(movement);
+            }
+            MoveQueue::Buffer8(b) => {
+                b.try_push_back(movement)
+                    .map_err(|_| "Buffer overflow")
+                    .unwrap();
+                b.make_contiguous();
+            }
+        }
+    }
+
+    fn occupancy(&self) -> u64 {
+        match self {
+            MoveQueue::SingleMove(x) => x.is_some() as u64,
+            MoveQueue::Buffer8(b) => b.len() as u64,
+        }
+    }
+
+    fn as_slice(&self) -> &[StoredMovement] {
+        match self {
+            MoveQueue::SingleMove(x) => x.as_ref().map(|x| std::slice::from_ref(x)).unwrap_or(&[]),
+            MoveQueue::Buffer8(x) => {
+                let (left_slice, right_slice) = x.as_slices();
+                if right_slice.is_empty() {
+                    left_slice
+                } else {
+                    panic!("Buffer8 should be contiguous");
+                }
+            }
+        }
+    }
+}
 
 /// The core of entity data. For performance reasons, this is stored in struct-of-arrays
 /// form, so that SIMD operations can be used to access it.
@@ -353,37 +480,34 @@ struct EntityCoreArray {
     // Tracks the last modification that actually conveys new information (e.g. to a client)
     // Simply exhausting a move and starting the next queued move does not count.
     last_nontrivial_modification: Vec<u64>,
-    // Position
+    // The current movement is broken out into struct-of-arrays so that SIMD can be used
+    // for fast checks.
+    //
+    // The current move's sequence number.
+    current_move_seq: Vec<u64>,
+    // Position at the start of the current move
     x: Vec<f64>,
     y: Vec<f64>,
     z: Vec<f64>,
-    // Velocity
+    // Velocity at the start of the current move
     xv: Vec<f32>,
     yv: Vec<f32>,
     zv: Vec<f32>,
-    // Acceleration
+    // Acceleration throughout the current move
     xa: Vec<f32>,
     ya: Vec<f32>,
     za: Vec<f32>,
-    // Face direction, radians
+    // Face direction, radians, during the current move
     theta_y: Vec<f32>,
     // The total time for the current move
     move_time: Vec<f32>,
     // The time already finished in the current move
     move_time_elapsed: Vec<f32>,
+    // When we next need to recalculate the current move
     recalc_in: Vec<f32>,
 
-    // Buffer one additional move so we don't have to stop while waiting for it to be calculated
-    next_xv: Vec<f32>,
-    next_yv: Vec<f32>,
-    next_zv: Vec<f32>,
-    next_xa: Vec<f32>,
-    next_ya: Vec<f32>,
-    next_za: Vec<f32>,
-    next_theta_y: Vec<f32>,
-    next_move_time: Vec<f32>,
+    move_queue: Vec<MoveQueue>,
 
-    mod_count: Vec<u64>,
     // Sometimes, we might set the state of an entity outside of the usual polling cycle.
     // This indicates how much to subtract from delta_time on the next polling cycle to
     // account for this discrepancy
@@ -402,6 +526,7 @@ impl EntityCoreArray {
         assert_eq!(self.id.len(), self.len);
         assert_eq!(self.control.len(), self.len);
         assert_eq!(self.last_nontrivial_modification.len(), self.len);
+        assert_eq!(self.current_move_seq.len(), self.len);
         assert_eq!(self.x.len(), self.len);
         assert_eq!(self.y.len(), self.len);
         assert_eq!(self.z.len(), self.len);
@@ -414,15 +539,7 @@ impl EntityCoreArray {
         assert_eq!(self.theta_y.len(), self.len);
         assert_eq!(self.move_time_elapsed.len(), self.len);
         assert_eq!(self.recalc_in.len(), self.len);
-        assert_eq!(self.next_xv.len(), self.len);
-        assert_eq!(self.next_yv.len(), self.len);
-        assert_eq!(self.next_zv.len(), self.len);
-        assert_eq!(self.next_xa.len(), self.len);
-        assert_eq!(self.next_ya.len(), self.len);
-        assert_eq!(self.next_za.len(), self.len);
-        assert_eq!(self.next_theta_y.len(), self.len);
-        assert_eq!(self.next_move_time.len(), self.len);
-        assert_eq!(self.mod_count.len(), self.len);
+        assert_eq!(self.move_queue.len(), self.len);
         assert_eq!(self.coroutine.len(), self.len);
         assert_eq!(self.next_delta_bias.len(), self.len);
     }
@@ -476,51 +593,56 @@ impl EntityCoreArray {
         &mut self,
         index: usize,
         pos: Vector3<f64>,
-        m1: Movement,
-        m2: Option<Movement>,
+        initial_movement: Movement,
+        queued_movements: InitialMoveQueue,
         time_bias: f32,
     ) {
         self.last_nontrivial_modification[index] = self.to_offset(Instant::now());
         self.x[index] = pos.x;
         self.y[index] = pos.y;
         self.z[index] = pos.z;
-        self.xv[index] = m1.velocity.x;
-        self.yv[index] = m1.velocity.y;
-        self.zv[index] = m1.velocity.z;
-        self.xa[index] = m1.acceleration.x;
-        self.ya[index] = m1.acceleration.y;
-        self.za[index] = m1.acceleration.z;
-        self.theta_y[index] = m1.face_direction;
-        self.move_time[index] = m1.move_time;
+        self.xv[index] = initial_movement.velocity.x;
+        self.yv[index] = initial_movement.velocity.y;
+        self.zv[index] = initial_movement.velocity.z;
+        self.xa[index] = initial_movement.acceleration.x;
+        self.ya[index] = initial_movement.acceleration.y;
+        self.za[index] = initial_movement.acceleration.z;
+        self.theta_y[index] = initial_movement.face_direction;
+        self.move_time[index] = initial_movement.move_time;
         self.move_time_elapsed[index] = 0.0;
         self.next_delta_bias[index] = time_bias;
-        self.recalc_in[index] = if m2.is_some() {
+        self.recalc_in[index] = if queued_movements.has_slack() {
             f32::MAX
         } else if self.control[index] & CONTROL_AUTONOMOUS == 0 {
             f32::MAX
         } else {
             0.0
         };
-        if let Some(m2) = m2 {
-            self.next_xv[index] = m2.velocity.x;
-            self.next_yv[index] = m2.velocity.y;
-            self.next_zv[index] = m2.velocity.z;
-            self.next_xa[index] = m2.acceleration.x;
-            self.next_ya[index] = m2.acceleration.y;
-            self.next_za[index] = m2.acceleration.z;
-            self.next_theta_y[index] = m2.face_direction;
-            self.next_move_time[index] = m2.move_time;
-        } else {
-            self.next_xv[index] = 0.0;
-            self.next_yv[index] = 0.0;
-            self.next_zv[index] = 0.0;
-            self.next_xa[index] = 0.0;
-            self.next_ya[index] = 0.0;
-            self.next_za[index] = 0.0;
-            self.next_theta_y[index] = 0.0;
-            self.next_move_time[index] = f32::MAX;
+        self.current_move_seq[index] =
+            self.current_move_seq[index] + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 1;
+        match queued_movements {
+            InitialMoveQueue::SingleMove(movement) => {
+                self.move_queue[index] = MoveQueue::SingleMove(movement.map(|m| StoredMovement {
+                    sequence: self.current_move_seq[index] + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 2,
+                    movement: m,
+                }));
+            }
+            InitialMoveQueue::Buffer8(movements) => {
+                let mut buffer: CircularBuffer<8, StoredMovement> = movements
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, m)| StoredMovement {
+                        sequence: self.current_move_seq[i]
+                            + LARGEST_POSSIBLE_QUEUE_SIZE as u64
+                            + 2
+                            + i as u64,
+                        movement: m,
+                    })
+                    .collect();
+                buffer.make_contiguous();
+                self.move_queue[index] = MoveQueue::Buffer8(Box::new(buffer));
+            }
         }
-        self.mod_count[index] += 2;
     }
 
     fn new() -> EntityCoreArray {
@@ -530,6 +652,7 @@ impl EntityCoreArray {
             id: vec![],
             control: vec![],
             last_nontrivial_modification: vec![],
+            current_move_seq: vec![],
             x: vec![],
             y: vec![],
             z: vec![],
@@ -543,15 +666,7 @@ impl EntityCoreArray {
             move_time: vec![],
             move_time_elapsed: vec![],
             recalc_in: vec![],
-            next_xv: vec![],
-            next_yv: vec![],
-            next_zv: vec![],
-            next_xa: vec![],
-            next_ya: vec![],
-            next_za: vec![],
-            next_theta_y: vec![],
-            next_move_time: vec![],
-            mod_count: vec![],
+            move_queue: vec![],
             coroutine: vec![],
             next_delta_bias: vec![],
             base_time: Instant::now(),
@@ -578,6 +693,7 @@ impl EntityCoreArray {
     fn insert(
         &mut self,
         id: u64,
+        entity_def: &EntityDef,
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
         services: &EntityCoroutineServices<'_>,
@@ -595,6 +711,10 @@ impl EntityCoreArray {
         } else {
             CONTROL_PRESENT
         };
+        let queue = match entity_def.move_queue_type {
+            MoveQueueType::SingleMove => MoveQueue::SingleMove(None),
+            MoveQueueType::Buffer8 => MoveQueue::Buffer8(circular_buffer::CircularBuffer::boxed()),
+        };
         let i = match index {
             Some(i) => {
                 tracing::info!("Inserting {} at index {} in entity array", id, i);
@@ -602,6 +722,7 @@ impl EntityCoreArray {
                 self.id[i] = id;
                 self.control[i] = control;
                 self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                self.current_move_seq[i] = 1;
                 self.x[i] = position.x;
                 self.y[i] = position.y;
                 self.z[i] = position.z;
@@ -615,17 +736,9 @@ impl EntityCoreArray {
                 self.move_time[i] = 0.0;
                 self.move_time_elapsed[i] = 0.0;
                 self.recalc_in[i] = 0.0;
-                self.next_xv[i] = 0.0;
-                self.next_yv[i] = 0.0;
-                self.next_zv[i] = 0.0;
-                self.next_xa[i] = 0.0;
-                self.next_ya[i] = 0.0;
-                self.next_za[i] = 0.0;
-                self.next_theta_y[i] = 0.0;
-                self.next_move_time[i] = 0.0;
+                self.move_queue[i] = queue;
                 self.coroutine[i] = coroutine;
                 self.recalc_in[i] = 0.0;
-                self.mod_count[i] = 0;
                 self.next_delta_bias[i] = time_bias;
                 i
             }
@@ -638,6 +751,7 @@ impl EntityCoreArray {
                 self.control.push(control);
                 self.last_nontrivial_modification
                     .push(self.to_offset(Instant::now()));
+                self.current_move_seq.push(1);
                 self.x.push(position.x);
                 self.y.push(position.y);
                 self.z.push(position.z);
@@ -651,15 +765,7 @@ impl EntityCoreArray {
                 self.move_time.push(0.0);
                 self.move_time_elapsed.push(0.0);
                 self.recalc_in.push(0.0);
-                self.next_xv.push(0.0);
-                self.next_yv.push(0.0);
-                self.next_zv.push(0.0);
-                self.next_xa.push(0.0);
-                self.next_ya.push(0.0);
-                self.next_za.push(0.0);
-                self.next_theta_y.push(0.0);
-                self.next_move_time.push(0.0);
-                self.mod_count.push(0);
+                self.move_queue.push(queue);
                 self.coroutine.push(coroutine);
                 self.next_delta_bias.push(time_bias);
 
@@ -668,11 +774,14 @@ impl EntityCoreArray {
         };
 
         if let Some(coroutine) = &mut self.coroutine[i] {
-            match coroutine
-                .as_mut()
-                .plan_move(services, position, position, 0.0)
-            {
-                CoroutineResult::Successful(EntityMoveDecision::QueueUpMovement(movement)) => {
+            match coroutine.as_mut().plan_move(
+                services,
+                position,
+                position,
+                0.0,
+                self.move_queue[i].remaining_capacity(),
+            ) {
+                CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
                     self.xv[i] = movement.velocity.x;
                     self.yv[i] = movement.velocity.y;
@@ -683,19 +792,36 @@ impl EntityCoreArray {
                     self.theta_y[i] = movement.face_direction;
                     self.move_time[i] = movement.move_time;
 
-                    self.next_move_time[i] = f32::MAX;
                     // We only got one move. We need another.
                     self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
                     self.recalc_in[i] = f32::MAX;
-                    self.mod_count[i] += 1;
-                    println!(
-                        "{}: queued movement (initial). Modcount: {}, nmt: {}",
-                        self.id[i], self.mod_count[i], self.next_move_time[i]
-                    );
+                    println!("{}: queued movement (initial)", self.id[i]);
+                }
+                CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
+                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    if movements.is_empty() {
+                        panic!("QueueUpMultiple with no movements");
+                    }
+                    let first = &movements[0];
+                    self.xv[i] = first.velocity.x;
+                    self.yv[i] = first.velocity.y;
+                    self.zv[i] = first.velocity.z;
+                    self.xa[i] = first.acceleration.x;
+                    self.ya[i] = first.acceleration.y;
+                    self.za[i] = first.acceleration.z;
+                    self.theta_y[i] = first.face_direction;
+                    self.move_time[i] = first.move_time;
+                    for (seq, m) in movements.into_iter().enumerate().skip(1) {
+                        println!("{}: queued movement {}", self.id[i], seq);
+                        self.move_queue[i].push(StoredMovement {
+                            // Current is 1 so next is 2
+                            sequence: seq as u64 + 1,
+                            movement: m,
+                        });
+                    }
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
                     self.recalc_in[i] = delay;
-                    // TODO test this
                     self.move_time[i] = delay;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                 }
@@ -723,6 +849,7 @@ impl EntityCoreArray {
             self.id.swap_remove(i);
             self.control.swap_remove(i);
             self.last_nontrivial_modification.swap_remove(i);
+            self.current_move_seq.swap_remove(i);
             self.x.swap_remove(i);
             self.y.swap_remove(i);
             self.z.swap_remove(i);
@@ -736,17 +863,10 @@ impl EntityCoreArray {
             self.move_time.swap_remove(i);
             self.move_time_elapsed.swap_remove(i);
             self.recalc_in.swap_remove(i);
-            self.next_xv.swap_remove(i);
-            self.next_yv.swap_remove(i);
-            self.next_zv.swap_remove(i);
-            self.next_xa.swap_remove(i);
-            self.next_ya.swap_remove(i);
-            self.next_za.swap_remove(i);
-            self.next_theta_y.swap_remove(i);
-            self.next_move_time.swap_remove(i);
-            self.coroutine.swap_remove(i);
-            self.mod_count.swap_remove(i);
+            self.move_queue.swap_remove(i);
             self.next_delta_bias.swap_remove(i);
+            self.coroutine.swap_remove(i);
+
             // fix up the id lookup since we rearranged stuff
             if i != self.len {
                 self.id_lookup.insert(self.id[i], i);
@@ -765,7 +885,7 @@ impl EntityCoreArray {
         id: u64,
         position: Vector3<f64>,
         current: Movement,
-        next: Option<Movement>,
+        next: InitialMoveQueue,
         time_bias: Duration,
     ) -> Result<usize, EntityError> {
         let index = self.find_entity(id)?;
@@ -803,26 +923,16 @@ impl EntityCoreArray {
                     qproj(self.y[i], self.yv[i], self.ya[i], self.move_time_elapsed[i]),
                     qproj(self.z[i], self.zv[i], self.za[i], self.move_time_elapsed[i]),
                 ),
-                current_move: Movement {
-                    velocity: Vector3::new(self.xv[i], self.yv[i], self.zv[i]),
-                    acceleration: Vector3::new(self.xa[i], self.ya[i], self.za[i]),
-                    face_direction: self.theta_y[i],
-                    move_time: self.move_time[i],
+                current_move: StoredMovement {
+                    movement: Movement {
+                        velocity: Vector3::new(self.xv[i], self.yv[i], self.zv[i]),
+                        acceleration: Vector3::new(self.xa[i], self.ya[i], self.za[i]),
+                        face_direction: self.theta_y[i],
+                        move_time: self.move_time[i],
+                    },
+                    sequence: self.current_move_seq[i],
                 },
-                next_move: if self.next_move_time[i] == f32::MAX {
-                    None
-                } else {
-                    Some(Movement {
-                        velocity: Vector3::new(self.next_xv[i], self.next_yv[i], self.next_zv[i]),
-                        acceleration: Vector3::new(
-                            self.next_xa[i],
-                            self.next_ya[i],
-                            self.next_za[i],
-                        ),
-                        face_direction: self.next_theta_y[i],
-                        move_time: self.next_move_time[i],
-                    })
-                },
+                next_moves: self.move_queue[i].as_slice(),
                 last_nontrivial_modification: lnm,
                 // If we have a time offset because this entity was started/reset in the middle of a polling cycle,
                 // we need to correct the elapsed time here as well.
@@ -830,8 +940,16 @@ impl EntityCoreArray {
                 // and will reset the bias to 0 at the same time.
                 current_move_elapsed: self.move_time_elapsed[i] + poll_elapsed.as_secs_f32()
                     - self.next_delta_bias[i],
-                mod_count: self.mod_count[i],
             };
+            if entity.current_move_elapsed < 0.0 {
+                println!("current_move_elapsed < 0.0 {}", entity.current_move_elapsed);
+                println!(
+                    "mte: {}, pe: {}, ndb: {}",
+                    self.move_time_elapsed[i],
+                    poll_elapsed.as_secs_f32(),
+                    self.next_delta_bias[i]
+                );
+            }
             f(entity)?;
         }
         Ok(())
@@ -862,33 +980,79 @@ impl EntityCoreArray {
 
         if let Some(coroutine) = self.coroutine[i].as_mut() {
             // do some kinematics
-            let estimated_x = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
-            let estimated_y = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
-            let estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
+            let mut estimated_x = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
+            let mut estimated_y = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
+            let mut estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
+            let mut estimated_t = remaining_time;
+            let mut last_seq = self.current_move_seq[i];
+            println!("last_seq: {}", last_seq);
+            for StoredMovement { sequence, movement } in self.move_queue[i].as_slice() {
+                println!("> seq {}", sequence);
+                assert!(last_seq < *sequence);
+                last_seq = *sequence;
+                estimated_x = qproj(
+                    estimated_x,
+                    movement.velocity.x,
+                    movement.acceleration.x,
+                    movement.move_time,
+                );
+                estimated_y = qproj(
+                    estimated_y,
+                    movement.velocity.y,
+                    movement.acceleration.y,
+                    movement.move_time,
+                );
+                estimated_z = qproj(
+                    estimated_z,
+                    movement.velocity.z,
+                    movement.acceleration.z,
+                    movement.move_time,
+                );
+                estimated_t += movement.move_time;
+            }
+
+            let move_queue = &mut self.move_queue[i];
             match coroutine.as_mut().plan_move(
                 services,
                 vec3(self.x[i], self.y[i], self.z[i]),
                 vec3(estimated_x, estimated_y, estimated_z),
-                remaining_time,
+                estimated_t,
+                move_queue.remaining_capacity(),
             ) {
-                CoroutineResult::Successful(EntityMoveDecision::QueueUpMovement(movement)) => {
+                CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
-                    self.next_xv[i] = movement.velocity.x;
-                    self.next_yv[i] = movement.velocity.y;
-                    self.next_zv[i] = movement.velocity.z;
-                    self.next_xa[i] = movement.acceleration.x;
-                    self.next_ya[i] = movement.acceleration.y;
-                    self.next_za[i] = movement.acceleration.z;
-                    self.next_theta_y[i] = movement.face_direction;
-                    self.next_move_time[i] = movement.move_time;
-                    self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    self.move_queue[i].push(StoredMovement {
+                        movement,
+                        sequence: last_seq + 1,
+                    });
+                    if self.move_queue[i].remaining_capacity() == 0 {
+                        self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    }
                     // We'll trigger a recalc when the movement gets advanced; no need to use recalc_in
                     self.recalc_in[i] = f32::MAX;
-                    self.mod_count[i] += 1;
+                    println!("{}: queued movement.", self.id[i]);
+                    self.move_time[i] - self.move_time_elapsed[i]
+                }
+                CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
+                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    if movements.is_empty() {
+                        panic!("QueueUpMultiple with no movements");
+                    }
+                    for (movement_index, m) in movements.into_iter().enumerate() {
+                        println!("queueing up {}", last_seq + movement_index as u64 + 1);
+                        self.move_queue[i].push(StoredMovement {
+                            sequence: last_seq + movement_index as u64 + 1,
+                            movement: m,
+                        });
+                    }
+                    self.recalc_in[i] = f32::MAX;
+                    self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+
                     println!(
-                        "{}: queued movement. Modcount: {}, nmt: {}",
-                        self.id[i], self.mod_count[i], self.next_move_time[i]
+                        "mt: {}, mte: {}",
+                        self.move_time[i], self.move_time_elapsed[i]
                     );
+
                     self.move_time[i] - self.move_time_elapsed[i]
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
@@ -937,8 +1101,8 @@ impl EntityCoreArray {
         // if we finished a move
         if self.move_time_elapsed[i] >= self.move_time[i] {
             println!(
-                "{}: finished move w/ time {}/{}",
-                self.id[i], self.move_time_elapsed[i], self.move_time[i]
+                "{}: finished move w/ time {}/{}, seq was {}",
+                self.id[i], self.move_time_elapsed[i], self.move_time[i], self.current_move_seq[i]
             );
             // Then we're going to need a new move to be queued up soon
             if self.control[i] & CONTROL_AUTONOMOUS != 0 {
@@ -949,23 +1113,25 @@ impl EntityCoreArray {
             self.y[i] = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
             self.z[i] = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
             // And move the next move into the current one
-            self.xv[i] = self.next_xv[i];
-            self.yv[i] = self.next_yv[i];
-            self.zv[i] = self.next_zv[i];
-            self.xa[i] = self.next_xa[i];
-            self.ya[i] = self.next_ya[i];
-            self.za[i] = self.next_za[i];
-            self.theta_y[i] = self.next_theta_y[i];
+            let next_move = self.move_queue[i].pop().unwrap_or_else(|| {
+                println!("buffer exhausted");
+                StoredMovement {
+                    movement: Movement::stop_and_stay(self.theta_y[i]),
+                    sequence: self.current_move_seq[i] + 1,
+                }
+            });
+            self.xv[i] = next_move.movement.velocity.x;
+            self.yv[i] = next_move.movement.velocity.y;
+            self.zv[i] = next_move.movement.velocity.z;
+            self.xa[i] = next_move.movement.acceleration.x;
+            self.ya[i] = next_move.movement.acceleration.y;
+            self.za[i] = next_move.movement.acceleration.z;
+            self.theta_y[i] = next_move.movement.face_direction;
+            self.current_move_seq[i] = next_move.sequence;
+            println!("new CMS {}", next_move.sequence);
             self.move_time_elapsed[i] -= self.move_time[i];
-            self.move_time[i] = self.next_move_time[i];
+            self.move_time[i] = next_move.movement.move_time;
             // And reset the next move to be a stop-and-stay
-            self.next_xa[i] = 0.0;
-            self.next_ya[i] = 0.0;
-            self.next_za[i] = 0.0;
-            self.next_xv[i] = 0.0;
-            self.next_yv[i] = 0.0;
-            self.next_zv[i] = 0.0;
-            self.next_move_time[i] = f32::MAX;
 
             self.recalc_in[i] = f32::MAX;
         }
@@ -985,9 +1151,14 @@ fn qproj(s: f64, v: f32, a: f32, t: f32) -> f64 {
 }
 
 enum EntityAction {
-    Insert(u64, Vector3<f64>, Option<Pin<Box<dyn EntityCoroutine>>>),
+    Insert(
+        u64,
+        Vector3<f64>,
+        Option<Pin<Box<dyn EntityCoroutine>>>,
+        EntityTypeId,
+    ),
     Remove(u64),
-    SetKinematics(u64, Vector3<f64>, Movement, Option<Movement>),
+    SetKinematics(u64, Vector3<f64>, Movement, InitialMoveQueue),
 }
 
 /// The entities stored in a shard of the game map.
@@ -1022,15 +1193,14 @@ impl EntityShard {
     }
 }
 
-pub(crate) struct IterEntity {
+pub(crate) struct IterEntity<'a> {
     pub(crate) id: u64,
     pub(crate) starting_position: Vector3<f64>,
     pub(crate) instantaneous_position: Vector3<f64>,
-    pub(crate) current_move: Movement,
-    pub(crate) next_move: Option<Movement>,
+    pub(crate) current_move: StoredMovement,
+    pub(crate) next_moves: &'a [StoredMovement],
     pub(crate) last_nontrivial_modification: Instant,
     pub(crate) current_move_elapsed: f32,
-    pub(crate) mod_count: u64,
 }
 
 pub(crate) struct EntityShardWorker {
@@ -1081,7 +1251,14 @@ impl EntityShardWorker {
                     self.shard_id, next_awakening_times
                 );
                 drop(lock);
-                now + Duration::from_secs_f32(next_awakening_times.min(coro_awakening_times))
+                println!(
+                    "next awakening: {:?}",
+                    next_awakening_times.min(coro_awakening_times)
+                );
+
+                now + Duration::from_secs_f32(
+                    next_awakening_times.min(coro_awakening_times).max(0.0),
+                )
             };
 
             last_iteration = now;
@@ -1106,8 +1283,7 @@ impl EntityShardWorker {
                                 break 'main_loop;
                             },
                             _ => {
-                                let time_bias = last_iteration.elapsed();
-                                next_awakening = next_awakening.min(self.handle_messages(&mut rx_messages, time_bias));
+                                next_awakening = next_awakening.min(self.handle_messages(&mut rx_messages));
                             }
                         }
                     }
@@ -1124,18 +1300,27 @@ impl EntityShardWorker {
         Ok(())
     }
 
-    fn handle_messages(&self, rx_messages: &mut Vec<EntityAction>, time_bias: Duration) -> Instant {
+    fn handle_messages(&self, rx_messages: &mut Vec<EntityAction>) -> Instant {
         let mut lock = self.entities.shards[self.shard_id].core.write();
         let mut indices: smallvec::SmallVec<[usize; COMMAND_BATCH_SIZE]> =
             smallvec::SmallVec::new();
         for action in rx_messages.drain(..) {
+            let time_bias = lock.last_time_poll.elapsed();
             match action {
-                EntityAction::Insert(id, position, coroutine) => {
+                EntityAction::Insert(id, position, coroutine, entity_type) => {
+                    let def = self.game_state.entities().get_by_type(entity_type);
+
                     let services = EntityCoroutineServices {
                         map: &self.game_state.map,
                     };
-                    let index =
-                        lock.insert(id, position, coroutine, &services, time_bias.as_secs_f32());
+                    let index = lock.insert(
+                        id,
+                        def,
+                        position,
+                        coroutine,
+                        &services,
+                        time_bias.as_secs_f32(),
+                    );
                     indices.push(index);
                 }
                 EntityAction::Remove(id) => match lock.remove(id) {
@@ -1180,4 +1365,50 @@ impl EntityShardWorker {
 pub enum EntityError {
     #[error("Entity not found")]
     NotFound,
+}
+
+pub enum MoveQueueType {
+    SingleMove,
+    Buffer8,
+}
+
+// TODO own and manage these, similar to block types and item defs.
+/// Warning: ***API is extremely preliminary and subject to change***
+pub struct EntityDef {
+    pub short_name: String,
+    pub move_queue_type: MoveQueueType,
+}
+
+/// Used to identify types of entities when spawning, dropping, etc.
+/// Note that this is not an efficient encoding, and should not be
+/// used in the hot path (e.g. bulk scans, coroutines, etc)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EntityTypeId {
+    /// The type of entity
+    pub class: u32,
+    /// Any additional data for this entity
+    ///
+    /// The interpretation of this depends on the entity type,
+    /// and is subject to change
+    pub data: Option<Box<[u8]>>,
+}
+
+/// An entity representing a player. This should only be spawned by the server.
+///
+/// The data should be the player's username.
+pub const CLASS_PLAYER_ENTITY: u32 = 1;
+/// An entity representing a dropped item. The data should be an ItemStack protobuf.
+pub const CLASS_DROPPED_ITEM_ENTITY: u32 = 2;
+
+/// A temporary stand-in entity for entities with deep queues while the type manager is under exploration
+/// Essentially, I'm bikeshedding back and forth in my head about how to represent entity types and serialized
+/// entities
+pub const CLASS_BIKESHED_DEEP_QUEUE_ENTITY: u32 = 3;
+/// A temporary stand-in for generic entities while the type manager is under exploration
+/// See CLASS_BIKESHED_DEEP_QUEUE_ENTITY docstring for rationale
+pub const CLASS_BIKESHED_GENERIC_ENTITY: u32 = 4;
+
+pub struct EntityTypeManager {
+    types: Vec<EntityDef>,
+    by_name: FxHashMap<String, EntityTypeId>,
 }

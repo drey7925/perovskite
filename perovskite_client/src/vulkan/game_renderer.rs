@@ -81,7 +81,7 @@ impl ActiveGame {
         let _span = span!("build renderer buffers");
         let FrameState {
             scene_state,
-            player_position,
+            mut player_position,
             tool_state,
         } = self
             .client_state
@@ -93,6 +93,19 @@ impl ActiveGame {
         )
         .unwrap();
         self.cube_draw_calls.clear();
+
+        if self
+            .client_state
+            .input
+            .lock()
+            .is_pressed(crate::game_state::input::BoundAction::PhysicsDebug)
+        {
+            let entity_lock = self.client_state.entities.lock();
+            if let Some(max_ent) = entity_lock.entities.keys().max() {
+                player_position = entity_lock.entities.get(max_ent).unwrap().position();
+            }
+        }
+
         if let Some(pointee) = tool_state.pointee {
             self.cube_draw_calls.push(
                 self.client_state
@@ -157,14 +170,8 @@ impl ActiveGame {
             .client_state
             .chunks
             .make_batched_draw_calls(player_position);
-        if !self
-            .client_state
-            .input
-            .lock()
-            .is_pressed(crate::game_state::input::BoundAction::PhysicsDebug)
-        {
-            self.cube_draw_calls.extend(batched_calls);
-        }
+
+        self.cube_draw_calls.extend(batched_calls);
 
         self.cube_draw_calls
             .extend(chunk_lock.iter().filter_map(|(coord, chunk)| {
