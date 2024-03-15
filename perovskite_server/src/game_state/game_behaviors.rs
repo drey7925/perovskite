@@ -149,6 +149,16 @@ impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
             connected_players.iter().sorted().join(", ")
         ));
         req.send_chat_message_async(individual_message).await?;
+        #[cfg(debug_assertions)]
+        {
+            req.send_chat_message_async(
+                ChatMessage::new_server_message(
+                    "Debug mode is enabled. Server will be slow and may be crashy.",
+                )
+                .with_color((255, 0, 0)),
+            )
+            .await?;
+        }
         Ok(())
     }
 }
