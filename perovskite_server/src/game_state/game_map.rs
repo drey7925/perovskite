@@ -1035,7 +1035,7 @@ impl ServerGameMap {
         block: U,
         extended_data: Option<ExtendedData>,
         check_variant: bool,
-    ) -> Result<(CasOutcome, BlockTypeHandle, Option<ExtendedData>)> {
+    ) -> Result<(CasOutcome, BlockId, Option<ExtendedData>)> {
         if check_variant {
             self.compare_and_set_block_predicate(
                 coord,

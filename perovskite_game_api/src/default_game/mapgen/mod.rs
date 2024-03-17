@@ -195,6 +195,8 @@ struct DefaultMapgen {
     cactus_density_noise: noise::Billow<noise::SuperSimplex>,
     tall_grass_density_noise: noise::Billow<noise::SuperSimplex>,
 
+    rail_testonly: BlockTypeHandle,
+
     biome_noise: BiomeNoise,
     cave_noise: CaveNoise,
     ores: Vec<(OreDefinition, noise::SuperSimplex)>,
@@ -242,6 +244,23 @@ impl MapgenInterface for DefaultMapgen {
             }
         }
         self.generate_vegetation(chunk_coord, chunk, &height_map, &biome_map);
+        for x in 0..16 {
+            for z in 0..16 {
+                let xg = 16 * chunk_coord.x + (x as i32);
+
+                if xg == 320000 && chunk_coord.y == 3 {
+                    // todo: generate rails
+                    chunk.set_block(ChunkOffset { x, y: 0, z }, self.rail_testonly, None);
+                }
+
+                if xg == 960000 && chunk_coord.y == 0 {
+                    // todo: generate rails
+                    chunk.set_block(ChunkOffset { x, y: 4, z }, self.rail_testonly, None);
+                    chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
+                    chunk.set_block(ChunkOffset { x, y: 6, z }, self.air, None);
+                }
+            }
+        }
     }
 }
 
@@ -580,5 +599,7 @@ pub(crate) fn build_mapgen(
             })
             .collect(),
         seed,
+
+        rail_testonly: blocks.get_by_name("carts:rail").expect("rail"),
     })
 }
