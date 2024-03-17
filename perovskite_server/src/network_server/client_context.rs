@@ -1343,7 +1343,7 @@ impl InboundWorker {
                             .as_ref()
                             .context("Missing position")?
                             .try_into()?,
-                        Movement::stop_and_stay(0.0),
+                        Movement::stop_and_stay(0.0, f32::MAX),
                         crate::game_state::entities::InitialMoveQueue::SingleMove(None),
                     )
                     .await;

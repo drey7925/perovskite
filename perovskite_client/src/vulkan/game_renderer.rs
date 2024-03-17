@@ -104,6 +104,10 @@ impl ActiveGame {
             if let Some(max_ent) = entity_lock.entities.keys().max() {
                 player_position = entity_lock.entities.get(max_ent).unwrap().position();
             }
+            self.client_state
+                .physics_state
+                .lock()
+                .set_position(player_position);
         }
 
         if let Some(pointee) = tool_state.pointee {

@@ -3,11 +3,13 @@ use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 // This is a temporary implementation used while developing the entity system
 use anyhow::Result;
 use async_trait::async_trait;
-use cgmath::vec3;
+use cgmath::{vec3, InnerSpace, Vector3};
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     chat::commands::ChatCommandHandler,
-    entities::{EntityCoroutine, EntityTypeId, Movement, CLASS_BIKESHED_DEEP_QUEUE_ENTITY},
+    entities::{
+        DeferrableResult, EntityCoroutine, EntityTypeId, Movement, CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+    },
     event::{EventInitiator, HandlerContext},
     GameStateExtension,
 };
@@ -166,22 +168,20 @@ type Flt = f64;
 /// A segment of track where we know we can run
 #[derive(Copy, Clone, Debug)]
 struct TrackClearance {
-    from: BlockCoordinate,
-    to: BlockCoordinate,
+    from: Vector3<f64>,
+    to: Vector3<f64>,
     // The maximum speed we can run in this track segment
     max_speed: Flt,
     // test only
     seg_id: u64,
-    // How far along the segment we start (in block units), used for slicing a segment into pieces.
-    offset: Flt,
 }
 // test only
 static NEXT_SEGMENT_ID: AtomicU64 = AtomicU64::new(0);
 impl TrackClearance {
-    fn manhattan_dist(&self) -> u32 {
-        (self.from.x - self.to.x).abs() as u32
-            + (self.from.y - self.to.y).abs() as u32
-            + (self.from.z - self.to.z).abs() as u32
+    fn manhattan_dist(&self) -> f64 {
+        (self.from.x - self.to.x).abs()
+            + (self.from.y - self.to.y).abs()
+            + (self.from.z - self.to.z).abs()
     }
     fn distance(&self) -> Flt {
         let dx = self.from.x as Flt - self.to.x as Flt;
@@ -190,12 +190,33 @@ impl TrackClearance {
         (dx * dx + dy * dy + dz * dz).sqrt()
     }
     fn with_offset(&self, offset: Flt) -> Self {
+        let unit = (self.to - self.from).normalize();
         Self {
-            from: self.from,
+            from: self.from + unit * offset,
             to: self.to,
             max_speed: self.max_speed,
             seg_id: self.seg_id,
-            offset,
+        }
+    }
+    fn split_at_offset(&self, offset: Flt) -> (Self, Option<Self>) {
+        if offset > 0.0 && offset < self.distance() {
+            let split_point = self.from + (self.to - self.from).normalize() * offset;
+            (
+                Self {
+                    from: self.from,
+                    to: split_point,
+                    max_speed: self.max_speed,
+                    seg_id: self.seg_id,
+                },
+                Some(Self {
+                    from: split_point,
+                    to: self.to,
+                    max_speed: self.max_speed,
+                    seg_id: self.seg_id,
+                }),
+            )
+        } else {
+            (self.clone(), None)
         }
     }
 }
@@ -204,7 +225,6 @@ const MAX_ACCEL: Flt = 90.0;
 struct CartCoroutine {
     config: CartsGameBuilderExtension,
     // Segments where we've already calculated a braking curve. (clearance, starting speed, acceleration, time)
-    // currently unused and empty
     scheduled_segments: VecDeque<(TrackClearance, Flt, Flt, Flt)>,
     // Segments where we don't yet have a braking curve
     unplanned_segments: VecDeque<TrackClearance>,
@@ -227,7 +247,7 @@ impl EntityCoroutine for CartCoroutine {
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
         // Fill the unplanned segment queue unless we've scanned too far ahead or it's full
-        let mut step_count = 0;
+        let mut step_count = 0.0;
         for seg in self.scheduled_segments.iter() {
             step_count += seg.0.manhattan_dist();
         }
@@ -249,11 +269,12 @@ impl EntityCoroutine for CartCoroutine {
         // hacky clean up
         let mut force_speed_post = false;
         // todo tune
-        while step_count < 1024 {
+        while step_count < 1024.0 {
             if self.unplanned_segments.is_empty()
                 || self.unplanned_segments.back().unwrap().max_speed
                     != self.last_speed_post_indication
                 || force_speed_post
+                || self.unplanned_segments.back().unwrap().distance() > 512.0
             {
                 tracing::info!("new seg");
                 if let Some(x) = self.unplanned_segments.back() {
@@ -262,11 +283,10 @@ impl EntityCoroutine for CartCoroutine {
                 tracing::info!("lspi {}", self.last_speed_post_indication);
                 tracing::info!("fsp {}", force_speed_post);
                 let empty_segment = TrackClearance {
-                    from: self.scan_position,
-                    to: self.scan_position,
+                    from: b2vec(self.scan_position),
+                    to: b2vec(self.scan_position),
                     max_speed: self.last_speed_post_indication,
                     seg_id: NEXT_SEGMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                    offset: 0.0,
                 };
                 self.unplanned_segments.push_back(empty_segment);
                 force_speed_post = false;
@@ -274,29 +294,37 @@ impl EntityCoroutine for CartCoroutine {
             // TODO: self should store direction of movement.
 
             // On the test track, we proceed in the Z+ direction. Speed posts are in the +X direction relative to the track
-            step_count += 1;
+            step_count += 1.0;
             // These should be checked, but they only fail at the end of the map.
             let next_scan = self.scan_position.try_delta(0, 0, 1).unwrap();
             let next_speed_post = next_scan.try_delta(1, 0, 0).unwrap();
 
-            let scan_block = services.try_get_block(next_scan);
-            let speed_post_block = services.try_get_block(next_speed_post);
-            if scan_block != Some(self.config.rail_block) {
+            let scan_block = match services.get_block(next_scan) {
+                DeferrableResult::AvailableNow(x) => x.unwrap(),
+                DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
+            };
+
+            let speed_post_block = match services.get_block(next_speed_post) {
+                DeferrableResult::AvailableNow(x) => x.unwrap(),
+                DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
+            };
+            if scan_block != self.config.rail_block {
                 // We're at the end of the track. The last segment already includes the last bit of track
                 tracing::info!("end of track: {scan_block:?}");
+                self.last_speed_post_indication = 1.0;
                 break;
             } else {
                 self.scan_position = next_scan;
-                self.unplanned_segments.back_mut().unwrap().to = next_scan;
+                self.unplanned_segments.back_mut().unwrap().to = b2vec(next_scan);
             }
 
-            if speed_post_block == Some(self.config.speedpost_1) {
+            if speed_post_block == self.config.speedpost_1 {
                 self.last_speed_post_indication = 0.2;
                 force_speed_post = true;
-            } else if speed_post_block == Some(self.config.speedpost_2) {
+            } else if speed_post_block == self.config.speedpost_2 {
                 self.last_speed_post_indication = 2.0;
                 force_speed_post = true;
-            } else if speed_post_block == Some(self.config.speedpost_3) {
+            } else if speed_post_block == self.config.speedpost_3 {
                 self.last_speed_post_indication = 90.0;
                 force_speed_post = true;
             }
@@ -313,6 +341,13 @@ impl EntityCoroutine for CartCoroutine {
         let mut segments_schedulable = false;
         let mut schedulable_segments = VecDeque::new();
 
+        //let mut readd_unplanned_segment = None;
+        let mut last_seg_speed = self
+            .scheduled_segments
+            .back()
+            .map(|x| x.1 + x.2 * x.3)
+            .unwrap_or(self.last_speed);
+
         // Iterate in reverse of track order
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
             max_exit_speed = max_exit_speed.min(seg.max_speed);
@@ -325,18 +360,43 @@ impl EntityCoroutine for CartCoroutine {
                 max_entry_speed = seg.max_speed;
             }
 
-            // Record the segment if it's schedulable, or if it's the only segment we have
-            if segments_schedulable || idx == 0 {
+            // Record the segment if it's schedulable, or if it's the only segment we have and we're running low on cached moves
+            if segments_schedulable {
                 // Record the actual speed we need to stay under as we exit this segment
                 // We push_front, so as we iterate, we get them in track order (which is what we need to now build the curve segment by segment)
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::info!(">> planning it");
+                tracing::info!(
+                    ">> planning it. seg_schedulable = {}, idx = {}, when = {}",
+                    segments_schedulable,
+                    idx,
+                    when
+                );
+            } else if idx == 0 && queue_space > 4 {
+                // This is the last segment we have, and we're running low on cached moves. We need to record it.
+                // However, we'll split it up
+
+                tracing::info!(
+                    ">> planning it. seg_schedulable = {}, idx = {}, when = {}",
+                    segments_schedulable,
+                    idx,
+                    when
+                );
+                // let braking_distance =
+                //     (last_seg_speed * last_seg_speed / (2.0 * MAX_ACCEL)).max(4.0);
+                // // split up the segment
+                // println!("splitting up segment");
+                // let (seg, second) = seg.split_at_offset(distance - braking_distance);
+                // println!("first: {seg:?}, second: {second:?}");
+                schedulable_segments.push_front((*seg, last_seg_speed));
+                //readd_unplanned_segment = second;
             }
+
             // This segment could be entered at maximum track speed and we would still stop in time. Any segments before it (in track order)
             // are now schedulable. This one is not yet schedulable, since we don't know how early in it we would need to start slowing down.
             if max_entry_speed >= seg.max_speed {
                 segments_schedulable = true;
             }
+
             // The exit speed of the previous segment is the entry speed of the current segment
             max_exit_speed = max_entry_speed;
         }
@@ -344,12 +404,10 @@ impl EntityCoroutine for CartCoroutine {
         for _ in 0..schedulable_segments.len() {
             self.unplanned_segments.pop_front();
         }
+        // if let Some(seg) = readd_unplanned_segment {
+        //     self.unplanned_segments.push_back(seg);
+        // }
 
-        let mut last_seg_speed = self
-            .scheduled_segments
-            .back()
-            .map(|x| x.1 + x.2 * x.3)
-            .unwrap_or(self.last_speed);
         for (seg, max_exit_speed) in schedulable_segments.into_iter() {
             // TODO - we should slice up the segment, rather than having a slow acceleration over the whole segment
             // This takes casework; the case where we have time to get to max speed, hold max speed, then slow down is easy
@@ -522,16 +580,9 @@ impl EntityCoroutine for CartCoroutine {
             // No schedulable segments
             // Scan every second, trying to start again.
             tracing::info!("No schedulable segments");
-            self.last_speed = 0.5;
-            self.last_speed_post_indication = 0.5;
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
-                perovskite_server::game_state::entities::EntityMoveDecision::QueueSingleMovement(
-                    Movement {
-                        velocity: cgmath::Vector3::new(0.0, 0.0, 0.0),
-                        acceleration: cgmath::Vector3::new(0.0, 0.0, 0.0),
-                        face_direction: 0.0,
-                        move_time: 1.0,
-                    },
+                perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
+                    0.5..1.0,
                 ),
             );
         }
@@ -548,12 +599,7 @@ impl EntityCoroutine for CartCoroutine {
                 segment.2,
                 segment.3
             );
-            tracing::info!(
-                "seg position: {:?} @ {}, actually {:?}",
-                b2vec(segment.0.from),
-                segment.0.offset,
-                whence
-            );
+            tracing::info!("seg position: {:?}, actually {:?}", segment.0.from, whence);
 
             returned_moves.push(Movement {
                 velocity: cgmath::Vector3::new(0.0, 0.0, segment.1 as f32),

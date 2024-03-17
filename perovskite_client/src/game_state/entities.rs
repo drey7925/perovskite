@@ -136,6 +136,12 @@ impl GameEntity {
             })?);
         }
 
+        if update.current_move_progress < 0.0 {
+            return Err("invalid current move progress: negative");
+        } else if update.current_move_progress.is_nan() {
+            return Err("invalid current move progress: NaN");
+        }
+
         if update.current_move_sequence != self.current_move_sequence {
             println!(
                 "retiming {} -> {}",
@@ -150,6 +156,11 @@ impl GameEntity {
             self.current_move_started =
                 Instant::now() - Duration::from_secs_f32(update.current_move_progress);
         }
+        self.fallback_position = self
+            .move_queue
+            .back()
+            .map(|m| m.qproj(m.total_time_seconds))
+            .unwrap_or(vec3(f64::NAN, f64::NAN, f64::NAN));
 
         Ok(())
     }
