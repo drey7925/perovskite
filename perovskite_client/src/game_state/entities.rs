@@ -94,6 +94,7 @@ impl GameEntity {
                     .sum::<f32>()
             );
             let popped_move = self.move_queue.pop_front().unwrap();
+            println!("popping move {:?}", popped_move);
             self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
             self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
         }

@@ -8,7 +8,8 @@ use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCo
 use perovskite_server::game_state::{
     chat::commands::ChatCommandHandler,
     entities::{
-        DeferrableResult, EntityCoroutine, EntityTypeId, Movement, CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+        CoroutineResult, DeferrableResult, Deferral, EntityCoroutine, EntityCoroutineServices,
+        EntityTypeId, Movement, CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
     },
     event::{EventInitiator, HandlerContext},
     GameStateExtension,
@@ -49,8 +50,11 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     include_texture_bytes!(game_builder, speedpost3_tex, "textures/speedpost_3.png")?;
 
     let rail = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:rail"))
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(rail_tex)),
+        BlockBuilder::new(StaticBlockName("carts:rail")).set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(rail_tex)
+                .set_rotate_laterally(),
+        ),
     )?;
 
     let speedpost1 = game_builder.add_block(
@@ -116,10 +120,15 @@ impl ChatCommandHandler for CartSpawner {
         );
         // find the nearest rail the same X and Z location
         let mut rail_pos = None;
+        let mut variant = None;
+
         for dy in [0, 1, -1, 2, -2, 3, -3] {
             if let Some(coord) = quantized.try_delta(0, dy, 0) {
-                if context.game_map().try_get_block(coord) == Some(self.config.rail_block) {
-                    rail_pos = Some(coord);
+                if let Some(block) = context.game_map().try_get_block(coord) {
+                    if block.equals_ignore_variant(self.config.rail_block) {
+                        rail_pos = Some(coord);
+                        variant = Some(block.variant());
+                    }
                 }
             }
         }
@@ -143,8 +152,16 @@ impl ChatCommandHandler for CartSpawner {
                     scan_position: rail_pos,
                     // Until we encounter a speed post, proceed at minimal safe speed
                     last_speed_post_indication: 0.5,
-                    last_speed: 0.0,
+                    last_speed: 0.5,
                     spawn_time: Instant::now(),
+                    rail_scan_state: RailScanState {
+                        valid: true,
+                        major_angle: (variant.unwrap() % 4) as u8,
+                        horizontal_deflection: 0,
+                        vertical_deflection: 0,
+                        horizontal_offset: 0,
+                        vertical_offset: 0,
+                    },
                 })),
                 EntityTypeId {
                     class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
@@ -236,6 +253,8 @@ struct CartCoroutine {
     last_speed: Flt,
     // debug only
     spawn_time: Instant,
+    // The rail scan state, indicating which direction we're scanning in
+    rail_scan_state: RailScanState,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -246,88 +265,101 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        // Fill the unplanned segment queue unless we've scanned too far ahead or it's full
-        let mut step_count = 0.0;
-        for seg in self.scheduled_segments.iter() {
-            step_count += seg.0.manhattan_dist();
-        }
-        for seg in self.unplanned_segments.iter() {
-            step_count += seg.manhattan_dist();
-        }
         tracing::info!(
             "{:?} ========== planning {} seconds in advance",
             self.spawn_time.elapsed(),
             when
         );
+        // debug only
+        let mut step_count = 0.0;
+        for seg in self.scheduled_segments.iter() {
+            step_count += seg.0.distance();
+        }
+        for seg in self.unplanned_segments.iter() {
+            step_count += seg.distance();
+        }
         tracing::info!(
             "cart coro: step_count = {}. {} in braking curve, {} unplanned",
             step_count,
             self.scheduled_segments.len(),
             self.unplanned_segments.len()
         );
+        // // Fill the unplanned segment queue unless we've scanned too far ahead or it's full
+        // let mut step_count = 0.0;
+        // for seg in self.scheduled_segments.iter() {
+        //     step_count += seg.0.manhattan_dist();
+        // }
+        // for seg in self.unplanned_segments.iter() {
+        //     step_count += seg.manhattan_dist();
+        // }
+        // // hacky clean up
+        // let mut force_speed_post = false;
+        // // todo tune
+        // while step_count < 1024.0 {
+        //     if self.unplanned_segments.is_empty()
+        //         || self.unplanned_segments.back().unwrap().max_speed
+        //             != self.last_speed_post_indication
+        //         || force_speed_post
+        //         || self.unplanned_segments.back().unwrap().distance() > 512.0
+        //     {
+        //         tracing::info!("new seg");
+        //         if let Some(x) = self.unplanned_segments.back() {
+        //             tracing::info!("last seg max speed {}", x.max_speed);
+        //         }
+        //         tracing::info!("lspi {}", self.last_speed_post_indication);
+        //         tracing::info!("fsp {}", force_speed_post);
+        //         let empty_segment = TrackClearance {
+        //             from: b2vec(self.scan_position),
+        //             to: b2vec(self.scan_position),
+        //             max_speed: self.last_speed_post_indication,
+        //             seg_id: NEXT_SEGMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        //         };
+        //         self.unplanned_segments.push_back(empty_segment);
+        //         force_speed_post = false;
+        //     }
+        //     // TODO: self should store direction of movement.
 
-        // hacky clean up
-        let mut force_speed_post = false;
-        // todo tune
-        while step_count < 1024.0 {
-            if self.unplanned_segments.is_empty()
-                || self.unplanned_segments.back().unwrap().max_speed
-                    != self.last_speed_post_indication
-                || force_speed_post
-                || self.unplanned_segments.back().unwrap().distance() > 512.0
-            {
-                tracing::info!("new seg");
-                if let Some(x) = self.unplanned_segments.back() {
-                    tracing::info!("last seg max speed {}", x.max_speed);
-                }
-                tracing::info!("lspi {}", self.last_speed_post_indication);
-                tracing::info!("fsp {}", force_speed_post);
-                let empty_segment = TrackClearance {
-                    from: b2vec(self.scan_position),
-                    to: b2vec(self.scan_position),
-                    max_speed: self.last_speed_post_indication,
-                    seg_id: NEXT_SEGMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                };
-                self.unplanned_segments.push_back(empty_segment);
-                force_speed_post = false;
-            }
-            // TODO: self should store direction of movement.
+        //     // On the test track, we proceed in the Z+ direction. Speed posts are in the +X direction relative to the track
+        //     step_count += 1.0;
+        //     // These should be checked, but they only fail at the end of the map.
+        //     let next_scan = self.scan_position.try_delta(0, 0, 1).unwrap();
+        //     let next_speed_post = next_scan.try_delta(1, 0, 0).unwrap();
 
-            // On the test track, we proceed in the Z+ direction. Speed posts are in the +X direction relative to the track
-            step_count += 1.0;
-            // These should be checked, but they only fail at the end of the map.
-            let next_scan = self.scan_position.try_delta(0, 0, 1).unwrap();
-            let next_speed_post = next_scan.try_delta(1, 0, 0).unwrap();
+        //     let scan_block = match services.get_block(next_scan) {
+        //         DeferrableResult::AvailableNow(x) => x.unwrap(),
+        //         DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
+        //     };
 
-            let scan_block = match services.get_block(next_scan) {
-                DeferrableResult::AvailableNow(x) => x.unwrap(),
-                DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
-            };
+        //     let speed_post_block = match services.get_block(next_speed_post) {
+        //         DeferrableResult::AvailableNow(x) => x.unwrap(),
+        //         DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
+        //     };
+        //     if scan_block != self.config.rail_block {
+        //         // We're at the end of the track. The last segment already includes the last bit of track
+        //         tracing::info!("end of track: {scan_block:?}");
+        //         self.last_speed_post_indication = 1.0;
+        //         break;
+        //     } else {
+        //         self.scan_position = next_scan;
+        //         self.unplanned_segments.back_mut().unwrap().to = b2vec(next_scan);
+        //     }
 
-            let speed_post_block = match services.get_block(next_speed_post) {
-                DeferrableResult::AvailableNow(x) => x.unwrap(),
-                DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
-            };
-            if scan_block != self.config.rail_block {
-                // We're at the end of the track. The last segment already includes the last bit of track
-                tracing::info!("end of track: {scan_block:?}");
-                self.last_speed_post_indication = 1.0;
-                break;
-            } else {
-                self.scan_position = next_scan;
-                self.unplanned_segments.back_mut().unwrap().to = b2vec(next_scan);
-            }
+        //     if speed_post_block == self.config.speedpost_1 {
+        //         self.last_speed_post_indication = 0.2;
+        //         force_speed_post = true;
+        //     } else if speed_post_block == self.config.speedpost_2 {
+        //         self.last_speed_post_indication = 2.0;
+        //         force_speed_post = true;
+        //     } else if speed_post_block == self.config.speedpost_3 {
+        //         self.last_speed_post_indication = 58.3;
+        //         force_speed_post = true;
+        //     }
+        // }
 
-            if speed_post_block == self.config.speedpost_1 {
-                self.last_speed_post_indication = 0.2;
-                force_speed_post = true;
-            } else if speed_post_block == self.config.speedpost_2 {
-                self.last_speed_post_indication = 2.0;
-                force_speed_post = true;
-            } else if speed_post_block == self.config.speedpost_3 {
-                self.last_speed_post_indication = 90.0;
-                force_speed_post = true;
-            }
+        self.scan_tracks(services, 1024.0);
+
+        for seg in self.unplanned_segments.iter() {
+            println!("{:?}", seg);
         }
 
         // Now, calculate the braking curve for the planned segment. For now, we'll rebuild the braking curve each time
@@ -601,9 +633,11 @@ impl EntityCoroutine for CartCoroutine {
             );
             tracing::info!("seg position: {:?}, actually {:?}", segment.0.from, whence);
 
+            let norm_delta = (segment.0.to - segment.0.from).normalize();
+
             returned_moves.push(Movement {
-                velocity: cgmath::Vector3::new(0.0, 0.0, segment.1 as f32),
-                acceleration: cgmath::Vector3::new(0.0, 0.0, segment.2 as f32),
+                velocity: segment.1 as f32 * norm_delta.cast().unwrap(),
+                acceleration: segment.2 as f32 * norm_delta.cast().unwrap(),
                 face_direction: 0.0,
                 move_time: segment.3 as f32,
             });
@@ -613,5 +647,291 @@ impl EntityCoroutine for CartCoroutine {
                 returned_moves,
             ),
         );
+    }
+}
+
+impl CartCoroutine {
+    fn next_scan(
+        &self,
+        scan_position: BlockCoordinate,
+        rail_state: &RailScanState,
+    ) -> Option<(BlockCoordinate, f64)> {
+        let (x, y, z) = rail_state.scan_delta();
+        scan_position
+            .try_delta(x, y, z)
+            .map(|c| (c, vec3(x as f64, y as f64, z as f64).magnitude()))
+    }
+
+    fn signal_coordinate(
+        &self,
+        scan_position: BlockCoordinate,
+        rail_state: &RailScanState,
+    ) -> Option<BlockCoordinate> {
+        if let Some((x, y, z)) = rail_state.signal_delta() {
+            scan_position.try_delta(x, y, z)
+        } else {
+            None
+        }
+    }
+
+    fn parse_signal(
+        &self,
+        services: &EntityCoroutineServices<'_>,
+        coord: BlockCoordinate,
+        signal_block: BlockId,
+    ) -> DeferrableResult<SignalResult> {
+        if signal_block == self.config.speedpost_1 {
+            SignalResult::SpeedRestriction(0.2).into()
+        } else if signal_block == self.config.speedpost_2 {
+            SignalResult::SpeedRestriction(2.0).into()
+        } else if signal_block == self.config.speedpost_3 {
+            SignalResult::SpeedRestriction(58.3).into()
+        } else {
+            SignalResult::Permissive.into()
+        }
+    }
+
+    fn parse_rail(
+        &self,
+        services: &EntityCoroutineServices<'_>,
+        coord: BlockCoordinate,
+        rail_block: BlockId,
+        prev_state: &RailScanState,
+    ) -> DeferrableResult<RailScanState> {
+        if rail_block.equals_ignore_variant(self.config.rail_block) {
+            // Check that the direction matches
+            if (rail_block.variant() % 2) as u8 != prev_state.major_angle % 2 {
+                RailScanState {
+                    valid: false,
+                    major_angle: prev_state.major_angle,
+                    horizontal_deflection: 0,
+                    vertical_deflection: 0,
+                    horizontal_offset: 0,
+                    vertical_offset: 0,
+                }
+                .into()
+            } else {
+                RailScanState {
+                    valid: true,
+                    major_angle: prev_state.major_angle,
+                    horizontal_deflection: 0,
+                    vertical_deflection: 0,
+                    horizontal_offset: 0,
+                    vertical_offset: 0,
+                }
+                .into()
+            }
+        } else {
+            RailScanState {
+                valid: false,
+                major_angle: prev_state.major_angle,
+                horizontal_deflection: 0,
+                vertical_deflection: 0,
+                horizontal_offset: 0,
+                vertical_offset: 0,
+            }
+            .into()
+        }
+    }
+
+    fn scan_tracks(
+        &mut self,
+        services: &EntityCoroutineServices<'_>,
+        max_steps_ahead: f64,
+    ) -> Option<CoroutineResult> {
+        println!("starting scan at {:?}", self.scan_position);
+
+        let mut steps = 0.0;
+        for seg in self.scheduled_segments.iter() {
+            steps += seg.0.distance();
+        }
+        for seg in self.unplanned_segments.iter() {
+            steps += seg.distance();
+        }
+
+        while steps < max_steps_ahead {
+            if self.unplanned_segments.is_empty() {
+                tracing::info!("unplanned segments empty, adding new");
+                let empty_segment = TrackClearance {
+                    from: b2vec(self.scan_position),
+                    to: b2vec(self.scan_position),
+                    max_speed: self.last_speed_post_indication,
+                    seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
+                };
+                self.unplanned_segments.push_back(empty_segment);
+            }
+
+            // Precondition: self.scan_position has a valid rail, self.rail_scan_state reflects the state of parsing it
+
+            let (next_scan_coord, step_distance) = if let Some((next_scan_coord, step_distance)) =
+                self.next_scan(self.scan_position, &self.rail_scan_state)
+            {
+                (next_scan_coord, step_distance)
+            } else {
+                break;
+            };
+
+            let scan_block = match services.get_block(next_scan_coord) {
+                DeferrableResult::AvailableNow(x) => x.unwrap(),
+                DeferrableResult::Deferred(d) => return Some(d.defer_and_reinvoke(0)),
+            };
+
+            let new_rail_state =
+                match self.parse_rail(services, next_scan_coord, scan_block, &self.rail_scan_state)
+                {
+                    DeferrableResult::AvailableNow(x) => x,
+                    DeferrableResult::Deferred(d) => {
+                        return Some(d.map(|x| x.to_u64()).defer_and_reinvoke(1))
+                    }
+                };
+            if !new_rail_state.valid {
+                println!("invalid rail state: {new_rail_state:?}");
+                break;
+            } else {
+                // The new rail state is valid. Update the scan state, movement, and position.
+                // The precondition will be satisfied for the next iteration.
+                self.rail_scan_state = new_rail_state;
+                self.scan_position = next_scan_coord;
+                self.unplanned_segments.back_mut().unwrap().to = b2vec(next_scan_coord);
+                steps += step_distance;
+            }
+
+            if let Some(signal_coord) =
+                self.signal_coordinate(self.scan_position, &self.rail_scan_state)
+            {
+                let signal_block = match services.get_block(signal_coord) {
+                    DeferrableResult::AvailableNow(x) => x.unwrap(),
+                    DeferrableResult::Deferred(d) => return Some(d.defer_and_reinvoke(1)),
+                };
+
+                let signal_result = match self.parse_signal(services, signal_coord, signal_block) {
+                    DeferrableResult::AvailableNow(x) => x,
+                    DeferrableResult::Deferred(d) => {
+                        return Some(d.map(|x| x.to_f64()).defer_and_reinvoke(2))
+                    }
+                };
+                match signal_result {
+                    SignalResult::Stop => break,
+                    SignalResult::Permissive => {}
+                    SignalResult::SpeedRestriction(speed) => {
+                        if speed as Flt != self.last_speed_post_indication {
+                            println!("changing speed to {:?}", speed);
+                            self.start_new_unplanned_segment();
+                            self.unplanned_segments.back_mut().unwrap().max_speed = speed as Flt;
+                        }
+
+                        self.last_speed_post_indication = speed as Flt;
+                    }
+                }
+                // TODO: Find a better approach for handling the last segment than just splitting segments to
+                // kick the can down the road
+                if self.unplanned_segments.back().unwrap().distance() > 256.0 {
+                    println!("splitting segment because of length");
+                    self.start_new_unplanned_segment();
+                }
+            }
+        }
+        println!("finishing scan at {:?}", self.scan_position);
+        None
+    }
+
+    fn start_new_unplanned_segment(&mut self) {
+        let prev_segment = self.unplanned_segments.back().unwrap();
+        if prev_segment.distance() > 0.01 {
+            println!("new segment starting from {:?}", prev_segment.to);
+            let empty_segment = TrackClearance {
+                from: prev_segment.to,
+                to: prev_segment.to,
+                max_speed: self.last_speed_post_indication,
+                seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
+            };
+            self.unplanned_segments.push_back(empty_segment);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SignalResult {
+    /// Signal/sign instructs all carts to stop
+    Stop,
+    /// Signal/sign allows all carts to continue, without speed restriction
+    Permissive,
+    /// Signal/sign allows all carts to continue, with speed restriction
+    SpeedRestriction(f32),
+}
+impl SignalResult {
+    fn to_f64(self) -> f64 {
+        match self {
+            SignalResult::Stop => 0.0,
+            SignalResult::Permissive => f64::INFINITY,
+            SignalResult::SpeedRestriction(x) => x as f64,
+        }
+    }
+    fn from_f64(x: f64) -> Self {
+        if x == 0.0 {
+            Self::Stop
+        } else if x == f64::INFINITY {
+            Self::Permissive
+        } else if x.is_finite() && x > 0.0 {
+            Self::SpeedRestriction(x as f32)
+        } else {
+            panic!("Invalid signal result: {:?}, {:x}", x, x.to_bits());
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RailScanState {
+    // If true, the rail is valid
+    valid: bool,
+    // The angle from the Z+ direction, in 90 degree increments
+    major_angle: u8,
+    // Direction in sixteenths-steps-per-block off the major angle
+    horizontal_deflection: i8,
+    // Direction in sixteenths-steps-per-block off the horizontal
+    vertical_deflection: i8,
+    // How many sixteenths-steps have actually been taken off the major angle
+    horizontal_offset: i8,
+    // How many sixteenths-steps have actually been taken off the horizontal
+    vertical_offset: i8,
+}
+impl RailScanState {
+    fn to_u64(&self) -> u64 {
+        self.major_angle as u64
+            | (self.horizontal_deflection as u64) << 8
+            | (self.vertical_deflection as u64) << 16
+            | (self.horizontal_offset as u64) << 24
+            | (self.vertical_offset as u64) << 32
+            | (self.valid as u64) << 40
+    }
+    fn from_u64(x: u64) -> Self {
+        Self {
+            valid: (x >> 40) != 0,
+            major_angle: (x & 0xFF) as u8,
+            horizontal_deflection: ((x >> 8) & 0xFF) as i8,
+            vertical_deflection: ((x >> 16) & 0xFF) as i8,
+            horizontal_offset: ((x >> 24) & 0xFF) as i8,
+            vertical_offset: ((x >> 32) & 0xFF) as i8,
+        }
+    }
+
+    fn scan_delta(&self) -> (i32, i32, i32) {
+        match self.major_angle % 4 {
+            0 => (0, 0, 1),
+            1 => (1, 0, 0),
+            2 => (0, 0, -1),
+            3 => (-1, 0, 0),
+            _ => unreachable!(),
+        }
+    }
+
+    fn signal_delta(&self) -> Option<(i32, i32, i32)> {
+        Some(match self.major_angle % 4 {
+            0 => (1, 0, 0),
+            1 => (0, 0, -1),
+            2 => (-1, 0, 0),
+            3 => (0, 0, 1),
+            _ => unreachable!(),
+        })
     }
 }
