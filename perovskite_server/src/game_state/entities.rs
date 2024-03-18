@@ -479,7 +479,8 @@ macro_rules! impl_deferral {
 }
 
 impl_deferral!(String, String);
-impl_deferral!(f64, Number);
+impl_deferral!(f64, FloatNumber);
+impl_deferral!(u64, Integer);
 impl_deferral!(Vector3<f64>, Vector);
 impl_deferral!(bool, Boolean);
 impl_deferral!(EntityMoveDecision, EntityDecision);
@@ -492,10 +493,56 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
     ) -> CoroutineResult {
         CoroutineResult::_DeferredMoveResult(DeferredPrivate {
             deferred_call: Box::new(move || {
-                let (t, residual) = (self.deferred_call)();
+                let (t, _residual) = (self.deferred_call)();
                 f(t)
             }),
         })
+    }
+}
+
+impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> From<T>
+    for DeferrableResult<T, Residual>
+{
+    fn from(t: T) -> Self {
+        Self::AvailableNow(t)
+    }
+}
+
+impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> From<Deferral<T, Residual>>
+    for DeferrableResult<T, Residual>
+{
+    fn from(t: Deferral<T, Residual>) -> Self {
+        Self::Deferred(t)
+    }
+}
+
+impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static>
+    DeferrableResult<T, Residual>
+{
+    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
+    pub fn map<U: Send + Sync + 'static>(
+        self,
+        f: impl FnOnce(T) -> U + Send + Sync + 'static,
+    ) -> DeferrableResult<U, ()> {
+        match self {
+            Self::AvailableNow(t) => DeferrableResult::AvailableNow(f(t)),
+            Self::Deferred(d) => DeferrableResult::Deferred(d.map(f)),
+        }
+    }
+}
+
+impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral<T, Residual> {
+    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
+    pub fn map<U: Send + Sync + 'static>(
+        self,
+        f: impl FnOnce(T) -> U + Send + Sync + 'static,
+    ) -> Deferral<U, ()> {
+        Deferral {
+            deferred_call: Box::new(move || {
+                let (t, _residual) = (self.deferred_call)();
+                (f(t), ())
+            }),
+        }
     }
 }
 
@@ -525,7 +572,9 @@ pub enum ContinuationResultValue {
     /// A string result from a deferred call
     String(String),
     /// A number result from a deferred call
-    Number(f64),
+    FloatNumber(f64),
+    /// A u64 integer result from a deferred call
+    Integer(u64),
     /// A vector result from a deferred call
     Vector(Vector3<f64>),
     /// A boolean result from a deferred call
