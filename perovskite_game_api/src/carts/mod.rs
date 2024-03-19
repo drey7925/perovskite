@@ -162,6 +162,7 @@ impl ChatCommandHandler for CartSpawner {
                         horizontal_offset: 0,
                         vertical_offset: 0,
                     },
+                    scan_stop_reason: ScanStopReason::NoRail,
                 })),
                 EntityTypeId {
                     class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
@@ -255,6 +256,8 @@ struct CartCoroutine {
     spawn_time: Instant,
     // The rail scan state, indicating which direction we're scanning in
     rail_scan_state: RailScanState,
+    // Why the last scan stopped
+    scan_stop_reason: ScanStopReason,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -284,162 +287,93 @@ impl EntityCoroutine for CartCoroutine {
             self.scheduled_segments.len(),
             self.unplanned_segments.len()
         );
-        // // Fill the unplanned segment queue unless we've scanned too far ahead or it's full
-        // let mut step_count = 0.0;
-        // for seg in self.scheduled_segments.iter() {
-        //     step_count += seg.0.manhattan_dist();
-        // }
-        // for seg in self.unplanned_segments.iter() {
-        //     step_count += seg.manhattan_dist();
-        // }
-        // // hacky clean up
-        // let mut force_speed_post = false;
-        // // todo tune
-        // while step_count < 1024.0 {
-        //     if self.unplanned_segments.is_empty()
-        //         || self.unplanned_segments.back().unwrap().max_speed
-        //             != self.last_speed_post_indication
-        //         || force_speed_post
-        //         || self.unplanned_segments.back().unwrap().distance() > 512.0
-        //     {
-        //         tracing::info!("new seg");
-        //         if let Some(x) = self.unplanned_segments.back() {
-        //             tracing::info!("last seg max speed {}", x.max_speed);
-        //         }
-        //         tracing::info!("lspi {}", self.last_speed_post_indication);
-        //         tracing::info!("fsp {}", force_speed_post);
-        //         let empty_segment = TrackClearance {
-        //             from: b2vec(self.scan_position),
-        //             to: b2vec(self.scan_position),
-        //             max_speed: self.last_speed_post_indication,
-        //             seg_id: NEXT_SEGMENT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        //         };
-        //         self.unplanned_segments.push_back(empty_segment);
-        //         force_speed_post = false;
-        //     }
-        //     // TODO: self should store direction of movement.
-
-        //     // On the test track, we proceed in the Z+ direction. Speed posts are in the +X direction relative to the track
-        //     step_count += 1.0;
-        //     // These should be checked, but they only fail at the end of the map.
-        //     let next_scan = self.scan_position.try_delta(0, 0, 1).unwrap();
-        //     let next_speed_post = next_scan.try_delta(1, 0, 0).unwrap();
-
-        //     let scan_block = match services.get_block(next_scan) {
-        //         DeferrableResult::AvailableNow(x) => x.unwrap(),
-        //         DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
-        //     };
-
-        //     let speed_post_block = match services.get_block(next_speed_post) {
-        //         DeferrableResult::AvailableNow(x) => x.unwrap(),
-        //         DeferrableResult::Deferred(d) => return d.defer_and_reinvoke(0),
-        //     };
-        //     if scan_block != self.config.rail_block {
-        //         // We're at the end of the track. The last segment already includes the last bit of track
-        //         tracing::info!("end of track: {scan_block:?}");
-        //         self.last_speed_post_indication = 1.0;
-        //         break;
-        //     } else {
-        //         self.scan_position = next_scan;
-        //         self.unplanned_segments.back_mut().unwrap().to = b2vec(next_scan);
-        //     }
-
-        //     if speed_post_block == self.config.speedpost_1 {
-        //         self.last_speed_post_indication = 0.2;
-        //         force_speed_post = true;
-        //     } else if speed_post_block == self.config.speedpost_2 {
-        //         self.last_speed_post_indication = 2.0;
-        //         force_speed_post = true;
-        //     } else if speed_post_block == self.config.speedpost_3 {
-        //         self.last_speed_post_indication = 58.3;
-        //         force_speed_post = true;
-        //     }
-        // }
 
         self.scan_tracks(services, 1024.0);
 
-        for seg in self.unplanned_segments.iter() {
-            println!("{:?}", seg);
-        }
+        let schedulable_segments = self.promote_schedulable(when, queue_space);
 
-        // Now, calculate the braking curve for the planned segment. For now, we'll rebuild the braking curve each time
-        // Scan backwards through all unplanned segments, then all planned segments.
-        // todo optimize this later
+        // for seg in self.unplanned_segments.iter() {
+        //     println!("{:?}", seg);
+        // }
 
-        // The maximum speed we can be moving at the end of the current track segment.
-        let mut max_exit_speed: Flt = 0.0;
-        // If true, we hit the max track speed for at least one segment. Otherwise, our braking curve is affected by
-        // unknown track segments that we haven't scanned yet, and hence is not certain yet.
-        let mut segments_schedulable = false;
-        let mut schedulable_segments = VecDeque::new();
+        // // Now, calculate the braking curve for the planned segment. For now, we'll rebuild the braking curve each time
+        // // Scan backwards through all unplanned segments, then all planned segments.
+        // // todo optimize this later
 
-        //let mut readd_unplanned_segment = None;
+        // // The maximum speed we can be moving at the end of the current track segment.
+        // let mut max_exit_speed: Flt = 0.0;
+        // // If true, we hit the max track speed for at least one segment. Otherwise, our braking curve is affected by
+        // // unknown track segments that we haven't scanned yet, and hence is not certain yet.
+        // let mut segments_schedulable = false;
+        // let mut schedulable_segments = VecDeque::new();
+
+        // //let mut readd_unplanned_segment = None;
+
+        // // Iterate in reverse of track order
+        // for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
+        //     max_exit_speed = max_exit_speed.min(seg.max_speed);
+        //     let distance = seg.distance();
+        //     // vf^2 = vi^2 + 2a(d)
+        //     let mut max_entry_speed =
+        //         (max_exit_speed * max_exit_speed + 2.0 * MAX_ACCEL * distance).sqrt();
+        //     tracing::info!("> unplanned segment {}, enter at {max_entry_speed}, exit at {max_exit_speed}, seg max speed {}, start {:?}, len {distance}", seg.seg_id, seg.max_speed, seg.from);
+        //     if max_entry_speed > seg.max_speed {
+        //         max_entry_speed = seg.max_speed;
+        //     }
+
+        //     // Record the segment if it's schedulable, or if it's the only segment we have and we're running low on cached moves
+        //     if segments_schedulable {
+        //         // Record the actual speed we need to stay under as we exit this segment
+        //         // We push_front, so as we iterate, we get them in track order (which is what we need to now build the curve segment by segment)
+        //         schedulable_segments.push_front((*seg, max_exit_speed));
+        //         tracing::info!(
+        //             ">> planning it. seg_schedulable = {}, idx = {}, when = {}",
+        //             segments_schedulable,
+        //             idx,
+        //             when
+        //         );
+        //     } else if idx == 0 && queue_space > 4 {
+        //         // This is the last segment we have, and we're running low on cached moves. We need to record it.
+        //         // However, we'll split it up
+
+        //         tracing::info!(
+        //             ">> planning it. seg_schedulable = {}, idx = {}, when = {}",
+        //             segments_schedulable,
+        //             idx,
+        //             when
+        //         );
+        //         // let braking_distance =
+        //         //     (last_seg_speed * last_seg_speed / (2.0 * MAX_ACCEL)).max(4.0);
+        //         // // split up the segment
+        //         // println!("splitting up segment");
+        //         // let (seg, second) = seg.split_at_offset(distance - braking_distance);
+        //         // println!("first: {seg:?}, second: {second:?}");
+        //         schedulable_segments.push_front((*seg, last_seg_speed));
+        //         //readd_unplanned_segment = second;
+        //     }
+
+        //     // This segment could be entered at maximum track speed and we would still stop in time. Any segments before it (in track order)
+        //     // are now schedulable. This one is not yet schedulable, since we don't know how early in it we would need to start slowing down.
+        //     if max_entry_speed >= seg.max_speed {
+        //         segments_schedulable = true;
+        //     }
+
+        //     // The exit speed of the previous segment is the entry speed of the current segment
+        //     max_exit_speed = max_entry_speed;
+        // }
+
+        // for _ in 0..schedulable_segments.len() {
+        //     self.unplanned_segments.pop_front();
+        // }
+        // if let Some(seg) = readd_unplanned_segment {
+        //     self.unplanned_segments.push_back(seg);
+        // }
+
         let mut last_seg_speed = self
             .scheduled_segments
             .back()
             .map(|x| x.1 + x.2 * x.3)
             .unwrap_or(self.last_speed);
-
-        // Iterate in reverse of track order
-        for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
-            max_exit_speed = max_exit_speed.min(seg.max_speed);
-            let distance = seg.distance();
-            // vf^2 = vi^2 + 2a(d)
-            let mut max_entry_speed =
-                (max_exit_speed * max_exit_speed + 2.0 * MAX_ACCEL * distance).sqrt();
-            tracing::info!("> unplanned segment {}, enter at {max_entry_speed}, exit at {max_exit_speed}, seg max speed {}, start {:?}, len {distance}", seg.seg_id, seg.max_speed, seg.from);
-            if max_entry_speed > seg.max_speed {
-                max_entry_speed = seg.max_speed;
-            }
-
-            // Record the segment if it's schedulable, or if it's the only segment we have and we're running low on cached moves
-            if segments_schedulable {
-                // Record the actual speed we need to stay under as we exit this segment
-                // We push_front, so as we iterate, we get them in track order (which is what we need to now build the curve segment by segment)
-                schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::info!(
-                    ">> planning it. seg_schedulable = {}, idx = {}, when = {}",
-                    segments_schedulable,
-                    idx,
-                    when
-                );
-            } else if idx == 0 && queue_space > 4 {
-                // This is the last segment we have, and we're running low on cached moves. We need to record it.
-                // However, we'll split it up
-
-                tracing::info!(
-                    ">> planning it. seg_schedulable = {}, idx = {}, when = {}",
-                    segments_schedulable,
-                    idx,
-                    when
-                );
-                // let braking_distance =
-                //     (last_seg_speed * last_seg_speed / (2.0 * MAX_ACCEL)).max(4.0);
-                // // split up the segment
-                // println!("splitting up segment");
-                // let (seg, second) = seg.split_at_offset(distance - braking_distance);
-                // println!("first: {seg:?}, second: {second:?}");
-                schedulable_segments.push_front((*seg, last_seg_speed));
-                //readd_unplanned_segment = second;
-            }
-
-            // This segment could be entered at maximum track speed and we would still stop in time. Any segments before it (in track order)
-            // are now schedulable. This one is not yet schedulable, since we don't know how early in it we would need to start slowing down.
-            if max_entry_speed >= seg.max_speed {
-                segments_schedulable = true;
-            }
-
-            // The exit speed of the previous segment is the entry speed of the current segment
-            max_exit_speed = max_entry_speed;
-        }
-
-        for _ in 0..schedulable_segments.len() {
-            self.unplanned_segments.pop_front();
-        }
-        // if let Some(seg) = readd_unplanned_segment {
-        //     self.unplanned_segments.push_back(seg);
-        // }
-
         for (seg, max_exit_speed) in schedulable_segments.into_iter() {
             // TODO - we should slice up the segment, rather than having a slow acceleration over the whole segment
             // This takes casework; the case where we have time to get to max speed, hold max speed, then slow down is easy
@@ -749,18 +683,24 @@ impl CartCoroutine {
             steps += seg.distance();
         }
 
-        while steps < max_steps_ahead {
-            if self.unplanned_segments.is_empty() {
-                tracing::info!("unplanned segments empty, adding new");
-                let empty_segment = TrackClearance {
-                    from: b2vec(self.scan_position),
-                    to: b2vec(self.scan_position),
-                    max_speed: self.last_speed_post_indication,
-                    seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
-                };
-                self.unplanned_segments.push_back(empty_segment);
-            }
+        if self.unplanned_segments.is_empty() {
+            tracing::info!("unplanned segments empty, adding new");
+            let empty_segment = TrackClearance {
+                from: b2vec(self.scan_position),
+                to: b2vec(self.scan_position),
+                max_speed: self.last_speed_post_indication,
+                seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
+            };
+            self.unplanned_segments.push_back(empty_segment);
+        }
 
+        // TODO remove after thorough testing; this invariant will be broken once we get switches and angled rails
+        assert!(
+            (self.unplanned_segments.back().unwrap().to - b2vec(self.scan_position)).magnitude()
+                < 0.1
+        );
+
+        while steps < max_steps_ahead {
             // Precondition: self.scan_position has a valid rail, self.rail_scan_state reflects the state of parsing it
 
             let (next_scan_coord, step_distance) = if let Some((next_scan_coord, step_distance)) =
@@ -833,6 +773,94 @@ impl CartCoroutine {
         }
         println!("finishing scan at {:?}", self.scan_position);
         None
+    }
+
+    fn promote_schedulable(
+        &mut self,
+        when: f32,
+        queue_space: usize,
+    ) -> VecDeque<(TrackClearance, Flt)> {
+        // NOTE: While this function iterates in reverse order (end of track -> nearest unscheduled segment),
+        // comments and names refer to segments in *track* order. So in reality, the iteration is from the
+        // furthest-away segment to the closest segment.
+
+        // Prepare a braking curve for the segments we have, looking for the first moment
+        // where we're no longer limited by the braking curve while scanning backwards from
+        // stop to start
+        //
+        // "No longer limited" is defined as "there's at least one upcoming track segment where we're
+        // limited by track speed" - even if we're on a braking curve approaching that track segment,
+        // it doesn't matter if the track scan detects more tracks or a signal clears - the braking curve
+        // up to that limiting track segment is unchanged
+
+        // The maximum speed at which we're allowed to exit the current segment.
+        // Updated to be the max entry speed of the following segment.
+        // It's 0.0 to start, because there is no further segment detected by track scan (or that segment
+        // cannot be entered due to a restrictive signal or a switch set against us)
+        let mut max_exit_speed: Flt = 0.0;
+
+        // If this is true, we've hit a segment where we were limited by track speed.
+        let mut unconditionally_schedulable = false;
+        let mut schedulable_segments = VecDeque::new();
+
+        let estimated_segments_remaining = (9 - queue_space) + self.scheduled_segments.len();
+
+        for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
+            tracing::info!("> unplanned segment {:?}", seg);
+            // The entrance speed, if we just consider the max acceleration
+            let mut max_entry_speed =
+                (max_exit_speed * max_exit_speed + 2.0 * MAX_ACCEL * seg.distance()).sqrt();
+
+            let limited_by_seg_speed = max_entry_speed >= seg.max_speed;
+
+            if limited_by_seg_speed {
+                max_entry_speed = seg.max_speed;
+                // This segment itself is not yet schedulable, so we don't set unconditionally_schedulable yet
+            }
+            // If we encountered a further segment where we were limited by track speed, we can schedule this one
+            if unconditionally_schedulable {
+                schedulable_segments.push_front((*seg, max_entry_speed));
+                tracing::info!(
+                    "> seg_schedulable = {}, seg = {:?}",
+                    unconditionally_schedulable,
+                    seg.seg_id
+                );
+            } else if estimated_segments_remaining < 2 || when < 1.0 && idx == 0 {
+                // We're low on cached moves, so let's schedule this segment
+                schedulable_segments.push_front((*seg, max_entry_speed));
+                tracing::info!(
+                    "> panic scheduling! seg_schedulable = {}, seg = {:?}",
+                    unconditionally_schedulable,
+                    seg.seg_id
+                );
+                // We don't actually need to set this, but this guards against refactorings that remove the idx==0 conditions
+                unconditionally_schedulable = true;
+            }
+
+            if limited_by_seg_speed {
+                unconditionally_schedulable = true;
+            }
+            // The max exit speed of the preeding segment is the same as the max entry speed of the current segment
+            // (after limiting for track speed)
+            max_exit_speed = max_entry_speed;
+        }
+
+        // We scheduled some prefix of the unscheduled segments, on a 1:1 basis
+        // Remove that prefix
+        for _ in 0..schedulable_segments.len() {
+            self.unplanned_segments.pop_front().unwrap();
+        }
+
+        // front is the first remaining unplanned segment
+        if let Some(front) = self.unplanned_segments.front() {
+            // back is the last segment we planned
+            if let Some(back) = schedulable_segments.back() {
+                // They ought to match up
+                assert!((front.from - back.0.to).magnitude() < 0.01);
+            }
+        }
+
+        schedulable_segments
     }
 
     fn start_new_unplanned_segment(&mut self) {
@@ -934,4 +962,14 @@ impl RailScanState {
             _ => unreachable!(),
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanStopReason {
+    /// We scanned as far as we're limited to
+    ScanDistance,
+    /// We encountered a restrictive signal or a switch that's not set for us
+    Signal,
+    /// We didn't find a rail.
+    NoRail,
 }
