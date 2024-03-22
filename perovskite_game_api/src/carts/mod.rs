@@ -3,7 +3,7 @@ use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 // This is a temporary implementation used while developing the entity system
 use anyhow::Result;
 use async_trait::async_trait;
-use cgmath::{vec3, InnerSpace, Vector3};
+use cgmath::{vec2, vec3, InnerSpace, Vector3};
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     chat::commands::ChatCommandHandler,
@@ -24,6 +24,8 @@ use crate::{
 #[derive(Clone)]
 struct CartsGameBuilderExtension {
     rail_block: BlockId,
+    rail_sw_right: BlockId,
+    rail_sw_left: BlockId,
     speedpost_1: BlockId,
     speedpost_2: BlockId,
     speedpost_3: BlockId,
@@ -32,6 +34,8 @@ impl Default for CartsGameBuilderExtension {
     fn default() -> Self {
         CartsGameBuilderExtension {
             rail_block: 0.into(),
+            rail_sw_right: 0.into(),
+            rail_sw_left: 0.into(),
             speedpost_1: 0.into(),
             speedpost_2: 0.into(),
             speedpost_3: 0.into(),
@@ -49,10 +53,35 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     include_texture_bytes!(game_builder, speedpost2_tex, "textures/speedpost_2.png")?;
     include_texture_bytes!(game_builder, speedpost3_tex, "textures/speedpost_3.png")?;
 
+    // TODO: These are fake stand-ins for real switch rails that differ at each point in the switch
+    let rail_sw_right_tex = StaticTextureName("carts:rail_sw_right");
+    let rail_sw_left_tex = StaticTextureName("carts:rail_sw_left");
+    include_texture_bytes!(
+        game_builder,
+        rail_sw_right_tex,
+        "textures/rail_sw_right.png"
+    )?;
+    include_texture_bytes!(game_builder, rail_sw_left_tex, "textures/rail_sw_left.png")?;
+
     let rail = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:rail")).set_cube_appearance(
             CubeAppearanceBuilder::new()
                 .set_single_texture(rail_tex)
+                .set_rotate_laterally(),
+        ),
+    )?;
+
+    let rail_sw_right = game_builder.add_block(
+        BlockBuilder::new(StaticBlockName("carts:rail_sw_right")).set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(rail_sw_right_tex)
+                .set_rotate_laterally(),
+        ),
+    )?;
+    let rail_sw_left = game_builder.add_block(
+        BlockBuilder::new(StaticBlockName("carts:rail_sw_left")).set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(rail_sw_left_tex)
                 .set_rotate_laterally(),
         ),
     )?;
@@ -72,6 +101,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
     ext.rail_block = rail.id;
+    ext.rail_sw_right = rail_sw_right.id;
+    ext.rail_sw_left = rail_sw_left.id;
     ext.speedpost_1 = speedpost1.id;
     ext.speedpost_2 = speedpost2.id;
     ext.speedpost_3 = speedpost3.id;
@@ -273,14 +304,14 @@ struct CartCoroutine {
     unplanned_segments: VecDeque<TrackSegment>,
     // The current coordinate where we're going to scan next
     scan_position: BlockCoordinate,
+    // The rail scan state, indicating which direction we're scanning in
+    rail_scan_state: RailScanState,
     // The last speed post we encountered while scanning
     last_speed_post_indication: Flt,
     // The last velocity we already delivered to the entity system
     last_submitted_move_exit_speed: Flt,
     // debug only
     spawn_time: Instant,
-    // The rail scan state, indicating which direction we're scanning in
-    rail_scan_state: RailScanState,
     // Why the last scan stopped
     scan_stop_reason: ScanStopReason,
 }
@@ -365,17 +396,6 @@ impl EntityCoroutine for CartCoroutine {
 }
 
 impl CartCoroutine {
-    fn next_scan(
-        &self,
-        scan_position: BlockCoordinate,
-        rail_state: &RailScanState,
-    ) -> Option<(BlockCoordinate, f64)> {
-        let (x, y, z) = rail_state.scan_delta();
-        scan_position
-            .try_delta(x, y, z)
-            .map(|c| (c, vec3(x as f64, y as f64, z as f64).magnitude()))
-    }
-
     fn signal_coordinate(
         &self,
         scan_position: BlockCoordinate,
@@ -405,6 +425,9 @@ impl CartCoroutine {
         }
     }
 
+    // Parses the rail at the given coord, and returns the
+    // rail scan state to use for the *next* scan step, or an invalid
+    // state if the scan should stop.
     fn parse_rail(
         &self,
         services: &EntityCoroutineServices<'_>,
@@ -428,9 +451,61 @@ impl CartCoroutine {
                 RailScanState {
                     valid: true,
                     major_angle: prev_state.major_angle,
+                    // Only reset this to 0 if we encounter a normal rail AND we're done switching
+                    horizontal_deflection: if prev_state.horizontal_offset == 0 {
+                        0
+                    } else {
+                        prev_state.horizontal_deflection
+                    },
+                    vertical_deflection: 0,
+                    horizontal_offset: prev_state.horizontal_offset,
+                    vertical_offset: 0,
+                }
+                .into()
+            }
+        } else if rail_block.equals_ignore_variant(self.config.rail_sw_left) {
+            if (rail_block.variant() % 2) as u8 != prev_state.major_angle % 2 {
+                RailScanState {
+                    valid: false,
+                    major_angle: prev_state.major_angle,
                     horizontal_deflection: 0,
                     vertical_deflection: 0,
                     horizontal_offset: 0,
+                    vertical_offset: 0,
+                }
+                .into()
+            } else {
+                println!("switch left");
+                RailScanState {
+                    valid: true,
+                    major_angle: prev_state.major_angle,
+                    horizontal_deflection: 6,
+                    vertical_deflection: 0,
+                    // We don't update this here; advance() will do that
+                    horizontal_offset: prev_state.horizontal_offset,
+                    vertical_offset: 0,
+                }
+                .into()
+            }
+        } else if rail_block.equals_ignore_variant(self.config.rail_sw_right) {
+            if (rail_block.variant() % 2) as u8 != prev_state.major_angle % 2 {
+                RailScanState {
+                    valid: false,
+                    major_angle: prev_state.major_angle,
+                    horizontal_deflection: 0,
+                    vertical_deflection: 0,
+                    horizontal_offset: 0,
+                    vertical_offset: 0,
+                }
+                .into()
+            } else {
+                RailScanState {
+                    valid: true,
+                    major_angle: prev_state.major_angle,
+                    horizontal_deflection: -6,
+                    vertical_deflection: 0,
+                    // We don't update this here; advance() will do that
+                    horizontal_offset: prev_state.horizontal_offset,
                     vertical_offset: 0,
                 }
                 .into()
@@ -453,7 +528,14 @@ impl CartCoroutine {
         services: &EntityCoroutineServices<'_>,
         max_steps_ahead: f64,
     ) -> Option<CoroutineResult> {
-        println!("starting scan at {:?}", self.scan_position);
+        println!(
+            "starting scan at {:?}: {:?}",
+            self.scan_position, self.rail_scan_state
+        );
+        println!(
+            "next would be {:?}",
+            self.rail_scan_state.next_scan(self.scan_position)
+        );
 
         let mut steps = 0.0;
         for seg in self.scheduled_segments.iter() {
@@ -466,56 +548,67 @@ impl CartCoroutine {
         if self.unplanned_segments.is_empty() {
             tracing::info!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
-                from: b2vec(self.scan_position),
-                to: b2vec(self.scan_position),
+                from: self.rail_scan_state.position(self.scan_position),
+                to: self.rail_scan_state.position(self.scan_position),
                 max_speed: self.last_speed_post_indication,
                 seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
             };
             self.unplanned_segments.push_back(empty_segment);
         }
 
-        // TODO remove after thorough testing; this invariant will be broken once we get switches and angled rails
-        assert!(
-            (self.unplanned_segments.back().unwrap().to - b2vec(self.scan_position)).magnitude()
-                < 0.1
-        );
+        // // TODO remove after thorough testing; this invariant will be broken once we get switches and angled rails
+        // assert!(
+        //     (self.unplanned_segments.back().unwrap().to - b2vec(self.scan_position)).magnitude()
+        //         < 0.1
+        // );
 
         while steps < max_steps_ahead {
             // Precondition: self.scan_position has a valid rail, self.rail_scan_state reflects the state of parsing it
+            // next_scan will use the rail_scan_state to determine the next rail to parse and the resulting scan state.
+            // Then, parse_rail may adjust that scan state accordingly.
+            let (next_scan_state, next_scan_coord, step_distance) =
+                if let Some((next_scan_state, next_scan_coord, step_distance)) =
+                    self.rail_scan_state.next_scan(self.scan_position)
+                {
+                    (next_scan_state, next_scan_coord, step_distance)
+                } else {
+                    break;
+                };
 
-            let (next_scan_coord, step_distance) = if let Some((next_scan_coord, step_distance)) =
-                self.next_scan(self.scan_position, &self.rail_scan_state)
-            {
-                (next_scan_coord, step_distance)
-            } else {
-                break;
-            };
-
+            // From the last coordinate we scanned + the deflection in the last scan state, we try to get a block
             let scan_block = match services.get_block(next_scan_coord) {
                 DeferrableResult::AvailableNow(x) => x.unwrap(),
                 DeferrableResult::Deferred(d) => return Some(d.defer_and_reinvoke(0)),
             };
 
+            // We then try to parse that block. Either it gives us a new rail state (possibly the same one if that block doesn't deflect), or it gives us an invalid state.
             let new_rail_state =
-                match self.parse_rail(services, next_scan_coord, scan_block, &self.rail_scan_state)
-                {
+                match self.parse_rail(services, next_scan_coord, scan_block, &next_scan_state) {
                     DeferrableResult::AvailableNow(x) => x,
                     DeferrableResult::Deferred(d) => {
                         return Some(d.map(|x| x.to_u64()).defer_and_reinvoke(1))
                     }
                 };
             if !new_rail_state.valid {
-                println!("invalid rail state: {new_rail_state:?}");
                 break;
             } else {
                 // The new rail state is valid. Update the scan state, movement, and position.
                 // The precondition will be satisfied for the next iteration.
+
+                if !new_rail_state.same_direction(self.rail_scan_state) {
+                    println!(
+                        "splitting segment because of changing scan direction @ {:?}",
+                        next_scan_coord
+                    );
+                    self.start_new_unplanned_segment();
+                }
+
                 self.rail_scan_state = new_rail_state;
                 self.scan_position = next_scan_coord;
-                self.unplanned_segments.back_mut().unwrap().to = b2vec(next_scan_coord);
+                self.unplanned_segments.back_mut().unwrap().to =
+                    new_rail_state.position(next_scan_coord);
                 steps += step_distance;
             }
-
             if let Some(signal_coord) =
                 self.signal_coordinate(self.scan_position, &self.rail_scan_state)
             {
@@ -539,7 +632,6 @@ impl CartCoroutine {
                             self.start_new_unplanned_segment();
                             self.unplanned_segments.back_mut().unwrap().max_speed = speed as Flt;
                         }
-
                         self.last_speed_post_indication = speed as Flt;
                     }
                 }
@@ -1042,17 +1134,22 @@ impl SignalResult {
 
 #[derive(Debug, Clone, Copy)]
 struct RailScanState {
-    // If true, the rail is valid
+    /// If true, the rail is valid
     valid: bool,
-    // The angle from the Z+ direction, in 90 degree increments
+    /// The angle from the Z+ direction, in 90 degree increments
     major_angle: u8,
-    // Direction in sixteenths-steps-per-block off the major angle
+    /// Direction in 1/96th-block per step off the major angle
+    /// Left of direction (i.e. increasing angle) is positive
+    /// e.g. setting to 3 means you'll shift left a full block after
+    /// moving 32 blocks forward
     horizontal_deflection: i8,
-    // Direction in sixteenths-steps-per-block off the horizontal
+    /// Direction in 1/96th-block per step off the horizontal
+    /// Ascending grades in the scan direction is positive
+    /// A value of 3 means a 3.125% grade
     vertical_deflection: i8,
-    // How many sixteenths-steps have actually been taken off the major angle
+    /// How many sixteenths-steps have actually been taken off the major angle
     horizontal_offset: i8,
-    // How many sixteenths-steps have actually been taken off the horizontal
+    /// How many sixteenths-steps have actually been taken off the horizontal
     vertical_offset: i8,
 }
 impl RailScanState {
@@ -1075,14 +1172,57 @@ impl RailScanState {
         }
     }
 
-    fn scan_delta(&self) -> (i32, i32, i32) {
-        match self.major_angle % 4 {
-            0 => (0, 0, 1),
-            1 => (1, 0, 0),
-            2 => (0, 0, -1),
-            3 => (-1, 0, 0),
-            _ => unreachable!(),
+    // Determines the next rail to parse and the resulting scan state, as well as the distance moved
+    fn next_scan(&self, current_coord: BlockCoordinate) -> Option<(Self, BlockCoordinate, f64)> {
+        if !self.valid {
+            panic!("next_scan called on invalid RailScanState: {:?}", self);
         }
+
+        let horz = self.horizontal_offset + self.horizontal_deflection;
+        let vert = self.vertical_offset + self.vertical_deflection;
+        let (horz_major, horz_minor) = symmetric_mod_rm_96(horz);
+        let (vert_major, vert_minor) = symmetric_mod_rm_96(vert);
+
+        let (dx, dy, dz) = match self.major_angle % 4 {
+            0 => (-horz_major, vert_major, 1),
+            1 => (1, vert_major, horz_major),
+            2 => (horz_major, vert_major, -1),
+            3 => (-1, vert_major, -horz_major),
+            _ => unreachable!(),
+        };
+
+        Some((
+            Self {
+                valid: true,
+                major_angle: self.major_angle,
+                horizontal_deflection: self.horizontal_deflection,
+                vertical_deflection: self.vertical_deflection,
+                horizontal_offset: horz_minor,
+                vertical_offset: vert_minor,
+            },
+            current_coord
+                .try_delta(dx.into(), dy.into(), dz.into())
+                .unwrap(),
+            vec2(
+                1.0 + (self.horizontal_deflection as f64 / 96.0),
+                self.vertical_deflection as f64 / 96.0,
+            )
+            .magnitude(),
+        ))
+    }
+
+    fn position(&self, coarse: BlockCoordinate) -> Vector3<f64> {
+        let h_f64 = self.horizontal_offset as f64 / 96.0;
+        let v_f64 = self.vertical_offset as f64 / 96.0;
+
+        let (dx, dy, dz) = match self.major_angle % 4 {
+            0 => (-h_f64, v_f64, 0.0),
+            1 => (0.0, v_f64, h_f64),
+            2 => (h_f64, v_f64, 0.0),
+            3 => (0.0, v_f64, -h_f64),
+            _ => unreachable!(),
+        };
+        b2vec(coarse) + vec3(dx, dy, dz)
     }
 
     fn signal_delta(&self) -> Option<(i32, i32, i32)> {
@@ -1093,6 +1233,27 @@ impl RailScanState {
             3 => (0, 0, 1),
             _ => unreachable!(),
         })
+    }
+
+    fn same_direction(&self, rail_scan_state: RailScanState) -> bool {
+        if !self.valid || !rail_scan_state.valid {
+            panic!(
+                "same_direction called on invalid RailScanState: {:?}, {:?}",
+                self, rail_scan_state
+            );
+        }
+
+        self.major_angle == rail_scan_state.major_angle
+            && self.horizontal_deflection == rail_scan_state.horizontal_deflection
+            && self.vertical_deflection == rail_scan_state.vertical_deflection
+    }
+}
+
+fn symmetric_mod_rm_96(x: i8) -> (i8, i8) {
+    match x {
+        ..=-96 => (-1, x + 96),
+        -95..=95 => (0, x),
+        96.. => (1, x - 96),
     }
 }
 

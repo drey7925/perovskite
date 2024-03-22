@@ -151,7 +151,7 @@ impl Color {
     /// Applies the color to the source image and returns the result.
     /// The source image must be in a format supported by the `image` crate.
     /// The mask image sets where colorization is and isn't applied. Brighter values in the
-    /// source image will result in more colorization.
+    /// mask will result in more colorization.
     ///
     /// The source and mask must be the same size.
     pub fn colorize_to_png_with_mask(
