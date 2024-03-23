@@ -373,7 +373,7 @@ pub struct PlayerPositionUpdate {
     pub position: cgmath::Vector3<f64>,
     // The velocity, blocks per second
     pub velocity: cgmath::Vector3<f64>,
-    // The facing direction, normalized
+    // The facing direction, normalized, in degrees
     pub face_direction: (f64, f64),
 }
 impl PlayerPositionUpdate {

@@ -4,20 +4,28 @@ use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 use anyhow::Result;
 use async_trait::async_trait;
 use cgmath::{vec2, vec3, InnerSpace, Vector3};
-use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
+use perovskite_core::{
+    block_id::BlockId,
+    chat::{ChatMessage, SERVER_ERROR_COLOR},
+    constants::items::default_item_interaction_rules,
+    coordinates::BlockCoordinate,
+    protocol::items::item_def::QuantityType,
+};
 use perovskite_server::game_state::{
+    self,
     chat::commands::ChatCommandHandler,
     entities::{
         CoroutineResult, DeferrableResult, Deferral, EntityCoroutine, EntityCoroutineServices,
         EntityTypeId, Movement, CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
     },
     event::{EventInitiator, HandlerContext},
+    items::ItemStack,
     GameStateExtension,
 };
 
 use crate::{
-    blocks::{BlockBuilder, CubeAppearanceBuilder},
-    game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
+    blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
+    game_builder::{GameBuilderExtension, StaticBlockName, StaticItemName, StaticTextureName},
     include_texture_bytes,
 };
 
@@ -52,6 +60,9 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     include_texture_bytes!(game_builder, speedpost1_tex, "textures/speedpost_1.png")?;
     include_texture_bytes!(game_builder, speedpost2_tex, "textures/speedpost_2.png")?;
     include_texture_bytes!(game_builder, speedpost3_tex, "textures/speedpost_3.png")?;
+
+    let cart_tex = StaticTextureName("carts:cart_temp");
+    include_texture_bytes!(game_builder, cart_tex, "textures/testonly_cart.png")?;
 
     // TODO: These are fake stand-ins for real switch rails that differ at each point in the switch
     let rail_sw_right_tex = StaticTextureName("carts:rail_sw_right");
@@ -106,6 +117,27 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     ext.speedpost_1 = speedpost1.id;
     ext.speedpost_2 = speedpost2.id;
     ext.speedpost_3 = speedpost3.id;
+    let ext_clone = ext.clone();
+
+    game_builder
+        .inner
+        .items_mut()
+        .register_item(game_state::items::Item {
+            proto: perovskite_core::perovskite::protocol::items::ItemDef {
+                short_name: "carts:cart_temp".to_string(),
+                display_name: "High-speed minecart".to_string(),
+                inventory_texture: Some(cart_tex.into()),
+                groups: vec![],
+                block_apperance: "".to_string(),
+                interaction_rules: default_item_interaction_rules(),
+                quantity_type: Some(QuantityType::Stack(256)),
+            },
+            dig_handler: None,
+            tap_handler: None,
+            place_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
+                place_cart(ctx, anchor, stack, ext_clone.clone())
+            })),
+        })?;
 
     Ok(())
 }
@@ -155,11 +187,10 @@ impl ChatCommandHandler for CartSpawner {
 
         for dy in [0, 1, -1, 2, -2, 3, -3] {
             if let Some(coord) = quantized.try_delta(0, dy, 0) {
-                if let Some(block) = context.game_map().try_get_block(coord) {
-                    if block.equals_ignore_variant(self.config.rail_block) {
-                        rail_pos = Some(coord);
-                        variant = Some(block.variant());
-                    }
+                let block = tokio::task::block_in_place(|| context.game_map().get_block(coord))?;
+                if block.equals_ignore_variant(self.config.rail_block) {
+                    rail_pos = Some(coord);
+                    variant = Some(block.variant());
                 }
             }
         }
@@ -204,6 +235,64 @@ impl ChatCommandHandler for CartSpawner {
 
         Ok(())
     }
+}
+
+fn place_cart(
+    ctx: &HandlerContext,
+    coord: BlockCoordinate,
+    stack: &ItemStack,
+    config: CartsGameBuilderExtension,
+) -> Result<Option<ItemStack>> {
+    let block = ctx.game_map().get_block(coord)?;
+    let (rail_pos, variant) = if block.equals_ignore_variant(config.rail_block) {
+        (coord, block.variant())
+    } else {
+        ctx.initiator().send_chat_message(
+            ChatMessage::new_server_message("Not on rail").with_color(SERVER_ERROR_COLOR),
+        )?;
+        return Ok(Some(stack.clone()));
+    };
+
+    let player_pos = match ctx.initiator().position() {
+        Some(pos) => pos,
+        None => {
+            ctx.initiator().send_chat_message(
+                ChatMessage::new_server_message("No initiator position")
+                    .with_color(SERVER_ERROR_COLOR),
+            )?;
+            return Ok(Some(stack.clone()));
+        }
+    };
+    let variant = rotate_nesw_azimuth_to_variant(player_pos.face_direction.0);
+
+    ctx.entities().new_entity_blocking(
+        b2vec(rail_pos.try_delta(0, 2, 0).unwrap()),
+        Some(Box::pin(CartCoroutine {
+            config: config.clone(),
+            scheduled_segments: VecDeque::new(),
+            unplanned_segments: VecDeque::new(),
+            scan_position: rail_pos,
+            // Until we encounter a speed post, proceed at minimal safe speed
+            last_speed_post_indication: 0.5,
+            last_submitted_move_exit_speed: 0.5,
+            spawn_time: Instant::now(),
+            rail_scan_state: RailScanState {
+                valid: true,
+                major_angle: variant as u8,
+                horizontal_deflection: 0,
+                vertical_deflection: 0,
+                horizontal_offset: 0,
+                vertical_offset: 0,
+            },
+            scan_stop_reason: ScanStopReason::NoRail,
+        })),
+        EntityTypeId {
+            class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+            data: None,
+        },
+    );
+
+    Ok(stack.decrement())
 }
 
 fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
@@ -324,7 +413,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        tracing::info!(
+        tracing::debug!(
             "{:?} ========== planning {} seconds in advance",
             self.spawn_time.elapsed(),
             when
@@ -337,7 +426,7 @@ impl EntityCoroutine for CartCoroutine {
         for seg in self.unplanned_segments.iter() {
             step_count += seg.distance();
         }
-        tracing::info!(
+        tracing::debug!(
             "cart coro: step_count = {}. {} in braking curve, {} unplanned",
             step_count,
             self.scheduled_segments.len(),
@@ -353,7 +442,7 @@ impl EntityCoroutine for CartCoroutine {
         if self.scheduled_segments.is_empty() {
             // No schedulable segments
             // Scan every second, trying to start again.
-            tracing::info!("No schedulable segments");
+            tracing::debug!("No schedulable segments");
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
                 perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
                     0.5..1.0,
@@ -368,14 +457,14 @@ impl EntityCoroutine for CartCoroutine {
             self.last_submitted_move_exit_speed =
                 segment.speed + (segment.acceleration * segment.move_time);
 
-            tracing::info!(
+            tracing::debug!(
                 "returning a movement, speed is {} -> {}, accel is {}, time is {}",
                 segment.speed,
                 self.last_submitted_move_exit_speed,
                 segment.acceleration,
                 segment.move_time
             );
-            tracing::info!(
+            tracing::debug!(
                 "seg position: {:?}, actually {:?}",
                 segment.segment.from,
                 whence
@@ -475,7 +564,7 @@ impl CartCoroutine {
                 }
                 .into()
             } else {
-                println!("switch left");
+                tracing::debug!("switch left");
                 RailScanState {
                     valid: true,
                     major_angle: prev_state.major_angle,
@@ -528,11 +617,12 @@ impl CartCoroutine {
         services: &EntityCoroutineServices<'_>,
         max_steps_ahead: f64,
     ) -> Option<CoroutineResult> {
-        println!(
+        tracing::debug!(
             "starting scan at {:?}: {:?}",
-            self.scan_position, self.rail_scan_state
+            self.scan_position,
+            self.rail_scan_state
         );
-        println!(
+        tracing::debug!(
             "next would be {:?}",
             self.rail_scan_state.next_scan(self.scan_position)
         );
@@ -546,7 +636,7 @@ impl CartCoroutine {
         }
 
         if self.unplanned_segments.is_empty() {
-            tracing::info!("unplanned segments empty, adding new");
+            tracing::debug!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
                 from: self.rail_scan_state.position(self.scan_position),
                 to: self.rail_scan_state.position(self.scan_position),
@@ -596,7 +686,7 @@ impl CartCoroutine {
                 // The precondition will be satisfied for the next iteration.
 
                 if !new_rail_state.same_direction(self.rail_scan_state) {
-                    println!(
+                    tracing::debug!(
                         "splitting segment because of changing scan direction @ {:?}",
                         next_scan_coord
                     );
@@ -628,7 +718,7 @@ impl CartCoroutine {
                     SignalResult::Permissive => {}
                     SignalResult::SpeedRestriction(speed) => {
                         if speed as Flt != self.last_speed_post_indication {
-                            println!("changing speed to {:?}", speed);
+                            tracing::debug!("changing speed to {:?}", speed);
                             self.start_new_unplanned_segment();
                             self.unplanned_segments.back_mut().unwrap().max_speed = speed as Flt;
                         }
@@ -638,12 +728,12 @@ impl CartCoroutine {
                 // TODO: Find a better approach for handling the last segment than just splitting segments to
                 // kick the can down the road
                 if self.unplanned_segments.back().unwrap().distance() > 256.0 {
-                    println!("splitting segment because of length");
+                    tracing::debug!("splitting segment because of length");
                     self.start_new_unplanned_segment();
                 }
             }
         }
-        println!("finishing scan at {:?}", self.scan_position);
+        tracing::debug!("finishing scan at {:?}", self.scan_position);
         None
     }
 
@@ -678,13 +768,14 @@ impl CartCoroutine {
         let estimated_segments_remaining = (9 - queue_space) + self.scheduled_segments.len();
 
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
+            tracing::debug!("> segment idx {}, {:?}", idx, seg);
             // The entrance speed, if we just consider the max acceleration
 
             max_exit_speed = max_exit_speed.min(seg.max_speed);
 
             let mut max_entry_speed =
                 (max_exit_speed * max_exit_speed + 2.0 * MAX_ACCEL * seg.distance()).sqrt();
-            tracing::info!(
+            tracing::debug!(
                 "> unplanned segment {:?} w/ max exit speed {}, max entry speed {}",
                 seg,
                 max_exit_speed,
@@ -699,15 +790,15 @@ impl CartCoroutine {
             // If we encountered a further segment where we were limited by track speed, we can schedule this one
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::info!(
+                tracing::debug!(
                     "> seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if estimated_segments_remaining < 2 || when < 1.0 && idx == 0 {
+            } else if (estimated_segments_remaining < 2 || when < 1.0) && idx == 0 {
                 // We're low on cached moves, so let's schedule this segment
-                schedulable_segments.push_front((*seg, max_entry_speed));
-                tracing::info!(
+                schedulable_segments.push_front((*seg, max_exit_speed));
+                tracing::debug!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg.seg_id
@@ -745,7 +836,7 @@ impl CartCoroutine {
     fn start_new_unplanned_segment(&mut self) {
         let prev_segment = self.unplanned_segments.back().unwrap();
         if prev_segment.distance() > 0.01 {
-            println!("new segment starting from {:?}", prev_segment.to);
+            tracing::debug!("new segment starting from {:?}", prev_segment.to);
             let empty_segment = TrackSegment {
                 from: prev_segment.to,
                 to: prev_segment.to,
@@ -754,7 +845,7 @@ impl CartCoroutine {
             };
             self.unplanned_segments.push_back(empty_segment);
         } else {
-            println!("old segment was empty, not starting new one");
+            tracing::debug!("old segment was empty, not starting new one");
         }
     }
 
@@ -787,7 +878,7 @@ impl CartCoroutine {
         mut enter_speed: f64,
         brake_curve_exit_speed: f64,
     ) -> f64 {
-        tracing::info!(
+        tracing::debug!(
             "schedule_single_segment({:?}, {} -> {})",
             seg,
             enter_speed,
@@ -835,11 +926,21 @@ impl CartCoroutine {
         }
 
         let seg_distance = seg.distance();
+        tracing::debug!(
+            ">> seg_distance {} seg.max_speed {}",
+            seg_distance,
+            seg.max_speed
+        );
+        tracing::debug!(
+            ">> accel distances: entrance {} exit {}",
+            entrance_accel_distance,
+            exit_accel_distance
+        );
         let total_accel_distance = entrance_accel_distance + exit_accel_distance;
 
         // Simple case: no need for any acceleration.
         if entrance_accel_distance == 0.0 && exit_accel_distance == 0.0 {
-            tracing::info!(
+            tracing::debug!(
                 ">> no acceleration required. speed {} time {}",
                 seg.max_speed,
                 seg_distance
@@ -945,14 +1046,14 @@ impl CartCoroutine {
                 + brake_curve_exit_speed * brake_curve_exit_speed)
                 / (4.0 * MAX_ACCEL);
             let decel_distance = seg_distance - corrected_acc_distance;
-            tracing::info!(
+            tracing::debug!(
                 ">> can't reach max speed, accel distance {} > seg distance {}. Speed {} => {}",
                 total_accel_distance,
                 seg_distance,
                 enter_speed,
                 brake_curve_exit_speed
             );
-            tracing::info!(
+            tracing::debug!(
                 ">>> corrected_acc_distance {} decel_distance {}",
                 corrected_acc_distance,
                 decel_distance
@@ -975,7 +1076,7 @@ impl CartCoroutine {
                     speed_left,
                     speed_right
                 );
-                tracing::info!(
+                tracing::debug!(
                     ">> can't reach max speed, speed left = {} after {}, speed right = {} after {}",
                     speed_left,
                     corrected_acc_distance,
@@ -984,7 +1085,7 @@ impl CartCoroutine {
                 );
 
                 assert!(speed_left - seg.max_speed < 1e-3);
-                tracing::info!(
+                tracing::debug!(
                     ">> subcase 1, distances {} + {}, reaching {}",
                     corrected_acc_distance,
                     decel_distance,
@@ -1012,7 +1113,7 @@ impl CartCoroutine {
                 let achieved_speed =
                     (enter_speed * enter_speed + 2.0 * MAX_ACCEL * seg_distance).sqrt();
 
-                tracing::info!(
+                tracing::debug!(
                     ">> subcase 2, distances {} + {}, reaching {}",
                     corrected_acc_distance,
                     decel_distance,
@@ -1026,7 +1127,7 @@ impl CartCoroutine {
                 });
                 achieved_speed
             } else if decel_distance > 0.1 {
-                tracing::info!(
+                tracing::debug!(
                     ">> subcase 3 (emergency braking), distances {} + {}, reaching {}",
                     corrected_acc_distance,
                     decel_distance,
@@ -1064,12 +1165,12 @@ impl CartCoroutine {
             // We have enough distance to accelerate to max speed, cruise, and then decelerate
 
             let remaining_distance = seg_distance - total_accel_distance;
-            tracing::info!(
+            tracing::debug!(
                 ">> can reach max speed, accel distance {} > seg distance {}",
                 total_accel_distance,
                 seg_distance
             );
-            tracing::info!(
+            tracing::debug!(
                 "Will accel for {}, cruise for {}, decel for {}",
                 (seg.max_speed - enter_speed) / MAX_ACCEL,
                 remaining_distance / seg.max_speed,
