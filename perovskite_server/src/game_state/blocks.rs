@@ -35,7 +35,7 @@ use super::{
     items::{Item, ItemManager, ItemStack},
 };
 use perovskite_core::{
-    block_id::{BlockError, BlockId},
+    block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
     constants::blocks::AIR,
     coordinates::BlockCoordinate,
     protocol::blocks as blocks_proto,
@@ -91,6 +91,8 @@ impl AddAssign for BlockInteractionResult {
         self.tool_wear += other.tool_wear;
     }
 }
+
+pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
 pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
@@ -403,7 +405,7 @@ impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
         BlockTypeManager {
             block_types: Vec::new(),
-            name_to_base_id_map: FxHashMap::default(),
+            name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
@@ -459,6 +461,9 @@ impl BlockTypeManager {
                         .try_into()
                         .with_context(|| BlockError::TooManyBlocks)?,
                 );
+                if new_id.index() >= MAX_BLOCK_DEFS {
+                    bail!(BlockError::TooManyBlocks);
+                }
                 info!(
                     "Registering new block {} as {:?}",
                     block.short_name(),
@@ -491,6 +496,10 @@ impl BlockTypeManager {
             .max()
             .unwrap_or(0);
 
+        if max_index >= MAX_BLOCK_DEFS {
+            bail!(BlockError::TooManyBlocks);
+        }
+
         let present_indices: HashSet<usize> =
             HashSet::from_iter(block_proto.block_type.iter().map(|x| BlockId(x.id).index()));
         manager.light_propagation.resize(max_index + 1, false);
@@ -522,6 +531,7 @@ impl BlockTypeManager {
                 .name_to_base_id_map
                 .insert(assignment.short_name.clone(), block_id.base_id());
         }
+        ensure!(manager.name_to_base_id_map.get(AIR).map(|&x| BlockId(x)) == Some(AIR_ID));
         Ok(manager)
     }
 
