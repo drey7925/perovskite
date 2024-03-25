@@ -44,6 +44,18 @@ pub enum BlockError {
 }
 pub const BLOCK_VARIANT_MASK: u32 = 0xfff;
 
+/// The maximum number of blocks that can be defined.
+/// The upper 16 definitions are reserved for engine internals.
+pub const MAX_BLOCK_DEFS: usize = (1 << 20) - 16;
+
+pub mod special_block_defs {
+    use super::BlockId;
+
+    pub const AIR_ID: BlockId = BlockId(0);
+    /// Used to indicate an unloaded chunk in the client. Not seen on the server (i.e. things like `try_get_block` return None instead).
+    pub const UNLOADED_CHUNK_BLOCK_ID: BlockId = BlockId(u32::MAX);
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct BlockId(pub u32);

@@ -53,7 +53,7 @@ pub(crate) trait ChunkDataView {
 pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView for LockedChunkDataView<'_> {
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
-        &self.0.block_ids
+        self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
 
     fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
@@ -64,10 +64,10 @@ impl ChunkDataView for LockedChunkDataView<'_> {
 pub(crate) struct ChunkDataViewMut<'a>(RwLockWriteGuard<'a, ChunkData>);
 impl ChunkDataViewMut<'_> {
     pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
-        &self.0.block_ids
+        self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
-    pub(crate) fn block_ids_mut(&mut self) -> &mut [BlockId; 18 * 18 * 18] {
-        &mut self.0.block_ids
+    pub(crate) fn block_ids_mut(&mut self) -> Option<&mut [BlockId; 18 * 18 * 18]> {
+        self.0.block_ids.as_deref_mut()
     }
     pub(crate) fn lightmap_mut(&mut self) -> &mut [u8; 18 * 18 * 18] {
         &mut self.0.lightmap
@@ -77,9 +77,15 @@ impl ChunkDataViewMut<'_> {
     }
 
     pub(crate) fn get_block(&self, offset: ChunkOffset) -> BlockId {
-        self.0.block_ids[offset.as_extended_index()]
+        self.0
+            .block_ids
+            .as_ref()
+            .map(|x| x[offset.as_extended_index()])
+            .unwrap_or(BlockId(0))
     }
 }
+
+const ZERO_CHUNK: [BlockId; 18 * 18 * 18] = [BlockId(0); 18 * 18 * 18];
 
 pub(crate) enum BlockIdState {
     /// We don't have this chunk's neighbors yet. It's not ready to render.
@@ -99,14 +105,16 @@ pub(crate) enum BlockIdState {
 pub(crate) struct ChunkData {
     /// Block_ids within this chunk *and* its neighbors.
     /// Future memory optimization - None if the chunk is all-air
-    pub(crate) block_ids: Box<[BlockId; 18 * 18 * 18]>,
+    pub(crate) block_ids: Option<Box<[BlockId; 18 * 18 * 18]>>,
     /// The calculated lightmap for this chunk + immediate neighbor blocks. The data is encoded as follows:
     /// Bottom four bits: local lighting
     /// Top four bits: global lighting
     /// TODO assess whether to optimize for time or memory
     ///
     /// This is stored separate from the block_ids because it might be used for lighting non-chunk meshes, such as
-    /// players, entities, etc. If None, not calculated yet.
+    /// players, entities, etc.
+    ///
+    /// This can't be optimized with None since we need to propagate light through the chunk
     pub(crate) lightmap: Box<[u8; 18 * 18 * 18]>,
 
     data_state: BlockIdState,
@@ -313,7 +321,10 @@ impl ClientChunk {
         }
     }
 
-    fn expand_ids(ids: &[u32; 16 * 16 * 16]) -> Box<[BlockId; 18 * 18 * 18]> {
+    fn expand_ids(ids: &[u32; 16 * 16 * 16]) -> Option<Box<[BlockId; 18 * 18 * 18]>> {
+        if ids.iter().all(|&x| x == 0) {
+            return None;
+        }
         let mut result = Box::new([BlockId(u32::MAX); 18 * 18 * 18]);
         for i in 0..16 {
             for j in 0..16 {
@@ -323,7 +334,7 @@ impl ClientChunk {
                 }
             }
         }
-        result
+        Some(result)
     }
 
     pub(crate) fn data_for_batch(&self) -> Option<VkChunkVertexDataCpu> {
@@ -394,13 +405,18 @@ impl ClientChunk {
         ensure!(block_coord.chunk() == self.coord);
 
         let mut chunk_data = self.chunk_data.write();
-        let old_id = chunk_data.block_ids[block_coord.offset().as_extended_index()];
+        if chunk_data.block_ids.is_none() {
+            chunk_data.block_ids = Some(Box::new([BlockId(0); 18 * 18 * 18]));
+        }
+        let old_id =
+            chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()];
         let new_id = BlockId::from(proto.new_id);
         // TODO future optimization: check whether a change in variant actually requires
         // a redraw
         if old_id != new_id {
             chunk_data.data_state = BlockIdState::NeedProcessing;
-            chunk_data.block_ids[block_coord.offset().as_extended_index()] = new_id;
+            chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()] =
+                new_id;
         }
 
         Ok(old_id != new_id)
@@ -447,7 +463,11 @@ impl ClientChunk {
         for x in 0..16 {
             for z in 0..16 {
                 'inner: for y in 0..16 {
-                    let id = data.block_ids[(ChunkOffset { x, y, z }).as_extended_index()];
+                    let id = data
+                        .block_ids
+                        .as_ref()
+                        .map(|ids| ids[(ChunkOffset { x, y, z }).as_extended_index()])
+                        .unwrap_or(BlockId(0));
                     if !block_types.propagates_light(id) {
                         occlusion.set(x, z, true);
                         break 'inner;
@@ -522,7 +542,12 @@ impl ClientChunk {
     }
 
     pub(crate) fn get_single(&self, offset: ChunkOffset) -> BlockId {
-        self.chunk_data.read().block_ids[offset.as_extended_index()]
+        self.chunk_data
+            .read()
+            .block_ids
+            .as_deref()
+            .map(|x| x[offset.as_extended_index()])
+            .unwrap_or(BlockId(0))
     }
 
     pub(crate) fn coord(&self) -> ChunkCoordinate {
