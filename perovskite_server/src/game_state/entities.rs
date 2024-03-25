@@ -1563,9 +1563,9 @@ pub struct EntityShard {
     shard_id: usize,
     db: Arc<dyn GameDatabase>,
     core: RwLock<EntityCoreArray>,
-    pending_actions_rx: Mutex<tokio::sync::mpsc::Receiver<EntityAction>>,
+    pending_actions_rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<EntityAction>>,
     pending_actions_tx: tokio::sync::mpsc::Sender<EntityAction>,
-    completion_rx: Mutex<tokio::sync::mpsc::Receiver<Completion<ContinuationResult>>>,
+    completion_rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Completion<ContinuationResult>>>,
     completion_tx: tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
 }
 impl EntityShard {
@@ -1581,9 +1581,9 @@ impl EntityShard {
             shard_id,
             db,
             core,
-            pending_actions_rx: Mutex::new(pending_actions_rx),
+            pending_actions_rx: tokio::sync::Mutex::new(pending_actions_rx),
             pending_actions_tx,
-            completion_rx: Mutex::new(completion_rx),
+            completion_rx: tokio::sync::Mutex::new(completion_rx),
             completion_tx,
         }
     }
@@ -1636,9 +1636,13 @@ impl EntityShardWorker {
         let mut last_iteration = Instant::now();
         let mut rx_lock = self.entities.shards[self.shard_id]
             .pending_actions_rx
-            .lock();
+            .lock()
+            .await;
 
-        let mut completion_lock = self.entities.shards[self.shard_id].completion_rx.lock();
+        let mut completion_lock = self.entities.shards[self.shard_id]
+            .completion_rx
+            .lock()
+            .await;
         let completion_tx = &self.entities.shards[self.shard_id].completion_tx;
 
         let mut rx_messages = Vec::with_capacity(COMMAND_BATCH_SIZE);

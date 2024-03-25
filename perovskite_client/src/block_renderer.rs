@@ -1145,20 +1145,6 @@ impl BlockRenderer {
         }
     }
 
-    fn get_block(
-        &self,
-        ids: &[BlockId; 18 * 18 * 18],
-        coord: ChunkOffset,
-    ) -> (BlockId, &BlockTypeDef) {
-        let block_id = ids[coord.as_extended_index()];
-
-        let def = self
-            .block_defs
-            .get_blockdef(block_id)
-            .unwrap_or_else(|| self.block_defs.get_fallback_blockdef());
-        (block_id, def)
-    }
-
     fn get_block_id(&self, ids: &[BlockId; 18 * 18 * 18], coord: ChunkOffset) -> BlockId {
         ids[coord.as_extended_index()]
     }

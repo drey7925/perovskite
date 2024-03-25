@@ -6,10 +6,13 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cgmath::InnerSpace;
 use parking_lot::{Condvar, Mutex};
-use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
+use perovskite_core::{
+    block_id::special_block_defs::UNLOADED_CHUNK_BLOCK_ID,
+    coordinates::{ChunkCoordinate, ChunkOffset},
+};
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
@@ -357,6 +360,10 @@ pub(crate) fn propagate_neighbor_data(
             }
         }
 
+        let ids = current_chunk
+            .block_ids_mut()
+            .context("Mutable block IDs should be non-empty because the chunk is not all air")?;
+
         {
             let _span = span!("nprop");
             for x in -1i32..17 {
@@ -382,8 +389,8 @@ pub(crate) fn propagate_neighbor_data(
                                 }
                                 .as_extended_index()]
                             })
-                            .unwrap_or(block_manager.air_block());
-                        current_chunk.block_ids_mut()[(x, y, z).as_extended_index()] = neighbor;
+                            .unwrap_or(UNLOADED_CHUNK_BLOCK_ID);
+                        ids[(x, y, z).as_extended_index()] = neighbor;
                     }
                 }
             }
