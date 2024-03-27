@@ -43,7 +43,7 @@ use crate::{
 
 use super::{
     client_ui::Popup,
-    entities::{EntityTypeId, CLASS_PLAYER_ENTITY},
+    entities::{EntityTypeId, PLAYER_ENTITY_CLASS_ID},
     event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
     GameState,
@@ -131,7 +131,7 @@ impl Player {
             position,
             None,
             EntityTypeId {
-                class: CLASS_PLAYER_ENTITY,
+                class: PLAYER_ENTITY_CLASS_ID,
                 data: Some(proto.name.as_bytes().into()),
             },
         );
@@ -201,7 +201,7 @@ impl Player {
             position,
             None,
             EntityTypeId {
-                class: CLASS_PLAYER_ENTITY,
+                class: PLAYER_ENTITY_CLASS_ID,
                 data: Some(name.as_bytes().into()),
             },
         );

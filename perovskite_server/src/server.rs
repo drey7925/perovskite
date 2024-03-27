@@ -30,6 +30,7 @@ use crate::{
     game_state::{
         blocks::BlockTypeManager,
         chat::commands::{ChatCommand, ChatCommandHandler, CommandManager},
+        entities::{EntityManager, EntityTypeManager},
         game_behaviors::GameBehaviors,
         game_map::{TimerCallback, TimerSettings},
         items::ItemManager,
@@ -141,6 +142,7 @@ pub struct ServerBuilder {
     runtime: tokio::runtime::Runtime,
     db: Arc<dyn GameDatabase>,
     blocks: BlockTypeManager,
+    entities: EntityTypeManager,
     items: ItemManager,
     mapgen: Option<Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>>,
     media: MediaManager,
@@ -171,7 +173,8 @@ impl ServerBuilder {
         db_dir.push("database");
         let db = Arc::new(RocksDbBackend::new(db_dir)?);
 
-        let blocks = BlockTypeManager::create_or_load(db.as_ref(), true)?;
+        let blocks = BlockTypeManager::create_or_load(db.as_ref())?;
+        let entities = EntityTypeManager::create_or_load(db.as_ref())?;
         let items = ItemManager::new()?;
         let media = MediaManager::new();
         Ok(ServerBuilder {
@@ -180,6 +183,7 @@ impl ServerBuilder {
                 .build()?,
             db,
             blocks,
+            entities,
             items,
             mapgen: None,
             media,
@@ -197,6 +201,12 @@ impl ServerBuilder {
     }
     pub fn blocks(&self) -> &BlockTypeManager {
         &self.blocks
+    }
+    pub fn entities_mut(&mut self) -> &mut EntityTypeManager {
+        &mut self.entities
+    }
+    pub fn entities(&self) -> &EntityTypeManager {
+        &self.entities
     }
     pub fn items_mut(&mut self) -> &mut ItemManager {
         &mut self.items
@@ -247,11 +257,17 @@ impl ServerBuilder {
         self.blocks.pre_build()?;
         let blocks = Arc::new(self.blocks);
         blocks.save_to(self.db.as_ref())?;
+
+        self.entities.pre_build()?;
+        let entities = Arc::new(self.entities);
+        entities.save_to(self.db.as_ref())?;
+
         let _rt_guard = self.runtime.enter();
         let game_state = GameState::new(
             self.data_dir,
             self.db,
             blocks,
+            entities,
             self.items,
             self.media,
             self.mapgen.with_context(|| "Mapgen not specified")?,
