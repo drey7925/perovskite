@@ -12,13 +12,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
 use circular_buffer::CircularBuffer;
+use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
-    block_id::BlockId, coordinates::BlockCoordinate, protocol::entities::EntityMove,
+    block_id::BlockId,
+    coordinates::BlockCoordinate,
+    protocol::entities::{EntityMove, EntityTypeAssignment, ServerEntityTypeAssignments},
 };
+use prost::Message;
 use rand::Rng;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
@@ -26,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracy_client::span;
 
 use crate::{
-    database::database_engine::GameDatabase,
+    database::database_engine::{GameDatabase, KeySpace},
     game_state::blocks::{BlockTypeHandle, ExtendedData},
     CachelineAligned,
 };
@@ -98,9 +102,13 @@ pub struct EntityManager {
     workers: Mutex<Vec<tokio::task::JoinHandle<Result<()>>>>,
     cancellation: CancellationToken,
     next_id: AtomicU64,
+    types: Arc<EntityTypeManager>,
 }
 impl EntityManager {
-    pub(crate) fn new(db: Arc<dyn GameDatabase>) -> EntityManager {
+    pub(crate) fn new(
+        db: Arc<dyn GameDatabase>,
+        entity_types: Arc<EntityTypeManager>,
+    ) -> EntityManager {
         EntityManager {
             shards: std::array::from_fn(|shard_id| {
                 CachelineAligned(EntityShard::new(shard_id, db.clone()))
@@ -109,6 +117,7 @@ impl EntityManager {
             cancellation: CancellationToken::new(),
             // TODO next_id needs to be initialized from the database eventually
             next_id: AtomicU64::new(0),
+            types: entity_types,
         }
     }
 
@@ -228,23 +237,20 @@ impl EntityManager {
             .unwrap();
     }
 
-    fn get_by_type(&self, entity_type: EntityTypeId) -> &EntityDef {
-        if entity_type.class == CLASS_BIKESHED_DEEP_QUEUE_ENTITY {
-            &FAKE_DEEP_DEF
-        } else {
-            &FAKE_SHALLOW_DEF
+    fn get_by_type(&self, entity_type: &EntityTypeId) -> &EntityDef {
+        match self.types.types.get(entity_type.class.0 as usize) {
+            Some(def) => def.as_ref().unwrap_or(&UNDEFINED_ENTITY),
+            None => &UNDEFINED_ENTITY,
         }
     }
 }
 
-static FAKE_SHALLOW_DEF: EntityDef = EntityDef {
-    short_name: String::new(),
-    move_queue_type: MoveQueueType::SingleMove,
-};
-static FAKE_DEEP_DEF: EntityDef = EntityDef {
-    short_name: String::new(),
-    move_queue_type: MoveQueueType::Buffer8,
-};
+lazy_static! {
+    pub(crate) static ref UNDEFINED_ENTITY: EntityDef = EntityDef {
+        move_queue_type: MoveQueueType::SingleMove,
+        class_name: "builtin:undefined".to_string()
+    };
+}
 
 // Note that if an entity has neither CONTROL_AUTONOMOUS nor CONTROL_SIMPLE_PHYSICS, it will
 // only move when programatically requested to do so by a caller
@@ -725,6 +731,8 @@ struct EntityCoreArray {
     id: Vec<u64>,
     // Flags
     control: Vec<u8>,
+    // The type of entity this actually is
+    class: Vec<u32>,
     // Tracks the last modification that actually conveys new information (e.g. to a client)
     // Simply exhausting a move and starting the next queued move does not count.
     last_nontrivial_modification: Vec<u64>,
@@ -907,6 +915,7 @@ impl EntityCoreArray {
             id_lookup: FxHashMap::default(),
             id: vec![],
             control: vec![],
+            class: vec![],
             last_nontrivial_modification: vec![],
             current_move_seq: vec![],
             x: vec![],
@@ -949,6 +958,7 @@ impl EntityCoreArray {
     fn insert(
         &mut self,
         id: u64,
+        entity_class: EntityTypeId,
         entity_def: &EntityDef,
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
@@ -978,6 +988,8 @@ impl EntityCoreArray {
                 self.id_lookup.insert(id, i);
                 self.id[i] = id;
                 self.control[i] = control;
+                self.class[i] = entity_class.class.0;
+                // TODO use the data buffer of the entity class as well
                 self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
                 self.current_move_seq[i] = 1;
                 self.x[i] = position.x;
@@ -1735,10 +1747,11 @@ impl EntityShardWorker {
             let time_bias = lock.last_time_poll.elapsed();
             match action {
                 EntityAction::Insert(id, position, coroutine, entity_type) => {
-                    let def = self.game_state.entities().get_by_type(entity_type);
+                    let def = self.game_state.entities().get_by_type(&entity_type);
 
                     let index = lock.insert(
                         id,
+                        entity_type,
                         def,
                         position,
                         coroutine,
@@ -1753,6 +1766,9 @@ impl EntityShardWorker {
                     Err(EntityError::NotFound) => {
                         tracing::warn!("Tried to remove non-existent entity {}", id);
                     }
+                    Err(e) => {
+                        tracing::error!("Failed to remove entity {}: {:?}", id, e);
+                    }
                 },
                 EntityAction::SetKinematics(id, position, movement, next_movement) => {
                     match lock.set_kinematics(id, position, movement, next_movement, time_bias) {
@@ -1764,6 +1780,9 @@ impl EntityShardWorker {
                                 "Tried to set kinematics for non-existent entity {}",
                                 id
                             );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to set kinematics for entity {}: {:?}", id, e);
                         }
                     }
                 }
@@ -1832,6 +1851,9 @@ impl EntityShardWorker {
 pub enum EntityError {
     #[error("Entity not found")]
     NotFound,
+
+    #[error("Duplicate class name")]
+    DuplicateClassName,
 }
 
 pub enum MoveQueueType {
@@ -1842,8 +1864,25 @@ pub enum MoveQueueType {
 // TODO own and manage these, similar to block types and item defs.
 /// Warning: ***API is extremely preliminary and subject to change***
 pub struct EntityDef {
-    pub short_name: String,
     pub move_queue_type: MoveQueueType,
+    pub class_name: String,
+}
+
+pub struct EntityClass {
+    pub def: EntityDef,
+    pub class_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntityClassId(u32);
+impl EntityClassId {
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
 }
 
 /// Used to identify types of entities when spawning, dropping, etc.
@@ -1852,7 +1891,7 @@ pub struct EntityDef {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EntityTypeId {
     /// The type of entity
-    pub class: u32,
+    pub class: EntityClassId,
     /// Any additional data for this entity
     ///
     /// The interpretation of this depends on the entity type,
@@ -1860,22 +1899,103 @@ pub struct EntityTypeId {
     pub data: Option<Box<[u8]>>,
 }
 
-/// An entity representing a player. This should only be spawned by the server.
-///
-/// The data should be the player's username.
-pub const CLASS_PLAYER_ENTITY: u32 = 1;
-/// An entity representing a dropped item. The data should be an ItemStack protobuf.
-pub const CLASS_DROPPED_ITEM_ENTITY: u32 = 2;
+pub(crate) const FAKE_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0xFFFFFFFF);
+/// The entity class ID for a player; data is the username in UTF-8 bytes
+pub const PLAYER_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0);
+/// The entity class ID for a dropped item; data is the item stack proto
+pub const DROPPED_ITEM_CLASS_ID: EntityClassId = EntityClassId(1);
 
-/// A temporary stand-in entity for entities with deep queues while the type manager is under exploration
-/// Essentially, I'm bikeshedding back and forth in my head about how to represent entity types and serialized
-/// entities
-pub const CLASS_BIKESHED_DEEP_QUEUE_ENTITY: u32 = 3;
-/// A temporary stand-in for generic entities while the type manager is under exploration
-/// See CLASS_BIKESHED_DEEP_QUEUE_ENTITY docstring for rationale
-pub const CLASS_BIKESHED_GENERIC_ENTITY: u32 = 4;
+const ENTITY_TYPE_MANAGER_META_KEY: &[u8] = b"entity_types";
 
 pub struct EntityTypeManager {
-    types: Vec<EntityDef>,
-    by_name: FxHashMap<String, EntityTypeId>,
+    types: Vec<Option<EntityDef>>,
+    by_name: FxHashMap<String, u32>,
+}
+impl EntityTypeManager {
+    pub(crate) fn create_or_load(db: &dyn GameDatabase) -> Result<EntityTypeManager> {
+        let db_key = KeySpace::Metadata.make_key(ENTITY_TYPE_MANAGER_META_KEY);
+
+        if let Some(encoded) = db.get(&db_key)? {
+            Self::from_encoded(&encoded)
+        } else {
+            Self::new_empty()
+        }
+    }
+
+    fn from_encoded(encoded: &[u8]) -> Result<EntityTypeManager> {
+        let assignments = ServerEntityTypeAssignments::decode(encoded)?;
+
+        let types = match assignments.entity_type.iter().map(|x| x.entity_class).max() {
+            Some(max_type) => Vec::with_capacity(max_type as usize + 1),
+            None => vec![],
+        };
+        let mut by_name = FxHashMap::default();
+
+        for def in assignments.entity_type.into_iter() {
+            // The entity class is still None; nobody has registered an entity with that class yet.
+            by_name.insert(def.short_name, def.entity_class);
+        }
+
+        Ok(EntityTypeManager {
+            types: types,
+            by_name: FxHashMap::default(),
+        })
+    }
+
+    fn new_empty() -> Result<EntityTypeManager> {
+        Ok(EntityTypeManager {
+            types: Vec::new(),
+            by_name: FxHashMap::default(),
+        })
+    }
+
+    pub(crate) fn to_proto(&self) -> ServerEntityTypeAssignments {
+        ServerEntityTypeAssignments {
+            entity_type: self
+                .types
+                .iter()
+                .enumerate()
+                .map(|(class_id, def)| EntityTypeAssignment {
+                    short_name: def.as_ref().unwrap().class_name.clone(),
+                    entity_class: class_id as u32,
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn save_to(&self, db: &dyn GameDatabase) -> Result<()> {
+        db.put(
+            &KeySpace::Metadata.make_key(ENTITY_TYPE_MANAGER_META_KEY),
+            &self.to_proto().encode_to_vec(),
+        )?;
+        db.flush()
+    }
+
+    pub fn register(&mut self, def: EntityDef) -> Result<EntityClassId> {
+        match self.by_name.get(&def.class_name) {
+            Some(class_id) => {
+                ensure!(
+                    self.types[*class_id as usize].is_none(),
+                    EntityError::DuplicateClassName
+                );
+                self.types[*class_id as usize] = Some(def);
+                Ok(EntityClassId(*class_id))
+            }
+            None => {
+                let class_id = self.types.len() as u32;
+                self.by_name.insert(def.class_name.clone(), class_id);
+                self.types.push(Some(def));
+                Ok(EntityClassId(class_id))
+            }
+        }
+    }
+
+    pub(crate) fn pre_build(&self) -> Result<()> {
+        tracing::info!(
+            "Pre-building entity type manager ({} types)",
+            self.types.len()
+        );
+        // Nothing to do in this version, but we expect to add some precomputes here
+        Ok(())
+    }
 }

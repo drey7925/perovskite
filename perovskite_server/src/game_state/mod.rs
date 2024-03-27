@@ -93,6 +93,7 @@ impl GameState {
         data_dir: PathBuf,
         db: Arc<dyn GameDatabase>,
         blocks: Arc<BlockTypeManager>,
+        entity_types: Arc<entities::EntityTypeManager>,
         items: ItemManager,
         media: MediaManager,
         mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
@@ -122,7 +123,7 @@ impl GameState {
             auth: AuthService::create(db.clone()).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
             player_state_resync: tokio::sync::watch::channel(()).0,
-            entities: Arc::new(entities::EntityManager::new(db.clone())),
+            entities: Arc::new(entities::EntityManager::new(db.clone(), entity_types)),
             server_start_time: Instant::now(),
             extensions,
         });

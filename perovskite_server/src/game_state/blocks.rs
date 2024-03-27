@@ -555,10 +555,7 @@ impl BlockTypeManager {
             .collect()
     }
 
-    pub(crate) fn create_or_load(
-        db: &dyn GameDatabase,
-        allow_create: bool,
-    ) -> Result<BlockTypeManager> {
+    pub(crate) fn create_or_load(db: &dyn GameDatabase) -> Result<BlockTypeManager> {
         match db.get(&KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY_LEGACY))? {
             Some(x) => {
                 let result = BlockTypeManager::from_proto(
@@ -571,9 +568,6 @@ impl BlockTypeManager {
                 Ok(result)
             }
             None => {
-                if !allow_create {
-                    bail!("Block type data is missing from the database");
-                }
                 info!("Creating new block type manager");
                 Ok(BlockTypeManager::new())
             }

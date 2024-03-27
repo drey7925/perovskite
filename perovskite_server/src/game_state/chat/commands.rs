@@ -16,7 +16,7 @@ use crate::{
     game_state::{
         entities::{
             CoroutineResult, EntityCoroutine, EntityCoroutineServices, EntityTypeId, Movement,
-            CLASS_BIKESHED_DEEP_QUEUE_ENTITY, CLASS_BIKESHED_GENERIC_ENTITY,
+            FAKE_ENTITY_CLASS_ID,
         },
         event::{EventInitiator, HandlerContext},
     },
@@ -460,7 +460,7 @@ impl ChatCommandHandler for SpawnTestEntityCommand {
                             ),
                         Some(Box::pin(TestEntityCoro {})),
                         EntityTypeId {
-                            class: CLASS_BIKESHED_GENERIC_ENTITY,
+                            class: FAKE_ENTITY_CLASS_ID,
                             data: None,
                         },
                     );
@@ -474,7 +474,7 @@ impl ChatCommandHandler for SpawnTestEntityCommand {
                 context.initiator().position().unwrap().position,
                 Some(Box::pin(TestEntityCoro {})),
                 EntityTypeId {
-                    class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+                    class: FAKE_ENTITY_CLASS_ID,
                     data: None,
                 },
             )
@@ -520,21 +520,27 @@ impl EntityCoroutine for TestEntityCoro {
         if clear_dist > 0 {
             let time = clear_dist as f32;
             CoroutineResult::Successful(
-                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(Movement {
-                    velocity: Vector3::new(0.0, 0.0, 1.0),
-                    acceleration: Vector3::new(0.0, 0.0, 0.0),
-                    face_direction: 0.0,
-                    move_time: time,
-                }),
+                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(
+                    Movement {
+                        velocity: Vector3::new(0.0, 0.0, 1.0),
+                        acceleration: Vector3::new(0.0, 0.0, 0.0),
+                        face_direction: 0.0,
+                        move_time: time,
+                    }
+                    .into(),
+                ),
             )
         } else {
             CoroutineResult::Successful(
-                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(Movement {
-                    velocity: Vector3::new(0.0, 0.0, 0.0),
-                    acceleration: Vector3::new(0.0, 0.0, 0.0),
-                    face_direction: 0.0,
-                    move_time: 1.0,
-                }),
+                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(
+                    Movement {
+                        velocity: Vector3::new(0.0, 0.0, 0.0),
+                        acceleration: Vector3::new(0.0, 0.0, 0.0),
+                        face_direction: 0.0,
+                        move_time: 1.0,
+                    }
+                    .into(),
+                ),
             )
         }
     }

@@ -15,19 +15,22 @@ use perovskite_server::game_state::{
     self,
     chat::commands::ChatCommandHandler,
     entities::{
-        CoroutineResult, DeferrableResult, Deferral, EntityCoroutine, EntityCoroutineServices,
-        EntityTypeId, Movement, CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+        CoroutineResult, DeferrableResult, Deferral, EntityClassId, EntityCoroutine,
+        EntityCoroutineServices, EntityDef, EntityTypeId, Movement,
     },
     event::{EventInitiator, HandlerContext},
     items::ItemStack,
     GameStateExtension,
 };
+use smallvec::SmallVec;
 
 use crate::{
     blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
     game_builder::{GameBuilderExtension, StaticBlockName, StaticItemName, StaticTextureName},
     include_texture_bytes,
 };
+
+mod signals;
 
 #[derive(Clone)]
 struct CartsGameBuilderExtension {
@@ -37,6 +40,9 @@ struct CartsGameBuilderExtension {
     speedpost_1: BlockId,
     speedpost_2: BlockId,
     speedpost_3: BlockId,
+    signal_block_id: BlockId,
+
+    cart_id: EntityClassId,
 }
 impl Default for CartsGameBuilderExtension {
     fn default() -> Self {
@@ -47,6 +53,9 @@ impl Default for CartsGameBuilderExtension {
             speedpost_1: 0.into(),
             speedpost_2: 0.into(),
             speedpost_3: 0.into(),
+            signal_block_id: 0.into(),
+
+            cart_id: EntityClassId::new(0),
         }
     }
 }
@@ -110,6 +119,13 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(speedpost3_tex)),
     )?;
 
+    let cart_id = game_builder.inner.entities_mut().register(EntityDef {
+        move_queue_type: game_state::entities::MoveQueueType::Buffer8,
+        class_name: "carts:cart_temp".to_string(),
+    })?;
+
+    let signal_block_id = signals::register_signal_block(game_builder)?;
+
     let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
     ext.rail_block = rail.id;
     ext.rail_sw_right = rail_sw_right.id;
@@ -117,6 +133,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     ext.speedpost_1 = speedpost1.id;
     ext.speedpost_2 = speedpost2.id;
     ext.speedpost_3 = speedpost3.id;
+    ext.cart_id = cart_id;
+
     let ext_clone = ext.clone();
 
     game_builder
@@ -227,7 +245,7 @@ impl ChatCommandHandler for CartSpawner {
                     scan_stop_reason: ScanStopReason::NoRail,
                 })),
                 EntityTypeId {
-                    class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+                    class: self.config.cart_id,
                     data: None,
                 },
             )
@@ -287,7 +305,7 @@ fn place_cart(
             scan_stop_reason: ScanStopReason::NoRail,
         })),
         EntityTypeId {
-            class: CLASS_BIKESHED_DEEP_QUEUE_ENTITY,
+            class: config.cart_id,
             data: None,
         },
     );
@@ -384,7 +402,7 @@ impl ScheduledSegment {
     }
 }
 
-const MAX_ACCEL: Flt = 20.0;
+const MAX_ACCEL: Flt = 8.0;
 struct CartCoroutine {
     config: CartsGameBuilderExtension,
     // Segments where we've already calculated a braking curve. (clearance, starting speed, acceleration, time)
@@ -485,16 +503,24 @@ impl EntityCoroutine for CartCoroutine {
 }
 
 impl CartCoroutine {
-    fn signal_coordinate(
+    fn signal_coordinates(
         &self,
         scan_position: BlockCoordinate,
         rail_state: &RailScanState,
-    ) -> Option<BlockCoordinate> {
-        if let Some((x, y, z)) = rail_state.signal_delta() {
-            scan_position.try_delta(x, y, z)
-        } else {
-            None
+    ) -> SmallVec<[BlockCoordinate; 2]> {
+        let mut coords = SmallVec::new();
+
+        if let Some((x, y, z)) = rail_state.wayside_signal_delta() {
+            if let Some(coord) = scan_position.try_delta(x, y, z) {
+                coords.push(coord);
+            }
         }
+        if let Some(coord) = scan_position.try_delta(0, 3, 0) {
+            // overhead signal
+            coords.push(coord);
+        }
+
+        coords
     }
 
     fn parse_signal(
@@ -510,7 +536,7 @@ impl CartCoroutine {
         } else if signal_block == self.config.speedpost_3 {
             SignalResult::SpeedRestriction(90.0).into()
         } else {
-            SignalResult::Permissive.into()
+            SignalResult::NoSignal.into()
         }
     }
 
@@ -652,7 +678,7 @@ impl CartCoroutine {
         //         < 0.1
         // );
 
-        while steps < max_steps_ahead {
+        'scan_loop: while steps < max_steps_ahead {
             // Precondition: self.scan_position has a valid rail, self.rail_scan_state reflects the state of parsing it
             // next_scan will use the rail_scan_state to determine the next rail to parse and the resulting scan state.
             // Then, parse_rail may adjust that scan state accordingly.
@@ -699,23 +725,23 @@ impl CartCoroutine {
                     new_rail_state.position(next_scan_coord);
                 steps += step_distance;
             }
-            if let Some(signal_coord) =
-                self.signal_coordinate(self.scan_position, &self.rail_scan_state)
+            'signal_loop: for coord in
+                self.signal_coordinates(self.scan_position, &self.rail_scan_state)
             {
-                let signal_block = match services.get_block(signal_coord) {
+                let signal_block = match services.get_block(coord) {
                     DeferrableResult::AvailableNow(x) => x.unwrap(),
                     DeferrableResult::Deferred(d) => return Some(d.defer_and_reinvoke(1)),
                 };
 
-                let signal_result = match self.parse_signal(services, signal_coord, signal_block) {
+                let signal_result = match self.parse_signal(services, coord, signal_block) {
                     DeferrableResult::AvailableNow(x) => x,
                     DeferrableResult::Deferred(d) => {
                         return Some(d.map(|x| x.to_f64()).defer_and_reinvoke(2))
                     }
                 };
                 match signal_result {
-                    SignalResult::Stop => break,
-                    SignalResult::Permissive => {}
+                    SignalResult::Stop => break 'scan_loop,
+                    SignalResult::Permissive => break 'signal_loop,
                     SignalResult::SpeedRestriction(speed) => {
                         if speed as Flt != self.last_speed_post_indication {
                             tracing::debug!("changing speed to {:?}", speed);
@@ -723,14 +749,16 @@ impl CartCoroutine {
                             self.unplanned_segments.back_mut().unwrap().max_speed = speed as Flt;
                         }
                         self.last_speed_post_indication = speed as Flt;
+                        break 'signal_loop;
                     }
+                    SignalResult::NoSignal => continue 'signal_loop,
                 }
-                // TODO: Find a better approach for handling the last segment than just splitting segments to
-                // kick the can down the road
-                if self.unplanned_segments.back().unwrap().distance() > 256.0 {
-                    tracing::debug!("splitting segment because of length");
-                    self.start_new_unplanned_segment();
-                }
+            }
+            // TODO: Find a better approach for handling the last segment than just splitting segments to
+            // kick the can down the road
+            if self.unplanned_segments.back().unwrap().distance() > 256.0 {
+                tracing::debug!("splitting segment because of length");
+                self.start_new_unplanned_segment();
             }
         }
         tracing::debug!("finishing scan at {:?}", self.scan_position);
@@ -1211,6 +1239,8 @@ enum SignalResult {
     Permissive,
     /// Signal/sign allows all carts to continue, with speed restriction
     SpeedRestriction(f32),
+    /// No signal is present
+    NoSignal,
 }
 impl SignalResult {
     fn to_f64(self) -> f64 {
@@ -1218,6 +1248,7 @@ impl SignalResult {
             SignalResult::Stop => 0.0,
             SignalResult::Permissive => f64::INFINITY,
             SignalResult::SpeedRestriction(x) => x as f64,
+            SignalResult::NoSignal => f64::NAN,
         }
     }
     fn from_f64(x: f64) -> Self {
@@ -1326,12 +1357,12 @@ impl RailScanState {
         b2vec(coarse) + vec3(dx, dy, dz)
     }
 
-    fn signal_delta(&self) -> Option<(i32, i32, i32)> {
+    fn wayside_signal_delta(&self) -> Option<(i32, i32, i32)> {
         Some(match self.major_angle % 4 {
-            0 => (1, 0, 0),
-            1 => (0, 0, -1),
-            2 => (-1, 0, 0),
-            3 => (0, 0, 1),
+            0 => (1, 2, 0),
+            1 => (0, 2, -1),
+            2 => (-1, 2, 0),
+            3 => (0, 2, 1),
             _ => unreachable!(),
         })
     }
