@@ -55,11 +55,17 @@ message EntityUpdate {
   // demand
 }
 
+enum QueueType {
+  QUEUE_UNSPECIFIED = 0;
+  QUEUE_SINGLE = 1;
+  QUEUE_EIGHT = 2;
+}
+
 message EntityTypeAssignment {
   string short_name = 1;
-  uint32 id = 2;
+  uint32 entity_class = 2;
 }
 
 message ServerEntityTypeAssignments {
-  repeated EntityTypeAssignment entity_types = 1;
+  repeated EntityTypeAssignment entity_type = 1;
 }

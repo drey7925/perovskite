@@ -1016,12 +1016,12 @@ impl AxisAlignedBoxesAppearanceBuilder {
     /// A full cube would span from -0.5 to 0.5 in all directions.
     pub fn add_box(
         self,
-        textures: AaBoxProperties,
+        box_properties: AaBoxProperties,
         x: (f32, f32),
         y: (f32, f32),
         z: (f32, f32),
     ) -> Self {
-        self.add_box_with_variant_mask(textures, x, y, z, 0)
+        self.add_box_with_variant_mask(box_properties, x, y, z, 0)
     }
 
     /// Same as [`AxisAlignedBoxesAppearanceBuilder::add_box`] but with an additional variant mask.
@@ -1029,7 +1029,7 @@ impl AxisAlignedBoxesAppearanceBuilder {
     /// the box will be drawn.
     pub fn add_box_with_variant_mask(
         mut self,
-        textures: AaBoxProperties,
+        box_properties: AaBoxProperties,
         x: (f32, f32),
         y: (f32, f32),
         z: (f32, f32),
@@ -1043,42 +1043,42 @@ impl AxisAlignedBoxesAppearanceBuilder {
             z_min: z.0,
             z_max: z.1,
             tex_left: Some(Self::maybe_crop(
-                textures.left,
-                &textures.crop_mode,
+                box_properties.left,
+                &box_properties.crop_mode,
                 (0.5 - z.1, 0.5 - z.0),
                 (0.5 - y.1, 0.5 - y.0),
             )),
             tex_right: Some(Self::maybe_crop(
-                textures.right,
-                &textures.crop_mode,
+                box_properties.right,
+                &box_properties.crop_mode,
                 (z.0 + 0.5, z.1 + 0.5),
                 (0.5 - y.1, 0.5 - y.0),
             )),
             tex_top: Some(Self::maybe_crop(
-                textures.top,
-                &textures.crop_mode,
+                box_properties.top,
+                &box_properties.crop_mode,
                 (0.5 - x.1, 0.5 - x.0),
                 (z.0 + 0.5, z.1 + 0.5),
             )),
             tex_bottom: Some(Self::maybe_crop(
-                textures.bottom,
-                &textures.crop_mode,
+                box_properties.bottom,
+                &box_properties.crop_mode,
                 (x.0 + 0.5, x.1 + 0.5),
                 (z.0 + 0.5, z.1 + 0.5),
             )),
             tex_front: Some(Self::maybe_crop(
-                textures.front,
-                &textures.crop_mode,
+                box_properties.front,
+                &box_properties.crop_mode,
                 (x.0 + 0.5, x.1 + 0.5),
                 (0.5 - y.1, 0.5 - y.0),
             )),
             tex_back: Some(Self::maybe_crop(
-                textures.back,
-                &textures.crop_mode,
+                box_properties.back,
+                &box_properties.crop_mode,
                 (0.5 - x.1, 0.5 - x.0),
                 (0.5 - y.1, 0.5 - y.0),
             )),
-            rotation: match textures.rotation_mode {
+            rotation: match box_properties.rotation_mode {
                 RotationMode::None => AxisAlignedBoxRotation::None.into(),
                 RotationMode::RotateHorizontally => AxisAlignedBoxRotation::Nesw.into(),
             },
