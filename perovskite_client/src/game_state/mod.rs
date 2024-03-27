@@ -278,12 +278,14 @@ impl ChunkManager {
         Ok((needs_remesh, unknown_coords, missing_coord))
     }
 
-    pub(crate) fn cloned_neighbors_fast(&self, chunk: ChunkCoordinate) -> FastChunkNeighbors {
+    pub(crate) fn cloned_neighbors_fast(
+        &self,
+        chunk: ChunkCoordinate,
+        result: &mut FastChunkNeighbors,
+    ) {
         let chunk_lock = self.chunks.read();
         let lights_lock = self.light_columns.read();
-        let mut data =
-            std::array::from_fn(|_| std::array::from_fn(|_| std::array::from_fn(|_| None)));
-        let mut inbound_lights = [[[Lightfield::zero(); 3]; 3]; 3];
+
         for i in -1..=1 {
             for k in -1..=1 {
                 let light_column = chunk
@@ -291,24 +293,33 @@ impl ChunkManager {
                     .and_then(|delta| lights_lock.get(&(delta.x, delta.z)));
                 for j in -1..=1 {
                     if let Some(delta) = chunk.try_delta(i, j, k) {
-                        data[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] = chunk_lock
-                            .get(&delta)
-                            .map(|x| Box::new(*x.chunk_data().block_ids()));
-                        if let Some(light_column) = light_column {
-                            inbound_lights[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize] =
-                                light_column
-                                    .get_incoming_light(delta.y)
-                                    .unwrap_or_else(Lightfield::zero);
+                        if let Some(chunk) = chunk_lock.get(&delta) {
+                            result.neighbors[(k + 1) as usize][(j + 1) as usize]
+                                [(i + 1) as usize]
+                                .0 = true;
+                            result.neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize]
+                                .1
+                                .copy_from_slice(chunk.chunk_data().block_ids());
+                        } else {
+                            result.neighbors[(k + 1) as usize][(j + 1) as usize]
+                                [(i + 1) as usize]
+                                .0 = false;
                         }
+
+                        if let Some(light_column) = light_column {
+                            result.inbound_lights[(k + 1) as usize][(j + 1) as usize]
+                                [(i + 1) as usize] = light_column
+                                .get_incoming_light(delta.y)
+                                .unwrap_or_else(Lightfield::zero);
+                        }
+                    } else {
+                        result.neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize].0 =
+                            false;
                     }
                 }
             }
         }
-        FastChunkNeighbors {
-            neighbors: data,
-            center: chunk_lock.get(&chunk).cloned(),
-            inbound_lights,
-        }
+        result.center = chunk_lock.get(&chunk).cloned();
     }
 
     /// If the chunk is present, meshes it. If any geometry was generated, inserts it into
@@ -420,13 +431,12 @@ impl ChunkManager {
                             let _span = span!("get batches lock");
                             self.mesh_batches.lock()
                         };
-                        batches.1.append(coord, chunk_data);
+                        batches.1.append(coord, &chunk_data);
                         chunk.set_batch(batches.1.id());
 
                         if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
-                            let builder =
-                                std::mem::replace(&mut batches.1, MeshBatchBuilder::new());
-                            batches.0.insert(builder.id(), builder.build(allocator)?);
+                            let new_batch = batches.1.build_and_reset(allocator)?;
+                            batches.0.insert(new_batch.id(), new_batch);
                             // We're going to start a new batch. As soon as we put an item into it, we should
                             // try to get some locality around it.
                             needs_resort = true;
@@ -489,13 +499,12 @@ impl ChunkManager {
             let mut batch_lock = self.mesh_batches.lock();
             if batch_lock.1.id() == batch_id {
                 // We are spilling the current batch builder itself
-                let mut builder = MeshBatchBuilder::new();
-                std::mem::swap(&mut batch_lock.1, &mut builder);
-                for spilled_coord in builder.chunks() {
+                for spilled_coord in batch_lock.1.chunks() {
                     if let Some(spilled_chunk) = chunks.get(&spilled_coord) {
                         spilled_chunk.spill_back_to_solo(batch_id);
                     }
                 }
+                batch_lock.1.reset();
             } else {
                 // We are spilling a finished batch. It's possible we may not find this batch, in case a different thread spilled it already.
                 if let Some(spilled_batch) = batch_lock.0.remove(&batch_id) {
@@ -528,11 +537,11 @@ impl<'a> ChunkManagerView<'a> {
     }
 }
 
-type ChunkWithEdgesBuffer = Box<[BlockId; 18 * 18 * 18]>;
+type ChunkWithEdgesBuffer = (bool, Box<[BlockId; 18 * 18 * 18]>);
 
 pub(crate) struct FastChunkNeighbors {
     center: Option<Arc<ClientChunk>>,
-    neighbors: [[[Option<ChunkWithEdgesBuffer>; 3]; 3]; 3],
+    neighbors: [[[ChunkWithEdgesBuffer; 3]; 3]; 3],
     inbound_lights: [[[Lightfield; 3]; 3]; 3],
 }
 impl FastChunkNeighbors {
@@ -540,9 +549,13 @@ impl FastChunkNeighbors {
         assert!((-1..=1).contains(&coord_xyz.0));
         assert!((-1..=1).contains(&coord_xyz.1));
         assert!((-1..=1).contains(&coord_xyz.2));
-        self.neighbors[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
-            [(coord_xyz.0 + 1) as usize]
-            .as_deref()
+        let chunk = &self.neighbors[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
+            [(coord_xyz.0 + 1) as usize];
+        if chunk.0 {
+            Some(&chunk.1)
+        } else {
+            None
+        }
     }
     pub(crate) fn center(&self) -> Option<&ClientChunk> {
         self.center.as_deref()
@@ -553,6 +566,22 @@ impl FastChunkNeighbors {
         assert!((-1..=1).contains(&coord_xyz.2));
         self.inbound_lights[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
             [(coord_xyz.0 + 1) as usize]
+    }
+}
+
+impl Default for FastChunkNeighbors {
+    fn default() -> Self {
+        Self {
+            center: None,
+            neighbors: std::array::from_fn(|_| {
+                std::array::from_fn(|_| {
+                    std::array::from_fn(|_| (false, Box::new([BlockId(0); 18 * 18 * 18])))
+                })
+            }),
+            inbound_lights: std::array::from_fn(|_| {
+                std::array::from_fn(|_| std::array::from_fn(|_| Lightfield::zero()))
+            }),
+        }
     }
 }
 

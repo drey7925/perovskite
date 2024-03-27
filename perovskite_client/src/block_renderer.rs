@@ -45,7 +45,10 @@ use vulkano::memory::allocator::{
 };
 
 use crate::cache::CacheManager;
-use crate::game_state::chunk::{ChunkDataView, ChunkOffsetExt, LockedChunkDataView};
+use crate::game_state::chunk::{
+    ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, SOLID_RECLAIMER,
+    TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
+};
 use crate::game_state::make_fallback_blockdef;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
@@ -490,10 +493,10 @@ pub(crate) struct VkChunkPassCpu {
 }
 impl VkChunkPassCpu {
     fn to_gpu(
-        self,
+        &self,
         allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
     ) -> Result<Option<VkChunkPassGpu>> {
-        VkChunkPassGpu::from_buffers(self.vtx, self.idx, allocator)
+        VkChunkPassGpu::from_buffers(&self.vtx, &self.idx, allocator)
     }
 }
 
@@ -504,8 +507,8 @@ pub(crate) struct VkChunkPassGpu {
 }
 impl VkChunkPassGpu {
     pub(crate) fn from_buffers(
-        vtx: Vec<CubeGeometryVertex>,
-        idx: Vec<u32>,
+        vtx: &[CubeGeometryVertex],
+        idx: &[u32],
         allocator: &StandardMemoryAllocator,
     ) -> Result<Option<VkChunkPassGpu>> {
         if vtx.is_empty() {
@@ -522,7 +525,7 @@ impl VkChunkPassGpu {
                         usage: MemoryUsage::Upload,
                         ..Default::default()
                     },
-                    vtx.into_iter(),
+                    vtx.iter().copied(),
                 )?,
                 idx: Buffer::from_iter(
                     allocator,
@@ -534,7 +537,7 @@ impl VkChunkPassGpu {
                         usage: MemoryUsage::Upload,
                         ..Default::default()
                     },
-                    idx.into_iter(),
+                    idx.iter().copied(),
                 )?,
             }))
         }
@@ -581,19 +584,19 @@ impl VkChunkVertexDataCpu {
     }
 
     pub(crate) fn to_gpu(
-        self,
+        &self,
         allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
     ) -> Result<VkChunkVertexDataGpu> {
         Ok(VkChunkVertexDataGpu {
-            solid_opaque: match self.solid_opaque {
+            solid_opaque: match &self.solid_opaque {
                 Some(x) => x.to_gpu(allocator)?,
                 None => None,
             },
-            transparent: match self.transparent {
+            transparent: match &self.transparent {
                 Some(x) => x.to_gpu(allocator)?,
                 None => None,
             },
-            translucent: match self.translucent {
+            translucent: match &self.translucent {
                 Some(x) => x.to_gpu(allocator)?,
                 None => None,
             },
@@ -835,6 +838,7 @@ impl BlockRenderer {
                 chunk_data,
                 |id| self.block_types().is_solid_opaque(id),
                 |_block, neighbor| self.block_defs.is_solid_opaque(neighbor),
+                &SOLID_RECLAIMER,
             ),
             transparent: self.mesh_chunk_subpass(
                 chunk_data,
@@ -843,6 +847,7 @@ impl BlockRenderer {
                     block.equals_ignore_variant(neighbor)
                         || self.block_defs.is_solid_opaque(neighbor)
                 },
+                &TRANSPARENT_RECLAIMER,
             ),
             translucent: self.mesh_chunk_subpass(
                 chunk_data,
@@ -851,6 +856,7 @@ impl BlockRenderer {
                     block.equals_ignore_variant(neighbor)
                         || self.block_defs.is_solid_opaque(neighbor)
                 },
+                &TRANSLUCENT_RECLAIMER,
             ),
         })
     }
@@ -863,14 +869,18 @@ impl BlockRenderer {
         // closure taking a block and its neighbor, and returning whether we should render the face of our block that faces the given neighbor
         // This only applies to cube blocks.
         suppress_face_when: G,
+        reclaimer: &MeshVectorReclaim,
     ) -> Option<VkChunkPassCpu>
     where
         F: Fn(BlockId) -> bool,
         G: Fn(BlockId, BlockId) -> bool,
     {
         let _span = span!("mesh subpass");
-        let mut vtx = Vec::new();
-        let mut idx = Vec::new();
+
+        let (mut idx, mut vtx) = match reclaimer.take() {
+            Some((idx, vtx)) => (idx, vtx),
+            None => (Vec::new(), Vec::new()),
+        };
         for x in 0..16 {
             for z in 0..16 {
                 for y in 0..16 {
@@ -894,6 +904,7 @@ impl BlockRenderer {
             }
         }
         if vtx.is_empty() {
+            reclaimer.put(idx, vtx);
             None
         } else {
             Some(VkChunkPassCpu { vtx, idx })

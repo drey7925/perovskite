@@ -145,6 +145,21 @@ struct ChunkMesh {
     solo_gpu: Option<VkChunkVertexDataGpu>,
     batch: Option<u64>,
 }
+impl Drop for ChunkMesh {
+    fn drop(&mut self) {
+        if let Some(cpu_data) = self.solo_cpu.take() {
+            if let Some(solid) = cpu_data.solid_opaque {
+                SOLID_RECLAIMER.put(solid.idx, solid.vtx);
+            }
+            if let Some(transparent) = cpu_data.transparent {
+                TRANSPARENT_RECLAIMER.put(transparent.idx, transparent.vtx);
+            }
+            if let Some(translucent) = cpu_data.translucent {
+                TRANSLUCENT_RECLAIMER.put(translucent.idx, translucent.vtx);
+            }
+        }
+    }
+}
 
 /// State of a chunk on the client
 ///
@@ -174,6 +189,39 @@ pub(crate) enum MeshResult {
     NewMesh(Option<u64>),
     SameMesh,
     EmptyMesh(Option<u64>),
+}
+
+// TODO move these from static into actual owners
+pub(crate) struct MeshVectorReclaim {
+    sender: flume::Sender<(Vec<u32>, Vec<CubeGeometryVertex>)>,
+    receiver: flume::Receiver<(Vec<u32>, Vec<CubeGeometryVertex>)>,
+}
+impl MeshVectorReclaim {
+    fn new() -> MeshVectorReclaim {
+        let (sender, receiver) = flume::bounded(256);
+        MeshVectorReclaim { sender, receiver }
+    }
+    pub(crate) fn take(&self) -> Option<(Vec<u32>, Vec<CubeGeometryVertex>)> {
+        match self.receiver.try_recv() {
+            Ok((mut idx, mut vtx)) => {
+                idx.clear();
+                vtx.clear();
+                Some((idx, vtx))
+            }
+            Err(_) => None,
+        }
+    }
+
+    pub(crate) fn put(&self, idx: Vec<u32>, vtx: Vec<CubeGeometryVertex>) {
+        // Drop - if we don't have space, just drop it
+        drop(self.sender.try_send((idx, vtx)));
+    }
+}
+
+lazy_static::lazy_static! {
+    pub(crate) static ref SOLID_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new();
+    pub(crate) static ref TRANSPARENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new();
+    pub(crate) static ref TRANSLUCENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new();
 }
 
 impl ClientChunk {
@@ -247,8 +295,8 @@ impl ClientChunk {
                 Ok(MeshResult::SameMesh)
             } else {
                 *mesh_lock = ChunkMesh {
-                    solo_cpu: Some(vertex_data.clone()),
                     solo_gpu: Some(vertex_data.to_gpu(renderer.allocator())?),
+                    solo_cpu: Some(vertex_data),
                     batch: None,
                 };
                 self.has_solo_hint.store(true, Ordering::Relaxed);
@@ -563,6 +611,9 @@ impl MeshBatch {
             model_matrix: matrix.cast().unwrap(),
         }
     }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 pub(crate) struct MeshBatchBuilder {
@@ -579,7 +630,7 @@ pub(crate) struct MeshBatchBuilder {
 impl MeshBatchBuilder {
     pub(crate) fn new() -> MeshBatchBuilder {
         MeshBatchBuilder {
-            id: NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64,
+            id: next_id(),
             // rough initial estimate, but should be good enough for now
             solid_vtx: Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 4000),
             solid_idx: Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 6000),
@@ -621,7 +672,7 @@ impl MeshBatchBuilder {
         idx.extend(input.idx.iter().map(|idx| idx + base_index as u32));
     }
 
-    pub(crate) fn append(&mut self, coord: ChunkCoordinate, cpu: VkChunkVertexDataCpu) {
+    pub(crate) fn append(&mut self, coord: ChunkCoordinate, cpu: &VkChunkVertexDataCpu) {
         let _span = span!("batch_append");
         let chunk_pos = vec3(
             coord.x as f64 * 16.0,
@@ -658,12 +709,12 @@ impl MeshBatchBuilder {
         self.chunks.push(coord);
     }
 
-    pub(crate) fn build(
-        self,
+    pub(crate) fn build_and_reset(
+        &mut self,
         allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
     ) -> Result<MeshBatch> {
         fn build_vertex(
-            buf: Vec<CubeGeometryVertex>,
+            buf: &[CubeGeometryVertex],
             allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
         ) -> Result<Option<Subbuffer<[CubeGeometryVertex]>>> {
             if buf.is_empty() {
@@ -679,13 +730,13 @@ impl MeshBatchBuilder {
                         usage: MemoryUsage::Upload,
                         ..Default::default()
                     },
-                    buf.into_iter(),
+                    buf.iter().copied(),
                 )?))
             }
         }
 
         fn build_index(
-            buf: Vec<u32>,
+            buf: &[u32],
             allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
         ) -> Result<Option<Subbuffer<[u32]>>> {
             if buf.is_empty() {
@@ -701,22 +752,41 @@ impl MeshBatchBuilder {
                         usage: MemoryUsage::Upload,
                         ..Default::default()
                     },
-                    buf.into_iter(),
+                    buf.iter().copied(),
                 )?))
             }
         }
-        Ok(MeshBatch {
+        let result = MeshBatch {
             id: self.id,
-            solid_vtx: build_vertex(self.solid_vtx, allocator)?,
-            solid_idx: build_index(self.solid_idx, allocator)?,
-            transparent_vtx: build_vertex(self.transparent_vtx, allocator)?,
-            transparent_idx: build_index(self.transparent_idx, allocator)?,
-            translucent_vtx: build_vertex(self.translucent_vtx, allocator)?,
-            translucent_idx: build_index(self.translucent_idx, allocator)?,
+            solid_vtx: build_vertex(&self.solid_vtx, allocator)?,
+            solid_idx: build_index(&self.solid_idx, allocator)?,
+            transparent_vtx: build_vertex(&self.transparent_vtx, allocator)?,
+            transparent_idx: build_index(&self.transparent_idx, allocator)?,
+            translucent_vtx: build_vertex(&self.translucent_vtx, allocator)?,
+            translucent_idx: build_index(&self.translucent_idx, allocator)?,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
-        })
+        };
+
+        self.reset();
+        Ok(result)
     }
+
+    pub(crate) fn reset(&mut self) {
+        self.solid_vtx.clear();
+        self.solid_idx.clear();
+        self.transparent_vtx.clear();
+        self.transparent_idx.clear();
+        self.translucent_vtx.clear();
+        self.translucent_idx.clear();
+        self.chunks.clear();
+        self.base_position = Vector3::zero();
+        self.id = next_id();
+    }
+}
+
+fn next_id() -> u64 {
+    NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64
 }
 
 pub(crate) trait ChunkOffsetExt {

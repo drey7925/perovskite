@@ -7,8 +7,10 @@ use std::{
 
 use crate::{
     game_state::{
-        chunk::SnappyDecodeHelper, entities::GameEntity, items::ClientInventory, ClientState,
-        GameAction,
+        chunk::SnappyDecodeHelper,
+        entities::{self, GameEntity},
+        items::ClientInventory,
+        ClientState, FastChunkNeighbors, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
@@ -27,7 +29,10 @@ use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
 
-use super::mesh_worker::{propagate_neighbor_data, MeshBatcher, MeshWorker, NeighborPropagator};
+use super::mesh_worker::{
+    propagate_neighbor_data, MeshBatcher, MeshWorker, NeighborPropagationScratchpad,
+    NeighborPropagator,
+};
 
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
@@ -73,6 +78,8 @@ pub(crate) async fn make_contexts(
         snappy_helper: SnappyDecodeHelper::new(),
         protocol_version,
         initial_state_notification,
+        inline_nprop_scratchpad: NeighborPropagationScratchpad::default(),
+        inline_fcn_scratchpad: FastChunkNeighbors::default(),
     };
 
     let outbound = OutboundContext {
@@ -303,6 +310,9 @@ pub(crate) struct InboundContext {
     protocol_version: u32,
 
     initial_state_notification: Arc<tokio::sync::Notify>,
+
+    inline_nprop_scratchpad: NeighborPropagationScratchpad,
+    inline_fcn_scratchpad: FastChunkNeighbors,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
@@ -578,7 +588,6 @@ impl InboundContext {
 
         {
             let _span = span!("remesh for delta");
-            let mut scratchpad = Box::new([0; 48 * 48 * 48]);
 
             // Only do inline meshing for chunks within 3 chunks of the current player location
             // Otherwise, we tie up the network thread for too long
@@ -593,11 +602,13 @@ impl InboundContext {
             };
             for &coord in needs_remesh.iter() {
                 if eligible_for_inline(coord) {
-                    let neighbors = self.client_state.chunks.cloned_neighbors_fast(coord);
+                    self.client_state
+                        .chunks
+                        .cloned_neighbors_fast(coord, &mut self.inline_fcn_scratchpad);
                     propagate_neighbor_data(
                         &self.client_state.block_types,
-                        &neighbors,
-                        &mut scratchpad,
+                        &self.inline_fcn_scratchpad,
+                        &mut self.inline_nprop_scratchpad,
                     )?;
                 } else {
                     self.enqueue_for_nprop(coord);

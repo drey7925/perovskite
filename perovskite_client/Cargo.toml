@@ -57,8 +57,11 @@ lazy_static = "1.4.0"
 sha2 = "0.10.6"
 splines = { version = "4.2.0", features = ["cgmath"] }
 smallvec = "1.13.1"
+flume = "0.11.0"
 
 [features]
 default = []
 # Performance tracing
 tracy = ["tracy-client/enable"]
+# malloc tracing (slow)
+tracy_malloc = ["tracy"]

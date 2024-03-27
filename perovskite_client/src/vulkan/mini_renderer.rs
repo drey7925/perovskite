@@ -153,7 +153,7 @@ impl MiniBlockRenderer {
             },
             SubpassContents::Inline,
         )?;
-        let pass = VkChunkPassGpu::from_buffers(vtx, idx, self.ctx.allocator())?;
+        let pass = VkChunkPassGpu::from_buffers(&vtx, &idx, self.ctx.allocator())?;
 
         if let Some(pass) = pass {
             self.cube_pipeline.bind(
