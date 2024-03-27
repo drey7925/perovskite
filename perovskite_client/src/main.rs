@@ -17,8 +17,14 @@ use perovskite_client::client_main;
 
 use mimalloc::MiMalloc;
 
+#[cfg(not(all(feature = "tracy", feature = "tracy_malloc")))]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+#[cfg(all(feature = "tracy", feature = "tracy_malloc"))]
+#[global_allocator]
+static GLOBAL: tracy_client::ProfiledAllocator<MiMalloc> =
+    tracy_client::ProfiledAllocator::new(MiMalloc, 100);
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

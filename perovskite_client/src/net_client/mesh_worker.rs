@@ -51,7 +51,7 @@ impl NeighborPropagator {
         (worker, handle)
     }
 
-    /// Estimates how many tasks are left in the queue. This is a rough estimate suitable
+    /// Estimates how many tasks are left in the scratchpad.visit_queue. This is a rough estimate suitable
     /// for flow control, but may be stale or approximate.
     pub(crate) fn queue_len(&self) -> usize {
         self.queue_len.load(Ordering::Relaxed)
@@ -69,7 +69,8 @@ impl NeighborPropagator {
 
     pub(crate) fn run_neighbor_propagator(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_neighbor_propagator");
-        let mut scratchpad = Box::new([0u8; 48 * 48 * 48]);
+        let mut scratchpad = NeighborPropagationScratchpad::default();
+        let mut chunk_neighbor_scratchpad = FastChunkNeighbors::default();
         if self
             .client_state
             .settings
@@ -127,10 +128,15 @@ impl NeighborPropagator {
 
             {
                 let _span = span!("nprop_work");
+
                 for &coord in chunks {
+                    self.client_state
+                        .chunks
+                        .cloned_neighbors_fast(coord, &mut chunk_neighbor_scratchpad);
+
                     let should_mesh = propagate_neighbor_data(
                         &self.client_state.block_types,
-                        &self.client_state.chunks.cloned_neighbors_fast(coord),
+                        &chunk_neighbor_scratchpad,
                         &mut scratchpad,
                     )?;
                     if should_mesh {
@@ -318,10 +324,29 @@ pub fn test_div_euclid() {
     }
 }
 
+pub(crate) struct NeighborPropagationScratchpad {
+    light_buffer: Box<[u8; 48 * 48 * 48]>,
+    visit_queue: Vec<(i32, i32, i32, u8)>,
+}
+impl NeighborPropagationScratchpad {
+    fn clear(&mut self) {
+        self.light_buffer.fill(0);
+        self.visit_queue.clear();
+    }
+}
+impl Default for NeighborPropagationScratchpad {
+    fn default() -> Self {
+        Self {
+            light_buffer: Box::new([0; 48 * 48 * 48]),
+            visit_queue: Vec::new(),
+        }
+    }
+}
+
 pub(crate) fn propagate_neighbor_data(
     block_manager: &ClientBlockTypeManager,
     neighbors: &FastChunkNeighbors,
-    scratchpad: &mut [u8; 48 * 48 * 48],
+    scratchpad: &mut NeighborPropagationScratchpad,
 ) -> Result<bool> {
     if let Some(current_chunk) = neighbors.center() {
         let mut current_chunk = current_chunk.chunk_data_mut();
@@ -385,7 +410,7 @@ pub(crate) fn propagate_neighbor_data(
             #[inline]
             fn check_propagation_and_push<F>(
                 queue: &mut Vec<(i32, i32, i32, u8)>,
-                scratchpad: &mut [u8; 48 * 48 * 48],
+                light_buffer: &mut [u8; 48 * 48 * 48],
                 i: i32,
                 j: i32,
                 k: i32,
@@ -400,7 +425,7 @@ pub(crate) fn propagate_neighbor_data(
                 if !light_propagation(i, j, k) {
                     return;
                 }
-                let old_level = scratchpad
+                let old_level = light_buffer
                     [(i + 16) as usize * 48 * 48 + (k + 16) as usize * 48 + (j + 16) as usize];
                 // Take the maximum value of the upper and lower nibbles independently
                 let max_level = ((old_level & 0xf).max(light_level & 0xf))
@@ -409,7 +434,7 @@ pub(crate) fn propagate_neighbor_data(
                     return;
                 }
 
-                scratchpad
+                light_buffer
                     [(i + 16) as usize * 48 * 48 + (k + 16) as usize * 48 + (j + 16) as usize] =
                     max_level;
                 let i_dist = (-1 - i).max(i - 16);
@@ -422,9 +447,7 @@ pub(crate) fn propagate_neighbor_data(
                 }
             }
 
-            scratchpad.fill(0);
-
-            let mut queue = vec![];
+            scratchpad.clear();
 
             // First, scan through the neighborhood looking for light sources
             // Indices are reversed in order to achieve better cache locality
@@ -475,8 +498,8 @@ pub(crate) fn propagate_neighbor_data(
                                         let effective_emission = light_emission | global_bits;
                                         if effective_emission > 0 {
                                             check_propagation_and_push(
-                                                &mut queue,
-                                                scratchpad,
+                                                &mut scratchpad.visit_queue,
+                                                &mut scratchpad.light_buffer,
                                                 x,
                                                 y,
                                                 z,
@@ -497,13 +520,13 @@ pub(crate) fn propagate_neighbor_data(
                     [(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
             };
 
-            // Then, while the queue is non-empty, attempt to propagate light
-            while let Some((x, y, z, light_level)) = queue.pop() {
+            // Then, while the scratchpad.visit_queue is non-empty, attempt to propagate light
+            while let Some((x, y, z, light_level)) = scratchpad.visit_queue.pop() {
                 let decremented = ((light_level & 0xf).saturating_sub(0x1))
                     | ((light_level & 0xf0).saturating_sub(0x10));
                 check_propagation_and_push(
-                    &mut queue,
-                    scratchpad,
+                    &mut scratchpad.visit_queue,
+                    &mut scratchpad.light_buffer,
                     x - 1,
                     y,
                     z,
@@ -511,8 +534,8 @@ pub(crate) fn propagate_neighbor_data(
                     propagates_light_check,
                 );
                 check_propagation_and_push(
-                    &mut queue,
-                    scratchpad,
+                    &mut scratchpad.visit_queue,
+                    &mut scratchpad.light_buffer,
                     x + 1,
                     y,
                     z,
@@ -520,8 +543,8 @@ pub(crate) fn propagate_neighbor_data(
                     propagates_light_check,
                 );
                 check_propagation_and_push(
-                    &mut queue,
-                    scratchpad,
+                    &mut scratchpad.visit_queue,
+                    &mut scratchpad.light_buffer,
                     x,
                     y - 1,
                     z,
@@ -529,8 +552,8 @@ pub(crate) fn propagate_neighbor_data(
                     propagates_light_check,
                 );
                 check_propagation_and_push(
-                    &mut queue,
-                    scratchpad,
+                    &mut scratchpad.visit_queue,
+                    &mut scratchpad.light_buffer,
                     x,
                     y + 1,
                     z,
@@ -538,8 +561,8 @@ pub(crate) fn propagate_neighbor_data(
                     propagates_light_check,
                 );
                 check_propagation_and_push(
-                    &mut queue,
-                    scratchpad,
+                    &mut scratchpad.visit_queue,
+                    &mut scratchpad.light_buffer,
                     x,
                     y,
                     z - 1,
@@ -547,8 +570,8 @@ pub(crate) fn propagate_neighbor_data(
                     propagates_light_check,
                 );
                 check_propagation_and_push(
-                    &mut queue,
-                    scratchpad,
+                    &mut scratchpad.visit_queue,
+                    &mut scratchpad.light_buffer,
                     x,
                     y,
                     z + 1,
@@ -562,7 +585,7 @@ pub(crate) fn propagate_neighbor_data(
                 for z in -1i32..17 {
                     for y in -1i32..17 {
                         lightmap[(x, y, z).as_extended_index()] =
-                            scratchpad[(x + 16) as usize * 48 * 48
+                            scratchpad.light_buffer[(x + 16) as usize * 48 * 48
                                 + (z + 16) as usize * 48
                                 + (y + 16) as usize];
                     }
