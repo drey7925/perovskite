@@ -1,4 +1,4 @@
-use perovskite_core::block_id::BlockId;
+use perovskite_core::{block_id::BlockId, chat::ChatMessage, protocol::render::DynamicCrop};
 use rand::Rng;
 
 use crate::{
@@ -12,6 +12,7 @@ pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal_b
 const SIGNAL_BLOCK_TEX_OFF: StaticTextureName = StaticTextureName("carts:signal_block_off");
 const SIGNAL_BLOCK_TEX_ON: StaticTextureName = StaticTextureName("carts:signal_block_on");
 const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
+const RAIL_TEST_TEX: StaticTextureName = StaticTextureName("carts:rail_test");
 
 // Note that the two low bits of the signal variant are used for the direction it's facing
 /// Set when the signal permits traffic
@@ -45,6 +46,8 @@ pub(crate) fn register_signal_block(
         SIGNAL_SIDE_TOP_TEX,
         "textures/signal_side_top.png"
     )?;
+
+    include_texture_bytes!(game_builder, RAIL_TEST_TEX, "textures/rail_atlas_test.png")?;
 
     let signal_off_box = AaBoxProperties::new(
         SIGNAL_SIDE_TOP_TEX,
@@ -133,6 +136,8 @@ pub(crate) fn register_signal_block(
                         *b = b.with_variant(new_variant)?;
                         Ok(())
                     })?;
+                    ctx.initiator()
+                        .send_chat_message(ChatMessage::new("[RNG]", format!("{:b}", variant)))?;
                     Ok(None)
                 }));
             }))
@@ -146,6 +151,60 @@ pub(crate) fn register_signal_block(
                     })?;
                     Ok(result)
                 }))
+            })),
+    )?;
+    let rail_test_box = AaBoxProperties::new(
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        RAIL_TEST_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    game_builder.add_block(
+        BlockBuilder::new(StaticBlockName("carts:rail_test"))
+            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
+                rail_test_box,
+                (-0.5, 0.5),
+                (-0.5, -0.4),
+                (-0.5, 0.5),
+            ))
+            .add_modifier(Box::new(|bt| {
+                bt.interact_key_handler = Some(Box::new(|ctx, coord| {
+                    let mut rng = rand::thread_rng();
+                    let variant = rng.gen_range(0..4096);
+                    ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
+                        // TODO this should check equals_ignore_variant
+                        let old_variant = b.variant();
+                        let new_variant = (variant & !3) | (old_variant & 3);
+                        *b = b.with_variant(new_variant)?;
+
+                        ctx.initiator().send_chat_message(ChatMessage::new("[RNG]", format!("{:b}", variant)))?;
+
+                        Ok(())
+                    })?;
+                    Ok(None)
+                }));
+                let ri = bt.client_info.render_info.as_mut().unwrap();
+                match ri {
+                    perovskite_core::protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabb) => {
+                        aabb.boxes.iter_mut().for_each(|b| {
+                            b.tex_top.as_mut().unwrap().crop.as_mut().unwrap().dynamic = Some(
+                                DynamicCrop {
+                                    x_selector_bits: 0b0000_0000_0011_1100,
+                                    y_selector_bits: 0b0000_0011_1100_0000,
+                                    x_cells: 16,
+                                    y_cells: 11,
+                                    flip_x_bit: 0b0000_0100_0000_0000,
+                                    flip_y_bit: 0,
+                                }
+                            )
+                        })
+                    },
+                    _ => unreachable!()
+                }
             })),
     )?;
 

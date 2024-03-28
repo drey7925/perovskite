@@ -1101,6 +1101,7 @@ impl AxisAlignedBoxesAppearanceBuilder {
                     right: extents_u.1,
                     top: extents_v.0,
                     bottom: extents_v.1,
+                    dynamic: None,
                 }),
             },
             TextureCropping::NoCrop => TextureReference {
