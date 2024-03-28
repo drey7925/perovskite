@@ -206,7 +206,7 @@ pub(crate) struct MeshVectorReclaim {
 }
 impl MeshVectorReclaim {
     fn new() -> MeshVectorReclaim {
-        let (sender, receiver) = flume::bounded(256);
+        let (sender, receiver) = flume::bounded(1024);
         MeshVectorReclaim { sender, receiver }
     }
     pub(crate) fn take(&self) -> Option<(Vec<u32>, Vec<CubeGeometryVertex>)> {
@@ -223,6 +223,9 @@ impl MeshVectorReclaim {
     pub(crate) fn put(&self, idx: Vec<u32>, vtx: Vec<CubeGeometryVertex>) {
         // Drop - if we don't have space, just drop it
         drop(self.sender.try_send((idx, vtx)));
+    }
+    pub(crate) fn occupancy(&self) -> usize {
+        self.receiver.len()
     }
 }
 

@@ -39,7 +39,11 @@ use winit::{
 
 use crate::{
     block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},
-    game_state::{settings::GameSettings, ClientState, FrameState},
+    game_state::{
+        chunk::{SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER},
+        settings::GameSettings,
+        ClientState, FrameState,
+    },
     main_menu::MainMenu,
     net_client,
 };
