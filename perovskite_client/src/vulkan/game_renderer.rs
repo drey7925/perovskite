@@ -122,23 +122,6 @@ impl ActiveGame {
                     .unwrap(),
             );
         }
-        // test only
-        if let Some(neighbor) = tool_state.neighbor {
-            if self
-                .client_state
-                .settings
-                .load()
-                .render
-                .show_placement_guide
-            {
-                self.cube_draw_calls.push(
-                    self.client_state
-                        .block_renderer
-                        .make_pointee_cube(player_position, neighbor)
-                        .unwrap(),
-                );
-            }
-        }
 
         let (entity_translations, vtx, idx) = {
             let mut entity_coords = vec![];
