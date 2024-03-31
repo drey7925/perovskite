@@ -103,6 +103,15 @@ impl RectF32 {
     fn right(&self) -> f32 {
         self.l + self.w
     }
+
+    fn div(&self, dimensions: (u32, u32)) -> RectF32 {
+        RectF32::new(
+            self.l / dimensions.0 as f32,
+            self.t / dimensions.1 as f32,
+            self.w / dimensions.0 as f32,
+            self.h / dimensions.1 as f32,
+        )
+    }
 }
 impl From<Rect> for RectF32 {
     fn from(rect: Rect) -> Self {
@@ -871,12 +880,18 @@ impl BlockRenderer {
         };
 
         let texture_atlas = Arc::new(Texture2DHolder::create(ctx, &texture_atlas)?);
+
+        let selection_rect: RectF32 = (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into();
+        let fallback_rect: RectF32 =
+            (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into();
+        let fake_entity_rect: RectF32 = (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into();
+        let atlas_dims = texture_atlas.dimensions();
         Ok(BlockRenderer {
             block_defs,
             texture_atlas,
-            selection_box_tex_coord: (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into(),
-            fallback_tex_coord: (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into(),
-            fake_entity_tex_coords: (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into(),
+            selection_box_tex_coord: selection_rect.div(atlas_dims),
+            fallback_tex_coord: fallback_rect.div(atlas_dims),
+            fake_entity_tex_coords: fake_entity_rect.div(atlas_dims),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
             allocator: ctx.clone_allocator(),
