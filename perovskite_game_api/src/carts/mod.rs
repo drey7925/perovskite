@@ -31,6 +31,7 @@ use crate::{
 };
 
 mod signals;
+mod tracks;
 
 #[derive(Clone)]
 struct CartsGameBuilderExtension {
@@ -125,6 +126,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     })?;
 
     let signal_block_id = signals::register_signal_block(game_builder)?;
+
+    tracks::register_tracks(game_builder)?;
 
     let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
     ext.rail_block = rail.id;

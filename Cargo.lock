@@ -2640,6 +2640,7 @@ dependencies = [
  "env_logger",
  "hashbrown 0.14.2",
  "image",
+ "lazy_static",
  "log",
  "mimalloc",
  "noise",
