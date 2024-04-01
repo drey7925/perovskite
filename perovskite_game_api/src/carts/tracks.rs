@@ -129,7 +129,7 @@ impl TileId {
         self.0 & (0b0000_1111_1111_1111)
     }
 
-    fn from_variant(variant: u16, reverse: bool, diverging: bool) -> Self {
+    const fn from_variant(variant: u16, reverse: bool, diverging: bool) -> Self {
         TileId(
             c::ENTRY_PRESENT
                 | (variant & 0b0000_1111_1111_1111)
@@ -138,21 +138,33 @@ impl TileId {
         )
     }
 
-    fn with_rotation_wrapped(&self, rotation: u16) -> TileId {
+    const fn with_rotation_wrapped(&self, rotation: u16) -> TileId {
         TileId(self.0 & !c::ROTATION_BITS | (rotation & c::ROTATION_BITS))
     }
 
-    fn xor_flip_x(&self, flip_x: bool) -> TileId {
+    const fn xor_flip_x(&self, flip_x: bool) -> TileId {
         TileId(self.0 ^ if flip_x { c::FLIP_X_BIT } else { 0 })
     }
 
-    fn correct_rotation_for_x_flip(&self, flip_x: bool) -> TileId {
+    const fn correct_rotation_for_x_flip(&self, flip_x: bool) -> TileId {
         // If facing 1/3, then correct for x-flip
         if self.rotation() & 1 == 1 && flip_x {
             TileId(self.0 ^ 2)
         } else {
             *self
         }
+    }
+
+    const fn rotation_flip_bitset_mask(&self) -> u8 {
+        1 << ((self.rotation() as u8) | (if self.flip_x() { 4 } else { 0 }))
+    }
+
+    fn with_reverse_diverge(&self, reverse: bool, diverge: bool) -> TileId {
+        TileId(
+            self.0 & (!c::REVERSE_SCAN & !c::DIVERGING_ROUTE)
+                | if reverse { c::REVERSE_SCAN } else { 0 }
+                | if diverge { c::DIVERGING_ROUTE } else { 0 },
+        )
     }
 }
 
@@ -277,16 +289,21 @@ const TN_CONTROL_FLIP_X: u8 = 2;
 #[derive(Debug, Clone, Copy)]
 struct TrackTile {
     /// The next tile that we will scan. This is given for variant = 0, and internally rotated by the engine when we're scanning other variants
-    next_coord: EncodedDelta,
+    next_delta: EncodedDelta,
     /// The previous tile that we will scan. This is given for variant = 0, and internally rotated by the engine when we're scanning other variants
-    prev_coord: EncodedDelta,
+    prev_delta: EncodedDelta,
+    /// The next tile that we will scan if we're diverging. This is given for variant = 0, and internally rotated by the engine when we're scanning other variants
+    next_diverging_delta: EncodedDelta,
+    /// The previous tile that we will scan if we're diverging. This is given for variant = 0, and internally rotated by the engine when we're scanning other variants
+    prev_diverging_delta: EncodedDelta,
     /// Secondary tile that needs to be set. As with before, this is given for variant = 0, and internally rotated by the engine when we're scanning other variants
     secondary_coord: EncodedDelta,
-    /// The tile we expect at the secondary tile.
-    secondary_tile: TileId,
+    /// The tile we expect at the secondary tile. If any tile ID in this array is set to diverging, but we're not currently diverging, we'll accept it regardless of what the
+    /// actual secondary tile is
+    secondary_tile: [TileId; 2],
     /// Tertiary tile that needs to be set. As with before, this is given for variant = 0, and internally rotated by the engine when we're scanning other variants
     tertiary_coord: EncodedDelta,
-    /// The tile we expect at the tertiary tile
+    /// The tile we expect at the tertiary tile. If the tile ID says diverging, we only need this tile to be set if we're diverging
     tertiary_tile: TileId,
     /// The variants that can exist in the next tile if we're signalled straight through (or if there is no choice).
     /// The tile ID for (0,0) is special: it means any of the STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS (i.e. the tracks that line up to a straight track)
@@ -294,27 +311,41 @@ struct TrackTile {
     /// connection, whatever it may be
     allowed_next_tiles: [TileId; 3],
     /// The variants that can exist in the next tile if we're signalled to diverge.
-    allowed_next_diverging_tiles: [TileId; 1],
+    allowed_next_diverging_tiles: [TileId; 2],
     /// The variants that can exist in the prev tile if we're signalled straight through (or if there is no choice).
     /// The tile ID for (0,0) is special: it means any of the STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS (i.e. the tracks that line up to a straight track)
     allowed_prev_tiles: [TileId; 1],
     /// The variants that can exist in the prev tile if we're signalled to diverge.
-    allowed_prev_diverging_tiles: [TileId; 1],
+    allowed_prev_diverging_tiles: [TileId; 2],
+    /// Bitset representing the eligible straight track connections that arrive forward, non-diverging into this tile. See [TrackTile::rotation_flip_bitset_mask]
+    straight_track_eligible_connections: u8,
+    /// Bitset representing the eligible straight track connections that arrive reverse, non-diverging into this tile. See [TrackTile::rotation_flip_bitset_mask]
+    reverse_straight_track_eligible_connections: u8,
+    /// Bitset representing the eligible straight track connections that arrive forward, diverging into this tile. See [TrackTile::rotation_flip_bitset_mask]
+    diverging_straight_track_eligible_connections: u8,
+    /// Bitset representing the eligible straight track connections that arrive reverse, diverging into this tile. See [TrackTile::rotation_flip_bitset_mask]
+    reverse_diverging_straight_track_eligible_connections: u8,
 }
 impl TrackTile {
     // This can't be in Default because it needs to be const
     const fn default() -> Self {
         TrackTile {
-            next_coord: EncodedDelta::empty(),
-            prev_coord: EncodedDelta::empty(),
+            next_delta: EncodedDelta::empty(),
+            prev_delta: EncodedDelta::empty(),
+            next_diverging_delta: EncodedDelta::empty(),
+            prev_diverging_delta: EncodedDelta::empty(),
             secondary_coord: EncodedDelta::empty(),
-            secondary_tile: TileId::empty(),
+            secondary_tile: [TileId::empty(); 2],
             tertiary_coord: EncodedDelta::empty(),
             tertiary_tile: TileId::empty(),
             allowed_next_tiles: [TileId::empty(); 3],
-            allowed_next_diverging_tiles: [TileId::empty(); 1],
+            allowed_next_diverging_tiles: [TileId::empty(); 2],
             allowed_prev_tiles: [TileId::empty(); 1],
-            allowed_prev_diverging_tiles: [TileId::empty(); 1],
+            allowed_prev_diverging_tiles: [TileId::empty(); 2],
+            straight_track_eligible_connections: 0,
+            reverse_straight_track_eligible_connections: 0,
+            diverging_straight_track_eligible_connections: 0,
+            reverse_diverging_straight_track_eligible_connections: 0,
         }
     }
 }
@@ -347,13 +378,9 @@ X <--+
 
      Z
 */
-const STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS: [TileId; 8] = [
-    // We can enter a straight track with the same rotation, regardless of flip_x
-    TileId::new(0, 0, 0, false, false, false),
-    TileId::new(0, 0, 0, true, false, false),
-    // We can enter a straight track from the other side, and do a reverse move through it
-    TileId::new(0, 0, 2, false, true, false),
-    TileId::new(0, 0, 2, true, true, false),
+
+// TODO this is going to grow. Use a bitset over 16 * 11 * 4 * 8 bits = 704 bytes
+const STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS: &[TileId] = &[
     // We can enter the 90-degree elbow at (8, 8) in its forward scan direction.
     TileId::new(8, 8, 0, false, false, false),
     // including if X is flipped
@@ -402,8 +429,8 @@ fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
     */
     // [0][0] is the straight track, running in the +/- Z direction
     track_tiles[0][0] = Some(TrackTile {
-        next_coord: EncodedDelta::new(0, 1),
-        prev_coord: EncodedDelta::new(0, -1),
+        next_delta: EncodedDelta::new(0, 1),
+        prev_delta: EncodedDelta::new(0, -1),
         allowed_next_tiles: [
             // Connects to a straight track (or straight track compatible) with the same rotation on its output side
             TileId::new(0, 0, 0, false, false, false),
@@ -411,22 +438,283 @@ fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
             TileId::empty(),
         ],
         allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+        straight_track_eligible_connections: (
+            // We can enter a straight track with the same rotation, regardless of flip_x
+            TileId::new(0, 0, 0, false, false, false).rotation_flip_bitset_mask()
+                | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
+        ),
+        reverse_straight_track_eligible_connections: (
+            // We can enter a straight track from the other side, and do a reverse move through it
+            TileId::new(0, 0, 2, false, true, false).rotation_flip_bitset_mask()
+                | TileId::new(0, 0, 2, true, true, false).rotation_flip_bitset_mask()
+        ),
         ..TrackTile::default()
     });
     // [8][8] is the 90 degree curve without a switch
     track_tiles[8][8] = Some(TrackTile {
-        next_coord: EncodedDelta::new(1, 0),
-        prev_coord: EncodedDelta::new(0, -1),
+        next_delta: EncodedDelta::new(1, 0),
+        prev_delta: EncodedDelta::new(0, -1),
         allowed_next_tiles: [
             TileId::new(0, 0, 1, false, false, false),
             TileId::empty(),
             TileId::empty(),
         ],
         allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+        straight_track_eligible_connections: (
+            // We can enter the 90-degree elbow at (8, 8) in its forward scan direction.
+            TileId::new(8, 8, 0, false, false, false).rotation_flip_bitset_mask()
+            // including if X is flipped
+            | TileId::new(8, 8, 0, true, false, false).rotation_flip_bitset_mask()
+        ),
+        reverse_straight_track_eligible_connections: (
+            // We can enter the 90-degree elbow at (8, 8) in its reverse scan direction.
+            // For this to work, the elbow must be turned 90 degrees so we're seeing its end-of-path
+            // side. We set reverse = true because we want the scan to continue in the reverse direction
+            //
+            // but if X is flipped on the elbow, we need the opposite rotation
+            TileId::new(8, 8, 1, false, true, false).rotation_flip_bitset_mask()
+                | TileId::new(8, 8, 3, true, true, false).rotation_flip_bitset_mask()
+        ),
         ..TrackTile::default()
     });
 
+    // CONTINUE HERE
+    // [0][1] and [1][1] start the 8-block switch (folded in half to make a 4 block segment in the tile space)
+    build_folded_switch(&mut track_tiles, 4, 0, 1, 6, 0, 1);
+
     track_tiles
+}
+
+fn build_folded_switch(
+    track_tiles: &mut [[Option<TrackTile>; 16]; 11],
+    switch_half_len: u16,
+    switch_xmin: u16,
+    switch_ymin: u16,
+    diag_xmin: u16,
+    diag_ymin: u16,
+    skip_secondary_tiles: u16,
+) {
+    // TODO - do this once we actually implement secondary tiles.
+    let _ = skip_secondary_tiles;
+
+    for y in 0..switch_half_len {
+        // The tiles on column 0 only carry straight-through traffic. Diverging traffic is always on column 1 tiles,
+        // with the column 0 tile being merely a secondary tile.
+        // We can just copy the 0,0 straight track into here
+        track_tiles[switch_xmin as usize][(switch_ymin + y) as usize] = track_tiles[0][0];
+
+        track_tiles[switch_xmin as usize + 1][(switch_ymin + y) as usize] = Some(TrackTile {
+            next_delta: EncodedDelta::new(0, 1),
+            // At y = 4, we are hitting the fold-in-half
+            next_diverging_delta: if y == (switch_half_len - 1) {
+                EncodedDelta::new(1, 1)
+            } else {
+                EncodedDelta::new(0, 1)
+            },
+
+            prev_delta: EncodedDelta::new(0, -1),
+            // Prev always converges back to the main track
+            prev_diverging_delta: EncodedDelta::new(0, -1),
+            allowed_next_tiles: [
+                // The next tile should be straight-track-compatible
+                TileId::new(0, 0, 0, false, false, false),
+                TileId::empty(),
+                TileId::empty(),
+            ],
+            allowed_next_diverging_tiles: if y == (switch_half_len - 1) {
+                // We're at the fold-in-half. We want the opposite diverging tile. We deflected halfway off our starting
+                // track, and now need to deflect back to the main track (in the new tile)
+                // This can also be a non-switch
+                [
+                    // The main tile is the one with the main track, so we want (1,4). (0,4) will only be visited for
+                    // non-diverging moves in the half of a crossover where the switch track is on the other side
+                    TileId::new(
+                        switch_xmin + 1,
+                        switch_ymin + switch_half_len - 1,
+                        2,
+                        false,
+                        true,
+                        true,
+                    ),
+                    // The non-switch diagonal tiles are never marked diverging
+                    TileId::new(
+                        diag_xmin + 1,
+                        diag_ymin + switch_half_len - 1,
+                        2,
+                        false,
+                        true,
+                        false,
+                    ),
+                ]
+            } else {
+                // The next tile should be the next tile in the set, still diverging
+                // Or the non-switch diagonal tile with the same slope
+                [
+                    TileId::new(
+                        switch_xmin + 1,
+                        switch_ymin + (y + 1) as u16,
+                        0,
+                        false,
+                        false,
+                        true,
+                    ),
+                    TileId::new(
+                        diag_xmin + 1,
+                        diag_ymin + (y + 1) as u16,
+                        0,
+                        false,
+                        false,
+                        false,
+                    ),
+                ]
+            },
+            allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+            allowed_prev_diverging_tiles: if y == 0 {
+                // If 0, diverging just merges back onto the main track
+                [TileId::new(0, 0, 2, false, false, false), TileId::empty()]
+            } else {
+                [
+                    TileId::new(
+                        switch_xmin + 1,
+                        switch_ymin + (y - 1) as u16,
+                        0,
+                        false,
+                        true,
+                        true,
+                    ),
+                    TileId::new(
+                        diag_xmin + 1,
+                        diag_ymin + (y - 1) as u16,
+                        0,
+                        false,
+                        true,
+                        true,
+                    ),
+                ]
+            },
+            straight_track_eligible_connections: (
+                // We can enter a straight track with the same rotation, regardless of flip_x
+                // Note that X and Y don't matter here; we're just getting the bitset mask.
+                TileId::new(0, 0, 0, false, false, false).rotation_flip_bitset_mask()
+                    | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
+            ),
+            reverse_straight_track_eligible_connections: (
+                // We can enter a straight track from the other side, and do a reverse move through it
+                TileId::new(0, 0, 2, false, true, false).rotation_flip_bitset_mask()
+                    | TileId::new(0, 0, 2, true, true, false).rotation_flip_bitset_mask()
+            ),
+
+            // At X+1, we need the counterpart to our main tile.
+            secondary_coord: EncodedDelta::new(1, 0),
+            secondary_tile: [
+                // Only needed if diverging
+                // Need either the corresponding switch tile
+                TileId::new(switch_xmin, switch_ymin + y, 0, false, false, true),
+                // or the corresponding diagonal tile
+                TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false),
+            ],
+
+            ..TrackTile::default()
+        });
+
+        // The left diagonal tile is only secondary and is never actually traversed.
+        track_tiles[diag_xmin as usize + 1][(diag_ymin + y) as usize] = Some(TrackTile {
+            next_delta: if y == (switch_half_len - 1) {
+                EncodedDelta::new(1, 1)
+            } else {
+                EncodedDelta::new(0, 1)
+            },
+
+            prev_delta: EncodedDelta::new(0, -1),
+            // No diverging
+            prev_diverging_delta: EncodedDelta::empty(),
+            allowed_next_tiles: if y == (switch_half_len - 1) {
+                // We're at the fold-in-half. We want the opposite diverging tile. We deflected halfway off our starting
+                // track, and now need to deflect back to the main track (in the new tile)
+                // This can also be a non-switch
+                [
+                    // The main tile is the one with the main track, so we want (1,4). (0,4) will only be visited for
+                    // non-diverging moves in the half of a crossover where the switch track is on the other side
+                    TileId::new(
+                        switch_xmin + 1,
+                        switch_ymin + switch_half_len - 1,
+                        2,
+                        false,
+                        true,
+                        true,
+                    ),
+                    // The non-switch diagonal tiles are never marked diverging
+                    TileId::new(
+                        diag_xmin + 1,
+                        diag_ymin + switch_half_len - 1,
+                        2,
+                        false,
+                        true,
+                        false,
+                    ),
+                    TileId::empty(),
+                ]
+            } else {
+                // The next tile should be the next tile in the set, still diverging
+                // Or the non-switch diagonal tile with the same slope
+                [
+                    TileId::new(
+                        switch_xmin + 1,
+                        switch_ymin + (y + 1) as u16,
+                        0,
+                        false,
+                        false,
+                        true,
+                    ),
+                    TileId::new(
+                        diag_xmin + 1,
+                        diag_ymin + (y + 1) as u16,
+                        0,
+                        false,
+                        false,
+                        false,
+                    ),
+                    TileId::empty(),
+                ]
+            },
+            allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+            allowed_prev_diverging_tiles: if y == 0 {
+                // If 0, diverging just merges back onto the main track
+                [TileId::new(0, 0, 2, false, false, false), TileId::empty()]
+            } else {
+                [
+                    TileId::new(
+                        switch_xmin + 1,
+                        switch_ymin + (y - 1) as u16,
+                        0,
+                        false,
+                        true,
+                        true,
+                    ),
+                    TileId::new(
+                        diag_xmin + 1,
+                        diag_ymin + (y - 1) as u16,
+                        0,
+                        false,
+                        true,
+                        true,
+                    ),
+                ]
+            },
+            // Only connects to straight track if y == 0, and only at the input side, regardless of flip_x
+            straight_track_eligible_connections: if y == 0 {
+                // We can enter a straight track with the same rotation, regardless of flip_x
+                // Note that X and Y don't matter here; we're just getting the bitset mask.
+                TileId::new(0, 0, 0, false, false, false).rotation_flip_bitset_mask()
+                    | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
+            } else {
+                0
+            },
+            // Does not connect to any straight track on its output side
+            reverse_straight_track_eligible_connections: 0,
+            ..TrackTile::default()
+        });
+    }
 }
 
 lazy_static::lazy_static! {
@@ -546,20 +834,25 @@ impl ScanState {
             None => return Ok(()),
         };
         // The next place we would scan
-        let next_coord = if self.is_reversed {
-            current_tile_def.prev_coord.eval_delta(
-                self.block_coord,
-                current_tile_id.flip_x(),
-                current_tile_id.rotation(),
-            )
-        } else {
-            current_tile_def.next_coord.eval_delta(
-                self.block_coord,
-                current_tile_id.flip_x(),
-                current_tile_id.rotation(),
-            )
+
+        let next_delta = match (self.is_reversed, self.is_diverging) {
+            (false, false) => current_tile_def.next_delta,
+            (true, false) => current_tile_def.prev_delta,
+            (false, true) => current_tile_def.next_diverging_delta,
+            (true, true) => current_tile_def.prev_diverging_delta,
+        };
+        if !next_delta.present() {
+            ctx.initiator()
+                .send_chat_message(ChatMessage::new("[SCAN]", format!("Next delta absent")))?;
+            return Ok(());
         }
-        .context("block coordinate overflow")?;
+        let next_coord = next_delta
+            .eval_delta(
+                self.block_coord,
+                current_tile_id.flip_x(),
+                current_tile_id.rotation(),
+            )
+            .context("block coordinate overflow")?;
         ctx.initiator().send_chat_message(ChatMessage::new(
             "[SCAN]",
             format!("Next coord: {:?}", next_coord),
@@ -594,9 +887,9 @@ impl ScanState {
         ctx.initiator().send_chat_message(ChatMessage::new(
             "[SCAN]",
             format!(
-                "Corrected rotation: {} -> {}",
+                "Corrected rotation: {} -> {:?}",
                 next_tile_id.rotation(),
-                rotation_corrected_next_tile_id.rotation()
+                rotation_corrected_next_tile_id
             ),
         ))?;
 
@@ -623,12 +916,27 @@ impl ScanState {
                         straight_track_rotation_corrected_tile_id
                     ),
                 ))?;
-                // try all the straight track connections
-                for &proposed_straight_track_id in STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS.iter() {
-                    if straight_track_rotation_corrected_tile_id
-                        .same_variant(proposed_straight_track_id)
-                    {
-                        matching_tile_id = proposed_straight_track_id;
+
+                if let Some(tile) =
+                    TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize]
+                {
+                    let mask =
+                        straight_track_rotation_corrected_tile_id.rotation_flip_bitset_mask();
+                    if tile.straight_track_eligible_connections & mask != 0 {
+                        matching_tile_id = next_tile_id.with_reverse_diverge(false, false);
+                        break;
+                    }
+                    if tile.reverse_straight_track_eligible_connections & mask != 0 {
+                        matching_tile_id = next_tile_id.with_reverse_diverge(true, false);
+                        break;
+                    }
+                    if tile.diverging_straight_track_eligible_connections & mask != 0 {
+                        matching_tile_id = next_tile_id.with_reverse_diverge(false, true);
+                        break;
+                    }
+                    if tile.reverse_diverging_straight_track_eligible_connections & mask != 0 {
+                        matching_tile_id = next_tile_id.with_reverse_diverge(true, true);
+                        break;
                     }
                 }
             } else if rotation_corrected_next_tile_id.same_variant(proposed_tile_id) {
