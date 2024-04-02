@@ -249,6 +249,18 @@ impl std::fmt::Debug for EncodedDelta {
     }
 }
 
+fn eval_rotation(x: i8, z: i8, flip_x: bool, rotation: u16) -> (i8, i8) {
+    let x = if flip_x { -x } else { x };
+    let z = z;
+    match rotation & 3 {
+        0 => (x, z),
+        1 => (z, -x),
+        2 => (-x, -z),
+        3 => (-z, x),
+        _ => unreachable!(),
+    }
+}
+
 /* In texture atlas order
 
 tile_x ->
@@ -314,7 +326,7 @@ struct TrackTile {
     allowed_next_diverging_tiles: [TileId; 2],
     /// The variants that can exist in the prev tile if we're signalled straight through (or if there is no choice).
     /// The tile ID for (0,0) is special: it means any of the STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS (i.e. the tracks that line up to a straight track)
-    allowed_prev_tiles: [TileId; 1],
+    allowed_prev_tiles: [TileId; 2],
     /// The variants that can exist in the prev tile if we're signalled to diverge.
     allowed_prev_diverging_tiles: [TileId; 2],
     /// Bitset representing the eligible straight track connections that arrive forward, non-diverging into this tile. See [TrackTile::rotation_flip_bitset_mask]
@@ -325,6 +337,14 @@ struct TrackTile {
     diverging_straight_track_eligible_connections: u8,
     /// Bitset representing the eligible straight track connections that arrive reverse, diverging into this tile. See [TrackTile::rotation_flip_bitset_mask]
     reverse_diverging_straight_track_eligible_connections: u8,
+    /// The actual physical position of the cart on the tile, expressed in 1/128ths of a tile
+    physical_x_offset: i8,
+    /// The actual physical position of the cart on the tile, expressed in 1/128ths of a tile
+    physical_z_offset: i8,
+    /// When diverging, the actual physical position of the cart on the tile, expressed in 1/128ths of a tile
+    diverging_physical_x_offset: i8,
+    /// When diverging, the actual physical position of the cart on the tile, expressed in 1/128ths of a tile
+    diverging_physical_z_offset: i8,
 }
 impl TrackTile {
     // This can't be in Default because it needs to be const
@@ -340,14 +360,31 @@ impl TrackTile {
             tertiary_tile: TileId::empty(),
             allowed_next_tiles: [TileId::empty(); 3],
             allowed_next_diverging_tiles: [TileId::empty(); 2],
-            allowed_prev_tiles: [TileId::empty(); 1],
+            allowed_prev_tiles: [TileId::empty(); 2],
             allowed_prev_diverging_tiles: [TileId::empty(); 2],
             straight_track_eligible_connections: 0,
             reverse_straight_track_eligible_connections: 0,
             diverging_straight_track_eligible_connections: 0,
             reverse_diverging_straight_track_eligible_connections: 0,
+            physical_x_offset: 0,
+            physical_z_offset: 0,
+            diverging_physical_x_offset: 0,
+            diverging_physical_z_offset: 0,
         }
     }
+}
+
+fn make_physical_offset(num: impl Into<f32>, den: impl Into<f32>) -> i8 {
+    let num: f32 = num.into();
+    let den: f32 = den.into();
+    let val = ((num / den) * 128.0).round();
+    if !val.is_finite() {
+        panic!("Invalid diverging offset (not finite): {:?}", val);
+    }
+    if val < -128.0 || val > 127.0 {
+        panic!("Invalid diverging offset (overflows): {:?}", val);
+    }
+    val as i8
 }
 
 // The basic track at (0,0) has lots of connections, so they're listed here rather than making each TRACK_TILES larger.
@@ -437,7 +474,7 @@ fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
             TileId::empty(),
             TileId::empty(),
         ],
-        allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+        allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
         straight_track_eligible_connections: (
             // We can enter a straight track with the same rotation, regardless of flip_x
             TileId::new(0, 0, 0, false, false, false).rotation_flip_bitset_mask()
@@ -459,7 +496,7 @@ fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
             TileId::empty(),
             TileId::empty(),
         ],
-        allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+        allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
         straight_track_eligible_connections: (
             // We can enter the 90-degree elbow at (8, 8) in its forward scan direction.
             TileId::new(8, 8, 0, false, false, false).rotation_flip_bitset_mask()
@@ -568,7 +605,7 @@ fn build_folded_switch(
                     ),
                 ]
             },
-            allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
+            allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
             allowed_prev_diverging_tiles: if y == 0 {
                 // If 0, diverging just merges back onto the main track
                 [TileId::new(0, 0, 2, false, false, false), TileId::empty()]
@@ -608,16 +645,24 @@ fn build_folded_switch(
             secondary_coord: EncodedDelta::new(1, 0),
             secondary_tile: [
                 // Only needed if diverging
-                // Need either the corresponding switch tile
+                // Need either the corresponding switch tile...
                 TileId::new(switch_xmin, switch_ymin + y, 0, false, false, true),
-                // or the corresponding diagonal tile
-                TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false),
+                // ...or the corresponding diagonal tile. We still set diverging=true, because for this case of TileId, it's
+                // a matter of whether our *current* state is diverging. The fact that the diag tiles have no diverging
+                // moves is immaterial
+                TileId::new(diag_xmin, diag_ymin + y, 0, false, false, true),
             ],
+            diverging_physical_x_offset: make_physical_offset(
+                2 * y + 1,
+                switch_half_len.checked_mul(4).unwrap(),
+            ),
 
             ..TrackTile::default()
         });
 
-        // The left diagonal tile is only secondary and is never actually traversed.
+        // The left diagonal tile is only secondary and is never actually traversed. We don't need to fill it in
+
+        // We do define the right diagonal tile here
         track_tiles[diag_xmin as usize + 1][(diag_ymin + y) as usize] = Some(TrackTile {
             next_delta: if y == (switch_half_len - 1) {
                 EncodedDelta::new(1, 1)
@@ -677,8 +722,7 @@ fn build_folded_switch(
                     TileId::empty(),
                 ]
             },
-            allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false)],
-            allowed_prev_diverging_tiles: if y == 0 {
+            allowed_prev_tiles: if y == 0 {
                 // If 0, diverging just merges back onto the main track
                 [TileId::new(0, 0, 2, false, false, false), TileId::empty()]
             } else {
@@ -697,7 +741,7 @@ fn build_folded_switch(
                         0,
                         false,
                         true,
-                        true,
+                        false,
                     ),
                 ]
             },
@@ -712,6 +756,20 @@ fn build_folded_switch(
             },
             // Does not connect to any straight track on its output side
             reverse_straight_track_eligible_connections: 0,
+            // At X+1, we need the counterpart to our main tile.
+            secondary_coord: EncodedDelta::new(1, 0),
+            secondary_tile: [
+                // The diagonal move is non-diverging in the case of the diagonal. So we need the corresponding tile
+                // to be there unconditionally.
+                // Need either the corresponding switch tile...
+                TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false),
+                // ...or the corresponding diagonal tile.
+                TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false),
+            ],
+            physical_x_offset: make_physical_offset(
+                2 * y + 1,
+                switch_half_len.checked_mul(4).unwrap(),
+            ),
             ..TrackTile::default()
         });
     }
@@ -767,7 +825,7 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
                     ))?;
 
                     Ok(Some(ctx.new_popup()
-                        .title("Rail test")
+                        .title("Mr. Yellow")
                         .label("Update tile:")
                         .text_field("tile_x", "Tile X", "0", true)
                         .text_field("tile_y", "Tile Y", "0", true)
@@ -814,6 +872,7 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
 
 struct ScanState {
     block_coord: BlockCoordinate,
+    vec_coord: cgmath::Vector3<f64>,
     is_reversed: bool,
     is_diverging: bool,
 }
@@ -950,13 +1009,143 @@ impl ScanState {
             ))?;
             return Ok(());
         }
+
+        // Now check secondary and tertiary tiles
+        let next_tile = match TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize] {
+            Some(tile) => tile,
+            None => {
+                ctx.initiator().send_chat_message(ChatMessage::new(
+                    "[SCAN]",
+                    "Match found, but no tile. This is a bug.".to_string(),
+                ))?;
+                return Ok(());
+            }
+        };
+        if next_tile.secondary_coord.present() {
+            let secondary_block_coord = match next_tile.secondary_coord.eval_delta(
+                next_coord,
+                next_tile_id.flip_x(),
+                next_tile_id.rotation(),
+            ) {
+                Some(secondary_block_coord) => secondary_block_coord,
+                None => {
+                    ctx.initiator().send_chat_message(ChatMessage::new(
+                        "[SCAN]",
+                        "Secondary tile coord overflows".to_string(),
+                    ))?;
+                    return Ok(());
+                }
+            };
+            let secondary_block = ctx.game_map().get_block(secondary_block_coord)?;
+            // TODO check the block type
+
+            let secondary_tile = TileId::from_variant(
+                secondary_block.variant(),
+                // Don't care about reverse or diverging
+                false,
+                false,
+            );
+
+            let rotation_corrected_next_tile_id = secondary_tile
+                .with_rotation_wrapped(secondary_tile.rotation() + 4 - next_tile_id.rotation())
+                .xor_flip_x(next_tile_id.flip_x())
+                .correct_rotation_for_x_flip(next_tile_id.flip_x());
+
+            let mut secondary_ok = false;
+            for proposed_secondary_tile_id in next_tile.secondary_tile {
+                if proposed_secondary_tile_id.diverging() && !self.is_diverging {
+                    // This tile only needs to match if we're diverging, but we're not
+                    secondary_ok = true;
+                    break;
+                }
+                if proposed_secondary_tile_id.same_variant(rotation_corrected_next_tile_id) {
+                    secondary_ok = true;
+                    break;
+                }
+            }
+
+            if !secondary_ok {
+                ctx.initiator().send_chat_message(ChatMessage::new(
+                    "[SCAN]",
+                    "Secondary tile doesn't match".to_string(),
+                ))?;
+                return Ok(());
+            }
+        }
+        if next_tile.tertiary_coord.present() {
+            let tertiary_block_coord = match next_tile.tertiary_coord.eval_delta(
+                next_coord,
+                next_tile_id.flip_x(),
+                next_tile_id.rotation(),
+            ) {
+                Some(tertiary_block_coord) => tertiary_block_coord,
+                None => {
+                    ctx.initiator().send_chat_message(ChatMessage::new(
+                        "[SCAN]",
+                        "Tertiary tile coord overflows".to_string(),
+                    ))?;
+                    return Ok(());
+                }
+            };
+            let tertiary_block = ctx.game_map().get_block(tertiary_block_coord)?;
+            // TODO check the block type
+
+            let tertiary_tile = TileId::from_variant(
+                tertiary_block.variant(),
+                // Don't care about reverse or diverging
+                false,
+                false,
+            );
+
+            let rotation_corrected_next_tile_id = tertiary_tile
+                .with_rotation_wrapped(tertiary_tile.rotation() + 4 - next_tile_id.rotation())
+                .xor_flip_x(next_tile_id.flip_x())
+                .correct_rotation_for_x_flip(next_tile_id.flip_x());
+
+            if (!next_tile.tertiary_tile.diverging() || self.is_diverging)
+                && !next_tile
+                    .tertiary_tile
+                    .same_variant(rotation_corrected_next_tile_id)
+            {
+                ctx.initiator().send_chat_message(ChatMessage::new(
+                    "[SCAN]",
+                    "Tertiary tile doesn't match".to_string(),
+                ))?;
+                return Ok(());
+            }
+        }
+
         self.block_coord = next_coord;
         self.is_reversed = matching_tile_id.reverse();
         self.is_diverging = matching_tile_id.diverging();
+        let base_coord = b2vec(next_coord);
+
+        let offset_x = if self.is_diverging {
+            next_tile.diverging_physical_x_offset
+        } else {
+            next_tile.physical_x_offset
+        };
+        let offset_z = if self.is_diverging {
+            next_tile.diverging_physical_z_offset
+        } else {
+            next_tile.physical_z_offset
+        };
+        self.vec_coord = base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
+
+        let (offset_x, offset_z) = eval_rotation(
+            offset_x,
+            offset_z,
+            next_tile_id.flip_x(),
+            next_tile_id.rotation(),
+        );
+        self.vec_coord = base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
 
         ctx.initiator().send_chat_message(ChatMessage::new(
             "[SCAN]",
-            format!("Found matching tile: {:?}", matching_tile_id),
+            format!(
+                "Found matching tile: {:?}. Coords: {:?}.",
+                matching_tile_id, self.vec_coord
+            ),
         ))?;
 
         Ok(())
@@ -1011,6 +1200,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .get("diverging")
                         .unwrap()
                         .parse::<bool>()?,
+                    vec_coord: b2vec(coord),
                 };
                 state.advance_verbose(&response.ctx)?;
             }
@@ -1027,13 +1217,14 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .get("diverging")
                         .unwrap()
                         .parse::<bool>()?,
+                    vec_coord: b2vec(coord),
                 };
                 response.ctx.run_deferred(move |ctx| {
                     for _ in 0..20 {
-                        let prev = b2vec(state.block_coord) + vec3(0.0, 1.0, 0.0);
+                        let prev = state.vec_coord + vec3(0.0, 1.0, 0.0);
                         state.advance_verbose(ctx)?;
 
-                        let current = b2vec(state.block_coord) + vec3(0.0, 1.0, 0.0);
+                        let current = state.vec_coord + vec3(0.0, 1.0, 0.0);
                         std::thread::sleep(std::time::Duration::from_millis(125));
                         if let EventInitiator::WeakPlayerRef(p) = ctx.initiator() {
                             p.try_to_run(|p| p.set_position_blocking(0.5 * (prev + current)));
