@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use perovskite_core::{
-    block_id::BlockId,
+    block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
         block_groups::{self, DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID, TRIVIALLY_REPLACEABLE},
         items::default_item_interaction_rules,
@@ -32,8 +32,7 @@ use perovskite_core::{
             AxisAlignedBox, AxisAlignedBoxRotation, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo,
             CubeRenderMode, CubeVariantEffect, Empty, PlantLikeRenderInfo,
         },
-        items as items_proto,
-        items::{item_def::QuantityType, ItemDef},
+        items::{self as items_proto, item_def::QuantityType, ItemDef},
         render::TextureReference,
     },
 };
@@ -72,7 +71,6 @@ impl DroppedItem {
     where
         F: Fn() -> Vec<ItemStack> + Sync + Send + 'static,
     {
-        let air_block = game_builder.air_block;
         Box::new(move |ctx, target_block, ext_data, stack| {
             let block_type = ctx.block_types().get_block(target_block)?.0;
             let rule = ctx
@@ -80,7 +78,7 @@ impl DroppedItem {
                 .from_stack(stack)
                 .and_then(|item| item.get_interaction_rule(block_type).cloned());
             if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
-                *target_block = air_block;
+                *target_block = AIR_ID;
                 ext_data.clear();
 
                 Ok(BlockInteractionResult {
@@ -482,7 +480,6 @@ impl BlockBuilder {
 
         let mut item = self.item;
         let item_name = ItemName(item.proto.short_name.clone());
-        let air_block = game_builder.air_block;
         let extended_data_initializer = self.extended_data_initializer.take();
         // todo factor out a default place handler and export it to users of the API
         item.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
@@ -508,7 +505,7 @@ impl BlockBuilder {
                     coord,
                     |block, _, block_types| {
                         // fast path
-                        if block == air_block {
+                        if block == AIR_ID {
                             return Ok(true);
                         };
                         let block_type = block_types.get_block(&block)?.0;
@@ -721,7 +718,6 @@ pub mod variants {
 
 pub(crate) struct FallingBlocksChunkEdgePropagator {
     pub(crate) blocks: Vec<BlockId>,
-    pub(crate) air: BlockTypeHandle,
 }
 impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
     fn vertical_neighbor_callback(
@@ -756,12 +752,12 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                     // added to the block type that the falling block falls into, to
                     // actually damage/break the bottom block. For now we just replace it
                     // with the falling block and leave air where the falling block fell from
-                    if top_block != self.air
+                    if top_block != AIR_ID
                         && replaceable_blocks.contains(bottom_block)
                         && blocks.contains(&top_block.base_id())
                     {
                         upper_chunk.swap_blocks(bottom, top);
-                        upper_chunk.set_block(top, self.air, None);
+                        upper_chunk.set_block(top, AIR_ID, None);
                     }
                 }
                 // then the seam
@@ -769,7 +765,7 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                 let upper_coord = ChunkOffset { x, y: 0, z };
                 let bottom_block = lower_chunk.get_block(lower_coord);
                 let top_block = upper_chunk.get_block(upper_coord);
-                if top_block != self.air
+                if top_block != AIR_ID
                     && replaceable_blocks.contains(bottom_block)
                     && blocks.contains(&top_block.base_id())
                 {
@@ -779,7 +775,7 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                         lower_coord,
                         upper_coord,
                     );
-                    upper_chunk.set_block(upper_coord, self.air, None);
+                    upper_chunk.set_block(upper_coord, AIR_ID, None);
                 }
 
                 // and now for the lower chunk
@@ -789,12 +785,12 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
                     let bottom_block: BlockId = lower_chunk.get_block(bottom);
                     let top_block = lower_chunk.get_block(top);
 
-                    if top_block != self.air
+                    if top_block != AIR_ID
                         && replaceable_blocks.contains(bottom_block)
                         && blocks.contains(&top_block.base_id())
                     {
                         lower_chunk.swap_blocks(bottom, top);
-                        lower_chunk.set_block(top, self.air, None);
+                        lower_chunk.set_block(top, AIR_ID, None);
                     }
                 }
             }
@@ -805,7 +801,6 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
 
 pub(crate) struct LiquidPropagator {
     pub(crate) liquids: Vec<BlockTypeHandle>,
-    pub(crate) air: BlockTypeHandle,
 }
 impl BulkUpdateCallback for LiquidPropagator {
     fn bulk_update_callback(
@@ -828,7 +823,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                             // liquid sources are invariant.
                             continue;
                         }
-                        let is_air = self.air.equals_ignore_variant(block);
+                        let is_air = AIR_ID.equals_ignore_variant(block);
                         let is_same_liquid = liquid_type.equals_ignore_variant(block);
                         if is_air || is_same_liquid {
                             // Apply the decay rule first
@@ -889,7 +884,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                             let new_variant = variant_from_flow.max(variant_from_decay);
 
                             let new_block = if new_variant < 0 {
-                                self.air
+                                AIR_ID
                             } else {
                                 liquid_type.with_variant(new_variant as u16).unwrap()
                             };
@@ -912,7 +907,7 @@ impl LiquidPropagator {
         x: perovskite_core::block_id::BlockId,
         liquid_type: &BlockTypeHandle,
     ) -> bool {
-        if x.equals_ignore_variant(self.air) {
+        if x.equals_ignore_variant(AIR_ID) {
             // if it's air below, don't let it flow laterally
             false
         } else if x.equals_ignore_variant(*liquid_type) {

@@ -178,7 +178,6 @@ pub trait GameBuilderExtension: private::AsAny {
 /// unit tuple.
 pub struct GameBuilder {
     pub(crate) inner: ServerBuilder,
-    pub(crate) air_block: BlockTypeHandle,
     pub(crate) liquids_by_flow_time: HashMap<Duration, Vec<BlockTypeHandle>>,
     pub(crate) falling_blocks: Vec<BlockTypeHandle>,
     // We cannot use a typemap here because we want to be able to iterate
@@ -232,7 +231,6 @@ impl GameBuilder {
                 },
                 TimerCallback::BulkUpdateWithNeighbors(Box::new(LiquidPropagator {
                     liquids: liquid_group.clone(),
-                    air: self.air_block,
                 })),
             )
         }
@@ -252,7 +250,6 @@ impl GameBuilder {
                 },
                 TimerCallback::LockedVerticalNeighors(Box::new(FallingBlocksChunkEdgePropagator {
                     blocks: self.falling_blocks.clone(),
-                    air: self.air_block,
                 })),
             );
         }
@@ -276,22 +273,8 @@ impl GameBuilder {
             include_bytes!("media/block_unknown.png"),
         )?;
         const EMPTY: Empty = Empty {};
-        let mut air_block = BlockType::default();
-        air_block.client_info = BlockTypeDef {
-            id: 0,
-            short_name: AIR.to_string(),
-            render_info: Some(RenderInfo::Empty(EMPTY)),
-            physics_info: Some(PhysicsInfo::Air(EMPTY)),
-            base_dig_time: 1.0,
-            groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
-            wear_multiplier: 1.0,
-            light_emission: 0,
-            allow_light_propagation: true,
-        };
-        let air_block = inner.blocks_mut().register_block(air_block)?;
         Ok(GameBuilder {
             inner,
-            air_block,
             liquids_by_flow_time: HashMap::new(),
             falling_blocks: vec![],
             builder_extensions: HashMap::new(),
@@ -392,10 +375,6 @@ impl GameBuilder {
             .as_any()
             .downcast_mut::<T>()
             .unwrap()
-    }
-
-    pub fn air_block(&self) -> BlockId {
-        self.air_block
     }
 }
 

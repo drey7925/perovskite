@@ -244,20 +244,37 @@ impl MapgenInterface for DefaultMapgen {
             }
         }
         self.generate_vegetation(chunk_coord, chunk, &height_map, &biome_map);
-        for x in 0..16 {
-            for z in 0..16 {
-                let xg = 16 * chunk_coord.x + (x as i32);
 
-                if xg == 320000 && chunk_coord.y == 3 {
-                    // todo: generate rails
-                    chunk.set_block(ChunkOffset { x, y: 0, z }, self.rail_testonly, None);
+        if chunk_coord.y == 0 {
+            // Rails running along Z axis
+            if chunk_coord.x % 16 == 0 {
+                for x in 1..15 {
+                    for z in 0..16 {
+                        chunk.set_block(ChunkOffset { x, y: 3, z }, self.stone, None);
+                        chunk.set_block(
+                            ChunkOffset { x, y: 4, z },
+                            self.rail_testonly.with_variant(0).unwrap(),
+                            None,
+                        );
+                        chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
+                        chunk.set_block(
+                            ChunkOffset { x, y: 6, z },
+                            if z == 0 && chunk_coord.z % 4 == 0 {
+                                self.desert_stone
+                            } else {
+                                self.air
+                            },
+                            None,
+                        );
+                    }
                 }
-
-                if xg == 960000 && chunk_coord.y == 0 {
-                    // todo: generate rails
-                    chunk.set_block(ChunkOffset { x, y: 4, z }, self.rail_testonly, None);
-                    chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
-                    chunk.set_block(ChunkOffset { x, y: 6, z }, self.air, None);
+                if chunk_coord.z % 4 == 0 {
+                    for x in [0, 15] {
+                        // Gantries
+                        chunk.set_block(ChunkOffset { x, y: 4, z: 0 }, self.desert_stone, None);
+                        chunk.set_block(ChunkOffset { x, y: 5, z: 0 }, self.desert_stone, None);
+                        chunk.set_block(ChunkOffset { x, y: 6, z: 0 }, self.desert_stone, None);
+                    }
                 }
             }
         }
@@ -600,6 +617,6 @@ pub(crate) fn build_mapgen(
             .collect(),
         seed,
 
-        rail_testonly: blocks.get_by_name("carts:rail").expect("rail"),
+        rail_testonly: blocks.get_by_name("carts:rail_tile").expect("rail"),
     })
 }
