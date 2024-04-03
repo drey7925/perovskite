@@ -36,7 +36,10 @@ use super::{
 };
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
-    constants::blocks::AIR,
+    constants::{
+        block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
+        blocks::AIR,
+    },
     coordinates::BlockCoordinate,
     protocol::blocks as blocks_proto,
 };
@@ -404,7 +407,7 @@ pub struct BlockTypeManager {
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
         BlockTypeManager {
-            block_types: Vec::new(),
+            block_types: vec![make_air_block()],
             name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
@@ -531,6 +534,7 @@ impl BlockTypeManager {
                 .name_to_base_id_map
                 .insert(assignment.short_name.clone(), block_id.base_id());
         }
+        manager.block_types[AIR_ID.index()] = make_air_block();
         ensure!(manager.name_to_base_id_map.get(AIR).map(|&x| BlockId(x)) == Some(AIR_ID));
         Ok(manager)
     }
@@ -773,6 +777,25 @@ fn make_unknown_block_serverside(
         place_upon_handler: None,
         interact_key_handler: None,
         is_unknown_block: true,
+    }
+}
+
+fn make_air_block() -> BlockType {
+    use perovskite_core::protocol::blocks::block_type_def::{PhysicsInfo, RenderInfo};
+    use perovskite_core::protocol::blocks::Empty;
+    BlockType {
+        client_info: perovskite_core::protocol::blocks::BlockTypeDef {
+            id: 0,
+            short_name: AIR.to_string(),
+            render_info: Some(RenderInfo::Empty(Empty {})),
+            physics_info: Some(PhysicsInfo::Air(Empty {})),
+            base_dig_time: 1.0,
+            groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
+            wear_multiplier: 1.0,
+            light_emission: 0,
+            allow_light_propagation: true,
+        },
+        ..Default::default()
     }
 }
 
