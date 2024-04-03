@@ -509,6 +509,7 @@ impl GameRenderer {
                         recreate_swapchain = true;
                     }
                     if let Some(image_fence) = &fences[image_i as usize] {
+                        // TODO: This sometimes stalls for a long time. Figure out why.
                         image_fence.wait(None).unwrap();
                     }
                     let previous_future = match fences[previous_fence_i as usize].clone() {

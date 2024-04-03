@@ -1,5 +1,6 @@
 use anyhow::Result;
 use perovskite_core::{
+    block_id::special_block_defs::AIR_ID,
     constants::{
         block_groups::{DEFAULT_SOLID, INSTANT_DIG},
         item_groups::TOOL_WEAR,
@@ -69,8 +70,6 @@ fn register_superuser_pickaxe(
     durability: u32,
 ) -> Result<()> {
     // TODO: consider implementing this using an ItemBuilder
-
-    let air = game_builder.air_block;
     let item = Item {
         proto: items_proto::ItemDef {
             short_name: name.into(),
@@ -101,7 +100,7 @@ fn register_superuser_pickaxe(
             block_apperance: "".to_string(),
         },
         dig_handler: Some(Box::new(move |ctx, coord, tool| {
-            let (old_block, _) = ctx.game_map().set_block(coord, air, None)?;
+            let (old_block, _) = ctx.game_map().set_block(coord, AIR_ID, None)?;
             let (block, variant) = ctx.block_types().get_block(&old_block)?;
             tracing::info!("superuser pickaxe dug {}:{:x}", block.short_name(), variant);
             Ok(ItemInteractionResult {

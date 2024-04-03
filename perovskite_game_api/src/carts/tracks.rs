@@ -531,9 +531,6 @@ fn build_folded_switch(
     diag_ymin: u16,
     skip_secondary_tiles: u16,
 ) {
-    // TODO - do this once we actually implement secondary tiles.
-    let _ = skip_secondary_tiles;
-
     for y in 0..switch_half_len {
         // The tiles on column 0 only carry straight-through traffic. Diverging traffic is always on column 1 tiles,
         // with the column 0 tile being merely a secondary tile.
@@ -642,7 +639,11 @@ fn build_folded_switch(
             ),
 
             // At X+1, we need the counterpart to our main tile.
-            secondary_coord: EncodedDelta::new(1, 0),
+            secondary_coord: if y >= skip_secondary_tiles {
+                EncodedDelta::new(1, 0)
+            } else {
+                EncodedDelta::empty()
+            },
             secondary_tile: [
                 // Only needed if diverging
                 // Need either the corresponding switch tile...
@@ -757,7 +758,11 @@ fn build_folded_switch(
             // Does not connect to any straight track on its output side
             reverse_straight_track_eligible_connections: 0,
             // At X+1, we need the counterpart to our main tile.
-            secondary_coord: EncodedDelta::new(1, 0),
+            secondary_coord: if y >= skip_secondary_tiles {
+                EncodedDelta::new(1, 0)
+            } else {
+                EncodedDelta::empty()
+            },
             secondary_tile: [
                 // The diagonal move is non-diverging in the case of the diagonal. So we need the corresponding tile
                 // to be there unconditionally.
@@ -781,11 +786,11 @@ lazy_static::lazy_static! {
 
 pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
-    const RAIL_TEST_TEX: StaticTextureName = StaticTextureName("carts:rail_test");
+    const RAIL_TEST_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
 
     include_texture_bytes!(game_builder, RAIL_TEST_TEX, "textures/rail_atlas_test.png")?;
 
-    let rail_test_box = AaBoxProperties::new(
+    let rail_tile_box = AaBoxProperties::new(
         SIGNAL_SIDE_TOP_TEX,
         SIGNAL_SIDE_TOP_TEX,
         RAIL_TEST_TEX,
@@ -796,28 +801,15 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
         crate::blocks::RotationMode::RotateHorizontally,
     );
     game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:rail_test"))
+        BlockBuilder::new(StaticBlockName("carts:rail_tile"))
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
-                rail_test_box,
+                rail_tile_box,
                 (-0.5, 0.5),
                 (-0.5, -0.4),
                 (-0.5, 0.5),
             ))
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| {
-                    // let mut rng = rand::thread_rng();
-                    // let variant = rng.gen_range(0..4096);
-                    // ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
-                    //     // TODO this should check equals_ignore_variant
-                    //     let old_variant = b.variant();
-                    //     let new_variant = (variant & !3) | (old_variant & 3);
-                    //     *b = b.with_variant(new_variant)?;
-
-                    //     ctx.initiator().send_chat_message(ChatMessage::new("[RNG]", format!("{:b}", variant)))?;
-
-                    //     Ok(())
-                    // })?;
-
                     let block = ctx.game_map().get_block(coord)?;
                     ctx.initiator().send_chat_message(ChatMessage::new(
                         "[INFO]",
@@ -878,16 +870,18 @@ struct ScanState {
 }
 impl ScanState {
     // Test only, prototype version that logs lots of details about each calculation
-    fn advance_verbose(&mut self, ctx: &HandlerContext) -> Result<()> {
+    fn advance_verbose(&mut self, ctx: &HandlerContext, chatty: bool) -> Result<()> {
         let block = ctx.game_map().get_block(self.block_coord)?;
         let variant = block.variant();
         let current_tile_id = TileId::from_variant(variant, self.is_reversed, self.is_diverging);
         if !current_tile_id.present() {}
         let tile = TRACK_TILES[current_tile_id.x() as usize][current_tile_id.y() as usize];
-        ctx.initiator().send_chat_message(ChatMessage::new(
-            "[SCAN]",
-            format!("{:?}:\n {:?}", current_tile_id, tile),
-        ))?;
+        if chatty {
+            ctx.initiator().send_chat_message(ChatMessage::new(
+                "[SCAN]",
+                format!("{:?}:\n {:?}", current_tile_id, tile),
+            ))?;
+        }
         let current_tile_def = match tile {
             Some(tile) => tile,
             None => return Ok(()),
@@ -901,8 +895,10 @@ impl ScanState {
             (true, true) => current_tile_def.prev_diverging_delta,
         };
         if !next_delta.present() {
-            ctx.initiator()
-                .send_chat_message(ChatMessage::new("[SCAN]", format!("Next delta absent")))?;
+            if chatty {
+                ctx.initiator()
+                    .send_chat_message(ChatMessage::new("[SCAN]", format!("Next delta absent")))?;
+            }
             return Ok(());
         }
         let next_coord = next_delta
@@ -912,10 +908,12 @@ impl ScanState {
                 current_tile_id.rotation(),
             )
             .context("block coordinate overflow")?;
-        ctx.initiator().send_chat_message(ChatMessage::new(
-            "[SCAN]",
-            format!("Next coord: {:?}", next_coord),
-        ))?;
+        if chatty {
+            ctx.initiator().send_chat_message(ChatMessage::new(
+                "[SCAN]",
+                format!("Next coord: {:?}", next_coord),
+            ))?;
+        }
 
         let next_block = ctx.game_map().get_block(next_coord)?;
         // TODO check that the block is actually a rail
@@ -923,10 +921,12 @@ impl ScanState {
 
         // This is the tile we see at the next coordinate. Does it match?
         let next_tile_id = TileId::from_variant(next_variant, self.is_reversed, self.is_diverging);
-        ctx.initiator().send_chat_message(ChatMessage::new(
-            "[SCAN]",
-            format!("Next tile: {:?}", next_tile_id),
-        ))?;
+        if chatty {
+            ctx.initiator().send_chat_message(ChatMessage::new(
+                "[SCAN]",
+                format!("Next tile: {:?}", next_tile_id),
+            ))?;
+        }
 
         // TODO: Does this generate rancid assembly because of the mismatched lengths?
         let eligible_tiles = match (self.is_reversed, self.is_diverging) {
@@ -943,14 +943,16 @@ impl ScanState {
             .with_rotation_wrapped(next_tile_id.rotation() + 4 - current_tile_id.rotation())
             .xor_flip_x(current_tile_id.flip_x())
             .correct_rotation_for_x_flip(current_tile_id.flip_x());
-        ctx.initiator().send_chat_message(ChatMessage::new(
-            "[SCAN]",
-            format!(
-                "Corrected rotation: {} -> {:?}",
-                next_tile_id.rotation(),
-                rotation_corrected_next_tile_id
-            ),
-        ))?;
+        if chatty {
+            ctx.initiator().send_chat_message(ChatMessage::new(
+                "[SCAN]",
+                format!(
+                    "Corrected rotation: {} -> {:?}",
+                    next_tile_id.rotation(),
+                    rotation_corrected_next_tile_id
+                ),
+            ))?;
+        }
 
         let mut matching_tile_id = TileId::empty();
         for &proposed_tile_id in eligible_tiles {
@@ -967,14 +969,16 @@ impl ScanState {
                             - proposed_tile_id.rotation(),
                     )
                     .xor_flip_x(proposed_tile_id.flip_x());
-                ctx.initiator().send_chat_message(ChatMessage::new(
-                    "[SCAN]",
-                    format!(
-                        "Trying the straight track connections. Corrected {} -> {:?}",
-                        rotation_corrected_next_tile_id.rotation(),
-                        straight_track_rotation_corrected_tile_id
-                    ),
-                ))?;
+                if chatty {
+                    ctx.initiator().send_chat_message(ChatMessage::new(
+                        "[SCAN]",
+                        format!(
+                            "Trying the straight track connections. Corrected {} -> {:?}",
+                            rotation_corrected_next_tile_id.rotation(),
+                            straight_track_rotation_corrected_tile_id
+                        ),
+                    ))?;
+                }
 
                 if let Some(tile) =
                     TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize]
@@ -1003,10 +1007,12 @@ impl ScanState {
             }
         }
         if !matching_tile_id.present() {
-            ctx.initiator().send_chat_message(ChatMessage::new(
-                "[SCAN]",
-                "No matching tile found".to_string(),
-            ))?;
+            if chatty {
+                ctx.initiator().send_chat_message(ChatMessage::new(
+                    "[SCAN]",
+                    "No matching tile found".to_string(),
+                ))?;
+            }
             return Ok(());
         }
 
@@ -1014,10 +1020,12 @@ impl ScanState {
         let next_tile = match TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize] {
             Some(tile) => tile,
             None => {
-                ctx.initiator().send_chat_message(ChatMessage::new(
-                    "[SCAN]",
-                    "Match found, but no tile. This is a bug.".to_string(),
-                ))?;
+                if chatty {
+                    ctx.initiator().send_chat_message(ChatMessage::new(
+                        "[SCAN]",
+                        "Match found, but no tile. This is a bug.".to_string(),
+                    ))?;
+                }
                 return Ok(());
             }
         };
@@ -1029,10 +1037,12 @@ impl ScanState {
             ) {
                 Some(secondary_block_coord) => secondary_block_coord,
                 None => {
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[SCAN]",
-                        "Secondary tile coord overflows".to_string(),
-                    ))?;
+                    if chatty {
+                        ctx.initiator().send_chat_message(ChatMessage::new(
+                            "[SCAN]",
+                            "Secondary tile coord overflows".to_string(),
+                        ))?;
+                    }
                     return Ok(());
                 }
             };
@@ -1065,10 +1075,12 @@ impl ScanState {
             }
 
             if !secondary_ok {
-                ctx.initiator().send_chat_message(ChatMessage::new(
-                    "[SCAN]",
-                    "Secondary tile doesn't match".to_string(),
-                ))?;
+                if chatty {
+                    ctx.initiator().send_chat_message(ChatMessage::new(
+                        "[SCAN]",
+                        "Secondary tile doesn't match".to_string(),
+                    ))?;
+                }
                 return Ok(());
             }
         }
@@ -1080,10 +1092,12 @@ impl ScanState {
             ) {
                 Some(tertiary_block_coord) => tertiary_block_coord,
                 None => {
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[SCAN]",
-                        "Tertiary tile coord overflows".to_string(),
-                    ))?;
+                    if chatty {
+                        ctx.initiator().send_chat_message(ChatMessage::new(
+                            "[SCAN]",
+                            "Tertiary tile coord overflows".to_string(),
+                        ))?;
+                    }
                     return Ok(());
                 }
             };
@@ -1107,10 +1121,12 @@ impl ScanState {
                     .tertiary_tile
                     .same_variant(rotation_corrected_next_tile_id)
             {
-                ctx.initiator().send_chat_message(ChatMessage::new(
-                    "[SCAN]",
-                    "Tertiary tile doesn't match".to_string(),
-                ))?;
+                if chatty {
+                    ctx.initiator().send_chat_message(ChatMessage::new(
+                        "[SCAN]",
+                        "Tertiary tile doesn't match".to_string(),
+                    ))?;
+                }
                 return Ok(());
             }
         }
@@ -1139,14 +1155,15 @@ impl ScanState {
             next_tile_id.rotation(),
         );
         self.vec_coord = base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
-
-        ctx.initiator().send_chat_message(ChatMessage::new(
-            "[SCAN]",
-            format!(
-                "Found matching tile: {:?}. Coords: {:?}.",
-                matching_tile_id, self.vec_coord
-            ),
-        ))?;
+        if chatty {
+            ctx.initiator().send_chat_message(ChatMessage::new(
+                "[SCAN]",
+                format!(
+                    "Found matching tile: {:?}. Coords: {:?}.",
+                    matching_tile_id, self.vec_coord
+                ),
+            ))?;
+        }
 
         Ok(())
     }
@@ -1202,7 +1219,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .parse::<bool>()?,
                     vec_coord: b2vec(coord),
                 };
-                state.advance_verbose(&response.ctx)?;
+                state.advance_verbose(&response.ctx, true)?;
             }
             "multiscan" => {
                 let mut state = ScanState {
@@ -1222,7 +1239,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                 response.ctx.run_deferred(move |ctx| {
                     for _ in 0..20 {
                         let prev = state.vec_coord + vec3(0.0, 1.0, 0.0);
-                        state.advance_verbose(ctx)?;
+                        state.advance_verbose(ctx, false)?;
 
                         let current = state.vec_coord + vec3(0.0, 1.0, 0.0);
                         std::thread::sleep(std::time::Duration::from_millis(125));
