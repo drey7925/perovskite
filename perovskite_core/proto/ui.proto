@@ -30,6 +30,18 @@ message TextField {
   
   // todo support multiline, other styling
 }
+
+message Checkbox {
+  // The key used for this checkbox in the response
+  string key = 1;
+  // If non-empty, label to show next to the checkbox
+  string label = 2;
+  // The initial value for the checkbox
+  bool initial = 3;
+  // Whether the checkbox is editable
+  bool enabled = 4;
+}
+
 message Button {
   // The key used to identify that this button was clicked
   string key = 1;
@@ -52,6 +64,7 @@ message UiElement {
     Button button = 3;
     InventoryView inventory = 4;
     SideBySideLayout side_by_side = 5;
+    Checkbox checkbox = 6;
   }
 }
 
@@ -71,4 +84,5 @@ message PopupResponse {
   bool closed = 2;
   string clicked_button = 3;
   map<string, string> text_fields = 4;
+  map<string, bool> checkboxes = 5;
 }

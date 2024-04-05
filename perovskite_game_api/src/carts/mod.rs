@@ -127,10 +127,10 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     let signal_block_id = signals::register_signal_block(game_builder)?;
 
-    tracks::register_tracks(game_builder)?;
+    let rail_block_id = tracks::register_tracks(game_builder)?;
 
     let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
-    ext.rail_block = rail.id;
+    ext.rail_block = rail_block_id;
     ext.rail_sw_right = rail_sw_right.id;
     ext.rail_sw_left = rail_sw_left.id;
     ext.speedpost_1 = speedpost1.id;
@@ -166,97 +166,9 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 impl GameBuilderExtension for CartsGameBuilderExtension {
     fn pre_run(&mut self, server_builder: &mut perovskite_server::server::ServerBuilder) {
         server_builder.add_extension(self.clone());
-        server_builder
-            .register_command(
-                "spawn_cart",
-                Box::new(CartSpawner::new(self.clone())),
-                "Spawn a cart at the current location",
-            )
-            .unwrap();
     }
 }
 impl GameStateExtension for CartsGameBuilderExtension {}
-
-struct CartSpawner {
-    config: CartsGameBuilderExtension,
-}
-impl CartSpawner {
-    fn new(config: CartsGameBuilderExtension) -> Self {
-        Self { config }
-    }
-}
-#[async_trait]
-impl ChatCommandHandler for CartSpawner {
-    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
-        let position = if let Some(location) = context.initiator().position() {
-            location.position
-        } else {
-            context
-                .initiator()
-                .send_chat_message_async(ChatMessage::new_server_message("No location"))
-                .await?;
-            return Ok(());
-        };
-        let quantized = BlockCoordinate::new(
-            position.x.floor() as i32,
-            position.y.floor() as i32,
-            position.z.floor() as i32,
-        );
-        // find the nearest rail the same X and Z location
-        let mut rail_pos = None;
-        let mut variant = None;
-
-        for dy in [0, 1, -1, 2, -2, 3, -3] {
-            if let Some(coord) = quantized.try_delta(0, dy, 0) {
-                let block = tokio::task::block_in_place(|| context.game_map().get_block(coord))?;
-                if block.equals_ignore_variant(self.config.rail_block) {
-                    rail_pos = Some(coord);
-                    variant = Some(block.variant());
-                }
-            }
-        }
-        let rail_pos = if let Some(rail_pos) = rail_pos {
-            rail_pos
-        } else {
-            context
-                .initiator()
-                .send_chat_message_async(ChatMessage::new_server_message("No rail found"))
-                .await?;
-            return Ok(());
-        };
-        context
-            .entities()
-            .new_entity(
-                b2vec(rail_pos.try_delta(0, 2, 0).unwrap()),
-                Some(Box::pin(CartCoroutine {
-                    config: self.config.clone(),
-                    scheduled_segments: VecDeque::new(),
-                    unplanned_segments: VecDeque::new(),
-                    scan_position: rail_pos,
-                    // Until we encounter a speed post, proceed at minimal safe speed
-                    last_speed_post_indication: 0.5,
-                    last_submitted_move_exit_speed: 0.5,
-                    spawn_time: Instant::now(),
-                    rail_scan_state: RailScanState {
-                        valid: true,
-                        major_angle: (variant.unwrap() % 4) as u8,
-                        horizontal_deflection: 0,
-                        vertical_deflection: 0,
-                        horizontal_offset: 0,
-                        vertical_offset: 0,
-                    },
-                    scan_stop_reason: ScanStopReason::NoRail,
-                })),
-                EntityTypeId {
-                    class: self.config.cart_id,
-                    data: None,
-                },
-            )
-            .await;
-
-        Ok(())
-    }
-}
 
 fn place_cart(
     ctx: &HandlerContext,
@@ -286,8 +198,24 @@ fn place_cart(
     };
     let variant = rotate_nesw_azimuth_to_variant(player_pos.face_direction.0);
 
+    let initial_state = tracks::ScanState::spawn_at(
+        rail_pos,
+        (variant as u8 + 2) % 4,
+        ctx.block_types().get_by_name("carts:rail_tile").unwrap(),
+        ctx.game_map(),
+    )?;
+    let initial_state = match initial_state {
+        Some(x) => x,
+        None => {
+            ctx.initiator().send_chat_message(
+                ChatMessage::new_server_message("Can't spawn").with_color(SERVER_ERROR_COLOR),
+            )?;
+            return Ok(Some(stack.clone()));
+        }
+    };
+
     ctx.entities().new_entity_blocking(
-        b2vec(rail_pos.try_delta(0, 2, 0).unwrap()),
+        b2vec(rail_pos.try_delta(0, 1, 0).unwrap()),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
             scheduled_segments: VecDeque::new(),
@@ -306,6 +234,7 @@ fn place_cart(
                 vertical_offset: 0,
             },
             scan_stop_reason: ScanStopReason::NoRail,
+            scan_state: initial_state,
         })),
         EntityTypeId {
             class: config.cart_id,
@@ -424,6 +353,8 @@ struct CartCoroutine {
     spawn_time: Instant,
     // Why the last scan stopped
     scan_stop_reason: ScanStopReason,
+    // Track scan state
+    scan_state: tracks::ScanState,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -454,7 +385,10 @@ impl EntityCoroutine for CartCoroutine {
             self.unplanned_segments.len()
         );
 
-        self.scan_tracks(services, 1024.0);
+        let maybe_deferral = self.scan_tracks_new(services, 1024.0);
+        if let Some(deferral) = maybe_deferral {
+            return deferral;
+        }
 
         let schedulable_segments = self.promote_schedulable(when, queue_space);
 
@@ -529,7 +463,7 @@ impl CartCoroutine {
     fn parse_signal(
         &self,
         services: &EntityCoroutineServices<'_>,
-        coord: BlockCoordinate,
+        signal_coord: BlockCoordinate,
         signal_block: BlockId,
     ) -> DeferrableResult<SignalResult> {
         if signal_block == self.config.speedpost_1 {
@@ -641,7 +575,7 @@ impl CartCoroutine {
         }
     }
 
-    fn scan_tracks(
+    fn scan_tracks_new(
         &mut self,
         services: &EntityCoroutineServices<'_>,
         max_steps_ahead: f64,
@@ -651,11 +585,6 @@ impl CartCoroutine {
             self.scan_position,
             self.rail_scan_state
         );
-        tracing::debug!(
-            "next would be {:?}",
-            self.rail_scan_state.next_scan(self.scan_position)
-        );
-
         let mut steps = 0.0;
         for seg in self.scheduled_segments.iter() {
             steps += seg.segment.distance();
@@ -667,76 +596,30 @@ impl CartCoroutine {
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
-                from: self.rail_scan_state.position(self.scan_position),
-                to: self.rail_scan_state.position(self.scan_position),
-                max_speed: self.last_speed_post_indication,
+                from: self.scan_state.vec_coord,
+                to: self.scan_state.vec_coord,
+                max_speed: self
+                    .last_speed_post_indication
+                    .min(self.scan_state.allowable_speed as f64),
                 seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
             };
             self.unplanned_segments.push_back(empty_segment);
         }
 
-        // // TODO remove after thorough testing; this invariant will be broken once we get switches and angled rails
-        // assert!(
-        //     (self.unplanned_segments.back().unwrap().to - b2vec(self.scan_position)).magnitude()
-        //         < 0.1
-        // );
+        let block_getter = |coord| services.get_block(coord);
 
         'scan_loop: while steps < max_steps_ahead {
-            // Precondition: self.scan_position has a valid rail, self.rail_scan_state reflects the state of parsing it
-            // next_scan will use the rail_scan_state to determine the next rail to parse and the resulting scan state.
-            // Then, parse_rail may adjust that scan state accordingly.
-            let (next_scan_state, next_scan_coord, step_distance) =
-                if let Some((next_scan_state, next_scan_coord, step_distance)) =
-                    self.rail_scan_state.next_scan(self.scan_position)
-                {
-                    (next_scan_state, next_scan_coord, step_distance)
-                } else {
-                    break;
-                };
+            // Precondition: self.scan_state is valid
 
-            // From the last coordinate we scanned + the deflection in the last scan state, we try to get a block
-            let scan_block = match services.get_block(next_scan_coord) {
-                DeferrableResult::AvailableNow(x) => x.unwrap(),
-                DeferrableResult::Deferred(d) => return Some(d.defer_and_reinvoke(0)),
-            };
-
-            // We then try to parse that block. Either it gives us a new rail state (possibly the same one if that block doesn't deflect), or it gives us an invalid state.
-            let new_rail_state =
-                match self.parse_rail(services, next_scan_coord, scan_block, &next_scan_state) {
-                    DeferrableResult::AvailableNow(x) => x,
-                    DeferrableResult::Deferred(d) => {
-                        return Some(d.map(|x| x.to_u64()).defer_and_reinvoke(1))
-                    }
-                };
-            if !new_rail_state.valid {
-                break;
-            } else {
-                // The new rail state is valid. Update the scan state, movement, and position.
-                // The precondition will be satisfied for the next iteration.
-
-                if !new_rail_state.same_direction(self.rail_scan_state) {
-                    tracing::debug!(
-                        "splitting segment because of changing scan direction @ {:?}",
-                        next_scan_coord
-                    );
-                    self.start_new_unplanned_segment();
-                }
-
-                self.rail_scan_state = new_rail_state;
-                self.scan_position = next_scan_coord;
-                self.unplanned_segments.back_mut().unwrap().to =
-                    new_rail_state.position(next_scan_coord);
-                steps += step_distance;
-            }
-            'signal_loop: for coord in
-                self.signal_coordinates(self.scan_position, &self.rail_scan_state)
-            {
-                let signal_block = match services.get_block(coord) {
+            // TODO check the facing direction of the signal against data from the track tile table, and also check multiple possible mounting positions.
+            let signal_coord = self.scan_state.block_coord.try_delta(0, 2, 0);
+            if let Some(signal_coord) = signal_coord {
+                let signal_block = match services.get_block(signal_coord) {
                     DeferrableResult::AvailableNow(x) => x.unwrap(),
                     DeferrableResult::Deferred(d) => return Some(d.defer_and_reinvoke(1)),
                 };
 
-                let signal_result = match self.parse_signal(services, coord, signal_block) {
+                let signal_result = match self.parse_signal(services, signal_coord, signal_block) {
                     DeferrableResult::AvailableNow(x) => x,
                     DeferrableResult::Deferred(d) => {
                         return Some(d.map(|x| x.to_f64()).defer_and_reinvoke(2))
@@ -744,27 +627,67 @@ impl CartCoroutine {
                 };
                 match signal_result {
                     SignalResult::Stop => break 'scan_loop,
-                    SignalResult::Permissive => break 'signal_loop,
+                    SignalResult::Permissive => {} // break 'signal_loop,
                     SignalResult::SpeedRestriction(speed) => {
-                        if speed as Flt != self.last_speed_post_indication {
-                            tracing::debug!("changing speed to {:?}", speed);
-                            self.start_new_unplanned_segment();
-                            self.unplanned_segments.back_mut().unwrap().max_speed = speed as Flt;
-                        }
                         self.last_speed_post_indication = speed as Flt;
-                        break 'signal_loop;
+                        //break 'signal_loop;
                     }
-                    SignalResult::NoSignal => continue 'signal_loop,
+                    SignalResult::NoSignal => {} // continue 'signal_loop,
                 }
             }
-            // TODO: Find a better approach for handling the last segment than just splitting segments to
-            // kick the can down the road
-            if self.unplanned_segments.back().unwrap().distance() > 256.0 {
-                tracing::debug!("splitting segment because of length");
+
+            match self
+                .scan_state
+                .advance_verbose(false, block_getter)
+                .unwrap()
+            {
+                tracks::ScanOutcome::Success => {}
+                tracks::ScanOutcome::Failure => break 'scan_loop,
+                tracks::ScanOutcome::NotOnTrack => {
+                    tracing::warn!("Not on track at {:?}", self.scan_state.vec_coord);
+                    break 'scan_loop;
+                }
+                tracks::ScanOutcome::Deferral(d) => return Some(d.defer_and_reinvoke(1)),
+            }
+            steps += 1.0;
+
+            let last_move = self.unplanned_segments.back().unwrap();
+            // We got success, so we're at a new position.
+            let new_delta = self.scan_state.vec_coord - last_move.to;
+            assert!(new_delta.magnitude() > 0.001);
+
+            let last_move_delta = last_move.to - last_move.from;
+
+            let effective_speed = self
+                .last_speed_post_indication
+                .min(self.scan_state.allowable_speed as f64);
+
+            if last_move_delta.magnitude() > 256.0 {
+                tracing::info!(
+                    "Splitting a segment due to length; prev length was {}",
+                    last_move_delta.magnitude()
+                );
+                self.start_new_unplanned_segment();
+            } else if last_move_delta.dot(new_delta)
+                / (last_move_delta.magnitude() * new_delta.magnitude())
+                < 0.999999
+            {
+                tracing::info!(
+                    "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
+                    last_move_delta.magnitude(),
+                    last_move_delta.dot(new_delta)
+                        / (last_move_delta.magnitude() * new_delta.magnitude())
+                );
+                self.start_new_unplanned_segment();
+            } else if effective_speed != last_move.max_speed {
+                tracing::info!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
                 self.start_new_unplanned_segment();
             }
+            let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
+            last_seg_mut.to = self.scan_state.vec_coord;
+            last_seg_mut.max_speed = effective_speed;
         }
-        tracing::debug!("finishing scan at {:?}", self.scan_position);
+
         None
     }
 

@@ -17,6 +17,7 @@ use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 
 pub type TextField = proto::TextField;
 pub type Button = proto::Button;
+pub type Checkbox = proto::Checkbox;
 /// Callbacks for inventory views will receive this hashmap,
 /// mapping all inventory views using the form_key passed when calling
 /// inventory_view_stored or inventory_view_transient
@@ -30,6 +31,8 @@ pub enum UiElement {
     /// A button that the user can click.
     /// The provided string is the name passed in the event
     Button(Button),
+    /// A checkbox that the user can click
+    Checkbox(Checkbox),
     /// An inventory view: key (within this popup), label, the inventory view id
     InventoryView(String, String, InventoryViewId),
     /// A side-by-side layout
@@ -44,6 +47,7 @@ impl UiElement {
             UiElement::Label(label) => proto::ui_element::Element::Label(label.clone()),
             UiElement::TextField(field) => proto::ui_element::Element::TextField(field.clone()),
             UiElement::Button(button) => proto::ui_element::Element::Button(button.clone()),
+            UiElement::Checkbox(checkbox) => proto::ui_element::Element::Checkbox(checkbox.clone()),
             UiElement::InventoryView(key, label, view_id) => {
                 // we can expect() here since presence in the map is an invariant
                 let view = inventory_views
@@ -87,6 +91,8 @@ pub struct PopupResponse<'a> {
     pub user_action: PopupAction,
     /// The values of all textfields
     pub textfield_values: HashMap<String, String>,
+    /// The values of all checkboxes
+    pub checkbox_values: HashMap<String, bool>,
     /// Handler context
     pub ctx: HandlerContext<'a>,
 }
@@ -238,6 +244,22 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         self.push_widget(UiElement::Button(Button {
             key: key.into(),
             label: label.into(),
+            enabled,
+        }));
+        self
+    }
+    /// Adds a checkbox to this popup
+    fn checkbox(
+        mut self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        initial: bool,
+        enabled: bool,
+    ) -> Self {
+        self.push_widget(UiElement::Checkbox(Checkbox {
+            key: key.into(),
+            label: label.into(),
+            initial,
             enabled,
         }));
         self
