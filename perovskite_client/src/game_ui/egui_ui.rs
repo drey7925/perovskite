@@ -46,6 +46,7 @@ pub(crate) struct EguiUi {
     visible_popups: Vec<PopupDescription>,
 
     text_fields: FxHashMap<(u64, String), String>,
+    checkboxes: FxHashMap<(u64, String), bool>,
 
     pub(crate) inventory_manipulation_view_id: Option<u64>,
     last_mouse_position: egui::Pos2,
@@ -76,6 +77,7 @@ impl EguiUi {
             scale: 1.0,
             visible_popups: vec![],
             text_fields: FxHashMap::default(),
+            checkboxes: FxHashMap::default(),
             inventory_manipulation_view_id: None,
             last_mouse_position: egui::Pos2 { x: 0., y: 0. },
             stack_carried_by_mouse_offset: (0., 0.),
@@ -185,14 +187,18 @@ impl EguiUi {
             .map(|((_, form_key), value)| (form_key.clone(), value.clone()))
             .collect()
     }
-    fn clear_text_fields(&mut self, popup: &PopupDescription) {
-        for field in popup.element.iter() {
-            if let Some(proto::ui_element::Element::TextField(text_field)) = &field.element {
-                // ugh, clone
-                self.text_fields
-                    .remove(&(popup.popup_id, text_field.key.clone()));
-            }
-        }
+    fn get_checkboxes(&self, popup_id: u64) -> HashMap<String, bool> {
+        self.checkboxes
+            .iter()
+            .filter(|((popup, _), _)| popup == &popup_id)
+            .map(|((_, form_key), value)| (form_key.clone(), *value))
+            .collect()
+    }
+    fn clear_fields(&mut self, popup: &PopupDescription) {
+        self.text_fields
+            .retain(|(popup_id, _), _| popup_id != &popup.popup_id);
+        self.checkboxes
+            .retain(|(popup_id, _), _| popup_id != &popup.popup_id);
     }
 
     fn render_element(
@@ -221,6 +227,13 @@ impl EguiUi {
                     ui.add_enabled(text_field.enabled, editor)
                         .labelled_by(label.id);
                 });
+            }
+            Some(proto::ui_element::Element::Checkbox(checkbox)) => {
+                let value = self
+                    .checkboxes
+                    .entry((popup.popup_id, checkbox.key.clone()))
+                    .or_insert(checkbox.initial);
+                ui.checkbox(value, checkbox.label.clone());
             }
             Some(proto::ui_element::Element::Button(button_def)) => {
                 let button = egui::Button::new(button_def.label.clone());
@@ -316,6 +329,7 @@ impl EguiUi {
                             closed: false,
                             clicked_button,
                             text_fields: self.get_text_fields(popup.popup_id),
+                            checkboxes: self.get_checkboxes(popup.popup_id),
                         }),
                     );
                 }
@@ -327,9 +341,10 @@ impl EguiUi {
                             closed: true,
                             clicked_button: "".to_string(),
                             text_fields: self.get_text_fields(popup.popup_id),
+                            checkboxes: self.get_checkboxes(popup.popup_id),
                         }),
                     );
-                    self.clear_text_fields(popup);
+                    self.clear_fields(popup);
                     ControlFlow::Break(())
                 } else {
                     ControlFlow::Continue(())
