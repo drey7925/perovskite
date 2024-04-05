@@ -1536,6 +1536,7 @@ impl InboundWorker {
                         PopupResponse {
                             user_action,
                             textfield_values: action.text_fields.clone(),
+                            checkbox_values: action.checkboxes.clone(),
                             ctx: ctx.clone(),
                         },
                         self.context.player_context.main_inventory(),
@@ -1558,6 +1559,7 @@ impl InboundWorker {
                         PopupResponse {
                             user_action,
                             textfield_values: action.text_fields.clone(),
+                            checkbox_values: action.checkboxes.clone(),
                             ctx: ctx.clone(),
                         },
                         self.context.player_context.main_inventory(),

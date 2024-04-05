@@ -4,10 +4,12 @@
 use anyhow::{Context, Result};
 use cgmath::vec3;
 use perovskite_core::{
-    chat::ChatMessage, coordinates::BlockCoordinate, protocol::render::DynamicCrop,
+    block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate,
+    protocol::render::DynamicCrop,
 };
 use perovskite_server::game_state::{
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
+    entities::{DeferrableResult, Deferral},
     event::{EventInitiator, HandlerContext},
     game_map::ServerGameMap,
 };
@@ -297,6 +299,8 @@ X <--+
 
 const TN_CONTROL_PRESENT: u8 = 1;
 const TN_CONTROL_FLIP_X: u8 = 2;
+/// 320 km/h or so, in m/s
+const TRACK_INHERENT_MAX_SPEED: u8 = 90;
 
 #[derive(Debug, Clone, Copy)]
 struct TrackTile {
@@ -345,6 +349,16 @@ struct TrackTile {
     diverging_physical_x_offset: i8,
     /// When diverging, the actual physical position of the cart on the tile, expressed in 1/128ths of a tile
     diverging_physical_z_offset: i8,
+    /// The max speed, in meters per second, for a non-diverging move through the tile
+    max_speed: u8,
+    /// The max speed, in meters per second, for a diverging move through the tile
+    diverging_max_speed: u8,
+    /// Bitfield of which physical directions are considered straight-through, when spawning a cart
+    /// Bits 0..3 are for forward movements, bits 4..7 are for reverse
+    straight_through_spawn_dirs: u8,
+    /// Bitfield of which physical directions are considered diverging, when spawning a cart
+    /// Bits 0..3 are for forward movements, bits 4..7 are for reverse
+    diverging_dirs_spawn_dirs: u8,
 }
 impl TrackTile {
     // This can't be in Default because it needs to be const
@@ -370,6 +384,10 @@ impl TrackTile {
             physical_z_offset: 0,
             diverging_physical_x_offset: 0,
             diverging_physical_z_offset: 0,
+            max_speed: TRACK_INHERENT_MAX_SPEED,
+            diverging_max_speed: TRACK_INHERENT_MAX_SPEED,
+            straight_through_spawn_dirs: 0b0100_0001,
+            diverging_dirs_spawn_dirs: 0,
         }
     }
 }
@@ -784,7 +802,9 @@ lazy_static::lazy_static! {
     static ref TRACK_TILES: [[Option<TrackTile>; 16]; 11] = build_track_tiles();
 }
 
-pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
+pub(crate) fn register_tracks(
+    game_builder: &mut crate::game_builder::GameBuilder,
+) -> Result<BlockId> {
     const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
     const RAIL_TEST_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
 
@@ -800,7 +820,7 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
     );
-    game_builder.add_block(
+    let rail_tile = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:rail_tile"))
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
                 rail_tile_box,
@@ -808,6 +828,7 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
                 (-0.5, -0.4),
                 (-0.5, 0.5),
             ))
+            .set_allow_light_propagation(true)
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| {
                     let block = ctx.game_map().get_block(coord)?;
@@ -822,11 +843,11 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
                         .text_field("tile_x", "Tile X", "0", true)
                         .text_field("tile_y", "Tile Y", "0", true)
                         .text_field("rotation", "Rotation", "0", true)
-                        .text_field("flip_x", "Flip X", "false", true)
+                        .checkbox("flip_x", "Flip X", false, true)
                         .button("apply", "Apply", true)
                         .label("Scan tile:")
-                        .text_field("reverse", "Reverse", "false", true)
-                        .text_field("diverging", "Diverging", "false", true)
+                        .checkbox("reverse", "Reverse", false, true)
+                        .checkbox("diverging", "Diverging", false, true)
                         .button("scan", "Scan", true)
                         .button("multiscan", "Multi-Scan", true)
                         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
@@ -859,32 +880,120 @@ pub(crate) fn register_tracks(game_builder: &mut crate::game_builder::GameBuilde
             })),
     )?;
 
-    Ok(())
+    Ok(rail_tile.id)
 }
 
-struct ScanState {
-    block_coord: BlockCoordinate,
-    vec_coord: cgmath::Vector3<f64>,
-    is_reversed: bool,
-    is_diverging: bool,
+pub(crate) enum ScanOutcome {
+    /// We advanced
+    Success,
+    /// We cannot advance
+    Failure,
+    /// We're not even on a track
+    NotOnTrack,
+    /// We got a deferral while reading the map
+    Deferral(Deferral<Result<BlockId>, BlockCoordinate>),
+}
+
+pub(crate) struct ScanState {
+    pub(crate) block_coord: BlockCoordinate,
+    pub(crate) vec_coord: cgmath::Vector3<f64>,
+    pub(crate) is_reversed: bool,
+    pub(crate) is_diverging: bool,
+    pub(crate) base_track_block: BlockId,
+    pub(crate) allowable_speed: f32,
 }
 impl ScanState {
+    pub(crate) fn spawn_at(
+        block_coord: BlockCoordinate,
+        az_direction: u8,
+        base_track_block: BlockId,
+        game_map: &ServerGameMap,
+    ) -> Result<Option<Self>> {
+        anyhow::ensure!(az_direction < 4);
+        let block = game_map.get_block(block_coord)?;
+        if !block.equals_ignore_variant(base_track_block) {
+            // TODO detect slope tracks and other special tracks
+            return Ok(None);
+        }
+        let tile_id = TileId::from_variant(block.variant(), false, false);
+        let mut corrected_rotation = (tile_id.rotation() + 4 - az_direction as u16) % 4;
+        if tile_id.flip_x() && corrected_rotation & 1 == 1 {
+            // If the corrected rotation is horizontal w.r.t. the tile, flip it over.
+            corrected_rotation ^= 2;
+        }
+        let tile = match TRACK_TILES[tile_id.x() as usize][tile_id.y() as usize] {
+            Some(tile) => tile,
+            None => return Ok(None),
+        };
+        assert!(corrected_rotation < 4);
+        tracing::info!(
+            "Corrected rotation: {} -> {}",
+            tile_id.rotation(),
+            corrected_rotation
+        );
+        let (is_reversed, is_diverging) =
+            if tile.straight_through_spawn_dirs & (1 << corrected_rotation) == 0 {
+                (false, false)
+            } else if tile.straight_through_spawn_dirs & (1 << (corrected_rotation + 4)) == 0 {
+                (true, false)
+            } else if tile.diverging_dirs_spawn_dirs & (1 << corrected_rotation) == 0 {
+                (false, true)
+            } else if tile.diverging_dirs_spawn_dirs & (1 << (corrected_rotation + 4)) == 0 {
+                (true, true)
+            } else {
+                tracing::info!(
+                    "Spawn is not allowed on this tile in this direction. {:?}",
+                    tile
+                );
+                return Ok(None);
+            };
+        let offset_x = if is_diverging {
+            tile.diverging_physical_x_offset
+        } else {
+            tile.physical_x_offset
+        };
+        let offset_z = if is_diverging {
+            tile.diverging_physical_z_offset
+        } else {
+            tile.physical_z_offset
+        };
+        let vec_coord =
+            b2vec(block_coord) + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
+        Ok(Some(ScanState {
+            block_coord,
+            vec_coord,
+            is_reversed,
+            is_diverging,
+            base_track_block,
+            allowable_speed: if is_diverging {
+                tile.diverging_max_speed as f32
+            } else {
+                tile.max_speed as f32
+            },
+        }))
+    }
+
     // Test only, prototype version that logs lots of details about each calculation
-    fn advance_verbose(&mut self, ctx: &HandlerContext, chatty: bool) -> Result<()> {
-        let block = ctx.game_map().get_block(self.block_coord)?;
-        let variant = block.variant();
+    pub(crate) fn advance_verbose(
+        &mut self,
+        chatty: bool,
+        get_block: impl Fn(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
+    ) -> Result<ScanOutcome> {
+        let block = match get_block(self.block_coord) {
+            DeferrableResult::AvailableNow(block) => block,
+            DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
+        };
+
+        let variant = block.unwrap().variant();
         let current_tile_id = TileId::from_variant(variant, self.is_reversed, self.is_diverging);
         if !current_tile_id.present() {}
         let tile = TRACK_TILES[current_tile_id.x() as usize][current_tile_id.y() as usize];
         if chatty {
-            ctx.initiator().send_chat_message(ChatMessage::new(
-                "[SCAN]",
-                format!("{:?}:\n {:?}", current_tile_id, tile),
-            ))?;
+            tracing::info!("{:?}:\n {:?}", current_tile_id, tile);
         }
         let current_tile_def = match tile {
             Some(tile) => tile,
-            None => return Ok(()),
+            None => return Ok(ScanOutcome::NotOnTrack),
         };
         // The next place we would scan
 
@@ -896,10 +1005,9 @@ impl ScanState {
         };
         if !next_delta.present() {
             if chatty {
-                ctx.initiator()
-                    .send_chat_message(ChatMessage::new("[SCAN]", format!("Next delta absent")))?;
+                tracing::info!("Next delta absent");
             }
-            return Ok(());
+            return Ok(ScanOutcome::Failure);
         }
         let next_coord = next_delta
             .eval_delta(
@@ -909,23 +1017,25 @@ impl ScanState {
             )
             .context("block coordinate overflow")?;
         if chatty {
-            ctx.initiator().send_chat_message(ChatMessage::new(
-                "[SCAN]",
-                format!("Next coord: {:?}", next_coord),
-            ))?;
+            tracing::info!("Next coord: {:?}", next_coord);
         }
 
-        let next_block = ctx.game_map().get_block(next_coord)?;
-        // TODO check that the block is actually a rail
+        let next_block = match get_block(next_coord) {
+            DeferrableResult::AvailableNow(block) => block.unwrap(),
+            DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
+        };
+        if !next_block.equals_ignore_variant(self.base_track_block) {
+            if chatty {
+                tracing::info!("Next block: {:?} is not the base track", next_block);
+            }
+            return Ok(ScanOutcome::Failure);
+        }
         let next_variant = next_block.variant();
 
         // This is the tile we see at the next coordinate. Does it match?
         let next_tile_id = TileId::from_variant(next_variant, self.is_reversed, self.is_diverging);
         if chatty {
-            ctx.initiator().send_chat_message(ChatMessage::new(
-                "[SCAN]",
-                format!("Next tile: {:?}", next_tile_id),
-            ))?;
+            tracing::info!("Next tile: {:?}", next_tile_id);
         }
 
         // TODO: Does this generate rancid assembly because of the mismatched lengths?
@@ -944,14 +1054,11 @@ impl ScanState {
             .xor_flip_x(current_tile_id.flip_x())
             .correct_rotation_for_x_flip(current_tile_id.flip_x());
         if chatty {
-            ctx.initiator().send_chat_message(ChatMessage::new(
-                "[SCAN]",
-                format!(
-                    "Corrected rotation: {} -> {:?}",
-                    next_tile_id.rotation(),
-                    rotation_corrected_next_tile_id
-                ),
-            ))?;
+            tracing::info!(
+                "Corrected rotation: {} -> {:?}",
+                next_tile_id.rotation(),
+                rotation_corrected_next_tile_id
+            );
         }
 
         let mut matching_tile_id = TileId::empty();
@@ -970,14 +1077,11 @@ impl ScanState {
                     )
                     .xor_flip_x(proposed_tile_id.flip_x());
                 if chatty {
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[SCAN]",
-                        format!(
-                            "Trying the straight track connections. Corrected {} -> {:?}",
-                            rotation_corrected_next_tile_id.rotation(),
-                            straight_track_rotation_corrected_tile_id
-                        ),
-                    ))?;
+                    tracing::info!(
+                        "Trying the straight track connections. Corrected {} -> {:?}",
+                        rotation_corrected_next_tile_id.rotation(),
+                        straight_track_rotation_corrected_tile_id
+                    );
                 }
 
                 if let Some(tile) =
@@ -1008,12 +1112,9 @@ impl ScanState {
         }
         if !matching_tile_id.present() {
             if chatty {
-                ctx.initiator().send_chat_message(ChatMessage::new(
-                    "[SCAN]",
-                    "No matching tile found".to_string(),
-                ))?;
+                tracing::info!("No match found");
             }
-            return Ok(());
+            return Ok(ScanOutcome::Failure);
         }
 
         // Now check secondary and tertiary tiles
@@ -1021,12 +1122,9 @@ impl ScanState {
             Some(tile) => tile,
             None => {
                 if chatty {
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[SCAN]",
-                        "Match found, but no tile. This is a bug.".to_string(),
-                    ))?;
+                    log::error!("Match found, but no tile.");
                 }
-                return Ok(());
+                return Ok(ScanOutcome::Failure);
             }
         };
         if next_tile.secondary_coord.present() {
@@ -1038,15 +1136,15 @@ impl ScanState {
                 Some(secondary_block_coord) => secondary_block_coord,
                 None => {
                     if chatty {
-                        ctx.initiator().send_chat_message(ChatMessage::new(
-                            "[SCAN]",
-                            "Secondary tile coord overflows".to_string(),
-                        ))?;
+                        tracing::info!("Secondary tile coord overflows");
                     }
-                    return Ok(());
+                    return Ok(ScanOutcome::Failure);
                 }
             };
-            let secondary_block = ctx.game_map().get_block(secondary_block_coord)?;
+            let secondary_block = match get_block(secondary_block_coord) {
+                DeferrableResult::AvailableNow(block) => block.unwrap(),
+                DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
+            };
             // TODO check the block type
 
             let secondary_tile = TileId::from_variant(
@@ -1056,7 +1154,7 @@ impl ScanState {
                 false,
             );
 
-            let rotation_corrected_next_tile_id = secondary_tile
+            let rotation_corrected_secondary_tile_id = secondary_tile
                 .with_rotation_wrapped(secondary_tile.rotation() + 4 - next_tile_id.rotation())
                 .xor_flip_x(next_tile_id.flip_x())
                 .correct_rotation_for_x_flip(next_tile_id.flip_x());
@@ -1068,7 +1166,7 @@ impl ScanState {
                     secondary_ok = true;
                     break;
                 }
-                if proposed_secondary_tile_id.same_variant(rotation_corrected_next_tile_id) {
+                if proposed_secondary_tile_id.same_variant(rotation_corrected_secondary_tile_id) {
                     secondary_ok = true;
                     break;
                 }
@@ -1076,12 +1174,12 @@ impl ScanState {
 
             if !secondary_ok {
                 if chatty {
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[SCAN]",
-                        "Secondary tile doesn't match".to_string(),
-                    ))?;
+                    tracing::info!(
+                        "Secondary tile doesn't match: {:?}",
+                        rotation_corrected_secondary_tile_id
+                    );
                 }
-                return Ok(());
+                return Ok(ScanOutcome::Failure);
             }
         }
         if next_tile.tertiary_coord.present() {
@@ -1093,15 +1191,15 @@ impl ScanState {
                 Some(tertiary_block_coord) => tertiary_block_coord,
                 None => {
                     if chatty {
-                        ctx.initiator().send_chat_message(ChatMessage::new(
-                            "[SCAN]",
-                            "Tertiary tile coord overflows".to_string(),
-                        ))?;
+                        tracing::info!("Tertiary tile coord overflows");
                     }
-                    return Ok(());
+                    return Ok(ScanOutcome::Failure);
                 }
             };
-            let tertiary_block = ctx.game_map().get_block(tertiary_block_coord)?;
+            let tertiary_block = match get_block(tertiary_block_coord) {
+                DeferrableResult::AvailableNow(block) => block.unwrap(),
+                DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
+            };
             // TODO check the block type
 
             let tertiary_tile = TileId::from_variant(
@@ -1111,7 +1209,7 @@ impl ScanState {
                 false,
             );
 
-            let rotation_corrected_next_tile_id = tertiary_tile
+            let rotation_corrected_tertiary_tile_id = tertiary_tile
                 .with_rotation_wrapped(tertiary_tile.rotation() + 4 - next_tile_id.rotation())
                 .xor_flip_x(next_tile_id.flip_x())
                 .correct_rotation_for_x_flip(next_tile_id.flip_x());
@@ -1119,15 +1217,15 @@ impl ScanState {
             if (!next_tile.tertiary_tile.diverging() || self.is_diverging)
                 && !next_tile
                     .tertiary_tile
-                    .same_variant(rotation_corrected_next_tile_id)
+                    .same_variant(rotation_corrected_tertiary_tile_id)
             {
                 if chatty {
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[SCAN]",
-                        "Tertiary tile doesn't match".to_string(),
-                    ))?;
+                    tracing::info!(
+                        "Tertiary tile doesn't match: {:?}",
+                        rotation_corrected_tertiary_tile_id
+                    );
                 }
-                return Ok(());
+                return Ok(ScanOutcome::Failure);
             }
         }
 
@@ -1156,16 +1254,14 @@ impl ScanState {
         );
         self.vec_coord = base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
         if chatty {
-            ctx.initiator().send_chat_message(ChatMessage::new(
-                "[SCAN]",
-                format!(
-                    "Found matching tile: {:?}. Coords: {:?}.",
-                    matching_tile_id, self.vec_coord
-                ),
-            ))?;
+            tracing::info!(
+                "Found matching tile: {:?}. Coords: {:?}.",
+                matching_tile_id,
+                self.vec_coord
+            );
         }
 
-        Ok(())
+        Ok(ScanOutcome::Success)
     }
 }
 
@@ -1189,11 +1285,10 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     .get("rotation")
                     .context("missing rotation")?
                     .parse::<u16>()?;
-                let flip_x = response
-                    .textfield_values
+                let flip_x = *response
+                    .checkbox_values
                     .get("flip_x")
-                    .context("missing flip_x")?
-                    .parse::<bool>()?;
+                    .context("missing flip_x")?;
                 let tile_id = TileId::try_new(tile_x, tile_y, rotation, flip_x, false, false)
                     .map_err(|x| anyhow::anyhow!(x))?;
                 response
@@ -1207,39 +1302,52 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
             "scan" => {
                 let mut state = ScanState {
                     block_coord: coord,
-                    is_reversed: response
-                        .textfield_values
+                    is_reversed: *response
+                        .checkbox_values
                         .get("reverse")
-                        .unwrap()
-                        .parse::<bool>()?,
-                    is_diverging: response
-                        .textfield_values
+                        .context("missing reverse")?,
+                    is_diverging: *response
+                        .checkbox_values
                         .get("diverging")
-                        .unwrap()
-                        .parse::<bool>()?,
+                        .context("missing diverging")?,
                     vec_coord: b2vec(coord),
+                    base_track_block: response
+                        .ctx
+                        .block_types()
+                        .get_by_name("carts:rail_tile")
+                        .unwrap(),
+                    allowable_speed: 90.0,
                 };
-                state.advance_verbose(&response.ctx, true)?;
+                state.advance_verbose(true, |coord| {
+                    response.ctx.game_map().get_block(coord).into()
+                })?;
             }
             "multiscan" => {
                 let mut state = ScanState {
                     block_coord: coord,
-                    is_reversed: response
-                        .textfield_values
+                    is_reversed: *response
+                        .checkbox_values
                         .get("reverse")
-                        .unwrap()
-                        .parse::<bool>()?,
-                    is_diverging: response
-                        .textfield_values
+                        .context("missing reverse")?,
+                    is_diverging: *response
+                        .checkbox_values
                         .get("diverging")
-                        .unwrap()
-                        .parse::<bool>()?,
+                        .context("missing diverging")?,
                     vec_coord: b2vec(coord),
+                    base_track_block: response
+                        .ctx
+                        .block_types()
+                        .get_by_name("carts:rail_tile")
+                        .unwrap(),
+                    allowable_speed: 90.0,
                 };
                 response.ctx.run_deferred(move |ctx| {
                     for _ in 0..20 {
                         let prev = state.vec_coord + vec3(0.0, 1.0, 0.0);
-                        state.advance_verbose(ctx, false)?;
+
+                        state.advance_verbose(true, |coord| {
+                            ctx.game_map().get_block(coord).into()
+                        })?;
 
                         let current = state.vec_coord + vec3(0.0, 1.0, 0.0);
                         std::thread::sleep(std::time::Duration::from_millis(125));

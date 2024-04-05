@@ -282,6 +282,7 @@ pub enum EntityMoveDecision {
     StopCoroutineControl,
 }
 
+#[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
 pub enum CoroutineResult {
     /// The coroutine returned successfully
     Successful(EntityMoveDecision),
@@ -380,8 +381,7 @@ impl<'a> EntityCoroutineServices<'a> {
     /// Gets the block at the specified coordinate, or None if the chunk isn't loaded.
     /// Forwards to the game map's try_get_block.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
-        // TODO restore
-        tokio::task::block_in_place(|| Some(self.map.get_block(coord).unwrap()))
+        self.map.try_get_block(coord)
     }
 
     pub fn get_block(
@@ -529,7 +529,7 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static>
     pub fn map<U: Send + Sync + 'static>(
         self,
         f: impl FnOnce(T) -> U + Send + Sync + 'static,
-    ) -> DeferrableResult<U, ()> {
+    ) -> DeferrableResult<U, Residual> {
         match self {
             Self::AvailableNow(t) => DeferrableResult::AvailableNow(f(t)),
             Self::Deferred(d) => DeferrableResult::Deferred(d.map(f)),
@@ -542,11 +542,11 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
     pub fn map<U: Send + Sync + 'static>(
         self,
         f: impl FnOnce(T) -> U + Send + Sync + 'static,
-    ) -> Deferral<U, ()> {
+    ) -> Deferral<U, Residual> {
         Deferral {
             deferred_call: Box::new(move || {
-                let (t, _residual) = (self.deferred_call)();
-                (f(t), ())
+                let (t, residual) = (self.deferred_call)();
+                (f(t), residual)
             }),
         }
     }
@@ -1713,7 +1713,7 @@ impl EntityShardWorker {
                         }
                     },
                     count = completion_lock.recv_many(&mut completions, COMPLETION_BATCH_SIZE) => {
-                        tracing::debug!("Entity worker for shard {} received {} completions", self.shard_id, count);
+                        tracing::info!("Entity worker for shard {} received {} completions", self.shard_id, count);
                         match count {
                             0 => {
                                 tracing::warn!("Entity worker for shard {} shutting down because sender disappeared", self.shard_id);
