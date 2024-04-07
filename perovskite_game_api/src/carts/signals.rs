@@ -384,7 +384,7 @@ pub(crate) fn automatic_signal_release(
         return;
     }
 
-    if variant & VARIANT_RESTRICTIVE_TRAFFIC != 0 {
+    if variant & VARIANT_RESTRICTIVE_TRAFFIC == 0 {
         // This signal is not actually clear
         tracing::warn!(
             "Attempting to release a signal that is already cleared at {:?}. Variant is {:x}",
