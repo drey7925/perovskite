@@ -239,6 +239,7 @@ struct DefaultMapgen {
 
     karst_noise: karst::KarstGenerator,
     rail_testonly: BlockTypeHandle,
+    signal_testonly: BlockTypeHandle,
 
     biome_noise: BiomeNoise,
     macrobiome_noise: MacrobiomeNoise,
@@ -381,8 +382,10 @@ impl MapgenInterface for DefaultMapgen {
                         chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
-                            if z == 0 && chunk_coord.z % 4 == 0 {
+                            if z == 5 && chunk_coord.z % 4 == 0 {
                                 self.desert_stone
+                            } else if z == 4 && chunk_coord.z % 4 == 0 {
+                                self.signal_testonly.with_variant(16).unwrap()
                             } else {
                                 self.air
                             },
@@ -393,9 +396,9 @@ impl MapgenInterface for DefaultMapgen {
                 if chunk_coord.z % 4 == 0 {
                     for x in [0, 15] {
                         // Gantries
-                        chunk.set_block(ChunkOffset { x, y: 4, z: 0 }, self.desert_stone, None);
-                        chunk.set_block(ChunkOffset { x, y: 5, z: 0 }, self.desert_stone, None);
-                        chunk.set_block(ChunkOffset { x, y: 6, z: 0 }, self.desert_stone, None);
+                        chunk.set_block(ChunkOffset { x, y: 4, z: 5 }, self.desert_stone, None);
+                        chunk.set_block(ChunkOffset { x, y: 5, z: 5 }, self.desert_stone, None);
+                        chunk.set_block(ChunkOffset { x, y: 6, z: 5 }, self.desert_stone, None);
                     }
                 }
             }
@@ -829,5 +832,6 @@ pub(crate) fn build_mapgen(
         seed,
 
         rail_testonly: blocks.get_by_name("carts:rail_tile").expect("rail"),
+        signal_testonly: blocks.get_by_name("carts:signal").expect("signal"),
     })
 }
