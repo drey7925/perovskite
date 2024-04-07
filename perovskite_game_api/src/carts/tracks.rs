@@ -832,18 +832,19 @@ pub(crate) fn register_tracks(
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| {
                     let block = ctx.game_map().get_block(coord)?;
+                    let tile_id = TileId::from_variant(block.variant(), false, false);
                     ctx.initiator().send_chat_message(ChatMessage::new(
                         "[INFO]",
-                        format!("{:?}", TileId::from_variant(block.variant(), false, false)),
+                        format!("{:?}", tile_id),
                     ))?;
 
                     Ok(Some(ctx.new_popup()
                         .title("Mr. Yellow")
                         .label("Update tile:")
-                        .text_field("tile_x", "Tile X", "0", true)
-                        .text_field("tile_y", "Tile Y", "0", true)
-                        .text_field("rotation", "Rotation", "0", true)
-                        .checkbox("flip_x", "Flip X", false, true)
+                        .text_field("tile_x", "Tile X", tile_id.x().to_string(), true)
+                        .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true)
+                        .text_field("rotation", "Rotation", tile_id.rotation().to_string(), true)
+                        .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
                         .button("apply", "Apply", true)
                         .label("Scan tile:")
                         .checkbox("reverse", "Reverse", false, true)
@@ -884,8 +885,8 @@ pub(crate) fn register_tracks(
 }
 
 pub(crate) enum ScanOutcome {
-    /// We advanced
-    Success,
+    /// We advanced, here's the new state
+    Success(ScanState),
     /// We cannot advance
     Failure,
     /// We're not even on a track
@@ -894,6 +895,7 @@ pub(crate) enum ScanOutcome {
     Deferral(Deferral<Result<BlockId>, BlockCoordinate>),
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct ScanState {
     pub(crate) block_coord: BlockCoordinate,
     pub(crate) vec_coord: cgmath::Vector3<f64>,
@@ -975,7 +977,7 @@ impl ScanState {
 
     // Test only, prototype version that logs lots of details about each calculation
     pub(crate) fn advance_verbose(
-        &mut self,
+        &self,
         chatty: bool,
         get_block: impl Fn(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
     ) -> Result<ScanOutcome> {
@@ -1229,22 +1231,25 @@ impl ScanState {
             }
         }
 
-        self.block_coord = next_coord;
-        self.is_reversed = matching_tile_id.reverse();
-        self.is_diverging = matching_tile_id.diverging();
+        let mut next_state = self.clone();
+
+        next_state.block_coord = next_coord;
+        next_state.is_reversed = matching_tile_id.reverse();
+        next_state.is_diverging = matching_tile_id.diverging();
         let base_coord = b2vec(next_coord);
 
-        let offset_x = if self.is_diverging {
+        let offset_x = if next_state.is_diverging {
             next_tile.diverging_physical_x_offset
         } else {
             next_tile.physical_x_offset
         };
-        let offset_z = if self.is_diverging {
+        let offset_z = if next_state.is_diverging {
             next_tile.diverging_physical_z_offset
         } else {
             next_tile.physical_z_offset
         };
-        self.vec_coord = base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
+        next_state.vec_coord =
+            base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
 
         let (offset_x, offset_z) = eval_rotation(
             offset_x,
@@ -1252,7 +1257,8 @@ impl ScanState {
             next_tile_id.flip_x(),
             next_tile_id.rotation(),
         );
-        self.vec_coord = base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
+        next_state.vec_coord =
+            base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
         if chatty {
             tracing::info!(
                 "Found matching tile: {:?}. Coords: {:?}.",
@@ -1261,7 +1267,7 @@ impl ScanState {
             );
         }
 
-        Ok(ScanOutcome::Success)
+        Ok(ScanOutcome::Success(next_state))
     }
 }
 
@@ -1345,9 +1351,16 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     for _ in 0..20 {
                         let prev = state.vec_coord + vec3(0.0, 1.0, 0.0);
 
-                        state.advance_verbose(true, |coord| {
-                            ctx.game_map().get_block(coord).into()
-                        })?;
+                        match state
+                            .advance_verbose(true, |coord| ctx.game_map().get_block(coord).into())?
+                        {
+                            ScanOutcome::Success(s) => {
+                                state = s;
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
 
                         let current = state.vec_coord + vec3(0.0, 1.0, 0.0);
                         std::thread::sleep(std::time::Duration::from_millis(125));
