@@ -921,7 +921,7 @@ impl ServerGameMap {
     where
         F: FnOnce(&ExtendedData) -> Option<T>,
     {
-        let chunk_guard = match self.try_get_chunk(coord.chunk()) {
+        let chunk_guard = match self.try_get_chunk(coord.chunk(), false) {
             Some(x) => x,
             None => return Ok(None),
         };
@@ -960,7 +960,7 @@ impl ServerGameMap {
     /// However, it will still wait to get a read lock for the chunk map itself. The only circumstances
     /// where this should fail is if the chunk is unloaded.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockTypeHandle> {
-        let chunk_guard = self.try_get_chunk(coord.chunk())?;
+        let chunk_guard = self.try_get_chunk(coord.chunk(), false)?;
         // We don't have a mapchunk lock, so we need actual atomic ordering here
         if chunk_guard.fast_path_read_ready.load(Ordering::Acquire) {
             Some(
@@ -1165,6 +1165,46 @@ impl ServerGameMap {
             self.enqueue_writeback(chunk_guard)?;
         }
         Ok(result)
+    }
+
+    /// Same as [mutate_block_atomically], but returns None if it cannot immediately run the mutator without
+    /// having to block (for a mutex, writeback permit, or IO).
+    pub fn try_mutate_block_atomically<F, T>(
+        &self,
+        coord: BlockCoordinate,
+        mutator: F,
+    ) -> Result<Option<T>>
+    where
+        F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
+    {
+        let chunk_guard = match self.try_get_chunk(coord.chunk(), true) {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let mut chunk = match chunk_guard.try_get_write()? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+
+        let (result, block_changed) = self.mutate_block_atomically_locked(
+            &chunk_guard,
+            &mut chunk,
+            coord.offset(),
+            mutator,
+            self,
+        )?;
+        if block_changed {
+            // mutate_block_atomically_locked already sent a broadcast.
+            chunk_guard.update_lighting_after_edit(
+                &chunk_guard,
+                &chunk,
+                coord.offset(),
+                self.block_type_manager(),
+            );
+            drop(chunk);
+            self.enqueue_writeback(chunk_guard)?;
+        }
+        Ok(Some(result))
     }
 
     /// Internal impl detail of mutate_block_atomically and timers
@@ -1417,8 +1457,23 @@ impl ServerGameMap {
     }
 
     #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]
-    fn try_get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Option<MapChunkOuterGuard<'a>> {
+    fn try_get_chunk<'a>(
+        &'a self,
+        coord: ChunkCoordinate,
+        want_permit: bool,
+    ) -> Option<MapChunkOuterGuard<'a>> {
         let shard = shard_id(coord);
+        let mut permit = None;
+        if want_permit {
+            match self.try_get_writeback_permit(shard) {
+                Ok(Some(p)) => permit = Some(p),
+                Ok(None) => return None,
+                Err(e) => {
+                    tracing::error!("Failed to get writeback permit: {:?}", e);
+                    return None;
+                }
+            }
+        }
         let guard = self.live_chunks[shard].read();
         // We need this check - if the chunk isn't in memory, we cannot construct a MapChunkOuterGuard for it
         // (unwrapping will panic)
@@ -1430,7 +1485,7 @@ impl ServerGameMap {
         return Some(MapChunkOuterGuard {
             read_guard: guard,
             coord,
-            writeback_permit: None,
+            writeback_permit: permit,
             force_writeback: false,
         });
     }

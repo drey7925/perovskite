@@ -15,6 +15,7 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
 use circular_buffer::CircularBuffer;
+use futures::Future;
 use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
@@ -35,7 +36,10 @@ use crate::{
     CachelineAligned,
 };
 
-use super::{game_map::CasOutcome, GameState, ServerGameMap};
+use super::{
+    blocks::ExtendedDataHolder, event::HandlerContext, game_map::CasOutcome, GameState,
+    ServerGameMap,
+};
 
 /// This entity is present and valid
 const CONTROL_PRESENT: u8 = 1;
@@ -374,14 +378,14 @@ impl InitialMoveQueue {
 /// It's technically possible for a coroutine to sneak an Arc<GameState> or similar into its own
 /// state and try to use it - however **that will likely lead to deadlocks**.
 pub struct EntityCoroutineServices<'a> {
-    map: &'a Arc<ServerGameMap>,
+    game_state: &'a Arc<GameState>,
     sender: &'a tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
 }
 impl<'a> EntityCoroutineServices<'a> {
     /// Gets the block at the specified coordinate, or None if the chunk isn't loaded.
     /// Forwards to the game map's try_get_block.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
-        self.map.try_get_block(coord)
+        self.game_state.game_map().try_get_block(coord)
     }
 
     pub fn get_block(
@@ -399,11 +403,73 @@ impl<'a> EntityCoroutineServices<'a> {
         if let Some(block) = self.try_get_block(coord) {
             (Ok(block), coord).into()
         } else {
-            let map_clone = self.map.clone();
+            let map_clone = self.game_state.game_map_clone();
             DeferrableResult::Deferred(Deferral {
                 deferred_call: Box::new(move || (map_clone.get_block(coord), coord)),
             })
         }
+    }
+
+    /// Modifies the block at the specified coordinate, if it is possible to do so without blocking.
+    /// Otherwise, returns None.
+    ///
+    /// Implementation note: At this time, all of the blocking is checked before the mutator is run, so
+    /// the mutator will only be invoked once in most cases (either inline if blocking can be avoided, or
+    /// as a deferred computation if blocking was required).
+    ///
+    /// Note that this may change in the future, and it's possible for the mutator to be invoked multiple times.
+    /// As with all calls to mutate_block_atomically, it's always possible that the block has changed between the time
+    /// when the caller decides to call (based on some old block value) and when the mutator is actually invoked.
+    ///
+    /// The mutator itself must be very careful to avoid blocking for performance, *just like any other coroutine.*
+    pub fn mutate_block_atomically<T: Send + Sync + 'static>(
+        &self,
+        coord: BlockCoordinate,
+        mut mutator: impl FnMut(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>
+            + Send
+            + Sync
+            + 'static,
+    ) -> DeferrableResult<Result<T>> {
+        match self
+            .game_state
+            .game_map()
+            .try_mutate_block_atomically(coord, &mut mutator)
+        {
+            Ok(Some(t)) => DeferrableResult::AvailableNow(Ok(t)),
+            Ok(None) => {
+                let map_clone = self.game_state.game_map_clone();
+                tracing::debug!("MBA deferring");
+                DeferrableResult::Deferred(Deferral {
+                    deferred_call: Box::new(move || {
+                        tracing::debug!("MBA invoking");
+                        (map_clone.mutate_block_atomically(coord, mutator), ())
+                    }),
+                })
+            }
+            Err(e) => DeferrableResult::AvailableNow(Err(e)),
+        }
+    }
+
+    /// Spawns a future onto the entity coroutine's executor.
+    ///
+    /// For now, this just calls tokio::task::spawn with a delay, but this may change in the future.
+    ///
+    /// Note that this may not be the most efficient way to do delayed actions. For now, it's
+    /// probably sufficient assuming that these actions are happening at a reasonable scale.
+    pub fn spawn_async(
+        &self,
+        delay: Duration,
+        task: impl FnOnce(&HandlerContext) + Send + 'static,
+    ) {
+        let ctx = HandlerContext {
+            tick: 0,
+            initiator: super::event::EventInitiator::Plugin("entity_coroutine".to_string()),
+            game_state: self.game_state.clone(),
+        };
+        tokio::task::spawn(async move {
+            tokio::time::sleep(delay).await;
+            tokio::task::block_in_place(|| task(&ctx));
+        });
     }
 }
 
@@ -467,6 +533,26 @@ macro_rules! impl_deferral {
                 })
             }
         }
+        impl Deferral<Option<$T>, ()> {
+            #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
+            pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
+                CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
+                    deferred_call: Box::new(move || {
+                        let (t, _) = (self.deferred_call)();
+                        match t {
+                            Some(t) => ContinuationResult {
+                                value: ContinuationResultValue::$Variant(t),
+                                tag,
+                            },
+                            None => ContinuationResult {
+                                value: ContinuationResultValue::None,
+                                tag,
+                            },
+                        }
+                    }),
+                })
+            }
+        }
         impl Deferral<$T> {
             #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
             pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
@@ -490,6 +576,18 @@ impl_deferral!(u64, Integer);
 impl_deferral!(Vector3<f64>, Vector);
 impl_deferral!(bool, Boolean);
 impl_deferral!(EntityMoveDecision, EntityDecision);
+
+impl Deferral<ContinuationResultValue, ()> {
+    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
+    pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
+        CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
+            deferred_call: Box::new(move || {
+                let (value, _) = (self.deferred_call)();
+                ContinuationResult { tag, value }
+            }),
+        })
+    }
+}
 
 impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral<T, Residual> {
     #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
@@ -552,6 +650,17 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
     }
 }
 
+pub enum ReenterableResult<T: Send + Sync + 'static> {
+    AvailableNow(T),
+    Deferred(Deferral<ContinuationResultValue>),
+}
+impl<T: Send + Sync + 'static> From<T> for ReenterableResult<T> {
+    fn from(t: T) -> Self {
+        Self::AvailableNow(t)
+    }
+}
+
+/// Either a T, or a deferred call to get a T
 pub enum DeferrableResult<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static = ()> {
     AvailableNow(T),
     Deferred(Deferral<T, Residual>),
@@ -589,6 +698,8 @@ pub enum ContinuationResultValue {
     EntityDecision(EntityMoveDecision),
     /// An anyhow::Error result from a deferred call
     Error(anyhow::Error),
+    /// None. Don't even reinvoke the coroutine
+    None,
 }
 
 pub struct ContinuationResult {
@@ -806,7 +917,7 @@ impl EntityCoreArray {
         self.check_preconditions();
         assert!(delta_time >= 0.0);
 
-        println!("delta_time: {}", delta_time);
+        tracing::debug!("delta_time: {}", delta_time);
         let mut next_event = std::f32::MAX;
 
         for i in 0..self.len {
@@ -1064,7 +1175,7 @@ impl EntityCoreArray {
                     // We only got one move. We need another.
                     self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
                     self.recalc_in[i] = f32::MAX;
-                    println!("{}: queued movement (initial)", self.id[i]);
+                    tracing::debug!("{}: queued movement (initial)", self.id[i]);
                 }
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
@@ -1081,7 +1192,7 @@ impl EntityCoreArray {
                     self.theta_y[i] = first.face_direction;
                     self.move_time[i] = first.move_time;
                     for (seq, m) in movements.into_iter().enumerate().skip(1) {
-                        println!("{}: queued movement {}", self.id[i], seq);
+                        tracing::debug!("{}: queued movement {}", self.id[i], seq);
                         self.move_queue[i].push(StoredMovement {
                             // Current is 1 so next is 2
                             sequence: seq as u64 + 1,
@@ -1098,13 +1209,15 @@ impl EntityCoreArray {
                     self.recalc_in[i] = delay;
                     self.move_time[i] = delay;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLaterFlexible(delay)) => {
                     // Flexible timings are an optimization, not a requirement
-                    // Because initializing an entity is complex, simply treat this as a non-range ask again.
+                    // Because initializing an entity is complex, simply treat this as a non-range ask-again.
                     self.recalc_in[i] = delay.start;
                     self.move_time[i] = delay.start;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ImmediateDespawn) => {
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
@@ -1116,13 +1229,15 @@ impl EntityCoreArray {
                 }
                 CoroutineResult::Successful(EntityMoveDecision::StopCoroutineControl) => {
                     self.control[i] &= !(CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS);
+                    self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::_DeferredMoveResult(deferral) => {
                     self.control[i] |= CONTROL_SUSPENDED;
+                    self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
-                    println!("{}: deferring continuation with a result", id);
+                    tracing::debug!("{}: deferring continuation with a result", id);
 
                     tokio::task::spawn(async move {
                         let result = tokio::task::block_in_place(deferral.deferred_call);
@@ -1139,15 +1254,16 @@ impl EntityCoreArray {
                             .await
                             .unwrap();
 
-                        println!("{}: sending continuation with a result", id);
+                        tracing::debug!("{}: sending continuation with a result", id);
                     });
                 }
                 CoroutineResult::_DeferredReenterCoroutine(deferral) => {
                     self.control[i] |= CONTROL_SUSPENDED;
+                    self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
-                    println!("{}: deferring continuation to reenter", id);
+                    tracing::debug!("{}: deferring continuation to reenter", id);
 
                     tokio::task::spawn(async move {
                         let result = tokio::task::block_in_place(deferral.deferred_call);
@@ -1159,7 +1275,7 @@ impl EntityCoreArray {
                             })
                             .await
                             .unwrap();
-                        println!("{}: sending continuation to reenter", id);
+                        tracing::debug!("{}: sending continuation to reenter", id);
                     });
                 }
             }
@@ -1267,8 +1383,8 @@ impl EntityCoreArray {
                     - self.next_delta_bias[i],
             };
             if entity.current_move_elapsed < 0.0 {
-                println!("current_move_elapsed < 0.0 {}", entity.current_move_elapsed);
-                println!(
+                tracing::debug!("current_move_elapsed < 0.0 {}", entity.current_move_elapsed);
+                tracing::debug!(
                     "mte: {}, pe: {}, ndb: {}",
                     self.move_time_elapsed[i],
                     poll_elapsed.as_secs_f32(),
@@ -1312,9 +1428,9 @@ impl EntityCoreArray {
             let mut estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
             let mut estimated_t = remaining_time;
             let mut last_seq = self.current_move_seq[i];
-            println!("last_seq: {}", last_seq);
+            tracing::debug!("last_seq: {}", last_seq);
             for StoredMovement { sequence, movement } in self.move_queue[i].as_slice() {
-                println!("> seq {}", sequence);
+                tracing::debug!("> seq {}", sequence);
                 assert!(last_seq < *sequence);
                 last_seq = *sequence;
                 estimated_x = qproj(
@@ -1336,6 +1452,9 @@ impl EntityCoreArray {
                     movement.move_time,
                 );
                 estimated_t += movement.move_time;
+            }
+            if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
+                estimated_t = 0.0;
             }
 
             let move_queue = &mut self.move_queue[i];
@@ -1373,7 +1492,7 @@ impl EntityCoreArray {
                     }
                     // We'll trigger a recalc when the movement gets advanced; no need to use recalc_in
                     self.recalc_in[i] = f32::MAX;
-                    println!("{}: queued movement.", self.id[i]);
+                    tracing::debug!("{}: queued movement.", self.id[i]);
                     self.move_time[i] - self.move_time_elapsed[i]
                 }
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
@@ -1382,7 +1501,6 @@ impl EntityCoreArray {
                         panic!("QueueUpMultiple with no movements");
                     }
                     for (movement_index, m) in movements.into_iter().enumerate() {
-                        println!("queueing up {}", last_seq + movement_index as u64 + 1);
                         self.move_queue[i].push(StoredMovement {
                             sequence: last_seq + movement_index as u64 + 1,
                             movement: m,
@@ -1391,12 +1509,16 @@ impl EntityCoreArray {
                     self.recalc_in[i] = f32::MAX;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
 
-                    println!(
+                    tracing::debug!(
                         "mt: {}, mte: {}",
-                        self.move_time[i], self.move_time_elapsed[i]
+                        self.move_time[i],
+                        self.move_time_elapsed[i]
                     );
-
-                    self.move_time[i] - self.move_time_elapsed[i]
+                    if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
+                        0.0
+                    } else {
+                        self.move_time[i] - self.move_time_elapsed[i]
+                    }
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
                     self.recalc_in[i] = delay;
@@ -1436,7 +1558,7 @@ impl EntityCoreArray {
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
-                    println!("{}: deferring continuation with a result", id);
+                    tracing::debug!("{}: deferring continuation with a result", id);
 
                     tokio::task::spawn(async move {
                         let result = tokio::task::block_in_place(deferral.deferred_call);
@@ -1453,7 +1575,7 @@ impl EntityCoreArray {
                             .await
                             .unwrap();
 
-                        println!("{}: sending continuation with a result", id);
+                        tracing::debug!("{}: sending continuation with a result", id);
                     });
                     // Don't reawaken until we get the completion
                     // TODO: completion stuckness detection
@@ -1464,8 +1586,7 @@ impl EntityCoreArray {
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
-                    println!("{}: deferring continuation to reenter", id);
-
+                    tracing::debug!("{}: deferring continuation to reenter", id);
                     tokio::task::spawn(async move {
                         let result = tokio::task::block_in_place(deferral.deferred_call);
                         tx_clone
@@ -1476,7 +1597,7 @@ impl EntityCoreArray {
                             })
                             .await
                             .unwrap();
-                        println!("{}: sending continuation to reenter", id);
+                        tracing::debug!("{}: sending continuation to reenter", id);
                     });
                     // Don't reawaken until we get the completion
                     // TODO: completion stuckness detection
@@ -1509,9 +1630,12 @@ impl EntityCoreArray {
                 self.move_time_elapsed[i] - self.move_time[i]
             };
             self.control[i] &= !CONTROL_DEQUEUE_WHEN_READY;
-            println!(
+            tracing::debug!(
                 "{}: finished move w/ time {}/{}, seq was {}",
-                self.id[i], self.move_time_elapsed[i], self.move_time[i], self.current_move_seq[i]
+                self.id[i],
+                self.move_time_elapsed[i],
+                self.move_time[i],
+                self.current_move_seq[i]
             );
             // Then we're going to need a new move to be queued up soon
             if self.control[i] & CONTROL_AUTONOMOUS != 0 {
@@ -1523,7 +1647,7 @@ impl EntityCoreArray {
             self.z[i] = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
             // And move the next move into the current one
             let next_move = self.move_queue[i].pop().unwrap_or_else(|| {
-                println!("buffer exhausted");
+                tracing::debug!("buffer exhausted");
                 self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 StoredMovement {
                     movement: Movement::stop_and_stay(self.theta_y[i], self.recalc_in[i]),
@@ -1538,7 +1662,7 @@ impl EntityCoreArray {
             self.za[i] = next_move.movement.acceleration.z;
             self.theta_y[i] = next_move.movement.face_direction;
             self.current_move_seq[i] = next_move.sequence;
-            println!("new CMS {}", next_move.sequence);
+            tracing::debug!("new CMS {}", next_move.sequence);
             self.move_time_elapsed[i] = new_elapsed;
             self.move_time[i] = next_move.movement.move_time;
 
@@ -1670,12 +1794,13 @@ impl EntityShardWorker {
                 let dt_f32 = dt.as_secs_f32();
                 let next_awakening_times = lock.update_times(dt_f32);
                 let coro_awakening_times = lock.run_coroutines(&services, dt_f32, completion_tx);
-                println!(
+                tracing::debug!(
                     "Entity worker for shard {} next awakening times: {:?}",
-                    self.shard_id, next_awakening_times
+                    self.shard_id,
+                    next_awakening_times
                 );
                 drop(lock);
-                println!(
+                tracing::debug!(
                     "next awakening: {:?}",
                     next_awakening_times.min(coro_awakening_times)
                 );
@@ -1841,7 +1966,7 @@ impl EntityShardWorker {
 
     fn services(&self) -> EntityCoroutineServices<'_> {
         EntityCoroutineServices {
-            map: &self.game_state.map,
+            game_state: &self.game_state,
             sender: &self.entities.shards[self.shard_id].completion_tx,
         }
     }

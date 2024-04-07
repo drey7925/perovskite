@@ -136,6 +136,10 @@ impl GameState {
         self.map.as_ref()
     }
 
+    pub(crate) fn game_map_clone(&self) -> Arc<ServerGameMap> {
+        self.map.clone()
+    }
+
     pub fn block_types(&self) -> &BlockTypeManager {
         self.map.block_type_manager()
     }

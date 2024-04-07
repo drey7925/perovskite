@@ -37,7 +37,7 @@ use super::{
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
     constants::{
-        block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
+        block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
         blocks::AIR,
     },
     coordinates::BlockCoordinate,
@@ -752,7 +752,7 @@ fn make_unknown_block_serverside(
                 },
             )),
             physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(E)),
-            groups: vec![],
+            groups: vec![block_groups::DEFAULT_SOLID.to_string()],
             base_dig_time: 1.0,
             wear_multiplier: 0.0,
             light_emission: 0,
