@@ -85,16 +85,16 @@ impl GameEntity {
             .front()
             .is_some_and(|m| elapsed > m.total_time_seconds)
         {
-            println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
-            println!(
-                "remaining buffer: {:?}",
-                self.move_queue
-                    .iter()
-                    .map(|m| m.total_time_seconds)
-                    .sum::<f32>()
-            );
+            // println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
+            // println!(
+            //     "remaining buffer: {:?}",
+            //     self.move_queue
+            //         .iter()
+            //         .map(|m| m.total_time_seconds)
+            //         .sum::<f32>()
+            // );
             let popped_move = self.move_queue.pop_front().unwrap();
-            println!("popping move {:?}", popped_move);
+            // println!("popping move {:?}", popped_move);
             self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
             self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
         }
@@ -104,23 +104,23 @@ impl GameEntity {
         &mut self,
         update: &entities_proto::EntityUpdate,
     ) -> Result<(), &'static str> {
-        println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
-        println!(
-            "Got {} -> {}, while CMS is {}",
-            update
-                .planned_move
-                .iter()
-                .map(|m| m.sequence)
-                .min()
-                .unwrap(),
-            update
-                .planned_move
-                .iter()
-                .map(|m| m.sequence)
-                .max()
-                .unwrap(),
-            self.current_move_sequence
-        );
+        // println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
+        // println!(
+        //     "Got {} -> {}, while CMS is {}",
+        //     update
+        //         .planned_move
+        //         .iter()
+        //         .map(|m| m.sequence)
+        //         .min()
+        //         .unwrap(),
+        //     update
+        //         .planned_move
+        //         .iter()
+        //         .map(|m| m.sequence)
+        //         .max()
+        //         .unwrap(),
+        //     self.current_move_sequence
+        // );
 
         while self
             .move_queue
@@ -144,15 +144,15 @@ impl GameEntity {
         }
 
         if update.current_move_sequence != self.current_move_sequence {
-            println!(
-                "retiming {} -> {}",
-                self.current_move_sequence, update.current_move_sequence
-            );
-            println!(
-                "{:?} -> {:?}",
-                self.current_move_started,
-                Instant::now() - Duration::from_secs_f32(update.current_move_progress)
-            );
+            // println!(
+            //     "retiming {} -> {}",
+            //     self.current_move_sequence, update.current_move_sequence
+            // );
+            // println!(
+            //     "{:?} -> {:?}",
+            //     self.current_move_started,
+            //     Instant::now() - Duration::from_secs_f32(update.current_move_progress)
+            // );
             self.current_move_sequence = update.current_move_sequence;
             self.current_move_started =
                 Instant::now() - Duration::from_secs_f32(update.current_move_progress);
@@ -194,7 +194,7 @@ impl GameEntity {
                 "invalid planned move"
             })?);
         }
-        println!("cms: {:?}", update.current_move_progress);
+        // println!("cms: {:?}", update.current_move_progress);
         Ok(GameEntity {
             fallback_position: queue
                 .back()

@@ -883,7 +883,7 @@ struct EntityCoreArray {
     // TODO: Once thin_box is stabilized, we can use it here
     coroutine: Vec<Option<Pin<Box<dyn EntityCoroutine>>>>,
 
-    last_time_poll: Instant,
+    last_move_update_poll: Instant,
 }
 impl EntityCoreArray {
     /// Checks some preconditions that we want to assume on the vectors to make
@@ -913,7 +913,6 @@ impl EntityCoreArray {
 
     fn update_times(&mut self, delta_time: f32) -> f32 {
         let _span = span!("entity_update_times");
-
         self.check_preconditions();
         assert!(delta_time >= 0.0);
 
@@ -931,7 +930,7 @@ impl EntityCoreArray {
         const MAX_WAIT_TIME: f32 = 10.0;
 
         let next_event = next_event.min(MAX_WAIT_TIME).max(0.0);
-        self.last_time_poll = Instant::now();
+        self.last_move_update_poll = Instant::now();
 
         next_event
     }
@@ -953,6 +952,7 @@ impl EntityCoreArray {
         sender: &tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
     ) -> f32 {
         let _span = span!("entity_run_coroutines");
+
         self.check_preconditions();
         let mut next_event = std::f32::MAX;
         for i in 0..self.len {
@@ -1046,7 +1046,7 @@ impl EntityCoreArray {
             coroutine: vec![],
             next_delta_bias: vec![],
             base_time: Instant::now(),
-            last_time_poll: Instant::now(),
+            last_move_update_poll: Instant::now(),
         }
     }
 
@@ -1056,8 +1056,8 @@ impl EntityCoreArray {
             .as_nanos()
             .try_into()
             .unwrap();
-        if offset & (1 << 63) != 0 {
-            tracing::warn!("Offset {offset} from {:?} is halfway to overflowing a u64 nanos counter. Either you've managed a very impressive uptime, or something's gone wrong.", self.base_time);
+        if offset == (u64::MAX - 1_000_000_000_000) {
+            panic!("Offset {offset} from {:?} is almost overflowing a u64 nanos counter. Either you've managed a very impressive uptime, or something's gone wrong.", self.base_time);
         }
         offset
     }
@@ -1154,6 +1154,7 @@ impl EntityCoreArray {
         };
 
         if let Some(coroutine) = &mut self.coroutine[i] {
+            println!("insert");
             match coroutine.as_mut().plan_move(
                 services,
                 position,
@@ -1346,7 +1347,7 @@ impl EntityCoreArray {
         since: Option<Instant>,
         mut f: impl FnMut(IterEntity) -> Result<()>,
     ) -> Result<()> {
-        let poll_elapsed = self.last_time_poll.elapsed();
+        let poll_elapsed = self.last_move_update_poll.elapsed();
         for i in 0..self.len {
             if self.control[i] & CONTROL_PRESENT == 0 {
                 continue;
@@ -1544,7 +1545,7 @@ impl EntityCoreArray {
                         pos,
                         m1,
                         m2,
-                        self.last_time_poll.elapsed().as_secs_f32(),
+                        self.last_move_update_poll.elapsed().as_secs_f32(),
                     );
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     self.move_time[i]
@@ -1869,7 +1870,7 @@ impl EntityShardWorker {
         let mut indices: smallvec::SmallVec<[usize; COMMAND_BATCH_SIZE]> =
             smallvec::SmallVec::new();
         for action in rx_messages.drain(..) {
-            let time_bias = lock.last_time_poll.elapsed();
+            let time_bias = lock.last_move_update_poll.elapsed();
             match action {
                 EntityAction::Insert(id, position, coroutine, entity_type) => {
                     let def = self.game_state.entities().get_by_type(&entity_type);
@@ -1917,6 +1918,9 @@ impl EntityShardWorker {
         indices.dedup();
         let mut next_event = std::f32::MAX;
         for index in indices {
+            if index != 0 {
+                println!("post control message");
+            }
             lock.run_coro_single(index, &self.services(), 0.0, None, completion_tx);
             next_event = next_event.min(lock.update_time_single(index, None));
         }
@@ -1952,7 +1956,7 @@ impl EntityShardWorker {
             }
             lock.control[index] &= !CONTROL_SUSPENDED;
 
-            let delta_time = lock.last_time_poll.elapsed().as_secs_f32();
+            let delta_time = lock.last_move_update_poll.elapsed().as_secs_f32();
             next_event = next_event.min(lock.run_coro_single(
                 index,
                 &self.services(),
