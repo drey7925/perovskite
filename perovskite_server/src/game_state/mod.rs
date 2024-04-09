@@ -40,7 +40,7 @@ use rand::prelude::Distribution;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::database::database_engine::{GameDatabase, KeySpace};
@@ -86,6 +86,7 @@ pub struct GameState {
     entities: Arc<entities::EntityManager>,
     server_start_time: Instant,
     extensions: type_map::concurrent::TypeMap,
+    startup_time: Instant,
 }
 
 impl GameState {
@@ -126,6 +127,7 @@ impl GameState {
             entities: Arc::new(entities::EntityManager::new(db.clone(), entity_types)),
             server_start_time: Instant::now(),
             extensions,
+            startup_time: Instant::now(),
         });
         result.entities.clone().start_workers(result.clone());
         Ok(result)
@@ -144,9 +146,14 @@ impl GameState {
         self.map.block_type_manager()
     }
 
-    /// Not implemented yet, and its semantics are still TBD
+    /// The time since the server started, in nanoseconds.
     pub fn tick(&self) -> u64 {
-        0 // TODO
+        // This limits the server to a runtime of approximately 500 years.
+        self.startup_time.elapsed().as_nanos().try_into().unwrap()
+    }
+
+    pub fn tick_as_duration(&self) -> Duration {
+        self.startup_time.elapsed()
     }
 
     pub(crate) fn mapgen(&self) -> &dyn MapgenInterface {

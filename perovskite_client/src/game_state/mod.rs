@@ -55,6 +55,7 @@ use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::lightcycle::LightCycle;
 use self::settings::GameSettings;
+use self::timekeeper::Timekeeper;
 use self::tool_controller::{ToolController, ToolState};
 
 pub(crate) mod chat;
@@ -65,6 +66,7 @@ pub(crate) mod items;
 pub(crate) mod lightcycle;
 pub(crate) mod physics;
 pub(crate) mod settings;
+pub(crate) mod timekeeper;
 pub(crate) mod tool_controller;
 
 #[derive(Debug, Clone, Copy)]
@@ -625,6 +627,8 @@ pub(crate) struct ClientState {
     pub(crate) wants_exit_from_game: Mutex<bool>,
     // This is a leaf mutex - consider using some sort of atomic instead
     pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>,
+
+    pub(crate) timekeeper: Timekeeper,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -635,6 +639,7 @@ impl ClientState {
         hud: GameHud,
         egui: EguiUi,
         block_renderer: BlockRenderer,
+        timekeeper: Timekeeper,
     ) -> Result<ClientState> {
         Ok(ClientState {
             settings: settings.clone(),
@@ -665,6 +670,7 @@ impl ClientState {
                 velocity: cgmath::Vector3::zero(),
                 face_direction: (0.0, 0.0),
             }),
+            timekeeper,
         })
     }
 
@@ -690,6 +696,8 @@ impl ClientState {
 
     pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
         {
+            self.timekeeper.update_frame();
+
             let mut input = self.input.lock();
             input.set_modal_active(self.egui.lock().wants_user_events());
             if input.take_just_pressed(BoundAction::Inventory) {
