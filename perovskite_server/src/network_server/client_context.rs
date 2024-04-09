@@ -1847,6 +1847,8 @@ impl EntityEventSender {
     }
     async fn do_tick(&mut self) -> Result<()> {
         // todo - this requires optimization
+
+        let update_time = Instant::now();
         let messages = {
             let mut messages = vec![];
 
@@ -1934,7 +1936,7 @@ impl EntityEventSender {
                 }))
                 .await?;
         }
-        self.last_update = Instant::now();
+        self.last_update = update_time;
         Ok(())
     }
 }
