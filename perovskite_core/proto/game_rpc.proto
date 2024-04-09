@@ -119,6 +119,8 @@ message StreamToServer {
 }
 
 message StreamToClient {
+  // 64-bit nanoseconds since some implementation-defined epoch
+  // Must be monotonic within any given stream.
   uint64 tick = 1;
 
   oneof server_message {

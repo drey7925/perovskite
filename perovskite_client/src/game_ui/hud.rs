@@ -98,6 +98,17 @@ impl GameHud {
         );
         outputs.push(fps_builder.build(ctx)?);
 
+        let mut net_err_builder = FlatTextureDrawBuilder::new();
+        let net_err = client_state.timekeeper.get_offset();
+        render_number(
+            (window_size.0, 12),
+            net_err as u32,
+            &mut net_err_builder,
+            &self.texture_coords,
+            &self.texture_atlas,
+        );
+        outputs.push(net_err_builder.build(ctx)?);
+
         Ok(outputs)
     }
 
