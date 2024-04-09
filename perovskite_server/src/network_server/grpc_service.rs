@@ -201,7 +201,7 @@ async fn game_stream_impl(
 
     outbound_tx
         .send(Ok(StreamToClient {
-            tick: 0,
+            tick: game_state.tick(),
             server_message: Some(ServerMessage::AuthSuccess(AuthSuccess {
                 effective_protocol_version: effective_max_protocol,
             })),
@@ -218,7 +218,7 @@ async fn game_stream_impl(
             log::error!("Failed to establish player context: {:?}", e);
             outbound_tx
                 .send(Ok(StreamToClient {
-                    tick: 0,
+                    tick: game_state.tick(),
                     server_message: Some(ServerMessage::ShutdownMessage(format!(
                         "Failed to establish player context: {e:?}"
                     ))),

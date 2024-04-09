@@ -427,6 +427,11 @@ impl InboundContext {
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
+        if message.tick == 0 {
+            log::warn!("Got message with tick 0");
+        } else {
+            self.client_state.timekeeper.update_error(message.tick);
+        }
         match &message.server_message {
             None => {
                 log::warn!("Got empty message from server");
