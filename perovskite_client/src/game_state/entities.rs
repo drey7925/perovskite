@@ -78,9 +78,9 @@ pub(crate) struct GameEntity {
 impl GameEntity {
     pub(crate) fn advance_state(&mut self) {
         let now = Instant::now();
-        let elapsed = (now - self.current_move_started).as_secs_f32();
+        let mut elapsed = (now - self.current_move_started).as_secs_f32();
 
-        if self
+        while self
             .move_queue
             .front()
             .is_some_and(|m| elapsed > m.total_time_seconds)
@@ -96,6 +96,7 @@ impl GameEntity {
             let popped_move = self.move_queue.pop_front().unwrap();
             // println!("popping move {:?}", popped_move);
             self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
+            elapsed -= popped_move.total_time_seconds;
             self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
         }
     }
@@ -103,6 +104,7 @@ impl GameEntity {
     pub(crate) fn update(
         &mut self,
         update: &entities_proto::EntityUpdate,
+        estimated_send_time: Instant,
     ) -> Result<(), &'static str> {
         // println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
         // println!(
@@ -155,7 +157,7 @@ impl GameEntity {
             // );
             self.current_move_sequence = update.current_move_sequence;
             self.current_move_started =
-                Instant::now() - Duration::from_secs_f32(update.current_move_progress);
+                estimated_send_time - Duration::from_secs_f32(update.current_move_progress);
         }
         self.fallback_position = self
             .move_queue
@@ -182,7 +184,10 @@ impl GameEntity {
             .unwrap_or(self.fallback_position)
     }
 
-    pub(crate) fn from_proto(update: &entities_proto::EntityUpdate) -> Result<GameEntity, &str> {
+    pub(crate) fn from_proto(
+        update: &entities_proto::EntityUpdate,
+        estimated_send_time: Instant,
+    ) -> Result<GameEntity, &str> {
         if update.planned_move.is_empty() {
             return Err("Empty move plan");
         }
@@ -201,7 +206,7 @@ impl GameEntity {
                 .map(|m: &EntityMove| m.qproj(m.total_time_seconds))
                 .unwrap(),
             move_queue: queue,
-            current_move_started: Instant::now()
+            current_move_started: estimated_send_time
                 - Duration::try_from_secs_f32(update.current_move_progress)
                     .map_err(|_| "invalid current move progress")?,
             current_move_sequence: update.current_move_sequence,
