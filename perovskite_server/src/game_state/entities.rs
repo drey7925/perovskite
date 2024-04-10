@@ -1919,7 +1919,7 @@ impl EntityShardWorker {
         let mut next_event = std::f32::MAX;
         for index in indices {
             if index != 0 {
-                println!("post control message");
+                //println!("post control message");
             }
             lock.run_coro_single(index, &self.services(), 0.0, None, completion_tx);
             next_event = next_event.min(lock.update_time_single(index, None));
