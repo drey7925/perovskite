@@ -245,7 +245,17 @@ impl<'a> ChunkColumnCursor<'a> {
             .map_or(Lightfield::all_on(), |x| x.outgoing());
         loop {
             // We should have advanced into a chunk with valid lighting.
-            assert!(self.current.valid);
+            // However - this is not always true. We may enter a chunk that's undergoing a deferred load,
+            // and we do not have valid lighting for it yet. However, once it loads it'll fix up light anyway,
+            // so this is of no concern.
+            //
+            // This assertion has not tripped for any other reason yet. To be safe, we'll log it.
+            //
+            // assert!(self.current.valid);
+            if !self.current.valid {
+                eprintln!("WARNING: Lightfield has no valid lighting. This is normal under high contention and deferred loading, but may signal a bug in other cases.");
+                panic!();
+            }
 
             let old_outgoing = self.current.outgoing();
             self.current.incoming = prev_outgoing;
