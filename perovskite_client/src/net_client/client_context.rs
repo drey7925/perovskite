@@ -475,7 +475,12 @@ impl InboundContext {
                 *self.shared_state.client_state.pending_error.lock() = Some(msg.clone());
             }
             Some(rpc::stream_to_client::ServerMessage::EntityUpdate(update)) => {
-                self.handle_entity_update(update).await?;
+                let estimated_send_time = self
+                    .client_state
+                    .timekeeper
+                    .estimated_send_time(message.tick);
+                self.handle_entity_update(update, estimated_send_time)
+                    .await?;
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);
@@ -693,7 +698,11 @@ impl InboundContext {
             .handle_server_update(state_update)
     }
 
-    async fn handle_entity_update(&mut self, update: &entities_proto::EntityUpdate) -> Result<()> {
+    async fn handle_entity_update(
+        &mut self,
+        update: &entities_proto::EntityUpdate,
+        estimated_send_time: Instant,
+    ) -> Result<()> {
         if update.remove {
             if self
                 .shared_state
@@ -721,9 +730,9 @@ impl InboundContext {
         {
             Entry::Occupied(mut entry) => {
                 // TODO we need to correct for network delay here
-                entry.get_mut().update(update)
+                entry.get_mut().update(update, estimated_send_time)
             }
-            Entry::Vacant(entry) => match GameEntity::from_proto(update) {
+            Entry::Vacant(entry) => match GameEntity::from_proto(update, estimated_send_time) {
                 Ok(x) => {
                     entry.insert(x);
                     Ok(())

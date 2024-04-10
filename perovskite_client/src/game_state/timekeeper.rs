@@ -103,7 +103,25 @@ impl Timekeeper {
         lock.last_frame_time = now;
     }
 
+    /// Returns the current timebase offset in nanoseconds.
+    /// Positive means that the network delay has increased,
+    /// so we should do things slightly earlier (where possible due to prefetching)
+    /// to keep them in sync with the server.
+    ///
+    /// Negative means that the network delay has decreased, so we should do things slightly
+    /// later (where possible due to available buffers/delays) to keep them in sync with the server.
     pub(crate) fn get_offset(&self) -> i64 {
         self.current_skew.load(Ordering::Relaxed)
+    }
+
+    /// Adjusts the server tick based on the offset.
+    pub(crate) fn adjust_server_tick(&self, server_tick: u64) -> u64 {
+        (server_tick as i128 + self.get_offset() as i128)
+            .try_into()
+            .unwrap()
+    }
+
+    pub(crate) fn estimated_send_time(&self, server_tick: u64) -> Instant {
+        self.initial_timebase_estimate + Duration::from_nanos(server_tick) // + Duration::from_nanos(self.adjust_server_tick(server_tick))
     }
 }
