@@ -120,7 +120,10 @@ impl EntityManager {
             workers: Mutex::new(Vec::new()),
             cancellation: CancellationToken::new(),
             // TODO next_id needs to be initialized from the database eventually
-            next_id: AtomicU64::new(0),
+            //   for now, just use 1
+            // We never want to have an id of 0 since we need a sentinel value in
+            // the RPC protos.
+            next_id: AtomicU64::new(1),
             types: entity_types,
         }
     }
@@ -1965,7 +1968,7 @@ impl EntityShardWorker {
                 completion_tx,
             ));
         }
-        Instant::now() + Duration::from_secs_f32(next_event.min(10.0))
+        Instant::now() + Duration::from_secs_f32(next_event.clamp(0.0, 10.0))
     }
 
     fn services(&self) -> EntityCoroutineServices<'_> {

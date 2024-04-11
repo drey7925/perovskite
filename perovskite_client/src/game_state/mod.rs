@@ -814,6 +814,14 @@ impl ClientState {
                 .time_state_mut()
                 .set_day_length(Duration::from_secs_f64(state_update.day_length_sec));
         }
+
+        {
+            let mut entities_lock = self.entities.lock();
+            entities_lock.attached_to_entity = match state_update.attached_to_entity {
+                0 => None,
+                id => Some(id),
+            }
+        }
         Ok(())
     }
 }

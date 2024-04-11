@@ -290,6 +290,8 @@ message SetClientState {
   // Permissions available to the client. Only permissions listed in CLIENT_RELEVANT_PERMISSIONS
   // are included here
   repeated string permission = 7;
+  // The ID of the entity that the player is currently attached to
+  uint64 attached_to_entity = 8;
 }
 
 message AuthSuccess {
