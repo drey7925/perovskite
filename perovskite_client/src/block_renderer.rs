@@ -680,7 +680,7 @@ fn get_texture(
             let x_selector_shift_factor = get_selector_shift(dynamic.x_selector_bits);
             let y_selector_shift_factor = get_selector_shift(dynamic.y_selector_bits);
 
-            return dbg!(MaybeDynamicRect::Dynamic(DynamicRect {
+            return MaybeDynamicRect::Dynamic(DynamicRect {
                 base: rect_f,
                 x_selector: dynamic.x_selector_bits as u16,
                 y_selector: dynamic.y_selector_bits as u16,
@@ -693,7 +693,7 @@ fn get_texture(
                     / (dynamic.y_cells as f32 * y_selector_shift_factor as f32),
                 flip_x_bit: dynamic.flip_x_bit as u16,
                 flip_y_bit: dynamic.flip_y_bit as u16,
-            }));
+            });
         }
     }
     MaybeDynamicRect::Static(RectF32 {

@@ -571,6 +571,12 @@ impl CartCoroutine {
         } else if signal_block == self.config.speedpost_3 {
             SignalResult::SpeedRestriction(90.0).into()
         } else if signal_block.equals_ignore_variant(self.config.automatic_signal) {
+            let rotation = signal_block.variant() & 0b11;
+            if !self.scan_state.signal_rotation_ok(rotation) {
+                println!("Skipping signal at {:?}", signal_coord);
+                return SignalResult::Stop.into();
+            }
+
             let outcome = services.mutate_block_atomically(signal_coord, move |block_id, _| {
                 tracing::debug!("trying to acquire the signal");
                 Ok(automatic_signal_acquire(
@@ -656,20 +662,20 @@ impl CartCoroutine {
 
         'scan_loop: while steps < max_steps_ahead {
             // Precondition: self.scan_state is valid
-            let new_state = match self
-                .scan_state
-                .advance_verbose(false, block_getter)
-                .unwrap()
-            {
-                tracks::ScanOutcome::Success(state) => state,
-                tracks::ScanOutcome::Failure => break 'scan_loop,
-                tracks::ScanOutcome::NotOnTrack => {
+            let new_state = match self.scan_state.advance_verbose(false, block_getter) {
+                Ok(tracks::ScanOutcome::Success(state)) => state,
+                Ok(tracks::ScanOutcome::Failure) => break 'scan_loop,
+                Ok(tracks::ScanOutcome::NotOnTrack) => {
                     tracing::warn!("Not on track at {:?}", self.scan_state.vec_coord);
                     break 'scan_loop;
                 }
-                tracks::ScanOutcome::Deferral(d) => {
+                Ok(tracks::ScanOutcome::Deferral(d)) => {
                     tracing::debug!("track scan deferral");
                     return Some(d.defer_and_reinvoke(1));
+                }
+                Err(e) => {
+                    tracing::error!("Failed to parse track: {}", e);
+                    break 'scan_loop;
                 }
             };
 
