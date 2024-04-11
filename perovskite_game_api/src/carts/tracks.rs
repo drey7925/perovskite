@@ -903,6 +903,7 @@ pub(crate) struct ScanState {
     pub(crate) is_diverging: bool,
     pub(crate) base_track_block: BlockId,
     pub(crate) allowable_speed: f32,
+    current_tile_id: TileId,
 }
 impl ScanState {
     pub(crate) fn spawn_at(
@@ -972,6 +973,7 @@ impl ScanState {
             } else {
                 tile.max_speed as f32
             },
+            current_tile_id: tile_id,
         }))
     }
 
@@ -1236,6 +1238,7 @@ impl ScanState {
         next_state.block_coord = next_coord;
         next_state.is_reversed = matching_tile_id.reverse();
         next_state.is_diverging = matching_tile_id.diverging();
+        next_state.current_tile_id = next_tile_id;
         let base_coord = b2vec(next_coord);
 
         let offset_x = if next_state.is_diverging {
@@ -1268,6 +1271,32 @@ impl ScanState {
         }
 
         Ok(ScanOutcome::Success(next_state))
+    }
+
+    pub(crate) fn signal_rotation_ok(&self, rotation: u16) -> bool {
+        let tile =
+            TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
+        let tile = match tile {
+            Some(tile) => tile,
+            None => {
+                return false;
+            }
+        };
+        let corrected_rotation = self
+            .current_tile_id
+            .with_rotation_wrapped(self.current_tile_id.rotation() + 4 - rotation)
+            .xor_flip_x(self.current_tile_id.flip_x())
+            .correct_rotation_for_x_flip(self.current_tile_id.flip_x())
+            .rotation();
+        println!("corrected rotation: {} => {}", rotation, corrected_rotation);
+        let bitmask = match (self.is_diverging, self.is_reversed) {
+            (false, false) => tile.straight_through_spawn_dirs & 0xf,
+            (false, true) => tile.straight_through_spawn_dirs >> 4,
+            (true, false) => tile.diverging_dirs_spawn_dirs & 0xf,
+            (true, true) => tile.diverging_dirs_spawn_dirs >> 4,
+        };
+        println!("bitmask: {:x}", bitmask);
+        bitmask & (1 << corrected_rotation) != 0
     }
 }
 
@@ -1323,6 +1352,8 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .get_by_name("carts:rail_tile")
                         .unwrap(),
                     allowable_speed: 90.0,
+                    // dummy
+                    current_tile_id: TileId::empty(),
                 };
                 state.advance_verbose(true, |coord| {
                     response.ctx.game_map().get_block(coord).into()
@@ -1346,6 +1377,8 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .get_by_name("carts:rail_tile")
                         .unwrap(),
                     allowable_speed: 90.0,
+                    // dummy
+                    current_tile_id: TileId::empty(),
                 };
                 response.ctx.run_deferred(move |ctx| {
                     for _ in 0..20 {
