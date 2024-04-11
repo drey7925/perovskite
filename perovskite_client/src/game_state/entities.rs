@@ -79,25 +79,29 @@ impl GameEntity {
     pub(crate) fn advance_state(&mut self) {
         let now = Instant::now();
         let mut elapsed = (now - self.current_move_started).as_secs_f32();
-
+        let mut any_popped = false;
         while self
             .move_queue
             .front()
             .is_some_and(|m| elapsed > m.total_time_seconds)
         {
             // println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
-            // println!(
-            //     "remaining buffer: {:?}",
-            //     self.move_queue
-            //         .iter()
-            //         .map(|m| m.total_time_seconds)
-            //         .sum::<f32>()
-            // );
+            any_popped = true;
             let popped_move = self.move_queue.pop_front().unwrap();
             // println!("popping move {:?}", popped_move);
             self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
             elapsed -= popped_move.total_time_seconds;
             self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
+        }
+        if any_popped {
+            println!(
+                "remaining buffer: {:?}",
+                self.move_queue
+                    .iter()
+                    .map(|m| m.total_time_seconds)
+                    .sum::<f32>()
+                    - elapsed
+            );
         }
     }
 
@@ -168,16 +172,20 @@ impl GameEntity {
         Ok(())
     }
 
-    pub(crate) fn as_transform(&self, base_position: Vector3<f64>) -> cgmath::Matrix4<f32> {
+    pub(crate) fn as_transform(
+        &self,
+        base_position: Vector3<f64>,
+        time: Instant,
+    ) -> cgmath::Matrix4<f32> {
         cgmath::Matrix4::from_translation(
-            (self.position() - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
+            (self.position(time) - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
         )
         .cast()
         .unwrap()
     }
 
-    pub(crate) fn position(&self) -> Vector3<f64> {
-        let time = (Instant::now() - self.current_move_started).as_secs_f32();
+    pub(crate) fn position(&self, time: Instant) -> Vector3<f64> {
+        let time = (time.saturating_duration_since(self.current_move_started)).as_secs_f32();
         self.move_queue
             .front()
             .map(|m| m.qproj(time))
@@ -228,6 +236,8 @@ pub(crate) struct EntityManager {
 
     pub(crate) fake_entity_vtx: Subbuffer<[CubeGeometryVertex]>,
     pub(crate) fake_entity_idx: Subbuffer<[u32]>,
+
+    pub(crate) attached_to_entity: Option<u64>,
 }
 impl EntityManager {
     pub(crate) fn new(block_renderer: &BlockRenderer) -> Result<Self> {
@@ -271,6 +281,7 @@ impl EntityManager {
                 },
                 idx.into_iter(),
             )?,
+            attached_to_entity: None,
         })
     }
 }

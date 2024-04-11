@@ -91,14 +91,6 @@ impl CommandManager {
             },
         );
 
-        commands.insert(
-            "entity_test".to_string(),
-            ChatCommand {
-                action: Box::new(SpawnTestEntityCommand),
-                help_text: "spawns a test entity at the player's location.".to_string(),
-            },
-        );
-
         Self { commands }
     }
     pub fn add_command(&mut self, name: String, command: ChatCommand) -> Result<()> {
@@ -440,108 +432,5 @@ impl ChatCommandHandler for ListPermissionsImpl {
         }
 
         Ok(())
-    }
-}
-
-struct SpawnTestEntityCommand;
-#[async_trait]
-impl ChatCommandHandler for SpawnTestEntityCommand {
-    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
-        if message.contains("many") {
-            context.run_deferred(|ctx| {
-                let mut rng = rand::thread_rng();
-                for _ in 0..1000 {
-                    let _ = ctx.entities().new_entity_blocking(
-                        ctx.initiator().position().unwrap().position
-                            + Vector3::new(
-                                rng.gen_range(-0.25..0.25),
-                                0.0,
-                                rng.gen_range(-0.25..0.25),
-                            ),
-                        Some(Box::pin(TestEntityCoro {})),
-                        EntityTypeId {
-                            class: FAKE_ENTITY_CLASS_ID,
-                            data: None,
-                        },
-                    );
-                }
-                Ok(())
-            });
-        }
-        let id = context
-            .entities()
-            .new_entity(
-                context.initiator().position().unwrap().position,
-                Some(Box::pin(TestEntityCoro {})),
-                EntityTypeId {
-                    class: FAKE_ENTITY_CLASS_ID,
-                    data: None,
-                },
-            )
-            .await;
-        context
-            .initiator()
-            .send_chat_message_async(ChatMessage::new_server_message(format!(
-                "Spawned entity {id}"
-            )))
-            .await
-    }
-}
-
-struct TestEntityCoro {}
-impl EntityCoroutine for TestEntityCoro {
-    fn plan_move(
-        self: Pin<&mut Self>,
-        services: &EntityCoroutineServices<'_>,
-        _current_position: Vector3<f64>,
-        whence: Vector3<f64>,
-        _when: f32,
-        _queue_space: usize,
-    ) -> CoroutineResult {
-        //println!("Planning move from {whence:?}");
-        let start_pos = BlockCoordinate::new(
-            whence.x.round() as i32,
-            whence.y.round() as i32,
-            whence.z.round() as i32,
-        );
-        let mut clear_dist = 0;
-        for i in 1..5 {
-            if let Some(coord) = start_pos.try_delta(0, 0, i) {
-                if let Some(id) = services.try_get_block(coord) {
-                    if id == BlockId(0) {
-                        clear_dist = i;
-                        continue;
-                    }
-                }
-            }
-            break;
-        }
-        //println!("Clear dist: {clear_dist}");
-        if clear_dist > 0 {
-            let time = clear_dist as f32;
-            CoroutineResult::Successful(
-                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(
-                    Movement {
-                        velocity: Vector3::new(0.0, 0.0, 1.0),
-                        acceleration: Vector3::new(0.0, 0.0, 0.0),
-                        face_direction: 0.0,
-                        move_time: time,
-                    }
-                    .into(),
-                ),
-            )
-        } else {
-            CoroutineResult::Successful(
-                crate::game_state::entities::EntityMoveDecision::QueueSingleMovement(
-                    Movement {
-                        velocity: Vector3::new(0.0, 0.0, 0.0),
-                        acceleration: Vector3::new(0.0, 0.0, 0.0),
-                        face_direction: 0.0,
-                        move_time: 1.0,
-                    }
-                    .into(),
-                ),
-            )
-        }
     }
 }

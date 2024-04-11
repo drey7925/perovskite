@@ -172,6 +172,7 @@ impl Player {
                 hotbar_slot: None,
                 granted_permissions: proto.permission.iter().cloned().collect(),
                 temporary_permissions: HashSet::new(),
+                attached_to_entity: None,
             }),
             sender,
             game_state,
@@ -242,6 +243,7 @@ impl Player {
                 hotbar_slot: None,
                 granted_permissions: game_state.game_behaviors().default_permissions.clone(),
                 temporary_permissions: HashSet::new(),
+                attached_to_entity: None,
             }
             .into(),
             sender,
@@ -374,6 +376,24 @@ impl Player {
     pub fn set_position_blocking(&self, position: Vector3<f64>) -> Result<()> {
         tokio::runtime::Handle::current().block_on(self.set_position(position))
     }
+
+    pub async fn attach_to_entity(&self, entity_id: u64) -> Result<()> {
+        self.state.lock().attached_to_entity = Some(entity_id);
+        self.sender.reinit_player_state.send(true).await?;
+        Ok(())
+    }
+
+    pub fn attach_to_entity_blocking(&self, entity_id: u64) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.attach_to_entity(entity_id))
+    }
+    pub async fn detach_from_entity(&self) -> Result<()> {
+        self.state.lock().attached_to_entity = None;
+        self.sender.reinit_player_state.send(true).await?;
+        Ok(())
+    }
+    pub fn detach_from_entity_blocking(&self) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.detach_from_entity())
+    }
 }
 
 pub(crate) struct PlayerState {
@@ -395,6 +415,8 @@ pub(crate) struct PlayerState {
     /// Permissions that this player has obtained using /elevate or similar
     /// They are sent to the client, but they are not stored in the database.
     pub(crate) temporary_permissions: HashSet<String>,
+    /// The player's attached entity, if any
+    pub(crate) attached_to_entity: Option<u64>,
 }
 impl PlayerState {
     pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cgmath::{vec2, vec3, InnerSpace, Vector3};
 use perovskite_core::{
     block_id::BlockId,
-    chat::{ChatMessage, SERVER_ERROR_COLOR},
+    chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
     constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
     protocol::items::item_def::QuantityType,
@@ -222,7 +222,7 @@ fn place_cart(
         }
     };
 
-    ctx.entities().new_entity_blocking(
+    let id = ctx.entities().new_entity_blocking(
         b2vec(rail_pos.try_delta(0, 1, 0).unwrap()),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
@@ -250,6 +250,11 @@ fn place_cart(
             data: None,
         },
     );
+
+    ctx.initiator().send_chat_message(
+        ChatMessage::new_server_message(format!("Spawned cart with id {}", id))
+            .with_color(SERVER_MESSAGE_COLOR),
+    )?;
 
     Ok(stack.decrement())
 }

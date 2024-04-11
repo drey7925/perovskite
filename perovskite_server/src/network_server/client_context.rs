@@ -894,6 +894,7 @@ fn make_client_state_update_message(
                         .iter()
                         .cloned()
                         .collect(),
+                    attached_to_entity: player_state.attached_to_entity.unwrap_or(0),
                 },
             )),
         }

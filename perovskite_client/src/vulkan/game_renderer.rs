@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 
@@ -97,21 +97,19 @@ impl ActiveGame {
         )
         .unwrap();
         self.cube_draw_calls.clear();
+        let start_time = Instant::now();
 
-        if self
-            .client_state
-            .input
-            .lock()
-            .is_pressed(crate::game_state::input::BoundAction::PhysicsDebug)
         {
             let entity_lock = self.client_state.entities.lock();
-            if let Some(max_ent) = entity_lock.entities.keys().max() {
-                player_position = entity_lock.entities.get(max_ent).unwrap().position();
+            if let Some(entity_id) = entity_lock.attached_to_entity {
+                if let Some(entity) = entity_lock.entities.get(&entity_id) {
+                    player_position = entity.position(start_time);
+                    self.client_state
+                        .physics_state
+                        .lock()
+                        .set_position(player_position);
+                }
             }
-            self.client_state
-                .physics_state
-                .lock()
-                .set_position(player_position);
         }
 
         if let Some(pointee) = tool_state.pointee {
@@ -128,7 +126,7 @@ impl ActiveGame {
             let mut entity_lock = self.client_state.entities.lock();
             for entity in entity_lock.entities.values_mut() {
                 entity.advance_state();
-                entity_coords.push(entity.as_transform(player_position))
+                entity_coords.push(entity.as_transform(player_position, start_time))
             }
             (
                 entity_coords,
