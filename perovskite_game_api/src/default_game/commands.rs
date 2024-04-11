@@ -63,6 +63,16 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
         Box::new(TestonlyPanicCommand),
         ": Panics the player's coroutine.",
     )?;
+    game_builder.add_command(
+        "attach_to_entity",
+        Box::new(AttachEntityCommand),
+        "<entity_id>: Attaches yourself to the given entity.",
+    )?;
+    game_builder.add_command(
+        "detach_from_entity",
+        Box::new(DetachEntityCommand),
+        ": Detaches yourself from the entity you're attached to.",
+    )?;
     Ok(())
 }
 
@@ -444,5 +454,48 @@ struct TestonlyPanicCommand;
 impl ChatCommandHandler for TestonlyPanicCommand {
     async fn handle(&self, _message: &str, _context: &HandlerContext<'_>) -> Result<()> {
         panic!("Test panic");
+    }
+}
+
+struct AttachEntityCommand;
+#[async_trait]
+impl ChatCommandHandler for AttachEntityCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if let EventInitiator::Player(p) = context.initiator() {
+            let parts = message.split(' ').collect::<Vec<_>>();
+            if parts.len() != 2 {
+                bail!("Incorrect usage: should be /attach entity_id");
+            }
+            let entity_id = parts[1].parse::<u64>()?;
+            p.player.attach_to_entity(entity_id).await?;
+            Ok(())
+        } else {
+            bail!("Only players can attach entities");
+        }
+    }
+
+    fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
+        context
+            .initiator()
+            .check_permission_if_player(permissions::WORLD_STATE)
+    }
+}
+
+struct DetachEntityCommand;
+#[async_trait]
+impl ChatCommandHandler for DetachEntityCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if let EventInitiator::Player(p) = context.initiator() {
+            p.player.detach_from_entity().await?;
+            Ok(())
+        } else {
+            bail!("Only players can attach entities");
+        }
+    }
+
+    fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
+        context
+            .initiator()
+            .check_permission_if_player(permissions::WORLD_STATE)
     }
 }
