@@ -15,9 +15,11 @@ use crate::default_game::basic_blocks::{
 
 const PROFILE_INPUT_SCALE: f64 = 1.0 / 160.0;
 const VALLEY_INPUT_SCALE: f64 = 1.0 / 800.0;
+const SLOW_MODULATOR_INPUT_SCALE: f64 = 1.0 / 320.0;
 const MODULATING_INPUT_SCALE: f64 = 1.0 / 80.0;
 const LIMESTONE_NOISE_SCALE: Vector3<f64> = Vector3::new(0.5, 0.03, 0.5);
 const LIMESTONE_SLOW_NOISE_SCALE: f64 = 1.0 / 40.0;
+const CAVES_INPUT_SCALE: f64 = 1.0 / 16.0;
 
 pub(crate) struct KarstGenerator {
     // The profile that the tops of mountains follow
@@ -35,6 +37,13 @@ pub(crate) struct KarstGenerator {
     // Contributes to limestone noise
     // Offset 14
     limestone_slow_noise: noise::SuperSimplex,
+    // Biases the modulator, changing slowly
+    // Offset 15
+    slow_modulator: noise::SuperSimplex,
+
+    // These two contribute to the direction bias for caves
+    // Offset 16
+    cave_control: noise::SuperSimplex,
 
     limestone: BlockId,
     light_limestone: BlockId,
@@ -51,6 +60,8 @@ impl KarstGenerator {
             modulating_noise: noise::SuperSimplex::new(seed.wrapping_add(12)),
             limestone_noise: noise::SuperSimplex::new(seed.wrapping_add(13)),
             limestone_slow_noise: noise::SuperSimplex::new(seed.wrapping_add(14)),
+            slow_modulator: noise::SuperSimplex::new(seed.wrapping_add(15)),
+            cave_control: noise::SuperSimplex::new(seed.wrapping_add(16)),
             limestone: blocks.get_by_name(LIMESTONE.0).expect("limestone"),
             light_limestone: blocks
                 .get_by_name(LIMESTONE_LIGHT.0)
@@ -70,7 +81,7 @@ impl KarstGenerator {
     }
 
     #[inline]
-    pub(crate) fn height(&self, xg: i32, zg: i32) -> f64 {
+    pub(crate) fn height(&self, xg: i32, zg: i32) -> (f64, f64, f64) {
         let profile = self.karst_profile_noise.get([
             xg as f64 * PROFILE_INPUT_SCALE,
             zg as f64 * PROFILE_INPUT_SCALE,
@@ -83,10 +94,29 @@ impl KarstGenerator {
         let raw_modulation = self.modulating_noise.get([
             xg as f64 * MODULATING_INPUT_SCALE,
             zg as f64 * MODULATING_INPUT_SCALE,
-        ]);
+        ]) + self.slow_modulator.get([
+            xg as f64 * SLOW_MODULATOR_INPUT_SCALE,
+            zg as f64 * SLOW_MODULATOR_INPUT_SCALE,
+        ]) * 0.25;
+
+        let cave_control = self
+            .cave_control
+            .get([xg as f64 * CAVES_INPUT_SCALE, zg as f64 * CAVES_INPUT_SCALE]);
 
         let modulation = (raw_modulation * 12.0 - 4.0).tanh() * 0.5 + 0.5;
-        (profile * modulation) + (valley * (1.0 - modulation))
+        // The cave excess is higher when modulation is higher, and is clamped to 0.
+        // modulation * 0.8 ranges from 0 to 0.8
+        //
+        let cave_excess = (modulation * 0.8 - cave_control - 0.3).clamp(0.0, 0.5);
+
+        let height = (profile * modulation) + (valley * (1.0 - modulation));
+        let valley_factor = if height < 0.0 { 1.25 } else { 0.5 };
+        let mut cave_ceiling = (valley * valley_factor) + (16.0 * cave_excess);
+        if raw_modulation < -0.33 {
+            cave_ceiling = valley - 1.0;
+        }
+
+        (height, valley, cave_ceiling)
     }
 
     pub(crate) fn generate(
@@ -95,6 +125,8 @@ impl KarstGenerator {
         x: u8,
         z: u8,
         height_map: &[[f64; 16]; 16],
+        cave_floors: &[[f64; 16]; 16],
+        cave_ceiling: &[[f64; 16]; 16],
         chunk: &mut MapChunk,
         gen_ore: impl Fn(BlockCoordinate) -> BlockId,
     ) {
@@ -102,13 +134,18 @@ impl KarstGenerator {
         let zg = 16 * chunk_coord.z + (z as i32);
 
         let blended_elevation = height_map[x as usize][z as usize];
+        let cave_floor = cave_floors[x as usize][z as usize];
+        let cave_ceiling = cave_ceiling[x as usize][z as usize];
+
         for y in 0..16 {
             let offset = ChunkOffset { x, y, z };
             let block_coord = chunk_coord.with_offset(offset);
 
             let vert_offset = block_coord.y - (blended_elevation as i32);
 
-            let block = if vert_offset > 0 {
+            let block = if vert_offset > 0
+                || ((block_coord.y as f64) > cave_floor && (block_coord.y as f64) < cave_ceiling)
+            {
                 if block_coord.y > 0 {
                     self.air
                 } else {

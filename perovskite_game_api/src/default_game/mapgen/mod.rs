@@ -48,8 +48,8 @@ const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
 const KARST_TENDENCY_INPUT_SCALE: f64 = 1.0 / 7200.0;
 
-// Next seed offset: 15
-// Offsets 10/11/12/13/14 are used for karst
+// Next seed offset: 18
+// Offsets 10-17 are used for karst
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Biome {
@@ -251,7 +251,8 @@ impl DefaultMapgen {
             elevation += self.elevation_noise.get(xg, zg) * rolling_hills_blend;
         }
         if karst_blend > 0.0 {
-            elevation += self.karst_noise.height(xg, zg) * karst_blend;
+            let (raw_elev, _floor, _ceil) = self.karst_noise.height(xg, zg);
+            elevation += raw_elev * karst_blend;
         }
         (macrobiome, elevation)
     }
@@ -268,6 +269,8 @@ impl DefaultMapgen {
         &self,
         chunk_coord: ChunkCoordinate,
         height_map: &mut [[f64; 16]; 16],
+        cave_floor_map: &mut [[f64; 16]; 16],
+        cave_ceil_map: &mut [[f64; 16]; 16],
         macrobiome_map: &mut [[Macrobiome; 16]; 16],
     ) {
         let mut rolling_hills_blend = [[0.0; 16]; 16];
@@ -298,11 +301,13 @@ impl DefaultMapgen {
         if karst_blend.iter().flatten().any(|&x| x > 0.0) {
             for x in 0..16 {
                 for z in 0..16 {
-                    height_map[x][z] += karst_blend[x][z]
-                        * self.karst_noise.height(
-                            (chunk_coord.x * 16) + x as i32,
-                            (chunk_coord.z * 16) + z as i32,
-                        );
+                    let (raw_height, raw_cave_floor, raw_cave_ceil) = self.karst_noise.height(
+                        (chunk_coord.x * 16) + x as i32,
+                        (chunk_coord.z * 16) + z as i32,
+                    );
+                    height_map[x][z] += karst_blend[x][z] * raw_height;
+                    cave_floor_map[x][z] += karst_blend[x][z] * raw_cave_floor;
+                    cave_ceil_map[x][z] += karst_blend[x][z] * raw_cave_ceil;
                 }
             }
         }
@@ -312,11 +317,19 @@ impl DefaultMapgen {
 impl MapgenInterface for DefaultMapgen {
     fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut MapChunk) {
         // todo subdivide by surface vs underground, etc. This is a very minimal MVP
-        let mut height_map = Box::new([[0.0; 16]; 16]);
-        let mut macrobiome_map = Box::new([[Macrobiome::RollingHills; 16]; 16]);
-        let mut biome_map = Box::new([[Biome::DefaultGrassy; 16]; 16]);
+        let mut height_map = [[0.0; 16]; 16];
+        let mut cave_floor_map: [[f64; 16]; 16] = [[0.0; 16]; 16];
+        let mut cave_ceil_map: [[f64; 16]; 16] = [[0.0; 16]; 16];
+        let mut macrobiome_map = [[Macrobiome::RollingHills; 16]; 16];
+        let mut biome_map = [[Biome::DefaultGrassy; 16]; 16];
 
-        self.prefill(chunk_coord, &mut height_map, &mut macrobiome_map);
+        self.prefill(
+            chunk_coord,
+            &mut height_map,
+            &mut cave_floor_map,
+            &mut cave_ceil_map,
+            &mut macrobiome_map,
+        );
 
         for x in 0..16 {
             for z in 0..16 {
@@ -333,10 +346,16 @@ impl MapgenInterface for DefaultMapgen {
                         );
                     }
                     Macrobiome::Karst => {
-                        self.karst_noise
-                            .generate(chunk_coord, x, z, &height_map, chunk, |coord| {
-                                self.generate_ore(coord)
-                            });
+                        self.karst_noise.generate(
+                            chunk_coord,
+                            x,
+                            z,
+                            &height_map,
+                            &cave_floor_map,
+                            &cave_ceil_map,
+                            chunk,
+                            |coord| self.generate_ore(coord),
+                        );
                     }
                 }
             }
