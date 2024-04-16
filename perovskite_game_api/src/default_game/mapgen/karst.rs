@@ -1,5 +1,6 @@
 //! Generates karst-like terrain, similar to places like Ha Long Bay and Ninh Binh
 
+use cgmath::Vector3;
 use noise::NoiseFn;
 use perovskite_core::{
     block_id::BlockId,
@@ -8,11 +9,15 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{blocks::BlockTypeManager, game_map::MapChunk};
 
-use crate::default_game::basic_blocks::{DIRT_WITH_GRASS, LIMESTONE_DARK, LIMESTONE_LIGHT, WATER};
+use crate::default_game::basic_blocks::{
+    DIRT_WITH_GRASS, LIMESTONE, LIMESTONE_DARK, LIMESTONE_LIGHT, WATER,
+};
 
 const PROFILE_INPUT_SCALE: f64 = 1.0 / 160.0;
 const VALLEY_INPUT_SCALE: f64 = 1.0 / 800.0;
 const MODULATING_INPUT_SCALE: f64 = 1.0 / 80.0;
+const LIMESTONE_NOISE_SCALE: Vector3<f64> = Vector3::new(0.5, 0.03, 0.5);
+const LIMESTONE_SLOW_NOISE_SCALE: f64 = 1.0 / 40.0;
 
 pub(crate) struct KarstGenerator {
     // The profile that the tops of mountains follow
@@ -27,7 +32,11 @@ pub(crate) struct KarstGenerator {
     // Limestone type noise
     // Offset 13
     limestone_noise: noise::SuperSimplex,
+    // Contributes to limestone noise
+    // Offset 14
+    limestone_slow_noise: noise::SuperSimplex,
 
+    limestone: BlockId,
     light_limestone: BlockId,
     dark_limestone: BlockId,
     dirt_grass: BlockId,
@@ -41,12 +50,15 @@ impl KarstGenerator {
             karst_valley_noise: noise::SuperSimplex::new(seed.wrapping_add(11)),
             modulating_noise: noise::SuperSimplex::new(seed.wrapping_add(12)),
             limestone_noise: noise::SuperSimplex::new(seed.wrapping_add(13)),
+            limestone_slow_noise: noise::SuperSimplex::new(seed.wrapping_add(14)),
+            limestone: blocks.get_by_name(LIMESTONE.0).expect("limestone"),
             light_limestone: blocks
                 .get_by_name(LIMESTONE_LIGHT.0)
                 .expect("limestone_light"),
             dark_limestone: blocks
                 .get_by_name(LIMESTONE_DARK.0)
                 .expect("limestone_dark"),
+
             dirt_grass: blocks.get_by_name(DIRT_WITH_GRASS.0).expect("dirt_grass"),
             air: blocks.get_by_name(AIR).expect("air"),
             water: blocks
@@ -56,21 +68,9 @@ impl KarstGenerator {
                 .unwrap(),
         }
     }
-    #[inline(always)]
-    pub(crate) fn generate(
-        &self,
-        chunk_coord: ChunkCoordinate,
-        x: u8,
-        z: u8,
-        height_map: &mut [[f64; 16]; 16],
-        chunk: &mut MapChunk,
-        blend_factor: f64,
-        blend_elevation: f64,
-        gen_ore: impl Fn(BlockCoordinate) -> BlockId,
-    ) {
-        let xg = 16 * chunk_coord.x + (x as i32);
-        let zg = 16 * chunk_coord.z + (z as i32);
 
+    #[inline]
+    pub(crate) fn height(&self, xg: i32, zg: i32) -> f64 {
         let profile = self.karst_profile_noise.get([
             xg as f64 * PROFILE_INPUT_SCALE,
             zg as f64 * PROFILE_INPUT_SCALE,
@@ -86,10 +86,22 @@ impl KarstGenerator {
         ]);
 
         let modulation = (raw_modulation * 12.0 - 4.0).tanh() * 0.5 + 0.5;
-        let elevation = (profile * modulation) + (valley * (1.0 - modulation));
-        let blended_elevation =
-            (blend_elevation * blend_factor) + (elevation * (1.0 - blend_factor));
-        height_map[x as usize][z as usize] = blended_elevation;
+        (profile * modulation) + (valley * (1.0 - modulation))
+    }
+
+    pub(crate) fn generate(
+        &self,
+        chunk_coord: ChunkCoordinate,
+        x: u8,
+        z: u8,
+        height_map: &[[f64; 16]; 16],
+        chunk: &mut MapChunk,
+        gen_ore: impl Fn(BlockCoordinate) -> BlockId,
+    ) {
+        let xg = 16 * chunk_coord.x + (x as i32);
+        let zg = 16 * chunk_coord.z + (z as i32);
+
+        let blended_elevation = height_map[x as usize][z as usize];
         for y in 0..16 {
             let offset = ChunkOffset { x, y, z };
             let block_coord = chunk_coord.with_offset(offset);
@@ -105,7 +117,23 @@ impl KarstGenerator {
             } else if vert_offset == 0 && block_coord.y >= 0 {
                 self.dirt_grass
             } else if block_coord.y > -32 {
-                self.light_limestone
+                let limestone_noise = self.limestone_noise.get([
+                    xg as f64 * LIMESTONE_NOISE_SCALE.x,
+                    y as f64 * LIMESTONE_NOISE_SCALE.y,
+                    zg as f64 * LIMESTONE_NOISE_SCALE.z,
+                ]);
+                let slow_limestone_noise = 0.25
+                    * self.limestone_slow_noise.get([
+                        xg as f64 * LIMESTONE_SLOW_NOISE_SCALE,
+                        zg as f64 * LIMESTONE_SLOW_NOISE_SCALE,
+                    ]);
+                if limestone_noise + slow_limestone_noise > 0.25 {
+                    self.dark_limestone
+                } else if limestone_noise + slow_limestone_noise < -0.25 {
+                    self.light_limestone
+                } else {
+                    self.limestone
+                }
             } else {
                 gen_ore(block_coord)
             };

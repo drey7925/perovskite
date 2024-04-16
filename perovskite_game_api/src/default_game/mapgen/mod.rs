@@ -48,8 +48,8 @@ const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
 const KARST_TENDENCY_INPUT_SCALE: f64 = 1.0 / 7200.0;
 
-// Next seed offset: 14
-// Offsets 10/11/12/13 are used for karst
+// Next seed offset: 15
+// Offsets 10/11/12/13/14 are used for karst
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Biome {
@@ -81,7 +81,7 @@ impl MacrobiomeNoise {
         if karst_value > 0.3 {
             (
                 Macrobiome::Karst,
-                ((0.35 - karst_value) * 10.0).clamp(0.0, 1.0),
+                ((0.5 - karst_value) * 5.0).clamp(0.0, 1.0),
             )
         } else {
             (Macrobiome::RollingHills, 0.0)
@@ -241,24 +241,86 @@ struct DefaultMapgen {
     ores: Vec<(OreDefinition, noise::SuperSimplex)>,
     seed: u32,
 }
+
+impl DefaultMapgen {
+    #[inline]
+    fn prefill_single(&self, xg: i32, zg: i32) -> (Macrobiome, f64) {
+        let (macrobiome, rolling_hills_blend, karst_blend) = self.macrobiome_single(xg, zg);
+        let mut elevation = 0.0;
+        if rolling_hills_blend > 0.0 {
+            elevation += self.elevation_noise.get(xg, zg) * rolling_hills_blend;
+        }
+        if karst_blend > 0.0 {
+            elevation += self.karst_noise.height(xg, zg) * karst_blend;
+        }
+        (macrobiome, elevation)
+    }
+
+    fn macrobiome_single(&self, xg: i32, zg: i32) -> (Macrobiome, f64, f64) {
+        let (macrobiome, blend_factor) = self.macrobiome_noise.get(xg, zg);
+        match macrobiome {
+            Macrobiome::RollingHills => (Macrobiome::RollingHills, 1.0, 0.0),
+            Macrobiome::Karst => (Macrobiome::Karst, blend_factor, 1.0 - blend_factor),
+        }
+    }
+
+    fn prefill(
+        &self,
+        chunk_coord: ChunkCoordinate,
+        height_map: &mut [[f64; 16]; 16],
+        macrobiome_map: &mut [[Macrobiome; 16]; 16],
+    ) {
+        let mut rolling_hills_blend = [[0.0; 16]; 16];
+        let mut karst_blend = [[0.0; 16]; 16];
+
+        for x in 0..16 {
+            for z in 0..16 {
+                let xg = (chunk_coord.x * 16) + x as i32;
+                let zg = (chunk_coord.z * 16) + z as i32;
+                (
+                    macrobiome_map[x][z],
+                    rolling_hills_blend[x][z],
+                    karst_blend[x][z],
+                ) = self.macrobiome_single(xg, zg);
+            }
+        }
+        if rolling_hills_blend.iter().flatten().any(|&x| x > 0.0) {
+            for x in 0..16 {
+                for z in 0..16 {
+                    height_map[x][z] += rolling_hills_blend[x][z]
+                        * self.elevation_noise.get(
+                            (chunk_coord.x * 16) + x as i32,
+                            (chunk_coord.z * 16) + z as i32,
+                        );
+                }
+            }
+        }
+        if karst_blend.iter().flatten().any(|&x| x > 0.0) {
+            for x in 0..16 {
+                for z in 0..16 {
+                    height_map[x][z] += karst_blend[x][z]
+                        * self.karst_noise.height(
+                            (chunk_coord.x * 16) + x as i32,
+                            (chunk_coord.z * 16) + z as i32,
+                        );
+                }
+            }
+        }
+    }
+}
+
 impl MapgenInterface for DefaultMapgen {
     fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut MapChunk) {
         // todo subdivide by surface vs underground, etc. This is a very minimal MVP
-        let mut height_map = Box::new([[f64::NAN; 16]; 16]);
+        let mut height_map = Box::new([[0.0; 16]; 16]);
+        let mut macrobiome_map = Box::new([[Macrobiome::RollingHills; 16]; 16]);
         let mut biome_map = Box::new([[Biome::DefaultGrassy; 16]; 16]);
-        let mut macrobiome_map: Box<[[Macrobiome; 16]; 16]> =
-            Box::new([[Macrobiome::RollingHills; 16]; 16]);
+
+        self.prefill(chunk_coord, &mut height_map, &mut macrobiome_map);
+
         for x in 0..16 {
             for z in 0..16 {
-                let (mut macrobiome, blend_factor) = self.macrobiome_noise.get(
-                    (chunk_coord.x * 16) + x as i32,
-                    (chunk_coord.z * 16) + z as i32,
-                );
-                if chunk_coord.y < -3 {
-                    macrobiome = Macrobiome::RollingHills;
-                }
-
-                macrobiome_map[x as usize][z as usize] = macrobiome;
+                let macrobiome = macrobiome_map[x as usize][z as usize];
                 match macrobiome {
                     Macrobiome::RollingHills => {
                         self.generate_rolling_hills(
@@ -266,29 +328,15 @@ impl MapgenInterface for DefaultMapgen {
                             x,
                             z,
                             &mut biome_map,
-                            &mut height_map,
+                            &height_map,
                             chunk,
                         );
                     }
                     Macrobiome::Karst => {
-                        let blend_elevation = if blend_factor > 0.0 {
-                            self.elevation_noise.get(
-                                (chunk_coord.x * 16) + x as i32,
-                                (chunk_coord.z * 16) + z as i32,
-                            )
-                        } else {
-                            0.
-                        };
-                        self.karst_noise.generate(
-                            chunk_coord,
-                            x,
-                            z,
-                            &mut height_map,
-                            chunk,
-                            blend_factor,
-                            blend_elevation,
-                            |coord| self.generate_ore(coord),
-                        );
+                        self.karst_noise
+                            .generate(chunk_coord, x, z, &height_map, chunk, |coord| {
+                                self.generate_ore(coord)
+                            });
                     }
                 }
             }
@@ -372,8 +420,13 @@ impl DefaultMapgen {
                             biome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
                         )
                     } else {
-                        let elevation = self.elevation_noise.get(x, z);
-                        let biome = self.biome_noise.get(x, z, elevation);
+                        let (macrobiome, elevation) = self.prefill_single(x, z);
+
+                        let biome = match macrobiome {
+                            Macrobiome::RollingHills => self.biome_noise.get(x, z, elevation),
+                            // TODO karst biomes
+                            Macrobiome::Karst => Biome::DefaultGrassy,
+                        };
                         (elevation as i32, biome)
                     };
                     if y <= 0 {
@@ -595,17 +648,16 @@ impl DefaultMapgen {
         x: u8,
         z: u8,
         biome_map: &mut [[Biome; 16]; 16],
-        height_map: &mut [[f64; 16]; 16],
+        height_map: &[[f64; 16]; 16],
         chunk: &mut MapChunk,
     ) {
         let xg = 16 * chunk_coord.x + (x as i32);
         let zg = 16 * chunk_coord.z + (z as i32);
 
-        let elevation = self.elevation_noise.get(xg, zg);
+        let elevation = height_map[x as usize][z as usize];
         let biome = self.biome_noise.get(xg, zg, elevation);
 
         biome_map[x as usize][z as usize] = biome;
-        height_map[x as usize][z as usize] = elevation;
 
         for y in 0..16 {
             let offset = ChunkOffset { x, y, z };
