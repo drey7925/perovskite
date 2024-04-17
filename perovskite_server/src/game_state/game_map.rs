@@ -1566,10 +1566,21 @@ impl ServerGameMap {
     }
 
     pub(crate) async fn do_shutdown(&self) -> Result<()> {
+        tracing::info!("Shutting down game map");
         let timers = self.timer_controller.lock().take();
         match timers {
             Some(timers) => {
-                timers.shutdown().await.unwrap();
+                match tokio::time::timeout(Duration::from_secs(10), timers.shutdown()).await {
+                    Ok(Ok(())) => {
+                        tracing::info!("Shut down timer controller");
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("Error shutting down timer controller: {e:?}");
+                    }
+                    Err(_) => {
+                        tracing::error!("Timed out waiting for timer controller to shut down");
+                    }
+                }
             }
             None => {
                 tracing::warn!("Tried to shutdown timer controller but it was never brought up");
@@ -1578,12 +1589,26 @@ impl ServerGameMap {
         // We need to stop the timers before we stop the writeback threads, since the timers might
         // try to write to the map, which requires a writeback thread to actually write back.
         self.shutdown.cancel();
-        for i in 0..NUM_LOCK_SHARDS {
-            let writeback_handle = self.writeback_handles[i].lock().take();
-            writeback_handle.unwrap().await??;
+        let await_task = async {
+            for i in 0..NUM_LOCK_SHARDS {
+                let writeback_handle = self.writeback_handles[i].lock().take();
+                writeback_handle.unwrap().await??;
 
-            let cleanup_handle = self.cleanup_handles[i].lock().take();
-            cleanup_handle.unwrap().await??;
+                let cleanup_handle = self.cleanup_handles[i].lock().take();
+                cleanup_handle.unwrap().await??;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        match tokio::time::timeout(Duration::from_secs(10), await_task).await {
+            Ok(Ok(())) => {
+                tracing::info!("Shut down async map workers");
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Error shutting down async map workers: {e:?}");
+            }
+            Err(_) => {
+                tracing::error!("Timed out waiting for async map workers to shut down");
+            }
         }
         self.flush();
 

@@ -31,8 +31,8 @@ impl RocksDbBackend {
         opts.create_if_missing(true);
         opts.optimize_for_point_lookup(128);
         let db = DB::open(&opts, path.as_ref())?;
-        log::info!("Opened DB at {:?}", path.as_ref());
-        log::info!(
+        tracing::info!("Opened DB at {:?}", path.as_ref());
+        tracing::info!(
             "db stats: \n{}\n{}\ntotal size: {}",
             db.property_value("rocksdb.stats").unwrap().unwrap(),
             db.property_value("rocksdb.levelstats").unwrap().unwrap(),
@@ -45,8 +45,12 @@ impl RocksDbBackend {
 }
 impl Drop for RocksDbBackend {
     fn drop(&mut self) {
-        log::info!("Closing DB");
-        log::info!(
+        tracing::info!("Closing DB");
+        match self.db.flush() {
+            Ok(_) => {}
+            Err(e) => tracing::error!("Failed to flush DB: {}", e),
+        }
+        tracing::info!(
             "db stats: \n{}\n{}\ntotal size: {}",
             self.db.property_value("rocksdb.stats").unwrap().unwrap(),
             self.db
