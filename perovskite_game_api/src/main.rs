@@ -109,4 +109,5 @@ fn main() {
     colors::register_dyes(&mut game).unwrap();
 
     game.run_game_server().unwrap();
+    tracing::info!("Game server has shut down; exiting");
 }

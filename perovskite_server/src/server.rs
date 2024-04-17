@@ -121,10 +121,10 @@ impl Server {
             tokio::select! {
                 result = tokio::signal::ctrl_c() => {
                     result.unwrap();
-                    log::info!("Ctrl+C received, shutting down network service");
+                    tracing::info!("Ctrl+C received, shutting down network service");
                 },
                 _ = self.game_state().await_start_shutdown() => {
-                    log::info!("Game shutdown requested programmatically; shutting down network serivce");
+                    tracing::info!("Game shutdown requested programmatically; shutting down network serivce");
                 }
             }
             self.game_state.start_shutdown();
@@ -133,7 +133,9 @@ impl Server {
 }
 impl Drop for Server {
     fn drop(&mut self) {
-        self.runtime.block_on(self.game_state.finish_shutdown());
+        tracing::info!("Server dropped, starting shutdown");
+        self.runtime.block_on(self.game_state.shut_down());
+        tracing::info!("Server shutdown complete.");
     }
 }
 
@@ -159,12 +161,12 @@ impl ServerBuilder {
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
         if !Path::exists(&args.data_dir) {
             std::fs::create_dir(&args.data_dir)?;
-            log::info!("Created new data directory at {:?}", args.data_dir);
+            tracing::info!("Created new data directory at {:?}", args.data_dir);
         } else {
             if !Path::is_dir(&args.data_dir) {
                 bail!("Specified data directory is not a directory.");
             }
-            log::info!("Loaded existing data directory at {:?}", args.data_dir);
+            tracing::info!("Loaded existing data directory at {:?}", args.data_dir);
         }
 
         let mut db_dir = args.data_dir.clone();

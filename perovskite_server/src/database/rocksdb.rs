@@ -24,7 +24,6 @@ use super::database_engine::GameDatabase;
 
 pub(crate) struct RocksDbBackend {
     db: rocksdb::DB,
-    tracy: tracy_client::Client,
 }
 impl RocksDbBackend {
     pub(crate) fn new<P: AsRef<Path>>(path: P) -> Result<RocksDbBackend> {
@@ -41,10 +40,24 @@ impl RocksDbBackend {
                 .unwrap()
                 .unwrap()
         );
-        Ok(RocksDbBackend {
-            db,
-            tracy: tracy_client::Client::start(),
-        })
+        Ok(RocksDbBackend { db })
+    }
+}
+impl Drop for RocksDbBackend {
+    fn drop(&mut self) {
+        log::info!("Closing DB");
+        log::info!(
+            "db stats: \n{}\n{}\ntotal size: {}",
+            self.db.property_value("rocksdb.stats").unwrap().unwrap(),
+            self.db
+                .property_value("rocksdb.levelstats")
+                .unwrap()
+                .unwrap(),
+            self.db
+                .property_value("rocksdb.total-sst-files-size")
+                .unwrap()
+                .unwrap()
+        );
     }
 }
 impl GameDatabase for RocksDbBackend {
