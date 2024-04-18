@@ -10,13 +10,14 @@ use perovskite_core::{
 use perovskite_server::game_state::{blocks::BlockTypeManager, game_map::MapChunk};
 
 use crate::default_game::basic_blocks::{
-    DIRT_WITH_GRASS, LIMESTONE, LIMESTONE_DARK, LIMESTONE_LIGHT, WATER,
+    DIRT, DIRT_WITH_GRASS, LIMESTONE, LIMESTONE_DARK, LIMESTONE_LIGHT, WATER,
 };
 
 const PROFILE_INPUT_SCALE: f64 = 1.0 / 160.0;
 const VALLEY_INPUT_SCALE: f64 = 1.0 / 800.0;
 const SLOW_MODULATOR_INPUT_SCALE: f64 = 1.0 / 320.0;
 const MODULATING_INPUT_SCALE: f64 = 1.0 / 80.0;
+const MODULATION_SLOPE_INPUT_SCALE: f64 = 1.0 / 80.0;
 const LIMESTONE_NOISE_SCALE: Vector3<f64> = Vector3::new(0.5, 0.03, 0.5);
 const LIMESTONE_SLOW_NOISE_SCALE: f64 = 1.0 / 40.0;
 const CAVES_INPUT_SCALE: f64 = 1.0 / 16.0;
@@ -40,15 +41,18 @@ pub(crate) struct KarstGenerator {
     // Biases the modulator, changing slowly
     // Offset 15
     slow_modulator: noise::SuperSimplex,
-
     // These two contribute to the direction bias for caves
     // Offset 16
     cave_control: noise::SuperSimplex,
+    // Adjusts the modulation slope feeding into the tanh
+    // Offset 17
+    modulation_slope: noise::SuperSimplex,
 
     limestone: BlockId,
     light_limestone: BlockId,
     dark_limestone: BlockId,
     dirt_grass: BlockId,
+    dirt: BlockId,
     air: BlockId,
     water: BlockId,
 }
@@ -62,6 +66,7 @@ impl KarstGenerator {
             limestone_slow_noise: noise::SuperSimplex::new(seed.wrapping_add(14)),
             slow_modulator: noise::SuperSimplex::new(seed.wrapping_add(15)),
             cave_control: noise::SuperSimplex::new(seed.wrapping_add(16)),
+            modulation_slope: noise::SuperSimplex::new(seed.wrapping_add(17)),
             limestone: blocks.get_by_name(LIMESTONE.0).expect("limestone"),
             light_limestone: blocks
                 .get_by_name(LIMESTONE_LIGHT.0)
@@ -71,6 +76,7 @@ impl KarstGenerator {
                 .expect("limestone_dark"),
 
             dirt_grass: blocks.get_by_name(DIRT_WITH_GRASS.0).expect("dirt_grass"),
+            dirt: blocks.get_by_name(DIRT.0).expect("dirt"),
             air: blocks.get_by_name(AIR).expect("air"),
             water: blocks
                 .get_by_name(WATER.0)
@@ -103,17 +109,29 @@ impl KarstGenerator {
             .cave_control
             .get([xg as f64 * CAVES_INPUT_SCALE, zg as f64 * CAVES_INPUT_SCALE]);
 
-        let modulation = (raw_modulation * 12.0 - 4.0).tanh() * 0.5 + 0.5;
+        // The tanh lands between -1 and 1
+        // Multiplying by 0.6 gives us -0.6 to 0.6
+        // We subsequently add 0.4 and clamp to [0, 1] to get a sharp cutoff on the
+        // bottom
+        let recentered = raw_modulation * 12.0 - 4.0;
+        let scaled = recentered
+            * (0.7
+                + 0.4
+                    * self.modulation_slope.get([
+                        xg as f64 * MODULATION_SLOPE_INPUT_SCALE,
+                        zg as f64 * MODULATION_SLOPE_INPUT_SCALE,
+                    ]));
+        let modulation = (scaled.tanh() * 0.6 + 0.4).clamp(0.0, 1.0);
         // The cave excess is higher when modulation is higher, and is clamped to 0.
-        // modulation * 0.8 ranges from 0 to 0.8
-        //
         let cave_excess = (modulation * 0.8 - cave_control - 0.3).clamp(0.0, 0.5);
 
         let height = (profile * modulation) + (valley * (1.0 - modulation));
         let valley_factor = if height < 0.0 { 1.25 } else { 0.5 };
         let mut cave_ceiling = (valley * valley_factor) + (16.0 * cave_excess);
-        if raw_modulation < -0.33 {
-            cave_ceiling = valley - 1.0;
+        if cave_ceiling < -0.0 || raw_modulation < 0.3 {
+            // avoid weird floating mountains that sit upon a cushion of water
+            // also avoid weird patches of bare limestone whenever we spawn a cave not in a valley.
+            cave_ceiling = valley - 100.0;
         }
 
         (height, valley, cave_ceiling)
@@ -151,8 +169,12 @@ impl KarstGenerator {
                 } else {
                     self.water
                 }
-            } else if vert_offset == 0 && block_coord.y >= 0 {
-                self.dirt_grass
+            } else if vert_offset == 0 {
+                if block_coord.y >= 0 {
+                    self.dirt_grass
+                } else {
+                    self.dirt
+                }
             } else if block_coord.y > -32 {
                 let limestone_noise = self.limestone_noise.get([
                     xg as f64 * LIMESTONE_NOISE_SCALE.x,

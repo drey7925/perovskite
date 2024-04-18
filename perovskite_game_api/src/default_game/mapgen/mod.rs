@@ -40,6 +40,10 @@ const TALL_GRASS_DENSITY_INPUT_SCALE: f64 = 1.0 / 120.0;
 const TALL_GRASS_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
 const TALL_GRASS_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
 
+const VINES_DENSITY_INPUT_SCALE: f64 = 1.0 / 120.0;
+const VINES_DENSITY_OUTPUT_SCALE: f64 = 0.1;
+const VINES_DENSITY_OUTPUT_OFFSET: f64 = 0.1;
+
 const FLOWER_DENSITY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const FLOWER_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
 const FLOWER_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
@@ -48,8 +52,8 @@ const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
 const KARST_TENDENCY_INPUT_SCALE: f64 = 1.0 / 7200.0;
 
-// Next seed offset: 18
-// Offsets 10-17 are used for karst
+// Next seed offset: 19
+// Offsets 10-18 are used for karst
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Biome {
@@ -360,7 +364,7 @@ impl MapgenInterface for DefaultMapgen {
                 }
             }
         }
-        self.generate_vegetation(chunk_coord, chunk, &height_map, &biome_map);
+        self.generate_vegetation(chunk_coord, chunk, &height_map, &macrobiome_map, &biome_map);
     }
 }
 
@@ -423,6 +427,7 @@ impl DefaultMapgen {
         chunk_coord: ChunkCoordinate,
         chunk: &mut MapChunk,
         heightmap: &[[f64; 16]; 16],
+        macrobiome_map: &[[Macrobiome; 16]; 16],
         biome_map: &[[Biome; 16]; 16],
     ) {
         for i in -3..18 {
@@ -431,11 +436,12 @@ impl DefaultMapgen {
                     .checked_add(i)
                     .zip((chunk_coord.z * 16).checked_add(j));
                 if let Some((x, z)) = block_xz {
-                    let (y, biome) = if x.div_euclid(16) == chunk_coord.x
+                    let (yf, macrobiome, biome) = if x.div_euclid(16) == chunk_coord.x
                         && z.div_euclid(16) == chunk_coord.z
                     {
                         (
-                            heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize] as i32,
+                            heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
+                            macrobiome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
                             biome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
                         )
                     } else {
@@ -446,13 +452,14 @@ impl DefaultMapgen {
                             // TODO karst biomes
                             Macrobiome::Karst => Biome::DefaultGrassy,
                         };
-                        (elevation as i32, biome)
+                        (elevation, macrobiome, biome)
                     };
+                    let y = yf as i32;
                     if y <= 0 {
                         continue;
                     }
-                    match biome {
-                        Biome::DefaultGrassy => {
+                    match (macrobiome, biome) {
+                        (Macrobiome::RollingHills, Biome::DefaultGrassy) => {
                             let tree_value = self.fast_uniform_2d(x, z, self.seed);
                             let tree_cutoff = self.tree_density_noise.get([
                                 (x as f64) * TREE_DENSITY_INPUT_SCALE,
@@ -484,10 +491,10 @@ impl DefaultMapgen {
                             let tall_grass_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(4));
                             let tall_grass_cutoff = self.flower_density_noise.get([
-                                (x as f64) * FLOWER_DENSITY_INPUT_SCALE,
-                                (z as f64) * FLOWER_DENSITY_INPUT_SCALE,
-                            ]) * FLOWER_DENSITY_OUTPUT_SCALE
-                                + FLOWER_DENSITY_OUTPUT_OFFSET;
+                                (x as f64) * TALL_GRASS_DENSITY_INPUT_SCALE,
+                                (z as f64) * TALL_GRASS_DENSITY_INPUT_SCALE,
+                            ]) * TALL_GRASS_DENSITY_OUTPUT_SCALE
+                                + TALL_GRASS_DENSITY_OUTPUT_OFFSET;
                             if tall_grass_value < tall_grass_cutoff {
                                 self.make_simple_foliage(
                                     chunk_coord,
@@ -499,7 +506,7 @@ impl DefaultMapgen {
                                 );
                             }
                         }
-                        Biome::Desert => {
+                        (Macrobiome::RollingHills, Biome::Desert) => {
                             let cactus_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(1));
                             let cactus_cutoff = self.cactus_density_noise.get([
@@ -514,8 +521,43 @@ impl DefaultMapgen {
                                 self.make_cactus(chunk_coord, chunk, x, y, z, cactus_height);
                             }
                         }
-                        Biome::SandyBeach => {
+                        (Macrobiome::RollingHills, Biome::SandyBeach) => {
                             // TODO beach plants?
+                        }
+                        (Macrobiome::Karst, _) => {
+                            if y <= 20 {
+                                let tree_value = self.fast_uniform_2d(x, z, self.seed);
+                                let tree_cutoff = self.tree_density_noise.get([
+                                    (x as f64) * TREE_DENSITY_INPUT_SCALE,
+                                    (z as f64) * TREE_DENSITY_INPUT_SCALE,
+                                ]) * TREE_DENSITY_OUTPUT_SCALE
+                                    + TREE_DENSITY_OUTPUT_OFFSET;
+                                if tree_value < tree_cutoff {
+                                    self.make_tree(chunk_coord, chunk, x, y, z);
+                                }
+                            } else {
+                                // vines
+                                // TODO: Apply vines to the whole surface of a karst formation,
+                                //       not just the top
+                                let tall_grass_value =
+                                    self.fast_uniform_2d(x, z, self.seed.wrapping_add(4)) - 0.2;
+                                let tall_grass_cutoff = self.flower_density_noise.get([
+                                    (x as f64) * VINES_DENSITY_INPUT_SCALE,
+                                    (z as f64) * VINES_DENSITY_INPUT_SCALE,
+                                ]) * VINES_DENSITY_OUTPUT_OFFSET
+                                    + VINES_DENSITY_OUTPUT_SCALE;
+
+                                if tall_grass_value < tall_grass_cutoff {
+                                    self.make_simple_foliage(
+                                        chunk_coord,
+                                        chunk,
+                                        x,
+                                        y,
+                                        z,
+                                        self.tall_grass,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -656,7 +698,9 @@ impl DefaultMapgen {
     ) {
         let coord = BlockCoordinate::new(x, y + 1, z);
         if coord.chunk() == chunk_coord {
-            chunk.set_block(coord.offset(), block, None);
+            if chunk.get_block(coord.offset()) == self.air {
+                chunk.set_block(coord.offset(), block, None);
+            }
         }
     }
 
