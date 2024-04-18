@@ -10,11 +10,11 @@ use crate::{
         chunk::SnappyDecodeHelper,
         entities::{self, GameEntity},
         items::ClientInventory,
-        ClientState, FastChunkNeighbors, GameAction,
+        ChunkManager, ChunkMap, ClientState, FastChunkNeighbors, GameAction, LightColumnMap,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cgmath::{vec3, InnerSpace};
 use futures::StreamExt;
 use parking_lot::Mutex;
@@ -34,6 +34,41 @@ use super::mesh_worker::{
     NeighborPropagator,
 };
 
+struct SharedState {
+    protocol_version: u32,
+    // Some messages are sent straight from the inbound context, namely protocol bugchecks
+    outbound_tx: mpsc::Sender<rpc::StreamToServer>,
+    client_state: Arc<ClientState>,
+    ack_map: Mutex<HashMap<u64, Instant>>,
+    mesh_workers: Vec<Arc<MeshWorker>>,
+    neighbor_propagators: Vec<Arc<NeighborPropagator>>,
+
+    batcher: Arc<MeshBatcher>,
+    initial_state_notification: Arc<tokio::sync::Notify>,
+    cancellation: CancellationToken,
+}
+impl SharedState {
+    async fn send_bugcheck(&self, description: String) -> Result<()> {
+        log::error!("Protocol bugcheck: {}", description);
+        self.outbound_tx
+            .send(rpc::StreamToServer {
+                sequence: 0,
+                client_tick: 0,
+                client_message: Some(rpc::stream_to_server::ClientMessage::BugCheck(
+                    rpc::ClientBugCheck {
+                        description,
+                        backtrace: backtrace::Backtrace::force_capture().to_string(),
+                        protocol_version: self.protocol_version,
+                        min_protocol_version: MIN_PROTOCOL_VERSION,
+                        max_protocol_version: MAX_PROTOCOL_VERSION,
+                    },
+                )),
+            })
+            .await?;
+        Ok(())
+    }
+}
+
 pub(crate) async fn make_contexts(
     client_state: Arc<ClientState>,
     tx_send: mpsc::Sender<StreamToServer>,
@@ -45,7 +80,6 @@ pub(crate) async fn make_contexts(
 ) -> Result<(InboundContext, OutboundContext)> {
     let cancellation = client_state.shutdown.clone();
 
-    let ack_map = Arc::new(Mutex::new(HashMap::new()));
     let mut mesh_workers = vec![];
     let mesh_worker_handles = futures::stream::FuturesUnordered::new();
     for _ in 0..client_state.settings.load().render.num_mesh_workers {
@@ -63,57 +97,46 @@ pub(crate) async fn make_contexts(
 
     let (batcher, batcher_handle) = MeshBatcher::new(client_state.clone());
 
-    let inbound = InboundContext {
-        outbound_tx: tx_send.clone(),
-        inbound_rx: stream,
-        client_state: client_state.clone(),
-        cancellation: cancellation.clone(),
-        ack_map: ack_map.clone(),
-        mesh_workers: mesh_workers.clone(),
-        mesh_worker_handles,
-        neighbor_propagators: neighbor_propagators.clone(),
-        neighbor_propagator_handles,
-        batcher,
-        batcher_handle,
-        snappy_helper: SnappyDecodeHelper::new(),
+    let shared_state = Arc::new(SharedState {
         protocol_version,
+        outbound_tx: tx_send,
+        client_state,
+        ack_map: Mutex::new(HashMap::new()),
+        mesh_workers,
+        neighbor_propagators,
+        batcher,
         initial_state_notification,
+        cancellation,
+    });
+
+    let inbound = InboundContext {
+        inbound_rx: stream,
+        shared_state: shared_state.clone(),
+        mesh_worker_handles,
+        neighbor_propagator_handles,
+        batcher_handle,
+
+        snappy_helper: SnappyDecodeHelper::new(),
         inline_nprop_scratchpad: NeighborPropagationScratchpad::default(),
         inline_fcn_scratchpad: FastChunkNeighbors::default(),
     };
 
     let outbound = OutboundContext {
-        outbound_tx: tx_send,
+        shared_state,
         sequence: 1,
-        client_state,
-        cancellation,
-        ack_map,
         action_receiver,
         last_pos_update_seq: None,
-        mesh_workers,
-        neighbor_propagators,
-        protocol_version,
     };
 
     Ok((inbound, outbound))
 }
 
 pub(crate) struct OutboundContext {
-    outbound_tx: mpsc::Sender<rpc::StreamToServer>,
     sequence: u64,
-    client_state: Arc<ClientState>,
-    // Cancellation, shared with the inbound context
-    pub(crate) cancellation: CancellationToken,
-    ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
 
     action_receiver: mpsc::Receiver<GameAction>,
     last_pos_update_seq: Option<u64>,
-
-    // Used only for pacing
-    mesh_workers: Vec<Arc<MeshWorker>>,
-    neighbor_propagators: Vec<Arc<NeighborPropagator>>,
-
-    protocol_version: u32,
+    shared_state: Arc<SharedState>,
 }
 impl OutboundContext {
     async fn send_sequenced_message(
@@ -123,8 +146,12 @@ impl OutboundContext {
         // todo tick
         let start_time = Instant::now();
         self.sequence += 1;
-        self.ack_map.lock().insert(self.sequence, Instant::now());
-        self.outbound_tx
+        self.shared_state
+            .ack_map
+            .lock()
+            .insert(self.sequence, Instant::now());
+        self.shared_state
+            .outbound_tx
             .send(rpc::StreamToServer {
                 sequence: self.sequence,
                 client_tick: 0,
@@ -140,7 +167,7 @@ impl OutboundContext {
     async fn send_position_update(&mut self, pos: PlayerPositionUpdate) -> Result<()> {
         if let Some(last_pos_send) = self
             .last_pos_update_seq
-            .and_then(|x| self.ack_map.lock().get(&x).copied())
+            .and_then(|x| self.shared_state.ack_map.lock().get(&x).copied())
         {
             // We haven't gotten an ack for the last pos update; withhold the current one
             let delay = Instant::now() - last_pos_send;
@@ -156,19 +183,21 @@ impl OutboundContext {
 
         // If this overflows, the client is severely behind (by 4 billion chunks!) and may as well crash
         let pending_chunks = self
+            .shared_state
             .mesh_workers
             .iter()
             .map(|worker| worker.queue_len())
             .sum::<usize>()
             .max(
-                self.neighbor_propagators
+                self.shared_state
+                    .neighbor_propagators
                     .iter()
                     .map(|x| x.queue_len())
                     .sum::<usize>(),
             )
             .try_into()
             .unwrap();
-        let hotbar_slot = self.client_state.hud.lock().hotbar_slot;
+        let hotbar_slot = self.shared_state.client_state.hud.lock().hotbar_slot;
         let sequence = self
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
                 rpc::ClientUpdate {
@@ -183,7 +212,7 @@ impl OutboundContext {
     }
 
     async fn handle_game_action(&mut self, action: GameAction) -> Result<()> {
-        self.send_position_update(self.client_state.last_position())
+        self.send_position_update(self.shared_state.client_state.last_position())
             .await?;
         match action {
             GameAction::Dig(action) => {
@@ -260,14 +289,14 @@ impl OutboundContext {
     pub(crate) async fn run_outbound_loop(&mut self) -> Result<()> {
         let mut position_tx_timer = tokio::time::interval(Duration::from_secs_f64(0.1));
         position_tx_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        while !self.cancellation.is_cancelled() {
+        while !self.shared_state.cancellation.is_cancelled() {
             tokio::select! {
                 _ = position_tx_timer.tick() => {
                     // TODO send updates at a lower rate if substantially unchanged
-                    self.send_position_update(self.client_state.last_position()).await?;
+                    self.send_position_update(self.shared_state.client_state.last_position()).await?;
                 },
 
-                _ = self.cancellation.cancelled() => {
+                _ = self.shared_state.cancellation.cancelled() => {
                     log::info!("Outbound stream context detected cancellation and shutting down")
                     // pass
                 }
@@ -277,7 +306,7 @@ impl OutboundContext {
                         Some(x) => self.handle_game_action(x).await?,
                         None => {
                             log::warn!("Action sender closed, shutting down outbound loop");
-                            self.cancellation.cancel();
+                            self.shared_state.cancellation.cancel();
                         }
                     }
                 }
@@ -289,53 +318,40 @@ impl OutboundContext {
 }
 
 pub(crate) struct InboundContext {
-    // Some messages are sent straight from the inbound context, namely protocol bugchecks
-    outbound_tx: mpsc::Sender<rpc::StreamToServer>,
     inbound_rx: tonic::Streaming<rpc::StreamToClient>,
-    client_state: Arc<ClientState>,
-    // Cancellation, shared with the inbound context
-    pub(crate) cancellation: CancellationToken,
+    shared_state: Arc<SharedState>,
 
-    ack_map: Arc<Mutex<HashMap<u64, Instant>>>,
-    mesh_workers: Vec<Arc<MeshWorker>>,
     mesh_worker_handles: futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
-    neighbor_propagators: Vec<Arc<NeighborPropagator>>,
     neighbor_propagator_handles:
         futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
-
-    batcher: Arc<MeshBatcher>,
     batcher_handle: tokio::task::JoinHandle<Result<()>>,
 
     snappy_helper: SnappyDecodeHelper,
-    protocol_version: u32,
-
-    initial_state_notification: Arc<tokio::sync::Notify>,
-
     inline_nprop_scratchpad: NeighborPropagationScratchpad,
     inline_fcn_scratchpad: FastChunkNeighbors,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
-        while !self.cancellation.is_cancelled() {
+        while !self.shared_state.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
                     match message {
                         Err(e) => {
                             log::warn!("Server sent an error: {:?}", e);
-                            *self.client_state.pending_error.lock() = Some(format!("{:?}", e));
+                            *self.shared_state.client_state.pending_error.lock() = Some(format!("{:?}", e));
                             return Err(e.into());
                         },
                         Ok(None) => {
                             log::info!("Server disconnected");
-                            let mut pending_error = self.client_state.pending_error.lock();
+                            let mut pending_error = self.shared_state.client_state.pending_error.lock();
                             if pending_error.is_none() {
                                 *pending_error = Some("Server disconnected unexpectedly without sending a detailed error message".to_string());
                             }
 
-                            self.cancellation.cancel();
+                            self.shared_state.cancellation.cancel();
                         }
-                        Ok(Some(message)) => {
-                            match self.handle_message(&message).await {
+                        Ok(Some(mut message)) => {
+                            match self.handle_message(&mut message).await {
                                 Ok(_) => {},
                                 Err(e) => {
                                     log::warn!("Client failed to handle message: {:?}, error: {:?}", message, e);
@@ -345,7 +361,7 @@ impl InboundContext {
                     }
 
                 }
-                _ = self.cancellation.cancelled() => {
+                _ = self.shared_state.cancellation.cancelled() => {
                     log::info!("Inbound stream context detected cancellation and shutting down")
                     // pass
                 },
@@ -364,7 +380,7 @@ impl InboundContext {
                             log::error!("Mesh worker exited unexpectedly");
                         }
                     }
-                    return result.unwrap()?;
+                    break;
                 }
                 result = &mut self.neighbor_propagator_handles.next() => {
                     match &result {
@@ -381,7 +397,7 @@ impl InboundContext {
                             log::error!("Neighbor propagator exited unexpectedly");
                         }
                     }
-                    return result.unwrap()?;
+                    break;
                 },
                 result = &mut self.batcher_handle => {
                     match &result {
@@ -400,13 +416,13 @@ impl InboundContext {
         }
         log::warn!("Exiting inbound loop");
         // Notify the mesh worker so it can exit soon
-        for worker in self.mesh_workers.iter() {
+        for worker in self.shared_state.mesh_workers.iter() {
             worker.cancel();
         }
-        for worker in self.neighbor_propagators.iter() {
+        for worker in self.shared_state.neighbor_propagators.iter() {
             worker.cancel();
         }
-        self.batcher.cancel();
+        self.shared_state.batcher.cancel();
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
@@ -433,16 +449,24 @@ impl InboundContext {
                 self.handle_client_state_update(client_state).await?;
             }
             Some(rpc::stream_to_client::ServerMessage::ShowPopup(popup_desc)) => {
-                self.client_state.egui.lock().show_popup(popup_desc);
+                self.shared_state
+                    .client_state
+                    .egui
+                    .lock()
+                    .show_popup(popup_desc);
             }
-            Some(rpc::stream_to_client::ServerMessage::ChatMessage(message)) => {
-                self.client_state.chat.lock().message_history.push(
+            Some(rpc::stream_to_client::ServerMessage::ChatMessage(message)) => self
+                .shared_state
+                .client_state
+                .chat
+                .lock()
+                .message_history
+                .push(
                     ChatMessage::new(&message.origin, &message.message)
                         .with_color_fixed32(message.color_argb),
-                )
-            }
+                ),
             Some(rpc::stream_to_client::ServerMessage::ShutdownMessage(msg)) => {
-                *self.client_state.pending_error.lock() = Some(msg.clone());
+                *self.shared_state.client_state.pending_error.lock() = Some(msg.clone());
             }
             Some(rpc::stream_to_client::ServerMessage::EntityMovement(movement)) => {
                 self.handle_entity_movement(movement).await?;
@@ -455,11 +479,14 @@ impl InboundContext {
     }
 
     fn enqueue_for_nprop(&self, coord: ChunkCoordinate) {
-        self.neighbor_propagators[coord.hash_u64() as usize % self.neighbor_propagators.len()]
-            .enqueue(coord);
+        self.shared_state.neighbor_propagators
+            [coord.hash_u64() as usize % self.shared_state.neighbor_propagators.len()]
+        .enqueue(coord);
     }
     fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
-        self.mesh_workers[coord.hash_u64() as usize % self.mesh_workers.len()].enqueue(coord);
+        self.shared_state.mesh_workers
+            [coord.hash_u64() as usize % self.shared_state.mesh_workers.len()]
+        .enqueue(coord);
     }
 
     async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
@@ -468,11 +495,11 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
-                    let extra_chunks = self.client_state.chunks.insert_or_update(
+                    let extra_chunks = self.shared_state.client_state.chunks.insert_or_update(
                         coord,
                         chunk.clone(),
                         &mut self.snappy_helper,
-                        &self.client_state.block_types,
+                        &self.shared_state.client_state.block_types,
                     )?;
 
                     self.enqueue_for_nprop(coord);
@@ -490,7 +517,8 @@ impl InboundContext {
                 })?;
             }
             None => {
-                self.send_bugcheck("Got chunk without a coordinate".to_string())
+                self.shared_state
+                    .send_bugcheck("Got chunk without a coordinate".to_string())
                     .await?;
             }
         };
@@ -498,7 +526,7 @@ impl InboundContext {
     }
 
     async fn handle_ack(&mut self, seq: u64) -> Result<()> {
-        let send_time = self.ack_map.lock().remove(&seq);
+        let send_time = self.shared_state.ack_map.lock().remove(&seq);
         match send_time {
             Some(time) => {
                 // todo track in a histogram
@@ -507,54 +535,29 @@ impl InboundContext {
             }
             None => {
                 let desc = format!("got ack for seq {} which we didn't send", seq);
-                self.send_bugcheck(desc).await?;
+                self.shared_state.send_bugcheck(desc).await?;
             }
         }
         Ok(())
     }
-
-    async fn send_bugcheck(&mut self, description: String) -> Result<()> {
-        log::error!("Protocol bugcheck: {}", description);
-        self.outbound_tx
-            .send(rpc::StreamToServer {
-                sequence: 0,
-                client_tick: 0,
-                client_message: Some(rpc::stream_to_server::ClientMessage::BugCheck(
-                    rpc::ClientBugCheck {
-                        description,
-                        backtrace: backtrace::Backtrace::force_capture().to_string(),
-                        protocol_version: self.protocol_version,
-                        min_protocol_version: MIN_PROTOCOL_VERSION,
-                        max_protocol_version: MAX_PROTOCOL_VERSION,
-                    },
-                )),
-            })
-            .await?;
-        Ok(())
-    }
-
     async fn handle_unsubscribe(&mut self, unsub: &rpc::MapChunkUnsubscribe) -> Result<()> {
         // TODO hold more old chunks (possibly LRU) to provide a higher render distance
         let mut bad_coords = vec![];
         for coord in unsub.chunk_coord.iter() {
-            match self.client_state.chunks.remove(&coord.into()) {
+            match self.shared_state.client_state.chunks.remove(&coord.into()) {
                 Some(_x) => {}
                 None => {
                     bad_coords.push(coord.clone());
                 }
             }
-
-            // TODO - do we need to do this?
-            // tokio::task::block_in_place(|| {
-            //     self.mesh_worker.queue.lock().remove(&coord.into());
-            // });
         }
         if !bad_coords.is_empty() {
-            self.send_bugcheck(format!(
-                "Asked to unsubscribe to chunks we never subscribed to: {:?}",
-                bad_coords
-            ))
-            .await?
+            self.shared_state
+                .send_bugcheck(format!(
+                    "Asked to unsubscribe to chunks we never subscribed to: {:?}",
+                    bad_coords
+                ))
+                .await?
         }
         Ok(())
     }
@@ -563,15 +566,17 @@ impl InboundContext {
         let (missing_coord, unknown_coords) =
             tokio::task::block_in_place(|| self.map_delta_update_sync(batch))?;
         if missing_coord {
-            self.send_bugcheck("Missing block_coord in delta update".to_string())
+            self.shared_state
+                .send_bugcheck("Missing block_coord in delta update".to_string())
                 .await?;
         }
         for coord in unknown_coords {
-            self.send_bugcheck(format!(
-                "Got delta at {:?} but chunk is not in cache",
-                coord
-            ))
-            .await?;
+            self.shared_state
+                .send_bugcheck(format!(
+                    "Got delta at {:?} but chunk is not in cache",
+                    coord
+                ))
+                .await?;
         }
 
         Ok(())
@@ -581,17 +586,18 @@ impl InboundContext {
         &mut self,
         batch: &rpc::MapDeltaUpdateBatch,
     ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
-        let (needs_remesh, unknown_coords, missing_coord) = self
-            .client_state
-            .chunks
-            .apply_delta_batch(batch, &self.client_state.block_types)?;
+        let (needs_remesh, unknown_coords, missing_coord) =
+            self.shared_state
+                .client_state
+                .chunks
+                .apply_delta_batch(batch, &self.shared_state.client_state.block_types)?;
 
         {
             let _span = span!("remesh for delta");
 
             // Only do inline meshing for chunks within 3 chunks of the current player location
             // Otherwise, we tie up the network thread for too long
-            let current_position = self.client_state.last_position().position;
+            let current_position = self.shared_state.client_state.last_position().position;
             let eligible_for_inline = |coord: ChunkCoordinate| {
                 let base = vec3(
                     coord.x as f64 * 16.0 + 8.0,
@@ -602,11 +608,12 @@ impl InboundContext {
             };
             for &coord in needs_remesh.iter() {
                 if eligible_for_inline(coord) {
-                    self.client_state
+                    self.shared_state
+                        .client_state
                         .chunks
                         .cloned_neighbors_fast(coord, &mut self.inline_fcn_scratchpad);
                     propagate_neighbor_data(
-                        &self.client_state.block_types,
+                        &self.shared_state.client_state.block_types,
                         &self.inline_fcn_scratchpad,
                         &mut self.inline_nprop_scratchpad,
                     )?;
@@ -616,9 +623,13 @@ impl InboundContext {
             }
             for coord in needs_remesh {
                 if eligible_for_inline(coord) {
-                    self.client_state
+                    self.shared_state
+                        .client_state
                         .chunks
-                        .maybe_mesh_and_maybe_promote(coord, &self.client_state.block_renderer)?;
+                        .maybe_mesh_and_maybe_promote(
+                            coord,
+                            &self.shared_state.client_state.block_renderer,
+                        )?;
                 } else {
                     self.enqueue_for_meshing(coord);
                 }
@@ -633,26 +644,32 @@ impl InboundContext {
     ) -> Result<()> {
         if inventory_update.inventory.is_none() {
             return self
+                .shared_state
                 .send_bugcheck("Missing inventory in InventoryUpdate".to_string())
                 .await;
         };
         let inv = ClientInventory::from_proto(inventory_update);
-        let mut hud_lock = self.client_state.hud.lock();
+        let mut hud_lock = self.shared_state.client_state.hud.lock();
         if Some(inventory_update.view_id) == hud_lock.hotbar_view_id {
             hud_lock.invalidate_hotbar();
             let slot = hud_lock.hotbar_slot();
             drop(hud_lock);
-            self.client_state.tool_controller.lock().update_item(
-                &self.client_state,
-                slot,
-                inv.contents()[slot as usize]
-                    .clone()
-                    .and_then(|x| self.client_state.items.get(&x.item_name))
-                    .cloned(),
-            )
+            self.shared_state
+                .client_state
+                .tool_controller
+                .lock()
+                .update_item(
+                    &self.shared_state.client_state,
+                    slot,
+                    inv.contents()[slot as usize]
+                        .clone()
+                        .and_then(|x| self.shared_state.client_state.items.get(&x.item_name))
+                        .cloned(),
+                )
         }
 
-        self.client_state
+        self.shared_state
+            .client_state
             .inventories
             .lock()
             .inventory_views
@@ -664,13 +681,16 @@ impl InboundContext {
         &mut self,
         state_update: &rpc::SetClientState,
     ) -> Result<()> {
-        self.initial_state_notification.notify_one();
-        self.client_state.handle_server_update(state_update)
+        self.shared_state.initial_state_notification.notify_one();
+        self.shared_state
+            .client_state
+            .handle_server_update(state_update)
     }
 
     async fn handle_entity_movement(&mut self, movement: &rpc::EntityMovement) -> Result<()> {
         if movement.remove {
             if self
+                .shared_state
                 .client_state
                 .entities
                 .lock()
@@ -678,11 +698,12 @@ impl InboundContext {
                 .remove(&movement.entity_id)
                 .is_none()
             {
-                self.send_bugcheck(format!(
-                    "Got remove for non-existent entity {}",
-                    movement.entity_id
-                ))
-                .await?;
+                self.shared_state
+                    .send_bugcheck(format!(
+                        "Got remove for non-existent entity {}",
+                        movement.entity_id
+                    ))
+                    .await?;
             }
             return Ok(());
         }
@@ -691,6 +712,7 @@ impl InboundContext {
             Some(position) => position.try_into()?,
             None => {
                 return self
+                    .shared_state
                     .send_bugcheck(format!(
                         "Got move for entity {} with no position",
                         movement.entity_id
@@ -699,6 +721,7 @@ impl InboundContext {
             }
         };
         match self
+            .shared_state
             .client_state
             .entities
             .lock()
