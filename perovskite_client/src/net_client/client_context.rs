@@ -430,7 +430,10 @@ impl InboundContext {
         if message.tick == 0 {
             log::warn!("Got message with tick 0");
         } else {
-            self.client_state.timekeeper.update_error(message.tick);
+            self.shared_state
+                .client_state
+                .timekeeper
+                .update_error(message.tick);
         }
         match &message.server_message {
             None => {
@@ -476,6 +479,7 @@ impl InboundContext {
             }
             Some(rpc::stream_to_client::ServerMessage::EntityUpdate(update)) => {
                 let estimated_send_time = self
+                    .shared_state
                     .client_state
                     .timekeeper
                     .estimated_send_time(message.tick);

@@ -110,23 +110,31 @@ impl GameEntity {
         update: &entities_proto::EntityUpdate,
         estimated_send_time: Instant,
     ) -> Result<(), &'static str> {
-        // println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
-        // println!(
-        //     "Got {} -> {}, while CMS is {}",
-        //     update
-        //         .planned_move
-        //         .iter()
-        //         .map(|m| m.sequence)
-        //         .min()
-        //         .unwrap(),
-        //     update
-        //         .planned_move
-        //         .iter()
-        //         .map(|m| m.sequence)
-        //         .max()
-        //         .unwrap(),
-        //     self.current_move_sequence
-        // );
+        if update.id == 8 {
+            println!("{:?}", update);
+            println!(
+                "estimated send was {} sec ago",
+                estimated_send_time.elapsed().as_secs_f32()
+            );
+            println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
+
+            println!(
+                "Got {} -> {}, while CMS is {}",
+                update
+                    .planned_move
+                    .iter()
+                    .map(|m| m.sequence)
+                    .min()
+                    .unwrap(),
+                update
+                    .planned_move
+                    .iter()
+                    .map(|m| m.sequence)
+                    .max()
+                    .unwrap(),
+                self.current_move_sequence
+            );
+        }
 
         while self
             .move_queue
@@ -150,15 +158,18 @@ impl GameEntity {
         }
 
         if update.current_move_sequence != self.current_move_sequence {
-            // println!(
-            //     "retiming {} -> {}",
-            //     self.current_move_sequence, update.current_move_sequence
-            // );
-            // println!(
-            //     "{:?} -> {:?}",
-            //     self.current_move_started,
-            //     Instant::now() - Duration::from_secs_f32(update.current_move_progress)
-            // );
+            if update.id == 8 {
+                println!(
+                    "retiming {} -> {}",
+                    self.current_move_sequence, update.current_move_sequence
+                );
+                println!(
+                    "{:?} -> {:?}",
+                    self.current_move_started,
+                    Instant::now() - Duration::from_secs_f32(update.current_move_progress)
+                );
+            }
+
             self.current_move_sequence = update.current_move_sequence;
             self.current_move_started =
                 estimated_send_time - Duration::from_secs_f32(update.current_move_progress);
