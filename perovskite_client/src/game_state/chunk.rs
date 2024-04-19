@@ -224,6 +224,7 @@ impl MeshVectorReclaim {
         // Drop - if we don't have space, just drop it
         drop(self.sender.try_send((idx, vtx)));
     }
+
     pub(crate) fn occupancy(&self) -> usize {
         self.receiver.len()
     }
@@ -811,6 +812,10 @@ impl MeshBatchBuilder {
         self.base_position = Vector3::zero();
         self.id = next_id();
     }
+}
+
+fn next_id() -> u64 {
+    NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64
 }
 
 fn next_id() -> u64 {

@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Error;
+use futures::FutureExt;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use rand::distributions::Bernoulli;
@@ -863,7 +864,10 @@ impl ServerGameMap {
         let timer_controller = TimerController {
             map: result.clone(),
             game_state,
-            cancellation,
+            // This needs to be separate from the cancellation token above, since we need the
+            // timer controller to shut down before the rest of the map (since the timer controller
+            // relies on the writeback thread to actually write back)
+            cancellation: CancellationToken::new(),
             timers: FxHashMap::default(),
         };
         *result.timer_controller.lock() = Some(timer_controller);
@@ -1630,20 +1634,54 @@ impl ServerGameMap {
         }
     }
 
-    pub(crate) fn request_shutdown(&self) {
-        self.shutdown.cancel();
-    }
-
-    pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        for i in 0..NUM_CHUNK_SHARDS {
-            let writeback_handle = self.writeback_handles[i].lock().take();
-            writeback_handle.unwrap().await??;
-
-            let cleanup_handle = self.cleanup_handles[i].lock().take();
-            cleanup_handle.unwrap().await??;
+    pub(crate) async fn do_shutdown(&self) -> Result<()> {
+        tracing::info!("Shutting down game map");
+        let timers = self.timer_controller.lock().take();
+        match timers {
+            Some(timers) => {
+                match tokio::time::timeout(Duration::from_secs(10), timers.shutdown()).await {
+                    Ok(Ok(())) => {
+                        tracing::info!("Shut down timer controller");
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("Error shutting down timer controller: {e:?}");
+                    }
+                    Err(_) => {
+                        tracing::error!("Timed out waiting for timer controller to shut down");
+                    }
+                }
+            }
+            None => {
+                tracing::warn!("Tried to shutdown timer controller but it was never brought up");
+            }
         }
+        // We need to stop the timers before we stop the writeback threads, since the timers might
+        // try to write to the map, which requires a writeback thread to actually write back.
+        self.shutdown.cancel();
+        let await_task = async {
+            for i in 0..NUM_LOCK_SHARDS {
+                let writeback_handle = self.writeback_handles[i].lock().take();
+                writeback_handle.unwrap().await??;
 
+
+                let cleanup_handle = self.cleanup_handles[i].lock().take();
+                cleanup_handle.unwrap().await??;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        match tokio::time::timeout(Duration::from_secs(10), await_task).await {
+            Ok(Ok(())) => {
+                tracing::info!("Shut down async map workers");
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Error shutting down async map workers: {e:?}");
+            }
+            Err(_) => {
+                tracing::error!("Timed out waiting for async map workers to shut down");
+            }
+        }
         self.flush();
+
         Ok(())
     }
 
@@ -1692,7 +1730,8 @@ impl ServerGameMap {
 }
 impl Drop for ServerGameMap {
     fn drop(&mut self) {
-        self.flush()
+        self.flush();
+        tracing::info!("ServerGameMap shut down");
     }
 }
 
@@ -2912,12 +2951,35 @@ struct TimerController {
     timers: FxHashMap<String, Arc<GameMapTimer>>,
 }
 impl TimerController {
-    async fn await_shutdown(&self) -> Result<()> {
-        assert!(self.cancellation.is_cancelled());
+    async fn shutdown(&self) -> Result<()> {
+        self.cancellation.cancel();
         for timer in self.timers.values() {
             timer.await_shutdown().await?;
         }
 
+        Ok(())
+    }
+
+    fn spawn_timer(
+        &mut self,
+        gs: Arc<GameState>,
+        name: String,
+        settings: TimerSettings,
+        callback: TimerCallback,
+    ) -> Result<()> {
+        let shards = (settings.shards - 1) / NUM_LOCK_SHARDS + 1;
+        let timer = Arc::new(GameMapTimer {
+            name: name.clone(),
+            callback,
+            settings,
+            // This is a bug-prone code smell. The server game map shouldn't
+            // be rummaging around in the timer controller to get the cancellation token.
+            // TODO: fix it.
+            cancellation: self.cancellation.clone(),
+            tasks: tokio::sync::Mutex::new(vec![]),
+        });
+        timer.spawn_shards(gs, shards)?;
+        self.timers.insert(name, timer);
         Ok(())
     }
 }
@@ -2931,20 +2993,13 @@ impl ServerGameMap {
         callback: TimerCallback,
     ) -> Result<()> {
         let mut guard = self.timer_controller.lock();
-        let timer_controller = guard.as_mut().unwrap();
-        let shards = (settings.shards - 1) / NUM_CHUNK_SHARDS + 1;
-        let timer = Arc::new(GameMapTimer {
-            name: name.clone(),
-            callback,
-            settings,
-            cancellation: self.shutdown.clone(),
-            tasks: tokio::sync::Mutex::new(vec![]),
-        });
-        timer.spawn_shards(self.game_state().clone(), shards)?;
-        timer_controller.timers.insert(name, timer);
-        Ok(())
+        guard
+            .as_mut()
+            .unwrap()
+            .spawn_timer(self.game_state().clone(), name, settings, callback)
     }
 }
+
 
 #[cfg(fuzzing)]
 pub mod fuzz {

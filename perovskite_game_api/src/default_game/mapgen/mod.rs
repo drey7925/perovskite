@@ -14,9 +14,14 @@ use perovskite_server::game_state::{
 use rand::seq::SliceRandom;
 
 use super::{
-    basic_blocks::{DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, STONE, WATER},
+    basic_blocks::{
+        DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, LIMESTONE_DARK, LIMESTONE_LIGHT, SAND,
+        STONE, WATER,
+    },
     foliage::{CACTUS, MAPLE_LEAVES, MAPLE_TREE, TALL_GRASS, TERRESTRIAL_FLOWERS},
 };
+
+mod karst;
 
 const ELEVATION_FINE_INPUT_SCALE: f64 = 1.0 / 60.0;
 const ELEVATION_FINE_OUTPUT_SCALE: f64 = 10.0;
@@ -35,20 +40,57 @@ const TALL_GRASS_DENSITY_INPUT_SCALE: f64 = 1.0 / 120.0;
 const TALL_GRASS_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
 const TALL_GRASS_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
 
+const VINES_DENSITY_INPUT_SCALE: f64 = 1.0 / 120.0;
+const VINES_DENSITY_OUTPUT_SCALE: f64 = 0.1;
+const VINES_DENSITY_OUTPUT_OFFSET: f64 = 0.1;
+
 const FLOWER_DENSITY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const FLOWER_DENSITY_OUTPUT_SCALE: f64 = 0.03125;
 const FLOWER_DENSITY_OUTPUT_OFFSET: f64 = 0.03125;
 
 const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
+const KARST_TENDENCY_INPUT_SCALE: f64 = 1.0 / 7200.0;
 
-// Next seed offset: 9
+// Next seed offset: 19
+// Offsets 10-18 are used for karst
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Biome {
     DefaultGrassy,
     SandyBeach,
     Desert,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Macrobiome {
+    RollingHills,
+    Karst,
+}
+
+struct MacrobiomeNoise {
+    karst_tendency: noise::SuperSimplex,
+}
+impl MacrobiomeNoise {
+    fn new(seed: u32) -> MacrobiomeNoise {
+        MacrobiomeNoise {
+            karst_tendency: noise::SuperSimplex::new(seed.wrapping_add(9)),
+        }
+    }
+    fn get(&self, x: i32, z: i32) -> (Macrobiome, f64) {
+        let karst_value = self.karst_tendency.get([
+            x as f64 * KARST_TENDENCY_INPUT_SCALE,
+            z as f64 * KARST_TENDENCY_INPUT_SCALE,
+        ]);
+        if karst_value > 0.3 {
+            (
+                Macrobiome::Karst,
+                ((0.5 - karst_value) * 5.0).clamp(0.0, 1.0),
+            )
+        } else {
+            (Macrobiome::RollingHills, 0.0)
+        }
+    }
 }
 
 struct BiomeNoise {
@@ -195,56 +237,136 @@ struct DefaultMapgen {
     cactus_density_noise: noise::Billow<noise::SuperSimplex>,
     tall_grass_density_noise: noise::Billow<noise::SuperSimplex>,
 
+    karst_noise: karst::KarstGenerator,
     rail_testonly: BlockTypeHandle,
     signal_testonly: BlockTypeHandle,
 
     biome_noise: BiomeNoise,
+    macrobiome_noise: MacrobiomeNoise,
     cave_noise: CaveNoise,
     ores: Vec<(OreDefinition, noise::SuperSimplex)>,
     seed: u32,
 }
-impl MapgenInterface for DefaultMapgen {
-    fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut MapChunk) {
-        // todo subdivide by surface vs underground, etc. This is a very minimal MVP
-        let mut height_map = Box::new([[0f64; 16]; 16]);
-        let mut biome_map = Box::new([[Biome::DefaultGrassy; 16]; 16]);
+
+impl DefaultMapgen {
+    #[inline]
+    fn prefill_single(&self, xg: i32, zg: i32) -> (Macrobiome, f64) {
+        let (macrobiome, rolling_hills_blend, karst_blend) = self.macrobiome_single(xg, zg);
+        let mut elevation = 0.0;
+        if rolling_hills_blend > 0.0 {
+            elevation += self.elevation_noise.get(xg, zg) * rolling_hills_blend;
+        }
+        if karst_blend > 0.0 {
+            let (raw_elev, _floor, _ceil) = self.karst_noise.height(xg, zg);
+            elevation += raw_elev * karst_blend;
+        }
+        (macrobiome, elevation)
+    }
+
+    fn macrobiome_single(&self, xg: i32, zg: i32) -> (Macrobiome, f64, f64) {
+        let (macrobiome, blend_factor) = self.macrobiome_noise.get(xg, zg);
+        match macrobiome {
+            Macrobiome::RollingHills => (Macrobiome::RollingHills, 1.0, 0.0),
+            Macrobiome::Karst => (Macrobiome::Karst, blend_factor, 1.0 - blend_factor),
+        }
+    }
+
+    fn prefill(
+        &self,
+        chunk_coord: ChunkCoordinate,
+        height_map: &mut [[f64; 16]; 16],
+        cave_floor_map: &mut [[f64; 16]; 16],
+        cave_ceil_map: &mut [[f64; 16]; 16],
+        macrobiome_map: &mut [[Macrobiome; 16]; 16],
+    ) {
+        let mut rolling_hills_blend = [[0.0; 16]; 16];
+        let mut karst_blend = [[0.0; 16]; 16];
+
         for x in 0..16 {
             for z in 0..16 {
-                let xg = 16 * chunk_coord.x + (x as i32);
-                let zg = 16 * chunk_coord.z + (z as i32);
-
-                let elevation = self.elevation_noise.get(xg, zg);
-                let biome = self.biome_noise.get(xg, zg, elevation);
-                biome_map[x as usize][z as usize] = biome;
-                height_map[x as usize][z as usize] = elevation;
-                for y in 0..16 {
-                    let offset = ChunkOffset { x, y, z };
-                    let block_coord = chunk_coord.with_offset(offset);
-
-                    let vert_offset = block_coord.y - (elevation as i32);
-
-                    let (is_cave, cave_ore_bias) = self.cave_noise.get(block_coord);
-                    if is_cave {
-                        // TODO - lava, etc?
-                        chunk.set_block(offset, self.air, None);
-                        continue;
-                    }
-                    let gen_ore = || self.generate_ore(block_coord, cave_ore_bias);
-
-                    let block = match biome {
-                        Biome::DefaultGrassy => {
-                            self.generate_default_biome(vert_offset, block_coord, gen_ore)
-                        }
-                        Biome::SandyBeach => {
-                            self.generate_sandy_beach(vert_offset, block_coord, gen_ore)
-                        }
-                        Biome::Desert => self.generate_desert(vert_offset, block_coord, gen_ore),
-                    };
-                    chunk.set_block(offset, block, None);
+                let xg = (chunk_coord.x * 16) + x as i32;
+                let zg = (chunk_coord.z * 16) + z as i32;
+                (
+                    macrobiome_map[x][z],
+                    rolling_hills_blend[x][z],
+                    karst_blend[x][z],
+                ) = self.macrobiome_single(xg, zg);
+            }
+        }
+        if rolling_hills_blend.iter().flatten().any(|&x| x > 0.0) {
+            for x in 0..16 {
+                for z in 0..16 {
+                    height_map[x][z] += rolling_hills_blend[x][z]
+                        * self.elevation_noise.get(
+                            (chunk_coord.x * 16) + x as i32,
+                            (chunk_coord.z * 16) + z as i32,
+                        );
                 }
             }
         }
-        self.generate_vegetation(chunk_coord, chunk, &height_map, &biome_map);
+        if karst_blend.iter().flatten().any(|&x| x > 0.0) {
+            for x in 0..16 {
+                for z in 0..16 {
+                    let (raw_height, raw_cave_floor, raw_cave_ceil) = self.karst_noise.height(
+                        (chunk_coord.x * 16) + x as i32,
+                        (chunk_coord.z * 16) + z as i32,
+                    );
+                    height_map[x][z] += karst_blend[x][z] * raw_height;
+                    cave_floor_map[x][z] += karst_blend[x][z] * raw_cave_floor;
+                    cave_ceil_map[x][z] += karst_blend[x][z] * raw_cave_ceil;
+                }
+            }
+        }
+    }
+}
+
+impl MapgenInterface for DefaultMapgen {
+    fn fill_chunk(&self, chunk_coord: ChunkCoordinate, chunk: &mut MapChunk) {
+        // todo subdivide by surface vs underground, etc. This is a very minimal MVP
+        let mut height_map = [[0.0; 16]; 16];
+        let mut cave_floor_map: [[f64; 16]; 16] = [[0.0; 16]; 16];
+        let mut cave_ceil_map: [[f64; 16]; 16] = [[0.0; 16]; 16];
+        let mut macrobiome_map = [[Macrobiome::RollingHills; 16]; 16];
+        let mut biome_map = [[Biome::DefaultGrassy; 16]; 16];
+
+        self.prefill(
+            chunk_coord,
+            &mut height_map,
+            &mut cave_floor_map,
+            &mut cave_ceil_map,
+            &mut macrobiome_map,
+        );
+
+        for x in 0..16 {
+            for z in 0..16 {
+                let macrobiome = macrobiome_map[x as usize][z as usize];
+                match macrobiome {
+                    Macrobiome::RollingHills => {
+                        self.generate_rolling_hills(
+                            chunk_coord,
+                            x,
+                            z,
+                            &mut biome_map,
+                            &height_map,
+                            chunk,
+                        );
+                    }
+                    Macrobiome::Karst => {
+                        self.karst_noise.generate(
+                            chunk_coord,
+                            x,
+                            z,
+                            &height_map,
+                            &cave_floor_map,
+                            &cave_ceil_map,
+                            chunk,
+                            |coord| self.generate_ore(coord),
+                        );
+                    }
+                }
+            }
+        }
+        self.generate_vegetation(chunk_coord, chunk, &height_map, &macrobiome_map, &biome_map);
 
         if chunk_coord.y == 0 {
             // Rails running along Z axis
@@ -286,7 +408,12 @@ impl MapgenInterface for DefaultMapgen {
 
 impl DefaultMapgen {
     #[inline]
-    fn generate_ore(&self, coord: BlockCoordinate, cave_bias: f64) -> BlockTypeHandle {
+    fn generate_ore(&self, coord: BlockCoordinate) -> BlockTypeHandle {
+        let (is_cave, cave_bias) = self.cave_noise.get(coord);
+        if is_cave {
+            // TODO - lava, etc?
+            return self.air;
+        }
         for (ore, noise) in &self.ores {
             let mut cutoff = ore
                 .noise_cutoff
@@ -338,6 +465,7 @@ impl DefaultMapgen {
         chunk_coord: ChunkCoordinate,
         chunk: &mut MapChunk,
         heightmap: &[[f64; 16]; 16],
+        macrobiome_map: &[[Macrobiome; 16]; 16],
         biome_map: &[[Biome; 16]; 16],
     ) {
         for i in -3..18 {
@@ -346,23 +474,30 @@ impl DefaultMapgen {
                     .checked_add(i)
                     .zip((chunk_coord.z * 16).checked_add(j));
                 if let Some((x, z)) = block_xz {
-                    let (y, biome) = if x.div_euclid(16) == chunk_coord.x
+                    let (yf, macrobiome, biome) = if x.div_euclid(16) == chunk_coord.x
                         && z.div_euclid(16) == chunk_coord.z
                     {
                         (
-                            heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize] as i32,
+                            heightmap[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
+                            macrobiome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
                             biome_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
                         )
                     } else {
-                        let elevation = self.elevation_noise.get(x, z);
-                        let biome = self.biome_noise.get(x, z, elevation);
-                        (elevation as i32, biome)
+                        let (macrobiome, elevation) = self.prefill_single(x, z);
+
+                        let biome = match macrobiome {
+                            Macrobiome::RollingHills => self.biome_noise.get(x, z, elevation),
+                            // TODO karst biomes
+                            Macrobiome::Karst => Biome::DefaultGrassy,
+                        };
+                        (elevation, macrobiome, biome)
                     };
+                    let y = yf as i32;
                     if y <= 0 {
                         continue;
                     }
-                    match biome {
-                        Biome::DefaultGrassy => {
+                    match (macrobiome, biome) {
+                        (Macrobiome::RollingHills, Biome::DefaultGrassy) => {
                             let tree_value = self.fast_uniform_2d(x, z, self.seed);
                             let tree_cutoff = self.tree_density_noise.get([
                                 (x as f64) * TREE_DENSITY_INPUT_SCALE,
@@ -409,7 +544,7 @@ impl DefaultMapgen {
                                 );
                             }
                         }
-                        Biome::Desert => {
+                        (Macrobiome::RollingHills, Biome::Desert) => {
                             let cactus_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(1));
                             let cactus_cutoff = self.cactus_density_noise.get([
@@ -424,8 +559,43 @@ impl DefaultMapgen {
                                 self.make_cactus(chunk_coord, chunk, x, y, z, cactus_height);
                             }
                         }
-                        Biome::SandyBeach => {
+                        (Macrobiome::RollingHills, Biome::SandyBeach) => {
                             // TODO beach plants?
+                        }
+                        (Macrobiome::Karst, _) => {
+                            if y <= 20 {
+                                let tree_value = self.fast_uniform_2d(x, z, self.seed);
+                                let tree_cutoff = self.tree_density_noise.get([
+                                    (x as f64) * TREE_DENSITY_INPUT_SCALE,
+                                    (z as f64) * TREE_DENSITY_INPUT_SCALE,
+                                ]) * TREE_DENSITY_OUTPUT_SCALE
+                                    + TREE_DENSITY_OUTPUT_OFFSET;
+                                if tree_value < tree_cutoff {
+                                    self.make_tree(chunk_coord, chunk, x, y, z);
+                                }
+                            } else {
+                                // vines
+                                // TODO: Apply vines to the whole surface of a karst formation,
+                                //       not just the top
+                                let tall_grass_value =
+                                    self.fast_uniform_2d(x, z, self.seed.wrapping_add(4)) - 0.2;
+                                let tall_grass_cutoff = self.flower_density_noise.get([
+                                    (x as f64) * VINES_DENSITY_INPUT_SCALE,
+                                    (z as f64) * VINES_DENSITY_INPUT_SCALE,
+                                ]) * VINES_DENSITY_OUTPUT_OFFSET
+                                    + VINES_DENSITY_OUTPUT_SCALE;
+
+                                if tall_grass_value < tall_grass_cutoff {
+                                    self.make_simple_foliage(
+                                        chunk_coord,
+                                        chunk,
+                                        x,
+                                        y,
+                                        z,
+                                        self.tall_grass,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -566,7 +736,46 @@ impl DefaultMapgen {
     ) {
         let coord = BlockCoordinate::new(x, y + 1, z);
         if coord.chunk() == chunk_coord {
-            chunk.set_block(coord.offset(), block, None);
+            if chunk.get_block(coord.offset()) == self.air {
+                chunk.set_block(coord.offset(), block, None);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn generate_rolling_hills(
+        &self,
+        chunk_coord: ChunkCoordinate,
+        x: u8,
+        z: u8,
+        biome_map: &mut [[Biome; 16]; 16],
+        height_map: &[[f64; 16]; 16],
+        chunk: &mut MapChunk,
+    ) {
+        let xg = 16 * chunk_coord.x + (x as i32);
+        let zg = 16 * chunk_coord.z + (z as i32);
+
+        let elevation = height_map[x as usize][z as usize];
+        let biome = self.biome_noise.get(xg, zg, elevation);
+
+        biome_map[x as usize][z as usize] = biome;
+
+        for y in 0..16 {
+            let offset = ChunkOffset { x, y, z };
+            let block_coord = chunk_coord.with_offset(offset);
+
+            let vert_offset = block_coord.y - (elevation as i32);
+
+            let gen_ore = || self.generate_ore(block_coord);
+
+            let block = match biome {
+                Biome::DefaultGrassy => {
+                    self.generate_default_biome(vert_offset, block_coord, gen_ore)
+                }
+                Biome::SandyBeach => self.generate_sandy_beach(vert_offset, block_coord, gen_ore),
+                Biome::Desert => self.generate_desert(vert_offset, block_coord, gen_ore),
+            };
+            chunk.set_block(offset, block, None);
         }
     }
 }
@@ -603,6 +812,8 @@ pub(crate) fn build_mapgen(
 
         elevation_noise: ElevationNoise::new(seed),
         biome_noise: BiomeNoise::new(seed),
+        macrobiome_noise: MacrobiomeNoise::new(seed),
+        karst_noise: karst::KarstGenerator::new(seed, &blocks),
         cave_noise: CaveNoise::new(seed),
         tree_density_noise: noise::Billow::new(seed.wrapping_add(2)),
         flower_density_noise: noise::Billow::new(seed.wrapping_add(7)),

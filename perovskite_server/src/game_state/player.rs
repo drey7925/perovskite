@@ -807,4 +807,11 @@ impl PlayerManager {
     }
 }
 
+impl Drop for PlayerManager {
+    fn drop(&mut self) {
+        self.flush().unwrap();
+        log::info!("Player manager shutdown complete");
+    }
+}
+
 const PLAYER_WRITEBACK_INTERVAL: Duration = Duration::from_secs(10);

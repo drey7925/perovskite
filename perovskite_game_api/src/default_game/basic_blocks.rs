@@ -83,6 +83,11 @@ pub const WATER: StaticBlockName = StaticBlockName("default:water");
 /// test only, no crafting recipe, not finalized
 pub const TNT: StaticBlockName = StaticBlockName("default:tnt");
 
+/// Limestone for karst landscapes
+pub const LIMESTONE: StaticBlockName = StaticBlockName("default:limestone");
+pub const LIMESTONE_LIGHT: StaticBlockName = StaticBlockName("default:limestone_light");
+pub const LIMESTONE_DARK: StaticBlockName = StaticBlockName("default:limestone_dark");
+
 const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_grass_side");
 const GRASS_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:grass_top");
@@ -102,6 +107,10 @@ const LOCKED_CHEST_FRONT_TEXTURE: StaticTextureName =
 const TORCH_TEXTURE: StaticTextureName = StaticTextureName("default:torch");
 const TNT_TEXTURE: StaticTextureName = StaticTextureName("default:tnt");
 const TESTONLY_UNKNOWN_TEX: StaticTextureName = StaticTextureName("default:testonly_unknown");
+
+const LIMESTONE_TEXTURE: StaticTextureName = StaticTextureName("default:limestone");
+const LIMESTONE_LIGHT_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_light");
+const LIMESTONE_DARK_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_dark");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -531,6 +540,18 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         "../media/block_unknown.png"
     )?;
 
+    include_texture_bytes!(game_builder, LIMESTONE_TEXTURE, "textures/limestone.png")?;
+    include_texture_bytes!(
+        game_builder,
+        LIMESTONE_DARK_TEXTURE,
+        "textures/limestone_dark.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        LIMESTONE_LIGHT_TEXTURE,
+        "textures/limestone_light.png"
+    )?;
+
     let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
@@ -567,6 +588,24 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(STONE_TEXTURE)
             .set_display_name("Stone"),
+    )?;
+    let limestone = game_builder.add_block(
+        BlockBuilder::new(LIMESTONE)
+            .add_block_group(BRITTLE)
+            .set_cube_single_texture(LIMESTONE_TEXTURE)
+            .set_display_name("Limestone"),
+    )?;
+    let limestone_light = game_builder.add_block(
+        BlockBuilder::new(LIMESTONE_LIGHT)
+            .add_block_group(BRITTLE)
+            .set_cube_single_texture(LIMESTONE_LIGHT_TEXTURE)
+            .set_display_name("Light limestone"),
+    )?;
+    let limestone_dark = game_builder.add_block(
+        BlockBuilder::new(LIMESTONE_DARK)
+            .add_block_group(BRITTLE)
+            .set_cube_single_texture(LIMESTONE_DARK_TEXTURE)
+            .set_display_name("Dark limestone"),
     )?;
 
     let _sand = game_builder.add_block(
@@ -669,10 +708,17 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     make_stairs(game_builder, &glass, true)?;
     make_stairs(game_builder, &dirt, false)?;
     make_stairs(game_builder, &desert_stone, true)?;
+    make_stairs(game_builder, &limestone, true)?;
+    make_stairs(game_builder, &limestone_dark, true)?;
+    make_stairs(game_builder, &limestone_light, true)?;
+
     make_slab(game_builder, &stone, true)?;
     make_slab(game_builder, &glass, true)?;
     make_slab(game_builder, &dirt, false)?;
     make_slab(game_builder, &desert_stone, true)?;
+    make_slab(game_builder, &limestone, true)?;
+    make_slab(game_builder, &limestone_dark, true)?;
+    make_slab(game_builder, &limestone_light, true)?;
 
     Ok(())
 }

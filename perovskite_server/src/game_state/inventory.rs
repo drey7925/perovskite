@@ -328,6 +328,15 @@ impl InventoryManager {
         }
     }
 }
+impl Drop for InventoryManager {
+    fn drop(&mut self) {
+        let lock_set = self.locked.lock();
+        for key in lock_set.iter() {
+            tracing::warn!("Inventory {:?} was not unlocked before drop", key);
+        }
+        tracing::info!("InventoryManager shut down.");
+    }
+}
 
 /// ID for an inventory view.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
