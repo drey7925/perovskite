@@ -71,7 +71,7 @@ pub(crate) struct GameEntity {
     current_move_started: Instant,
     pub(crate) current_move_sequence: u64,
     pub fallback_position: Vector3<f64>,
-
+    id: u64,
     // debug only
     created: Instant,
 }
@@ -93,7 +93,7 @@ impl GameEntity {
             elapsed -= popped_move.total_time_seconds;
             self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
         }
-        if any_popped {
+        if any_popped && self.id == 8 {
             println!(
                 "remaining buffer: {:?}",
                 self.move_queue
@@ -230,6 +230,7 @@ impl GameEntity {
                     .map_err(|_| "invalid current move progress")?,
             current_move_sequence: update.current_move_sequence,
             created: Instant::now(),
+            id: update.id,
         })
     }
 }
