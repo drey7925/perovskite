@@ -448,7 +448,9 @@ impl EntityCoroutine for CartCoroutine {
                     enter_signal_coord
                 );
                 services.spawn_async(
-                    std::time::Duration::from_secs_f64(returned_moves_time + when as f64),
+                    std::time::Duration::from_secs_f64(
+                        (returned_moves_time + when as f64).max(0.0),
+                    ),
                     move |ctx| {
                         ctx.game_map()
                             .mutate_block_atomically(enter_signal_coord, |b, _ext| {
@@ -479,7 +481,7 @@ impl EntityCoroutine for CartCoroutine {
 
                 services.spawn_async(
                     std::time::Duration::from_secs_f64(
-                        returned_moves_time + when as f64 + extra_delay,
+                        (returned_moves_time + when as f64 + extra_delay).max(0.0),
                     ),
                     move |ctx| {
                         ctx.game_map()

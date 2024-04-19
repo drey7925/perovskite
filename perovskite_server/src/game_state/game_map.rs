@@ -1659,10 +1659,9 @@ impl ServerGameMap {
         // try to write to the map, which requires a writeback thread to actually write back.
         self.shutdown.cancel();
         let await_task = async {
-            for i in 0..NUM_LOCK_SHARDS {
+            for i in 0..NUM_CHUNK_SHARDS {
                 let writeback_handle = self.writeback_handles[i].lock().take();
                 writeback_handle.unwrap().await??;
-
 
                 let cleanup_handle = self.cleanup_handles[i].lock().take();
                 cleanup_handle.unwrap().await??;
@@ -2967,7 +2966,7 @@ impl TimerController {
         settings: TimerSettings,
         callback: TimerCallback,
     ) -> Result<()> {
-        let shards = (settings.shards - 1) / NUM_LOCK_SHARDS + 1;
+        let shards = (settings.shards - 1) / NUM_CHUNK_SHARDS + 1;
         let timer = Arc::new(GameMapTimer {
             name: name.clone(),
             callback,
@@ -2999,7 +2998,6 @@ impl ServerGameMap {
             .spawn_timer(self.game_state().clone(), name, settings, callback)
     }
 }
-
 
 #[cfg(fuzzing)]
 pub mod fuzz {

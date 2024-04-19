@@ -430,7 +430,10 @@ impl InboundContext {
         if message.tick == 0 {
             log::warn!("Got message with tick 0");
         } else {
-            self.client_state.timekeeper.update_error(message.tick);
+            self.shared_state
+                .client_state
+                .timekeeper
+                .update_error(message.tick);
         }
         match &message.server_message {
             None => {
@@ -476,6 +479,7 @@ impl InboundContext {
             }
             Some(rpc::stream_to_client::ServerMessage::EntityUpdate(update)) => {
                 let estimated_send_time = self
+                    .shared_state
                     .client_state
                     .timekeeper
                     .estimated_send_time(message.tick);
@@ -625,7 +629,6 @@ impl InboundContext {
                         .cloned_neighbors_fast(coord, &mut self.inline_fcn_scratchpad);
                     propagate_neighbor_data(
                         &self.shared_state.client_state.block_types,
-
                         &self.inline_fcn_scratchpad,
                         &mut self.inline_nprop_scratchpad,
                     )?;
@@ -715,16 +718,20 @@ impl InboundContext {
                 .is_none()
             {
                 self.shared_state
-                    .send_bugcheck(format!(
-                        "Got remove for non-existent entity {}",
-                        movement.entity_id
-                    ))
+                    .send_bugcheck(format!("Got remove for non-existent entity {}", update.id))
                     .await?;
             }
             return Ok(());
         }
 
-        let outcome = match self.client_state.entities.lock().entities.entry(update.id) {
+        let outcome = match self
+            .shared_state
+            .client_state
+            .entities
+            .lock()
+            .entities
+            .entry(update.id)
+        {
             Entry::Occupied(mut entry) => {
                 // TODO we need to correct for network delay here
                 entry.get_mut().update(update, estimated_send_time)
@@ -739,7 +746,8 @@ impl InboundContext {
         };
 
         if let Err(e) = outcome {
-            self.send_bugcheck(format!("Failed to handle entity update: {:?}", e))
+            self.shared_state
+                .send_bugcheck(format!("Failed to handle entity update: {:?}", e))
                 .await?;
         }
 

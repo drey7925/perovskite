@@ -818,10 +818,6 @@ fn next_id() -> u64 {
     NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64
 }
 
-fn next_id() -> u64 {
-    NEXT_MESH_BATCH_ID.fetch_add(1, Ordering::Relaxed) as u64
-}
-
 pub(crate) trait ChunkOffsetExt {
     fn as_extended_index(&self) -> usize;
 }
