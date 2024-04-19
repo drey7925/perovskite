@@ -327,13 +327,53 @@ impl TryFrom<crate::protocol::coordinates::Vec3D> for cgmath::Vector3<f64> {
     }
 }
 
+impl TryFrom<cgmath::Vector3<f32>> for crate::protocol::coordinates::Vec3F {
+    type Error = anyhow::Error;
+
+    fn try_from(value: cgmath::Vector3<f32>) -> std::result::Result<Self, Self::Error> {
+        ensure!(
+            value.x.is_finite() && value.y.is_finite() && value.z.is_finite(),
+            "vec3D contained NaN or inf"
+        );
+        Ok(crate::protocol::coordinates::Vec3F {
+            x: value.x,
+            y: value.y,
+            z: value.z,
+        })
+    }
+}
+impl TryFrom<&crate::protocol::coordinates::Vec3F> for cgmath::Vector3<f32> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        value: &crate::protocol::coordinates::Vec3F,
+    ) -> std::result::Result<Self, Self::Error> {
+        ensure!(
+            value.x.is_finite() && value.y.is_finite() && value.z.is_finite(),
+            "vec3D contained NaN or inf"
+        );
+        Ok(cgmath::Vector3 {
+            x: value.x,
+            y: value.y,
+            z: value.z,
+        })
+    }
+}
+impl TryFrom<crate::protocol::coordinates::Vec3F> for cgmath::Vector3<f32> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: crate::protocol::coordinates::Vec3F) -> Result<Self> {
+        (&value).try_into()
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct PlayerPositionUpdate {
     // The position, blocks
     pub position: cgmath::Vector3<f64>,
     // The velocity, blocks per second
     pub velocity: cgmath::Vector3<f64>,
-    // The facing direction, normalized
+    // The facing direction, normalized, in degrees
     pub face_direction: (f64, f64),
 }
 impl PlayerPositionUpdate {

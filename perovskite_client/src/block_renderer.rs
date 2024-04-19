@@ -103,10 +103,54 @@ impl RectF32 {
     fn right(&self) -> f32 {
         self.l + self.w
     }
+
+    fn div(&self, dimensions: (u32, u32)) -> RectF32 {
+        RectF32::new(
+            self.l / dimensions.0 as f32,
+            self.t / dimensions.1 as f32,
+            self.w / dimensions.0 as f32,
+            self.h / dimensions.1 as f32,
+        )
+    }
 }
 impl From<Rect> for RectF32 {
     fn from(rect: Rect) -> Self {
         Self::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DynamicRect {
+    base: RectF32,
+    x_selector: u16,
+    y_selector: u16,
+    // The size of a cell
+    x_cell_stride: f32,
+    y_cell_stride: f32,
+    // How much distance/offset corresponds to a value of (1) in selector AND variant
+    x_selector_factor: f32,
+    y_selector_factor: f32,
+    flip_x_bit: u16,
+    flip_y_bit: u16,
+}
+impl DynamicRect {
+    #[inline]
+    fn resolve(&self, variant: u16) -> RectF32 {
+        let x_min = self.base.l + (variant & self.x_selector) as f32 * self.x_selector_factor;
+        let y_min = self.base.t + (variant & self.y_selector) as f32 * self.y_selector_factor;
+
+        let (real_xmin, real_xstride) = if (variant & self.flip_x_bit) != 0 {
+            (x_min + self.x_cell_stride, -self.x_cell_stride)
+        } else {
+            (x_min, self.x_cell_stride)
+        };
+        let (real_ymin, real_ystride) = if (variant & self.flip_y_bit) != 0 {
+            (y_min + self.y_cell_stride, -self.y_cell_stride)
+        } else {
+            (y_min, self.y_cell_stride)
+        };
+
+        RectF32::new(real_xmin, real_ymin, real_xstride, real_ystride)
     }
 }
 
@@ -604,18 +648,60 @@ impl VkChunkVertexDataCpu {
     }
 }
 
+fn get_selector_shift(bits: u32) -> u32 {
+    let leading_zeros = bits.leading_zeros();
+    let trailing_zeros = bits.trailing_zeros();
+    let ones = bits.count_ones();
+    if (leading_zeros + trailing_zeros + ones) != 32 {
+        log::warn!("Selector with non-contiguous bits: {:b}", bits);
+    }
+
+    dbg!(1 << trailing_zeros)
+}
+
 fn get_texture(
     texture_coords: &FxHashMap<String, Rect>,
     tex: Option<&TextureReference>,
-) -> RectF32 {
+    width: f32,
+    height: f32,
+) -> MaybeDynamicRect {
     let rect = tex
         .and_then(|tex| texture_coords.get(&tex.texture_name).copied())
         .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
-    let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
+    let mut rect_f = RectF32::new(
+        rect.x as f32 / width,
+        rect.y as f32 / height,
+        rect.w as f32 / width,
+        rect.h as f32 / height,
+    );
     if let Some(crop) = tex.and_then(|tex| tex.crop.as_ref()) {
         rect_f = crop_texture(crop, rect_f);
+        if let Some(dynamic) = crop.dynamic.as_ref() {
+            let x_selector_shift_factor = get_selector_shift(dynamic.x_selector_bits);
+            let y_selector_shift_factor = get_selector_shift(dynamic.y_selector_bits);
+
+            return MaybeDynamicRect::Dynamic(DynamicRect {
+                base: rect_f,
+                x_selector: dynamic.x_selector_bits as u16,
+                y_selector: dynamic.y_selector_bits as u16,
+                // these are given in texture coordinates
+                x_cell_stride: rect_f.w / (dynamic.x_cells as f32),
+                y_cell_stride: rect_f.h / (dynamic.y_cells as f32),
+                x_selector_factor: rect_f.w
+                    / (dynamic.x_cells as f32 * x_selector_shift_factor as f32),
+                y_selector_factor: rect_f.h
+                    / (dynamic.y_cells as f32 * y_selector_shift_factor as f32),
+                flip_x_bit: dynamic.flip_x_bit as u16,
+                flip_y_bit: dynamic.flip_y_bit as u16,
+            });
+        }
     }
-    rect_f
+    MaybeDynamicRect::Static(RectF32 {
+        l: rect_f.l,
+        t: rect_f.t,
+        w: rect_f.w,
+        h: rect_f.h,
+    })
 }
 
 fn crop_texture(crop: &TextureCrop, r: RectF32) -> RectF32 {
@@ -764,8 +850,14 @@ impl BlockRenderer {
                 .block_defs
                 .iter()
                 .map(|x| {
-                    x.as_ref()
-                        .and_then(|x| build_simple_cache_entry(x, &texture_coords))
+                    x.as_ref().and_then(|x| {
+                        build_simple_cache_entry(
+                            x,
+                            &texture_coords,
+                            texture_atlas.width() as f32,
+                            texture_atlas.height() as f32,
+                        )
+                    })
                 })
                 .collect(),
         };
@@ -775,19 +867,31 @@ impl BlockRenderer {
                 .block_defs
                 .iter()
                 .map(|x| {
-                    x.as_ref()
-                        .and_then(|x| build_axis_aligned_box_cache_entry(x, &texture_coords))
+                    x.as_ref().and_then(|x| {
+                        build_axis_aligned_box_cache_entry(
+                            x,
+                            &texture_coords,
+                            texture_atlas.width() as f32,
+                            texture_atlas.height() as f32,
+                        )
+                    })
                 })
                 .collect(),
         };
 
         let texture_atlas = Arc::new(Texture2DHolder::create(ctx, &texture_atlas)?);
+
+        let selection_rect: RectF32 = (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into();
+        let fallback_rect: RectF32 =
+            (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into();
+        let fake_entity_rect: RectF32 = (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into();
+        let atlas_dims = texture_atlas.dimensions();
         Ok(BlockRenderer {
             block_defs,
             texture_atlas,
-            selection_box_tex_coord: (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into(),
-            fallback_tex_coord: (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into(),
-            fake_entity_tex_coords: (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into(),
+            selection_box_tex_coord: selection_rect.div(atlas_dims),
+            fallback_tex_coord: fallback_rect.div(atlas_dims),
+            fake_entity_tex_coords: fake_entity_rect.div(atlas_dims),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
             allocator: ctx.clone_allocator(),
@@ -904,7 +1008,8 @@ impl BlockRenderer {
             }
         }
         if vtx.is_empty() {
-            reclaimer.put(idx, vtx);
+            // Don't put these into the reclaimer. They're empty and there's no memory
+            // allocation to reclaim.
             None
         } else {
             Some(VkChunkPassCpu { vtx, idx })
@@ -969,10 +1074,10 @@ impl BlockRenderer {
 
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
-        let textures = match self.simple_block_tex_coords.get(id) {
-            Some(x) => *x,
-            None => [self.fallback_tex_coord; 6],
-        };
+        let textures = self
+            .simple_block_tex_coords
+            .get(id)
+            .unwrap_or([self.fallback_tex_coord; 6]);
         self.emit_single_cube_impl(
             e,
             offset,
@@ -1015,7 +1120,6 @@ impl BlockRenderer {
                 emit_cube_face_vk(
                     pos,
                     textures[i],
-                    self.texture_atlas.dimensions(),
                     CUBE_EXTENTS_FACE_ORDER[i],
                     vtx,
                     idx,
@@ -1042,7 +1146,6 @@ impl BlockRenderer {
             emit_cube_face_vk(
                 pos,
                 textures[i],
-                self.texture_atlas.dimensions(),
                 CUBE_EXTENTS_FACE_ORDER[i],
                 vtx,
                 idx,
@@ -1068,8 +1171,8 @@ impl BlockRenderer {
     ) {
         let e = FULL_CUBE_EXTENTS;
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
-        let tex = match self.simple_block_tex_coords.get(id) {
-            Some(x) => x[0],
+        let tex = match self.simple_block_tex_coords.get_zero(id) {
+            Some(x) => x,
             None => self.fallback_tex_coord,
         };
         vtx.reserve(8);
@@ -1078,7 +1181,6 @@ impl BlockRenderer {
             emit_cube_face_vk(
                 pos,
                 tex,
-                self.texture_atlas.dimensions(),
                 face,
                 vtx,
                 idx,
@@ -1130,8 +1232,7 @@ impl BlockRenderer {
 
                 emit_cube_face_vk(
                     pos,
-                    aabb.textures[i],
-                    self.texture_atlas.dimensions(),
+                    aabb.textures[i].rect(id.variant()),
                     CUBE_EXTENTS_FACE_ORDER[i],
                     vtx,
                     idx,
@@ -1143,20 +1244,6 @@ impl BlockRenderer {
                 );
             }
         }
-    }
-
-    fn get_block(
-        &self,
-        ids: &[BlockId; 18 * 18 * 18],
-        coord: ChunkOffset,
-    ) -> (BlockId, &BlockTypeDef) {
-        let block_id = ids[coord.as_extended_index()];
-
-        let def = self
-            .block_defs
-            .get_blockdef(block_id)
-            .unwrap_or_else(|| self.block_defs.get_fallback_blockdef());
-        (block_id, def)
     }
 
     fn get_block_id(&self, ids: &[BlockId; 18 * 18 * 18], coord: ChunkOffset) -> BlockId {
@@ -1178,17 +1265,7 @@ impl BlockRenderer {
 
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
-                vk_pos,
-                frame,
-                self.texture_atlas.dimensions(),
-                face,
-                &mut vtx,
-                &mut idx,
-                e,
-                0xff,
-                0x00,
-                0.0,
-                1.0,
+                vk_pos, frame, face, &mut vtx, &mut idx, e, 0xff, 0x00, 0.0, 1.0,
             );
         }
 
@@ -1238,6 +1315,8 @@ impl BlockRenderer {
 fn build_axis_aligned_box_cache_entry(
     x: &BlockTypeDef,
     texture_coords: &FxHashMap<String, Rect>,
+    w: f32,
+    h: f32,
 ) -> Option<Box<[CachedAxisAlignedBox]>> {
     if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
         let mut result = Vec::new();
@@ -1248,12 +1327,12 @@ fn build_axis_aligned_box_cache_entry(
                 (aa_box.z_min, aa_box.z_max),
             );
             let textures = [
-                get_texture(texture_coords, aa_box.tex_right.as_ref()),
-                get_texture(texture_coords, aa_box.tex_left.as_ref()),
-                get_texture(texture_coords, aa_box.tex_top.as_ref()),
-                get_texture(texture_coords, aa_box.tex_bottom.as_ref()),
-                get_texture(texture_coords, aa_box.tex_back.as_ref()),
-                get_texture(texture_coords, aa_box.tex_front.as_ref()),
+                get_texture(texture_coords, aa_box.tex_right.as_ref(), w, h),
+                get_texture(texture_coords, aa_box.tex_left.as_ref(), w, h),
+                get_texture(texture_coords, aa_box.tex_top.as_ref(), w, h),
+                get_texture(texture_coords, aa_box.tex_bottom.as_ref(), w, h),
+                get_texture(texture_coords, aa_box.tex_back.as_ref(), w, h),
+                get_texture(texture_coords, aa_box.tex_front.as_ref(), w, h),
             ];
             if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
                 log::warn!(
@@ -1282,18 +1361,20 @@ fn build_axis_aligned_box_cache_entry(
 fn build_simple_cache_entry(
     block_def: &BlockTypeDef,
     texture_coords: &FxHashMap<String, Rect>,
-) -> Option<[RectF32; 6]> {
+    w: f32,
+    h: f32,
+) -> Option<[MaybeDynamicRect; 6]> {
     match &block_def.render_info {
         Some(RenderInfo::Cube(render_info)) => Some([
-            get_texture(texture_coords, render_info.tex_right.as_ref()),
-            get_texture(texture_coords, render_info.tex_left.as_ref()),
-            get_texture(texture_coords, render_info.tex_top.as_ref()),
-            get_texture(texture_coords, render_info.tex_bottom.as_ref()),
-            get_texture(texture_coords, render_info.tex_back.as_ref()),
-            get_texture(texture_coords, render_info.tex_front.as_ref()),
+            get_texture(texture_coords, render_info.tex_right.as_ref(), w, h),
+            get_texture(texture_coords, render_info.tex_left.as_ref(), w, h),
+            get_texture(texture_coords, render_info.tex_top.as_ref(), w, h),
+            get_texture(texture_coords, render_info.tex_bottom.as_ref(), w, h),
+            get_texture(texture_coords, render_info.tex_back.as_ref(), w, h),
+            get_texture(texture_coords, render_info.tex_front.as_ref(), w, h),
         ]),
         Some(RenderInfo::PlantLike(render_info)) => {
-            let coords = get_texture(texture_coords, render_info.tex.as_ref());
+            let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
             Some([coords; 6])
         }
         _ => None,
@@ -1380,12 +1461,45 @@ fn build_liquid_cube_extents(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum MaybeDynamicRect {
+    Static(RectF32),
+    Dynamic(DynamicRect),
+}
+impl MaybeDynamicRect {
+    fn rect(&self, variant: u16) -> RectF32 {
+        match self {
+            Self::Static(rect) => *rect,
+            Self::Dynamic(rect) => rect.resolve(variant),
+        }
+    }
+}
+
 struct SimpleTexCoordCache {
-    blocks: Vec<Option<[RectF32; 6]>>,
+    blocks: Vec<Option<[MaybeDynamicRect; 6]>>,
 }
 impl SimpleTexCoordCache {
-    fn get(&self, block_id: BlockId) -> Option<&[RectF32; 6]> {
-        self.blocks.get(block_id.index()).and_then(|x| x.as_ref())
+    fn get(&self, block_id: BlockId) -> Option<[RectF32; 6]> {
+        self.blocks
+            .get(block_id.index())
+            .and_then(|x| x.as_ref())
+            .and_then(|entry| {
+                Some([
+                    entry[0].rect(block_id.variant()),
+                    entry[1].rect(block_id.variant()),
+                    entry[2].rect(block_id.variant()),
+                    entry[3].rect(block_id.variant()),
+                    entry[4].rect(block_id.variant()),
+                    entry[5].rect(block_id.variant()),
+                ])
+            })
+    }
+
+    fn get_zero(&self, block_id: BlockId) -> Option<RectF32> {
+        self.blocks
+            .get(block_id.index())
+            .and_then(|x| x.as_ref())
+            .and_then(|entry| Some(entry[0].rect(block_id.variant())))
     }
 }
 
@@ -1396,7 +1510,7 @@ enum AabbRotation {
 
 struct CachedAxisAlignedBox {
     extents: CubeExtents,
-    textures: [RectF32; 6],
+    textures: [MaybeDynamicRect; 6],
     rotation: AabbRotation,
     mask: u16,
 }
@@ -1465,7 +1579,6 @@ fn make_cgv(
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
     frame: RectF32,
-    tex_dimension: (u32, u32),
     face: CubeFace,
     vert_buf: &mut Vec<CubeGeometryVertex>,
     idx_buf: &mut Vec<u32>,
@@ -1477,12 +1590,10 @@ pub(crate) fn emit_cube_face_vk(
 ) {
     // Flip the coordinate system to Vulkan
     let coord = vec3(coord.x, -coord.y, coord.z);
-    let width = (tex_dimension.0) as f32;
-    let height = (tex_dimension.1) as f32;
-    let l = frame.left() / width;
-    let r = frame.right() / width;
-    let t = frame.top() / height;
-    let b = frame.bottom() / height;
+    let l = frame.left();
+    let r = frame.right();
+    let t = frame.top();
+    let b = frame.bottom();
     // todo handle rotating textures (both in the texture ref and here)
     // Possibly at the caller?
     let tl = Vector2::new(l, t);

@@ -40,7 +40,7 @@ use rand::prelude::Distribution;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::database::database_engine::{GameDatabase, KeySpace};
@@ -52,7 +52,6 @@ use crate::network_server::auth::AuthService;
 use self::blocks::BlockTypeManager;
 use self::chat::commands::CommandManager;
 use self::chat::ChatState;
-use self::entities::EntityManager;
 use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
@@ -84,9 +83,10 @@ pub struct GameState {
     auth: AuthService,
     time_state: Mutex<TimeState>,
     player_state_resync: tokio::sync::watch::Sender<()>,
-    entities: EntityManager,
+    entities: Arc<entities::EntityManager>,
     server_start_time: Instant,
     extensions: type_map::concurrent::TypeMap,
+    startup_time: Instant,
 }
 
 impl GameState {
@@ -94,6 +94,7 @@ impl GameState {
         data_dir: PathBuf,
         db: Arc<dyn GameDatabase>,
         blocks: Arc<BlockTypeManager>,
+        entity_types: Arc<entities::EntityTypeManager>,
         items: ItemManager,
         media: MediaManager,
         mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
@@ -107,7 +108,7 @@ impl GameState {
         // If we don't have a time of day yet, start in the morning.
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
         let day_length = game_behaviors.day_length;
-        Ok(Arc::new_cyclic(|weak| Self {
+        let result = Arc::new_cyclic(|weak| Self {
             data_dir,
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
             mapgen,
@@ -120,13 +121,16 @@ impl GameState {
             early_shutdown: CancellationToken::new(),
             mapgen_seed,
             game_behaviors,
-            auth: AuthService::create(db).unwrap(),
+            auth: AuthService::create(db.clone()).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
             player_state_resync: tokio::sync::watch::channel(()).0,
-            entities: EntityManager::new(weak.clone()),
+            entities: Arc::new(entities::EntityManager::new(db.clone(), entity_types)),
             server_start_time: Instant::now(),
             extensions,
-        }))
+            startup_time: Instant::now(),
+        });
+        result.entities.clone().start_workers(result.clone());
+        Ok(result)
     }
 
     /// Gets the map for this game.
@@ -134,13 +138,22 @@ impl GameState {
         self.map.as_ref()
     }
 
+    pub(crate) fn game_map_clone(&self) -> Arc<ServerGameMap> {
+        self.map.clone()
+    }
+
     pub fn block_types(&self) -> &BlockTypeManager {
         self.map.block_type_manager()
     }
 
-    /// Not implemented yet, and its semantics are still TBD
+    /// The time since the server started, in nanoseconds.
     pub fn tick(&self) -> u64 {
-        0 // TODO
+        // This limits the server to a runtime of approximately 500 years.
+        self.startup_time.elapsed().as_nanos().try_into().unwrap()
+    }
+
+    pub fn tick_as_duration(&self) -> Duration {
+        self.startup_time.elapsed()
     }
 
     pub(crate) fn mapgen(&self) -> &dyn MapgenInterface {
@@ -183,6 +196,8 @@ impl GameState {
     // and wait for them to safely flush data.
     pub(crate) async fn shut_down(&self) {
         self.player_manager.request_shutdown();
+        self.entities.request_shutdown();
+        self.entities.await_shutdown().await.unwrap();
         self.player_manager.await_shutdown().await.unwrap();
 
         self.map.do_shutdown().await.unwrap();
@@ -215,6 +230,10 @@ impl GameState {
         &self.game_behaviors
     }
 
+    pub fn entities(&self) -> &entities::EntityManager {
+        &self.entities
+    }
+
     pub fn chat(&self) -> &ChatState {
         &self.chat
     }
@@ -225,10 +244,6 @@ impl GameState {
 
     pub(crate) fn time_state(&self) -> &Mutex<TimeState> {
         &self.time_state
-    }
-
-    pub(crate) fn entities(&self) -> &EntityManager {
-        &self.entities
     }
 
     /// Sets the time of day. 0 is midnight, 1 is the next midnight.

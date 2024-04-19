@@ -24,8 +24,8 @@ use std::time::Instant;
 
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
-use crate::game_state::entities::DrivenEntity;
-use crate::game_state::entities::EntityId;
+use crate::game_state::entities::IterEntity;
+use crate::game_state::entities::Movement;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
@@ -63,7 +63,8 @@ use log::info;
 use log::warn;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use perovskite_core::protocol::coordinates::Angles;
+use perovskite_core::protocol::coordinates as coords_proto;
+use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::game_rpc as proto;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
@@ -146,7 +147,8 @@ impl PlayerCoroutinePack {
             self.context
                 .game_state
                 .entities()
-                .remove_entity(self.context.player_context.entity_id);
+                .remove(self.context.player_context.entity_id)
+                .await;
         })?;
 
         Ok(())
@@ -251,7 +253,7 @@ pub(crate) async fn make_client_contexts(
     let entity_sender = EntityEventSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
-        observed_ids: FxHashSet::default(),
+        sent_entities: FxHashMap::default(),
         last_update: game_state.server_start_time(),
     };
 
@@ -503,9 +505,7 @@ impl MapChunkSender {
         level = "trace",
         skip(self, update, bump_index),
         fields(
-        player_name = %self.context.player_context.name(),
-            budget = %update.chunks_to_send,
-            player_chunk
+            player_name = %self.context.player_context.name()
         ),
     )]
     async fn handle_position_update(
@@ -867,7 +867,7 @@ fn make_client_state_update_message(
             Some(PlayerPosition {
                 position: Some(player_state.last_position.position.try_into()?),
                 velocity: Some(Vector3::zero().try_into()?),
-                face_direction: Some(Angles {
+                face_direction: Some(coords_proto::Angles {
                     deg_azimuth: 0.,
                     deg_elevation: 0.,
                 }),
@@ -894,6 +894,7 @@ fn make_client_state_update_message(
                         .iter()
                         .cloned()
                         .collect(),
+                    attached_to_entity: player_state.attached_to_entity.unwrap_or(0),
                 },
             )),
         }
@@ -1135,7 +1136,8 @@ impl InboundWorker {
                 .await?;
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
-                self.handle_pos_update(message.client_tick, pos_update)?;
+                self.handle_pos_update(message.client_tick, pos_update)
+                    .await?;
             }
             Some(proto::stream_to_server::ClientMessage::BugCheck(bug_check)) => {
                 error!("Client bug check: {:?}", bug_check);
@@ -1293,7 +1295,7 @@ impl InboundWorker {
         Ok(())
     }
 
-    fn handle_pos_update(&mut self, _tick: u64, update: &proto::ClientUpdate) -> Result<()> {
+    async fn handle_pos_update(&mut self, _tick: u64, update: &proto::ClientUpdate) -> Result<()> {
         match &update.position {
             Some(pos_update) => {
                 let (az, el) = match &pos_update.face_direction {
@@ -1332,11 +1334,20 @@ impl InboundWorker {
                 self.context
                     .player_context
                     .update_client_position_state(pos, update.hotbar_slot);
-                self.context.game_state.entities().drive_entity(
-                    self.context.player_context.entity_id,
-                    pos.position,
-                    pos.velocity,
-                )?;
+                self.context
+                    .game_state
+                    .entities()
+                    .set_kinematics(
+                        self.context.player_context.entity_id,
+                        pos_update
+                            .position
+                            .as_ref()
+                            .context("Missing position")?
+                            .try_into()?,
+                        Movement::stop_and_stay(0.0, f32::MAX),
+                        crate::game_state::entities::InitialMoveQueue::SingleMove(None),
+                    )
+                    .await;
             }
             None => {
                 warn!("No position in update message from client");
@@ -1526,6 +1537,7 @@ impl InboundWorker {
                         PopupResponse {
                             user_action,
                             textfield_values: action.text_fields.clone(),
+                            checkbox_values: action.checkboxes.clone(),
                             ctx: ctx.clone(),
                         },
                         self.context.player_context.main_inventory(),
@@ -1548,6 +1560,7 @@ impl InboundWorker {
                         PopupResponse {
                             user_action,
                             textfield_values: action.text_fields.clone(),
+                            checkbox_values: action.checkboxes.clone(),
                             ctx: ctx.clone(),
                         },
                         self.context.player_context.main_inventory(),
@@ -1803,12 +1816,13 @@ impl MiscOutboundWorker {
 struct EntityEventSender {
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
     context: Arc<SharedContext>,
-    observed_ids: FxHashSet<EntityId>,
+    // entity id -> last sequence number we've sent
+    sent_entities: FxHashMap<u64, u64>,
     last_update: Instant,
 }
 impl EntityEventSender {
     async fn entity_sender_loop(&mut self) -> Result<()> {
-        if self.context.effective_protocol_version < 2 {
+        if self.context.effective_protocol_version < 4 {
             tracing::info!(
                 "Client {} is using an unsupported protocol version, ignoring entity events",
                 self.context.id
@@ -1818,7 +1832,7 @@ impl EntityEventSender {
         }
 
         // TODO - optimize this with actual awakenings based on relevant entities
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut interval = tokio::time::interval(Duration::from_millis(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -1833,43 +1847,85 @@ impl EntityEventSender {
         Ok(())
     }
     async fn do_tick(&mut self) -> Result<()> {
+        // todo - this requires optimization
+
+        let update_time = Instant::now();
         let messages = {
             let mut messages = vec![];
 
-            let entities = self.context.game_state.entities().contents();
+            let entities = self.context.game_state.entities();
 
             // TODO this is suboptimal
-            let known_to_us = self.observed_ids.iter().cloned().collect::<HashSet<_>>();
-            let still_valid = entities.iter().map(DrivenEntity::id).collect();
+            let known_to_us = self.sent_entities.keys().cloned().collect::<HashSet<_>>();
+            let mut still_valid = HashSet::new();
+
+            for shard in entities.shards() {
+                shard.for_each_entity(None, |entity: IterEntity| {
+                    still_valid.insert(entity.id);
+                    if entity.id == self.context.player_context.entity_id {
+                        return Ok(());
+                    }
+                    if entity.last_nontrivial_modification < self.last_update {
+                        return Ok(());
+                    }
+
+                    let last_sent_sequence = self.sent_entities.get(&entity.id).cloned();
+                    let last_available_sequence = entity
+                        .next_moves
+                        .last()
+                        .map(|m| m.sequence)
+                        .unwrap_or(entity.current_move.sequence);
+
+                    if last_sent_sequence == Some(last_available_sequence) {
+                        // Client's view of this entity is up to date
+                        return Ok(());
+                    }
+                    self.sent_entities
+                        .insert(entity.id, last_available_sequence);
+
+                    let mut moves_to_send = Vec::with_capacity(8);
+                    let mut pos = entity.starting_position;
+                    for m in std::iter::once(&entity.current_move).chain(entity.next_moves.iter()) {
+                        if m.sequence > last_sent_sequence.unwrap_or(0) {
+                            moves_to_send.push(entities_proto::EntityMove {
+                                sequence: m.sequence,
+                                start_position: Some(pos.try_into()?),
+                                velocity: Some(m.movement.velocity.try_into()?),
+                                acceleration: Some(m.movement.acceleration.try_into()?),
+                                face_direction: m.movement.face_direction,
+                                total_time_seconds: m.movement.move_time,
+                            });
+                        }
+
+                        pos = m.movement.pos_after_move(pos);
+                    }
+
+                    let message = entities_proto::EntityUpdate {
+                        id: entity.id,
+                        planned_move: moves_to_send,
+                        remove: false,
+                        current_move_sequence: entity.current_move.sequence,
+                        // This has already been corrected for delta_bias in cases where a move began
+                        // in the middle of a poll cycle
+                        current_move_progress: entity.current_move_elapsed,
+                    };
+                    messages.push(message);
+                    Ok(())
+                })?;
+            }
             let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
-            for entity_id in to_remove {
-                messages.push(proto::EntityMovement {
-                    entity_id: entity_id.client_id(),
-                    position: None,
-                    velocity: None,
+
+            for &entity_id in to_remove.into_iter() {
+                messages.push(entities_proto::EntityUpdate {
+                    id: entity_id,
+                    planned_move: vec![],
+                    current_move_sequence: 0,
+                    current_move_progress: 0.0,
                     remove: true,
                 });
-                self.observed_ids.remove(entity_id);
+                self.sent_entities.remove(&entity_id);
             }
 
-            for entity in entities.iter() {
-                if entity.id() == self.context.player_context.entity_id {
-                    continue;
-                }
-
-                if !self.observed_ids.contains(&entity.id())
-                    || entity.updated_since(self.last_update)
-                {
-                    self.observed_ids.insert(entity.id());
-                    let (position, velocity) = entity.sample();
-                    messages.push(proto::EntityMovement {
-                        entity_id: entity.id().client_id(),
-                        position: Some(position.try_into()?),
-                        velocity: Some(velocity.try_into()?),
-                        remove: false,
-                    });
-                }
-            }
             messages
         };
         let tick = self.context.game_state.tick();
@@ -1877,11 +1933,11 @@ impl EntityEventSender {
             self.outbound_tx
                 .send(Ok(StreamToClient {
                     tick,
-                    server_message: Some(ServerMessage::EntityMovement(message)),
+                    server_message: Some(ServerMessage::EntityUpdate(message)),
                 }))
                 .await?;
         }
-        self.last_update = Instant::now();
+        self.last_update = update_time;
         Ok(())
     }
 }

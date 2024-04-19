@@ -42,15 +42,17 @@ use unicode_normalization::UnicodeNormalization;
 use crate::{
     block_renderer::{AsyncMediaLoader, BlockRenderer, ClientBlockTypeManager},
     cache::CacheManager,
-    game_state::{items::ClientItemManager, settings::GameSettings, ClientState},
+    game_state::{
+        items::ClientItemManager, settings::GameSettings, timekeeper::Timekeeper, ClientState,
+    },
     vulkan::VulkanWindow,
 };
 
 mod client_context;
 pub(crate) mod mesh_worker;
 
-const MIN_PROTOCOL_VERSION: u32 = 3;
-const MAX_PROTOCOL_VERSION: u32 = 3;
+const MIN_PROTOCOL_VERSION: u32 = 4;
+const MAX_PROTOCOL_VERSION: u32 = 4;
 
 async fn connect_grpc(
     server_addr: String,
@@ -82,8 +84,12 @@ pub(crate) async fn connect_game(
     let mut stream = connection.game_stream(request).await?.into_inner();
     progress.send((0.2, "Logging into server...".to_string()))?;
 
-    let protocol_version =
-        do_auth_handshake(&tx_send, &mut stream, username, password, register).await?;
+    let AuthSuccess {
+        protocol_version,
+        tick: initial_tick,
+    } = do_auth_handshake(&tx_send, &mut stream, username, password, register).await?;
+
+    let timekeeper = Timekeeper::new(initial_tick);
 
     if protocol_version < MIN_PROTOCOL_VERSION {
         bail!(
@@ -155,6 +161,7 @@ pub(crate) async fn connect_game(
     .await?;
 
     let (action_sender, action_receiver) = mpsc::channel(4);
+
     let client_state = Arc::new(ClientState::new(
         settings,
         block_types,
@@ -163,6 +170,7 @@ pub(crate) async fn connect_game(
         hud,
         egui,
         block_renderer,
+        timekeeper,
     )?);
     tx_send
         .send(StreamToServer {
@@ -212,13 +220,18 @@ fn normalize_password(password: String) -> String {
     password.nfkc().to_string()
 }
 
+struct AuthSuccess {
+    protocol_version: u32,
+    tick: u64,
+}
+
 async fn do_auth_handshake(
     tx: &mpsc::Sender<StreamToServer>,
     rx: &mut Streaming<StreamToClient>,
     username: String,
     password: String,
     register: bool,
-) -> Result<u32> {
+) -> Result<AuthSuccess> {
     if register {
         do_register_handshake(tx, rx, username, normalize_password(password)).await
     } else {
@@ -231,7 +244,7 @@ async fn do_register_handshake(
     rx: &mut Streaming<StreamToClient>,
     username: String,
     password: String,
-) -> Result<u32> {
+) -> Result<AuthSuccess> {
     let mut client_rng = OsRng;
     let client_state = opaque_ke::ClientRegistration::<PerovskiteOpaqueAuth>::start(
         &mut client_rng,
@@ -284,8 +297,11 @@ async fn do_register_handshake(
     match rx.message().await? {
         Some(StreamToClient {
             server_message: Some(ServerMessage::AuthSuccess(success)),
-            ..
-        }) => Ok(success.effective_protocol_version),
+            tick,
+        }) => Ok(AuthSuccess {
+            protocol_version: success.effective_protocol_version,
+            tick,
+        }),
         Some(x) => {
             bail!("Server sent an unexpected message instead of confirming auth success: {x:?}")
         }
@@ -298,7 +314,7 @@ async fn do_login_handshake(
     rx: &mut Streaming<StreamToClient>,
     username: String,
     password: String,
-) -> Result<u32> {
+) -> Result<AuthSuccess> {
     let mut client_rng = OsRng;
     let client_state =
         opaque_ke::ClientLogin::<PerovskiteOpaqueAuth>::start(&mut client_rng, password.as_bytes())
@@ -349,12 +365,15 @@ async fn do_login_handshake(
     match rx.message().await? {
         Some(StreamToClient {
             server_message: Some(ServerMessage::AuthSuccess(success)),
-            ..
-        }) => Ok(success.effective_protocol_version),
+            tick,
+        }) => Ok(AuthSuccess {
+            protocol_version: success.effective_protocol_version,
+            tick,
+        }),
         Some(x) => {
             bail!("Server sent an unexpected message instead of confirming auth success: {x:?}")
         }
-        None => bail!("Server disconnected before confirming auth success"),
+        None => bail!("Server disconnected before finishing login"),
     }
 }
 

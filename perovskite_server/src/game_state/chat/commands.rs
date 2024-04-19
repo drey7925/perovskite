@@ -1,15 +1,25 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, pin::Pin};
 
 use anyhow::{bail, Result};
+use cgmath::Vector3;
 use itertools::Itertools;
 use perovskite_core::{
+    block_id::BlockId,
     chat::ChatMessage,
     constants::permissions::{self, ELIGIBLE_PREFIX},
+    coordinates::BlockCoordinate,
 };
+use rand::Rng;
 use tonic::async_trait;
 
 use crate::{
-    game_state::event::{EventInitiator, HandlerContext},
+    game_state::{
+        entities::{
+            CoroutineResult, EntityCoroutine, EntityCoroutineServices, EntityTypeId, Movement,
+            FAKE_ENTITY_CLASS_ID,
+        },
+        event::{EventInitiator, HandlerContext},
+    },
     run_async_handler,
 };
 
@@ -80,6 +90,7 @@ impl CommandManager {
                         .to_string(),
             },
         );
+
         Self { commands }
     }
     pub fn add_command(&mut self, name: String, command: ChatCommand) -> Result<()> {

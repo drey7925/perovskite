@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 
@@ -39,7 +39,11 @@ use winit::{
 
 use crate::{
     block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},
-    game_state::{settings::GameSettings, ClientState, FrameState},
+    game_state::{
+        chunk::{SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER},
+        settings::GameSettings,
+        ClientState, FrameState,
+    },
     main_menu::MainMenu,
     net_client,
 };
@@ -81,7 +85,7 @@ impl ActiveGame {
         let _span = span!("build renderer buffers");
         let FrameState {
             scene_state,
-            player_position,
+            mut player_position,
             tool_state,
         } = self
             .client_state
@@ -93,6 +97,21 @@ impl ActiveGame {
         )
         .unwrap();
         self.cube_draw_calls.clear();
+        let start_time = Instant::now();
+
+        {
+            let entity_lock = self.client_state.entities.lock();
+            if let Some(entity_id) = entity_lock.attached_to_entity {
+                if let Some(entity) = entity_lock.entities.get(&entity_id) {
+                    player_position = entity.position(start_time);
+                    self.client_state
+                        .physics_state
+                        .lock()
+                        .set_position(player_position);
+                }
+            }
+        }
+
         if let Some(pointee) = tool_state.pointee {
             self.cube_draw_calls.push(
                 self.client_state
@@ -101,29 +120,13 @@ impl ActiveGame {
                     .unwrap(),
             );
         }
-        // test only
-        if let Some(neighbor) = tool_state.neighbor {
-            if self
-                .client_state
-                .settings
-                .load()
-                .render
-                .show_placement_guide
-            {
-                self.cube_draw_calls.push(
-                    self.client_state
-                        .block_renderer
-                        .make_pointee_cube(player_position, neighbor)
-                        .unwrap(),
-                );
-            }
-        }
 
         let (entity_translations, vtx, idx) = {
             let mut entity_coords = vec![];
-            let entity_lock = self.client_state.entities.lock();
-            for entity in entity_lock.entities.values() {
-                entity_coords.push(entity.as_transform(player_position))
+            let mut entity_lock = self.client_state.entities.lock();
+            for entity in entity_lock.entities.values_mut() {
+                entity.advance_state();
+                entity_coords.push(entity.as_transform(player_position, start_time))
             }
             (
                 entity_coords,
@@ -156,14 +159,8 @@ impl ActiveGame {
             .client_state
             .chunks
             .make_batched_draw_calls(player_position);
-        if !self
-            .client_state
-            .input
-            .lock()
-            .is_pressed(crate::game_state::input::BoundAction::PhysicsDebug)
-        {
-            self.cube_draw_calls.extend(batched_calls);
-        }
+
+        self.cube_draw_calls.extend(batched_calls);
 
         self.cube_draw_calls
             .extend(chunk_lock.iter().filter_map(|(coord, chunk)| {
@@ -510,6 +507,7 @@ impl GameRenderer {
                         recreate_swapchain = true;
                     }
                     if let Some(image_fence) = &fences[image_i as usize] {
+                        // TODO: This sometimes stalls for a long time. Figure out why.
                         image_fence.wait(None).unwrap();
                     }
                     let previous_future = match fences[previous_fence_i as usize].clone() {

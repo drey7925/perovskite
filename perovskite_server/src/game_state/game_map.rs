@@ -24,7 +24,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -34,12 +34,12 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::run_handler;
 use crate::sync::{AtomicInstant, RwCondvar};
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
 };
+use crate::{run_handler, CachelineAligned};
 
 use super::blocks::BlockInteractionResult;
 use super::{
@@ -766,32 +766,24 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
     }
 }
 
-const NUM_LOCK_SHARDS: usize = 16;
+const NUM_CHUNK_SHARDS: usize = 16;
+// todo scale up
+const NUM_ENTITY_SHARDS: usize = 1;
+
 fn shard_id(coord: ChunkCoordinate) -> usize {
-    (coord.coarse_hash_no_y() % NUM_LOCK_SHARDS as u64) as usize
+    (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
 }
 
 struct MapShard {
     chunks: FxHashMap<ChunkCoordinate, MapChunkHolder>,
     light_columns: FxHashMap<(i32, i32), ChunkColumn>,
-    entities: entities::EntityShard,
 }
 impl MapShard {
-    fn new(shard: usize, db: Arc<dyn GameDatabase>) -> MapShard {
+    fn new(shard: usize) -> MapShard {
         MapShard {
             chunks: FxHashMap::default(),
             light_columns: FxHashMap::default(),
-            entities: entities::EntityShard::new(shard, db),
         }
-    }
-}
-
-#[repr(align(64))]
-struct CachelineAligned<T>(T);
-impl<T> Deref for CachelineAligned<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -805,13 +797,13 @@ pub struct ServerGameMap {
     // sharded 16 ways based on the coarse hash of the chunk
     // Each one is 72 bytes, so we pad them out to a whole cacheline. This wastes a bit of space, unfortunately
     // However, it means that one shard's lock control word isn't aliasing with the data of other shards.
-    live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_LOCK_SHARDS],
+    live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_CHUNK_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
-    writeback_senders: [mpsc::Sender<WritebackReq>; NUM_LOCK_SHARDS],
+    writeback_senders: [mpsc::Sender<WritebackReq>; NUM_CHUNK_SHARDS],
     shutdown: CancellationToken,
-    writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_LOCK_SHARDS],
-    cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_LOCK_SHARDS],
+    writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
+    cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
     timer_controller: Mutex<Option<TimerController>>,
 }
 impl ServerGameMap {
@@ -823,7 +815,7 @@ impl ServerGameMap {
         let (block_update_sender, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
         let mut writeback_senders = vec![];
         let mut writeback_receivers = vec![];
-        for _ in 0..NUM_LOCK_SHARDS {
+        for _ in 0..NUM_CHUNK_SHARDS {
             let (sender, receiver) = mpsc::channel(WRITEBACK_QUEUE_SIZE);
             writeback_senders.push(sender);
             writeback_receivers.push(receiver);
@@ -835,7 +827,7 @@ impl ServerGameMap {
             game_state: game_state.clone(),
             database: database.clone(),
             live_chunks: std::array::from_fn(|shard| {
-                CachelineAligned(RwLock::new(MapShard::new(shard, database.clone())))
+                CachelineAligned(RwLock::new(MapShard::new(shard)))
             }),
             block_type_manager,
             block_update_sender,
@@ -922,10 +914,36 @@ impl ServerGameMap {
             None => None,
         };
 
-        Ok((
-            self.block_type_manager().make_blockref(id.into())?,
-            ext_data,
-        ))
+        Ok((id.into(), ext_data))
+    }
+
+    fn get_block_with_extended_data_no_load<F, T>(
+        &self,
+        coord: BlockCoordinate,
+        extended_data_callback: F,
+    ) -> Result<Option<(BlockTypeHandle, Option<T>)>>
+    where
+        F: FnOnce(&ExtendedData) -> Option<T>,
+    {
+        let chunk_guard = match self.try_get_chunk(coord.chunk(), false) {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let chunk = match chunk_guard.try_get_read()? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+
+        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
+        let ext_data = match chunk
+            .extended_data
+            .get(&coord.offset().as_index().try_into().unwrap())
+        {
+            Some(x) => extended_data_callback(x),
+            None => None,
+        };
+
+        Ok(Some((BlockId(id), ext_data)))
     }
 
     /// Gets a block + variant without its extended data. This will perform a data load if the chunk
@@ -935,8 +953,7 @@ impl ServerGameMap {
         let chunk = chunk_guard.wait_and_get_for_read()?;
 
         let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-
-        self.block_type_manager().make_blockref(id.into())
+        Ok(id.into())
     }
 
     /// Attempts to get a block without its extended data. Will not attempt to load blocks on cache misses
@@ -947,7 +964,7 @@ impl ServerGameMap {
     /// However, it will still wait to get a read lock for the chunk map itself. The only circumstances
     /// where this should fail is if the chunk is unloaded.
     pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockTypeHandle> {
-        let chunk_guard = self.try_get_chunk(coord.chunk())?;
+        let chunk_guard = self.try_get_chunk(coord.chunk(), false)?;
         // We don't have a mapchunk lock, so we need actual atomic ordering here
         if chunk_guard.fast_path_read_ready.load(Ordering::Acquire) {
             Some(
@@ -976,7 +993,7 @@ impl ServerGameMap {
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        let old_block = self.block_type_manager().make_blockref(old_id.into())?;
+        let old_block = old_id.into();
         let old_data = match new_data {
             Some(new_data) => chunk
                 .extended_data
@@ -1022,7 +1039,7 @@ impl ServerGameMap {
         block: U,
         extended_data: Option<ExtendedData>,
         check_variant: bool,
-    ) -> Result<(CasOutcome, BlockTypeHandle, Option<ExtendedData>)> {
+    ) -> Result<(CasOutcome, BlockId, Option<ExtendedData>)> {
         if check_variant {
             self.compare_and_set_block_predicate(
                 coord,
@@ -1060,7 +1077,7 @@ impl ServerGameMap {
     where
         F: FnOnce(BlockTypeHandle, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
     {
-        let block = block
+        let new_id = block
             .as_handle(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
@@ -1068,7 +1085,7 @@ impl ServerGameMap {
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
-        let old_block = self.block_type_manager().make_blockref(old_id)?;
+        let old_block = old_id.into();
         if !predicate(
             old_block,
             chunk
@@ -1087,8 +1104,6 @@ impl ServerGameMap {
                 .extended_data
                 .remove(&coord.offset().as_index().try_into().unwrap()),
         };
-
-        let new_id = block;
         chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
         if old_id != new_id || old_data.is_some() || new_data_was_some {
             chunk.dirty = true;
@@ -1107,11 +1122,11 @@ impl ServerGameMap {
         drop(chunk);
         chunk_guard
             .block_bloom_filter
-            .insert(block.base_id() as u64);
+            .insert(new_id.base_id() as u64);
         self.enqueue_writeback(chunk_guard)?;
         self.broadcast_block_change(BlockUpdate {
             location: coord,
-            new_value: block,
+            new_value: new_id,
         });
         Ok((CasOutcome::Match, old_block, old_data))
     }
@@ -1156,6 +1171,46 @@ impl ServerGameMap {
         Ok(result)
     }
 
+    /// Same as [mutate_block_atomically], but returns None if it cannot immediately run the mutator without
+    /// having to block (for a mutex, writeback permit, or IO).
+    pub fn try_mutate_block_atomically<F, T>(
+        &self,
+        coord: BlockCoordinate,
+        mutator: F,
+    ) -> Result<Option<T>>
+    where
+        F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
+    {
+        let chunk_guard = match self.try_get_chunk(coord.chunk(), true) {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let mut chunk = match chunk_guard.try_get_write()? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+
+        let (result, block_changed) = self.mutate_block_atomically_locked(
+            &chunk_guard,
+            &mut chunk,
+            coord.offset(),
+            mutator,
+            self,
+        )?;
+        if block_changed {
+            // mutate_block_atomically_locked already sent a broadcast.
+            chunk_guard.update_lighting_after_edit(
+                &chunk_guard,
+                &chunk,
+                coord.offset(),
+                self.block_type_manager(),
+            );
+            drop(chunk);
+            self.enqueue_writeback(chunk_guard)?;
+        }
+        Ok(Some(result))
+    }
+
     /// Internal impl detail of mutate_block_atomically and timers
     fn mutate_block_atomically_locked<F, T>(
         &self,
@@ -1177,8 +1232,8 @@ impl ServerGameMap {
         let old_id = chunk.block_ids[offset.as_index()]
             .load(Ordering::Relaxed)
             .into();
-        let mut block_type = game_map.block_type_manager().make_blockref(old_id)?;
-        let closure_result = mutator(&mut block_type, &mut data_holder);
+        let mut new_id = old_id;
+        let closure_result = mutator(&mut new_id, &mut data_holder);
 
         let extended_data_dirty = data_holder.dirty();
         if let Some(new_data) = extended_data {
@@ -1187,7 +1242,6 @@ impl ServerGameMap {
                 .insert(offset.as_index().try_into().unwrap(), new_data);
         }
 
-        let new_id = block_type;
         if new_id != old_id {
             chunk.block_ids[offset.as_index()].store(new_id.into(), Ordering::Relaxed);
             chunk.dirty = true;
@@ -1205,7 +1259,7 @@ impl ServerGameMap {
         if new_id != old_id {
             game_map.broadcast_block_change(BlockUpdate {
                 location: chunk.coord.with_offset(offset),
-                new_value: block_type,
+                new_value: new_id,
             });
         }
 
@@ -1407,8 +1461,23 @@ impl ServerGameMap {
     }
 
     #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]
-    fn try_get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Option<MapChunkOuterGuard<'a>> {
+    fn try_get_chunk<'a>(
+        &'a self,
+        coord: ChunkCoordinate,
+        want_permit: bool,
+    ) -> Option<MapChunkOuterGuard<'a>> {
         let shard = shard_id(coord);
+        let mut permit = None;
+        if want_permit {
+            match self.try_get_writeback_permit(shard) {
+                Ok(Some(p)) => permit = Some(p),
+                Ok(None) => return None,
+                Err(e) => {
+                    tracing::error!("Failed to get writeback permit: {:?}", e);
+                    return None;
+                }
+            }
+        }
         let guard = self.live_chunks[shard].read();
         // We need this check - if the chunk isn't in memory, we cannot construct a MapChunkOuterGuard for it
         // (unwrapping will panic)
@@ -1420,7 +1489,7 @@ impl ServerGameMap {
         return Some(MapChunkOuterGuard {
             read_guard: guard,
             coord,
-            writeback_permit: None,
+            writeback_permit: permit,
             force_writeback: false,
         });
     }
@@ -1594,6 +1663,7 @@ impl ServerGameMap {
                 let writeback_handle = self.writeback_handles[i].lock().take();
                 writeback_handle.unwrap().await??;
 
+
                 let cleanup_handle = self.cleanup_handles[i].lock().take();
                 cleanup_handle.unwrap().await??;
             }
@@ -1616,7 +1686,7 @@ impl ServerGameMap {
     }
 
     pub(crate) fn flush(&self) {
-        for shard in 0..NUM_LOCK_SHARDS {
+        for shard in 0..NUM_CHUNK_SHARDS {
             let mut lock = self.live_chunks[shard].write();
             let coords: Vec<_> = lock.chunks.keys().copied().collect();
             log::info!(
@@ -2087,13 +2157,13 @@ impl GameMapTimer {
         let mut tasks = self.tasks.blocking_lock();
         // Hacky: Delay 0.1 seconds to allow shards to start up
         let first_run = Instant::now() + Duration::from_millis(100);
-        for coarse_shard in 0..NUM_LOCK_SHARDS {
+        for coarse_shard in 0..NUM_CHUNK_SHARDS {
             for fine_shard in 0..fine_shards_per_coarse {
                 let start_time = first_run
                     + (self.settings.interval.mul_f64(
                         self.settings.spreading
                             * (fine_shard + fine_shards_per_coarse * coarse_shard) as f64
-                            / (fine_shards_per_coarse * NUM_LOCK_SHARDS) as f64,
+                            / (fine_shards_per_coarse * NUM_CHUNK_SHARDS) as f64,
                     ));
                 {
                     let cloned_self = self.clone();
@@ -2930,131 +3000,6 @@ impl ServerGameMap {
     }
 }
 
-/// This implementation is EXTREMELY unstable while it is under active development.
-/// Do not assume any functionality or performance guarantees while different techniques
-/// are under investigation.
-mod entities {
-    use std::sync::Arc;
-
-    use rustc_hash::FxHashMap;
-
-    use crate::database::database_engine::GameDatabase;
-
-    /// This entity is present and valid
-    const CONTROL_PRESENT: u8 = 1;
-    /// This entity should remain loaded even when it's in unloaded chunks
-    const CONTROL_STICKY: u8 = 2;
-    const ID_MASK: u64 = (1 << 48) - 1;
-
-    /// The core of entity data. For performance reasons, this is stored in struct-of-arrays
-    /// form, so that SIMD operations can be used to access it.
-    /// For now, these are just standard vectors, with further SIMD optimizations coming later.
-    /// The in-memory representation is subject to change and other code should not assume any particular
-    /// layout.
-    struct EntityCoreArray {
-        // The next index to insert into. It may either be an unused slot or at the end of the arrays
-        next_insert: usize,
-        // The physical len of the arrays. It is always a multiple of 16
-        len: usize,
-        next_id: u64,
-        // Lookup table from ID to index. This should only be used for scalar operations on a single entity (or a few)
-        id_lookup: FxHashMap<u64, usize>,
-
-        // Entity ID, unique, assigned by the server. Only 48 bits available to allow for possible
-        // packing later
-        id: Vec<u64>,
-        // Flags
-        control: Vec<u8>,
-        // Position
-        x: Vec<f64>,
-        y: Vec<f64>,
-        z: Vec<f64>,
-        // Velocity
-        xv: Vec<f32>,
-        yv: Vec<f32>,
-        zv: Vec<f32>,
-        // Acceleration
-        ax: Vec<f32>,
-        ay: Vec<f32>,
-        az: Vec<f32>,
-        // Face direction, given as a vector to avoid doing trig in the loop
-        facedir_x: Vec<f32>,
-        facedir_z: Vec<f32>,
-
-        move_time_remaining: Vec<f32>,
-    }
-    impl EntityCoreArray {
-        /// Checks some preconditions that we want to assume on the vectors to make
-        /// iteration faster.
-        fn check_preconditions(&self) {
-            // We assume that all vectors have the same length.
-            assert_eq!(self.id.len(), self.len);
-            assert_eq!(self.control.len(), self.len);
-            assert_eq!(self.x.len(), self.len);
-            assert_eq!(self.y.len(), self.len);
-            assert_eq!(self.z.len(), self.len);
-            assert_eq!(self.xv.len(), self.len);
-            assert_eq!(self.yv.len(), self.len);
-            assert_eq!(self.zv.len(), self.len);
-            assert_eq!(self.facedir_x.len(), self.len);
-            assert_eq!(self.facedir_z.len(), self.len);
-        }
-
-        fn apply_velocity_update(&mut self, delta_time: f32) {
-            self.check_preconditions();
-            // Building SIMD masks is expensive. I suspect that it's cheaper to just update everything, including
-            // entries whose control flag is not set, rather than branch
-            // Of course, this will require substantial benchmarking and tuning.
-            for i in 0..self.len {
-                let dt = self.move_time_remaining[i].min(delta_time);
-                self.move_time_remaining[i] -= dt;
-                self.x[i] += (self.xv[i] * dt + 0.5 * self.ax[i] * dt * dt) as f64;
-                self.y[i] += (self.yv[i] * dt + 0.5 * self.ay[i] * dt * dt) as f64;
-                self.z[i] += (self.zv[i] * dt + 0.5 * self.az[i] * dt * dt) as f64;
-                self.xv[i] += self.ax[i] * dt;
-                self.yv[i] += self.ay[i] * dt;
-                self.zv[i] += self.az[i] * dt;
-            }
-        }
-
-        fn new() -> EntityCoreArray {
-            EntityCoreArray {
-                next_insert: 0,
-                len: 0,
-                next_id: 0,
-                id_lookup: FxHashMap::default(),
-                id: vec![],
-                control: vec![],
-                x: vec![],
-                y: vec![],
-                z: vec![],
-                xv: vec![],
-                yv: vec![],
-                zv: vec![],
-                ax: vec![],
-                ay: vec![],
-                az: vec![],
-                facedir_x: vec![],
-                facedir_z: vec![],
-                move_time_remaining: vec![],
-            }
-        }
-    }
-
-    /// The entities stored in a shard of the game map.
-    pub(super) struct EntityShard {
-        db: Arc<dyn GameDatabase>,
-        // currently, all entities share a single core array. This may change in the future
-        core: EntityCoreArray,
-    }
-    impl EntityShard {
-        pub(super) fn new(shard: usize, db: Arc<dyn GameDatabase>) -> EntityShard {
-            tracing::warn!("FIXME: Need to load entities from DB for {shard}");
-            let core = EntityCoreArray::new();
-            EntityShard { db, core }
-        }
-    }
-}
 
 #[cfg(fuzzing)]
 pub mod fuzz {

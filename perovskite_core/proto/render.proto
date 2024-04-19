@@ -31,4 +31,23 @@ message TextureCrop {
     float top = 2;
     float right = 3;
     float bottom = 4;
+    // If set, the rectangle defined by the four fields above will
+    // be cropped *further* by this dynamic rule
+    DynamicCrop dynamic = 5;
+}
+// The rule defining how to crop a texture based on its variant
+message DynamicCrop {
+    // AND the variant with this value to get the horizontal grid cell (the 1 bits must be contiguous)...
+    uint32 x_selector_bits = 1;
+    // out of this many grid cells total. Values range from [0..x_cells-1]
+    // with 0 leftmost in the texture
+    uint32 x_cells = 2;
+    // Do the same thing with these fields to get the vertical grid cell
+    // (0 is topmost, TODO check)
+    uint32 y_selector_bits = 3;
+    uint32 y_cells = 4;
+    // If variant AND this is nonzero, flip the selected grid cell horizontally
+    uint32 flip_x_bit = 5;
+    // If variant AND this is nonzero, flip the selected grid cell vertically
+    uint32 flip_y_bit = 6;
 }

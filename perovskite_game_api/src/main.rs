@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use perovskite_game_api::{
-    colors, default_game::DefaultGameBuilder, discord, game_builder::GameBuilder,
+    carts, colors, default_game::DefaultGameBuilder, discord, game_builder::GameBuilder,
 };
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::{prelude::*, registry::LookupSpan};
@@ -43,9 +43,11 @@ where
     for<'a> S: LookupSpan<'a>,
 {
     Box::new(
-        tracing_tracy::TracyLayer::new().with_filter(tracing_subscriber::filter::filter_fn(|x| {
-            x.module_path().is_some_and(|x| x.contains("perovskite"))
-        })),
+        tracing_tracy::TracyLayer::new(tracing_tracy::DefaultConfig::default()).with_filter(
+            tracing_subscriber::filter::filter_fn(|x| {
+                x.module_path().is_some_and(|x| x.contains("perovskite"))
+            }),
+        ),
     )
 }
 
@@ -104,6 +106,10 @@ fn main() {
     #[cfg(feature = "discord")]
     {
         discord::connect(&mut game).unwrap();
+    }
+    #[cfg(feature = "carts")]
+    {
+        carts::register_carts(&mut game).unwrap();
     }
 
     colors::register_dyes(&mut game).unwrap();

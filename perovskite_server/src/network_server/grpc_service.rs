@@ -146,8 +146,8 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
     }
 }
 
-pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 3;
-pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 3;
+pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 4;
+pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 4;
 
 async fn game_stream_impl(
     game_state: Arc<GameState>,
@@ -178,8 +178,21 @@ async fn game_stream_impl(
     };
 
     if SERVER_MIN_PROTOCOL_VERSION > auth_outcome.max_protocol_version {
+        outbound_tx
+            .send(Err(tonic::Status::unimplemented(format!(
+                "Client is too old; minimum server protocol version is {}",
+                SERVER_MIN_PROTOCOL_VERSION
+            ))))
+            .await?;
         bail!("Client is too old");
-    } else if SERVER_MAX_PROTOCOL_VERSION < auth_outcome.min_protocol_version {
+    }
+    if SERVER_MAX_PROTOCOL_VERSION < auth_outcome.min_protocol_version {
+        outbound_tx
+            .send(Err(tonic::Status::unimplemented(format!(
+                "Client is too new; maximum server protocol version is {}",
+                SERVER_MIN_PROTOCOL_VERSION
+            ))))
+            .await?;
         bail!("Client is too new");
     }
     let effective_min_protocol = SERVER_MIN_PROTOCOL_VERSION.max(auth_outcome.min_protocol_version);
@@ -188,7 +201,7 @@ async fn game_stream_impl(
 
     outbound_tx
         .send(Ok(StreamToClient {
-            tick: 0,
+            tick: game_state.tick(),
             server_message: Some(ServerMessage::AuthSuccess(AuthSuccess {
                 effective_protocol_version: effective_max_protocol,
             })),
@@ -205,7 +218,7 @@ async fn game_stream_impl(
             log::error!("Failed to establish player context: {:?}", e);
             outbound_tx
                 .send(Ok(StreamToClient {
-                    tick: 0,
+                    tick: game_state.tick(),
                     server_message: Some(ServerMessage::ShutdownMessage(format!(
                         "Failed to establish player context: {e:?}"
                     ))),

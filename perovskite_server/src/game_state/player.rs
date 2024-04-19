@@ -43,7 +43,7 @@ use crate::{
 
 use super::{
     client_ui::Popup,
-    entities::EntityId,
+    entities::{EntityTypeId, PLAYER_ENTITY_CLASS_ID},
     event::{EventInitiator, PlayerInitiator},
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
     GameState,
@@ -67,7 +67,7 @@ pub struct Player {
     sender: PlayerEventSender,
     game_state: Arc<GameState>,
     // TODO - refactor according to the final design of entities
-    pub(crate) entity_id: EntityId,
+    pub(crate) entity_id: u64,
 }
 
 impl Player {
@@ -127,9 +127,14 @@ impl Player {
             .with_context(|| "Missing last_position in StoredPlayer")?
             .try_into()?;
 
-        let entity_id = game_state
-            .entities
-            .insert_entity(position, Vector3::zero())?;
+        let entity_id = game_state.entities().new_entity_blocking(
+            position,
+            None,
+            EntityTypeId {
+                class: PLAYER_ENTITY_CLASS_ID,
+                data: Some(proto.name.as_bytes().into()),
+            },
+        );
 
         Ok(Player {
             name: proto.name.clone(),
@@ -167,6 +172,7 @@ impl Player {
                 hotbar_slot: None,
                 granted_permissions: proto.permission.iter().cloned().collect(),
                 temporary_permissions: HashSet::new(),
+                attached_to_entity: None,
             }),
             sender,
             game_state,
@@ -192,9 +198,14 @@ impl Player {
             .collect();
 
         let position = (game_state.game_behaviors().spawn_location)(name);
-        let entity_id = game_state
-            .entities
-            .insert_entity(position, Vector3::zero())?;
+        let entity_id = game_state.entities().new_entity_blocking(
+            position,
+            None,
+            EntityTypeId {
+                class: PLAYER_ENTITY_CLASS_ID,
+                data: Some(name.as_bytes().into()),
+            },
+        );
 
         let player = Player {
             name: name.to_string(),
@@ -232,6 +243,7 @@ impl Player {
                 hotbar_slot: None,
                 granted_permissions: game_state.game_behaviors().default_permissions.clone(),
                 temporary_permissions: HashSet::new(),
+                attached_to_entity: None,
             }
             .into(),
             sender,
@@ -364,6 +376,24 @@ impl Player {
     pub fn set_position_blocking(&self, position: Vector3<f64>) -> Result<()> {
         tokio::runtime::Handle::current().block_on(self.set_position(position))
     }
+
+    pub async fn attach_to_entity(&self, entity_id: u64) -> Result<()> {
+        self.state.lock().attached_to_entity = Some(entity_id);
+        self.sender.reinit_player_state.send(true).await?;
+        Ok(())
+    }
+
+    pub fn attach_to_entity_blocking(&self, entity_id: u64) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.attach_to_entity(entity_id))
+    }
+    pub async fn detach_from_entity(&self) -> Result<()> {
+        self.state.lock().attached_to_entity = None;
+        self.sender.reinit_player_state.send(true).await?;
+        Ok(())
+    }
+    pub fn detach_from_entity_blocking(&self) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.detach_from_entity())
+    }
 }
 
 pub(crate) struct PlayerState {
@@ -385,6 +415,8 @@ pub(crate) struct PlayerState {
     /// Permissions that this player has obtained using /elevate or similar
     /// They are sent to the client, but they are not stored in the database.
     pub(crate) temporary_permissions: HashSet<String>,
+    /// The player's attached entity, if any
+    pub(crate) attached_to_entity: Option<u64>,
 }
 impl PlayerState {
     pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {
@@ -600,14 +632,18 @@ impl PlayerManager {
         // TODO - optimization: This is IO done under the global player lock
         // Maybe something like the game map double locks?
         let player = match self.db.get(&Self::db_key(name))? {
-            Some(player_proto) => Player::from_server_proto(
-                self.game_state(),
-                &StoredPlayer::decode(player_proto.as_slice())?,
-                sender,
-            )?,
+            Some(player_proto) => tokio::task::block_in_place(|| {
+                Player::from_server_proto(
+                    self.game_state(),
+                    &StoredPlayer::decode(player_proto.as_slice())?,
+                    sender,
+                )
+            })?,
             None => {
                 log::info!("New player {name} joining");
-                let player = Player::new_player(name, self.game_state(), sender)?;
+                let player = tokio::task::block_in_place(|| {
+                    Player::new_player(name, self.game_state(), sender)
+                })?;
                 self.write_back(&player)?;
                 player
             }

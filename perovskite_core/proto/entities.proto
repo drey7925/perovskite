@@ -1,0 +1,71 @@
+// Copyright 2024 drey7925
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package perovskite.protocol.entities;
+
+import "coordinates.proto";
+
+message EntityMove {
+  // The starting position for the movement
+  perovskite.protocol.coordinates.Vec3D start_position = 1;
+  // The initial velocity of the movement
+  perovskite.protocol.coordinates.Vec3F velocity = 2;
+  // The acceleration of the movement
+  perovskite.protocol.coordinates.Vec3F acceleration = 3;
+  // The total time scheduled for the movement.
+  float total_time_seconds = 4;
+  // The face direction (about the vertical Y axis) in radians
+  float face_direction = 5;
+  // The sequence number of the move.
+  uint64 sequence = 6;
+}
+
+message EntityUpdate {
+  // The unique ID of the entity.
+  uint64 id = 1;
+  // The moves that are queued for this move, and have not yet been delivered to
+  // this client
+  repeated EntityMove planned_move = 2;
+  // The sequence of the current move
+  uint64 current_move_sequence = 3;
+  // How much of the current move (in seconds) has already happened at the time
+  // of this message
+  float current_move_progress = 4;
+
+  // If true, the entity should stop being displayed. If so, ignore all other
+  // fields
+  bool remove = 5;
+
+  // todo later - appearance, including the ability to change the appearance on
+  // demand
+}
+
+enum QueueType {
+  QUEUE_UNSPECIFIED = 0;
+  QUEUE_SINGLE = 1;
+  QUEUE_EIGHT = 2;
+}
+
+message EntityTypeAssignment {
+  string short_name = 1;
+  uint32 entity_class = 2;
+}
+
+message ServerEntityTypeAssignments {
+  repeated EntityTypeAssignment entity_type = 1;
+}

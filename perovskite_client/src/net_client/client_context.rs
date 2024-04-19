@@ -21,6 +21,7 @@ use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
     coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate},
+    protocol::entities as entities_proto,
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
 
@@ -426,6 +427,11 @@ impl InboundContext {
         Ok(())
     }
     async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
+        if message.tick == 0 {
+            log::warn!("Got message with tick 0");
+        } else {
+            self.client_state.timekeeper.update_error(message.tick);
+        }
         match &message.server_message {
             None => {
                 log::warn!("Got empty message from server");
@@ -468,8 +474,13 @@ impl InboundContext {
             Some(rpc::stream_to_client::ServerMessage::ShutdownMessage(msg)) => {
                 *self.shared_state.client_state.pending_error.lock() = Some(msg.clone());
             }
-            Some(rpc::stream_to_client::ServerMessage::EntityMovement(movement)) => {
-                self.handle_entity_movement(movement).await?;
+            Some(rpc::stream_to_client::ServerMessage::EntityUpdate(update)) => {
+                let estimated_send_time = self
+                    .client_state
+                    .timekeeper
+                    .estimated_send_time(message.tick);
+                self.handle_entity_update(update, estimated_send_time)
+                    .await?;
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);
@@ -614,6 +625,7 @@ impl InboundContext {
                         .cloned_neighbors_fast(coord, &mut self.inline_fcn_scratchpad);
                     propagate_neighbor_data(
                         &self.shared_state.client_state.block_types,
+
                         &self.inline_fcn_scratchpad,
                         &mut self.inline_nprop_scratchpad,
                     )?;
@@ -687,15 +699,19 @@ impl InboundContext {
             .handle_server_update(state_update)
     }
 
-    async fn handle_entity_movement(&mut self, movement: &rpc::EntityMovement) -> Result<()> {
-        if movement.remove {
+    async fn handle_entity_update(
+        &mut self,
+        update: &entities_proto::EntityUpdate,
+        estimated_send_time: Instant,
+    ) -> Result<()> {
+        if update.remove {
             if self
                 .shared_state
                 .client_state
                 .entities
                 .lock()
                 .entities
-                .remove(&movement.entity_id)
+                .remove(&update.id)
                 .is_none()
             {
                 self.shared_state
@@ -708,32 +724,23 @@ impl InboundContext {
             return Ok(());
         }
 
-        let position = match &movement.position {
-            Some(position) => position.try_into()?,
-            None => {
-                return self
-                    .shared_state
-                    .send_bugcheck(format!(
-                        "Got move for entity {} with no position",
-                        movement.entity_id
-                    ))
-                    .await
-            }
-        };
-        match self
-            .shared_state
-            .client_state
-            .entities
-            .lock()
-            .entities
-            .entry(movement.entity_id)
-        {
+        let outcome = match self.client_state.entities.lock().entities.entry(update.id) {
             Entry::Occupied(mut entry) => {
-                entry.get_mut().position = position;
+                // TODO we need to correct for network delay here
+                entry.get_mut().update(update, estimated_send_time)
             }
-            Entry::Vacant(entry) => {
-                entry.insert(GameEntity { position });
-            }
+            Entry::Vacant(entry) => match GameEntity::from_proto(update, estimated_send_time) {
+                Ok(x) => {
+                    entry.insert(x);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            },
+        };
+
+        if let Err(e) = outcome {
+            self.send_bugcheck(format!("Failed to handle entity update: {:?}", e))
+                .await?;
         }
 
         Ok(())

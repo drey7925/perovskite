@@ -35,8 +35,11 @@ use super::{
     items::{Item, ItemManager, ItemStack},
 };
 use perovskite_core::{
-    block_id::{BlockError, BlockId},
-    constants::blocks::AIR,
+    block_id::{special_block_defs::AIR_ID, BlockError, BlockId},
+    constants::{
+        block_groups::{self, DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
+        blocks::AIR,
+    },
     coordinates::BlockCoordinate,
     protocol::blocks as blocks_proto,
 };
@@ -91,6 +94,8 @@ impl AddAssign for BlockInteractionResult {
         self.tool_wear += other.tool_wear;
     }
 }
+
+pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
 pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
@@ -264,7 +269,6 @@ pub struct BlockType {
         Option<Box<dyn Fn(HandlerContext, BlockCoordinate) -> Result<Option<Popup>> + Send + Sync>>,
     // Internal impl details
     pub(crate) is_unknown_block: bool,
-    pub(crate) block_type_manager_id: Option<usize>,
 }
 
 impl BlockType {
@@ -274,16 +278,6 @@ impl BlockType {
 
     pub fn short_name(&self) -> &str {
         &self.client_info.short_name
-    }
-
-    pub fn block_type_ref(&self, variant: u16) -> Result<BlockTypeHandle> {
-        if let Some(_unique_id) = self.block_type_manager_id {
-            Ok(self.id(variant)?)
-        } else {
-            bail!(BlockError::BlockNotRegistered(
-                self.client_info.short_name.clone()
-            ))
-        }
     }
 }
 
@@ -302,7 +296,6 @@ impl Default for BlockType {
             place_upon_handler: None,
             interact_key_handler: None,
             is_unknown_block: false,
-            block_type_manager_id: None,
         }
     }
 }
@@ -403,8 +396,7 @@ static BLOCK_TYPE_MANAGER_ID: AtomicUsize = AtomicUsize::new(1);
 /// for lookup caching); they can be freely cloned around as needed.
 pub struct BlockTypeManager {
     block_types: Vec<BlockType>,
-    name_to_base_id_map: HashMap<String, u32>,
-    unique_id: usize,
+    name_to_base_id_map: FxHashMap<String, u32>,
 
     // Separate copy of BlockType.client_info.allow_light_propagation, packed densely in order
     // to be more cache friendly
@@ -415,20 +407,12 @@ pub struct BlockTypeManager {
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
         BlockTypeManager {
-            block_types: Vec::new(),
-            name_to_base_id_map: HashMap::new(),
-            unique_id: BLOCK_TYPE_MANAGER_ID.fetch_add(1, Ordering::Relaxed),
+            block_types: vec![make_air_block()],
+            name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
         }
-    }
-
-    pub(crate) fn make_blockref(&self, id: BlockId) -> Result<BlockTypeHandle> {
-        if id.index() >= self.block_types.len() {
-            bail!(BlockError::IdNotFound(id.into()));
-        }
-        Ok(id)
     }
     /// Given a handle, return the block.
     pub fn get_block(&self, handle: &BlockTypeHandle) -> Result<(&BlockType, u16)> {
@@ -458,8 +442,6 @@ impl BlockTypeManager {
     /// Returns an error if another block is already registered with the same short name, or
     /// if there are too many blocktypes (up to roughly 1 million BlockTypes can be registered)
     pub fn register_block(&mut self, mut block: BlockType) -> Result<BlockTypeHandle> {
-        block.block_type_manager_id = Some(self.unique_id);
-
         let id = match self
             .name_to_base_id_map
             .entry(block.short_name().to_string())
@@ -482,6 +464,9 @@ impl BlockTypeManager {
                         .try_into()
                         .with_context(|| BlockError::TooManyBlocks)?,
                 );
+                if new_id.index() >= MAX_BLOCK_DEFS {
+                    bail!(BlockError::TooManyBlocks);
+                }
                 info!(
                     "Registering new block {} as {:?}",
                     block.short_name(),
@@ -502,8 +487,7 @@ impl BlockTypeManager {
     ) -> Result<BlockTypeManager> {
         let mut manager = BlockTypeManager {
             block_types: Vec::new(),
-            name_to_base_id_map: HashMap::new(),
-            unique_id: BLOCK_TYPE_MANAGER_ID.fetch_add(1, Ordering::Relaxed),
+            name_to_base_id_map: FxHashMap::default(),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
@@ -514,6 +498,10 @@ impl BlockTypeManager {
             .map(|x| BlockId(x.id).index())
             .max()
             .unwrap_or(0);
+
+        if max_index >= MAX_BLOCK_DEFS {
+            bail!(BlockError::TooManyBlocks);
+        }
 
         let present_indices: HashSet<usize> =
             HashSet::from_iter(block_proto.block_type.iter().map(|x| BlockId(x.id).index()));
@@ -546,6 +534,8 @@ impl BlockTypeManager {
                 .name_to_base_id_map
                 .insert(assignment.short_name.clone(), block_id.base_id());
         }
+        manager.block_types[AIR_ID.index()] = make_air_block();
+        ensure!(manager.name_to_base_id_map.get(AIR).map(|&x| BlockId(x)) == Some(AIR_ID));
         Ok(manager)
     }
 
@@ -569,10 +559,7 @@ impl BlockTypeManager {
             .collect()
     }
 
-    pub(crate) fn create_or_load(
-        db: &dyn GameDatabase,
-        allow_create: bool,
-    ) -> Result<BlockTypeManager> {
+    pub(crate) fn create_or_load(db: &dyn GameDatabase) -> Result<BlockTypeManager> {
         match db.get(&KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY_LEGACY))? {
             Some(x) => {
                 let result = BlockTypeManager::from_proto(
@@ -585,9 +572,6 @@ impl BlockTypeManager {
                 Ok(result)
             }
             None => {
-                if !allow_create {
-                    bail!("Block type data is missing from the database");
-                }
                 info!("Creating new block type manager");
                 Ok(BlockTypeManager::new())
             }
@@ -768,7 +752,7 @@ fn make_unknown_block_serverside(
                 },
             )),
             physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(E)),
-            groups: vec![],
+            groups: vec![block_groups::DEFAULT_SOLID.to_string()],
             base_dig_time: 1.0,
             wear_multiplier: 0.0,
             light_emission: 0,
@@ -793,7 +777,25 @@ fn make_unknown_block_serverside(
         place_upon_handler: None,
         interact_key_handler: None,
         is_unknown_block: true,
-        block_type_manager_id: None,
+    }
+}
+
+fn make_air_block() -> BlockType {
+    use perovskite_core::protocol::blocks::block_type_def::{PhysicsInfo, RenderInfo};
+    use perovskite_core::protocol::blocks::Empty;
+    BlockType {
+        client_info: perovskite_core::protocol::blocks::BlockTypeDef {
+            id: 0,
+            short_name: AIR.to_string(),
+            render_info: Some(RenderInfo::Empty(Empty {})),
+            physics_info: Some(PhysicsInfo::Air(Empty {})),
+            base_dig_time: 1.0,
+            groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
+            wear_multiplier: 1.0,
+            light_emission: 0,
+            allow_light_propagation: true,
+        },
+        ..Default::default()
     }
 }
 

@@ -35,6 +35,11 @@ message Vec3D {
     double y = 2;
     double z = 3;
 }
+message Vec3F {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+}
 
 message Angles {
     double deg_azimuth = 1;
