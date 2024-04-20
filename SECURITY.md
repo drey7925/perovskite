@@ -8,10 +8,18 @@ At the moment, the following are out-of-scope:
 
 * Eavesdropping on a connection and observing game state/game chat
 * Active MITM allowing access to a game account
+* Denial of service for the game itself, or simple CPU/memory exhausion on either clients or servers.
+* In-game cheating
 
 There are plans to introduce TLS later, but this requires additional work as well as extra configuration on the part of server owners.
 
 Note that clients authenticate to servers using the OPAQUE protocol; issues in that protocol's integration/implementation will be fixed where known and feasible.
+
+## Memory Safety/Security Principles
+
+* There should be few instances where untrusted data directly goes into system interface (e.g. filenames, etc). For example, most configs live in files with hardcoded
+  names (e.g. `settings.ron`), and client cache data is stored in files with a known, controlled name format (e.g. hex representation of a hash).
+* 
 
 ## Supported Versions
 
