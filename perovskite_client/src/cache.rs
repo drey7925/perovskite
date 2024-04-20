@@ -67,10 +67,16 @@ impl CacheManager {
     }
 
     pub(crate) async fn load_media_by_name(&mut self, media_name: &str) -> Result<Vec<u8>> {
+        if !sanitize_filename::is_sanitized(media_name) {
+            bail!("Invalid media name: {}", media_name);
+        }
         let extension = media_name
             .rsplit_once('.')
             .map(|(_, ext)| ".".to_owned() + ext)
             .unwrap_or("".to_string());
+        if !extension.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            bail!("Invalid extension in media name: {}", media_name);
+        }
         if let Some(hash) = self.file_hashes.get(media_name).copied() {
             // For media by name, the ID hash is the same as the content hash
             let data = tokio::task::block_in_place(|| {
