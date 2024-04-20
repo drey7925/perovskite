@@ -1662,7 +1662,7 @@ impl ServerGameMap {
             for i in 0..NUM_CHUNK_SHARDS {
                 let writeback_handle = self.writeback_handles[i].lock().take();
                 writeback_handle.unwrap().await??;
-                
+
                 let cleanup_handle = self.cleanup_handles[i].lock().take();
                 cleanup_handle.unwrap().await??;
             }
