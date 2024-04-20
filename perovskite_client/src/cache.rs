@@ -67,21 +67,9 @@ impl CacheManager {
     }
 
     pub(crate) async fn load_media_by_name(&mut self, media_name: &str) -> Result<Vec<u8>> {
-        if !sanitize_filename::is_sanitized(media_name) {
-            bail!("Invalid media name: {}", media_name);
-        }
-        let extension = media_name
-            .rsplit_once('.')
-            .map(|(_, ext)| ".".to_owned() + ext)
-            .unwrap_or("".to_string());
-        if !extension.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            bail!("Invalid extension in media name: {}", media_name);
-        }
         if let Some(hash) = self.file_hashes.get(media_name).copied() {
             // For media by name, the ID hash is the same as the content hash
-            let data = tokio::task::block_in_place(|| {
-                self.try_get_cached(&extension, &hash, Some(&hash))
-            })?;
+            let data = tokio::task::block_in_place(|| self.try_get_cached(&hash, Some(&hash)))?;
             if let Some(data) = data {
                 Ok(data)
             } else {
@@ -100,21 +88,22 @@ impl CacheManager {
                     );
                 }
 
-                tokio::task::block_in_place(|| {
-                    self.insert_into_cache(&extension, &hash, &loaded_data)
-                })?;
+                tokio::task::block_in_place(|| self.insert_into_cache(&hash, &loaded_data))?;
 
                 Ok(loaded_data)
             }
         } else {
-            log::warn!("{} not found in media manifest", media_name);
+            log::warn!(
+                "{} not found in media manifest. Will load it but not cache it",
+                media_name
+            );
             self.loader.load_media(media_name).await
         }
     }
 
-    fn insert_into_cache(&mut self, extension: &str, hash: &[u8; 32], data: &[u8]) -> Result<()> {
+    fn insert_into_cache(&mut self, hash: &[u8; 32], data: &[u8]) -> Result<()> {
         if let Some(cache_dir) = &self.cache_dir {
-            let path = get_cache_path(hash, cache_dir, extension);
+            let path = get_cache_path(hash, cache_dir);
             if !path.parent().unwrap().exists() {
                 std::fs::create_dir_all(path.parent().unwrap())?;
             }
@@ -134,7 +123,7 @@ impl CacheManager {
         if let Some(hash) = hash {
             // For block appearances, the id hash is based on the render info and the content hashes feeding into it.
             // We don't know the content hash.
-            self.try_get_cached("png", &hash, None)
+            self.try_get_cached(&hash, None)
         } else {
             Ok(None)
         }
@@ -150,19 +139,18 @@ impl CacheManager {
             .as_ref()
             .and_then(|x| self.hash_render_info(x));
         if let Some(hash) = hash {
-            self.insert_into_cache("png", &hash, &data)?;
+            self.insert_into_cache(&hash, &data)?;
         }
         Ok(())
     }
 
     fn try_get_cached(
         &self,
-        extension: &str,
         id_hash: &[u8; 32],
         content_hash: Option<&[u8; 32]>,
     ) -> Result<Option<Vec<u8>>> {
         if let Some(cache_dir) = &self.cache_dir {
-            let path = get_cache_path(id_hash, cache_dir, extension);
+            let path = get_cache_path(id_hash, cache_dir);
             if path.exists() {
                 let data = std::fs::read(&path)?;
                 if let Some(expected_hash) = content_hash {
@@ -285,14 +273,12 @@ impl CacheManager {
     }
 }
 
-fn get_cache_path(expected_hash: &[u8; 32], cache_dir: &Path, extension: &str) -> PathBuf {
+fn get_cache_path(expected_hash: &[u8; 32], cache_dir: &Path) -> PathBuf {
     let hash_hex = hex::encode(expected_hash);
     assert!(hash_hex.len() == 64);
+    // Security: The hash is untrusted... But we verified its length, and we generate the hex string ourselves.
     let prefix = hash_hex[0..2].to_string();
     let suffix = hash_hex[2..].to_string();
 
-    cache_dir
-        .join(prefix)
-        .join(suffix)
-        .with_extension(extension)
+    cache_dir.join(prefix).join(suffix)
 }
