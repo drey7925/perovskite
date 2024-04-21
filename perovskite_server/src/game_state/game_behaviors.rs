@@ -136,7 +136,7 @@ pub struct PlayerJoinHandlerImpl;
 impl GenericAsyncHandler<Player, ()> for PlayerJoinHandlerImpl {
     async fn handle(&self, req: &Player, context: HandlerContext<'_>) -> Result<()> {
         let broadcast_message =
-            ChatMessage::new_server_message(format!("{} has joined the game.", req.name()));
+            ChatMessage::new_server_message(format!("{} joined the game.", req.name()));
         context.chat().broadcast_chat_message(broadcast_message)?;
 
         let mut connected_players = vec![];
