@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Deg, ElementWise, InnerSpace, Vector3, Zero};
+use cgmath::{vec3, Deg, InnerSpace, Vector3, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
@@ -495,7 +495,7 @@ impl ChunkManager {
         &self,
         chunks: &FxHashMap<ChunkCoordinate, Arc<ClientChunk>>,
         batch_id: u64,
-        reason: &str,
+        _reason: &str,
     ) {
         {
             let _span = span!("batch_spill");

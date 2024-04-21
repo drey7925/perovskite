@@ -208,13 +208,15 @@ impl<const N: usize, T> RecipeImpl<N, T> {
 }
 
 mod test {
-    use perovskite_core::protocol;
-    use perovskite_server::game_state::items::{Item, ItemStack};
-
-    use super::{RecipeImpl, RecipeSlot};
-
     #[test]
     fn test_shapeless() {
+        use perovskite_core::protocol;
+        use perovskite_server::game_state::items::Item;
+
+        use crate::default_game::recipes::RecipeImpl;
+
+        use crate::default_game::recipes::RecipeSlot;
+        use perovskite_server::game_state::items::ItemStack;
         let item_1 = Item {
             proto: protocol::items::ItemDef {
                 short_name: "a".into(),

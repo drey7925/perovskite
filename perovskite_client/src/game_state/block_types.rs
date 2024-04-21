@@ -5,7 +5,7 @@ use bitvec::prelude as bv;
 use perovskite_core::constants::blocks::AIR;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
-    self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
+    self as blocks_proto, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
 };
 use rustc_hash::FxHashMap;
 

@@ -21,22 +21,21 @@ use std::sync::Arc;
 use cgmath::num_traits::Num;
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Vector2, Vector3, Zero};
 
-use perovskite_core::constants::blocks::AIR;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
-    self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
+    self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo,
 };
 use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
-use anyhow::{ensure, Context, Error, Result};
+use anyhow::{Error, Result};
 
 use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
-use tonic::async_trait;
+
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{

@@ -20,25 +20,15 @@ use std::{
 };
 
 use perovskite_core::{
-    block_id::BlockId,
     constants::{
-        block_groups::{DEFAULT_GAS, TRIVIALLY_REPLACEABLE},
-        blocks::AIR,
-        items::default_item_interaction_rules,
+        block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
-    protocol::{
-        blocks::{
-            block_type_def::{PhysicsInfo, RenderInfo},
-            BlockTypeDef, Empty,
-        },
-        items::ItemDef,
-        render::TextureReference,
-    },
+    protocol::{blocks::Empty, items::ItemDef, render::TextureReference},
 };
 use perovskite_server::{
     game_state::{
-        blocks::{BlockType, BlockTypeHandle},
+        blocks::BlockTypeHandle,
         chat::commands::ChatCommandHandler,
         game_map::{TimerCallback, TimerSettings},
         items::Item,

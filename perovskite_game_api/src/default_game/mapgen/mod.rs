@@ -14,10 +14,7 @@ use perovskite_server::game_state::{
 use rand::seq::SliceRandom;
 
 use super::{
-    basic_blocks::{
-        DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, LIMESTONE_DARK, LIMESTONE_LIGHT, SAND,
-        STONE, WATER,
-    },
+    basic_blocks::{DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, STONE, WATER},
     foliage::{CACTUS, MAPLE_LEAVES, MAPLE_TREE, TALL_GRASS, TERRESTRIAL_FLOWERS},
 };
 

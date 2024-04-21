@@ -38,11 +38,7 @@ use winit::{
 };
 
 use crate::{
-    game_state::{
-        chunk::{SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER},
-        settings::GameSettings,
-        ClientState, FrameState,
-    },
+    game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
     vulkan::block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},

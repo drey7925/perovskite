@@ -21,7 +21,6 @@ use perovskite_core::protocol::items as items_proto;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
-use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::VulkanContext;
 
 pub(crate) struct ClientItemManager {

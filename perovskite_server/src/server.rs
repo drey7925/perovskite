@@ -30,7 +30,7 @@ use crate::{
     game_state::{
         blocks::BlockTypeManager,
         chat::commands::{ChatCommand, ChatCommandHandler, CommandManager},
-        entities::{EntityManager, EntityTypeManager},
+        entities::EntityTypeManager,
         game_behaviors::GameBehaviors,
         game_map::{TimerCallback, TimerSettings},
         items::ItemManager,

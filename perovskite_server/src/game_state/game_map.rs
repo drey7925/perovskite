@@ -24,7 +24,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -779,7 +779,7 @@ struct MapShard {
     light_columns: FxHashMap<(i32, i32), ChunkColumn>,
 }
 impl MapShard {
-    fn new(shard: usize) -> MapShard {
+    fn new(_shard: usize) -> MapShard {
         MapShard {
             chunks: FxHashMap::default(),
             light_columns: FxHashMap::default(),

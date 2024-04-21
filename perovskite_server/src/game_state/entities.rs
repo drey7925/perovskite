@@ -7,7 +7,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Weak,
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -15,16 +15,16 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
 use circular_buffer::CircularBuffer;
-use futures::Future;
+
 use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
     block_id::BlockId,
     coordinates::BlockCoordinate,
-    protocol::entities::{EntityMove, EntityTypeAssignment, ServerEntityTypeAssignments},
+    protocol::entities::{EntityTypeAssignment, ServerEntityTypeAssignments},
 };
 use prost::Message;
-use rand::Rng;
+
 use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -32,14 +32,10 @@ use tracy_client::span;
 
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
-    game_state::blocks::{BlockTypeHandle, ExtendedData},
     CachelineAligned,
 };
 
-use super::{
-    blocks::ExtendedDataHolder, event::HandlerContext, game_map::CasOutcome, GameState,
-    ServerGameMap,
-};
+use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
 
 /// This entity is present and valid
 const CONTROL_PRESENT: u8 = 1;

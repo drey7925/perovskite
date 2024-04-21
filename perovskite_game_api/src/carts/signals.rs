@@ -1,12 +1,8 @@
-use perovskite_core::{
-    block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate,
-    protocol::render::DynamicCrop,
-};
+use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
-use rand::Rng;
 
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
@@ -308,7 +304,7 @@ pub(crate) enum AutomaticSignalOutcome {
 /// Attempts to acquire an automatic signal.
 /// This will transition it from the restrictive to the permissive state.
 pub(crate) fn automatic_signal_acquire(
-    block_coord: BlockCoordinate,
+    _block_coord: BlockCoordinate,
     id: &mut BlockId,
     expected_id_with_rotation: BlockId,
 ) -> AutomaticSignalOutcome {

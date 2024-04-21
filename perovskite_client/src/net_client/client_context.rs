@@ -7,14 +7,12 @@ use std::{
 
 use crate::{
     game_state::{
-        chunk::SnappyDecodeHelper,
-        entities::{self, GameEntity},
-        items::ClientInventory,
-        ChunkManager, ChunkMap, ClientState, FastChunkNeighbors, GameAction, LightColumnMap,
+        chunk::SnappyDecodeHelper, entities::GameEntity, items::ClientInventory, ClientState,
+        FastChunkNeighbors, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use cgmath::{vec3, InnerSpace};
 use futures::StreamExt;
 use parking_lot::Mutex;

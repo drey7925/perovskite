@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 
 // This is a temporary implementation used while developing the entity system
 use anyhow::Result;
-use async_trait::async_trait;
+
 use cgmath::{vec2, vec3, InnerSpace, Vector3};
 use perovskite_core::{
     block_id::BlockId,
@@ -13,13 +13,12 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::{
     self,
-    chat::commands::ChatCommandHandler,
     entities::{
-        ContinuationResult, ContinuationResultValue, CoroutineResult, DeferrableResult, Deferral,
+        ContinuationResult, ContinuationResultValue, CoroutineResult, DeferrableResult,
         EntityClassId, EntityCoroutine, EntityCoroutineServices, EntityDef, EntityTypeId, Movement,
         ReenterableResult,
     },
-    event::{EventInitiator, HandlerContext},
+    event::HandlerContext,
     items::ItemStack,
     GameStateExtension,
 };
@@ -28,7 +27,7 @@ use smallvec::SmallVec;
 
 use crate::{
     blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
-    game_builder::{GameBuilderExtension, StaticBlockName, StaticItemName, StaticTextureName},
+    game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 
@@ -89,7 +88,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     )?;
     include_texture_bytes!(game_builder, rail_sw_left_tex, "textures/rail_sw_left.png")?;
 
-    let rail = game_builder.add_block(
+    let _rail = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:rail")).set_cube_appearance(
             CubeAppearanceBuilder::new()
                 .set_single_texture(rail_tex)
@@ -185,7 +184,7 @@ fn place_cart(
     config: CartsGameBuilderExtension,
 ) -> Result<Option<ItemStack>> {
     let block = ctx.game_map().get_block(coord)?;
-    let (rail_pos, variant) = if block.equals_ignore_variant(config.rail_block) {
+    let (rail_pos, _variant) = if block.equals_ignore_variant(config.rail_block) {
         (coord, block.variant())
     } else {
         ctx.initiator().send_chat_message(
@@ -374,7 +373,7 @@ impl EntityCoroutine for CartCoroutine {
     fn plan_move(
         mut self: std::pin::Pin<&mut Self>,
         services: &perovskite_server::game_state::entities::EntityCoroutineServices<'_>,
-        current_position: cgmath::Vector3<f64>,
+        _current_position: cgmath::Vector3<f64>,
         whence: cgmath::Vector3<f64>,
         when: f32,
         queue_space: usize,

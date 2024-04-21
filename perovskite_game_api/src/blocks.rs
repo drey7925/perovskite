@@ -67,7 +67,7 @@ enum DroppedItem {
     NotDiggable,
 }
 impl DroppedItem {
-    fn build_dig_handler_inner<F>(closure: F, game_builder: &GameBuilder) -> Box<InlineHandler>
+    fn build_dig_handler_inner<F>(closure: F, _game_builder: &GameBuilder) -> Box<InlineHandler>
     where
         F: Fn() -> Vec<ItemStack> + Sync + Send + 'static,
     {

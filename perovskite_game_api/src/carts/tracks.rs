@@ -10,10 +10,9 @@ use perovskite_core::{
 use perovskite_server::game_state::{
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
     entities::{DeferrableResult, Deferral},
-    event::{EventInitiator, HandlerContext},
+    event::EventInitiator,
     game_map::ServerGameMap,
 };
-use rand::Rng;
 
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
@@ -1335,7 +1334,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     })?;
             }
             "scan" => {
-                let mut state = ScanState {
+                let state = ScanState {
                     block_coord: coord,
                     is_reversed: *response
                         .checkbox_values
