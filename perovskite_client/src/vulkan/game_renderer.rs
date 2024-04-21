@@ -38,7 +38,6 @@ use winit::{
 };
 
 use crate::{
-    block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},
     game_state::{
         chunk::{SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER},
         settings::GameSettings,
@@ -46,6 +45,7 @@ use crate::{
     },
     main_menu::MainMenu,
     net_client,
+    vulkan::block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},
 };
 
 use super::{

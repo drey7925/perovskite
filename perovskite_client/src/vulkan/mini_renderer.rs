@@ -22,12 +22,12 @@ use vulkano::{
 };
 
 use crate::{
-    block_renderer::{BlockRenderer, VkChunkPassGpu, VkChunkVertexDataGpu},
     game_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
 };
 
 use super::{
+    block_renderer::{BlockRenderer, VkChunkPassGpu, VkChunkVertexDataGpu},
     make_render_pass,
     shaders::{
         cube_geometry::{

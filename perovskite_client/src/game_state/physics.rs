@@ -29,12 +29,10 @@ use perovskite_core::{
 
 use tracy_client::{plot, span};
 
-use crate::block_renderer::ClientBlockTypeManager;
-
 use super::{
     input::{BoundAction, InputState},
     settings::GameSettings,
-    ChunkManagerView, ClientState,
+    ChunkManagerView, ClientBlockTypeManager, ClientState,
 };
 
 const PLAYER_WIDTH: f64 = 0.75;

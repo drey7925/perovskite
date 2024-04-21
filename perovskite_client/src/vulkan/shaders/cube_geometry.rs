@@ -38,12 +38,10 @@ use vulkano::{
     shader::ShaderModule,
 };
 
-use crate::{
+use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
-    vulkan::{
-        shaders::{frag_lighting, vert_3d::ModelMatrix},
-        CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
-    },
+    shaders::{frag_lighting, vert_3d::ModelMatrix},
+    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
 };
 
 use crate::vulkan::shaders::{

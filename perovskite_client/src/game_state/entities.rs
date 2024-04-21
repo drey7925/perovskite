@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
-use crate::{
+use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents},
-    vulkan::shaders::cube_geometry::CubeGeometryVertex,
+    shaders::cube_geometry::CubeGeometryVertex,
 };
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, Vector3, Zero};

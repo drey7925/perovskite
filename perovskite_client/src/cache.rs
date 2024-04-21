@@ -16,8 +16,8 @@ use perovskite_core::protocol::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    block_renderer::AsyncMediaLoader,
     game_state::settings::{clean_path, project_dirs},
+    net_client::AsyncMediaLoader,
 };
 
 pub(crate) struct CacheManager {

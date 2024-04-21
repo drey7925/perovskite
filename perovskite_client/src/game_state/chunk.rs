@@ -35,12 +35,13 @@ use vulkano::memory::allocator::{
     AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryUsage,
 };
 
-use crate::block_renderer::{
-    BlockRenderer, ClientBlockTypeManager, VkChunkPassCpu, VkChunkPassGpu, VkChunkVertexDataCpu,
-    VkChunkVertexDataGpu,
+use crate::vulkan::block_renderer::{
+    BlockRenderer, VkChunkPassCpu, VkChunkPassGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use prost::Message;
+
+use super::block_types::ClientBlockTypeManager;
 
 pub(crate) trait ChunkDataView {
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18];

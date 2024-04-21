@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+pub(crate) mod block_renderer;
 pub mod game_renderer;
 pub(crate) mod mini_renderer;
 pub(crate) mod shaders;

@@ -38,13 +38,14 @@ use tracy_client::span;
 use vulkano::memory::allocator::{FreeListAllocator, GenericMemoryAllocator};
 use winit::event::Event;
 
-use crate::block_renderer::{fallback_texture, BlockRenderer, ClientBlockTypeManager};
 use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
+use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
 
+use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;
 use self::chunk::{
     ChunkDataView, MeshBatch, MeshBatchBuilder, MeshResult, SnappyDecodeHelper,
@@ -58,6 +59,7 @@ use self::settings::GameSettings;
 use self::timekeeper::Timekeeper;
 use self::tool_controller::{ToolController, ToolState};
 
+pub(crate) mod block_types;
 pub(crate) mod chat;
 pub(crate) mod chunk;
 pub(crate) mod entities;

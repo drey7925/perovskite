@@ -17,9 +17,8 @@ use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::{
-    block_renderer::ClientBlockTypeManager,
-    game_state::{chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors},
+use crate::game_state::{
+    block_types::ClientBlockTypeManager, chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors,
 };
 
 // Responsible for reconciling a chunk with data from other nearby chunks (e.g. lighting, neighbor calculations)

@@ -40,12 +40,12 @@ use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
-    block_renderer::{AsyncMediaLoader, BlockRenderer, ClientBlockTypeManager},
     cache::CacheManager,
     game_state::{
-        items::ClientItemManager, settings::GameSettings, timekeeper::Timekeeper, ClientState,
+        block_types::ClientBlockTypeManager, items::ClientItemManager, settings::GameSettings,
+        timekeeper::Timekeeper, ClientState,
     },
-    vulkan::VulkanWindow,
+    vulkan::{block_renderer::BlockRenderer, VulkanWindow},
 };
 
 mod client_context;
@@ -147,7 +147,6 @@ pub(crate) async fn connect_game(
     );
     let items = Arc::new(ClientItemManager::new(
         item_defs_proto.into_inner().item_defs,
-        &block_renderer,
         window,
     )?);
 
@@ -395,4 +394,9 @@ impl AsyncMediaLoader for GrpcTextureLoader {
             .await?;
         Ok(resp.into_inner().media)
     }
+}
+
+#[async_trait]
+pub(crate) trait AsyncMediaLoader {
+    async fn load_media(&mut self, tex_name: &str) -> Result<Vec<u8>>;
 }

@@ -12,10 +12,12 @@ use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 use anyhow::{Error, Result};
 
 use crate::{
-    block_renderer::BlockRenderer,
     cache::CacheManager,
     game_state::items::ClientItemManager,
-    vulkan::{mini_renderer::MiniBlockRenderer, Texture2DHolder, VulkanContext},
+    vulkan::{
+        block_renderer::BlockRenderer, mini_renderer::MiniBlockRenderer, Texture2DHolder,
+        VulkanContext,
+    },
 };
 
 use self::{egui_ui::EguiUi, hud::GameHud};
@@ -171,7 +173,7 @@ async fn build_texture_atlas(
     pack_tex(
         &mut texture_packer,
         UNKNOWN_TEXTURE,
-        ImageImporter::import_from_memory(include_bytes!("../block_unknown.png")).unwrap(),
+        ImageImporter::import_from_memory(include_bytes!("../vulkan/block_unknown.png")).unwrap(),
     )?;
     pack_tex(
         &mut texture_packer,

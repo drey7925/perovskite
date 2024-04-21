@@ -21,7 +21,7 @@ use perovskite_core::protocol::items as items_proto;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
-use crate::block_renderer::BlockRenderer;
+use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::VulkanContext;
 
 pub(crate) struct ClientItemManager {
@@ -30,7 +30,6 @@ pub(crate) struct ClientItemManager {
 impl ClientItemManager {
     pub(crate) fn new(
         items: Vec<items_proto::ItemDef>,
-        _block_renderer: &BlockRenderer,
         _vk_ctx: &VulkanContext,
     ) -> Result<ClientItemManager> {
         let mut item_defs = HashMap::new();
