@@ -21,10 +21,29 @@ Naming Rust projects after oxide minerals is fun. Unfortunately, all the cool ox
 
 It is possible to define blocks and dig them. Inventory support is mostly present. There's a furnace and a crafting mechanism. Game content (i.e. all the blocks you'd expect) is not yet present.
 
+Entities are under active development, but are not yet stable. The entity system is currently focused on
+autonomous movement, and low-latency player control will be added in the future.
+
 I intend to wrap the engine-specific behaviors in a lightweight API that makes it easier to define game logic. That API is still not stable, but I intend to make that API more stable than the low-level engine API.
 
 At the moment, the network API is not yet stable - the client and server must be built from the same code.
 The intent is to stabilize the API to a reasonable extent later on, but having an unstable API allows for faster feature iteration.
+
+## How is it different from similar voxel games?
+
+The limitations:
+* The implementation is a bit more incoherent since it's a learning project
+* The game lacks a lot of content
+* A lot of basic features, like a player model, are still missing
+* No scripting language yet - all game logic is written in Rust
+    * And no dynamic content loading yet. It might be possible once crABI stabilizes.
+
+The benefits:
+* The engine is optimized for scalability and performance where possible
+    * Note that not all of the components have been optimized yet
+* The minecarts can move at an unusually high speed, comparable to real-world HSR
+* All game logic is written in Rust
+* Authentication uses a secure remote password protocol that avoids sending the password over the network
 
 ## How do I play it?
 
@@ -83,9 +102,24 @@ To reach a client on the local machine, use `grpc://localhost:28273` as the serv
 
 These can be adjusted in the settings file, whose filename is printed in the log when the client starts up.
 
+## What are the requirements?
+
+It runs on Windows and Linux. Mac is an open question due to issues involving Vulkan libraries.
+
+Aspirationally, I'd like the game to be somewhat playable in single-player with only one or two CPU cores
+and a very basic GPU.
+
+I'm not quite there yet, and it's possible that I'll drift further away from this goal as I add features.
+I tend to test with a fairly powerful laptop and a high-end GPU. I aim for the following performance goals:
+
+* 165 FPS (matching my monitor refresh rate) and no noticeable interaction latency when using my gaming machine - to ensure there are not bottlenecks at the high end of scaling
+* 30-50 FPS on Intel integrated graphics when the client and server are limited to a few E-cores.
+    * This will require both optimizations and better control over load (e.g. settings, dynamic render distance, etc)
+
 ## What's on the near-term roadmap?
 
-Tons of stuff, in no particular order, and not yet prioritized:
+Tons of stuff, in no particular order, and not yet prioritized. Everything in this list is a maybe, depending
+on my available time and mood.
 
 * Rendering and display:
     * TBD
@@ -93,10 +127,13 @@ Tons of stuff, in no particular order, and not yet prioritized:
     * Support for falling blocks (e.g. sand)
     * Further optimized APIs
         * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
-    * Multithreaded mapgen?
+    * Out-of-line chunk loading (e.g. offloaded onto a dedicated executor)
+    * Map bypass (i.e. stream chunks directly to the client for display)
 * Entities
-    * Initial design of non-block entities (e.g. other player characters)
-    * TBD based on the initial design
+    * Entity appearance/model
+    * Optimized (shader-assisted?) entity renderer
+    * Simpler (tokio-driven) entity API (i.e. use a tokio task rather than the custom coroutine)
+    * Entity interaction
 * Net code
     * Testing and optimization for slow WANs
     * Player action validation
@@ -107,12 +144,21 @@ Tons of stuff, in no particular order, and not yet prioritized:
         * Trees - keep refining
         * Sand and other surface material variety
         * Ores (+ resulting items)
-        * Simple caves
         * Slightly more interesting elevation profile
     * Helpers for stairs and slabs
     * Simple tools
     * Locked chests
     * Cobblestone, bricks, etc
+    * Minecarts
+        * Interlockings/signals
+        * Route selection
+        * Map all switch/curve types
+        * Starting/stopping and entering/exiting carts
+        * Track placement tool
+        * Ensure stability at high speeds under server load
+    * Pneumatic tubes
+        * Tubes to send items between chests and furnaces, as a basis for some kind of machines later on
+* Audio
 * Bugfixes for known issues
     * Trees intersect each other
     * Only binds to IPv6 on Windows
@@ -122,6 +168,12 @@ Tons of stuff, in no particular order, and not yet prioritized:
 None at the moment. I test with either the latest or almost-latest stable Rust version, on Windows x64.
 
 perovskite_server's API can change in breaking ways. perovskite_game_api (as well as anything it re-exports by default) should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
+
+## Code style
+
+* Formatted following `cargo fmt`
+* No unsafe
+* No nightly-only features; should build on stable Rust.
 
 ## Who is behind this?
 
