@@ -676,7 +676,7 @@ impl CartCoroutine {
 
         'scan_loop: while steps < max_steps_ahead {
             // Precondition: self.scan_state is valid
-            let new_state = match self.scan_state.advance_verbose(false, block_getter) {
+            let new_state = match self.scan_state.advance::<false>(block_getter) {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
                 Ok(tracks::ScanOutcome::Failure) => break 'scan_loop,
                 Ok(tracks::ScanOutcome::NotOnTrack) => {

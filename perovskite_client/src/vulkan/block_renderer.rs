@@ -92,6 +92,8 @@ struct DynamicRect {
     y_selector_factor: f32,
     flip_x_bit: u16,
     flip_y_bit: u16,
+    extra_flip_x: bool,
+    extra_flip_y: bool,
 }
 impl DynamicRect {
     #[inline]
@@ -99,12 +101,12 @@ impl DynamicRect {
         let x_min = self.base.l + (variant & self.x_selector) as f32 * self.x_selector_factor;
         let y_min = self.base.t + (variant & self.y_selector) as f32 * self.y_selector_factor;
 
-        let (real_xmin, real_xstride) = if (variant & self.flip_x_bit) != 0 {
+        let (real_xmin, real_xstride) = if ((variant & self.flip_x_bit) != 0) ^ self.extra_flip_x {
             (x_min + self.x_cell_stride, -self.x_cell_stride)
         } else {
             (x_min, self.x_cell_stride)
         };
-        let (real_ymin, real_ystride) = if (variant & self.flip_y_bit) != 0 {
+        let (real_ymin, real_ystride) = if ((variant & self.flip_y_bit) != 0) ^ self.extra_flip_y {
             (y_min + self.y_cell_stride, -self.y_cell_stride)
         } else {
             (y_min, self.y_cell_stride)
@@ -452,6 +454,8 @@ fn get_texture(
                     / (dynamic.y_cells as f32 * y_selector_shift_factor as f32),
                 flip_x_bit: dynamic.flip_x_bit as u16,
                 flip_y_bit: dynamic.flip_y_bit as u16,
+                extra_flip_x: dynamic.extra_flip_x,
+                extra_flip_y: dynamic.extra_flip_y,
             });
         }
     }

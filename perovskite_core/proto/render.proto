@@ -50,6 +50,10 @@ message DynamicCrop {
     uint32 flip_x_bit = 5;
     // If variant AND this is nonzero, flip the selected grid cell vertically
     uint32 flip_y_bit = 6;
+    // If set, invert the logic of flip_x_bit
+    bool extra_flip_x = 7;
+    // If set, invert the logic of flip_y_bit
+    bool extra_flip_y = 8;
 }
 
 message CustomMesh {

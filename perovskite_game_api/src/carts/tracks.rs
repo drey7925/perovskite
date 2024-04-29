@@ -814,8 +814,6 @@ pub(crate) fn register_tracks(
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
         RAIL_TILES_TEX,
-        // TODO: tracks look wrong when viewed from below. We need to tweak how autocrop works - but this shouldn't require
-        // any extra variant bits.
         RAIL_TILES_TEX,
         TRANSPARENT_PIXEL,
         TRANSPARENT_PIXEL,
@@ -875,6 +873,20 @@ pub(crate) fn register_tracks(
                                     y_cells: 11,
                                     flip_x_bit: 0b0000_0100_0000_0000,
                                     flip_y_bit: 0,
+                                    extra_flip_x: false,
+                                    extra_flip_y: false,
+                                }
+                            );
+                            b.tex_bottom.as_mut().unwrap().crop.as_mut().unwrap().dynamic = Some(
+                                DynamicCrop {
+                                    x_selector_bits: 0b0000_0000_0011_1100,
+                                    y_selector_bits: 0b0000_0011_1100_0000,
+                                    x_cells: 16,
+                                    y_cells: 11,
+                                    flip_x_bit: 0b0000_0100_0000_0000,
+                                    flip_y_bit: 0,
+                                    extra_flip_x: true,
+                                    extra_flip_y: false,
                                 }
                             )
                         })
@@ -981,9 +993,8 @@ impl ScanState {
     }
 
     // Test only, prototype version that logs lots of details about each calculation
-    pub(crate) fn advance_verbose(
+    pub(crate) fn advance<const CHATTY: bool>(
         &self,
-        chatty: bool,
         get_block: impl Fn(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
     ) -> Result<ScanOutcome> {
         let block = match get_block(self.block_coord) {
@@ -995,7 +1006,7 @@ impl ScanState {
         let current_tile_id = TileId::from_variant(variant, self.is_reversed, self.is_diverging);
         if !current_tile_id.present() {}
         let tile = TRACK_TILES[current_tile_id.x() as usize][current_tile_id.y() as usize];
-        if chatty {
+        if CHATTY {
             tracing::info!("{:?}:\n {:?}", current_tile_id, tile);
         }
         let current_tile_def = match tile {
@@ -1011,7 +1022,7 @@ impl ScanState {
             (true, true) => current_tile_def.prev_diverging_delta,
         };
         if !next_delta.present() {
-            if chatty {
+            if CHATTY {
                 tracing::info!("Next delta absent");
             }
             return Ok(ScanOutcome::Failure);
@@ -1023,7 +1034,7 @@ impl ScanState {
                 current_tile_id.rotation(),
             )
             .context("block coordinate overflow")?;
-        if chatty {
+        if CHATTY {
             tracing::info!("Next coord: {:?}", next_coord);
         }
 
@@ -1032,7 +1043,7 @@ impl ScanState {
             DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
         };
         if !next_block.equals_ignore_variant(self.base_track_block) {
-            if chatty {
+            if CHATTY {
                 tracing::info!("Next block: {:?} is not the base track", next_block);
             }
             return Ok(ScanOutcome::Failure);
@@ -1041,7 +1052,7 @@ impl ScanState {
 
         // This is the tile we see at the next coordinate. Does it match?
         let next_tile_id = TileId::from_variant(next_variant, self.is_reversed, self.is_diverging);
-        if chatty {
+        if CHATTY {
             tracing::info!("Next tile: {:?}", next_tile_id);
         }
 
@@ -1060,7 +1071,7 @@ impl ScanState {
             .with_rotation_wrapped(next_tile_id.rotation() + 4 - current_tile_id.rotation())
             .xor_flip_x(current_tile_id.flip_x())
             .correct_rotation_for_x_flip(current_tile_id.flip_x());
-        if chatty {
+        if CHATTY {
             tracing::info!(
                 "Corrected rotation: {} -> {:?}",
                 next_tile_id.rotation(),
@@ -1083,7 +1094,7 @@ impl ScanState {
                             - proposed_tile_id.rotation(),
                     )
                     .xor_flip_x(proposed_tile_id.flip_x());
-                if chatty {
+                if CHATTY {
                     tracing::info!(
                         "Trying the straight track connections. Corrected {} -> {:?}",
                         rotation_corrected_next_tile_id.rotation(),
@@ -1118,7 +1129,7 @@ impl ScanState {
             }
         }
         if !matching_tile_id.present() {
-            if chatty {
+            if CHATTY {
                 tracing::info!("No match found");
             }
             return Ok(ScanOutcome::Failure);
@@ -1128,7 +1139,7 @@ impl ScanState {
         let next_tile = match TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize] {
             Some(tile) => tile,
             None => {
-                if chatty {
+                if CHATTY {
                     log::error!("Match found, but no tile.");
                 }
                 return Ok(ScanOutcome::Failure);
@@ -1142,7 +1153,7 @@ impl ScanState {
             ) {
                 Some(secondary_block_coord) => secondary_block_coord,
                 None => {
-                    if chatty {
+                    if CHATTY {
                         tracing::info!("Secondary tile coord overflows");
                     }
                     return Ok(ScanOutcome::Failure);
@@ -1152,7 +1163,15 @@ impl ScanState {
                 DeferrableResult::AvailableNow(block) => block.unwrap(),
                 DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
             };
-            // TODO check the block type
+            if !secondary_block.equals_ignore_variant(self.base_track_block) {
+                if CHATTY {
+                    tracing::info!(
+                        "Secondary block: {:?} is not the base track",
+                        secondary_block
+                    );
+                }
+                return Ok(ScanOutcome::Failure);
+            }
 
             let secondary_tile = TileId::from_variant(
                 secondary_block.variant(),
@@ -1180,7 +1199,7 @@ impl ScanState {
             }
 
             if !secondary_ok {
-                if chatty {
+                if CHATTY {
                     tracing::info!(
                         "Secondary tile doesn't match: {:?}",
                         rotation_corrected_secondary_tile_id
@@ -1197,7 +1216,7 @@ impl ScanState {
             ) {
                 Some(tertiary_block_coord) => tertiary_block_coord,
                 None => {
-                    if chatty {
+                    if CHATTY {
                         tracing::info!("Tertiary tile coord overflows");
                     }
                     return Ok(ScanOutcome::Failure);
@@ -1207,8 +1226,11 @@ impl ScanState {
                 DeferrableResult::AvailableNow(block) => block.unwrap(),
                 DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
             };
-            // TODO check the block type
-
+            if !tertiary_block.equals_ignore_variant(self.base_track_block) {
+                if CHATTY {
+                    tracing::info!("Tertiary block: {:?} is not the base track", tertiary_block);
+                }
+            }
             let tertiary_tile = TileId::from_variant(
                 tertiary_block.variant(),
                 // Don't care about reverse or diverging
@@ -1226,7 +1248,7 @@ impl ScanState {
                     .tertiary_tile
                     .same_variant(rotation_corrected_tertiary_tile_id)
             {
-                if chatty {
+                if CHATTY {
                     tracing::info!(
                         "Tertiary tile doesn't match: {:?}",
                         rotation_corrected_tertiary_tile_id
@@ -1265,7 +1287,7 @@ impl ScanState {
         );
         next_state.vec_coord =
             base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
-        if chatty {
+        if CHATTY {
             tracing::info!(
                 "Found matching tile: {:?}. Coords: {:?}.",
                 matching_tile_id,
@@ -1356,9 +1378,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     // dummy
                     current_tile_id: TileId::empty(),
                 };
-                state.advance_verbose(true, |coord| {
-                    response.ctx.game_map().get_block(coord).into()
-                })?;
+                state.advance::<true>(|coord| response.ctx.game_map().get_block(coord).into())?;
             }
             "multiscan" => {
                 let mut state = ScanState {
@@ -1386,7 +1406,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         let prev = state.vec_coord + vec3(0.0, 1.0, 0.0);
 
                         match state
-                            .advance_verbose(true, |coord| ctx.game_map().get_block(coord).into())?
+                            .advance::<true>(|coord| ctx.game_map().get_block(coord).into())?
                         {
                             ScanOutcome::Success(s) => {
                                 state = s;
