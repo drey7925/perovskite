@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::{
-    block_renderer::{BlockRenderer, VkChunkPassGpu, VkChunkVertexDataGpu},
+    block_renderer::{BlockRenderer, VkCgvBufferGpu, VkChunkVertexDataGpu},
     make_render_pass,
     shaders::{
         cube_geometry::{
@@ -153,7 +153,7 @@ impl MiniBlockRenderer {
             },
             SubpassContents::Inline,
         )?;
-        let pass = VkChunkPassGpu::from_buffers(&vtx, &idx, self.ctx.allocator())?;
+        let pass = VkCgvBufferGpu::from_buffers(&vtx, &idx, self.ctx.allocator())?;
 
         if let Some(pass) = pass {
             self.cube_pipeline.bind(

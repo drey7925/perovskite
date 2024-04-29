@@ -52,6 +52,8 @@ use crate::game_state::chunk::{
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
+use super::RectF32;
+
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
 const TESTONLY_ENTITY: &str = "builtin:testonly_entity";
 
@@ -74,45 +76,6 @@ impl CubeFace {
     #[inline(always)]
     fn index(&self) -> usize {
         *self as usize
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RectF32 {
-    l: f32,
-    t: f32,
-    w: f32,
-    h: f32,
-}
-impl RectF32 {
-    fn new(l: f32, t: f32, w: f32, h: f32) -> Self {
-        Self { l, t, w, h }
-    }
-    fn top(&self) -> f32 {
-        self.t
-    }
-    fn bottom(&self) -> f32 {
-        self.t + self.h
-    }
-    fn left(&self) -> f32 {
-        self.l
-    }
-    fn right(&self) -> f32 {
-        self.l + self.w
-    }
-
-    fn div(&self, dimensions: (u32, u32)) -> RectF32 {
-        RectF32::new(
-            self.l / dimensions.0 as f32,
-            self.t / dimensions.1 as f32,
-            self.w / dimensions.0 as f32,
-            self.h / dimensions.1 as f32,
-        )
-    }
-}
-impl From<Rect> for RectF32 {
-    fn from(rect: Rect) -> Self {
-        Self::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32)
     }
 }
 
@@ -327,34 +290,34 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
 ];
 
 #[derive(Clone, PartialEq)]
-pub(crate) struct VkChunkPassCpu {
+pub(crate) struct VkCgvBufferCpu {
     pub(crate) vtx: Vec<CubeGeometryVertex>,
     pub(crate) idx: Vec<u32>,
 }
-impl VkChunkPassCpu {
+impl VkCgvBufferCpu {
     fn to_gpu(
         &self,
         allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
-    ) -> Result<Option<VkChunkPassGpu>> {
-        VkChunkPassGpu::from_buffers(&self.vtx, &self.idx, allocator)
+    ) -> Result<Option<VkCgvBufferGpu>> {
+        VkCgvBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct VkChunkPassGpu {
+pub(crate) struct VkCgvBufferGpu {
     pub(crate) vtx: Subbuffer<[CubeGeometryVertex]>,
     pub(crate) idx: Subbuffer<[u32]>,
 }
-impl VkChunkPassGpu {
+impl VkCgvBufferGpu {
     pub(crate) fn from_buffers(
         vtx: &[CubeGeometryVertex],
         idx: &[u32],
         allocator: &StandardMemoryAllocator,
-    ) -> Result<Option<VkChunkPassGpu>> {
+    ) -> Result<Option<VkCgvBufferGpu>> {
         if vtx.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(VkChunkPassGpu {
+            Ok(Some(VkCgvBufferGpu {
                 vtx: Buffer::from_iter(
                     allocator,
                     BufferCreateInfo {
@@ -386,9 +349,9 @@ impl VkChunkPassGpu {
 
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexDataGpu {
-    pub(crate) solid_opaque: Option<VkChunkPassGpu>,
-    pub(crate) transparent: Option<VkChunkPassGpu>,
-    pub(crate) translucent: Option<VkChunkPassGpu>,
+    pub(crate) solid_opaque: Option<VkCgvBufferGpu>,
+    pub(crate) transparent: Option<VkCgvBufferGpu>,
+    pub(crate) translucent: Option<VkCgvBufferGpu>,
 }
 impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
@@ -410,9 +373,9 @@ impl VkChunkVertexDataGpu {
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
-    pub(crate) solid_opaque: Option<VkChunkPassCpu>,
-    pub(crate) transparent: Option<VkChunkPassCpu>,
-    pub(crate) translucent: Option<VkChunkPassCpu>,
+    pub(crate) solid_opaque: Option<VkCgvBufferCpu>,
+    pub(crate) transparent: Option<VkCgvBufferCpu>,
+    pub(crate) translucent: Option<VkCgvBufferCpu>,
 }
 impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
@@ -770,7 +733,7 @@ impl BlockRenderer {
         // This only applies to cube blocks.
         suppress_face_when: G,
         reclaimer: &MeshVectorReclaim,
-    ) -> Option<VkChunkPassCpu>
+    ) -> Option<VkCgvBufferCpu>
     where
         F: Fn(BlockId) -> bool,
         G: Fn(BlockId, BlockId) -> bool,
@@ -808,7 +771,7 @@ impl BlockRenderer {
             // allocation to reclaim.
             None
         } else {
-            Some(VkChunkPassCpu { vtx, idx })
+            Some(VkCgvBufferCpu { vtx, idx })
         }
     }
 
@@ -1095,7 +1058,7 @@ impl BlockRenderer {
             model_matrix: Matrix4::from_translation(offset.cast().unwrap()),
             models: VkChunkVertexDataGpu {
                 solid_opaque: None,
-                transparent: Some(VkChunkPassGpu { vtx, idx }),
+                transparent: Some(VkCgvBufferGpu { vtx, idx }),
                 translucent: None,
             },
         })

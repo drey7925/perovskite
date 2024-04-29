@@ -295,6 +295,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutomaticSignalOutcome {
     InvalidSignal,
     Acquired,

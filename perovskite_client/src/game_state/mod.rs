@@ -42,6 +42,7 @@ use crate::game_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
+use crate::vulkan::entity_renderer::EntityRenderer;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
 
@@ -51,7 +52,7 @@ use self::chunk::{
     ChunkDataView, MeshBatch, MeshBatchBuilder, MeshResult, SnappyDecodeHelper,
     TARGET_BATCH_OCCUPANCY,
 };
-use self::entities::EntityManager;
+use self::entities::EntityState;
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
 use self::lightcycle::LightCycle;
@@ -616,11 +617,12 @@ pub(crate) struct ClientState {
     pub(crate) actions: mpsc::Sender<GameAction>,
     pub(crate) light_cycle: Arc<Mutex<LightCycle>>,
     pub(crate) chat: Arc<Mutex<ChatState>>,
-    pub(crate) entities: Mutex<EntityManager>,
+    pub(crate) entities: Mutex<EntityState>,
 
     // block_renderer doesn't currently need a mutex because it's stateless
     // and keeps its cached geometry data in the chunks themselves
     pub(crate) block_renderer: Arc<BlockRenderer>,
+    pub(crate) entity_renderer: Arc<EntityRenderer>,
     // GameHud manages its own state.
     pub(crate) hud: Arc<Mutex<GameHud>>,
     pub(crate) egui: Arc<Mutex<EguiUi>>,
@@ -641,6 +643,7 @@ impl ClientState {
         hud: GameHud,
         egui: EguiUi,
         block_renderer: BlockRenderer,
+        entity_renderer: EntityRenderer,
         timekeeper: Timekeeper,
     ) -> Result<ClientState> {
         Ok(ClientState {
@@ -660,9 +663,10 @@ impl ClientState {
                 0.0,
             )))),
             chat: Arc::new(Mutex::new(ChatState::new())),
-            entities: Mutex::new(EntityManager::new(&block_renderer)?),
+            entities: Mutex::new(EntityState::new(&block_renderer)?),
 
             block_renderer: Arc::new(block_renderer),
+            entity_renderer: Arc::new(entity_renderer),
             hud: Arc::new(Mutex::new(hud)),
             egui: Arc::new(Mutex::new(egui)),
             pending_error: Mutex::new(None),

@@ -19,6 +19,7 @@ syntax = "proto3";
 package perovskite.protocol.entities;
 
 import "coordinates.proto";
+import "render.proto";
 
 message EntityMove {
   // The starting position for the movement
@@ -53,12 +54,8 @@ message EntityUpdate {
 
   // todo later - appearance, including the ability to change the appearance on
   // demand
-}
-
-enum QueueType {
-  QUEUE_UNSPECIFIED = 0;
-  QUEUE_SINGLE = 1;
-  QUEUE_EIGHT = 2;
+  // The entity's class, controlling its appearance
+  uint32 entity_class = 6;
 }
 
 message EntityTypeAssignment {
@@ -68,4 +65,15 @@ message EntityTypeAssignment {
 
 message ServerEntityTypeAssignments {
   repeated EntityTypeAssignment entity_type = 1;
+}
+
+message EntityDef {
+  string short_name = 1;
+  uint32 entity_class = 2;
+  EntityAppearance appearance = 3;
+}
+
+message EntityAppearance {
+  // The mesh to use for the entity. At least one must be specified.
+  repeated perovskite.protocol.render.CustomMesh custom_mesh = 1;
 }

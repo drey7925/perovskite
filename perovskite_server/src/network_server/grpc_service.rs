@@ -144,6 +144,15 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
                 .collect(),
         }))
     }
+
+    async fn get_entity_defs(
+        &self,
+        _req: Request<proto::GetEntityDefsRequest>,
+    ) -> Result<Response<proto::GetEntityDefsResponse>> {
+        Result::Ok(Response::new(proto::GetEntityDefsResponse {
+            entity_defs: self.game_state.entities().types().to_client_protos(),
+        }))
+    }
 }
 
 pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 4;

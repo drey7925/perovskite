@@ -16,9 +16,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod database;
+/// Various utilities to convert between formats.
+pub mod formats;
+/// The state of the actual game world and all of the things inside it
 pub mod game_state;
+/// Media files that the client will need
 pub mod media;
+/// The server that powers the multiplayer and player interaction experience
 pub mod network_server;
+/// The actual builders and lifecycle of a game server
 pub mod server;
 
 mod sync;

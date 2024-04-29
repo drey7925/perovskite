@@ -41,14 +41,14 @@ use crate::{
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
-    vulkan::block_renderer::{VkChunkPassGpu, VkChunkVertexDataGpu},
+    vulkan::block_renderer::{VkCgvBufferGpu, VkChunkVertexDataGpu},
 };
 
 use super::{
     shaders::{
         cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
         egui_adapter::{self, EguiAdapter},
-        flat_texture, PipelineProvider, PipelineWrapper,
+        entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
     },
     CommandBufferBuilder, VulkanWindow,
 };
@@ -59,6 +59,9 @@ pub(crate) struct ActiveGame {
 
     flat_provider: flat_texture::FlatTexPipelineProvider,
     flat_pipeline: flat_texture::FlatTexPipelineWrapper,
+
+    entities_provider: entity_geometry::EntityPipelineProvider,
+    entities_pipeline: entity_geometry::EntityPipelineWrapper,
 
     egui_adapter: Option<egui_adapter::EguiAdapter>,
 
@@ -115,34 +118,6 @@ impl ActiveGame {
                     .make_pointee_cube(player_position, pointee)
                     .unwrap(),
             );
-        }
-
-        let (entity_translations, vtx, idx) = {
-            let mut entity_coords = vec![];
-            let mut entity_lock = self.client_state.entities.lock();
-            for entity in entity_lock.entities.values_mut() {
-                entity.advance_state();
-                entity_coords.push(entity.as_transform(player_position, start_time))
-            }
-            (
-                entity_coords,
-                entity_lock.fake_entity_vtx.clone(),
-                entity_lock.fake_entity_idx.clone(),
-            )
-        };
-
-        for translation in entity_translations {
-            self.cube_draw_calls.push(CubeGeometryDrawCall {
-                models: VkChunkVertexDataGpu {
-                    solid_opaque: None,
-                    transparent: Some(VkChunkPassGpu {
-                        vtx: vtx.clone(),
-                        idx: idx.clone(),
-                    }),
-                    translucent: None,
-                },
-                model_matrix: translation,
-            })
         }
 
         let chunk_lock = {
@@ -218,6 +193,21 @@ impl ActiveGame {
                 )
                 .unwrap();
         }
+        let entity_draw_calls = {
+            let mut lock = self.client_state.entities.lock();
+            lock.advance_all_states();
+            lock.render_calls(
+                player_position,
+                start_time,
+                &self.client_state.entity_renderer,
+            )
+        };
+        self.entities_pipeline
+            .bind(ctx, scene_state, &mut command_buf_builder, ())
+            .unwrap();
+        self.entities_pipeline
+            .draw(&mut command_buf_builder, entity_draw_calls, ())
+            .unwrap();
 
         self.flat_pipeline
             .bind(ctx, (), &mut command_buf_builder, ())
@@ -248,6 +238,9 @@ impl ActiveGame {
             .cube_provider
             .make_pipeline(ctx, self.client_state.block_renderer.atlas())
             .unwrap();
+        self.entities_pipeline = self
+            .entities_provider
+            .make_pipeline(ctx, self.client_state.entity_renderer.atlas())?;
         self.flat_pipeline = self
             .flat_provider
             .make_pipeline(ctx, (self.client_state.hud.lock().texture_atlas(), 0))?;
@@ -663,6 +656,10 @@ async fn connect_impl(
     let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
     let cube_pipeline = cube_provider.make_pipeline(&ctx, client_state.block_renderer.atlas())?;
 
+    let entities_provider = entity_geometry::EntityPipelineProvider::new(ctx.vk_device.clone())?;
+    let entities_pipeline =
+        entities_provider.make_pipeline(&ctx, client_state.entity_renderer.atlas())?;
+
     let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
     let flat_pipeline =
         flat_provider.make_pipeline(&ctx, (client_state.hud.lock().texture_atlas(), 0))?;
@@ -672,6 +669,8 @@ async fn connect_impl(
         cube_pipeline,
         flat_provider,
         flat_pipeline,
+        entities_provider,
+        entities_pipeline,
         client_state,
         egui_adapter: None,
         cube_draw_calls: vec![],

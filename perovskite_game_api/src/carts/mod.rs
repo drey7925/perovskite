@@ -9,7 +9,7 @@ use perovskite_core::{
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
     constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
-    protocol::items::item_def::QuantityType,
+    protocol::{self, items::item_def::QuantityType, render::CustomMesh},
 };
 use perovskite_server::game_state::{
     self,
@@ -65,6 +65,13 @@ impl Default for CartsGameBuilderExtension {
     }
 }
 
+const CART_MESH_BYTES: &[u8] = include_bytes!("minecart.obj");
+lazy_static::lazy_static! {
+    static ref CART_MESH: CustomMesh = {
+        perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, "carts:minecart_uv").unwrap()
+    };
+}
+
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     let rail_tex = StaticTextureName("carts:rail");
     let speedpost1_tex = StaticTextureName("carts:speedpost1");
@@ -77,6 +84,9 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     let cart_tex = StaticTextureName("carts:cart_temp");
     include_texture_bytes!(game_builder, cart_tex, "textures/testonly_cart.png")?;
+
+    let cart_uv_tex = StaticTextureName("carts:minecart_uv");
+    include_texture_bytes!(game_builder, cart_uv_tex, "textures/cart_uv.png")?;
 
     // TODO: These are fake stand-ins for real switch rails that differ at each point in the switch
     let rail_sw_right_tex = StaticTextureName("carts:rail_sw_right");
@@ -126,7 +136,10 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     let cart_id = game_builder.inner.entities_mut().register(EntityDef {
         move_queue_type: game_state::entities::MoveQueueType::Buffer8,
-        class_name: "carts:cart_temp".to_string(),
+        class_name: "carts:high_speed_minecart".to_string(),
+        client_info: protocol::entities::EntityAppearance {
+            custom_mesh: vec![CART_MESH.clone()],
+        },
     })?;
 
     let (automatic_signal, interlocking_signal) = signals::register_signal_block(game_builder)?;
@@ -245,7 +258,7 @@ fn place_cart(
             held_signal: None,
         })),
         EntityTypeId {
-            class: config.cart_id,
+            class: dbg!(config.cart_id),
             data: None,
         },
     );

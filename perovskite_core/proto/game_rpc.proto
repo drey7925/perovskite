@@ -41,6 +41,9 @@ service PerovskiteGame {
 
   // Fetch media
   rpc GetMedia(GetMediaRequest) returns (GetMediaResponse);
+
+  // Get entity definitions
+  rpc GetEntityDefs(GetEntityDefsRequest) returns (GetEntityDefsResponse);
 }
 
 message GetBlockDefsRequest {}
@@ -51,6 +54,11 @@ message GetBlockDefsResponse {
 message GetItemDefsRequest {}
 message GetItemDefsResponse {
   repeated perovskite.protocol.items.ItemDef item_defs = 1;
+}
+
+message GetEntityDefsRequest {}
+message GetEntityDefsResponse {
+  repeated perovskite.protocol.entities.EntityDef entity_defs = 1;
 }
 
 message GetMediaRequest { string media_name = 1; }
@@ -328,7 +336,7 @@ message StartAuth {
   //        * Labels in inventories
   // 4 - circa 2024-02-28
   //        * MVP of entity kinematics w/ pending move queues
-  //        * Entity appearance, definition, interactions *NOT* present in this version.
+  //        * Entity definition with meshes
   //        * Checkboxes in popups
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;

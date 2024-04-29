@@ -20,8 +20,13 @@ use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
     block_id::BlockId,
+    constants::textures::FALLBACK_UNKNOWN_TEXTURE,
     coordinates::BlockCoordinate,
-    protocol::entities::{EntityTypeAssignment, ServerEntityTypeAssignments},
+    protocol::{
+        self,
+        entities::{EntityAppearance, EntityTypeAssignment, ServerEntityTypeAssignments},
+        render::{CustomMesh, TextureReference},
+    },
 };
 use prost::Message;
 
@@ -32,7 +37,7 @@ use tracy_client::span;
 
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
-    CachelineAligned,
+    formats, CachelineAligned,
 };
 
 use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
@@ -246,12 +251,20 @@ impl EntityManager {
             None => &UNDEFINED_ENTITY,
         }
     }
+
+    pub fn types(&self) -> &EntityTypeManager {
+        &self.types
+    }
 }
 
 lazy_static! {
     pub(crate) static ref UNDEFINED_ENTITY: EntityDef = EntityDef {
         move_queue_type: MoveQueueType::SingleMove,
-        class_name: "builtin:undefined".to_string()
+        class_name: "builtin:undefined".to_string(),
+        client_info: EntityAppearance {
+            // TODO generate from the OBJ file
+            custom_mesh: vec![]
+        },
     };
 }
 
@@ -890,6 +903,7 @@ impl EntityCoreArray {
     fn check_preconditions(&self) {
         // We assume that all vectors have the same length.
         assert_eq!(self.id.len(), self.len);
+        assert_eq!(self.class.len(), self.len);
         assert_eq!(self.control.len(), self.len);
         assert_eq!(self.last_nontrivial_modification.len(), self.len);
         assert_eq!(self.current_move_seq.len(), self.len);
@@ -1127,6 +1141,7 @@ impl EntityCoreArray {
                 // we need to grow the array
                 self.len += 1;
                 self.id.push(id);
+                self.class.push(entity_class.class.0);
                 self.control.push(control);
                 self.last_nontrivial_modification
                     .push(self.to_offset(Instant::now()));
@@ -1288,6 +1303,7 @@ impl EntityCoreArray {
         if let Some(i) = self.id_lookup.remove(&id) {
             self.len -= 1;
             self.id.swap_remove(i);
+            self.class.swap_remove(i);
             self.control.swap_remove(i);
             self.last_nontrivial_modification.swap_remove(i);
             self.current_move_seq.swap_remove(i);
@@ -1358,6 +1374,7 @@ impl EntityCoreArray {
 
             let entity = IterEntity {
                 id: self.id[i],
+                class: self.class[i],
                 starting_position: Vector3::new(self.x[i], self.y[i], self.z[i]),
                 instantaneous_position: Vector3::new(
                     qproj(self.x[i], self.xv[i], self.xa[i], self.move_time_elapsed[i]),
@@ -1735,6 +1752,7 @@ impl EntityShard {
 
 pub(crate) struct IterEntity<'a> {
     pub(crate) id: u64,
+    pub(crate) class: u32,
     pub(crate) starting_position: Vector3<f64>,
     pub(crate) instantaneous_position: Vector3<f64>,
     pub(crate) current_move: StoredMovement,
@@ -1994,6 +2012,7 @@ pub enum MoveQueueType {
 pub struct EntityDef {
     pub move_queue_type: MoveQueueType,
     pub class_name: String,
+    pub client_info: perovskite_core::protocol::entities::EntityAppearance,
 }
 
 pub struct EntityClass {
@@ -2028,10 +2047,12 @@ pub struct EntityTypeId {
 }
 
 pub(crate) const FAKE_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0xFFFFFFFF);
+/// The entity class ID for unknown entities and the fallback entity appearance
+pub const UNKNOWN_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0);
 /// The entity class ID for a player; data is the username in UTF-8 bytes
-pub const PLAYER_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0);
+pub const PLAYER_ENTITY_CLASS_ID: EntityClassId = EntityClassId(1);
 /// The entity class ID for a dropped item; data is the item stack proto
-pub const DROPPED_ITEM_CLASS_ID: EntityClassId = EntityClassId(1);
+pub const DROPPED_ITEM_CLASS_ID: EntityClassId = EntityClassId(2);
 
 const ENTITY_TYPE_MANAGER_META_KEY: &[u8] = b"entity_types";
 
@@ -2053,10 +2074,11 @@ impl EntityTypeManager {
     fn from_encoded(encoded: &[u8]) -> Result<EntityTypeManager> {
         let assignments = ServerEntityTypeAssignments::decode(encoded)?;
 
-        let types = match assignments.entity_type.iter().map(|x| x.entity_class).max() {
+        let mut types = match assignments.entity_type.iter().map(|x| x.entity_class).max() {
             Some(max_type) => Vec::with_capacity(max_type as usize + 1),
             None => vec![],
         };
+        types.push(make_unknown_entity_appearance());
         let mut by_name = FxHashMap::default();
 
         for def in assignments.entity_type.into_iter() {
@@ -2072,12 +2094,15 @@ impl EntityTypeManager {
 
     fn new_empty() -> Result<EntityTypeManager> {
         Ok(EntityTypeManager {
-            types: Vec::new(),
-            by_name: FxHashMap::default(),
+            types: vec![make_unknown_entity_appearance()],
+            by_name: FxHashMap::from_iter([(
+                "builtin:unknown".to_string(),
+                UNKNOWN_ENTITY_CLASS_ID.0 as u32,
+            )]),
         })
     }
 
-    pub(crate) fn to_proto(&self) -> ServerEntityTypeAssignments {
+    pub(crate) fn to_server_proto(&self) -> ServerEntityTypeAssignments {
         ServerEntityTypeAssignments {
             entity_type: self
                 .types
@@ -2091,10 +2116,24 @@ impl EntityTypeManager {
         }
     }
 
+    pub(crate) fn to_client_protos(&self) -> Vec<protocol::entities::EntityDef> {
+        self.types
+            .iter()
+            .enumerate()
+            .flat_map(|(i, x)| {
+                x.as_ref().map(|x| protocol::entities::EntityDef {
+                    short_name: x.class_name.clone(),
+                    entity_class: i as u32,
+                    appearance: Some(x.client_info.clone()),
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn save_to(&self, db: &dyn GameDatabase) -> Result<()> {
         db.put(
             &KeySpace::Metadata.make_key(ENTITY_TYPE_MANAGER_META_KEY),
-            &self.to_proto().encode_to_vec(),
+            &self.to_server_proto().encode_to_vec(),
         )?;
         db.flush()
     }
@@ -2126,4 +2165,20 @@ impl EntityTypeManager {
         // Nothing to do in this version, but we expect to add some precomputes here
         Ok(())
     }
+}
+
+const UNKNOWN_ENTITITY_MESH: &[u8] = include_bytes!("media/unknown_entity.obj");
+
+fn make_unknown_entity_appearance() -> Option<EntityDef> {
+    Some(EntityDef {
+        class_name: "builtin:unknown".to_string(),
+        move_queue_type: MoveQueueType::SingleMove,
+        client_info: protocol::entities::EntityAppearance {
+            custom_mesh: vec![formats::load_obj_mesh(
+                UNKNOWN_ENTITITY_MESH,
+                FALLBACK_UNKNOWN_TEXTURE,
+            )
+            .unwrap()],
+        },
+    })
 }

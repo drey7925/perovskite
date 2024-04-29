@@ -29,8 +29,9 @@ use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
     protocol::game_rpc::{
         self as rpc, perovskite_game_client::PerovskiteGameClient, stream_to_client::ServerMessage,
-        stream_to_server::ClientMessage, GetBlockDefsRequest, GetItemDefsRequest, GetMediaRequest,
-        ListMediaRequest, StartAuth, StreamToClient, StreamToServer,
+        stream_to_server::ClientMessage, GetBlockDefsRequest, GetEntityDefsRequest,
+        GetItemDefsRequest, GetMediaRequest, ListMediaRequest, StartAuth, StreamToClient,
+        StreamToServer,
     },
 };
 use rand::rngs::OsRng;
@@ -45,7 +46,7 @@ use crate::{
         block_types::ClientBlockTypeManager, items::ClientItemManager, settings::GameSettings,
         timekeeper::Timekeeper, ClientState,
     },
-    vulkan::{block_renderer::BlockRenderer, VulkanWindow},
+    vulkan::{block_renderer::BlockRenderer, entity_renderer::EntityRenderer, VulkanWindow},
 };
 
 mod client_context;
@@ -62,6 +63,8 @@ async fn connect_grpc(
         .map_err(|e| anyhow::Error::msg(e.to_string()))
 }
 
+const TOTAL_STEPS: f32 = 10.0;
+
 pub(crate) async fn connect_game(
     server_addr: String,
     username: String,
@@ -71,7 +74,7 @@ pub(crate) async fn connect_game(
     window: &VulkanWindow,
     progress: &mut watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
-    progress.send((0.1, "Connecting to server...".to_string()))?;
+    progress.send((1.0 / TOTAL_STEPS, "Connecting to server...".to_string()))?;
     log::info!("Connecting to {}...", &server_addr);
     let mut connection = connect_grpc(server_addr.clone())
         .await?
@@ -82,7 +85,7 @@ pub(crate) async fn connect_game(
 
     let request = Request::new(ReceiverStream::new(tx_recv));
     let mut stream = connection.game_stream(request).await?.into_inner();
-    progress.send((0.2, "Logging into server...".to_string()))?;
+    progress.send((2.0 / TOTAL_STEPS, "Logging into server...".to_string()))?;
 
     let AuthSuccess {
         protocol_version,
@@ -106,7 +109,7 @@ pub(crate) async fn connect_game(
     log::info!("Protocol version: {}", protocol_version);
     log::info!("Connection to {} established.", &server_addr);
 
-    progress.send((0.3, "Fetching media list...".to_string()))?;
+    progress.send((3.0 / TOTAL_STEPS, "Fetching media list...".to_string()))?;
     let media_list = connection.list_media(ListMediaRequest::default()).await?;
     log::info!(
         "{} media items loaded from server",
@@ -120,26 +123,32 @@ pub(crate) async fn connect_game(
         Box::new(texture_loader),
     )?));
 
-    progress.send((0.4, "Loading block definitions...".to_string()))?;
+    progress.send((
+        4.0 / TOTAL_STEPS,
+        "Loading block definitions...".to_string(),
+    ))?;
     let block_defs_proto = connection.get_block_defs(GetBlockDefsRequest {}).await?;
     log::info!(
         "{} block defs loaded from server",
         block_defs_proto.get_ref().block_types.len()
     );
 
-    progress.send((0.5, "Loading block textures...".to_string()))?;
+    progress.send((5.0 / TOTAL_STEPS, "Loading block textures...".to_string()))?;
 
     let block_types = Arc::new(tokio::task::block_in_place(|| {
         ClientBlockTypeManager::new(block_defs_proto.into_inner().block_types)
     })?);
 
-    progress.send((0.6, "Setting up block renderer...".to_string()))?;
+    progress.send((
+        6.0 / TOTAL_STEPS,
+        "Setting up block renderer...".to_string(),
+    ))?;
     let block_renderer = {
         let cache_manager_lock = cache_manager.lock();
         BlockRenderer::new(block_types.clone(), cache_manager_lock, window).await?
     };
 
-    progress.send((0.7, "Loading item definitions...".to_string()))?;
+    progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
     log::info!(
         "{} item defs loaded from server",
@@ -150,12 +159,28 @@ pub(crate) async fn connect_game(
         window,
     )?);
 
-    progress.send((0.8, "Loading item textures...".to_string()))?;
+    progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
         &cache_manager,
         window.clone_context(),
         &block_renderer,
+    )
+    .await?;
+
+    progress.send((
+        9.0 / TOTAL_STEPS,
+        "Loading entity definitions...".to_string(),
+    ))?;
+    let entity_defs = connection.get_entity_defs(GetEntityDefsRequest {}).await?;
+    log::info!(
+        "{} entity defs loaded from server",
+        entity_defs.get_ref().entity_defs.len()
+    );
+    let entitity_renderer = EntityRenderer::new(
+        entity_defs.into_inner().entity_defs,
+        cache_manager.lock(),
+        window.context(),
     )
     .await?;
 
@@ -169,6 +194,7 @@ pub(crate) async fn connect_game(
         hud,
         egui,
         block_renderer,
+        entitity_renderer,
         timekeeper,
     )?);
     tx_send
@@ -199,7 +225,10 @@ pub(crate) async fn connect_game(
         }
     });
 
-    progress.send((0.9, "Waiting for initial game state...".to_string()))?;
+    progress.send((
+        10.0 / TOTAL_STEPS,
+        "Waiting for initial game state...".to_string(),
+    ))?;
     initial_state_notification.notified().await;
     tokio::spawn(async move {
         match outbound.run_outbound_loop().await {
@@ -208,7 +237,8 @@ pub(crate) async fn connect_game(
         }
     });
 
-    progress.send((1.0, "Connected!".to_string()))?;
+    progress.send((11.0 / TOTAL_STEPS, "Connected!".to_string()))?;
+    // Sleep for a moment so the user can see the connected message
     tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
     Ok(client_state)
 }

@@ -1,8 +1,12 @@
 use std::time::{Duration, Instant};
 
 use crate::vulkan::{
-    block_renderer::{BlockRenderer, CubeExtents},
-    shaders::cube_geometry::CubeGeometryVertex,
+    block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
+    entity_renderer::EntityRenderer,
+    shaders::{
+        cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex},
+        entity_geometry::EntityGeometryDrawCall,
+    },
 };
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, Vector3, Zero};
@@ -72,6 +76,7 @@ pub(crate) struct GameEntity {
     pub(crate) current_move_sequence: u64,
     pub fallback_position: Vector3<f64>,
     id: u64,
+    class: u32,
     // debug only
     created: Instant,
 }
@@ -230,6 +235,7 @@ impl GameEntity {
                     .map_err(|_| "invalid current move progress")?,
             current_move_sequence: update.current_move_sequence,
             created: Instant::now(),
+            class: update.entity_class,
             id: update.id,
         })
     }
@@ -242,16 +248,16 @@ fn qproj(s: f64, v: f32, a: f32, t: f32) -> f64 {
 
 // Minimal stub implementation of the entity manager
 // Quite barebones, and will need extensive optimization in the future.
-pub(crate) struct EntityManager {
+pub(crate) struct EntityState {
     // todo properly encapsulate
     pub(crate) entities: FxHashMap<u64, GameEntity>,
 
-    pub(crate) fake_entity_vtx: Subbuffer<[CubeGeometryVertex]>,
-    pub(crate) fake_entity_idx: Subbuffer<[u32]>,
+    pub(crate) fallback_entity: VkCgvBufferGpu,
 
     pub(crate) attached_to_entity: Option<u64>,
 }
-impl EntityManager {
+impl EntityState {
+    // TODO - this should not use the block renderer once we're properly using meshes from the server.
     pub(crate) fn new(block_renderer: &BlockRenderer) -> Result<Self> {
         let fake_extents = CubeExtents::new((-0.375, 0.375), (-0.2, 1.5), (-0.01, 0.01));
         let tex = [block_renderer.fake_entity_tex_coords(); 6];
@@ -269,31 +275,43 @@ impl EntityManager {
 
         Ok(Self {
             entities: FxHashMap::default(),
-            fake_entity_vtx: Buffer::from_iter(
-                block_renderer.allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::VERTEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
-                vtx.into_iter(),
-            )?,
-            fake_entity_idx: Buffer::from_iter(
-                block_renderer.allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::INDEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
-                idx.into_iter(),
-            )?,
+            fallback_entity: VkCgvBufferGpu::from_buffers(&vtx, &idx, &block_renderer.allocator())?
+                .unwrap(),
             attached_to_entity: None,
         })
+    }
+
+    pub(crate) fn advance_all_states(&mut self) {
+        for entity in self.entities.values_mut() {
+            entity.advance_state();
+        }
+    }
+
+    pub(crate) fn render_calls(
+        &self,
+        player_position: Vector3<f64>,
+        time: Instant,
+        entity_renderer: &EntityRenderer,
+    ) -> Vec<EntityGeometryDrawCall> {
+        // Current implementation will just render each entity in its own draw call.
+        // This will obviously not scale well, but is good enough for now.
+        // A later impl should eventually:
+        // * Provide multiple entities in a single draw call
+        // * Find a way to evaluate the movement of each individual entity. This will likely require a change
+        //    to the vertex format to include velocity, acceleration, and the necessary timing details.
+        self.entities
+            .iter()
+            .map(|(id, entity)| EntityGeometryDrawCall {
+                model_matrix: entity.as_transform(player_position, time),
+                model: entity_renderer
+                    .get_singleton(entity.class)
+                    // class 0 is the fallback
+                    .unwrap_or(
+                        entity_renderer
+                            .get_singleton(0)
+                            .unwrap_or(self.fallback_entity.clone()),
+                    ),
+            })
+            .collect()
     }
 }

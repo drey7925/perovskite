@@ -1902,6 +1902,7 @@ impl EntityEventSender {
 
                     let message = entities_proto::EntityUpdate {
                         id: entity.id,
+                        entity_class: entity.class,
                         planned_move: moves_to_send,
                         remove: false,
                         current_move_sequence: entity.current_move.sequence,
@@ -1922,6 +1923,8 @@ impl EntityEventSender {
                     current_move_sequence: 0,
                     current_move_progress: 0.0,
                     remove: true,
+                    // entity class doesn't matter since we're going to remove it
+                    entity_class: 0,
                 });
                 self.sent_entities.remove(&entity_id);
             }

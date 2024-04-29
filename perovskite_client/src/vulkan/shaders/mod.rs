@@ -21,6 +21,7 @@ use super::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 
 pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
+pub(crate) mod entity_geometry;
 pub(crate) mod flat_texture;
 
 /// Shaders that render 3D

@@ -39,9 +39,8 @@ use vulkano::{
 };
 
 use crate::vulkan::{
-    block_renderer::VkChunkVertexDataGpu,
-    shaders::{frag_lighting, vert_3d::ModelMatrix},
-    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
+    block_renderer::VkCgvBufferGpu, shaders::vert_3d::ModelMatrix, CommandBufferBuilder,
+    Texture2DHolder, VulkanContext, VulkanWindow,
 };
 
 use crate::vulkan::shaders::{
@@ -49,119 +48,39 @@ use crate::vulkan::shaders::{
     PipelineProvider, PipelineWrapper,
 };
 
-use super::{frag_lighting_sparse, SceneState};
+use super::{cube_geometry::CubeGeometryVertex, frag_lighting_sparse, SceneState};
 
-#[derive(BufferContents, Vertex, Copy, Clone, Debug, PartialEq)]
-#[repr(C)]
-pub(crate) struct CubeGeometryVertex {
-    /// Position, given relative to the origin of the chunk in world space.
-    /// Not transformed into camera space via a view matrix yet
-    #[format(R32G32B32_SFLOAT)]
-    pub(crate) position: [f32; 3],
-
-    /// Normal, given in world space
-    #[format(R32G32B32_SFLOAT)]
-    pub(crate) normal: [f32; 3],
-
-    // Texture coordinate in tex space (0-1)
-    #[format(R32G32_SFLOAT)]
-    pub(crate) uv_texcoord: [f32; 2],
-
-    // The local brightness (from nearby sources, unchanging as the global lighting varies)
-    #[format(R32_SFLOAT)]
-    pub(crate) brightness: f32,
-
-    // How much the global brightness should affect the brightness of this vertex
-    #[format(R32_SFLOAT)]
-    pub(crate) global_brightness_contribution: f32,
-
-    // How much this vertex should wave with wavy input
-    #[format(R32_SFLOAT)]
-    pub(crate) wave_horizontal: f32,
-}
-pub(crate) struct CubeGeometryDrawCall {
-    pub(crate) models: VkChunkVertexDataGpu,
+pub(crate) struct EntityGeometryDrawCall {
+    pub(crate) model: VkCgvBufferGpu,
     pub(crate) model_matrix: Matrix4<f32>,
 }
 
-pub(crate) struct CubePipelineWrapper {
-    solid_pipeline: Arc<GraphicsPipeline>,
-    sparse_pipeline: Arc<GraphicsPipeline>,
-    translucent_pipeline: Arc<GraphicsPipeline>,
-    solid_descriptor: Arc<PersistentDescriptorSet>,
-    sparse_descriptor: Arc<PersistentDescriptorSet>,
-    translucent_descriptor: Arc<PersistentDescriptorSet>,
-    start_time: Instant,
-}
-const PLANT_WAVE_FREQUENCY_HZ: f64 = 0.25;
-impl CubePipelineWrapper {
-    fn get_plant_wave_vector(&self) -> [f32; 2] {
-        // f64 has enough bits of precision that we shouldn't worry about floating-point error here.
-        let time = self.start_time.elapsed().as_secs_f64();
-        let sin_cos = Rad(PLANT_WAVE_FREQUENCY_HZ * time * 2.0 * std::f64::consts::PI).sin_cos();
-        [sin_cos.0 as f32, sin_cos.1 as f32]
-    }
+pub(crate) struct EntityPipelineWrapper {
+    pipeline: Arc<GraphicsPipeline>,
+    descriptor: Arc<PersistentDescriptorSet>,
 }
 
-/// Which render step we are rendering now.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BlockRenderPass {
-    Opaque,
-    Transparent,
-    Translucent,
-}
-
-impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWrapper {
-    type PassIdentifier = BlockRenderPass;
+impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipelineWrapper {
+    type PassIdentifier = ();
     fn draw<L>(
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
-        draw_calls: &mut [CubeGeometryDrawCall],
-        pass: BlockRenderPass,
+        draw_calls: Vec<EntityGeometryDrawCall>,
+        pass: (),
     ) -> Result<()> {
-        let _span = match pass {
-            BlockRenderPass::Opaque => span!("draw opaque"),
-            BlockRenderPass::Transparent => span!("draw transparent"),
-            BlockRenderPass::Translucent => span!("draw translucent"),
-        };
-        let pipeline = match pass {
-            BlockRenderPass::Opaque => self.solid_pipeline.clone(),
-            BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
-            BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
-        };
+        let _span = span!("draw entities");
+        let pipeline = self.pipeline.clone();
         let layout = pipeline.layout().clone();
         builder.bind_pipeline_graphics(pipeline);
-        let mut effective_calls = 0;
-        for call in draw_calls.iter_mut() {
-            let pass_data = match pass {
-                BlockRenderPass::Opaque => call.models.solid_opaque.take(),
-                BlockRenderPass::Transparent => call.models.transparent.take(),
-                BlockRenderPass::Translucent => call.models.translucent.take(),
-            };
-            if let Some(pass_data) = pass_data {
-                effective_calls += 1;
-
-                let push_data: ModelMatrix = call.model_matrix.into();
-                builder
-                    .push_constants(layout.clone(), 0, push_data)
-                    .bind_vertex_buffers(0, pass_data.vtx.clone())
-                    .bind_index_buffer(pass_data.idx.clone())
-                    .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
-            }
+        for call in draw_calls.into_iter() {
+            let push_data: ModelMatrix = call.model_matrix.into();
+            builder
+                .push_constants(layout.clone(), 0, push_data)
+                .bind_vertex_buffers(0, call.model.vtx.clone())
+                .bind_index_buffer(call.model.idx.clone())
+                .draw_indexed(call.model.idx.len().try_into()?, 1, 0, 0, 0)?;
         }
-        plot!("total_calls", draw_calls.len() as f64);
-        let draw_rate = effective_calls as f64 / (draw_calls.len() as f64);
-        match pass {
-            BlockRenderPass::Opaque => {
-                plot!("opaque_rate", draw_rate);
-            }
-            BlockRenderPass::Transparent => {
-                plot!("transparent_rate", draw_rate);
-            }
-            BlockRenderPass::Translucent => {
-                plot!("translucent_rate", draw_rate);
-            }
-        };
+
         Ok(())
     }
 
@@ -170,18 +89,10 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
         ctx: &VulkanContext,
         per_frame_config: SceneState,
         command_buf_builder: &mut CommandBufferBuilder<L>,
-        pass: BlockRenderPass,
+        _pass: (),
     ) -> Result<()> {
-        let _span = match pass {
-            BlockRenderPass::Opaque => span!("bind opaque"),
-            BlockRenderPass::Transparent => span!("bind transparent"),
-            BlockRenderPass::Translucent => span!("bind translucent"),
-        };
-        let layout = match pass {
-            BlockRenderPass::Opaque => self.solid_pipeline.layout().clone(),
-            BlockRenderPass::Transparent => self.sparse_pipeline.layout().clone(),
-            BlockRenderPass::Translucent => self.translucent_pipeline.layout().clone(),
-        };
+        let _span = span!("bind entities");
+        let layout = self.pipeline.layout().clone();
 
         let per_frame_set_layout = layout
             .set_layouts()
@@ -200,7 +111,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             },
             UniformData {
                 vp_matrix: per_frame_config.vp_matrix.into(),
-                plant_wave_vector: self.get_plant_wave_vector().into(),
+                plant_wave_vector: [0.0, 0.0].into(),
                 global_brightness_color: per_frame_config.global_light_color.into(),
                 global_light_direction: per_frame_config.global_light_direction.into(),
             },
@@ -212,11 +123,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
         )?;
 
-        let descriptor = match pass {
-            BlockRenderPass::Opaque => self.solid_descriptor.clone(),
-            BlockRenderPass::Transparent => self.sparse_descriptor.clone(),
-            BlockRenderPass::Translucent => self.translucent_descriptor.clone(),
-        };
+        let descriptor = self.descriptor.clone();
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout,
@@ -228,22 +135,19 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
     }
 }
 
-pub(crate) struct CubePipelineProvider {
+pub(crate) struct EntityPipelineProvider {
     device: Arc<Device>,
-    vs_cube: Arc<ShaderModule>,
-    fs_solid: Arc<ShaderModule>,
-    fs_sparse: Arc<ShaderModule>,
+    vs_entity: Arc<ShaderModule>,
+    fs: Arc<ShaderModule>,
 }
-impl CubePipelineProvider {
-    pub(crate) fn new(device: Arc<Device>) -> Result<CubePipelineProvider> {
-        let vs_cube = vert_3d::load_cube_geometry(device.clone())?;
-        let fs_solid = frag_lighting::load(device.clone())?;
-        let fs_sparse = frag_lighting_sparse::load(device.clone())?;
-        Ok(CubePipelineProvider {
+impl EntityPipelineProvider {
+    pub(crate) fn new(device: Arc<Device>) -> Result<EntityPipelineProvider> {
+        let vs_entity = vert_3d::load_cube_geometry(device.clone())?;
+        let fs = frag_lighting_sparse::load(device.clone())?;
+        Ok(EntityPipelineProvider {
             device,
-            vs_cube,
-            fs_solid,
-            fs_sparse,
+            vs_entity,
+            fs,
         })
     }
 
@@ -253,11 +157,11 @@ impl CubePipelineProvider {
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,
-    ) -> Result<CubePipelineWrapper> {
+    ) -> Result<EntityPipelineWrapper> {
         let default_pipeline = GraphicsPipeline::start()
             .vertex_input_state(CubeGeometryVertex::per_vertex())
             .vertex_shader(
-                self.vs_cube
+                self.vs_entity
                     .entry_point("main")
                     .context("Could not find vertex shader entry point")?,
                 (),
@@ -280,7 +184,7 @@ impl CubePipelineProvider {
         let solid_pipeline = default_pipeline
             .clone()
             .fragment_shader(
-                self.fs_solid
+                self.fs
                     .entry_point("main")
                     .with_context(|| "Couldn't find dense fragment shader entry point")?,
                 (),
@@ -290,7 +194,7 @@ impl CubePipelineProvider {
         let sparse_pipeline = default_pipeline
             .clone()
             .fragment_shader(
-                self.fs_sparse
+                self.fs
                     .entry_point("main")
                     .with_context(|| "Couldn't find sparse fragment shader entry point")?,
                 (),
@@ -300,7 +204,7 @@ impl CubePipelineProvider {
         let translucent_pipeline = default_pipeline
             .clone()
             .fragment_shader(
-                self.fs_solid
+                self.fs
                     .entry_point("main")
                     .with_context(|| "Couldn't find dense fragment shader entry point")?,
                 (),
@@ -319,23 +223,18 @@ impl CubePipelineProvider {
         let solid_descriptor = tex.descriptor_set(&solid_pipeline, 0, 0)?;
         let sparse_descriptor = tex.descriptor_set(&sparse_pipeline, 0, 0)?;
         let translucent_descriptor = tex.descriptor_set(&translucent_pipeline, 0, 0)?;
-        Ok(CubePipelineWrapper {
-            solid_pipeline,
-            sparse_pipeline,
-            translucent_pipeline,
-            solid_descriptor,
-            sparse_descriptor,
-            translucent_descriptor,
-            start_time: Instant::now(),
+        Ok(EntityPipelineWrapper {
+            pipeline: solid_pipeline,
+            descriptor: solid_descriptor,
         })
     }
 }
-impl PipelineProvider for CubePipelineProvider {
+impl PipelineProvider for EntityPipelineProvider {
     fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
         config: &Texture2DHolder,
-    ) -> Result<CubePipelineWrapper> {
+    ) -> Result<EntityPipelineWrapper> {
         self.build_pipeline(
             &wnd.vk_ctx,
             wnd.viewport.clone(),
@@ -344,8 +243,8 @@ impl PipelineProvider for CubePipelineProvider {
         )
     }
 
-    type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];
+    type DrawCall<'a> = Vec<EntityGeometryDrawCall>;
     type PerFrameConfig = SceneState;
-    type PipelineWrapperImpl = CubePipelineWrapper;
+    type PipelineWrapperImpl = EntityPipelineWrapper;
     type PerPipelineConfig<'a> = &'a Texture2DHolder;
 }

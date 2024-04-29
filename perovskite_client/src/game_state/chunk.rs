@@ -36,7 +36,7 @@ use vulkano::memory::allocator::{
 };
 
 use crate::vulkan::block_renderer::{
-    BlockRenderer, VkChunkPassCpu, VkChunkPassGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
+    BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use prost::Message;
@@ -611,7 +611,7 @@ impl MeshBatch {
         CubeGeometryDrawCall {
             models: VkChunkVertexDataGpu {
                 solid_opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
-                    Some(VkChunkPassGpu {
+                    Some(VkCgvBufferGpu {
                         vtx: self.solid_vtx.as_ref().unwrap().clone(),
                         idx: self.solid_idx.as_ref().unwrap().clone(),
                     })
@@ -620,7 +620,7 @@ impl MeshBatch {
                 },
 
                 transparent: if self.transparent_vtx.is_some() && self.transparent_idx.is_some() {
-                    Some(VkChunkPassGpu {
+                    Some(VkCgvBufferGpu {
                         vtx: self.transparent_vtx.as_ref().unwrap().clone(),
                         idx: self.transparent_idx.as_ref().unwrap().clone(),
                     })
@@ -629,7 +629,7 @@ impl MeshBatch {
                 },
 
                 translucent: if self.translucent_vtx.is_some() && self.translucent_idx.is_some() {
-                    Some(VkChunkPassGpu {
+                    Some(VkCgvBufferGpu {
                         vtx: self.translucent_vtx.as_ref().unwrap().clone(),
                         idx: self.translucent_idx.as_ref().unwrap().clone(),
                     })
@@ -684,7 +684,7 @@ impl MeshBatchBuilder {
     }
 
     fn extend_buffer(
-        input: &VkChunkPassCpu,
+        input: &VkCgvBufferCpu,
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         delta_offset: Vector3<f32>,

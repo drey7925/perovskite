@@ -51,3 +51,29 @@ message DynamicCrop {
     // If variant AND this is nonzero, flip the selected grid cell vertically
     uint32 flip_y_bit = 6;
 }
+
+message CustomMesh {
+    // The texture to apply to the mesh
+    TextureReference texture = 1;
+    // Parallel arrays of vertices. All of these must have the same length
+    // In vulkan's coordinate system, with Y going down.
+    repeated float x = 2;
+    repeated float y = 3;
+    repeated float z = 4;
+    // Parallel arrays of texture coordinates, relative to the texture field.
+    // These will be internally rescaled to fit the position of the texture in
+    // any texture atlases
+    // u is in [0..1] going left to right
+    repeated float u = 5;
+    // v is in [0..1] going top to bottom
+    repeated float v = 6;
+    // Parallel arrays of vertex normals
+    repeated float nx = 7;
+    repeated float ny = 8;
+    repeated float nz = 9;
+
+    // This list's length must be divisible by 3
+    // Each three entries in this list define a triangle
+    // All values must be <= the number of vertices in the parallel arrays above.
+    repeated uint32 indices = 10;
+}

@@ -805,17 +805,20 @@ pub(crate) fn register_tracks(
     game_builder: &mut crate::game_builder::GameBuilder,
 ) -> Result<BlockId> {
     const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
-    const RAIL_TEST_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
-
-    include_texture_bytes!(game_builder, RAIL_TEST_TEX, "textures/rail_atlas_test.png")?;
+    const RAIL_TILES_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
+    const TRANSPARENT_PIXEL: StaticTextureName = StaticTextureName("carts:transparent_pixel");
+    include_texture_bytes!(game_builder, RAIL_TILES_TEX, "textures/rail_atlas.png")?;
+    include_texture_bytes!(game_builder, TRANSPARENT_PIXEL, "textures/transparent.png")?;
 
     let rail_tile_box = AaBoxProperties::new(
-        SIGNAL_SIDE_TOP_TEX,
-        SIGNAL_SIDE_TOP_TEX,
-        RAIL_TEST_TEX,
-        SIGNAL_SIDE_TOP_TEX,
-        SIGNAL_SIDE_TOP_TEX,
-        SIGNAL_SIDE_TOP_TEX,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        RAIL_TILES_TEX,
+        // TODO: tracks look wrong when viewed from below. We need to tweak how autocrop works - but this shouldn't require
+        // any extra variant bits.
+        RAIL_TILES_TEX,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
     );
@@ -828,6 +831,7 @@ pub(crate) fn register_tracks(
                 (-0.5, 0.5),
             ))
             .set_allow_light_propagation(true)
+            .set_display_name("Railway track")
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| {
                     let block = ctx.game_map().get_block(coord)?;
@@ -1287,14 +1291,12 @@ impl ScanState {
             .xor_flip_x(self.current_tile_id.flip_x())
             .correct_rotation_for_x_flip(self.current_tile_id.flip_x())
             .rotation();
-        println!("corrected rotation: {} => {}", rotation, corrected_rotation);
         let bitmask = match (self.is_diverging, self.is_reversed) {
             (false, false) => tile.straight_through_spawn_dirs & 0xf,
             (false, true) => tile.straight_through_spawn_dirs >> 4,
             (true, false) => tile.diverging_dirs_spawn_dirs & 0xf,
             (true, true) => tile.diverging_dirs_spawn_dirs >> 4,
         };
-        println!("bitmask: {:x}", bitmask);
         bitmask & (1 << corrected_rotation) != 0
     }
 }

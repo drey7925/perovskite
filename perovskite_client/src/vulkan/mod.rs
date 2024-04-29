@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod block_renderer;
+pub(crate) mod entity_renderer;
 pub mod game_renderer;
 pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
@@ -26,6 +27,7 @@ use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use log::warn;
 
+use texture_packer::Rect;
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
@@ -549,5 +551,49 @@ impl Texture2DHolder {
     }
     pub(crate) fn clone_image_view(&self) -> Arc<ImageView<ImmutableImage>> {
         self.image_view.clone()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RectF32 {
+    l: f32,
+    t: f32,
+    w: f32,
+    h: f32,
+}
+impl RectF32 {
+    fn new(l: f32, t: f32, w: f32, h: f32) -> Self {
+        Self { l, t, w, h }
+    }
+    fn top(&self) -> f32 {
+        self.t
+    }
+    fn bottom(&self) -> f32 {
+        self.t + self.h
+    }
+    fn left(&self) -> f32 {
+        self.l
+    }
+    fn right(&self) -> f32 {
+        self.l + self.w
+    }
+
+    fn div(&self, dimensions: (u32, u32)) -> RectF32 {
+        RectF32::new(
+            self.l / dimensions.0 as f32,
+            self.t / dimensions.1 as f32,
+            self.w / dimensions.0 as f32,
+            self.h / dimensions.1 as f32,
+        )
+    }
+}
+impl From<Rect> for RectF32 {
+    fn from(rect: Rect) -> Self {
+        Self::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32)
+    }
+}
+impl From<&Rect> for RectF32 {
+    fn from(rect: &Rect) -> Self {
+        (*rect).into()
     }
 }
