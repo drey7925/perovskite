@@ -9,7 +9,7 @@ use crate::vulkan::{
     },
 };
 use anyhow::{Context, Result};
-use cgmath::{vec3, ElementWise, Vector3, Zero};
+use cgmath::{vec3, Deg, ElementWise, Matrix4, Rad, Vector3, Zero};
 use perovskite_core::protocol::entities as entities_proto;
 use rustc_hash::FxHashMap;
 use vulkano::{
@@ -75,6 +75,7 @@ pub(crate) struct GameEntity {
     current_move_started: Instant,
     pub(crate) current_move_sequence: u64,
     pub fallback_position: Vector3<f64>,
+    pub last_face_dir: f32,
     id: u64,
     class: u32,
     // debug only
@@ -184,7 +185,11 @@ impl GameEntity {
             .back()
             .map(|m| m.qproj(m.total_time_seconds))
             .unwrap_or(vec3(f64::NAN, f64::NAN, f64::NAN));
-
+        self.last_face_dir = self
+            .move_queue
+            .back()
+            .map(|m| m.face_direction)
+            .unwrap_or(0.0);
         Ok(())
     }
 
@@ -193,19 +198,29 @@ impl GameEntity {
         base_position: Vector3<f64>,
         time: Instant,
     ) -> cgmath::Matrix4<f32> {
-        cgmath::Matrix4::from_translation(
-            (self.position(time) - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
+        let (pos, angle) = self.position(time);
+        let translation = cgmath::Matrix4::from_translation(
+            (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
         )
         .cast()
-        .unwrap()
+        .unwrap();
+
+        translation * Matrix4::from_angle_y(angle)
     }
 
-    pub(crate) fn position(&self, time: Instant) -> Vector3<f64> {
+    pub(crate) fn position(&self, time: Instant) -> (Vector3<f64>, Rad<f32>) {
         let time = (time.saturating_duration_since(self.current_move_started)).as_secs_f32();
-        self.move_queue
+        let pos = self
+            .move_queue
             .front()
             .map(|m| m.qproj(time))
-            .unwrap_or(self.fallback_position)
+            .unwrap_or(self.fallback_position);
+        let dir = self
+            .move_queue
+            .front()
+            .map(|m| m.face_direction)
+            .unwrap_or(self.last_face_dir);
+        (pos, Rad(dir))
     }
 
     pub(crate) fn from_proto(
@@ -229,6 +244,7 @@ impl GameEntity {
                 .back()
                 .map(|m: &EntityMove| m.qproj(m.total_time_seconds))
                 .unwrap(),
+            last_face_dir: queue.back().map(|m| m.face_direction).unwrap(),
             move_queue: queue,
             current_move_started: estimated_send_time
                 - Duration::try_from_secs_f32(update.current_move_progress)

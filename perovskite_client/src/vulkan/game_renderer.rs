@@ -102,7 +102,7 @@ impl ActiveGame {
             let entity_lock = self.client_state.entities.lock();
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
-                    player_position = entity.position(start_time);
+                    (player_position, _) = entity.position(start_time);
                     self.client_state
                         .physics_state
                         .lock()

@@ -245,14 +245,6 @@ fn place_cart(
             last_speed_post_indication: 0.5,
             last_submitted_move_exit_speed: 0.5,
             spawn_time: Instant::now(),
-            rail_scan_state: RailScanState {
-                valid: true,
-                major_angle: variant as u8,
-                horizontal_deflection: 0,
-                vertical_deflection: 0,
-                horizontal_offset: 0,
-                vertical_offset: 0,
-            },
             scan_state: initial_state,
             cleared_signals: FxHashMap::default(),
             held_signal: None,
@@ -368,8 +360,6 @@ struct CartCoroutine {
     unplanned_segments: VecDeque<TrackSegment>,
     // The current coordinate where we're going to scan next
     scan_position: BlockCoordinate,
-    // The rail scan state, indicating which direction we're scanning in
-    rail_scan_state: RailScanState,
     // The last speed post we encountered while scanning
     last_speed_post_indication: Flt,
     // The last velocity we already delivered to the entity system
@@ -411,7 +401,7 @@ impl EntityCoroutine for CartCoroutine {
             self.unplanned_segments.len()
         );
 
-        let maybe_deferral = self.scan_tracks_new(services, 1024.0);
+        let maybe_deferral = self.scan_tracks(services, 1024.0);
         if let Some(deferral) = maybe_deferral {
             return deferral;
         }
@@ -552,26 +542,6 @@ impl EntityCoroutine for CartCoroutine {
 const CONTINUATION_TAG_SIGNAL: u32 = 0x516ea1;
 
 impl CartCoroutine {
-    fn signal_coordinates(
-        &self,
-        scan_position: BlockCoordinate,
-        rail_state: &RailScanState,
-    ) -> SmallVec<[BlockCoordinate; 2]> {
-        let mut coords = SmallVec::new();
-
-        if let Some((x, y, z)) = rail_state.wayside_signal_delta() {
-            if let Some(coord) = scan_position.try_delta(x, y, z) {
-                coords.push(coord);
-            }
-        }
-        if let Some(coord) = scan_position.try_delta(0, 3, 0) {
-            // overhead signal
-            coords.push(coord);
-        }
-
-        coords
-    }
-
     fn parse_signal(
         &self,
         services: &EntityCoroutineServices<'_>,
@@ -623,7 +593,7 @@ impl CartCoroutine {
                                 ContinuationResultValue::GetBlock(0.into(), signal_coord).into()
                             }
                             signals::AutomaticSignalOutcome::InvalidSignal => {
-                                tracing::debug!("Invalid signal 540");
+                                tracing::debug!("Invalid signal");
                                 ContinuationResultValue::None
                             }
                         },
@@ -639,16 +609,11 @@ impl CartCoroutine {
         }
     }
 
-    fn scan_tracks_new(
+    fn scan_tracks(
         &mut self,
         services: &EntityCoroutineServices<'_>,
         max_steps_ahead: f64,
     ) -> Option<CoroutineResult> {
-        tracing::debug!(
-            "starting scan at {:?}: {:?}",
-            self.scan_position,
-            self.rail_scan_state
-        );
         let mut steps = 0.0;
         for seg in self.scheduled_segments.iter() {
             steps += seg.segment.distance();
@@ -1295,139 +1260,4 @@ impl SignalResult {
             panic!("Invalid signal result: {:?}, {:x}", x, x.to_bits());
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RailScanState {
-    /// If true, the rail is valid
-    valid: bool,
-    /// The angle from the Z+ direction, in 90 degree increments
-    major_angle: u8,
-    /// Direction in 1/96th-block per step off the major angle
-    /// Left of direction (i.e. increasing angle) is positive
-    /// e.g. setting to 3 means you'll shift left a full block after
-    /// moving 32 blocks forward
-    horizontal_deflection: i8,
-    /// Direction in 1/96th-block per step off the horizontal
-    /// Ascending grades in the scan direction is positive
-    /// A value of 3 means a 3.125% grade
-    vertical_deflection: i8,
-    /// How many sixteenths-steps have actually been taken off the major angle
-    horizontal_offset: i8,
-    /// How many sixteenths-steps have actually been taken off the horizontal
-    vertical_offset: i8,
-}
-impl RailScanState {
-    fn to_u64(&self) -> u64 {
-        self.major_angle as u64
-            | (self.horizontal_deflection as u64) << 8
-            | (self.vertical_deflection as u64) << 16
-            | (self.horizontal_offset as u64) << 24
-            | (self.vertical_offset as u64) << 32
-            | (self.valid as u64) << 40
-    }
-    fn from_u64(x: u64) -> Self {
-        Self {
-            valid: (x >> 40) != 0,
-            major_angle: (x & 0xFF) as u8,
-            horizontal_deflection: ((x >> 8) & 0xFF) as i8,
-            vertical_deflection: ((x >> 16) & 0xFF) as i8,
-            horizontal_offset: ((x >> 24) & 0xFF) as i8,
-            vertical_offset: ((x >> 32) & 0xFF) as i8,
-        }
-    }
-
-    // Determines the next rail to parse and the resulting scan state, as well as the distance moved
-    fn next_scan(&self, current_coord: BlockCoordinate) -> Option<(Self, BlockCoordinate, f64)> {
-        if !self.valid {
-            panic!("next_scan called on invalid RailScanState: {:?}", self);
-        }
-
-        let horz = self.horizontal_offset + self.horizontal_deflection;
-        let vert = self.vertical_offset + self.vertical_deflection;
-        let (horz_major, horz_minor) = symmetric_mod_rm_96(horz);
-        let (vert_major, vert_minor) = symmetric_mod_rm_96(vert);
-
-        let (dx, dy, dz) = match self.major_angle % 4 {
-            0 => (-horz_major, vert_major, 1),
-            1 => (1, vert_major, horz_major),
-            2 => (horz_major, vert_major, -1),
-            3 => (-1, vert_major, -horz_major),
-            _ => unreachable!(),
-        };
-
-        Some((
-            Self {
-                valid: true,
-                major_angle: self.major_angle,
-                horizontal_deflection: self.horizontal_deflection,
-                vertical_deflection: self.vertical_deflection,
-                horizontal_offset: horz_minor,
-                vertical_offset: vert_minor,
-            },
-            current_coord
-                .try_delta(dx.into(), dy.into(), dz.into())
-                .unwrap(),
-            vec2(
-                1.0 + (self.horizontal_deflection as f64 / 96.0),
-                self.vertical_deflection as f64 / 96.0,
-            )
-            .magnitude(),
-        ))
-    }
-
-    fn position(&self, coarse: BlockCoordinate) -> Vector3<f64> {
-        let h_f64 = self.horizontal_offset as f64 / 96.0;
-        let v_f64 = self.vertical_offset as f64 / 96.0;
-
-        let (dx, dy, dz) = match self.major_angle % 4 {
-            0 => (-h_f64, v_f64, 0.0),
-            1 => (0.0, v_f64, h_f64),
-            2 => (h_f64, v_f64, 0.0),
-            3 => (0.0, v_f64, -h_f64),
-            _ => unreachable!(),
-        };
-        b2vec(coarse) + vec3(dx, dy, dz)
-    }
-
-    fn wayside_signal_delta(&self) -> Option<(i32, i32, i32)> {
-        Some(match self.major_angle % 4 {
-            0 => (1, 2, 0),
-            1 => (0, 2, -1),
-            2 => (-1, 2, 0),
-            3 => (0, 2, 1),
-            _ => unreachable!(),
-        })
-    }
-
-    fn same_direction(&self, rail_scan_state: RailScanState) -> bool {
-        if !self.valid || !rail_scan_state.valid {
-            panic!(
-                "same_direction called on invalid RailScanState: {:?}, {:?}",
-                self, rail_scan_state
-            );
-        }
-
-        self.major_angle == rail_scan_state.major_angle
-            && self.horizontal_deflection == rail_scan_state.horizontal_deflection
-            && self.vertical_deflection == rail_scan_state.vertical_deflection
-    }
-}
-
-fn symmetric_mod_rm_96(x: i8) -> (i8, i8) {
-    match x {
-        ..=-96 => (-1, x + 96),
-        -95..=95 => (0, x),
-        96.. => (1, x - 96),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScanStopReason {
-    /// We scanned as far as we're limited to
-    ScanDistance,
-    /// We encountered a restrictive signal or a switch that's not set for us
-    Signal,
-    /// We didn't find a rail.
-    NoRail,
 }
