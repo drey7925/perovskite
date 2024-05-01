@@ -381,7 +381,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        tracing::debug!(
+        tracing::info!(
             "{:?} ========== planning {} seconds in advance",
             self.spawn_time.elapsed(),
             when
@@ -783,8 +783,12 @@ impl CartCoroutine {
         let mut unconditionally_schedulable = false;
         let mut schedulable_segments = VecDeque::new();
 
-        let estimated_segments_remaining = (9 - queue_space) + self.scheduled_segments.len();
+        let available_scheduled_segments = (9 - queue_space) + self.scheduled_segments.len();
 
+        tracing::info!(
+            "{} segments remaining in track scan",
+            available_scheduled_segments
+        );
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
             tracing::debug!("> segment idx {}, {:?}", idx, seg);
             // The entrance speed, if we just consider the max acceleration
@@ -813,7 +817,7 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if (estimated_segments_remaining < 2 || when < 1.0) && idx == 0 {
+            } else if (available_scheduled_segments < 2 && when < 1.0) && idx == 0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(
