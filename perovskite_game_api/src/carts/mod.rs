@@ -381,7 +381,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        tracing::info!(
+        tracing::debug!(
             "{:?} ========== planning {} seconds in advance",
             self.spawn_time.elapsed(),
             when
@@ -649,7 +649,7 @@ impl CartCoroutine {
                     .map(|seg| seg.speed + (seg.acceleration * seg.move_time))
                     .unwrap_or(self.last_speed_post_indication.max(5.0)),
             ) as f32;
-        tracing::info!("estimated max speed {}", estimated_max_speed);
+        tracing::debug!("estimated max speed {}", estimated_max_speed);
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
@@ -793,7 +793,7 @@ impl CartCoroutine {
             self.scan_state = new_state;
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Finished with {} steps, {} buffer time estimate, {} max speed, {} time limit",
             steps,
             buffer_time_estimate,
@@ -834,7 +834,7 @@ impl CartCoroutine {
 
         let available_scheduled_segments = (9 - queue_space) + self.scheduled_segments.len();
 
-        tracing::info!(
+        tracing::debug!(
             "{} segments remaining in track scan",
             available_scheduled_segments
         );
@@ -894,7 +894,7 @@ impl CartCoroutine {
             } else if (available_scheduled_segments < 2 && when < 1.0) && idx == 0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::info!(
+                tracing::debug!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg
@@ -976,7 +976,7 @@ impl CartCoroutine {
         mut enter_speed: f64,
         brake_curve_exit_speed: f64,
     ) -> f64 {
-        tracing::info!(
+        tracing::debug!(
             "schedule_single_segment({:?}, {} -> {})",
             seg,
             enter_speed,
