@@ -401,7 +401,7 @@ impl EntityCoroutine for CartCoroutine {
             self.unplanned_segments.len()
         );
 
-        let maybe_deferral = self.scan_tracks(services, 1024.0);
+        let maybe_deferral = self.scan_tracks(services, 1024.0, when);
         if let Some(deferral) = maybe_deferral {
             return deferral;
         }
@@ -613,6 +613,7 @@ impl CartCoroutine {
         &mut self,
         services: &EntityCoroutineServices<'_>,
         max_steps_ahead: f64,
+        when: f32,
     ) -> Option<CoroutineResult> {
         let mut steps = 0.0;
         for seg in self.scheduled_segments.iter() {
@@ -622,6 +623,33 @@ impl CartCoroutine {
             steps += seg.distance();
         }
 
+        // this should be an underestimate
+        // max_speed is an overestimate of the actual speed, and it's in the denominator
+        let unplanned_buffer_estimate = self
+            .unplanned_segments
+            .iter()
+            .map(|seg| (seg.distance() / seg.max_speed) as f32)
+            .sum::<f32>();
+        let scheduled_buffer_estimate = self
+            .scheduled_segments
+            .iter()
+            .map(|seg| seg.move_time as f32)
+            .sum::<f32>();
+        let mut buffer_time_estimate = when + unplanned_buffer_estimate + scheduled_buffer_estimate;
+
+        // this should be an overestimate
+        // todo: tighten this bound. If we start at a high max speed (even if unachievable) we'll end up with a high estimated max speed
+        let mut estimated_max_speed = self
+            .unplanned_segments
+            .back()
+            .map(|seg| seg.max_speed)
+            .unwrap_or(
+                self.scheduled_segments
+                    .back()
+                    .map(|seg| seg.speed + (seg.acceleration * seg.move_time))
+                    .unwrap_or(self.last_speed_post_indication.max(5.0)),
+            ) as f32;
+        tracing::info!("estimated max speed {}", estimated_max_speed);
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
@@ -639,7 +667,9 @@ impl CartCoroutine {
 
         let block_getter = |coord| services.get_block(coord);
 
-        'scan_loop: while steps < max_steps_ahead {
+        'scan_loop: while steps < max_steps_ahead
+            && buffer_time_estimate < (2.0 + 2.0 * estimated_max_speed / MAX_ACCEL as f32)
+        {
             // Precondition: self.scan_state is valid
             let new_state = match self.scan_state.advance::<false>(block_getter) {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
@@ -658,7 +688,6 @@ impl CartCoroutine {
                 }
             };
 
-            // TODO check the facing direction of the signal against data from the track tile table, and also check multiple possible mounting positions.
             let signal_coord = new_state.block_coord.try_delta(0, 2, 0);
             if let Some(signal_coord) = signal_coord {
                 if let Some(block_id) = self.cleared_signals.remove(&signal_coord) {
@@ -712,7 +741,19 @@ impl CartCoroutine {
                     SignalResult::NoSignal => {} // continue 'signal_loop,
                 }
             }
-            steps += 1.0;
+
+            let movement_len = (new_state.vec_coord - self.scan_state.vec_coord).magnitude();
+            steps += movement_len;
+            // last speed indication is an overestimate of speed
+            let speed_upper_bound = self
+                .last_speed_post_indication
+                .min(new_state.allowable_speed as f64);
+            buffer_time_estimate += (movement_len / speed_upper_bound) as f32;
+
+            estimated_max_speed = (estimated_max_speed * estimated_max_speed
+                + 2.0 * MAX_ACCEL as f32 * movement_len as f32)
+                .sqrt()
+                .min(speed_upper_bound as f32);
 
             let last_move = self.unplanned_segments.back().unwrap();
             // We got success, so we're at a new position.
@@ -752,6 +793,14 @@ impl CartCoroutine {
             self.scan_state = new_state;
         }
 
+        tracing::info!(
+            "Finished with {} steps, {} buffer time estimate, {} max speed, {} time limit",
+            steps,
+            buffer_time_estimate,
+            estimated_max_speed,
+            (2.0 * estimated_max_speed / MAX_ACCEL as f32)
+        );
+
         None
     }
 
@@ -789,6 +838,31 @@ impl CartCoroutine {
             "{} segments remaining in track scan",
             available_scheduled_segments
         );
+
+        // split the last segment into a segment as long as the stopping distance and a remainder, if possible
+        // This allows us to avoid panic-scheduling the entire last segment if it's long
+        let split_pos = self.unplanned_segments.back().and_then(|last_segment| {
+            // 0 = vi^2 + 2ad, d = vi^2 / 2a after correcting for signs
+            let stopping_distance =
+                (last_segment.max_speed * last_segment.max_speed) / (2.0 * MAX_ACCEL) + 0.001;
+            if stopping_distance < last_segment.distance() {
+                Some(last_segment.distance() - stopping_distance)
+            } else {
+                None
+            }
+        });
+
+        if let Some(split_pos) = split_pos {
+            let (main, stopping_distance) = self
+                .unplanned_segments
+                .pop_back()
+                .unwrap()
+                .split_at_offset(split_pos);
+            self.unplanned_segments.push_back(main);
+            self.unplanned_segments
+                .push_back(stopping_distance.unwrap());
+        }
+
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
             tracing::debug!("> segment idx {}, {:?}", idx, seg);
             // The entrance speed, if we just consider the max acceleration
@@ -820,10 +894,10 @@ impl CartCoroutine {
             } else if (available_scheduled_segments < 2 && when < 1.0) && idx == 0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::debug!(
+                tracing::info!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
-                    seg.seg_id
+                    seg
                 );
                 // We don't actually need to set this, but this guards against refactorings that remove the idx==0 conditions
                 unconditionally_schedulable = true;
@@ -902,7 +976,7 @@ impl CartCoroutine {
         mut enter_speed: f64,
         brake_curve_exit_speed: f64,
     ) -> f64 {
-        tracing::debug!(
+        tracing::info!(
             "schedule_single_segment({:?}, {} -> {})",
             seg,
             enter_speed,
