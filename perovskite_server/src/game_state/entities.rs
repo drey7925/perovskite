@@ -2,6 +2,7 @@
 /// Do not assume any functionality or performance guarantees while different techniques
 /// are under investigation.
 use std::{
+    any::Any,
     fmt::Debug,
     ops::Range,
     pin::Pin,
@@ -16,6 +17,7 @@ use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Vector3, Zero};
 use circular_buffer::CircularBuffer;
 
+use futures::Future;
 use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
@@ -92,7 +94,7 @@ struct DeferredPrivate<T: Send + Sync + 'static> {
     //     If it's a sender, then backlogs will lead to tasks building up in tokio. We may need to
     //     keep an eye on the number of outstanding tokio tasks and avoid invoking coroutines when
     //     facing such a backlog. This can probably be itself deferred for a future version.
-    deferred_call: Box<dyn FnOnce() -> T + Send + Sync + 'static>,
+    deferred_call: Pin<Box<(dyn Future<Output = T> + Send + 'static)>>,
 }
 
 fn id_to_shard(id: u64) -> usize {
@@ -417,7 +419,9 @@ impl<'a> EntityCoroutineServices<'a> {
         } else {
             let map_clone = self.game_state.game_map_clone();
             DeferrableResult::Deferred(Deferral {
-                deferred_call: Box::new(move || (map_clone.get_block(coord), coord)),
+                deferred_call: Box::pin(async move {
+                    tokio::task::block_in_place(move || (map_clone.get_block(coord), coord))
+                }),
             })
         }
     }
@@ -425,7 +429,7 @@ impl<'a> EntityCoroutineServices<'a> {
     /// Modifies the block at the specified coordinate, if it is possible to do so without blocking.
     /// Otherwise, returns None.
     ///
-    /// Implementation note: At this time, all of the blocking is checked before the mutator is run, so
+    /// Implementation note: At this time, the need to block is checked before the mutator is run, so
     /// the mutator will only be invoked once in most cases (either inline if blocking can be avoided, or
     /// as a deferred computation if blocking was required).
     ///
@@ -452,9 +456,11 @@ impl<'a> EntityCoroutineServices<'a> {
                 let map_clone = self.game_state.game_map_clone();
                 tracing::debug!("MBA deferring");
                 DeferrableResult::Deferred(Deferral {
-                    deferred_call: Box::new(move || {
+                    deferred_call: Box::pin(async move {
                         tracing::debug!("MBA invoking");
-                        (map_clone.mutate_block_atomically(coord, mutator), ())
+                        tokio::task::block_in_place(move || {
+                            (map_clone.mutate_block_atomically(coord, mutator), ())
+                        })
                     }),
                 })
             }
@@ -474,7 +480,7 @@ impl<'a> EntityCoroutineServices<'a> {
         task: impl FnOnce(&HandlerContext) + Send + 'static,
     ) {
         let ctx = HandlerContext {
-            tick: 0,
+            tick: self.game_state.tick(),
             initiator: super::event::EventInitiator::Plugin("entity_coroutine".to_string()),
             game_state: self.game_state.clone(),
         };
@@ -483,6 +489,31 @@ impl<'a> EntityCoroutineServices<'a> {
             tokio::task::block_in_place(|| task(&ctx));
         });
     }
+
+    /// Spawns a future onto the entity coroutine's async executor.
+    ///
+    /// For now, this is just spawned onto the tokio runtime, but this may change in the future.
+    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
+    pub fn spawn_deferred<T: Send + Sync + 'static, Fut>(
+        &self,
+        task: impl FnOnce(&HandlerContext) -> Fut,
+    ) -> DeferrableResult<T>
+    where
+        Fut: Future<Output = T> + Send + 'static,
+    {
+        let ctx = HandlerContext {
+            tick: self.game_state.tick(),
+            initiator: super::event::EventInitiator::Plugin("entity_coroutine".to_string()),
+            game_state: self.game_state.clone(),
+        };
+        let fut = task(&ctx);
+        DeferrableResult::Deferred(Deferral {
+            deferred_call: Box::pin(async move {
+                let result = fut.await;
+                (result, ())
+            }),
+        })
+    }
 }
 
 /// An abstraction over a computation that needs to be deferred because it can't
@@ -490,8 +521,8 @@ impl<'a> EntityCoroutineServices<'a> {
 ///
 /// This is returned from various helpers in [EntityCoroutineServices] that may need to block
 /// or run expensive computations.
-pub struct Deferral<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static = ()> {
-    deferred_call: Box<dyn FnOnce() -> (T, Residual) + Send + Sync + 'static>,
+pub struct Deferral<T: Send + 'static, Residual: Debug + Send + 'static = ()> {
+    deferred_call: Pin<Box<dyn Future<Output = (T, Residual)> + Send + 'static>>,
 }
 impl Deferral<Result<BlockId>, BlockCoordinate> {
     #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
@@ -505,8 +536,8 @@ impl Deferral<Result<BlockId>, BlockCoordinate> {
     pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
         tracing::info!("deferring and reinvoking");
         CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
-            deferred_call: Box::new(move || {
-                let (t, resid) = (self.deferred_call)();
+            deferred_call: Box::pin(async move {
+                let (t, resid) = self.deferred_call.await;
                 if let Ok(block) = t {
                     ContinuationResult {
                         value: ContinuationResultValue::GetBlock(block, resid),
@@ -529,8 +560,8 @@ macro_rules! impl_deferral {
             #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
             pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
                 CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
-                    deferred_call: Box::new(move || {
-                        let (t, _) = (self.deferred_call)();
+                    deferred_call: Box::pin(async move {
+                        let (t, _) = self.deferred_call.await;
                         match t {
                             Ok(t) => ContinuationResult {
                                 value: ContinuationResultValue::$Variant(t),
@@ -549,8 +580,8 @@ macro_rules! impl_deferral {
             #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
             pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
                 CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
-                    deferred_call: Box::new(move || {
-                        let (t, _) = (self.deferred_call)();
+                    deferred_call: Box::pin(async move {
+                        let (t, _) = self.deferred_call.await;
                         match t {
                             Some(t) => ContinuationResult {
                                 value: ContinuationResultValue::$Variant(t),
@@ -569,8 +600,8 @@ macro_rules! impl_deferral {
             #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
             pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
                 CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
-                    deferred_call: Box::new(move || {
-                        let (t, _) = (self.deferred_call)();
+                    deferred_call: Box::pin(async move {
+                        let (t, _) = self.deferred_call.await;
                         ContinuationResult {
                             value: ContinuationResultValue::$Variant(t),
                             tag,
@@ -593,8 +624,8 @@ impl Deferral<ContinuationResultValue, ()> {
     #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
     pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
         CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
-            deferred_call: Box::new(move || {
-                let (value, _) = (self.deferred_call)();
+            deferred_call: Box::pin(async move {
+                let (value, _) = self.deferred_call.await;
                 ContinuationResult { tag, value }
             }),
         })
@@ -608,8 +639,8 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
         f: impl FnOnce(T) -> EntityMoveDecision + Send + Sync + 'static,
     ) -> CoroutineResult {
         CoroutineResult::_DeferredMoveResult(DeferredPrivate {
-            deferred_call: Box::new(move || {
-                let (t, _residual) = (self.deferred_call)();
+            deferred_call: Box::pin(async move {
+                let (t, _residual) = self.deferred_call.await;
                 f(t)
             }),
         })
@@ -654,8 +685,8 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
         f: impl FnOnce(T) -> U + Send + Sync + 'static,
     ) -> Deferral<U, Residual> {
         Deferral {
-            deferred_call: Box::new(move || {
-                let (t, residual) = (self.deferred_call)();
+            deferred_call: Box::pin(async move {
+                let (t, residual) = self.deferred_call.await;
                 (f(t), residual)
             }),
         }
@@ -710,6 +741,8 @@ pub enum ContinuationResultValue {
     EntityDecision(EntityMoveDecision),
     /// An anyhow::Error result from a deferred call
     Error(anyhow::Error),
+    /// A heap-allocated result from a deferred call
+    HeapResult(Box<dyn Any + Send + Sync>),
     /// None. Don't even reinvoke the coroutine
     None,
 }
@@ -1255,7 +1288,7 @@ impl EntityCoreArray {
                     tracing::debug!("{}: deferring continuation with a result", id);
 
                     tokio::task::spawn(async move {
-                        let result = tokio::task::block_in_place(deferral.deferred_call);
+                        let result = deferral.deferred_call.await;
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
@@ -1281,7 +1314,7 @@ impl EntityCoreArray {
                     tracing::debug!("{}: deferring continuation to reenter", id);
 
                     tokio::task::spawn(async move {
-                        let result = tokio::task::block_in_place(deferral.deferred_call);
+                        let result = deferral.deferred_call.await;
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
@@ -1578,7 +1611,7 @@ impl EntityCoreArray {
                     tracing::debug!("{}: deferring continuation with a result", id);
 
                     tokio::task::spawn(async move {
-                        let result = tokio::task::block_in_place(deferral.deferred_call);
+                        let result = deferral.deferred_call.await;
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
@@ -1605,7 +1638,7 @@ impl EntityCoreArray {
 
                     tracing::debug!("{}: deferring continuation to reenter", id);
                     tokio::task::spawn(async move {
-                        let result = tokio::task::block_in_place(deferral.deferred_call);
+                        let result = deferral.deferred_call.await;
                         tx_clone
                             .send(Completion {
                                 entity_id: id,

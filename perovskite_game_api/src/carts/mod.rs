@@ -235,7 +235,9 @@ fn place_cart(
     };
 
     let id = ctx.entities().new_entity_blocking(
-        b2vec(rail_pos.try_delta(0, 1, 0).unwrap()),
+        // TODO: support an offset when attaching a player to an entity, so the camera position is right
+        // and we don't need to do this hackery
+        initial_state.vec_coord + cgmath::Vector3::new(0.0, 1.0, 0.0),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
             scheduled_segments: VecDeque::new(),
