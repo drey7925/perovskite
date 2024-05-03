@@ -39,11 +39,12 @@ mod tracks;
 #[derive(Clone)]
 struct CartsGameBuilderExtension {
     rail_block: BlockId,
-    rail_sw_right: BlockId,
-    rail_sw_left: BlockId,
     speedpost_1: BlockId,
     speedpost_2: BlockId,
     speedpost_3: BlockId,
+    switch_unset: BlockId,
+    switch_straight: BlockId,
+    switch_diverging: BlockId,
     automatic_signal: BlockId,
     interlocking_signal: BlockId,
 
@@ -53,11 +54,12 @@ impl Default for CartsGameBuilderExtension {
     fn default() -> Self {
         CartsGameBuilderExtension {
             rail_block: 0.into(),
-            rail_sw_right: 0.into(),
-            rail_sw_left: 0.into(),
             speedpost_1: 0.into(),
             speedpost_2: 0.into(),
             speedpost_3: 0.into(),
+            switch_unset: 0.into(),
+            switch_straight: 0.into(),
+            switch_diverging: 0.into(),
             automatic_signal: 0.into(),
             interlocking_signal: 0.into(),
             cart_id: EntityClassId::new(0),
@@ -77,26 +79,33 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     let speedpost1_tex = StaticTextureName("carts:speedpost1");
     let speedpost2_tex = StaticTextureName("carts:speedpost2");
     let speedpost3_tex = StaticTextureName("carts:speedpost3");
+
+    let switch_unset_tex = StaticTextureName("carts:switch_unset");
+    let switch_straight_tex = StaticTextureName("carts:switch_straight");
+    let switch_diverging_tex = StaticTextureName("carts:switch_diverging");
+
     include_texture_bytes!(game_builder, rail_tex, "textures/rail.png")?;
     include_texture_bytes!(game_builder, speedpost1_tex, "textures/speedpost_1.png")?;
     include_texture_bytes!(game_builder, speedpost2_tex, "textures/speedpost_2.png")?;
     include_texture_bytes!(game_builder, speedpost3_tex, "textures/speedpost_3.png")?;
+
+    include_texture_bytes!(game_builder, switch_unset_tex, "textures/switch_unset.png")?;
+    include_texture_bytes!(
+        game_builder,
+        switch_straight_tex,
+        "textures/switch_straight.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        switch_diverging_tex,
+        "textures/switch_diverging.png"
+    )?;
 
     let cart_tex = StaticTextureName("carts:cart_temp");
     include_texture_bytes!(game_builder, cart_tex, "textures/testonly_cart.png")?;
 
     let cart_uv_tex = StaticTextureName("carts:minecart_uv");
     include_texture_bytes!(game_builder, cart_uv_tex, "textures/cart_uv.png")?;
-
-    // TODO: These are fake stand-ins for real switch rails that differ at each point in the switch
-    let rail_sw_right_tex = StaticTextureName("carts:rail_sw_right");
-    let rail_sw_left_tex = StaticTextureName("carts:rail_sw_left");
-    include_texture_bytes!(
-        game_builder,
-        rail_sw_right_tex,
-        "textures/rail_sw_right.png"
-    )?;
-    include_texture_bytes!(game_builder, rail_sw_left_tex, "textures/rail_sw_left.png")?;
 
     let _rail = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:rail")).set_cube_appearance(
@@ -105,22 +114,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 .set_rotate_laterally(),
         ),
     )?;
-
-    let rail_sw_right = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:rail_sw_right")).set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(rail_sw_right_tex)
-                .set_rotate_laterally(),
-        ),
-    )?;
-    let rail_sw_left = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:rail_sw_left")).set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(rail_sw_left_tex)
-                .set_rotate_laterally(),
-        ),
-    )?;
-
+    // TODO update the speedposts
     let speedpost1 = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:speedpost1"))
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(speedpost1_tex)),
@@ -132,6 +126,28 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     let speedpost3 = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:speedpost3"))
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(speedpost3_tex)),
+    )?;
+
+    let switch_unset = game_builder.add_block(
+        BlockBuilder::new(StaticBlockName("carts:switch_unset")).set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(switch_unset_tex)
+                .set_rotate_laterally(),
+        ),
+    )?;
+    let switch_straight = game_builder.add_block(
+        BlockBuilder::new(StaticBlockName("carts:switch_straight")).set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(switch_straight_tex)
+                .set_rotate_laterally(),
+        ),
+    )?;
+    let switch_diverging = game_builder.add_block(
+        BlockBuilder::new(StaticBlockName("carts:switch_diverging")).set_cube_appearance(
+            CubeAppearanceBuilder::new()
+                .set_single_texture(switch_diverging_tex)
+                .set_rotate_laterally(),
+        ),
     )?;
 
     let cart_id = game_builder.inner.entities_mut().register(EntityDef {
@@ -148,11 +164,12 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
     ext.rail_block = rail_block_id;
-    ext.rail_sw_right = rail_sw_right.id;
-    ext.rail_sw_left = rail_sw_left.id;
     ext.speedpost_1 = speedpost1.id;
     ext.speedpost_2 = speedpost2.id;
     ext.speedpost_3 = speedpost3.id;
+    ext.switch_unset = switch_unset.id;
+    ext.switch_straight = switch_straight.id;
+    ext.switch_diverging = switch_diverging.id;
     ext.automatic_signal = automatic_signal;
     ext.interlocking_signal = interlocking_signal;
 
@@ -234,6 +251,8 @@ fn place_cart(
         }
     };
 
+    static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
     let id = ctx.entities().new_entity_blocking(
         // TODO: support an offset when attaching a player to an entity, so the camera position is right
         // and we don't need to do this hackery
@@ -242,7 +261,6 @@ fn place_cart(
             config: config.clone(),
             scheduled_segments: VecDeque::new(),
             unplanned_segments: VecDeque::new(),
-            scan_position: rail_pos,
             // Until we encounter a speed post, proceed at minimal safe speed
             last_speed_post_indication: 0.5,
             last_submitted_move_exit_speed: 0.5,
@@ -250,6 +268,7 @@ fn place_cart(
             scan_state: initial_state,
             cleared_signals: FxHashMap::default(),
             held_signal: None,
+            id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -267,9 +286,6 @@ fn place_cart(
 
 fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
     cgmath::Vector3::new(b.x as f64, b.y as f64, b.z as f64)
-}
-fn vec2b(v: cgmath::Vector3<f64>) -> BlockCoordinate {
-    BlockCoordinate::new(v.x as i32, v.y as i32, v.z as i32)
 }
 type Flt = f64;
 
@@ -299,6 +315,10 @@ impl TrackSegment {
         let dy = self.from.y as Flt - self.to.y as Flt;
         let dz = self.from.z as Flt - self.to.z as Flt;
         (dx * dx + dy * dy + dz * dz).sqrt()
+    }
+
+    fn any_content(&self) -> bool {
+        self.enter_signal.is_some() || self.exit_signal.is_some() || self.distance() > 0.0
     }
 
     fn split_at_offset(&self, offset: Flt) -> (Self, Option<Self>) {
@@ -334,6 +354,7 @@ struct ScheduledSegment {
     speed: Flt,
     acceleration: Flt,
     move_time: Flt,
+    created: &'static str,
 }
 impl ScheduledSegment {
     fn to_movement(self) -> Option<Movement> {
@@ -360,14 +381,13 @@ struct CartCoroutine {
     scheduled_segments: VecDeque<ScheduledSegment>,
     // Segments where we don't yet have a braking curve
     unplanned_segments: VecDeque<TrackSegment>,
-    // The current coordinate where we're going to scan next
-    scan_position: BlockCoordinate,
     // The last speed post we encountered while scanning
     last_speed_post_indication: Flt,
     // The last velocity we already delivered to the entity system
     last_submitted_move_exit_speed: Flt,
     // debug only
     spawn_time: Instant,
+    id: u32,
     // Track scan state
     scan_state: tracks::ScanState,
     // TODO improve this as needed
@@ -383,8 +403,9 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        tracing::debug!(
-            "{:?} ========== planning {} seconds in advance",
+        tracing::info!(
+            "{} {:?} ========== planning {} seconds in advance",
+            self.id,
             self.spawn_time.elapsed(),
             when
         );
@@ -415,7 +436,7 @@ impl EntityCoroutine for CartCoroutine {
         if !self.scheduled_segments.iter().any(|x| x.move_time > 0.001) {
             // No schedulable segments
             // Scan every second, trying to start again.
-            tracing::debug!("No schedulable segments");
+            tracing::info!("No schedulable segments");
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
                 perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
                     0.5..1.0,
@@ -504,7 +525,7 @@ impl EntityCoroutine for CartCoroutine {
 
             if let Some(movement) = segment.to_movement() {
                 returned_moves.push(movement);
-            } else {
+            } else if !segment.segment.any_content() {
                 tracing::warn!("Segment {:?} had no movement", segment);
             }
         }
@@ -574,10 +595,13 @@ impl CartCoroutine {
             match outcome {
                 DeferrableResult::AvailableNow(Ok(result)) => match result {
                     signals::AutomaticSignalOutcome::Acquired => {
-                        tracing::debug!("acquired inline");
+                        tracing::info!("acquired inline");
                         SignalResult::Permissive.into()
                     }
-                    signals::AutomaticSignalOutcome::Contended => SignalResult::Stop.into(),
+                    signals::AutomaticSignalOutcome::Contended => {
+                        tracing::info!("contended inline");
+                        SignalResult::Stop.into()
+                    }
                     signals::AutomaticSignalOutcome::InvalidSignal => SignalResult::NoSignal.into(),
                 },
                 DeferrableResult::AvailableNow(Err(e)) => {
@@ -592,6 +616,7 @@ impl CartCoroutine {
                                 ContinuationResultValue::GetBlock(signal_block, signal_coord).into()
                             }
                             signals::AutomaticSignalOutcome::Contended => {
+                                tracing::debug!("contended deferred");
                                 ContinuationResultValue::GetBlock(0.into(), signal_coord).into()
                             }
                             signals::AutomaticSignalOutcome::InvalidSignal => {
@@ -693,7 +718,7 @@ impl CartCoroutine {
             let signal_coord = new_state.block_coord.try_delta(0, 2, 0);
             if let Some(signal_coord) = signal_coord {
                 if let Some(block_id) = self.cleared_signals.remove(&signal_coord) {
-                    tracing::debug!("cached clear signal at {:?}", signal_coord);
+                    tracing::info!("cached clear signal at {:?}", signal_coord);
                     if block_id.equals_ignore_variant(0.into()) {
                         // contended signal
                         break 'scan_loop;
@@ -725,7 +750,10 @@ impl CartCoroutine {
                     }
                 };
                 match signal_result {
-                    SignalResult::Stop => break 'scan_loop,
+                    SignalResult::Stop => {
+                        tracing::debug!("Stop signal at {:?}", new_state.vec_coord);
+                        break 'scan_loop;
+                    }
                     SignalResult::Permissive => {
                         tracing::debug!("Permissive signal at {:?}", new_state.vec_coord);
                         self.unplanned_segments.back_mut().unwrap().exit_signal =
@@ -767,9 +795,9 @@ impl CartCoroutine {
             let effective_speed = self
                 .last_speed_post_indication
                 .min(new_state.allowable_speed as f64);
-
+            tracing::info!("Considering split at {:?}", new_state.vec_coord);
             if last_move_delta.magnitude() > 256.0 {
-                tracing::debug!(
+                tracing::info!(
                     "Splitting a segment due to length; prev length was {}",
                     last_move_delta.magnitude()
                 );
@@ -778,7 +806,7 @@ impl CartCoroutine {
                 / (last_move_delta.magnitude() * new_delta.magnitude())
                 < 0.999999
             {
-                tracing::debug!(
+                tracing::info!(
                     "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
                     last_move_delta.magnitude(),
                     last_move_delta.dot(new_delta)
@@ -786,7 +814,7 @@ impl CartCoroutine {
                 );
                 self.start_new_unplanned_segment();
             } else if effective_speed != last_move.max_speed {
-                tracing::debug!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
+                tracing::info!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
                 self.start_new_unplanned_segment();
             }
             let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
@@ -834,7 +862,16 @@ impl CartCoroutine {
         let mut unconditionally_schedulable = false;
         let mut schedulable_segments = VecDeque::new();
 
-        let available_scheduled_segments = (9 - queue_space) + self.scheduled_segments.len();
+        let available_scheduled_segments = (8usize.checked_sub(queue_space).unwrap())
+            + self
+                .scheduled_segments
+                .iter()
+                .filter(|s| s.segment.distance() > 0.001)
+                .count();
+        tracing::info!(
+            "Available scheduled segments: {:?}",
+            self.scheduled_segments
+        );
 
         tracing::debug!(
             "{} segments remaining in track scan",
@@ -846,8 +883,8 @@ impl CartCoroutine {
         let split_pos = self.unplanned_segments.back().and_then(|last_segment| {
             // 0 = vi^2 + 2ad, d = vi^2 / 2a after correcting for signs
             let stopping_distance =
-                (last_segment.max_speed * last_segment.max_speed) / (2.0 * MAX_ACCEL) + 0.001;
-            if stopping_distance < last_segment.distance() {
+                (last_segment.max_speed * last_segment.max_speed) / (2.0 * MAX_ACCEL);
+            if stopping_distance > 0.0 && (stopping_distance + 0.001) < last_segment.distance() {
                 Some(last_segment.distance() - stopping_distance)
             } else {
                 None
@@ -855,6 +892,12 @@ impl CartCoroutine {
         });
 
         if let Some(split_pos) = split_pos {
+            tracing::info!(
+                "Splitting last segment {:?} at {} out of {}",
+                self.unplanned_segments.back().unwrap(),
+                split_pos,
+                self.unplanned_segments.back().unwrap().distance()
+            );
             let (main, stopping_distance) = self
                 .unplanned_segments
                 .pop_back()
@@ -886,6 +929,8 @@ impl CartCoroutine {
                 // This segment itself is not yet schedulable, so we don't set unconditionally_schedulable yet
             }
             // If we encountered a further segment where we were limited by track speed, we can schedule this one
+            let should_panic_schedule = dbg!(available_scheduled_segments) < 2 && (when < 1.0);
+
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(
@@ -893,7 +938,9 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if (available_scheduled_segments < 2 && when < 1.0) && idx == 0 {
+            } else if (should_panic_schedule || dbg!(self.last_submitted_move_exit_speed) < 0.001)
+                && idx == 0
+            {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(
@@ -933,7 +980,7 @@ impl CartCoroutine {
 
     fn start_new_unplanned_segment(&mut self) {
         let prev_segment = self.unplanned_segments.back().unwrap();
-        if prev_segment.distance() > 0.01 || prev_segment.exit_signal.is_some() {
+        if prev_segment.distance() > 0.01 || dbg!(prev_segment.exit_signal.is_some()) {
             tracing::debug!("new segment starting from {:?}", prev_segment.to);
             let empty_segment = TrackSegment {
                 from: prev_segment.to,
@@ -985,12 +1032,18 @@ impl CartCoroutine {
             brake_curve_exit_speed,
         );
         if seg.distance() < 1e-3 {
-            self.scheduled_segments.push_back(ScheduledSegment {
-                segment: seg,
-                speed: enter_speed,
-                acceleration: 0.0,
-                move_time: 0.0,
-            });
+            if seg.any_content() {
+                tracing::info!("Pushing short segment: {:?}", seg);
+                self.scheduled_segments.push_back(ScheduledSegment {
+                    segment: seg,
+                    speed: enter_speed,
+                    acceleration: 0.0,
+                    move_time: 0.0,
+                    created: "short segment",
+                });
+            } else {
+                tracing::info!("Skipping short segment: {:?}", seg);
+            }
             return enter_speed;
         }
         // See if we need to accelerate at the entrance of the segment, to reach the intended movement speed
@@ -1056,6 +1109,7 @@ impl CartCoroutine {
                 speed: seg.max_speed,
                 acceleration: 0.0,
                 move_time: seg_distance / seg.max_speed,
+                created: "no acceleration required",
             });
             seg.max_speed
         } else if entrance_accel_distance > 0.0 && exit_accel_distance == 0.0 {
@@ -1075,6 +1129,7 @@ impl CartCoroutine {
                     speed: enter_speed,
                     acceleration: MAX_ACCEL,
                     move_time: (seg.max_speed - enter_speed) / MAX_ACCEL,
+                    created: "case 2a first",
                 });
 
                 self.scheduled_segments.push_back(ScheduledSegment {
@@ -1082,6 +1137,7 @@ impl CartCoroutine {
                     speed: seg.max_speed,
                     acceleration: 0.0,
                     move_time: remaining_distance / seg.max_speed,
+                    created: "case 2a second",
                 });
                 seg.max_speed
             } else {
@@ -1094,6 +1150,7 @@ impl CartCoroutine {
                     speed: enter_speed,
                     acceleration: MAX_ACCEL,
                     move_time: (actual_exit_speed - enter_speed) / MAX_ACCEL,
+                    created: "case 2b",
                 });
                 actual_exit_speed
             }
@@ -1122,26 +1179,30 @@ impl CartCoroutine {
                     speed: enter_speed,
                     acceleration: -new_accel,
                     move_time: (enter_speed - brake_curve_exit_speed) / new_accel,
+                    created: "case 3",
                 });
                 brake_curve_exit_speed
             } else {
                 // We have enough distance to finish the deceleration
                 let remaining_distance = seg_distance - exit_accel_distance;
                 let (split_before, split_after) = seg.split_at_offset(remaining_distance);
-
+                tracing::info!(">> case 3a, remaining_distance {}", remaining_distance);
                 self.scheduled_segments.push_back(ScheduledSegment {
                     segment: split_before,
                     speed: enter_speed,
                     acceleration: 0.0,
-                    move_time: (remaining_distance) / enter_speed,
+                    move_time: split_before.distance() / enter_speed,
+                    created: "case 3a first",
                 });
-
-                self.scheduled_segments.push_back(ScheduledSegment {
-                    segment: split_after.unwrap(),
-                    speed: enter_speed,
-                    acceleration: -MAX_ACCEL,
-                    move_time: (seg.max_speed - brake_curve_exit_speed) / MAX_ACCEL,
-                });
+                if let Some(after) = split_after {
+                    self.scheduled_segments.push_back(ScheduledSegment {
+                        segment: after,
+                        speed: enter_speed,
+                        acceleration: -MAX_ACCEL,
+                        move_time: (seg.max_speed - brake_curve_exit_speed) / MAX_ACCEL,
+                        created: "case 3a second",
+                    });
+                }
                 brake_curve_exit_speed
             }
         } else if total_accel_distance > seg_distance {
@@ -1205,6 +1266,7 @@ impl CartCoroutine {
                     speed: enter_speed,
                     acceleration: MAX_ACCEL,
                     move_time: (speed_left - enter_speed) / MAX_ACCEL,
+                    created: "case 4a first",
                 });
 
                 self.scheduled_segments.push_back(ScheduledSegment {
@@ -1212,6 +1274,7 @@ impl CartCoroutine {
                     speed: speed_right,
                     acceleration: -MAX_ACCEL,
                     move_time: (speed_right - brake_curve_exit_speed) / MAX_ACCEL,
+                    created: "case 4a second",
                 });
                 return brake_curve_exit_speed;
             } else if corrected_acc_distance > 0.1 {
@@ -1230,6 +1293,7 @@ impl CartCoroutine {
                     speed: enter_speed,
                     acceleration: MAX_ACCEL,
                     move_time: (achieved_speed - enter_speed) / MAX_ACCEL,
+                    created: "case 4b",
                 });
                 achieved_speed
             } else if decel_distance > 0.1 {
@@ -1259,6 +1323,7 @@ impl CartCoroutine {
                     speed: enter_speed,
                     acceleration: -new_accel,
                     move_time: (enter_speed - brake_curve_exit_speed) / new_accel,
+                    created: "case 4c",
                 });
                 brake_curve_exit_speed
             } else {
@@ -1288,6 +1353,7 @@ impl CartCoroutine {
                 speed: enter_speed,
                 acceleration: MAX_ACCEL,
                 move_time: (seg.max_speed - enter_speed) / MAX_ACCEL,
+                created: "case 5 first",
             });
             // The cruise segment
             self.scheduled_segments.push_back(ScheduledSegment {
@@ -1295,6 +1361,7 @@ impl CartCoroutine {
                 speed: seg.max_speed,
                 acceleration: 0.0,
                 move_time: remaining_distance / seg.max_speed,
+                created: "case 5 second",
             });
             // The deceleration segment
             self.scheduled_segments.push_back(ScheduledSegment {
@@ -1302,6 +1369,7 @@ impl CartCoroutine {
                 speed: seg.max_speed,
                 acceleration: -MAX_ACCEL,
                 move_time: (seg.max_speed - brake_curve_exit_speed) / MAX_ACCEL,
+                created: "case 5 third",
             });
 
             brake_curve_exit_speed
