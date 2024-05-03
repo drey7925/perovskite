@@ -403,7 +403,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        tracing::info!(
+        tracing::debug!(
             "{} {:?} ========== planning {} seconds in advance",
             self.id,
             self.spawn_time.elapsed(),
@@ -436,7 +436,7 @@ impl EntityCoroutine for CartCoroutine {
         if !self.scheduled_segments.iter().any(|x| x.move_time > 0.001) {
             // No schedulable segments
             // Scan every second, trying to start again.
-            tracing::info!("No schedulable segments");
+            tracing::debug!("No schedulable segments");
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
                 perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
                     0.5..1.0,
@@ -595,11 +595,11 @@ impl CartCoroutine {
             match outcome {
                 DeferrableResult::AvailableNow(Ok(result)) => match result {
                     signals::AutomaticSignalOutcome::Acquired => {
-                        tracing::info!("acquired inline");
+                        tracing::debug!("acquired inline");
                         SignalResult::Permissive.into()
                     }
                     signals::AutomaticSignalOutcome::Contended => {
-                        tracing::info!("contended inline");
+                        tracing::debug!("contended inline");
                         SignalResult::Stop.into()
                     }
                     signals::AutomaticSignalOutcome::InvalidSignal => SignalResult::NoSignal.into(),
@@ -718,7 +718,7 @@ impl CartCoroutine {
             let signal_coord = new_state.block_coord.try_delta(0, 2, 0);
             if let Some(signal_coord) = signal_coord {
                 if let Some(block_id) = self.cleared_signals.remove(&signal_coord) {
-                    tracing::info!("cached clear signal at {:?}", signal_coord);
+                    tracing::debug!("cached clear signal at {:?}", signal_coord);
                     if block_id.equals_ignore_variant(0.into()) {
                         // contended signal
                         break 'scan_loop;
@@ -795,9 +795,9 @@ impl CartCoroutine {
             let effective_speed = self
                 .last_speed_post_indication
                 .min(new_state.allowable_speed as f64);
-            tracing::info!("Considering split at {:?}", new_state.vec_coord);
+            tracing::debug!("Considering split at {:?}", new_state.vec_coord);
             if last_move_delta.magnitude() > 256.0 {
-                tracing::info!(
+                tracing::debug!(
                     "Splitting a segment due to length; prev length was {}",
                     last_move_delta.magnitude()
                 );
@@ -806,7 +806,7 @@ impl CartCoroutine {
                 / (last_move_delta.magnitude() * new_delta.magnitude())
                 < 0.999999
             {
-                tracing::info!(
+                tracing::debug!(
                     "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
                     last_move_delta.magnitude(),
                     last_move_delta.dot(new_delta)
@@ -814,7 +814,7 @@ impl CartCoroutine {
                 );
                 self.start_new_unplanned_segment();
             } else if effective_speed != last_move.max_speed {
-                tracing::info!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
+                tracing::debug!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
                 self.start_new_unplanned_segment();
             }
             let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
@@ -868,7 +868,7 @@ impl CartCoroutine {
                 .iter()
                 .filter(|s| s.segment.distance() > 0.001)
                 .count();
-        tracing::info!(
+        tracing::debug!(
             "Available scheduled segments: {:?}",
             self.scheduled_segments
         );
@@ -892,7 +892,7 @@ impl CartCoroutine {
         });
 
         if let Some(split_pos) = split_pos {
-            tracing::info!(
+            tracing::debug!(
                 "Splitting last segment {:?} at {} out of {}",
                 self.unplanned_segments.back().unwrap(),
                 split_pos,
@@ -929,7 +929,7 @@ impl CartCoroutine {
                 // This segment itself is not yet schedulable, so we don't set unconditionally_schedulable yet
             }
             // If we encountered a further segment where we were limited by track speed, we can schedule this one
-            let should_panic_schedule = dbg!(available_scheduled_segments) < 2 && (when < 1.0);
+            let should_panic_schedule = available_scheduled_segments < 2 && (when < 1.0);
 
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
@@ -938,7 +938,7 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if (should_panic_schedule || dbg!(self.last_submitted_move_exit_speed) < 0.001)
+            } else if (should_panic_schedule || self.last_submitted_move_exit_speed < 0.001)
                 && idx == 0
             {
                 // We're low on cached moves, so let's schedule this segment
@@ -980,7 +980,7 @@ impl CartCoroutine {
 
     fn start_new_unplanned_segment(&mut self) {
         let prev_segment = self.unplanned_segments.back().unwrap();
-        if prev_segment.distance() > 0.01 || dbg!(prev_segment.exit_signal.is_some()) {
+        if prev_segment.distance() > 0.01 || prev_segment.exit_signal.is_some() {
             tracing::debug!("new segment starting from {:?}", prev_segment.to);
             let empty_segment = TrackSegment {
                 from: prev_segment.to,
@@ -1033,7 +1033,7 @@ impl CartCoroutine {
         );
         if seg.distance() < 1e-3 {
             if seg.any_content() {
-                tracing::info!("Pushing short segment: {:?}", seg);
+                tracing::debug!("Pushing short segment: {:?}", seg);
                 self.scheduled_segments.push_back(ScheduledSegment {
                     segment: seg,
                     speed: enter_speed,
@@ -1042,7 +1042,7 @@ impl CartCoroutine {
                     created: "short segment",
                 });
             } else {
-                tracing::info!("Skipping short segment: {:?}", seg);
+                tracing::debug!("Skipping short segment: {:?}", seg);
             }
             return enter_speed;
         }
@@ -1186,7 +1186,7 @@ impl CartCoroutine {
                 // We have enough distance to finish the deceleration
                 let remaining_distance = seg_distance - exit_accel_distance;
                 let (split_before, split_after) = seg.split_at_offset(remaining_distance);
-                tracing::info!(">> case 3a, remaining_distance {}", remaining_distance);
+                tracing::debug!(">> case 3a, remaining_distance {}", remaining_distance);
                 self.scheduled_segments.push_back(ScheduledSegment {
                     segment: split_before,
                     speed: enter_speed,
