@@ -230,12 +230,14 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         label: impl Into<String>,
         initial: impl Into<String>,
         enabled: bool,
+        multiline: bool,
     ) -> Self {
         self.push_widget(UiElement::TextField(TextField {
             key: key.into(),
             label: label.into(),
             initial: initial.into(),
             enabled,
+            multiline,
         }));
         self
     }

@@ -27,8 +27,9 @@ message TextField {
   string initial = 3;
   // Whether the textfield is editable
   bool enabled = 4;
-  
-  // todo support multiline, other styling
+  // Whether the textfield is multiline
+  bool multiline = 5;
+  // todo other styling
 }
 
 message Checkbox {

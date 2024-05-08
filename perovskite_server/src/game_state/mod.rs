@@ -31,6 +31,7 @@ pub mod player;
 pub mod tests;
 
 use anyhow::{bail, Result};
+use futures::Future;
 use integer_encoding::VarInt;
 use log::{info, warn};
 use parking_lot::Mutex;
@@ -177,6 +178,10 @@ impl GameState {
     /// Returns true if the server is in the process of shutting down.
     pub fn is_shutting_down(&self) -> bool {
         self.early_shutdown.is_cancelled()
+    }
+    /// Returns a future that will resolve when the server is in the process of shutting down.
+    pub async fn await_shutdown(&self) {
+        self.early_shutdown.cancelled().await
     }
 
     /// Returns an extension that a plugin registered with [crate::server::ServerBuilder::add_extension],

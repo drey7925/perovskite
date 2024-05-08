@@ -362,6 +362,7 @@ fn furnace_dig_handler(
         .get_by_name(constants::blocks::AIR)
         .unwrap();
     extended_data.clear();
+    extended_data.set_dirty();
 
     let block_type = ctx.block_types().get_block(bt)?.0;
     let rule = ctx
@@ -371,6 +372,7 @@ fn furnace_dig_handler(
     if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
         *bt = air;
         extended_data.clear();
+        extended_data.set_dirty();
 
         Ok(BlockInteractionResult {
             item_stacks: vec![ctx.items().get_item(FURNACE.0).unwrap().singleton_stack()],

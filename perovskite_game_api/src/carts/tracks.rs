@@ -358,6 +358,16 @@ struct TrackTile {
     /// Bitfield of which physical directions are considered diverging, when spawning a cart
     /// Bits 0..3 are for forward movements, bits 4..7 are for reverse
     diverging_dirs_spawn_dirs: u8,
+    /// If true, this track tile can start/end a diverging move.
+    ///
+    /// When this is true, the following additional conditions are imposed:
+    ///     * In the forward and forward diverging directions, a single incoming path splits into the normal and diverging paths
+    ///     * In the reverse and reverse diverging directions, the incoming diverging and normal paths converge onto a normal path
+    /// If these preconditions are violated, the behavior of the interlocking scanner may be abnormal.
+    ///
+    /// Note that this may become a small enum if we ever add slip switches; in that case, the required preconditions above will apply
+    /// for the non-slip-switch case.
+    switch_eligible: bool,
 }
 impl TrackTile {
     // This can't be in Default because it needs to be const
@@ -387,6 +397,7 @@ impl TrackTile {
             diverging_max_speed: TRACK_INHERENT_MAX_SPEED,
             straight_through_spawn_dirs: 0b0100_0001,
             diverging_dirs_spawn_dirs: 0,
+            switch_eligible: false,
         }
     }
 }
@@ -842,9 +853,9 @@ pub(crate) fn register_tracks(
                     Ok(Some(ctx.new_popup()
                         .title("Mr. Yellow")
                         .label("Update tile:")
-                        .text_field("tile_x", "Tile X", tile_id.x().to_string(), true)
-                        .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true)
-                        .text_field("rotation", "Rotation", tile_id.rotation().to_string(), true)
+                        .text_field("tile_x", "Tile X", tile_id.x().to_string(), true, false)
+                        .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true, false)
+                        .text_field("rotation", "Rotation", tile_id.rotation().to_string(), true, false)
                         .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
                         .button("apply", "Apply", true)
                         .label("Scan tile:")
@@ -903,7 +914,7 @@ pub(crate) enum ScanOutcome {
     /// We advanced, here's the new state
     Success(ScanState),
     /// We cannot advance
-    Failure,
+    CannotAdvance,
     /// We're not even on a track
     NotOnTrack,
     /// We got a deferral while reading the map
@@ -1025,7 +1036,7 @@ impl ScanState {
             if CHATTY {
                 tracing::info!("Next delta absent");
             }
-            return Ok(ScanOutcome::Failure);
+            return Ok(ScanOutcome::CannotAdvance);
         }
         let next_coord = next_delta
             .eval_delta(
@@ -1046,7 +1057,7 @@ impl ScanState {
             if CHATTY {
                 tracing::info!("Next block: {:?} is not the base track", next_block);
             }
-            return Ok(ScanOutcome::Failure);
+            return Ok(ScanOutcome::CannotAdvance);
         }
         let next_variant = next_block.variant();
 
@@ -1132,7 +1143,7 @@ impl ScanState {
             if CHATTY {
                 tracing::info!("No match found");
             }
-            return Ok(ScanOutcome::Failure);
+            return Ok(ScanOutcome::CannotAdvance);
         }
 
         // Now check secondary and tertiary tiles
@@ -1142,7 +1153,7 @@ impl ScanState {
                 if CHATTY {
                     log::error!("Match found, but no tile.");
                 }
-                return Ok(ScanOutcome::Failure);
+                return Ok(ScanOutcome::CannotAdvance);
             }
         };
         if next_tile.secondary_coord.present() {
@@ -1156,7 +1167,7 @@ impl ScanState {
                     if CHATTY {
                         tracing::info!("Secondary tile coord overflows");
                     }
-                    return Ok(ScanOutcome::Failure);
+                    return Ok(ScanOutcome::CannotAdvance);
                 }
             };
             let secondary_block = match get_block(secondary_block_coord) {
@@ -1170,7 +1181,7 @@ impl ScanState {
                         secondary_block
                     );
                 }
-                return Ok(ScanOutcome::Failure);
+                return Ok(ScanOutcome::CannotAdvance);
             }
 
             let secondary_tile = TileId::from_variant(
@@ -1205,7 +1216,7 @@ impl ScanState {
                         rotation_corrected_secondary_tile_id
                     );
                 }
-                return Ok(ScanOutcome::Failure);
+                return Ok(ScanOutcome::CannotAdvance);
             }
         }
         if next_tile.tertiary_coord.present() {
@@ -1219,7 +1230,7 @@ impl ScanState {
                     if CHATTY {
                         tracing::info!("Tertiary tile coord overflows");
                     }
-                    return Ok(ScanOutcome::Failure);
+                    return Ok(ScanOutcome::CannotAdvance);
                 }
             };
             let tertiary_block = match get_block(tertiary_block_coord) {
@@ -1254,7 +1265,7 @@ impl ScanState {
                         rotation_corrected_tertiary_tile_id
                     );
                 }
-                return Ok(ScanOutcome::Failure);
+                return Ok(ScanOutcome::CannotAdvance);
             }
         }
 
@@ -1299,6 +1310,7 @@ impl ScanState {
     }
 
     pub(crate) fn signal_rotation_ok(&self, rotation: u16) -> bool {
+        let rotation = rotation & 3;
         let tile =
             TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
         let tile = match tile {
@@ -1320,6 +1332,34 @@ impl ScanState {
             (true, true) => tile.diverging_dirs_spawn_dirs >> 4,
         };
         bitmask & (1 << corrected_rotation) != 0
+    }
+
+    pub(crate) fn is_switch_eligible(&self) -> bool {
+        let tile =
+            TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
+        let tile = match tile {
+            Some(tile) => tile,
+            None => {
+                return false;
+            }
+        };
+        tile.switch_eligible
+    }
+
+    pub(crate) fn can_diverge_left(&self) -> bool {
+        // The tile has to be switch eligible, it has to be a forward move facing the points, and the tile
+        // has to be flipped along X (since unflipped tiles turn out to the right)
+        self.is_switch_eligible() && !self.is_reversed && self.current_tile_id.flip_x()
+    }
+    pub(crate) fn can_diverge_right(&self) -> bool {
+        // The tile has to be switch eligible, it has to be a forward move facing the points, and the tile
+        // cannot be flipped along X (since unflipped tiles turn out to the left)
+        self.is_switch_eligible() && !self.is_reversed && !self.current_tile_id.flip_x()
+    }
+
+    pub(crate) fn can_converge(&self) -> bool {
+        // The tile has to be switch eligible, it has to be a backward move approaching against the points.
+        self.is_switch_eligible() && self.is_reversed
     }
 }
 

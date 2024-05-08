@@ -101,7 +101,7 @@ impl GameHud {
         let mut net_err_builder = FlatTextureDrawBuilder::new();
         let net_err = client_state.timekeeper.get_offset();
         render_number(
-            (window_size.0, 12),
+            (window_size.0, 16),
             net_err as u32,
             &mut net_err_builder,
             &self.texture_coords,

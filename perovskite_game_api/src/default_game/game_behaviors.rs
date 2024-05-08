@@ -270,8 +270,8 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         if has_creative {
             Ok(Popup::new(game_state)
                 .title("Inventory")
-                .text_field("search", "Filter: ", "", true)
-                .text_field("count", "Creative stack size: ", "256", true)
+                .text_field("search", "Filter: ", "", true, false)
+                .text_field("count", "Creative stack size: ", "256", true, false)
                 .button("update_btn", "Update", true)
                 .side_by_side_layout("Navigation", |p| {
                     Ok(p.button("left", "Prev. page", true)

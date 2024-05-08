@@ -474,7 +474,7 @@ impl<'a> EntityCoroutineServices<'a> {
     ///
     /// Note that this may not be the most efficient way to do delayed actions. For now, it's
     /// probably sufficient assuming that these actions are happening at a reasonable scale.
-    pub fn spawn_async(
+    pub fn spawn_delayed(
         &self,
         delay: Duration,
         task: impl FnOnce(&HandlerContext) + Send + 'static,
@@ -493,26 +493,28 @@ impl<'a> EntityCoroutineServices<'a> {
     /// Spawns a future onto the entity coroutine's async executor.
     ///
     /// For now, this is just spawned onto the tokio runtime, but this may change in the future.
-    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
-    pub fn spawn_deferred<T: Send + Sync + 'static, Fut>(
+    ///
+    /// Warning: If the function hangs indefinitely, the game cannot exit.
+    #[must_use = "deferrable result does nothing unless returned to the entity scheduler"]
+    pub fn spawn_async<T: Send + Sync + 'static, Fut>(
         &self,
-        task: impl FnOnce(&HandlerContext) -> Fut,
-    ) -> DeferrableResult<T>
+        task: impl FnOnce(HandlerContext<'static>) -> Fut,
+    ) -> Deferral<T>
     where
         Fut: Future<Output = T> + Send + 'static,
     {
-        let ctx = HandlerContext {
+        let ctx: HandlerContext<'static> = HandlerContext {
             tick: self.game_state.tick(),
             initiator: super::event::EventInitiator::Plugin("entity_coroutine".to_string()),
             game_state: self.game_state.clone(),
         };
-        let fut = task(&ctx);
-        DeferrableResult::Deferred(Deferral {
+        let fut = task(ctx);
+        Deferral {
             deferred_call: Box::pin(async move {
                 let result = fut.await;
                 (result, ())
             }),
-        })
+        }
     }
 }
 
@@ -521,6 +523,7 @@ impl<'a> EntityCoroutineServices<'a> {
 ///
 /// This is returned from various helpers in [EntityCoroutineServices] that may need to block
 /// or run expensive computations.
+#[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
 pub struct Deferral<T: Send + 'static, Residual: Debug + Send + 'static = ()> {
     deferred_call: Pin<Box<dyn Future<Output = (T, Residual)> + Send + 'static>>,
 }
@@ -619,6 +622,7 @@ impl_deferral!(u64, Integer);
 impl_deferral!(Vector3<f64>, Vector);
 impl_deferral!(bool, Boolean);
 impl_deferral!(EntityMoveDecision, EntityDecision);
+impl_deferral!(HeapResult, HeapResult);
 
 impl Deferral<ContinuationResultValue, ()> {
     #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
@@ -704,6 +708,7 @@ impl<T: Send + Sync + 'static> From<T> for ReenterableResult<T> {
 }
 
 /// Either a T, or a deferred call to get a T
+#[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
 pub enum DeferrableResult<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static = ()> {
     AvailableNow(T),
     Deferred(Deferral<T, Residual>),
@@ -742,10 +747,12 @@ pub enum ContinuationResultValue {
     /// An anyhow::Error result from a deferred call
     Error(anyhow::Error),
     /// A heap-allocated result from a deferred call
-    HeapResult(Box<dyn Any + Send + Sync>),
+    HeapResult(HeapResult),
     /// None. Don't even reinvoke the coroutine
     None,
 }
+/// A heap-allocated result from a deferred call
+pub type HeapResult = Box<dyn Any + Send + Sync>;
 
 pub struct ContinuationResult {
     /// The tag that was passed when deferring the call

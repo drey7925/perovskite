@@ -779,12 +779,12 @@ impl<T> InventoryView<T> {
                 .game_state
                 .game_map()
                 .get_block_with_extended_data(*coord, |x| {
-                    Some(
+                    Ok(Some(
                         x.inventories
                             .get(key)
                             .map(|x| x.contents.to_vec())
                             .unwrap_or(vec![]),
-                    )
+                    ))
                 })?
                 .1
                 .unwrap_or(vec![])),

@@ -221,7 +221,11 @@ impl EguiUi {
                     .entry((popup.popup_id, text_field.key.clone()))
                     .or_insert(text_field.initial.clone());
                 // todo support multiline, other styling
-                let editor = egui::TextEdit::singleline(value);
+                let editor = if text_field.multiline {
+                    egui::TextEdit::multiline(value)
+                } else {
+                    egui::TextEdit::singleline(value)
+                };
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                     let label = ui.label(text_field.label.clone());
                     ui.add_enabled(text_field.enabled, editor)

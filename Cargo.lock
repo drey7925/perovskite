@@ -2674,6 +2674,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "tracing-tracy",
+ "wildmatch",
 ]
 
 [[package]]
@@ -4737,6 +4738,12 @@ dependencies = [
  "once_cell",
  "rustix",
 ]
+
+[[package]]
+name = "wildmatch"
+version = "2.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "939e59c1bc731542357fdaad98b209ef78c8743d652bb61439d16b16a79eb025"
 
 [[package]]
 name = "winapi"

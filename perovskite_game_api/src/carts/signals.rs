@@ -1,8 +1,10 @@
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
+    blocks::{CustomData, ExtDataHandling, ExtendedData, InlineContext},
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
+use prost::Message;
 
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
@@ -21,7 +23,7 @@ const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_s
 
 // Note that the two low bits of the signal variant are used for the direction it's facing
 /// Set when the signal permits traffic
-const VARIANT_PERMISSIVE_SIGNAL: u16 = 4;
+const VARIANT_PERMISSIVE: u16 = 4;
 /// Set when the signal cannot clear because there is traffic in the block
 const VARIANT_RESTRICTIVE_TRAFFIC: u16 = 8;
 /// Set when the signal is not clear for any reason (either conflicting traffic, no cart
@@ -34,8 +36,9 @@ const VARIANT_RESTRICTIVE_EXTERNAL: u16 = 32;
 const VARIANT_RIGHT: u16 = 64;
 /// Set when the signal indicates a turnout to the left
 const VARIANT_LEFT: u16 = 128;
-/// Set when the signal has routing rules in its extended data (not yet implemented)
-const VARIANT_EXTENDED_ROUTING: u16 = 256;
+/// A cart is trying to acquire this signal in an interlocking. It hasn't yet managed
+/// to complete, but it wants to reserve the route for now.
+const VARIANT_PRELOCKED: u16 = 256;
 
 pub(crate) fn register_signal_block(
     game_builder: &mut crate::game_builder::GameBuilder,
@@ -114,7 +117,7 @@ fn register_single_signal(
                         /* x= */ (-3.0 / 32.0, 3.0 / 32.0),
                         /* y= */ (-11.0 / 32.0, -5.0 / 32.0),
                         /* z= */ (0.235, 0.25),
-                        VARIANT_PERMISSIVE_SIGNAL as u32,
+                        VARIANT_PERMISSIVE as u32,
                     )
                     .add_box_with_variant_mask(
                         signal_on_box.clone(),
@@ -149,13 +152,16 @@ fn register_single_signal(
                         /* x= */ (5.0 / 32.0, 11.0 / 32.0),
                         /* y= */ (5.0 / 32.0, 11.0 / 32.0),
                         /* z= */ (0.235, 0.25),
-                        VARIANT_RESTRICTIVE_EXTERNAL as u32,
+                        (VARIANT_RESTRICTIVE_EXTERNAL | VARIANT_PRELOCKED) as u32,
                     ),
             )
             .set_allow_light_propagation(true)
             .set_light_emission(8)
             .add_modifier(Box::new(|bt| {
+                bt.extended_data_handling = ExtDataHandling::ServerSide;
                 bt.interact_key_handler = Some(Box::new(spawn_popup));
+                bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
+                bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
             }))
             .add_item_modifier(Box::new(|it| {
                 let old_place_handler = it.place_handler.take().unwrap();
@@ -174,12 +180,35 @@ fn register_single_signal(
 }
 
 fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Popup>> {
-    let variant = ctx.game_map().get_block(coord)?.variant();
+    let (block, ext) =
+        ctx.game_map()
+            .get_block_with_extended_data(coord, |ext| match ext.custom_data {
+                Some(ref custom_data) => match custom_data.downcast_ref::<SignalConfig>() {
+                    Some(config) => Ok(Some(config.clone())),
+                    _ => {
+                        tracing::warn!("expected SignalConfig, got a different type");
+                        Ok(None)
+                    }
+                },
+                None => Ok(None),
+            })?;
+    let variant = block.variant();
+    let ext = ext.unwrap_or_default();
+
+    let left_routes = ext.left_routes.join("\n");
+    let right_routes = ext.right_routes.join("\n");
+
     Ok(Some(
         ctx.new_popup()
             .title("Mrs. Yellow")
             .label("Update signal:")
-            .text_field("rotation", "Rotation", (variant & 3).to_string(), true)
+            .text_field(
+                "rotation",
+                "Rotation",
+                (variant & 3).to_string(),
+                true,
+                false,
+            )
             .checkbox(
                 "restrictive",
                 "Restrictive",
@@ -201,11 +230,13 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             .checkbox(
                 "permissive",
                 "Permissive",
-                (variant & VARIANT_PERMISSIVE_SIGNAL) != 0,
+                (variant & VARIANT_PERMISSIVE) != 0,
                 true,
             )
             .checkbox("left", "Left", (variant & VARIANT_LEFT) != 0, true)
             .checkbox("right", "Right", (variant & VARIANT_RIGHT) != 0, true)
+            .text_field("left_routes", "Left Routes", left_routes, true, true)
+            .text_field("right_routes", "Right Routes", right_routes, true, true)
             .button("apply", "Apply", true)
             .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
                 match handle_popup_response(&response, coord) {
@@ -258,6 +289,14 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     .checkbox_values
                     .get("right")
                     .context("missing right")?;
+                let left_routes = response
+                    .textfield_values
+                    .get("left_routes")
+                    .context("missing left_routes")?;
+                let right_routes = response
+                    .textfield_values
+                    .get("right_routes")
+                    .context("missing right_routes")?;
                 let mut variant = rotation & 3;
                 if restrictive {
                     variant |= VARIANT_RESTRICTIVE;
@@ -269,7 +308,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     variant |= VARIANT_RESTRICTIVE_TRAFFIC;
                 }
                 if permissive {
-                    variant |= VARIANT_PERMISSIVE_SIGNAL;
+                    variant |= VARIANT_PERMISSIVE;
                 }
                 if left {
                     variant |= VARIANT_LEFT;
@@ -281,8 +320,20 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                 response
                     .ctx
                     .game_map()
-                    .mutate_block_atomically(coord, |b, _ext| {
+                    .mutate_block_atomically(coord, |b, ext| {
                         *b = b.with_variant(variant)?;
+                        let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+                        let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
+                            left_routes: left_routes
+                                .split('\n')
+                                .map(|s| s.trim().to_string())
+                                .collect(),
+                            right_routes: right_routes
+                                .split('\n')
+                                .map(|s| s.trim().to_string())
+                                .collect(),
+                        }));
+                        ext.set_dirty();
                         Ok(())
                     })?;
             }
@@ -295,8 +346,30 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
     Ok(())
 }
 
+fn signal_config_deserialize(_ctx: InlineContext, data: &[u8]) -> Result<Option<CustomData>> {
+    let signal_config = SignalConfig::decode(data)?;
+    Ok(Some(Box::new(signal_config)))
+}
+fn signal_config_serialize(_ctx: InlineContext, state: &CustomData) -> Result<Option<Vec<u8>>> {
+    let signal_config = state
+        .downcast_ref::<SignalConfig>()
+        .context("FurnaceState downcast failed")?;
+    Ok(Some(signal_config.encode_to_vec()))
+}
+
+/// Extended data for a furnace. One tick is 0.25 seconds.
+#[derive(Clone, Message)]
+pub(crate) struct SignalConfig {
+    /// The list of routes that will diverge left
+    #[prost(string, repeated, tag = "1")]
+    pub(crate) left_routes: Vec<String>,
+    /// The list of routes that will diverge right
+    #[prost(string, repeated, tag = "2")]
+    pub(crate) right_routes: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutomaticSignalOutcome {
+pub(crate) enum SignalLockOutcome {
     InvalidSignal,
     Acquired,
     Contended,
@@ -304,39 +377,41 @@ pub(crate) enum AutomaticSignalOutcome {
 
 /// Attempts to acquire an automatic signal.
 /// This will transition it from the restrictive to the permissive state.
+///
+/// This should NOT be called on interlocking signals; those require closer coordination.
 pub(crate) fn automatic_signal_acquire(
     _block_coord: BlockCoordinate,
     id: &mut BlockId,
     expected_id_with_rotation: BlockId,
-) -> AutomaticSignalOutcome {
+) -> SignalLockOutcome {
     if !id.equals_ignore_variant(expected_id_with_rotation) {
-        return AutomaticSignalOutcome::InvalidSignal;
+        return SignalLockOutcome::InvalidSignal;
     }
 
     let mut variant = id.variant();
     if variant & 3 != expected_id_with_rotation.variant() & 3 {
-        return AutomaticSignalOutcome::InvalidSignal;
+        return SignalLockOutcome::InvalidSignal;
     }
 
     if variant & (VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_RESTRICTIVE_EXTERNAL) != 0 {
         // The signal is already restricted because of traffic or external signal (not implemented yet)
-        return AutomaticSignalOutcome::Contended;
+        return SignalLockOutcome::Contended;
     }
-    if variant & VARIANT_PERMISSIVE_SIGNAL != 0 {
+    if variant & VARIANT_PERMISSIVE != 0 {
         // The signal is already cleared, but we're trying to clear it. Therefore we're not the ones that cleared it
-        return AutomaticSignalOutcome::Contended;
+        return SignalLockOutcome::Contended;
     }
 
-    variant |= VARIANT_PERMISSIVE_SIGNAL;
+    variant |= VARIANT_PERMISSIVE;
     variant &= !VARIANT_RESTRICTIVE;
     *id = id.with_variant(variant).unwrap();
-    AutomaticSignalOutcome::Acquired
+    SignalLockOutcome::Acquired
 }
 
-/// Updates an automatic signal as a cart passes it and enters the following block.
+/// Updates a signal as a cart passes it and enters the following block.
 ///
 /// This transitions it from permissive to restrictive | restrictive_traffic
-pub(crate) fn automatic_signal_enter_block(
+pub(crate) fn signal_enter_block(
     block_coord: BlockCoordinate,
     id: &mut BlockId,
     expected_id_with_rotation: BlockId,
@@ -351,7 +426,7 @@ pub(crate) fn automatic_signal_enter_block(
         return;
     }
 
-    if variant & VARIANT_PERMISSIVE_SIGNAL == 0 {
+    if variant & VARIANT_PERMISSIVE == 0 {
         // This signal is not actually clear
         tracing::warn!(
             "Attempting to clear a signal that is already cleared at {:?}. Variant is {:x}",
@@ -362,12 +437,12 @@ pub(crate) fn automatic_signal_enter_block(
 
     variant |= VARIANT_RESTRICTIVE;
     variant |= VARIANT_RESTRICTIVE_TRAFFIC;
-    variant &= !VARIANT_PERMISSIVE_SIGNAL;
+    variant &= !VARIANT_PERMISSIVE;
     *id = id.with_variant(variant).unwrap();
 }
 
-/// Releases an automatic signal as a cart leaves the block
-pub(crate) fn automatic_signal_release(
+/// Releases a signal as a cart leaves the block, transitioning it from restrictive_traffic | restrictive to just restrictive
+pub(crate) fn signal_release(
     block_coord: BlockCoordinate,
     id: &mut BlockId,
     expected_id_with_rotation: BlockId,
@@ -392,4 +467,102 @@ pub(crate) fn automatic_signal_release(
     variant &= !VARIANT_RESTRICTIVE_TRAFFIC;
     variant |= VARIANT_RESTRICTIVE;
     *id = id.with_variant(variant).unwrap();
+}
+
+/// Attempts to acquire an automatic signal.
+/// This will transition it from the restrictive to the permissive state.
+pub(crate) fn interlocking_signal_preacquire(
+    _block_coord: BlockCoordinate,
+    id: &mut BlockId,
+    expected_id_with_rotation: BlockId,
+) -> SignalLockOutcome {
+    let mut variant = id.variant();
+
+    if variant & (VARIANT_PRELOCKED) != 0 {
+        // Another cart is already trying to acquire this signal and beat us to it.
+        return SignalLockOutcome::Contended;
+    }
+
+    if variant & (VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_RESTRICTIVE_EXTERNAL) != 0 {
+        // A cart is still moving through the block protected by this signal
+        return SignalLockOutcome::Contended;
+    }
+    if variant & VARIANT_PERMISSIVE != 0 {
+        // The signal is already cleared, so another cart already has a path through the interlocking.
+        return SignalLockOutcome::Contended;
+    }
+
+    variant |= VARIANT_PRELOCKED;
+    *id = id.with_variant(variant).unwrap();
+    SignalLockOutcome::Acquired
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignalParseOutcome {
+    /// The signal indicates that the next switch is to be set straight
+    Straight,
+    /// The signal indicates that the next switch (capable of being set diverging left, i.e. switch tile with flip_x = true) is to be set diverging
+    DivergingLeft,
+    /// The signal indicates that the next switch (capable of being set diverging right, i.e. switch tile with flip_x = false) is to be set diverging
+    DivergingRight,
+    Fork,
+    Deny,
+    NotASignal,
+    /// This is an automatic signal, so we're done with the interlocking
+    AutomaticSignal,
+}
+impl SignalParseOutcome {
+    pub(crate) fn adjust_variant(&self, variant: u16) -> Option<u16> {
+        let rotation = variant & 3;
+        match self {
+            SignalParseOutcome::Straight => Some(VARIANT_PERMISSIVE | rotation),
+            SignalParseOutcome::DivergingLeft => Some(VARIANT_PERMISSIVE | rotation | VARIANT_LEFT),
+            SignalParseOutcome::DivergingRight => {
+                Some(VARIANT_PERMISSIVE | rotation | VARIANT_RIGHT)
+            }
+            SignalParseOutcome::Fork => None,
+            SignalParseOutcome::Deny => None,
+            SignalParseOutcome::NotASignal => None,
+            SignalParseOutcome::AutomaticSignal => None,
+        }
+    }
+}
+
+pub(crate) fn query_interlocking_signal(
+    ext: Option<&ExtendedData>,
+    cart_route_name: &str,
+) -> Result<SignalParseOutcome> {
+    if ext.is_none() {
+        return Ok(SignalParseOutcome::Straight);
+    }
+    let ext = ext.unwrap();
+    let signal_config = match ext.custom_data.as_ref() {
+        Some(config) => match config.downcast_ref::<SignalConfig>() {
+            Some(config) => Some(config),
+            _ => {
+                tracing::warn!("expected SignalConfig, got a different type");
+                None
+            }
+        },
+        _ => None,
+    };
+
+    if let Some(config) = signal_config {
+        // TODO avoid expensive wildmatch construction every time
+        if config
+            .left_routes
+            .iter()
+            .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
+        {
+            return Ok(SignalParseOutcome::DivergingLeft);
+        }
+        if config
+            .right_routes
+            .iter()
+            .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
+        {
+            return Ok(SignalParseOutcome::DivergingRight);
+        }
+    }
+    Ok(SignalParseOutcome::Straight)
 }

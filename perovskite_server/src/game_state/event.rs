@@ -206,6 +206,8 @@ impl<'a> HandlerContext<'a> {
     /// Runs the given function in a new blocking task in the background.
     /// run_deferred returns immediately. This can be used e.g. in a timer while locks are held;
     /// if the deferred task needs the same locks, it'll wait in the background for them to be released.
+    ///
+    /// Warning: If the function hangs indefinitely, the game cannot exit.
     pub fn run_deferred<F>(&self, f: F)
     where
         F: FnOnce(&HandlerContext) -> Result<()> + 'static + Send,
@@ -222,6 +224,12 @@ impl<'a> HandlerContext<'a> {
         });
     }
 
+    /// Same as run_deferred, but runs the function after the given delay
+    ///
+    /// Warning: If the function hangs indefinitely, the game cannot exit.
+    ///
+    /// Consider checking `game_state.is_shutting_down()` in any loops or other unbounded delays,
+    /// or consider using a tokio::select to exit early if `game_state.await_shutdown()` returns.
     pub fn run_deferred_delayed(
         &self,
         delay: std::time::Duration,

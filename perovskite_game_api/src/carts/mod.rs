@@ -3,7 +3,7 @@ use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 // This is a temporary implementation used while developing the entity system
 use anyhow::Result;
 
-use cgmath::{vec2, vec3, InnerSpace, Vector3};
+use cgmath::{InnerSpace, Vector3};
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
@@ -23,7 +23,6 @@ use perovskite_server::game_state::{
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 
 use crate::{
     blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
@@ -31,8 +30,9 @@ use crate::{
     include_texture_bytes,
 };
 
-use self::signals::automatic_signal_acquire;
+use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
 
+mod interlocking;
 mod signals;
 mod tracks;
 
@@ -269,6 +269,7 @@ fn place_cart(
             cleared_signals: FxHashMap::default(),
             held_signal: None,
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            precomputed_steps: Vec::new(),
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -393,6 +394,8 @@ struct CartCoroutine {
     // TODO improve this as needed
     cleared_signals: FxHashMap<BlockCoordinate, BlockId>,
     held_signal: Option<(BlockCoordinate, BlockId)>,
+    // If we got a planned path from the interlocking system, this is the path
+    precomputed_steps: Vec<InterlockingStep>,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -429,111 +432,7 @@ impl EntityCoroutine for CartCoroutine {
             return deferral;
         }
 
-        let schedulable_segments = self.promote_schedulable(when, queue_space);
-
-        self.schedule_segments(schedulable_segments);
-
-        if !self.scheduled_segments.iter().any(|x| x.move_time > 0.001) {
-            // No schedulable segments
-            // Scan every second, trying to start again.
-            tracing::debug!("No schedulable segments");
-            return perovskite_server::game_state::entities::CoroutineResult::Successful(
-                perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
-                    0.5..1.0,
-                ),
-            );
-        }
-
-        let mut returned_moves = Vec::with_capacity(queue_space);
-        let mut returned_moves_time = 0.0;
-
-        while self.scheduled_segments.len() > 0 && returned_moves.len() < queue_space {
-            let segment = self.scheduled_segments.pop_front().unwrap();
-            self.last_submitted_move_exit_speed =
-                segment.speed + (segment.acceleration * segment.move_time);
-
-            tracing::debug!(
-                "returning a movement, speed is {} -> {}, accel is {}, time is {}",
-                segment.speed,
-                self.last_submitted_move_exit_speed,
-                segment.acceleration,
-                segment.move_time
-            );
-            tracing::debug!(
-                "seg position: {:?}, actually {:?}",
-                segment.segment.from,
-                whence
-            );
-
-            if let Some((enter_signal_coord, enter_signal_block)) = segment.segment.enter_signal {
-                tracing::debug!(
-                    "entering block in {} + {} seconds at {:?}",
-                    returned_moves_time,
-                    when,
-                    enter_signal_coord
-                );
-                services.spawn_async(
-                    std::time::Duration::from_secs_f64(
-                        (returned_moves_time + when as f64).max(0.0),
-                    ),
-                    move |ctx| {
-                        ctx.game_map()
-                            .mutate_block_atomically(enter_signal_coord, |b, _ext| {
-                                tracing::debug!("entering block");
-                                signals::automatic_signal_enter_block(
-                                    enter_signal_coord,
-                                    b,
-                                    enter_signal_block,
-                                );
-                                Ok(())
-                            })
-                            .unwrap();
-                    },
-                );
-            }
-            returned_moves_time += segment.move_time;
-            if let Some((exit_signal_coord, exit_signal_block)) = segment.segment.exit_signal {
-                let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
-                const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
-                let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
-                tracing::debug!(
-                    "exiting block in {} + {} + {} seconds at {:?}",
-                    returned_moves_time,
-                    when,
-                    extra_delay,
-                    exit_signal_coord
-                );
-
-                services.spawn_async(
-                    std::time::Duration::from_secs_f64(
-                        (returned_moves_time + when as f64 + extra_delay).max(0.0),
-                    ),
-                    move |ctx| {
-                        ctx.game_map()
-                            .mutate_block_atomically(exit_signal_coord, |b, _ext| {
-                                signals::automatic_signal_release(
-                                    exit_signal_coord,
-                                    b,
-                                    exit_signal_block,
-                                );
-                                Ok(())
-                            })
-                            .unwrap();
-                    },
-                );
-            }
-
-            if let Some(movement) = segment.to_movement() {
-                returned_moves.push(movement);
-            } else if !segment.segment.any_content() {
-                tracing::warn!("Segment {:?} had no movement", segment);
-            }
-        }
-        return perovskite_server::game_state::entities::CoroutineResult::Successful(
-            perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMultiple(
-                returned_moves,
-            ),
-        );
+        self.finish_schedule(when, queue_space, whence, services)
     }
     fn continuation(
         mut self: std::pin::Pin<&mut Self>,
@@ -548,6 +447,37 @@ impl EntityCoroutine for CartCoroutine {
             match continuation_result.value {
                 ContinuationResultValue::GetBlock(block_id, coord) => {
                     self.cleared_signals.insert(coord, block_id);
+                }
+                ContinuationResultValue::HeapResult(result) => {
+                    match result.downcast::<Option<Vec<InterlockingStep>>>() {
+                        Ok(steps) => {
+                            match *steps {
+                                Some(steps) => {
+                                    if !self.precomputed_steps.is_empty() {
+                                        tracing::warn!(
+                                            "precomputed steps is not empty: {:?}",
+                                            self.precomputed_steps
+                                        )
+                                    }
+                                    self.precomputed_steps = steps;
+                                }
+                                None => {
+                                    // empty route plan, try to scan the interlocking again next time
+                                    // For now, just schedule what we can, and we'll get reinvoked to try again
+                                    tracing::debug!("Got empty route plan, rescheduling");
+                                    return self.finish_schedule(
+                                        when,
+                                        queue_space,
+                                        whence,
+                                        services,
+                                    );
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            log::error!("Unexpected heap result");
+                        }
+                    }
                 }
                 _ => {
                     log::error!(
@@ -594,15 +524,15 @@ impl CartCoroutine {
             });
             match outcome {
                 DeferrableResult::AvailableNow(Ok(result)) => match result {
-                    signals::AutomaticSignalOutcome::Acquired => {
+                    signals::SignalLockOutcome::Acquired => {
                         tracing::debug!("acquired inline");
                         SignalResult::Permissive.into()
                     }
-                    signals::AutomaticSignalOutcome::Contended => {
+                    signals::SignalLockOutcome::Contended => {
                         tracing::debug!("contended inline");
                         SignalResult::Stop.into()
                     }
-                    signals::AutomaticSignalOutcome::InvalidSignal => SignalResult::NoSignal.into(),
+                    signals::SignalLockOutcome::InvalidSignal => SignalResult::NoSignal.into(),
                 },
                 DeferrableResult::AvailableNow(Err(e)) => {
                     tracing::error!("Failed to parse signal: {}", e);
@@ -611,15 +541,15 @@ impl CartCoroutine {
                 DeferrableResult::Deferred(d) => {
                     ReenterableResult::Deferred(d.map(move |x| match x {
                         Ok(x) => match x {
-                            signals::AutomaticSignalOutcome::Acquired => {
+                            signals::SignalLockOutcome::Acquired => {
                                 tracing::debug!("acquired deferred");
                                 ContinuationResultValue::GetBlock(signal_block, signal_coord).into()
                             }
-                            signals::AutomaticSignalOutcome::Contended => {
+                            signals::SignalLockOutcome::Contended => {
                                 tracing::debug!("contended deferred");
                                 ContinuationResultValue::GetBlock(0.into(), signal_coord).into()
                             }
-                            signals::AutomaticSignalOutcome::InvalidSignal => {
+                            signals::SignalLockOutcome::InvalidSignal => {
                                 tracing::debug!("Invalid signal");
                                 ContinuationResultValue::None
                             }
@@ -631,6 +561,15 @@ impl CartCoroutine {
                     }))
                 }
             }
+        } else if signal_block.equals_ignore_variant(self.config.interlocking_signal) {
+            let state_clone = self.scan_state.clone();
+            let config_clone = self.config.clone();
+            return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
+                let state = state_clone;
+                let result = interlocking::interlock_cart(ctx, state, 256, config_clone).await;
+                // todo better error handling?
+                ContinuationResultValue::HeapResult(Box::new(result.unwrap_or_default()))
+            }));
         } else {
             SignalResult::NoSignal.into()
         }
@@ -642,6 +581,39 @@ impl CartCoroutine {
         max_steps_ahead: f64,
         when: f32,
     ) -> Option<CoroutineResult> {
+        for step in std::mem::replace(&mut self.precomputed_steps, vec![]) {
+            let state = step.scan_state;
+
+            // // Unironically, this is probably easier to do with an actual track circuit and some relays
+            // if step.exit_signal != BlockId::from(0) {
+            //     if self
+            //         .unplanned_segments
+            //         .back_mut()
+            //         .unwrap()
+            //         .exit_signal
+            //         .is_some()
+            //     {
+            //         tracing::error!("unplanned_segments.back().exit_signal is already set. We don't expect this to happen");
+            //         self.start_new_unplanned_segment();
+            //     };
+            //     self.unplanned_segments.back_mut().unwrap().exit_signal = Some((
+            //         state.block_coord.try_delta(0, 2, 0).unwrap(),
+            //         step.exit_signal,
+            //     ));
+            // }
+            // if step.exit_signal != BlockId::from(0) || step.enter_signal != BlockId::from(0) {
+            //     self.start_new_unplanned_segment();
+            // }
+            if step.enter_signal != BlockId::from(0) {
+                self.unplanned_segments.back_mut().unwrap().exit_signal = self.held_signal.take();
+                self.start_new_unplanned_segment();
+                self.unplanned_segments.back_mut().unwrap().enter_signal =
+                    Some((state.block_coord, step.enter_signal));
+                self.held_signal = Some((state.block_coord, step.enter_signal));
+            }
+            self.apply_step(state);
+        }
+
         let mut steps = 0.0;
         for seg in self.scheduled_segments.iter() {
             steps += seg.segment.distance();
@@ -700,7 +672,7 @@ impl CartCoroutine {
             // Precondition: self.scan_state is valid
             let new_state = match self.scan_state.advance::<false>(block_getter) {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
-                Ok(tracks::ScanOutcome::Failure) => break 'scan_loop,
+                Ok(tracks::ScanOutcome::CannotAdvance) => break 'scan_loop,
                 Ok(tracks::ScanOutcome::NotOnTrack) => {
                     tracing::warn!("Not on track at {:?}", self.scan_state.vec_coord);
                     break 'scan_loop;
@@ -746,7 +718,7 @@ impl CartCoroutine {
                     ReenterableResult::AvailableNow(x) => x,
                     ReenterableResult::Deferred(d) => {
                         tracing::debug!("signal parse deferral");
-                        return Some(d.defer_and_reinvoke(2));
+                        return Some(d.defer_and_reinvoke(CONTINUATION_TAG_SIGNAL));
                     }
                 };
                 match signal_result {
@@ -779,48 +751,11 @@ impl CartCoroutine {
                 .last_speed_post_indication
                 .min(new_state.allowable_speed as f64);
             buffer_time_estimate += (movement_len / speed_upper_bound) as f32;
-
             estimated_max_speed = (estimated_max_speed * estimated_max_speed
                 + 2.0 * MAX_ACCEL as f32 * movement_len as f32)
                 .sqrt()
                 .min(speed_upper_bound as f32);
-
-            let last_move = self.unplanned_segments.back().unwrap();
-            // We got success, so we're at a new position.
-            let new_delta = new_state.vec_coord - last_move.to;
-            assert!(new_delta.magnitude() > 0.001);
-
-            let last_move_delta = last_move.to - last_move.from;
-
-            let effective_speed = self
-                .last_speed_post_indication
-                .min(new_state.allowable_speed as f64);
-            tracing::debug!("Considering split at {:?}", new_state.vec_coord);
-            if last_move_delta.magnitude() > 256.0 {
-                tracing::debug!(
-                    "Splitting a segment due to length; prev length was {}",
-                    last_move_delta.magnitude()
-                );
-                self.start_new_unplanned_segment();
-            } else if last_move_delta.dot(new_delta)
-                / (last_move_delta.magnitude() * new_delta.magnitude())
-                < 0.999999
-            {
-                tracing::debug!(
-                    "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
-                    last_move_delta.magnitude(),
-                    last_move_delta.dot(new_delta)
-                        / (last_move_delta.magnitude() * new_delta.magnitude())
-                );
-                self.start_new_unplanned_segment();
-            } else if effective_speed != last_move.max_speed {
-                tracing::debug!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
-                self.start_new_unplanned_segment();
-            }
-            let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
-            last_seg_mut.to = new_state.vec_coord;
-            last_seg_mut.max_speed = effective_speed;
-            self.scan_state = new_state;
+            self.apply_step(new_state);
         }
 
         tracing::debug!(
@@ -832,6 +767,47 @@ impl CartCoroutine {
         );
 
         None
+    }
+
+    fn apply_step(&mut self, new_state: ScanState) {
+        let last_move = self.unplanned_segments.back().unwrap();
+        // We got success, so we're at a new position.
+        let new_delta = new_state.vec_coord - last_move.to;
+        if new_delta.magnitude() <= 0.001 {
+            return;
+        }
+
+        let last_move_delta = last_move.to - last_move.from;
+
+        let effective_speed = self
+            .last_speed_post_indication
+            .min(new_state.allowable_speed as f64);
+        tracing::debug!("Considering split at {:?}", new_state.vec_coord);
+        if last_move_delta.magnitude() > 256.0 {
+            tracing::debug!(
+                "Splitting a segment due to length; prev length was {}",
+                last_move_delta.magnitude()
+            );
+            self.start_new_unplanned_segment();
+        } else if last_move_delta.dot(new_delta)
+            / (last_move_delta.magnitude() * new_delta.magnitude())
+            < 0.999999
+        {
+            tracing::debug!(
+                "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
+                last_move_delta.magnitude(),
+                last_move_delta.dot(new_delta)
+                    / (last_move_delta.magnitude() * new_delta.magnitude())
+            );
+            self.start_new_unplanned_segment();
+        } else if effective_speed != last_move.max_speed {
+            tracing::debug!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
+            self.start_new_unplanned_segment();
+        }
+        let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
+        last_seg_mut.to = new_state.vec_coord;
+        last_seg_mut.max_speed = effective_speed;
+        self.scan_state = new_state;
     }
 
     fn promote_schedulable(
@@ -938,9 +914,7 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if (should_panic_schedule || self.last_submitted_move_exit_speed < 0.001)
-                && idx == 0
-            {
+            } else if should_panic_schedule || self.last_submitted_move_exit_speed < 0.001 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(
@@ -948,7 +922,6 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg
                 );
-                // We don't actually need to set this, but this guards against refactorings that remove the idx==0 conditions
                 unconditionally_schedulable = true;
             }
 
@@ -962,6 +935,7 @@ impl CartCoroutine {
 
         // We scheduled some prefix of the unscheduled segments, on a 1:1 basis
         // Remove that prefix
+        tracing::debug!("Scheduling {:?} segments", schedulable_segments.len());
         for _ in 0..schedulable_segments.len() {
             self.unplanned_segments.pop_front().unwrap();
         }
@@ -1374,6 +1348,112 @@ impl CartCoroutine {
 
             brake_curve_exit_speed
         }
+    }
+
+    fn finish_schedule(
+        &mut self,
+        when: f32,
+        queue_space: usize,
+        whence: Vector3<f64>,
+        services: &EntityCoroutineServices<'_>,
+    ) -> CoroutineResult {
+        let schedulable_segments = self.promote_schedulable(when, queue_space);
+        self.schedule_segments(schedulable_segments);
+        if !self.scheduled_segments.iter().any(|x| x.move_time > 0.001) {
+            // No schedulable segments
+            // Scan every second, trying to start again.
+            tracing::debug!("No schedulable segments");
+            return perovskite_server::game_state::entities::CoroutineResult::Successful(
+                perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
+                    0.5..1.0,
+                ),
+            );
+        }
+        let mut returned_moves = Vec::with_capacity(queue_space);
+        let mut returned_moves_time = 0.0;
+        while self.scheduled_segments.len() > 0 && returned_moves.len() < queue_space {
+            let segment = self.scheduled_segments.pop_front().unwrap();
+            self.last_submitted_move_exit_speed =
+                segment.speed + (segment.acceleration * segment.move_time);
+
+            tracing::debug!(
+                "returning a movement, speed is {} -> {}, accel is {}, time is {}",
+                segment.speed,
+                self.last_submitted_move_exit_speed,
+                segment.acceleration,
+                segment.move_time
+            );
+            tracing::debug!(
+                "seg position: {:?}, actually {:?}",
+                segment.segment.from,
+                whence
+            );
+
+            if let Some((enter_signal_coord, enter_signal_block)) = segment.segment.enter_signal {
+                tracing::debug!(
+                    "entering block in {} + {} seconds at {:?}",
+                    returned_moves_time,
+                    when,
+                    enter_signal_coord
+                );
+                services.spawn_delayed(
+                    std::time::Duration::from_secs_f64(
+                        (returned_moves_time + when as f64).max(0.0),
+                    ),
+                    move |ctx| {
+                        ctx.game_map()
+                            .mutate_block_atomically(enter_signal_coord, |b, _ext| {
+                                tracing::debug!("entering block");
+                                signals::signal_enter_block(
+                                    enter_signal_coord,
+                                    b,
+                                    enter_signal_block,
+                                );
+                                Ok(())
+                            })
+                            .unwrap();
+                    },
+                );
+            }
+            returned_moves_time += segment.move_time;
+            if let Some((exit_signal_coord, exit_signal_block)) = segment.segment.exit_signal {
+                let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
+                const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
+                let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
+                tracing::debug!(
+                    "exiting block in {} + {} + {} seconds at {:?}",
+                    returned_moves_time,
+                    when,
+                    extra_delay,
+                    exit_signal_coord
+                );
+
+                services.spawn_delayed(
+                    std::time::Duration::from_secs_f64(
+                        (returned_moves_time + when as f64 + extra_delay).max(0.0),
+                    ),
+                    move |ctx| {
+                        ctx.game_map()
+                            .mutate_block_atomically(exit_signal_coord, |b, _ext| {
+                                signals::signal_release(exit_signal_coord, b, exit_signal_block);
+                                Ok(())
+                            })
+                            .unwrap();
+                    },
+                );
+            }
+
+            if let Some(movement) = segment.to_movement() {
+                returned_moves.push(movement);
+            } else if !segment.segment.any_content() {
+                tracing::warn!("Segment {:?} had no movement", segment);
+            }
+        }
+        CoroutineResult::Successful(
+            perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMultiple(
+                returned_moves,
+            ),
+        )
     }
 }
 

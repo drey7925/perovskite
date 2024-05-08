@@ -15,7 +15,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Error;
-use futures::FutureExt;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use rand::distributions::Bernoulli;
@@ -900,7 +899,7 @@ impl ServerGameMap {
         extended_data_callback: F,
     ) -> Result<(BlockTypeHandle, Option<T>)>
     where
-        F: FnOnce(&ExtendedData) -> Option<T>,
+        F: FnOnce(&ExtendedData) -> Result<Option<T>>,
     {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let chunk = chunk_guard.wait_and_get_for_read()?;
@@ -910,7 +909,7 @@ impl ServerGameMap {
             .extended_data
             .get(&coord.offset().as_index().try_into().unwrap())
         {
-            Some(x) => extended_data_callback(x),
+            Some(x) => extended_data_callback(x)?,
             None => None,
         };
 
@@ -949,11 +948,13 @@ impl ServerGameMap {
     /// Gets a block + variant without its extended data. This will perform a data load if the chunk
     /// is not loaded
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockTypeHandle> {
-        let chunk_guard = self.get_chunk(coord.chunk())?;
-        let chunk = chunk_guard.wait_and_get_for_read()?;
+        tokio::task::block_in_place(|| {
+            let chunk_guard = self.get_chunk(coord.chunk())?;
+            let chunk = chunk_guard.wait_and_get_for_read()?;
 
-        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        Ok(id.into())
+            let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
+            Ok(id.into())
+        })
     }
 
     /// Attempts to get a block without its extended data. Will not attempt to load blocks on cache misses
@@ -1147,28 +1148,30 @@ impl ServerGameMap {
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
-        let chunk_guard = self.get_chunk(coord.chunk())?;
-        let mut chunk = chunk_guard.wait_and_get_for_write()?;
+        tokio::task::block_in_place(|| {
+            let chunk_guard = self.get_chunk(coord.chunk())?;
+            let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
-        let (result, block_changed) = self.mutate_block_atomically_locked(
-            &chunk_guard,
-            &mut chunk,
-            coord.offset(),
-            mutator,
-            self,
-        )?;
-        if block_changed {
-            // mutate_block_atomically_locked already sent a broadcast.
-            chunk_guard.update_lighting_after_edit(
+            let (result, block_changed) = self.mutate_block_atomically_locked(
                 &chunk_guard,
-                &chunk,
+                &mut chunk,
                 coord.offset(),
-                self.block_type_manager(),
-            );
-            drop(chunk);
-            self.enqueue_writeback(chunk_guard)?;
-        }
-        Ok(result)
+                mutator,
+                self,
+            )?;
+            if block_changed {
+                // mutate_block_atomically_locked already sent a broadcast.
+                chunk_guard.update_lighting_after_edit(
+                    &chunk_guard,
+                    &chunk,
+                    coord.offset(),
+                    self.block_type_manager(),
+                );
+                drop(chunk);
+                self.enqueue_writeback(chunk_guard)?;
+            }
+            Ok(result)
+        })
     }
 
     /// Same as [mutate_block_atomically], but returns None if it cannot immediately run the mutator without
@@ -2923,7 +2926,7 @@ fn reconcile_after_bulk_handler(
 fn reacquire_writeback_permit<'a, 'b>(
     game_state: &'a Arc<GameState>,
     coarse_shard: usize,
-    read_lock: &mut parking_lot::lock_api::RwLockReadGuard<'_, parking_lot::RawRwLock, MapShard>,
+    read_lock: &mut parking_lot::RwLockReadGuard<'_, MapShard>,
 ) -> Result<mpsc::Permit<'b, WritebackReq>, Error>
 where
     'a: 'b,

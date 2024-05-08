@@ -773,7 +773,7 @@ fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
                         let (_, owner) =
                             ctx.game_map().get_block_with_extended_data(coord, |data| {
-                                data.simple_data.get(LOCKED_CHEST_OWNER).cloned()
+                                Ok(data.simple_data.get(LOCKED_CHEST_OWNER).cloned())
                             })?;
 
                         let owner_matches = if let Some(owner) = &owner {

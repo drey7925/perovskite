@@ -76,6 +76,9 @@ impl BlockId {
         );
         Ok(BlockId(self.base_id() | (variant as u32)))
     }
+    pub fn with_variant_of(self, other: BlockId) -> BlockId {
+        BlockId(self.base_id() | (other.0 & BLOCK_VARIANT_MASK))
+    }
     pub fn new(base: u32, variant: u16) -> Result<BlockId> {
         ensure!(
             base & BLOCK_VARIANT_MASK == 0,
