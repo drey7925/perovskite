@@ -537,7 +537,7 @@ impl Deferral<Result<BlockId>, BlockCoordinate> {
     ///     tag: The tag that will be passed in the continuation result when the deferred computation is
     ///         reentered
     pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
-        tracing::info!("deferring and reinvoking");
+        tracing::debug!("deferring and reinvoking");
         CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
             deferred_call: Box::pin(async move {
                 let (t, resid) = self.deferred_call.await;
@@ -824,6 +824,13 @@ impl MoveQueue {
                 }
             }
             MoveQueue::Buffer8(b) => b.capacity() - b.len(),
+        }
+    }
+
+    fn pending_movements(&self) -> usize {
+        match self {
+            MoveQueue::SingleMove(x) => x.is_some() as usize,
+            MoveQueue::Buffer8(b) => b.len(),
         }
     }
 
@@ -1148,7 +1155,7 @@ impl EntityCoreArray {
         };
         let i = match index {
             Some(i) => {
-                tracing::info!("Inserting {} at index {} in entity array", id, i);
+                tracing::debug!("Inserting {} at index {} in entity array", id, i);
                 self.id_lookup.insert(id, i);
                 self.id[i] = id;
                 self.control[i] = control;
@@ -1176,7 +1183,7 @@ impl EntityCoreArray {
                 i
             }
             None => {
-                tracing::info!("Inserting {} at end of entity array", id);
+                tracing::debug!("Inserting {} at end of entity array", id);
                 self.id_lookup.insert(id, self.len);
                 // we need to grow the array
                 self.len += 1;
@@ -1463,6 +1470,15 @@ impl EntityCoreArray {
         completion: Option<Completion<ContinuationResult>>,
         completion_sender: &tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
     ) -> f32 {
+        if self.control[i] & CONTROL_PRESENT == 0 {
+            return f32::MAX;
+        }
+        if self.control[i] & CONTROL_AUTONOMOUS == 0 {
+            return f32::MAX;
+        }
+        if self.control[i] & CONTROL_SUSPENDED != 0 {
+            return f32::MAX;
+        }
         self.recalc_in[i] -= delta_time;
         if self.recalc_in[i] < 0.0
             && self.control[i] & (CONTROL_AUTONOMOUS | CONTROL_PRESENT)
@@ -1555,6 +1571,7 @@ impl EntityCoreArray {
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
                     self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
                     if movements.is_empty() {
+                        // TODO this shouldn't be a panic
                         panic!("QueueUpMultiple with no movements");
                     }
                     for (movement_index, m) in movements.into_iter().enumerate() {
@@ -1567,9 +1584,10 @@ impl EntityCoreArray {
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
 
                     tracing::debug!(
-                        "mt: {}, mte: {}",
+                        "mt: {}, mte: {}, control: {}",
                         self.move_time[i],
-                        self.move_time_elapsed[i]
+                        self.move_time_elapsed[i],
+                        self.control[i]
                     );
                     if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
                         0.0
@@ -1677,10 +1695,29 @@ impl EntityCoreArray {
         }
         // We don't update recalc_in, the coroutine handler will do that
 
-        // if we finished a move
-        if (self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 && !self.move_queue[i].is_empty())
-            || (self.move_time_elapsed[i] >= self.move_time[i])
-        {
+        let force_advance =
+            self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 && !self.move_queue[i].is_empty();
+        if force_advance {
+            tracing::debug!(
+                "{}: force advance, control {}, mte {}, mt {}, MoveQ available {}",
+                self.id[i],
+                self.control[i],
+                self.move_time_elapsed[i],
+                self.move_time[i],
+                self.move_queue[i].pending_movements()
+            );
+            self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+        };
+
+        if force_advance || (self.move_time_elapsed[i] >= self.move_time[i]) {
+            tracing::debug!(
+                "{}: finished move, control {}, mte {}, mt {}, MoveQ available {}",
+                self.id[i],
+                self.control[i],
+                self.move_time_elapsed[i],
+                self.move_time[i],
+                self.move_queue[i].pending_movements()
+            );
             let new_elapsed = if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
                 0.0
             } else {
@@ -1870,8 +1907,6 @@ impl EntityShardWorker {
 
             last_iteration = now;
 
-            // TODO: This should use select! and some signal that lets us detect
-            // new entries, as well as cancellations
             rx_messages.clear();
             'poll: loop {
                 tracing::debug!(
@@ -1896,7 +1931,7 @@ impl EntityShardWorker {
                         }
                     },
                     count = completion_lock.recv_many(&mut completions, COMPLETION_BATCH_SIZE) => {
-                        tracing::info!("Entity worker for shard {} received {} completions", self.shard_id, count);
+                        tracing::debug!("Entity worker for shard {} received {} completions", self.shard_id, count);
                         match count {
                             0 => {
                                 tracing::warn!("Entity worker for shard {} shutting down because sender disappeared", self.shard_id);
@@ -1909,10 +1944,11 @@ impl EntityShardWorker {
                         }
                     }
                     _ = tokio::time::sleep_until(next_awakening.into()) => {
+                        tracing::debug!("Entity worker for shard {} waking up", self.shard_id);
                         break 'poll;
                     },
                     _ = self.cancellation.cancelled() => {
-                        tracing::info!("Entity worker for shard {} shutting down", self.shard_id);
+                        tracing::debug!("Entity worker for shard {} shutting down", self.shard_id);
                         break 'main_loop;
                     },
                 }
@@ -2198,7 +2234,7 @@ impl EntityTypeManager {
     }
 
     pub(crate) fn pre_build(&self) -> Result<()> {
-        tracing::info!(
+        tracing::debug!(
             "Pre-building entity type manager ({} types)",
             self.types.len()
         );

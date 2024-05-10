@@ -1875,10 +1875,16 @@ impl EntityEventSender {
                         .last()
                         .map(|m| m.sequence)
                         .unwrap_or(entity.current_move.sequence);
-
+                    // This check is too lenient - we have various modifications that don't change
+                    // the last sent sequence, but are otherwise important (e.g. force-advancing out of
+                    // a wait-forever movement with DEQUEUE_WHEN_READY in the entity engine)
                     if last_sent_sequence == Some(last_available_sequence) {
                         // Client's view of this entity is up to date
-                        return Ok(());
+                        tracing::warn!(
+                            "Client {}'s view of entity {} is believed to be up to date",
+                            self.context.id,
+                            entity.id
+                        )
                     }
                     self.sent_entities
                         .insert(entity.id, last_available_sequence);
@@ -1895,11 +1901,17 @@ impl EntityEventSender {
                                 face_direction: m.movement.face_direction,
                                 total_time_seconds: m.movement.move_time,
                             });
+                            tracing::info!("sending move {}", m.sequence);
                         }
 
                         pos = m.movement.pos_after_move(pos);
                     }
 
+                    tracing::info!(
+                        "cms {} cmp {}",
+                        entity.current_move.sequence,
+                        entity.current_move_elapsed
+                    );
                     let message = entities_proto::EntityUpdate {
                         id: entity.id,
                         entity_class: entity.class,

@@ -448,6 +448,12 @@ pub(crate) fn signal_release(
     expected_id_with_rotation: BlockId,
 ) {
     if !id.equals_ignore_variant(expected_id_with_rotation) {
+        tracing::warn!(
+            "Attempting to release unexpected signal at {:?}. Expected {:?}, got {:?}",
+            block_coord,
+            expected_id_with_rotation,
+            id
+        );
         return;
     }
 
@@ -464,7 +470,7 @@ pub(crate) fn signal_release(
             variant
         )
     }
-    variant &= !VARIANT_RESTRICTIVE_TRAFFIC;
+    variant &= !(VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_LEFT | VARIANT_RIGHT);
     variant |= VARIANT_RESTRICTIVE;
     *id = id.with_variant(variant).unwrap();
 }

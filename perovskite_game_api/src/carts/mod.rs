@@ -270,6 +270,8 @@ fn place_cart(
             held_signal: None,
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             precomputed_steps: Vec::new(),
+
+            refcount: Box::leak(Box::new(std::sync::atomic::AtomicUsize::new(0))),
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -300,8 +302,12 @@ struct TrackSegment {
     // test only
     seg_id: u64,
 
+    // The signal to acquire when entering this segment
     enter_signal: Option<(BlockCoordinate, BlockId)>,
+    // The signal to release when exiting this segment
     exit_signal: Option<(BlockCoordinate, BlockId)>,
+    // The switch to reset when exiting this segment
+    pass_switch: Option<(BlockCoordinate, BlockId)>,
 }
 // test only
 static NEXT_SEGMENT_ID: AtomicU64 = AtomicU64::new(0);
@@ -319,7 +325,10 @@ impl TrackSegment {
     }
 
     fn any_content(&self) -> bool {
-        self.enter_signal.is_some() || self.exit_signal.is_some() || self.distance() > 0.0
+        self.enter_signal.is_some()
+            || self.exit_signal.is_some()
+            || self.distance() > 0.0
+            || self.pass_switch.is_some()
     }
 
     fn split_at_offset(&self, offset: Flt) -> (Self, Option<Self>) {
@@ -333,6 +342,7 @@ impl TrackSegment {
                     seg_id: self.seg_id,
                     enter_signal: self.enter_signal,
                     exit_signal: None,
+                    pass_switch: None,
                 },
                 Some(Self {
                     from: split_point,
@@ -341,6 +351,7 @@ impl TrackSegment {
                     seg_id: self.seg_id,
                     enter_signal: None,
                     exit_signal: self.exit_signal,
+                    pass_switch: None,
                 }),
             )
         } else {
@@ -386,8 +397,6 @@ struct CartCoroutine {
     last_speed_post_indication: Flt,
     // The last velocity we already delivered to the entity system
     last_submitted_move_exit_speed: Flt,
-    // debug only
-    spawn_time: Instant,
     id: u32,
     // Track scan state
     scan_state: tracks::ScanState,
@@ -396,6 +405,9 @@ struct CartCoroutine {
     held_signal: Option<(BlockCoordinate, BlockId)>,
     // If we got a planned path from the interlocking system, this is the path
     precomputed_steps: Vec<InterlockingStep>,
+    // debug only
+    spawn_time: Instant,
+    refcount: &'static std::sync::atomic::AtomicUsize,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -406,6 +418,10 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
+        if self.refcount.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            panic!("Cart coroutine refcount is not zero!");
+        }
+
         tracing::debug!(
             "{} {:?} ========== planning {} seconds in advance",
             self.id,
@@ -564,9 +580,11 @@ impl CartCoroutine {
         } else if signal_block.equals_ignore_variant(self.config.interlocking_signal) {
             let state_clone = self.scan_state.clone();
             let config_clone = self.config.clone();
+            let refcount = self.refcount;
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
-                let result = interlocking::interlock_cart(ctx, state, 256, config_clone).await;
+                let result =
+                    interlocking::interlock_cart(ctx, state, 256, config_clone, refcount).await;
                 // todo better error handling?
                 ContinuationResultValue::HeapResult(Box::new(result.unwrap_or_default()))
             }));
@@ -581,35 +599,35 @@ impl CartCoroutine {
         max_steps_ahead: f64,
         when: f32,
     ) -> Option<CoroutineResult> {
-        for step in std::mem::replace(&mut self.precomputed_steps, vec![]) {
+        for (i, step) in std::mem::replace(&mut self.precomputed_steps, vec![])
+            .into_iter()
+            .enumerate()
+        {
+            tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
             let state = step.scan_state;
 
-            // // Unironically, this is probably easier to do with an actual track circuit and some relays
-            // if step.exit_signal != BlockId::from(0) {
-            //     if self
-            //         .unplanned_segments
-            //         .back_mut()
-            //         .unwrap()
-            //         .exit_signal
-            //         .is_some()
-            //     {
-            //         tracing::error!("unplanned_segments.back().exit_signal is already set. We don't expect this to happen");
-            //         self.start_new_unplanned_segment();
-            //     };
-            //     self.unplanned_segments.back_mut().unwrap().exit_signal = Some((
-            //         state.block_coord.try_delta(0, 2, 0).unwrap(),
-            //         step.exit_signal,
-            //     ));
-            // }
-            // if step.exit_signal != BlockId::from(0) || step.enter_signal != BlockId::from(0) {
-            //     self.start_new_unplanned_segment();
-            // }
-            if step.enter_signal != BlockId::from(0) {
-                self.unplanned_segments.back_mut().unwrap().exit_signal = self.held_signal.take();
+            if let Some(switch_coord) = state.block_coord.try_delta(0, -1, 0) {
+                if step.pass_switch != BlockId::from(0) {
+                    self.unplanned_segments.back_mut().unwrap().pass_switch =
+                        Some((switch_coord, step.pass_switch));
+                }
                 self.start_new_unplanned_segment();
-                self.unplanned_segments.back_mut().unwrap().enter_signal =
-                    Some((state.block_coord, step.enter_signal));
-                self.held_signal = Some((state.block_coord, step.enter_signal));
+            }
+
+            if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
+                if step.enter_signal != BlockId::from(0) {
+                    tracing::debug!("Acquiring signal at {:?}", state.block_coord);
+                    tracing::debug!(
+                        "Releasing signal at {:?}",
+                        self.held_signal.as_ref().map(|x| x.0)
+                    );
+                    self.unplanned_segments.back_mut().unwrap().exit_signal =
+                        self.held_signal.take();
+                    self.start_new_unplanned_segment();
+                    self.unplanned_segments.back_mut().unwrap().enter_signal =
+                        Some((signal_coord, step.enter_signal));
+                    self.held_signal = Some((signal_coord, step.enter_signal));
+                }
             }
             self.apply_step(state);
         }
@@ -660,6 +678,7 @@ impl CartCoroutine {
                 seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
                 enter_signal: None,
                 exit_signal: None,
+                pass_switch: None,
             };
             self.unplanned_segments.push_back(empty_segment);
         }
@@ -954,7 +973,7 @@ impl CartCoroutine {
 
     fn start_new_unplanned_segment(&mut self) {
         let prev_segment = self.unplanned_segments.back().unwrap();
-        if prev_segment.distance() > 0.01 || prev_segment.exit_signal.is_some() {
+        if prev_segment.any_content() {
             tracing::debug!("new segment starting from {:?}", prev_segment.to);
             let empty_segment = TrackSegment {
                 from: prev_segment.to,
@@ -963,6 +982,7 @@ impl CartCoroutine {
                 seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
                 enter_signal: None,
                 exit_signal: None,
+                pass_switch: None,
             };
             self.unplanned_segments.push_back(empty_segment);
         } else {
@@ -1442,6 +1462,45 @@ impl CartCoroutine {
                     },
                 );
             }
+            if let Some((pass_switch_coord, pass_switch_block)) = segment.segment.pass_switch {
+                let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
+                const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
+                let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
+                tracing::info!(
+                    "passing switch in {} + {} + {} seconds at {:?}",
+                    returned_moves_time,
+                    when,
+                    extra_delay,
+                    pass_switch_coord
+                );
+                let switch_unset = self.config.switch_unset;
+                services.spawn_delayed(
+                    std::time::Duration::from_secs_f64(
+                        (returned_moves_time + when as f64 + extra_delay).max(0.0),
+                    ),
+                    move |ctx| match ctx
+                        .game_map()
+                        .compare_and_set_block(
+                            pass_switch_coord,
+                            pass_switch_block,
+                            switch_unset,
+                            None,
+                            false,
+                        )
+                        .unwrap()
+                    {
+                        (game_state::game_map::CasOutcome::Match, _, _) => {}
+                        (game_state::game_map::CasOutcome::Mismatch, id, _) => {
+                            tracing::warn!(
+                                "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
+                                id,
+                                pass_switch_block,
+                                pass_switch_coord
+                            );
+                        }
+                    },
+                );
+            }
 
             if let Some(movement) = segment.to_movement() {
                 returned_moves.push(movement);
@@ -1449,6 +1508,7 @@ impl CartCoroutine {
                 tracing::warn!("Segment {:?} had no movement", segment);
             }
         }
+        tracing::debug!("returning {} moves", returned_moves.len());
         CoroutineResult::Successful(
             perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMultiple(
                 returned_moves,

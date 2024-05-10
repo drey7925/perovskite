@@ -1,9 +1,8 @@
+use std::sync::atomic::AtomicUsize;
+
 use anyhow::{bail, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
-use perovskite_server::game_state::{
-    blocks::{ExtendedData, ExtendedDataHolder},
-    event::HandlerContext,
-};
+use perovskite_server::game_state::event::HandlerContext;
 use rand::Rng;
 
 use crate::carts::signals;
@@ -35,7 +34,6 @@ impl<'a> SignalTransaction<'a> {
     /// To be used when we've successfully found a path through the interlocking
     fn commit(mut self) {
         for (coord, _expected, _rollback, commit) in self.map_changes.drain(..) {
-            tracing::info!(">>>> @ {:?}: commit {:?}", coord, commit);
             self.handler_context
                 .game_map()
                 .mutate_block_atomically(coord, |block, _ext| {
@@ -112,7 +110,10 @@ pub(super) async fn interlock_cart(
     initial_state: ScanState,
     max_scan_distance: usize,
     cart_config: CartsGameBuilderExtension,
+    refcount: &AtomicUsize,
 ) -> Result<Option<Vec<InterlockingStep>>> {
+    let prev = refcount.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    println!("prev refcount is {}", prev);
     while !handler_context.is_shutting_down() {
         let resolution = single_pathfind_attempt(
             &handler_context,
@@ -121,9 +122,10 @@ pub(super) async fn interlock_cart(
             &cart_config,
         )?;
         if resolution.is_some() {
+            refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             return dbg!(Ok(resolution));
         } else {
-            tracing::info!("No path found, trying again");
+            tracing::debug!("No path found, trying again");
             // Randomized backoff, 500-1000 msec
             //
             // A "smarter" deadlock resolution strategy like wound-wait or wait-die would
@@ -131,9 +133,11 @@ pub(super) async fn interlock_cart(
             // but that makes extended data error handling more tricky.
             let backoff = rand::thread_rng().gen_range(500..1000);
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+            refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(None);
         }
     }
+    refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     Ok(None)
 }
 
@@ -187,14 +191,12 @@ fn single_pathfind_attempt(
                     if block.equals_ignore_variant(cart_config.interlocking_signal)
                         && state.signal_rotation_ok(block.variant())
                     {
-                        tracing::info!("!!!! @ {:?}: {:?}", signal_coord, block);
                         match interlocking_signal_preacquire(signal_coord, block, *block) {
                             signals::SignalLockOutcome::Contended
                             | signals::SignalLockOutcome::InvalidSignal => {
                                 Ok(SignalParseOutcome::Deny)
                             }
                             signals::SignalLockOutcome::Acquired => {
-                                tracing::info!("   > @ {:?}: {:?}", signal_coord, block);
                                 // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
                                 let query_result = query_interlocking_signal(ext.as_ref(), "test")?;
                                 if let Some(variant) = query_result.adjust_variant(block.variant())
@@ -209,17 +211,6 @@ fn single_pathfind_attempt(
                                         *block,
                                         rollback_block,
                                         commit_block,
-                                    );
-
-                                    tracing::info!(
-                                        "   > @ {:?}: rb {:?}",
-                                        signal_coord,
-                                        rollback_block
-                                    );
-                                    tracing::info!(
-                                        "   > @ {:?}: commit {:?}",
-                                        signal_coord,
-                                        commit_block
                                     );
                                     acquired_signal = commit_block;
                                 }
@@ -286,6 +277,7 @@ fn single_pathfind_attempt(
             }
         }
         // then set the switch accordingly.
+        let mut set_switch = BlockId::from(0);
         if state.is_switch_eligible() {
             let switch_coord = track_coord.try_delta(0, -1, 0);
 
@@ -313,9 +305,9 @@ fn single_pathfind_attempt(
                             } else {
                                 cart_config.switch_straight.with_variant_of(*switch_block)
                             };
-
                             transaction.insert(switch_coord, new_block, *switch_block, new_block);
                             *switch_block = new_block;
+                            set_switch = new_block;
 
                             if will_diverge {
                                 Ok(Some(SwitchState::Diverging))
@@ -338,6 +330,7 @@ fn single_pathfind_attempt(
                         // if we're approaching from the leading side, we need to set the diverging bit
                         // If we're approaching from the reverse side, we are done - the track patterns will
                         // guide us onto the correct track.
+                        state.is_diverging = true;
                     }
                     Some(SwitchState::Straight) => {
                         // Nothing to do, the tracks already guide us straight unless we set the diverging bit.
@@ -353,13 +346,12 @@ fn single_pathfind_attempt(
         steps.push(InterlockingStep {
             scan_state: state.clone(),
             enter_signal: acquired_signal,
-            pass_switch: BlockId::from(0),
+            pass_switch: set_switch,
         });
         let new_state =
             state.advance::<false>(|coord| handler_context.game_map().get_block(coord).into())?;
         match new_state {
             super::tracks::ScanOutcome::Success(new_state) => {
-                tracing::info!("{:?}", new_state.vec_coord - state.vec_coord);
                 state = new_state;
             }
             super::tracks::ScanOutcome::CannotAdvance => {
