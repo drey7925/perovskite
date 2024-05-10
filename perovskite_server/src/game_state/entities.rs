@@ -29,6 +29,7 @@ use perovskite_core::{
         entities::{EntityAppearance, EntityTypeAssignment, ServerEntityTypeAssignments},
         render::{CustomMesh, TextureReference},
     },
+    util::{TraceBuffer, TraceLog},
 };
 use prost::Message;
 
@@ -70,6 +71,8 @@ struct Completion<T: Send + Sync + 'static> {
     index: usize,
     /// The result we're delivering.
     result: T,
+    /// The trace buffer, if any
+    trace_buffer: Option<TraceBuffer>,
 }
 
 // A deferred call to be invoked on a tokio executor, same as Deferral but private
@@ -95,6 +98,8 @@ struct DeferredPrivate<T: Send + Sync + 'static> {
     //     keep an eye on the number of outstanding tokio tasks and avoid invoking coroutines when
     //     facing such a backlog. This can probably be itself deferred for a future version.
     deferred_call: Pin<Box<(dyn Future<Output = T> + Send + 'static)>>,
+
+    trace_buffer: Option<TraceBuffer>,
 }
 
 fn id_to_shard(id: u64) -> usize {
@@ -325,6 +330,39 @@ impl From<EntityMoveDecision> for CoroutineResult {
         Self::Successful(m)
     }
 }
+impl CoroutineResult {
+    pub fn with_trace_buffer(self, buffer: TraceBuffer) -> Self {
+        match self {
+            Self::Successful(decision) => {
+                buffer.log("CoroutineResult::Successful");
+                drop(buffer);
+                Self::Successful(decision)
+            }
+            CoroutineResult::_DeferredMoveResult(x) => {
+                buffer.log("attaching");
+                CoroutineResult::_DeferredMoveResult(DeferredPrivate {
+                    deferred_call: x.deferred_call,
+                    trace_buffer: Some(buffer),
+                })
+            }
+            CoroutineResult::_DeferredReenterCoroutine(x) => {
+                buffer.log("attaching");
+                CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
+                    deferred_call: x.deferred_call,
+                    trace_buffer: Some(buffer),
+                })
+            }
+        }
+    }
+
+    fn log_trace(&self, arg: &'static str) {
+        match self {
+            CoroutineResult::Successful(_) => {}
+            CoroutineResult::_DeferredMoveResult(x) => x.trace_buffer.log(arg),
+            CoroutineResult::_DeferredReenterCoroutine(x) => x.trace_buffer.log(arg),
+        }
+    }
+}
 
 pub(crate) struct StoredMovement {
     pub(crate) sequence: u64,
@@ -553,6 +591,7 @@ impl Deferral<Result<BlockId>, BlockCoordinate> {
                     }
                 }
             }),
+            trace_buffer: None,
         })
     }
 }
@@ -576,6 +615,7 @@ macro_rules! impl_deferral {
                             },
                         }
                     }),
+                    trace_buffer: None,
                 })
             }
         }
@@ -596,6 +636,7 @@ macro_rules! impl_deferral {
                             },
                         }
                     }),
+                    trace_buffer: None,
                 })
             }
         }
@@ -610,6 +651,7 @@ macro_rules! impl_deferral {
                             tag,
                         }
                     }),
+                    trace_buffer: None,
                 })
             }
         }
@@ -632,6 +674,7 @@ impl Deferral<ContinuationResultValue, ()> {
                 let (value, _) = self.deferred_call.await;
                 ContinuationResult { tag, value }
             }),
+            trace_buffer: None,
         })
     }
 }
@@ -647,6 +690,7 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
                 let (t, _residual) = self.deferred_call.await;
                 f(t)
             }),
+            trace_buffer: None,
         })
     }
 }
@@ -791,7 +835,9 @@ pub trait EntityCoroutine: Send + Sync + 'static {
         when: f32,
         queue_space: usize,
         continuation_result: ContinuationResult,
+        trace_buffer: Option<TraceBuffer>,
     ) -> CoroutineResult {
+        trace_buffer.log("WARN: In default continuation, dropping the completion.");
         drop(continuation_result);
         self.plan_move(services, current_position, whence, when, queue_space)
     }
@@ -1299,10 +1345,16 @@ impl EntityCoreArray {
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
+                    let trace_buffer = deferral.trace_buffer;
                     tracing::debug!("{}: deferring continuation with a result", id);
+                    trace_buffer.log("In insert, preparing to spawn for a deferred result");
 
                     tokio::task::spawn(async move {
+                        trace_buffer.log("spawned, about to run deferred call");
+
                         let result = deferral.deferred_call.await;
+                        trace_buffer.log("Done running deferred call");
+
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
@@ -1312,11 +1364,10 @@ impl EntityCoreArray {
                                     // The tag doesn't matter in this case
                                     tag: 0,
                                 },
+                                trace_buffer,
                             })
                             .await
                             .unwrap();
-
-                        tracing::debug!("{}: sending continuation with a result", id);
                     });
                 }
                 CoroutineResult::_DeferredReenterCoroutine(deferral) => {
@@ -1326,18 +1377,22 @@ impl EntityCoreArray {
                     let id = self.id[i];
 
                     tracing::debug!("{}: deferring continuation to reenter", id);
+                    let trace_buffer = deferral.trace_buffer;
+                    trace_buffer.log("In insert, preparing to spawn for a deferred reentry");
 
                     tokio::task::spawn(async move {
+                        trace_buffer.log("spawned, about to run deferred call");
                         let result = deferral.deferred_call.await;
+                        trace_buffer.log("Done running deferred call");
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
                                 index: i,
                                 result,
+                                trace_buffer,
                             })
                             .await
                             .unwrap();
-                        tracing::debug!("{}: sending continuation to reenter", id);
                     });
                 }
             }
@@ -1542,16 +1597,21 @@ impl EntityCoreArray {
                 ),
                 Some(c) => match c.result.value {
                     ContinuationResultValue::EntityDecision(m) => CoroutineResult::Successful(m),
-                    _ => coroutine.as_mut().continuation(
-                        services,
-                        vec3(self.x[i], self.y[i], self.z[i]),
-                        vec3(estimated_x, estimated_y, estimated_z),
-                        estimated_t,
-                        move_queue.remaining_capacity(),
-                        c.result,
-                    ),
+                    _ => {
+                        c.trace_buffer.log("In run_coro_single, reentering");
+                        coroutine.as_mut().continuation(
+                            services,
+                            vec3(self.x[i], self.y[i], self.z[i]),
+                            vec3(estimated_x, estimated_y, estimated_z),
+                            estimated_t,
+                            move_queue.remaining_capacity(),
+                            c.result,
+                            c.trace_buffer,
+                        )
+                    }
                 },
             };
+            planned_move.log_trace("In run_coro_single, after plan_move");
 
             match planned_move {
                 CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
@@ -1629,14 +1689,20 @@ impl EntityCoreArray {
                     self.move_time[i] - self.move_time_elapsed[i]
                 }
                 CoroutineResult::_DeferredMoveResult(deferral) => {
+                    deferral.trace_buffer.log("_dmr early");
                     self.control[i] |= CONTROL_SUSPENDED;
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
                     tracing::debug!("{}: deferring continuation with a result", id);
 
+                    let trace_buffer = deferral.trace_buffer;
+                    trace_buffer.log("In run_coro, preparing to spawn for a deferred result");
+
                     tokio::task::spawn(async move {
+                        trace_buffer.log("spawned, about to run deferred call");
                         let result = deferral.deferred_call.await;
+                        trace_buffer.log("Done running deferred call");
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
@@ -1646,6 +1712,7 @@ impl EntityCoreArray {
                                     // The tag doesn't matter in this case
                                     tag: 0,
                                 },
+                                trace_buffer,
                             })
                             .await
                             .unwrap();
@@ -1661,14 +1728,20 @@ impl EntityCoreArray {
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
+                    let trace_buffer = deferral.trace_buffer;
+                    trace_buffer.log("In run_coro, preparing to spawn for a deferred result");
                     tracing::debug!("{}: deferring continuation to reenter", id);
+
                     tokio::task::spawn(async move {
+                        trace_buffer.log("spawned, about to run deferred call");
                         let result = deferral.deferred_call.await;
+                        trace_buffer.log("Done running deferred call");
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
                                 index: i,
                                 result,
+                                trace_buffer,
                             })
                             .await
                             .unwrap();
@@ -2026,6 +2099,9 @@ impl EntityShardWorker {
 
         let mut next_event = std::f32::MAX;
         for completion in completions.drain(..) {
+            completion
+                .trace_buffer
+                .log("In handle_completions, about to resume");
             let index = completion.index;
 
             if index >= lock.len {
@@ -2036,6 +2112,11 @@ impl EntityShardWorker {
             if lock.control[index] & (CONTROL_PRESENT | CONTROL_AUTONOMOUS | CONTROL_SUSPENDED) == 0
             {
                 tracing::warn!("Tried to resume non-existent/non-auton/non-suspended entity at index {} w/ control {:x}", index, lock.control[index]);
+
+                completion
+                    .trace_buffer
+                    .log("WARN: Resuming nonexistent/non-auton/non-suspended entity");
+
                 continue;
             }
             if lock.id[index] != completion.entity_id {
@@ -2045,6 +2126,7 @@ impl EntityShardWorker {
                     completion.entity_id,
                     lock.id[index]
                 );
+                completion.trace_buffer.log("WARN: Resuming mismatched ID");
                 continue;
             }
             lock.control[index] &= !CONTROL_SUSPENDED;

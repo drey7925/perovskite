@@ -10,6 +10,7 @@ use perovskite_core::{
     constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
+    util::{TraceBuffer, TraceLog},
 };
 use perovskite_server::game_state::{
     self,
@@ -418,47 +419,20 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        if self.refcount.load(std::sync::atomic::Ordering::SeqCst) != 0 {
-            panic!("Cart coroutine refcount is not zero!");
-        }
-
-        tracing::debug!(
-            "{} {:?} ========== planning {} seconds in advance",
-            self.id,
-            self.spawn_time.elapsed(),
-            when
-        );
-        // debug only
-        let mut step_count = 0.0;
-        for seg in self.scheduled_segments.iter() {
-            step_count += seg.segment.distance();
-        }
-        for seg in self.unplanned_segments.iter() {
-            step_count += seg.distance();
-        }
-        tracing::debug!(
-            "cart coro: step_count = {}. {} in braking curve, {} unplanned",
-            step_count,
-            self.scheduled_segments.len(),
-            self.unplanned_segments.len()
-        );
-
-        let maybe_deferral = self.scan_tracks(services, 1024.0, when);
-        if let Some(deferral) = maybe_deferral {
-            return deferral;
-        }
-
-        self.finish_schedule(when, queue_space, whence, services)
+        let trace_buffer = TraceBuffer::new();
+        self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
     }
     fn continuation(
         mut self: std::pin::Pin<&mut Self>,
         services: &perovskite_server::game_state::entities::EntityCoroutineServices<'_>,
-        current_position: cgmath::Vector3<f64>,
+        _current_position: cgmath::Vector3<f64>,
         whence: cgmath::Vector3<f64>,
         when: f32,
         queue_space: usize,
         continuation_result: ContinuationResult,
+        trace_buffer: Option<TraceBuffer>,
     ) -> CoroutineResult {
+        trace_buffer.log("In continuation");
         if continuation_result.tag == CONTINUATION_TAG_SIGNAL {
             match continuation_result.value {
                 ContinuationResultValue::GetBlock(block_id, coord) => {
@@ -481,11 +455,19 @@ impl EntityCoroutine for CartCoroutine {
                                     // empty route plan, try to scan the interlocking again next time
                                     // For now, just schedule what we can, and we'll get reinvoked to try again
                                     tracing::debug!("Got empty route plan, rescheduling");
+                                    trace_buffer.log("Got empty route plan, rescheduling");
                                     return self.finish_schedule(
                                         when,
                                         queue_space,
                                         whence,
                                         services,
+                                        trace_buffer.unwrap_or_else(|| {
+                                            let buf = TraceBuffer::new();
+                                            buf.log(
+                                                "In completion: no trace buffer, making a new one",
+                                            );
+                                            buf
+                                        }),
                                     );
                                 }
                             }
@@ -504,13 +486,63 @@ impl EntityCoroutine for CartCoroutine {
             };
         }
 
-        self.plan_move(services, current_position, whence, when, queue_space)
+        self.plan_move_impl(
+            services,
+            whence,
+            when,
+            queue_space,
+            trace_buffer.unwrap_or_else(|| {
+                let buf = TraceBuffer::new();
+                buf.log("In completion: no trace buffer, making a new one");
+                buf
+            }),
+        )
     }
 }
 
 const CONTINUATION_TAG_SIGNAL: u32 = 0x516ea1;
 
 impl CartCoroutine {
+    fn plan_move_impl(
+        &mut self,
+        services: &EntityCoroutineServices<'_>,
+        whence: cgmath::Vector3<f64>,
+        when: f32,
+        queue_space: usize,
+        trace_buffer: TraceBuffer,
+    ) -> CoroutineResult {
+        if self.refcount.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            panic!("Cart coroutine refcount is not zero!");
+        }
+        tracing::debug!(
+            "{} {:?} ========== planning {} seconds in advance",
+            self.id,
+            self.spawn_time.elapsed(),
+            when
+        );
+        // debug only
+        let mut step_count = 0.0;
+        for seg in self.scheduled_segments.iter() {
+            step_count += seg.segment.distance();
+        }
+        for seg in self.unplanned_segments.iter() {
+            step_count += seg.distance();
+        }
+        tracing::debug!(
+            "cart coro: step_count = {}. {} in braking curve, {} unplanned",
+            step_count,
+            self.scheduled_segments.len(),
+            self.unplanned_segments.len()
+        );
+
+        let maybe_deferral = self.scan_tracks(services, 1024.0, when, &trace_buffer);
+        if let Some(deferral) = maybe_deferral {
+            return deferral.with_trace_buffer(trace_buffer);
+        }
+
+        self.finish_schedule(when, queue_space, whence, services, trace_buffer)
+    }
+
     fn parse_signal(
         &self,
         services: &EntityCoroutineServices<'_>,
@@ -598,7 +630,11 @@ impl CartCoroutine {
         services: &EntityCoroutineServices<'_>,
         max_steps_ahead: f64,
         when: f32,
+        trace_buffer: &TraceBuffer,
     ) -> Option<CoroutineResult> {
+        if !self.precomputed_steps.is_empty() {
+            trace_buffer.log("Using precomputed steps");
+        }
         for (i, step) in std::mem::replace(&mut self.precomputed_steps, vec![])
             .into_iter()
             .enumerate()
@@ -632,6 +668,7 @@ impl CartCoroutine {
             self.apply_step(state);
         }
 
+        trace_buffer.log("Starting scan");
         let mut steps = 0.0;
         for seg in self.scheduled_segments.iter() {
             steps += seg.segment.distance();
@@ -698,6 +735,7 @@ impl CartCoroutine {
                 }
                 Ok(tracks::ScanOutcome::Deferral(d)) => {
                     tracing::debug!("track scan deferral");
+                    trace_buffer.log("ScanState::advance deferral");
                     return Some(d.defer_and_reinvoke(1));
                 }
                 Err(e) => {
@@ -784,6 +822,7 @@ impl CartCoroutine {
             estimated_max_speed,
             (2.0 * estimated_max_speed / MAX_ACCEL as f32)
         );
+        trace_buffer.log("finished scanning");
 
         None
     }
@@ -1376,19 +1415,24 @@ impl CartCoroutine {
         queue_space: usize,
         whence: Vector3<f64>,
         services: &EntityCoroutineServices<'_>,
+        trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
+        trace_buffer.log("Promoting schedulable segments");
         let schedulable_segments = self.promote_schedulable(when, queue_space);
+        trace_buffer.log("Scheduling segments");
         self.schedule_segments(schedulable_segments);
         if !self.scheduled_segments.iter().any(|x| x.move_time > 0.001) {
-            // No schedulable segments
+            // No scheduled segments
             // Scan every second, trying to start again.
             tracing::debug!("No schedulable segments");
+            trace_buffer.log("No schedulable segments");
             return perovskite_server::game_state::entities::CoroutineResult::Successful(
                 perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
                     0.5..1.0,
                 ),
             );
         }
+        trace_buffer.log("Building moves");
         let mut returned_moves = Vec::with_capacity(queue_space);
         let mut returned_moves_time = 0.0;
         while self.scheduled_segments.len() > 0 && returned_moves.len() < queue_space {
@@ -1509,6 +1553,7 @@ impl CartCoroutine {
             }
         }
         tracing::debug!("returning {} moves", returned_moves.len());
+        trace_buffer.log("Done!");
         CoroutineResult::Successful(
             perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMultiple(
                 returned_moves,

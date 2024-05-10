@@ -113,7 +113,7 @@ pub(super) async fn interlock_cart(
     refcount: &AtomicUsize,
 ) -> Result<Option<Vec<InterlockingStep>>> {
     let prev = refcount.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    println!("prev refcount is {}", prev);
+    //println!("prev refcount is {}", prev);
     while !handler_context.is_shutting_down() {
         let resolution = single_pathfind_attempt(
             &handler_context,
@@ -123,7 +123,7 @@ pub(super) async fn interlock_cart(
         )?;
         if resolution.is_some() {
             refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            return dbg!(Ok(resolution));
+            return Ok(resolution);
         } else {
             tracing::debug!("No path found, trying again");
             // Randomized backoff, 500-1000 msec
