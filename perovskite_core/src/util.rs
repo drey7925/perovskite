@@ -1,25 +1,68 @@
-use std::time::Instant;
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::Instant,
+};
+
+use rand::Rng;
 // TODO: Conditionally replace with a ZST based on a feature flag
-pub struct TraceBuffer {
+
+static TRACE_RATE_DENOMINATOR: AtomicUsize = AtomicUsize::new(1);
+
+pub fn set_trace_rate_denominator(val: usize) {
+    TRACE_RATE_DENOMINATOR.store(val, std::sync::atomic::Ordering::Relaxed);
+}
+
+struct TraceBufferInner {
     created: Instant,
     buf: std::sync::mpsc::SyncSender<(Instant, &'static str)>,
     buf_recv: std::sync::Mutex<std::sync::mpsc::Receiver<(Instant, &'static str)>>,
 }
 
+pub struct TraceBuffer {
+    inner: Option<Arc<TraceBufferInner>>,
+}
+impl Clone for TraceBuffer {
+    fn clone(&self) -> Self {
+        self.log("Cloning trace buffer");
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl TraceBuffer {
-    pub fn new() -> TraceBuffer {
-        let (tx, rx) = std::sync::mpsc::sync_channel(256);
-        TraceBuffer {
-            created: Instant::now(),
-            buf: tx,
-            buf_recv: std::sync::Mutex::new(rx),
+    pub fn new(force_print: bool) -> TraceBuffer {
+        if force_print
+            || rand::thread_rng().gen_bool(
+                1.0 / TRACE_RATE_DENOMINATOR.load(std::sync::atomic::Ordering::Relaxed) as f64,
+            )
+        {
+            Self::new_filled()
+        } else {
+            Self::empty()
         }
     }
     pub fn log(&self, msg: &'static str) {
-        let _ = self.buf.try_send((Instant::now(), msg));
+        if let Some(inner) = self.inner.as_ref() {
+            let _ = inner.buf.try_send((Instant::now(), msg));
+        }
+    }
+    fn new_filled() -> TraceBuffer {
+        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let inner = TraceBufferInner {
+            created: Instant::now(),
+            buf: tx,
+            buf_recv: std::sync::Mutex::new(rx),
+        };
+        TraceBuffer {
+            inner: Some(Arc::new(inner)),
+        }
+    }
+    pub fn empty() -> TraceBuffer {
+        TraceBuffer { inner: None }
     }
 }
-impl Drop for TraceBuffer {
+impl Drop for TraceBufferInner {
     fn drop(&mut self) {
         println!("+-----TRACE-----");
         let mut prev_nanos = 0;
@@ -34,11 +77,4 @@ impl Drop for TraceBuffer {
 
 pub trait TraceLog {
     fn log(&self, msg: &'static str);
-}
-impl TraceLog for Option<TraceBuffer> {
-    fn log(&self, msg: &'static str) {
-        if let Some(buf) = self.as_ref() {
-            buf.log(msg);
-        }
-    }
 }

@@ -41,6 +41,7 @@ use crate::{
 use crate::{run_handler, CachelineAligned};
 
 use super::blocks::BlockInteractionResult;
+use super::event::log_trace;
 use super::{
     blocks::{
         self, BlockTypeHandle, BlockTypeManager, ExtDataHandling, ExtendedData, ExtendedDataHolder,
@@ -1387,7 +1388,9 @@ impl ServerGameMap {
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
     fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
+        log_trace("get_chunk starting");
         let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
+        log_trace("get_chunk acquired writeback permit");
         let shard = shard_id(coord);
         let mut load_chunk_tries = 0;
         let result = loop {
@@ -1395,8 +1398,10 @@ impl ServerGameMap {
                 let _span = span!("acquire game_map read lock");
                 self.live_chunks[shard].read()
             };
+            log_trace("get_chunk acquired read lock");
             // All good. The chunk is loaded.
             if read_guard.chunks.contains_key(&coord) {
+                log_trace("get_chunk chunk loaded");
                 return Ok(MapChunkOuterGuard {
                     read_guard,
                     coord,
@@ -1404,9 +1409,10 @@ impl ServerGameMap {
                     force_writeback: false,
                 });
             }
+
             load_chunk_tries += 1;
             drop(read_guard);
-
+            log_trace("get_chunk read lock released");
             // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
             // under a read lock
             // This can't be done with an upgradable lock due to a deadlock risk.
@@ -1414,9 +1420,11 @@ impl ServerGameMap {
                 let _span = span!("acquire game_map write lock");
                 self.live_chunks[shard].write()
             };
+            log_trace("get_chunk acquired write lock");
             if write_guard.chunks.contains_key(&coord) {
                 // Someone raced with us. Try looping again.
                 log::info!("Race while upgrading in get_chunk; retrying two-phase lock");
+                log_trace("get_chunk race detected");
                 drop(write_guard);
                 continue;
             }
@@ -1437,11 +1445,14 @@ impl ServerGameMap {
             // they'll get an empty chunk holder and will wait for the condition variable to be signalled
             // (when that thread waits on the condition variable, it atomically releases the inner lock)
             let read_guard = RwLockWriteGuard::downgrade(write_guard);
+            log_trace("get_chunk downgraded write lock");
             // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
             let chunk_holder = read_guard.chunks.get(&coord).unwrap();
             match self.load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone()) {
                 Ok((chunk, force_writeback)) => {
+                    log_trace("get_chunk chunk loaded, filling");
                     chunk_holder.fill(chunk, &read_guard.light_columns, self.block_type_manager());
+                    log_trace("get_chunk chunk filled");
                     let outer_guard = MapChunkOuterGuard {
                         read_guard,
                         coord,

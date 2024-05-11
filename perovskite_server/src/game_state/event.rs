@@ -20,8 +20,11 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use anyhow::Result;
 
+use futures::Future;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::PlayerPositionUpdate;
+use perovskite_core::util::TraceBuffer;
+use tokio::task::futures::TaskLocalFuture;
 use tracing::warn;
 
 use super::{client_ui::Popup, player::Player, GameState};
@@ -254,4 +257,27 @@ impl Deref for HandlerContext<'_> {
     fn deref(&self) -> &Self::Target {
         &self.game_state
     }
+}
+
+tokio::task_local! {
+    static TRACE_BUFFER: TraceBuffer;
+}
+
+pub fn log_trace(msg: &'static str) {
+    let _ = TRACE_BUFFER.try_with(|t| t.log(msg));
+}
+
+pub fn clone_trace_buffer() -> TraceBuffer {
+    match TRACE_BUFFER.try_with(|t| t.clone()) {
+        Ok(t) => t,
+        Err(_) => {
+            let buf = TraceBuffer::new(false);
+            buf.log("Failed to clone trace buffer, creating a new one");
+            buf
+        }
+    }
+}
+
+pub(crate) fn run_traced<F: Future>(buf: TraceBuffer, f: F) -> TaskLocalFuture<TraceBuffer, F> {
+    TRACE_BUFFER.scope(buf, f)
 }

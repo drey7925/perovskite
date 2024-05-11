@@ -71,8 +71,8 @@ struct Completion<T: Send + Sync + 'static> {
     index: usize,
     /// The result we're delivering.
     result: T,
-    /// The trace buffer, if any
-    trace_buffer: Option<TraceBuffer>,
+    /// The trace buffer (may be an empty one)
+    trace_buffer: TraceBuffer,
 }
 
 // A deferred call to be invoked on a tokio executor, same as Deferral but private
@@ -99,7 +99,7 @@ struct DeferredPrivate<T: Send + Sync + 'static> {
     //     facing such a backlog. This can probably be itself deferred for a future version.
     deferred_call: Pin<Box<(dyn Future<Output = T> + Send + 'static)>>,
 
-    trace_buffer: Option<TraceBuffer>,
+    trace_buffer: TraceBuffer,
 }
 
 fn id_to_shard(id: u64) -> usize {
@@ -342,14 +342,14 @@ impl CoroutineResult {
                 buffer.log("attaching");
                 CoroutineResult::_DeferredMoveResult(DeferredPrivate {
                     deferred_call: x.deferred_call,
-                    trace_buffer: Some(buffer),
+                    trace_buffer: buffer,
                 })
             }
             CoroutineResult::_DeferredReenterCoroutine(x) => {
                 buffer.log("attaching");
                 CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
                     deferred_call: x.deferred_call,
-                    trace_buffer: Some(buffer),
+                    trace_buffer: buffer,
                 })
             }
         }
@@ -591,7 +591,7 @@ impl Deferral<Result<BlockId>, BlockCoordinate> {
                     }
                 }
             }),
-            trace_buffer: None,
+            trace_buffer: TraceBuffer::empty(),
         })
     }
 }
@@ -615,7 +615,7 @@ macro_rules! impl_deferral {
                             },
                         }
                     }),
-                    trace_buffer: None,
+                    trace_buffer: TraceBuffer::empty(),
                 })
             }
         }
@@ -636,7 +636,7 @@ macro_rules! impl_deferral {
                             },
                         }
                     }),
-                    trace_buffer: None,
+                    trace_buffer: TraceBuffer::empty(),
                 })
             }
         }
@@ -651,7 +651,7 @@ macro_rules! impl_deferral {
                             tag,
                         }
                     }),
-                    trace_buffer: None,
+                    trace_buffer: TraceBuffer::empty(),
                 })
             }
         }
@@ -674,7 +674,7 @@ impl Deferral<ContinuationResultValue, ()> {
                 let (value, _) = self.deferred_call.await;
                 ContinuationResult { tag, value }
             }),
-            trace_buffer: None,
+            trace_buffer: TraceBuffer::empty(),
         })
     }
 }
@@ -690,7 +690,7 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral
                 let (t, _residual) = self.deferred_call.await;
                 f(t)
             }),
-            trace_buffer: None,
+            trace_buffer: TraceBuffer::empty(),
         })
     }
 }
@@ -835,7 +835,7 @@ pub trait EntityCoroutine: Send + Sync + 'static {
         when: f32,
         queue_space: usize,
         continuation_result: ContinuationResult,
-        trace_buffer: Option<TraceBuffer>,
+        trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
         trace_buffer.log("WARN: In default continuation, dropping the completion.");
         drop(continuation_result);

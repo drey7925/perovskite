@@ -26,6 +26,8 @@ use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::entities::IterEntity;
 use crate::game_state::entities::Movement;
+use crate::game_state::event::log_trace;
+use crate::game_state::event::run_traced;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 
@@ -70,6 +72,7 @@ use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
 use perovskite_core::protocol::game_rpc::StreamToClient;
+use perovskite_core::util::TraceBuffer;
 use prost::Message;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -1041,6 +1044,8 @@ impl InboundWorker {
     // Poll for world events and send them through outbound_tx
     pub(crate) async fn inbound_worker_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
+            let trace_buffer = TraceBuffer::new(false);
+            trace_buffer.log("Waiting for inbound message");
             tokio::select! {
                 message = self.inbound_rx.message() => {
                     match message {
@@ -1053,7 +1058,7 @@ impl InboundWorker {
                             return Ok(());
                         }
                         Ok(Some(message)) => {
-                            match self.handle_message(&message).await {
+                            match run_traced(trace_buffer, async { self.handle_message(&message).await }).await {
                                 Ok(_) => {},
                                 Err(e) => {
                                     warn!("Client {} failed to handle message: {:?}, error: {:?}", self.context.id, message, e);
@@ -1075,12 +1080,15 @@ impl InboundWorker {
 
     fn check_player_permission(&self, permission: &str) -> Result<()> {
         if !self.context.player_context.has_permission(permission) {
+            log_trace("Player permission check failed");
             return Err(Error::msg("Player does not have permission"));
         }
+        log_trace("Player permission check succeeded");
         Ok(())
     }
 
     async fn handle_message(&mut self, message: &proto::StreamToServer) -> Result<()> {
+        log_trace("Handling inbound message");
         // todo do something with the client tick once we define ticks
         match &message.client_message {
             None => {
@@ -1186,7 +1194,9 @@ impl InboundWorker {
         // todo decide whether we should send nacks on error, or just complain about them
         // to the local log
         // also decide whether position updates merit an ack
+        log_trace("Sending ack");
         self.send_ack(message.sequence).await?;
+        log_trace("Done handling message");
         Ok(())
     }
 
@@ -1223,11 +1233,13 @@ impl InboundWorker {
     where
         F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
     {
+        log_trace("Running map handlers");
         let game_state = &self.context.game_state;
 
         game_state.inventory_manager().mutate_inventory_atomically(
             &self.context.player_context.main_inventory(),
             |inventory| {
+                log_trace("In inventory mutator");
                 let stack = inventory
                     .contents_mut()
                     .get_mut(selected_inv_slot as usize)
@@ -1271,6 +1283,7 @@ impl InboundWorker {
                     // This will require support for non-block things in the world
                     error!("Dropped items from dig_block not empty; TODO/FIXME handle those items");
                 }
+                log_trace("Done running map handlers");
                 Ok(())
             },
         )
@@ -1366,6 +1379,7 @@ impl InboundWorker {
     )]
     async fn handle_place(&mut self, place_message: &proto::PlaceAction) -> Result<()> {
         tokio::task::block_in_place(|| {
+            log_trace("Running place handlers");
             let _span = span!("handle_place");
             self.context
                 .game_state
@@ -1373,6 +1387,7 @@ impl InboundWorker {
                 .mutate_inventory_atomically(
                     &self.context.player_context.main_inventory(),
                     |inventory| {
+                        log_trace("In inventory mutator");
                         let stack = inventory
                             .contents_mut()
                             .get_mut(place_message.item_slot as usize)
@@ -1424,6 +1439,7 @@ impl InboundWorker {
                             )?;
                             *stack = new_stack;
                         }
+                        log_trace("Done running place handlers");
                         Ok(())
                     },
                 )
@@ -1450,8 +1466,9 @@ impl InboundWorker {
             {
                 let mut views_to_send = HashSet::new();
                 block_in_place(|| -> anyhow::Result<Vec<StreamToClient>> {
+                    log_trace("Locking player for inventory action");
                     let mut player_state = self.context.player_context.player.state.lock();
-
+                    log_trace("Locked player for inventory action");
                     player_state.handle_inventory_action(action)?;
 
                     for popup in player_state
@@ -1475,7 +1492,7 @@ impl InboundWorker {
                             player_state.find_inv_view(view)?.as_ref(),
                         )?);
                     }
-
+                    log_trace("Done running inventory action");
                     anyhow::Result::Ok(updates)
                 })?
             };
@@ -1485,6 +1502,7 @@ impl InboundWorker {
                 .await
                 .map_err(|_| Error::msg("Could not send outbound message (inventory update)"))?;
         }
+        log_trace("Done sending inventory updates");
 
         Ok(())
     }

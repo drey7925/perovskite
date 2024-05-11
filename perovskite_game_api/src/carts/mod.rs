@@ -419,7 +419,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        let trace_buffer = TraceBuffer::new();
+        let trace_buffer = TraceBuffer::new(self.id == 0);
         self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
     }
     fn continuation(
@@ -430,7 +430,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
         continuation_result: ContinuationResult,
-        trace_buffer: Option<TraceBuffer>,
+        trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
         trace_buffer.log("In continuation");
         if continuation_result.tag == CONTINUATION_TAG_SIGNAL {
@@ -461,13 +461,7 @@ impl EntityCoroutine for CartCoroutine {
                                         queue_space,
                                         whence,
                                         services,
-                                        trace_buffer.unwrap_or_else(|| {
-                                            let buf = TraceBuffer::new();
-                                            buf.log(
-                                                "In completion: no trace buffer, making a new one",
-                                            );
-                                            buf
-                                        }),
+                                        trace_buffer,
                                     );
                                 }
                             }
@@ -485,18 +479,7 @@ impl EntityCoroutine for CartCoroutine {
                 }
             };
         }
-
-        self.plan_move_impl(
-            services,
-            whence,
-            when,
-            queue_space,
-            trace_buffer.unwrap_or_else(|| {
-                let buf = TraceBuffer::new();
-                buf.log("In completion: no trace buffer, making a new one");
-                buf
-            }),
-        )
+        self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
     }
 }
 

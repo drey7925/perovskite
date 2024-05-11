@@ -42,8 +42,11 @@ where
 #[macro_export]
 macro_rules! run_handler {
     ($closure:expr, $name:literal, $initiator:expr $(,)?) => {{
+        $crate::game_state::event::log_trace(concat!($name, " handler starting"));
         let _span = tracy_client::span!(concat!($name, " handler"));
-        $crate::game_state::handlers::run_handler_impl($closure, $name, $initiator)
+        let result = $crate::game_state::handlers::run_handler_impl($closure, $name, $initiator);
+        $crate::game_state::event::log_trace(concat!($name, " handler finished"));
+        result
     }};
 }
 

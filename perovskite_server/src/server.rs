@@ -23,7 +23,10 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use perovskite_core::protocol::game_rpc::perovskite_game_server::PerovskiteGameServer;
+use perovskite_core::{
+    protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
+    util::set_trace_rate_denominator,
+};
 
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
@@ -53,6 +56,9 @@ pub struct ServerArgs {
 
     #[arg(short, long, default_value_t = 28273)]
     port: u16,
+
+    #[arg(long, default_value_t = 100)]
+    trace_rate_denominator: usize,
 }
 
 pub struct Server {
@@ -251,6 +257,7 @@ impl ServerBuilder {
     }
 
     pub fn build(mut self) -> Result<Server> {
+        set_trace_rate_denominator(self.args.trace_rate_denominator);
         let addr = SocketAddr::new(
             // Bind to all interfaces (v4 and v6) by default
             self.args.bind_addr.unwrap_or(IpAddr::from_str("::")?),
