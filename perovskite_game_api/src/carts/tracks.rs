@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use cgmath::vec3;
+use cgmath::{vec3, Vector3};
 use perovskite_core::{
     block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate,
     protocol::render::DynamicCrop,
@@ -925,7 +925,6 @@ pub(crate) enum ScanOutcome {
 #[derive(Debug, Clone)]
 pub(crate) struct ScanState {
     pub(crate) block_coord: BlockCoordinate,
-    pub(crate) vec_coord: cgmath::Vector3<f64>,
     pub(crate) is_reversed: bool,
     pub(crate) is_diverging: bool,
     pub(crate) base_track_block: BlockId,
@@ -977,21 +976,8 @@ impl ScanState {
                 );
                 return Ok(None);
             };
-        let offset_x = if is_diverging {
-            tile.diverging_physical_x_offset
-        } else {
-            tile.physical_x_offset
-        };
-        let offset_z = if is_diverging {
-            tile.diverging_physical_z_offset
-        } else {
-            tile.physical_z_offset
-        };
-        let vec_coord =
-            b2vec(block_coord) + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
         Ok(Some(ScanState {
             block_coord,
-            vec_coord,
             is_reversed,
             is_diverging,
             base_track_block,
@@ -1276,35 +1262,9 @@ impl ScanState {
         next_state.is_reversed = matching_tile_id.reverse();
         next_state.is_diverging = matching_tile_id.diverging();
         next_state.current_tile_id = next_tile_id;
-        let base_coord = b2vec(next_coord);
 
-        let offset_x = if next_state.is_diverging {
-            next_tile.diverging_physical_x_offset
-        } else {
-            next_tile.physical_x_offset
-        };
-        let offset_z = if next_state.is_diverging {
-            next_tile.diverging_physical_z_offset
-        } else {
-            next_tile.physical_z_offset
-        };
-        next_state.vec_coord =
-            base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
-
-        let (offset_x, offset_z) = eval_rotation(
-            offset_x,
-            offset_z,
-            next_tile_id.flip_x(),
-            next_tile_id.rotation(),
-        );
-        next_state.vec_coord =
-            base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0);
         if CHATTY {
-            tracing::info!(
-                "Found matching tile: {:?}. Coords: {:?}.",
-                matching_tile_id,
-                self.vec_coord
-            );
+            tracing::info!("Found matching tile: {:?}", matching_tile_id,);
         }
 
         Ok(ScanOutcome::Success(next_state))
@@ -1362,6 +1322,35 @@ impl ScanState {
         // The tile has to be switch eligible, it has to be a backward move approaching against the points.
         self.is_switch_eligible() && self.is_reversed
     }
+
+    pub(crate) fn vec_coord(&self) -> Vector3<f64> {
+        let base_coord = b2vec(self.block_coord);
+        let tile = match TRACK_TILES[self.current_tile_id.x() as usize]
+            [self.current_tile_id.y() as usize]
+        {
+            Some(tile) => tile,
+            None => {
+                return base_coord;
+            }
+        };
+        let offset_x = if self.is_diverging {
+            tile.diverging_physical_x_offset
+        } else {
+            tile.physical_x_offset
+        };
+        let offset_z = if self.is_diverging {
+            tile.diverging_physical_z_offset
+        } else {
+            tile.physical_z_offset
+        };
+        let (offset_x, offset_z) = eval_rotation(
+            offset_x,
+            offset_z,
+            self.current_tile_id.flip_x(),
+            self.current_tile_id.rotation(),
+        );
+        base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0)
+    }
 }
 
 // test only
@@ -1409,7 +1398,6 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .checkbox_values
                         .get("diverging")
                         .context("missing diverging")?,
-                    vec_coord: b2vec(coord),
                     base_track_block: response
                         .ctx
                         .block_types()
@@ -1432,7 +1420,6 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .checkbox_values
                         .get("diverging")
                         .context("missing diverging")?,
-                    vec_coord: b2vec(coord),
                     base_track_block: response
                         .ctx
                         .block_types()
@@ -1444,7 +1431,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                 };
                 response.ctx.run_deferred(move |ctx| {
                     for _ in 0..20 {
-                        let prev = state.vec_coord + vec3(0.0, 1.0, 0.0);
+                        let prev = state.vec_coord() + vec3(0.0, 1.0, 0.0);
 
                         match state
                             .advance::<true>(|coord| ctx.game_map().get_block(coord).into())?
@@ -1457,7 +1444,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                             }
                         }
 
-                        let current = state.vec_coord + vec3(0.0, 1.0, 0.0);
+                        let current = state.vec_coord() + vec3(0.0, 1.0, 0.0);
                         std::thread::sleep(std::time::Duration::from_millis(125));
                         if let EventInitiator::WeakPlayerRef(p) = ctx.initiator() {
                             p.try_to_run(|p| p.set_position_blocking(0.5 * (prev + current)));

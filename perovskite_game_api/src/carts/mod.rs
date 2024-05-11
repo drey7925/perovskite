@@ -257,7 +257,7 @@ fn place_cart(
     let id = ctx.entities().new_entity_blocking(
         // TODO: support an offset when attaching a player to an entity, so the camera position is right
         // and we don't need to do this hackery
-        initial_state.vec_coord + cgmath::Vector3::new(0.0, 1.0, 0.0),
+        initial_state.vec_coord() + cgmath::Vector3::new(0.0, 1.0, 0.0),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
             scheduled_segments: VecDeque::new(),
@@ -707,8 +707,8 @@ impl CartCoroutine {
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
-                from: self.scan_state.vec_coord,
-                to: self.scan_state.vec_coord,
+                from: self.scan_state.vec_coord(),
+                to: self.scan_state.vec_coord(),
                 max_speed: self
                     .last_speed_post_indication
                     .min(self.scan_state.allowable_speed as f64),
@@ -730,7 +730,7 @@ impl CartCoroutine {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
                 Ok(tracks::ScanOutcome::CannotAdvance) => break 'scan_loop,
                 Ok(tracks::ScanOutcome::NotOnTrack) => {
-                    tracing::warn!("Not on track at {:?}", self.scan_state.vec_coord);
+                    tracing::warn!("Not on track at {:?}", self.scan_state.block_coord);
                     break 'scan_loop;
                 }
                 Ok(tracks::ScanOutcome::Deferral(d)) => {
@@ -752,7 +752,7 @@ impl CartCoroutine {
                         // contended signal
                         break 'scan_loop;
                     } else {
-                        tracing::debug!("Cached permissive signal at {:?}", new_state.vec_coord);
+                        tracing::debug!("Cached permissive signal at {:?}", new_state.block_coord);
                         self.unplanned_segments.back_mut().unwrap().exit_signal =
                             self.held_signal.take();
                         self.start_new_unplanned_segment();
@@ -780,11 +780,11 @@ impl CartCoroutine {
                 };
                 match signal_result {
                     SignalResult::Stop => {
-                        tracing::debug!("Stop signal at {:?}", new_state.vec_coord);
+                        tracing::debug!("Stop signal at {:?}", new_state.block_coord);
                         break 'scan_loop;
                     }
                     SignalResult::Permissive => {
-                        tracing::debug!("Permissive signal at {:?}", new_state.vec_coord);
+                        tracing::debug!("Permissive signal at {:?}", new_state.block_coord);
                         self.unplanned_segments.back_mut().unwrap().exit_signal =
                             self.held_signal.take();
                         self.start_new_unplanned_segment();
@@ -801,7 +801,7 @@ impl CartCoroutine {
                 }
             }
 
-            let movement_len = (new_state.vec_coord - self.scan_state.vec_coord).magnitude();
+            let movement_len = (new_state.vec_coord() - self.scan_state.vec_coord()).magnitude();
             steps += movement_len;
             // last speed indication is an overestimate of speed
             let speed_upper_bound = self
@@ -830,7 +830,7 @@ impl CartCoroutine {
     fn apply_step(&mut self, new_state: ScanState) {
         let last_move = self.unplanned_segments.back().unwrap();
         // We got success, so we're at a new position.
-        let new_delta = new_state.vec_coord - last_move.to;
+        let new_delta = new_state.vec_coord() - last_move.to;
         if new_delta.magnitude() <= 0.001 {
             return;
         }
@@ -840,7 +840,7 @@ impl CartCoroutine {
         let effective_speed = self
             .last_speed_post_indication
             .min(new_state.allowable_speed as f64);
-        tracing::debug!("Considering split at {:?}", new_state.vec_coord);
+        tracing::debug!("Considering split at {:?}", new_state.vec_coord());
         if last_move_delta.magnitude() > 256.0 {
             tracing::debug!(
                 "Splitting a segment due to length; prev length was {}",
@@ -863,7 +863,7 @@ impl CartCoroutine {
             self.start_new_unplanned_segment();
         }
         let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
-        last_seg_mut.to = new_state.vec_coord;
+        last_seg_mut.to = new_state.vec_coord();
         last_seg_mut.max_speed = effective_speed;
         self.scan_state = new_state;
     }
@@ -885,12 +885,6 @@ impl CartCoroutine {
         // limited by track speed" - even if we're on a braking curve approaching that track segment,
         // it doesn't matter if the track scan detects more tracks or a signal clears - the braking curve
         // up to that limiting track segment is unchanged
-
-        // The maximum speed at which we're allowed to exit the current segment.
-        // Updated to be the max entry speed of the following segment.
-        // It's 0.0 to start, because there is no further segment detected by track scan (or that segment
-        // cannot be entered due to a restrictive signal or a switch set against us)
-        let mut max_exit_speed: Flt = 0.0;
 
         // If this is true, we've hit a segment where we were limited by track speed.
         let mut unconditionally_schedulable = false;
@@ -914,7 +908,8 @@ impl CartCoroutine {
 
         // split the last segment into a segment as long as the stopping distance and a remainder, if possible
         // This allows us to avoid panic-scheduling the entire last segment if it's long
-        let split_pos = self.unplanned_segments.back().and_then(|last_segment| {
+
+        let stopping_split_pos = self.unplanned_segments.back().and_then(|last_segment| {
             // 0 = vi^2 + 2ad, d = vi^2 / 2a after correcting for signs
             let stopping_distance =
                 (last_segment.max_speed * last_segment.max_speed) / (2.0 * MAX_ACCEL);
@@ -924,8 +919,22 @@ impl CartCoroutine {
                 None
             }
         });
+        let slowing_split_pos = self.unplanned_segments.back().and_then(|last_segment| {
+            if last_segment.max_speed < 6.0 {
+                return None;
+            };
+            let target_speed = last_segment.max_speed - 5.0;
+            let slowing_distance = (last_segment.max_speed * last_segment.max_speed
+                - target_speed * target_speed)
+                / (2.0 * MAX_ACCEL);
+            if slowing_distance > 0.0 && (slowing_distance + 0.001) < last_segment.distance() {
+                Some(slowing_distance)
+            } else {
+                None
+            }
+        });
 
-        if let Some(split_pos) = split_pos {
+        if let Some(split_pos) = stopping_split_pos {
             tracing::debug!(
                 "Splitting last segment {:?} at {} out of {}",
                 self.unplanned_segments.back().unwrap(),
@@ -940,7 +949,22 @@ impl CartCoroutine {
             self.unplanned_segments.push_back(main);
             self.unplanned_segments
                 .push_back(stopping_distance.unwrap());
+            if let Some(slowing_split_pos) = slowing_split_pos {
+                let (slowing_distance, remainder) = self
+                    .unplanned_segments
+                    .pop_back()
+                    .unwrap()
+                    .split_at_offset(slowing_split_pos);
+                self.unplanned_segments.push_back(slowing_distance);
+                self.unplanned_segments.push_back(remainder.unwrap());
+            }
         }
+
+        // The maximum speed at which we're allowed to exit the current segment.
+        // Updated to be the max entry speed of the following segment.
+        // It's 0.0 to start, because there is no further segment detected by track scan (or that segment
+        // cannot be entered due to a restrictive signal or a switch set against us)
+        let mut max_exit_speed: Flt = 0.0;
 
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
             tracing::debug!("> segment idx {}, {:?}", idx, seg);
@@ -972,7 +996,9 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if should_panic_schedule || self.last_submitted_move_exit_speed < 0.001 {
+            } else if (should_panic_schedule && idx == 0)
+                || self.last_submitted_move_exit_speed < 0.001
+            {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(

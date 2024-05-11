@@ -123,7 +123,7 @@ pub(super) async fn interlock_cart(
         )?;
         if resolution.is_some() {
             refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(resolution);
+            return Ok(dbg!(resolution));
         } else {
             tracing::debug!("No path found, trying again");
             // Randomized backoff, 500-1000 msec
@@ -298,6 +298,8 @@ fn single_pathfind_attempt(
                                 will_diverge = true;
                             } else if state.can_diverge_right() && right_pending {
                                 right_pending = false;
+                                will_diverge = true;
+                            } else if state.can_converge() && state.is_diverging {
                                 will_diverge = true;
                             }
                             let new_block = if will_diverge {

@@ -122,24 +122,6 @@ impl GameEntity {
                 "estimated send was {} sec ago",
                 estimated_send_time.elapsed().as_secs_f32()
             );
-            println!(">>> @ {} <<<", self.created.elapsed().as_secs_f32());
-
-            println!(
-                "Got {} -> {}, while CMS is {}",
-                update
-                    .planned_move
-                    .iter()
-                    .map(|m| m.sequence)
-                    .min()
-                    .unwrap(),
-                update
-                    .planned_move
-                    .iter()
-                    .map(|m| m.sequence)
-                    .max()
-                    .unwrap(),
-                self.current_move_sequence
-            );
         }
 
         while self
