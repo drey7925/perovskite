@@ -509,9 +509,11 @@ impl BlockBuilder {
                             return Ok(true);
                         };
                         let block_type = block_types.get_block(&block)?.0;
-                        Ok(block_type.client_info.groups.iter().any(|g| {
-                            g == block_groups::DEFAULT_LIQUID || g == block_groups::DEFAULT_GAS
-                        }))
+                        Ok(block_type
+                            .client_info
+                            .groups
+                            .iter()
+                            .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
                     },
                     block_handle.with_variant(variant)?,
                     extended_data,

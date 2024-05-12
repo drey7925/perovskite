@@ -4,18 +4,30 @@
 use anyhow::{Context, Result};
 use cgmath::{vec3, Vector3};
 use perovskite_core::{
-    block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate,
-    protocol::render::DynamicCrop,
+    block_id::{special_block_defs::AIR_ID, BlockId},
+    chat::ChatMessage,
+    constants::{block_groups, items::default_item_interaction_rules},
+    coordinates::BlockCoordinate,
+    protocol::{
+        self,
+        items::{
+            item_def::{self, QuantityType},
+            item_stack,
+        },
+        render::DynamicCrop,
+    },
 };
 use perovskite_server::game_state::{
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
     entities::{DeferrableResult, Deferral},
     event::EventInitiator,
-    game_map::ServerGameMap,
+    game_map::{CasOutcome, ServerGameMap},
+    items::{Item, ItemStack},
 };
 
 use crate::{
-    blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
+    blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
+    default_game::{recipes::RecipeSlot, DefaultGameBuilder},
     game_builder::{StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
@@ -910,6 +922,80 @@ pub(crate) fn register_tracks(
                 }
             })),
     )?;
+
+    const CURVED_RAIL_ITEM_TEX: StaticTextureName = StaticTextureName("carts:curved_rail_item");
+    include_texture_bytes!(
+        game_builder,
+        CURVED_RAIL_ITEM_TEX,
+        "textures/curved_rail_item.png"
+    )?;
+    let rail_tile_id = rail_tile.id;
+    game_builder.inner.items_mut().register_item(Item {
+        proto: protocol::items::ItemDef {
+            short_name: "carts:rail_curve".to_string(),
+            display_name: "Curved rail".to_string(),
+            inventory_texture: Some(CURVED_RAIL_ITEM_TEX.into()),
+            groups: vec![],
+            block_apperance: String::new(),
+            interaction_rules: default_item_interaction_rules(),
+            quantity_type: Some(QuantityType::Stack(256)),
+        },
+        dig_handler: None,
+        tap_handler: None,
+        place_handler: Some(Box::new(move |ctx, coord, _anchor, stack| {
+            if stack.proto().quantity == 0 {
+                return Ok(None);
+            }
+            let rotation = ctx
+                .initiator()
+                .position()
+                .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
+                .unwrap_or(0);
+            let variant = rotation | TileId::new(8, 8, 0, false, false, false).block_variant();
+            match ctx
+                .game_map()
+                .compare_and_set_block_predicate(
+                    coord,
+                    |block, _, block_types| {
+                        // fast path
+                        if block == AIR_ID {
+                            return Ok(true);
+                        };
+                        let block_type = block_types.get_block(&block)?.0;
+                        Ok(block_type
+                            .client_info
+                            .groups
+                            .iter()
+                            .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
+                    },
+                    rail_tile_id.with_variant(variant)?,
+                    None,
+                )?
+                .0
+            {
+                CasOutcome::Match => Ok(stack.decrement()),
+                CasOutcome::Mismatch => Ok(Some(stack.clone())),
+            }
+        })),
+    })?;
+
+    game_builder.register_crafting_recipe(
+        [
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Exact("carts:rail_tile".to_string()),
+            RecipeSlot::Exact("carts:rail_tile".to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Exact("carts:rail_tile".to_string()),
+            RecipeSlot::Empty,
+        ],
+        "carts:rail_curve".to_string(),
+        3,
+        Some(item_stack::QuantityType::Stack(256)),
+        false,
+    );
 
     Ok(rail_tile.id)
 }

@@ -81,10 +81,7 @@ pub mod item_groups {
 /// Control of the map generator.
 pub mod mapgen;
 
-/// Builder for a game based on the default game.
-/// Eventually, hooks will be added so other game content can integrate closely
-/// with default game content (e.g. in the mapgen). For now, this simply wraps
-/// a [GameBuilder].
+/// Additional traits that allow customization of the default game's mechanics (e.g. its crafting recipes).
 pub trait DefaultGameBuilder {
     /// Initializes the default game in the current game builder.
     /// This will set the mapgen, game behaviors, inventory menu, register blocks/items, etc.
