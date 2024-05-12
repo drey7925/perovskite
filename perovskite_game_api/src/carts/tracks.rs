@@ -540,12 +540,13 @@ fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
             TileId::new(8, 8, 1, false, true, false).rotation_flip_bitset_mask()
                 | TileId::new(8, 8, 3, true, true, false).rotation_flip_bitset_mask()
         ),
+        max_speed: 10,
         ..TrackTile::default()
     });
 
     // CONTINUE HERE
     // [0][1] and [1][1] start the 8-block switch (folded in half to make a 4 block segment in the tile space)
-    build_folded_switch(&mut track_tiles, 4, 0, 1, 6, 0, 1);
+    build_folded_switch(&mut track_tiles, 4, 0, 1, 6, 0, 1, 40);
 
     track_tiles
 }
@@ -558,6 +559,7 @@ fn build_folded_switch(
     diag_xmin: u16,
     diag_ymin: u16,
     skip_secondary_tiles: u16,
+    max_turnout_speed: u8,
 ) {
     for y in 0..switch_half_len {
         // The tiles on column 0 only carry straight-through traffic. Diverging traffic is always on column 1 tiles,
@@ -686,7 +688,8 @@ fn build_folded_switch(
                 switch_half_len.checked_mul(4).unwrap(),
             ),
             switch_eligible: (y == 0),
-
+            max_speed: TRACK_INHERENT_MAX_SPEED,
+            diverging_max_speed: max_turnout_speed,
             ..TrackTile::default()
         });
 
@@ -1262,6 +1265,11 @@ impl ScanState {
         next_state.is_reversed = matching_tile_id.reverse();
         next_state.is_diverging = matching_tile_id.diverging();
         next_state.current_tile_id = next_tile_id;
+        next_state.allowable_speed = if matching_tile_id.diverging() {
+            next_tile.diverging_max_speed as f32
+        } else {
+            next_tile.max_speed as f32
+        };
 
         if CHATTY {
             tracing::info!("Found matching tile: {:?}", matching_tile_id,);

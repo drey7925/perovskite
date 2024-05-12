@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
@@ -26,6 +27,15 @@ impl Clone for TraceBuffer {
         self.log("Cloning trace buffer");
         Self {
             inner: self.inner.clone(),
+        }
+    }
+}
+impl Debug for TraceBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.inner.is_some() {
+            f.write_str("TraceBuffer")
+        } else {
+            f.write_str("Empty TraceBuffer")
         }
     }
 }

@@ -110,10 +110,7 @@ pub(super) async fn interlock_cart(
     initial_state: ScanState,
     max_scan_distance: usize,
     cart_config: CartsGameBuilderExtension,
-    refcount: &AtomicUsize,
 ) -> Result<Option<Vec<InterlockingStep>>> {
-    let prev = refcount.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    //println!("prev refcount is {}", prev);
     while !handler_context.is_shutting_down() {
         let resolution = single_pathfind_attempt(
             &handler_context,
@@ -122,7 +119,6 @@ pub(super) async fn interlock_cart(
             &cart_config,
         )?;
         if resolution.is_some() {
-            refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(dbg!(resolution));
         } else {
             tracing::debug!("No path found, trying again");
@@ -133,11 +129,9 @@ pub(super) async fn interlock_cart(
             // but that makes extended data error handling more tricky.
             let backoff = rand::thread_rng().gen_range(500..1000);
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
-            refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(None);
         }
     }
-    refcount.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     Ok(None)
 }
 

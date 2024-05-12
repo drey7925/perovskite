@@ -271,8 +271,6 @@ fn place_cart(
             held_signal: None,
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             precomputed_steps: Vec::new(),
-
-            refcount: Box::leak(Box::new(std::sync::atomic::AtomicUsize::new(0))),
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -408,7 +406,6 @@ struct CartCoroutine {
     precomputed_steps: Vec<InterlockingStep>,
     // debug only
     spawn_time: Instant,
-    refcount: &'static std::sync::atomic::AtomicUsize,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -494,9 +491,6 @@ impl CartCoroutine {
         queue_space: usize,
         trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
-        if self.refcount.load(std::sync::atomic::Ordering::SeqCst) != 0 {
-            panic!("Cart coroutine refcount is not zero!");
-        }
         tracing::debug!(
             "{} {:?} ========== planning {} seconds in advance",
             self.id,
@@ -595,11 +589,9 @@ impl CartCoroutine {
         } else if signal_block.equals_ignore_variant(self.config.interlocking_signal) {
             let state_clone = self.scan_state.clone();
             let config_clone = self.config.clone();
-            let refcount = self.refcount;
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
-                let result =
-                    interlocking::interlock_cart(ctx, state, 256, config_clone, refcount).await;
+                let result = interlocking::interlock_cart(ctx, state, 256, config_clone).await;
                 // todo better error handling?
                 ContinuationResultValue::HeapResult(Box::new(result.unwrap_or_default()))
             }));
@@ -842,7 +834,7 @@ impl CartCoroutine {
             );
             self.start_new_unplanned_segment();
         } else if effective_speed != last_move.max_speed {
-            tracing::debug!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
+            tracing::info!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
             self.start_new_unplanned_segment();
         }
         let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
