@@ -254,7 +254,6 @@ impl<'a> ChunkColumnCursor<'a> {
             // assert!(self.current.valid);
             if !self.current.valid {
                 eprintln!("WARNING: Lightfield has no valid lighting. This is normal under high contention and deferred loading, but may signal a bug in other cases.");
-                panic!();
             }
 
             let old_outgoing = self.current.outgoing();

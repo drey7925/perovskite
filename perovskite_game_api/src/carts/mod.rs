@@ -970,7 +970,8 @@ impl CartCoroutine {
                 // This segment itself is not yet schedulable, so we don't set unconditionally_schedulable yet
             }
             // If we encountered a further segment where we were limited by track speed, we can schedule this one
-            let should_panic_schedule = available_scheduled_segments < 2 && (when < 1.0);
+            let should_panic_schedule =
+                available_scheduled_segments < 2 || self.last_submitted_move_exit_speed < 0.001;
 
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
@@ -979,9 +980,7 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if (should_panic_schedule && idx == 0)
-                || self.last_submitted_move_exit_speed < 0.001
-            {
+            } else if should_panic_schedule && idx == 0 && when < 1.0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(

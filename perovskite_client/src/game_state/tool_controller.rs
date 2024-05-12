@@ -269,11 +269,24 @@ impl ToolController {
 
         let chunks = client_state.chunks.read_lock();
         let mut prev = None;
-        for (x, y, z) in WalkVoxels::<f64, i64>::new(
-            (pos + RAYCAST_FUDGE_VEC).into(),
-            (end + RAYCAST_FUDGE_VEC).into(),
-            &line_drawing::VoxelOrigin::Corner,
-        ) {
+        let start_pos = match (pos + RAYCAST_FUDGE_VEC).try_into() {
+            Ok(x) => x,
+            Err(_) => {
+                log::error!("pos: {pos:?} corrupt");
+                return None;
+            }
+        };
+        let end_pos = match (end + RAYCAST_FUDGE_VEC).try_into() {
+            Ok(x) => x,
+            Err(_) => {
+                log::error!("end: {end:?} corrupt");
+                return None;
+            }
+        };
+
+        for (x, y, z) in
+            WalkVoxels::<f64, i64>::new(start_pos, end_pos, &line_drawing::VoxelOrigin::Corner)
+        {
             let coord = BlockCoordinate {
                 x: x.try_into().ok()?,
                 y: y.try_into().ok()?,
