@@ -1,16 +1,15 @@
-use std::sync::atomic::AtomicUsize;
-
-use anyhow::{bail, Result};
+use anyhow::Result;
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::event::HandlerContext;
 use rand::Rng;
+use smallvec::SmallVec;
 
 use crate::carts::signals;
 
 use super::{
     signals::{
         automatic_signal_acquire, interlocking_signal_preacquire, query_interlocking_signal,
-        SignalConfig, SignalParseOutcome,
+        SignalParseOutcome,
     },
     tracks::ScanState,
     CartsGameBuilderExtension,
@@ -145,6 +144,9 @@ fn single_pathfind_attempt(
     let mut state = initial_state;
     let mut transaction = SignalTransaction::new(handler_context);
 
+    let mut switch_countdowns: smallvec::SmallVec<[(BlockCoordinate, BlockId, u8); 16]> =
+        SmallVec::new();
+
     let mut left_pending = false;
     let mut right_pending = false;
 
@@ -260,19 +262,34 @@ fn single_pathfind_attempt(
                     // do nothing, keep scanning
                 }
                 SignalParseOutcome::AutomaticSignal => {
+                    let mut clear_switch = None;
+                    if switch_countdowns.len() >= 1 {
+                        if switch_countdowns.len() > 1 {
+                            tracing::warn!(
+                                "Multiple switch clears remaining: {:?}",
+                                switch_countdowns
+                            )
+                        }
+                        let last_switch = switch_countdowns[0];
+                        clear_switch = Some((last_switch.0, last_switch.1));
+                    }
+
                     steps.push(InterlockingStep {
                         scan_state: state.clone(),
                         enter_signal: acquired_signal,
-                        pass_switch: BlockId::from(0),
+                        clear_switch,
                     });
+                    if !switch_countdowns.is_empty() {
+                        tracing::warn!("Switch clears still remaining: {:?}", switch_countdowns)
+                    }
                     transaction.commit();
                     return Ok(Some(steps));
                 }
             }
         }
         // then set the switch accordingly.
-        let mut set_switch = BlockId::from(0);
-        if state.is_switch_eligible() {
+        let mut clear_switch = None;
+        if let Some(switch_len) = state.get_switch_length() {
             let switch_coord = track_coord.try_delta(0, -1, 0);
 
             if let Some(switch_coord) = switch_coord {
@@ -286,15 +303,34 @@ fn single_pathfind_attempt(
                             return Ok(None);
                         } else if switch_block.equals_ignore_variant(cart_config.switch_unset) {
                             // The switch is unset, so we can pass.
-                            let mut will_diverge = false;
+                            let will_diverge;
+                            let defer_switch;
                             if state.can_diverge_left() && left_pending {
                                 left_pending = false;
                                 will_diverge = true;
+                                // Facing the points, defer the switch until we clear its full length
+                                defer_switch = true;
                             } else if state.can_diverge_right() && right_pending {
                                 right_pending = false;
                                 will_diverge = true;
+                                // Facing the points, defer the switch until we clear its full length
+                                defer_switch = true;
                             } else if state.can_converge() && state.is_diverging {
+                                // Trailing the points, once we get through it we can clear it immediately without deferring
                                 will_diverge = true;
+                                defer_switch = false;
+                            } else if state.can_converge() && !state.is_diverging {
+                                // Trailing the points, once we get through we can clear it immediately without deferring
+                                will_diverge = false;
+                                defer_switch = false;
+                            } else if state.can_diverge_left() || state.can_diverge_right() {
+                                // Facing the points, proceeding straight, still need to defer the switch to avoid fouling
+                                defer_switch = true;
+                                will_diverge = false;
+                            } else {
+                                // Just a random switch block without a switch
+                                defer_switch = false;
+                                will_diverge = false;
                             }
                             let new_block = if will_diverge {
                                 cart_config.switch_diverging.with_variant_of(*switch_block)
@@ -303,7 +339,11 @@ fn single_pathfind_attempt(
                             };
                             transaction.insert(switch_coord, new_block, *switch_block, new_block);
                             *switch_block = new_block;
-                            set_switch = new_block;
+                            if defer_switch {
+                                switch_countdowns.push((switch_coord, new_block, switch_len.get()));
+                            } else {
+                                clear_switch = Some((switch_coord, *switch_block));
+                            }
 
                             if will_diverge {
                                 Ok(Some(SwitchState::Diverging))
@@ -339,10 +379,25 @@ fn single_pathfind_attempt(
             }
         }
 
+        for (coord, block, countdown) in switch_countdowns.iter_mut() {
+            *countdown -= 1;
+            if *countdown == 0 {
+                if clear_switch.is_none() {
+                    tracing::info!("Clearing switch at {:?}", track_coord);
+                    clear_switch = Some((*coord, *block));
+                } else {
+                    // We need to clear two switches in the same block; this shouldn't happen.
+                    // Push it over to the next block.
+                    tracing::warn!("Got two switches in the same block at {:?}", track_coord);
+                }
+            }
+        }
+        switch_countdowns.retain(|(_, _, countdown)| *countdown != 0);
+
         steps.push(InterlockingStep {
             scan_state: state.clone(),
             enter_signal: acquired_signal,
-            pass_switch: set_switch,
+            clear_switch,
         });
         let new_state =
             state.advance::<false>(|coord| handler_context.game_map().get_block(coord).into())?;
@@ -352,6 +407,9 @@ fn single_pathfind_attempt(
             }
             super::tracks::ScanOutcome::CannotAdvance => {
                 transaction.commit();
+                if !switch_countdowns.is_empty() {
+                    tracing::warn!("Switch clears still remaining")
+                }
                 return Ok(Some(steps));
             }
             super::tracks::ScanOutcome::NotOnTrack => {
@@ -379,5 +437,5 @@ impl LogError for Result<(), anyhow::Error> {
 pub struct InterlockingStep {
     pub scan_state: ScanState,
     pub enter_signal: BlockId,
-    pub pass_switch: BlockId,
+    pub clear_switch: Option<(BlockCoordinate, BlockId)>,
 }

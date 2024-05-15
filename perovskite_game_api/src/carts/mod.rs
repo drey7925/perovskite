@@ -617,13 +617,11 @@ impl CartCoroutine {
             tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
             let state = step.scan_state;
 
-            if let Some(switch_coord) = state.block_coord.try_delta(0, -1, 0) {
-                if step.pass_switch != BlockId::from(0) {
-                    self.unplanned_segments.back_mut().unwrap().pass_switch =
-                        Some((switch_coord, step.pass_switch));
-                }
-                self.start_new_unplanned_segment();
+            if let Some((switch_coord, block_id)) = step.clear_switch {
+                self.unplanned_segments.back_mut().unwrap().pass_switch =
+                    Some((switch_coord, block_id));
             }
+            self.start_new_unplanned_segment();
 
             if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
                 if step.enter_signal != BlockId::from(0) {

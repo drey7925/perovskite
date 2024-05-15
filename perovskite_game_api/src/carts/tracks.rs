@@ -1,6 +1,8 @@
 // For now, hide unused warnings since they're distracting
 #![allow(dead_code)]
 
+use std::num::NonZeroU8;
+
 use anyhow::{Context, Result};
 use cgmath::{vec3, Vector3};
 use perovskite_core::{
@@ -370,16 +372,19 @@ struct TrackTile {
     /// Bitfield of which physical directions are considered diverging, when spawning a cart
     /// Bits 0..3 are for forward movements, bits 4..7 are for reverse
     diverging_dirs_spawn_dirs: u8,
-    /// If true, this track tile can start/end a diverging move.
+    /// If nonzero, this track tile can start/end a diverging move.
     ///
-    /// When this is true, the following additional conditions are imposed:
+    /// When this is nonzero, the following additional conditions are imposed:
     ///     * In the forward and forward diverging directions, a single incoming path splits into the normal and diverging paths
     ///     * In the reverse and reverse diverging directions, the incoming diverging and normal paths converge onto a normal path
     /// If these preconditions are violated, the behavior of the interlocking scanner may be abnormal.
     ///
-    /// Note that this may become a small enum if we ever add slip switches; in that case, the required preconditions above will apply
+    /// When nonzero, the value indicates the length of the switch - when this counts down to zero, the switch can be released.
+    /// This ensures that carts don't sideswipe each other at a switch while still diverging.
+    ///
+    /// Note that the upper bit may become reserved if we support slip switches; in that case, the required preconditions above will apply
     /// for the non-slip-switch case.
-    switch_eligible: bool,
+    switch_length: u8,
 }
 impl TrackTile {
     // This can't be in Default because it needs to be const
@@ -409,7 +414,7 @@ impl TrackTile {
             diverging_max_speed: TRACK_INHERENT_MAX_SPEED,
             straight_through_spawn_dirs: 0b0100_0001,
             diverging_dirs_spawn_dirs: 0,
-            switch_eligible: false,
+            switch_length: 0,
         }
     }
 }
@@ -699,7 +704,11 @@ fn build_folded_switch(
                 2 * y + 1,
                 switch_half_len.checked_mul(4).unwrap(),
             ),
-            switch_eligible: (y == 0),
+            switch_length: if y == 0 {
+                switch_half_len.checked_mul(2).unwrap().try_into().unwrap()
+            } else {
+                0
+            },
             max_speed: TRACK_INHERENT_MAX_SPEED,
             diverging_max_speed: max_turnout_speed,
             ..TrackTile::default()
@@ -1389,32 +1398,36 @@ impl ScanState {
         bitmask & (1 << corrected_rotation) != 0
     }
 
-    pub(crate) fn is_switch_eligible(&self) -> bool {
+    pub(crate) fn get_switch_length(&self) -> Option<NonZeroU8> {
         let tile =
             TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
         let tile = match tile {
             Some(tile) => tile,
             None => {
-                return false;
+                return None;
             }
         };
-        tile.switch_eligible
+        NonZeroU8::new(tile.switch_length)
     }
 
+    // Inline these because they share a lot of common subexpressions.
+    #[inline]
     pub(crate) fn can_diverge_left(&self) -> bool {
         // The tile has to be switch eligible, it has to be a forward move facing the points, and the tile
         // has to be flipped along X (since unflipped tiles turn out to the right)
-        self.is_switch_eligible() && !self.is_reversed && self.current_tile_id.flip_x()
+        self.get_switch_length().is_some() && !self.is_reversed && self.current_tile_id.flip_x()
     }
+    #[inline]
     pub(crate) fn can_diverge_right(&self) -> bool {
         // The tile has to be switch eligible, it has to be a forward move facing the points, and the tile
         // cannot be flipped along X (since unflipped tiles turn out to the left)
-        self.is_switch_eligible() && !self.is_reversed && !self.current_tile_id.flip_x()
+        self.get_switch_length().is_some() && !self.is_reversed && !self.current_tile_id.flip_x()
     }
 
+    #[inline]
     pub(crate) fn can_converge(&self) -> bool {
         // The tile has to be switch eligible, it has to be a backward move approaching against the points.
-        self.is_switch_eligible() && self.is_reversed
+        self.get_switch_length().is_some() && self.is_reversed
     }
 
     pub(crate) fn vec_coord(&self) -> Vector3<f64> {
