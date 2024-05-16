@@ -99,7 +99,8 @@ impl ActiveGame {
         let start_time = Instant::now();
 
         {
-            let entity_lock = self.client_state.entities.lock();
+            let mut entity_lock = self.client_state.entities.lock();
+            entity_lock.advance_all_states(start_time);
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
                     (player_position, _) = entity.position(start_time);
@@ -107,6 +108,15 @@ impl ActiveGame {
                         .physics_state
                         .lock()
                         .set_position(player_position);
+
+                    plot!(
+                        "entity_buffer",
+                        entity.estimated_buffer(start_time).max(0.0) as f64
+                    );
+                    plot!(
+                        "entity_buffer_count",
+                        entity.estimated_buffer_count() as f64
+                    );
                 }
             }
         }
@@ -194,8 +204,7 @@ impl ActiveGame {
                 .unwrap();
         }
         let entity_draw_calls = {
-            let mut lock = self.client_state.entities.lock();
-            lock.advance_all_states();
+            let lock = self.client_state.entities.lock();
             lock.render_calls(
                 player_position,
                 start_time,

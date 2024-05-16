@@ -399,7 +399,7 @@ impl Movement {
     }
 }
 
-const LARGEST_POSSIBLE_QUEUE_SIZE: usize = 8;
+const LARGEST_POSSIBLE_QUEUE_SIZE: usize = 32;
 
 #[derive(Debug, Clone)]
 pub enum InitialMoveQueue {
@@ -413,12 +413,14 @@ pub enum InitialMoveQueue {
     Buffer8(Box<arrayvec::ArrayVec<Movement, 8>>),
     // TODO: Deeper buffers if necessary. 8 moves of one block each take less than 100 msec
     // when running an entity at the target max speed of 320 km/h
+    Buffer64(Box<arrayvec::ArrayVec<Movement, 64>>),
 }
 impl InitialMoveQueue {
     fn has_slack(&self) -> bool {
         match self {
             InitialMoveQueue::SingleMove(m) => m.is_none(),
             InitialMoveQueue::Buffer8(m) => m.len() < 8,
+            InitialMoveQueue::Buffer64(m) => m.len() < 32,
         }
     }
 }
@@ -848,12 +850,18 @@ const ID_MASK: u64 = (1 << 48) - 1;
 enum MoveQueue {
     SingleMove(Option<StoredMovement>),
     Buffer8(Box<circular_buffer::CircularBuffer<8, StoredMovement>>),
+    Buffer64(Box<circular_buffer::CircularBuffer<64, StoredMovement>>),
 }
 impl MoveQueue {
     fn pop(&mut self) -> Option<StoredMovement> {
         match self {
             MoveQueue::SingleMove(m) => m.take(),
             MoveQueue::Buffer8(b) => {
+                let m = b.pop_front();
+                b.make_contiguous();
+                m
+            }
+            MoveQueue::Buffer64(b) => {
                 let m = b.pop_front();
                 b.make_contiguous();
                 m
@@ -870,6 +878,7 @@ impl MoveQueue {
                 }
             }
             MoveQueue::Buffer8(b) => b.capacity() - b.len(),
+            MoveQueue::Buffer64(b) => b.capacity() - b.len(),
         }
     }
 
@@ -877,6 +886,7 @@ impl MoveQueue {
         match self {
             MoveQueue::SingleMove(x) => x.is_some() as usize,
             MoveQueue::Buffer8(b) => b.len(),
+            MoveQueue::Buffer64(b) => b.len(),
         }
     }
 
@@ -893,6 +903,12 @@ impl MoveQueue {
                     .unwrap();
                 b.make_contiguous();
             }
+            MoveQueue::Buffer64(b) => {
+                b.try_push_back(movement)
+                    .map_err(|_| "Buffer overflow")
+                    .unwrap();
+                b.make_contiguous();
+            }
         }
     }
 
@@ -900,6 +916,7 @@ impl MoveQueue {
         match self {
             MoveQueue::SingleMove(x) => x.is_some() as u64,
             MoveQueue::Buffer8(b) => b.len() as u64,
+            MoveQueue::Buffer64(b) => b.len() as u64,
         }
     }
 
@@ -914,6 +931,14 @@ impl MoveQueue {
                     panic!("Buffer8 should be contiguous");
                 }
             }
+            MoveQueue::Buffer64(x) => {
+                let (left_slice, right_slice) = x.as_slices();
+                if right_slice.is_empty() {
+                    left_slice
+                } else {
+                    panic!("Buffer64 should be contiguous");
+                }
+            }
         }
     }
 
@@ -921,6 +946,7 @@ impl MoveQueue {
         match self {
             MoveQueue::SingleMove(x) => x.is_none(),
             MoveQueue::Buffer8(x) => x.is_empty(),
+            MoveQueue::Buffer64(x) => x.is_empty(),
         }
     }
 }
@@ -1123,6 +1149,21 @@ impl EntityCoreArray {
                 buffer.make_contiguous();
                 self.move_queue[index] = MoveQueue::Buffer8(Box::new(buffer));
             }
+            InitialMoveQueue::Buffer64(movements) => {
+                let mut buffer: CircularBuffer<64, StoredMovement> = movements
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, m)| StoredMovement {
+                        sequence: self.current_move_seq[i]
+                            + LARGEST_POSSIBLE_QUEUE_SIZE as u64
+                            + 2
+                            + i as u64,
+                        movement: m,
+                    })
+                    .collect();
+                buffer.make_contiguous();
+                self.move_queue[index] = MoveQueue::Buffer64(Box::new(buffer));
+            }
         }
     }
 
@@ -1198,6 +1239,9 @@ impl EntityCoreArray {
         let queue = match entity_def.move_queue_type {
             MoveQueueType::SingleMove => MoveQueue::SingleMove(None),
             MoveQueueType::Buffer8 => MoveQueue::Buffer8(circular_buffer::CircularBuffer::boxed()),
+            MoveQueueType::Buffer64 => {
+                MoveQueue::Buffer64(circular_buffer::CircularBuffer::boxed())
+            }
         };
         let i = match index {
             Some(i) => {
@@ -2163,6 +2207,7 @@ pub enum EntityError {
 pub enum MoveQueueType {
     SingleMove,
     Buffer8,
+    Buffer64,
 }
 
 // TODO own and manage these, similar to block types and item defs.

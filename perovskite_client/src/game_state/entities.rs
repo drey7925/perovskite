@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
@@ -70,8 +73,8 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
 
 pub(crate) struct GameEntity {
     // todo refine
-    // 9 should be enough, server has a queue depth of 8
-    pub(crate) move_queue: circular_buffer::CircularBuffer<9, EntityMove>,
+    // 33 should be enough, server has a queue depth of up to 32
+    pub(crate) move_queue: VecDeque<EntityMove>,
     current_move_started: Instant,
     pub(crate) current_move_sequence: u64,
     pub fallback_position: Vector3<f64>,
@@ -82,9 +85,8 @@ pub(crate) struct GameEntity {
     created: Instant,
 }
 impl GameEntity {
-    pub(crate) fn advance_state(&mut self) {
-        let now = Instant::now();
-        let mut elapsed = (now - self.current_move_started).as_secs_f32();
+    pub(crate) fn advance_state(&mut self, until: Instant) {
+        let mut elapsed = (until - self.current_move_started).as_secs_f32();
         let mut any_popped = false;
         while self
             .move_queue
@@ -111,6 +113,18 @@ impl GameEntity {
         }
     }
 
+    pub(crate) fn estimated_buffer(&self, until: Instant) -> f32 {
+        self.move_queue
+            .iter()
+            .map(|m| m.total_time_seconds)
+            .sum::<f32>()
+            - (until - self.current_move_started).as_secs_f32()
+    }
+
+    pub(crate) fn estimated_buffer_count(&self) -> usize {
+        self.move_queue.len()
+    }
+
     pub(crate) fn update(
         &mut self,
         update: &entities_proto::EntityUpdate,
@@ -124,6 +138,9 @@ impl GameEntity {
             );
         }
 
+        if let Some(m) = self.move_queue.back() {
+            self.fallback_position = m.qproj(m.total_time_seconds);
+        }
         while self
             .move_queue
             .front()
@@ -162,11 +179,9 @@ impl GameEntity {
             self.current_move_started =
                 estimated_send_time - Duration::from_secs_f32(update.current_move_progress);
         }
-        self.fallback_position = self
-            .move_queue
-            .back()
-            .map(|m| m.qproj(m.total_time_seconds))
-            .unwrap_or(vec3(f64::NAN, f64::NAN, f64::NAN));
+        if let Some(m) = self.move_queue.back() {
+            self.fallback_position = m.qproj(m.total_time_seconds);
+        }
         self.last_face_dir = self
             .move_queue
             .back()
@@ -202,6 +217,14 @@ impl GameEntity {
             .front()
             .map(|m| m.face_direction)
             .unwrap_or(self.last_face_dir);
+        if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
+            log::info!(
+                "invalid position, move queue contains {:?}",
+                self.move_queue
+            );
+            log::info!("CMS {:?}, time {}", self.current_move_started, time);
+            return (Vector3::zero(), Rad(0.0));
+        }
         (pos, Rad(dir))
     }
 
@@ -212,7 +235,7 @@ impl GameEntity {
         if update.planned_move.is_empty() {
             return Err("Empty move plan");
         }
-        let mut queue = circular_buffer::CircularBuffer::new();
+        let mut queue = VecDeque::new();
         for planned_move in &update.planned_move {
             queue.push_back(planned_move.try_into().map_err(|_| {
                 dbg!(planned_move);
@@ -279,9 +302,9 @@ impl EntityState {
         })
     }
 
-    pub(crate) fn advance_all_states(&mut self) {
+    pub(crate) fn advance_all_states(&mut self, until: Instant) {
         for entity in self.entities.values_mut() {
-            entity.advance_state();
+            entity.advance_state(until);
         }
     }
 

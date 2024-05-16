@@ -152,7 +152,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     )?;
 
     let cart_id = game_builder.inner.entities_mut().register(EntityDef {
-        move_queue_type: game_state::entities::MoveQueueType::Buffer8,
+        move_queue_type: game_state::entities::MoveQueueType::Buffer64,
         class_name: "carts:high_speed_minecart".to_string(),
         client_info: protocol::entities::EntityAppearance {
             custom_mesh: vec![CART_MESH.clone()],
@@ -416,7 +416,7 @@ impl EntityCoroutine for CartCoroutine {
         when: f32,
         queue_space: usize,
     ) -> perovskite_server::game_state::entities::CoroutineResult {
-        let trace_buffer = TraceBuffer::new(self.id == 0);
+        let trace_buffer = TraceBuffer::new(false);
         self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
     }
     fn continuation(
@@ -459,6 +459,7 @@ impl EntityCoroutine for CartCoroutine {
                                         whence,
                                         services,
                                         trace_buffer,
+                                        false,
                                     );
                                 }
                             }
@@ -512,12 +513,21 @@ impl CartCoroutine {
             self.unplanned_segments.len()
         );
 
-        let maybe_deferral = self.scan_tracks(services, 1024.0, when, &trace_buffer);
+        let debug_precomputed = !self.precomputed_steps.is_empty();
+
+        let maybe_deferral = self.scan_tracks(services, 2048.0, when, &trace_buffer);
         if let Some(deferral) = maybe_deferral {
             return deferral.with_trace_buffer(trace_buffer);
         }
 
-        self.finish_schedule(when, queue_space, whence, services, trace_buffer)
+        self.finish_schedule(
+            when,
+            queue_space,
+            whence,
+            services,
+            trace_buffer,
+            debug_precomputed,
+        )
     }
 
     fn parse_signal(
@@ -525,6 +535,7 @@ impl CartCoroutine {
         services: &EntityCoroutineServices<'_>,
         signal_coord: BlockCoordinate,
         signal_block: BlockId,
+        trace_buffer: &TraceBuffer,
     ) -> ReenterableResult<SignalResult> {
         if signal_block == self.config.speedpost_1 {
             SignalResult::SpeedRestriction(3.0).into()
@@ -535,7 +546,6 @@ impl CartCoroutine {
         } else if signal_block.equals_ignore_variant(self.config.automatic_signal) {
             let rotation = signal_block.variant() & 0b11;
             if !self.scan_state.signal_rotation_ok(rotation) {
-                println!("Skipping signal at {:?}", signal_coord);
                 return SignalResult::Stop.into();
             }
 
@@ -589,9 +599,17 @@ impl CartCoroutine {
         } else if signal_block.equals_ignore_variant(self.config.interlocking_signal) {
             let state_clone = self.scan_state.clone();
             let config_clone = self.config.clone();
+
+            tracing::debug!(
+                ">>>> interlocking signal start at {:?}",
+                state_clone.block_coord
+            );
+            let trace_buffer = trace_buffer.clone();
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
+                trace_buffer.log("Interlocking signal deferred");
                 let result = interlocking::interlock_cart(ctx, state, 256, config_clone).await;
+                trace_buffer.log("Interlocking signal done");
                 // todo better error handling?
                 ContinuationResultValue::HeapResult(Box::new(result.unwrap_or_default()))
             }));
@@ -607,38 +625,43 @@ impl CartCoroutine {
         when: f32,
         trace_buffer: &TraceBuffer,
     ) -> Option<CoroutineResult> {
+        let mut debug_precomputed = false;
         if !self.precomputed_steps.is_empty() {
+            debug_precomputed = true;
             trace_buffer.log("Using precomputed steps");
-        }
-        for (i, step) in std::mem::replace(&mut self.precomputed_steps, vec![])
-            .into_iter()
-            .enumerate()
-        {
-            tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
-            let state = step.scan_state;
 
-            if let Some((switch_coord, block_id)) = step.clear_switch {
-                self.unplanned_segments.back_mut().unwrap().pass_switch =
-                    Some((switch_coord, block_id));
-            }
-            self.start_new_unplanned_segment();
+            for (i, step) in std::mem::replace(&mut self.precomputed_steps, vec![])
+                .into_iter()
+                .enumerate()
+            {
+                tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
+                let state = step.scan_state;
 
-            if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
-                if step.enter_signal != BlockId::from(0) {
-                    tracing::debug!("Acquiring signal at {:?}", state.block_coord);
-                    tracing::debug!(
-                        "Releasing signal at {:?}",
-                        self.held_signal.as_ref().map(|x| x.0)
-                    );
-                    self.unplanned_segments.back_mut().unwrap().exit_signal =
-                        self.held_signal.take();
-                    self.start_new_unplanned_segment();
-                    self.unplanned_segments.back_mut().unwrap().enter_signal =
-                        Some((signal_coord, step.enter_signal));
-                    self.held_signal = Some((signal_coord, step.enter_signal));
+                if let Some((switch_coord, block_id)) = step.clear_switch {
+                    self.unplanned_segments.back_mut().unwrap().pass_switch =
+                        Some((switch_coord, block_id));
                 }
+                if step.clear_switch.is_some() || step.enter_signal != BlockId::from(0) {
+                    self.start_new_unplanned_segment();
+                }
+
+                if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
+                    if step.enter_signal != BlockId::from(0) {
+                        tracing::debug!("Acquiring signal at {:?}", state.block_coord);
+                        tracing::debug!(
+                            "Releasing signal at {:?}",
+                            self.held_signal.as_ref().map(|x| x.0)
+                        );
+                        self.unplanned_segments.back_mut().unwrap().exit_signal =
+                            self.held_signal.take();
+                        self.start_new_unplanned_segment();
+                        self.unplanned_segments.back_mut().unwrap().enter_signal =
+                            Some((signal_coord, step.enter_signal));
+                        self.held_signal = Some((signal_coord, step.enter_signal));
+                    }
+                }
+                self.apply_step(state);
             }
-            self.apply_step(state);
         }
 
         trace_buffer.log("Starting scan");
@@ -649,7 +672,6 @@ impl CartCoroutine {
         for seg in self.unplanned_segments.iter() {
             steps += seg.distance();
         }
-
         // this should be an underestimate
         // max_speed is an overestimate of the actual speed, and it's in the denominator
         let unplanned_buffer_estimate = self
@@ -677,6 +699,9 @@ impl CartCoroutine {
                     .unwrap_or(self.last_speed_post_indication.max(5.0)),
             ) as f32;
         tracing::debug!("estimated max speed {}", estimated_max_speed);
+
+        tracing::debug!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
+
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
             let empty_segment = TrackSegment {
@@ -744,13 +769,15 @@ impl CartCoroutine {
                     }
                 };
 
-                let signal_result = match self.parse_signal(services, signal_coord, signal_block) {
-                    ReenterableResult::AvailableNow(x) => x,
-                    ReenterableResult::Deferred(d) => {
-                        tracing::debug!("signal parse deferral");
-                        return Some(d.defer_and_reinvoke(CONTINUATION_TAG_SIGNAL));
-                    }
-                };
+                let signal_result =
+                    match self.parse_signal(services, signal_coord, signal_block, &trace_buffer) {
+                        ReenterableResult::AvailableNow(x) => x,
+                        ReenterableResult::Deferred(d) => {
+                            tracing::debug!("signal parse deferral");
+
+                            return Some(d.defer_and_reinvoke(CONTINUATION_TAG_SIGNAL));
+                        }
+                    };
                 match signal_result {
                     SignalResult::Stop => {
                         tracing::debug!("Stop signal at {:?}", new_state.block_coord);
@@ -815,7 +842,7 @@ impl CartCoroutine {
             .min(new_state.allowable_speed as f64);
         tracing::debug!("Considering split at {:?}", new_state.vec_coord());
         if last_move_delta.magnitude() > 256.0 {
-            tracing::debug!(
+            tracing::info!(
                 "Splitting a segment due to length; prev length was {}",
                 last_move_delta.magnitude()
             );
@@ -824,7 +851,7 @@ impl CartCoroutine {
             / (last_move_delta.magnitude() * new_delta.magnitude())
             < 0.999999
         {
-            tracing::debug!(
+            tracing::info!(
                 "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
                 last_move_delta.magnitude(),
                 last_move_delta.dot(new_delta)
@@ -832,7 +859,7 @@ impl CartCoroutine {
             );
             self.start_new_unplanned_segment();
         } else if effective_speed != last_move.max_speed {
-            tracing::info!("Splitting a segment due to effective speed; prev length was {}, speed changing {} -> {}", last_move_delta.magnitude(), last_move.max_speed, effective_speed);
+            tracing::info!("Splitting a segment due to effective speed at {:?} (our vec coord {:?}); prev length was {}, speed changing {} -> {}", last_move.to,  new_state.vec_coord(), last_move_delta.magnitude(), last_move.max_speed, effective_speed);
             self.start_new_unplanned_segment();
         }
         let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
@@ -863,7 +890,7 @@ impl CartCoroutine {
         let mut unconditionally_schedulable = false;
         let mut schedulable_segments = VecDeque::new();
 
-        let available_scheduled_segments = (8usize.checked_sub(queue_space).unwrap())
+        let available_scheduled_segments = (64usize.checked_sub(queue_space).unwrap())
             + self
                 .scheduled_segments
                 .iter()
@@ -939,6 +966,7 @@ impl CartCoroutine {
         // cannot be entered due to a restrictive signal or a switch set against us)
         let mut max_exit_speed: Flt = 0.0;
 
+        let mut total_skipped_segments = 0.0;
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
             tracing::debug!("> segment idx {}, {:?}", idx, seg);
             // The entrance speed, if we just consider the max acceleration
@@ -960,8 +988,9 @@ impl CartCoroutine {
                 // This segment itself is not yet schedulable, so we don't set unconditionally_schedulable yet
             }
             // If we encountered a further segment where we were limited by track speed, we can schedule this one
-            let should_panic_schedule =
-                available_scheduled_segments < 2 || self.last_submitted_move_exit_speed < 0.001;
+            let should_panic_schedule = available_scheduled_segments < 2
+                || self.last_submitted_move_exit_speed < 0.001
+                || when < 2.0;
 
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
@@ -970,7 +999,7 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if should_panic_schedule && idx == 0 && when < 1.0 {
+            } else if should_panic_schedule && idx == 0 && when < 5.0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
                 tracing::debug!(
@@ -979,6 +1008,8 @@ impl CartCoroutine {
                     seg
                 );
                 unconditionally_schedulable = true;
+            } else {
+                total_skipped_segments += seg.distance();
             }
 
             if limited_by_seg_speed {
@@ -988,6 +1019,8 @@ impl CartCoroutine {
             // (after limiting for track speed)
             max_exit_speed = max_entry_speed;
         }
+
+        tracing::debug!("Skipped {} blocks", total_skipped_segments);
 
         // We scheduled some prefix of the unscheduled segments, on a 1:1 basis
         // Remove that prefix
@@ -1015,7 +1048,7 @@ impl CartCoroutine {
             let empty_segment = TrackSegment {
                 from: prev_segment.to,
                 to: prev_segment.to,
-                max_speed: self.last_speed_post_indication,
+                max_speed: prev_segment.max_speed,
                 seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
                 enter_signal: None,
                 exit_signal: None,
@@ -1195,8 +1228,8 @@ impl CartCoroutine {
                     - brake_curve_exit_speed * brake_curve_exit_speed)
                     / (2.0 * seg_distance);
                 assert!(new_accel > 0.0);
-
-                tracing::warn!(
+                if new_accel > (MAX_ACCEL + 1e-3) {
+                    tracing::warn!(
                     "exit_accel_distance {} > seg_distance {}, decelerating {} => {} using accel of {}",
                     exit_accel_distance,
                     seg_distance,
@@ -1204,6 +1237,7 @@ impl CartCoroutine {
                     brake_curve_exit_speed,
                     new_accel
                 );
+                }
 
                 self.scheduled_segments.push_back(ScheduledSegment {
                     segment: seg,
@@ -1340,14 +1374,16 @@ impl CartCoroutine {
                     / (2.0 * seg_distance);
                 assert!(new_accel > 0.0);
 
-                tracing::warn!(
-                    "exit_accel_distance {} > seg_distance {}, decelerating {} => {} using accel of {}",
-                    exit_accel_distance,
-                    seg_distance,
-                    enter_speed,
-                    brake_curve_exit_speed,
-                    new_accel
-                );
+                if new_accel > (MAX_ACCEL + 1e-3) {
+                    tracing::warn!(
+                        "exit_accel_distance {} > seg_distance {}, decelerating {} => {} using accel of {}",
+                        exit_accel_distance,
+                        seg_distance,
+                        enter_speed,
+                        brake_curve_exit_speed,
+                        new_accel
+                    );
+                }
 
                 self.scheduled_segments.push_back(ScheduledSegment {
                     segment: seg,
@@ -1414,6 +1450,7 @@ impl CartCoroutine {
         whence: Vector3<f64>,
         services: &EntityCoroutineServices<'_>,
         trace_buffer: TraceBuffer,
+        noisy: bool,
     ) -> CoroutineResult {
         trace_buffer.log("Promoting schedulable segments");
         let schedulable_segments = self.promote_schedulable(when, queue_space);
@@ -1508,7 +1545,7 @@ impl CartCoroutine {
                 let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
                 const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
                 let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
-                tracing::info!(
+                tracing::debug!(
                     "passing switch in {} + {} + {} seconds at {:?}",
                     returned_moves_time,
                     when,
@@ -1548,6 +1585,11 @@ impl CartCoroutine {
                 returned_moves.push(movement);
             } else if !segment.segment.any_content() {
                 tracing::warn!("Segment {:?} had no movement", segment);
+            }
+        }
+        if noisy {
+            for m in &returned_moves {
+                tracing::debug!("Returned move: {:?}", m);
             }
         }
         tracing::debug!("returning {} moves", returned_moves.len());

@@ -118,7 +118,7 @@ pub(super) async fn interlock_cart(
             &cart_config,
         )?;
         if resolution.is_some() {
-            return Ok(dbg!(resolution));
+            return Ok(resolution);
         } else {
             tracing::debug!("No path found, trying again");
             // Randomized backoff, 500-1000 msec
@@ -383,7 +383,6 @@ fn single_pathfind_attempt(
             *countdown -= 1;
             if *countdown == 0 {
                 if clear_switch.is_none() {
-                    tracing::info!("Clearing switch at {:?}", track_coord);
                     clear_switch = Some((*coord, *block));
                 } else {
                     // We need to clear two switches in the same block; this shouldn't happen.

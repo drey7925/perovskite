@@ -828,6 +828,7 @@ fn build_folded_switch(
                 2 * y + 1,
                 switch_half_len.checked_mul(4).unwrap(),
             ),
+            max_speed: max_turnout_speed,
             ..TrackTile::default()
         });
     }
