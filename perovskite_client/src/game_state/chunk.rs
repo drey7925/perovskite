@@ -39,6 +39,7 @@ use crate::vulkan::block_renderer::{
     BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::VkAllocator;
 use prost::Message;
 
 use super::block_types::ClientBlockTypeManager;
@@ -738,13 +739,10 @@ impl MeshBatchBuilder {
         self.chunks.push(coord);
     }
 
-    pub(crate) fn build_and_reset(
-        &mut self,
-        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
-    ) -> Result<MeshBatch> {
+    pub(crate) fn build_and_reset(&mut self, allocator: &VkAllocator) -> Result<MeshBatch> {
         fn build_vertex(
             buf: &[CubeGeometryVertex],
-            allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+            allocator: &VkAllocator,
         ) -> Result<Option<Subbuffer<[CubeGeometryVertex]>>> {
             if buf.is_empty() {
                 Ok(None)
@@ -764,10 +762,7 @@ impl MeshBatchBuilder {
             }
         }
 
-        fn build_index(
-            buf: &[u32],
-            allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
-        ) -> Result<Option<Subbuffer<[u32]>>> {
+        fn build_index(buf: &[u32], allocator: &VkAllocator) -> Result<Option<Subbuffer<[u32]>>> {
             if buf.is_empty() {
                 Ok(None)
             } else {

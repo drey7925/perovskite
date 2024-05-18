@@ -52,7 +52,7 @@ use crate::game_state::chunk::{
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 
-use super::RectF32;
+use super::{RectF32, VkAllocator};
 
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
 const TESTONLY_ENTITY: &str = "builtin:testonly_entity";
@@ -297,10 +297,7 @@ pub(crate) struct VkCgvBufferCpu {
     pub(crate) idx: Vec<u32>,
 }
 impl VkCgvBufferCpu {
-    fn to_gpu(
-        &self,
-        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
-    ) -> Result<Option<VkCgvBufferGpu>> {
+    fn to_gpu(&self, allocator: &VkAllocator) -> Result<Option<VkCgvBufferGpu>> {
         VkCgvBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
     }
 }
@@ -314,7 +311,7 @@ impl VkCgvBufferGpu {
     pub(crate) fn from_buffers(
         vtx: &[CubeGeometryVertex],
         idx: &[u32],
-        allocator: &StandardMemoryAllocator,
+        allocator: &VkAllocator,
     ) -> Result<Option<VkCgvBufferGpu>> {
         if vtx.is_empty() {
             Ok(None)
@@ -388,10 +385,7 @@ impl VkChunkVertexDataCpu {
         }
     }
 
-    pub(crate) fn to_gpu(
-        &self,
-        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
-    ) -> Result<VkChunkVertexDataGpu> {
+    pub(crate) fn to_gpu(&self, allocator: &VkAllocator) -> Result<VkChunkVertexDataGpu> {
         Ok(VkChunkVertexDataGpu {
             solid_opaque: match &self.solid_opaque {
                 Some(x) => x.to_gpu(allocator)?,
@@ -486,7 +480,7 @@ pub(crate) struct BlockRenderer {
     simple_block_tex_coords: SimpleTexCoordCache,
     axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
     fake_entity_tex_coords: RectF32,
-    allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
+    allocator: Arc<VkAllocator>,
 }
 impl BlockRenderer {
     pub(crate) async fn new(
@@ -669,7 +663,7 @@ impl BlockRenderer {
         &self.texture_atlas
     }
 
-    pub(crate) fn allocator(&self) -> &GenericMemoryAllocator<Arc<FreeListAllocator>> {
+    pub(crate) fn allocator(&self) -> &VkAllocator {
         &self.allocator
     }
 

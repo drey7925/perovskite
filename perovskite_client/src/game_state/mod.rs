@@ -45,6 +45,7 @@ use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
 use crate::vulkan::entity_renderer::EntityRenderer;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
+use crate::vulkan::VkAllocator;
 
 use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;
@@ -377,7 +378,7 @@ impl ChunkManager {
     pub(crate) fn do_batch_round(
         &self,
         player_pos: Vector3<f64>,
-        allocator: &GenericMemoryAllocator<Arc<FreeListAllocator>>,
+        allocator: &VkAllocator,
     ) -> Result<()> {
         let _span = span!("batch_round");
         let mut chunks = self.chunks.read();

@@ -12,7 +12,7 @@ use vulkano::memory::allocator::{FreeListAllocator, GenericMemoryAllocator};
 
 use super::{
     block_renderer::VkCgvBufferGpu, shaders::cube_geometry::CubeGeometryVertex, Texture2DHolder,
-    VulkanContext,
+    VkAllocator, VulkanContext,
 };
 use anyhow::{bail, ensure, Error, Result};
 
@@ -22,7 +22,7 @@ use anyhow::{bail, ensure, Error, Result};
 /// that state is in EntityState.
 pub(crate) struct EntityRenderer {
     texture_atlas: Arc<Texture2DHolder>,
-    allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
+    allocator: Arc<VkAllocator>,
     mesh_definitions: FxHashMap<u32, EntityMesh>,
     /// These include buffers that render a single entity. Later on, as we add various accelerated and
     /// instanced rendering, the renderer may build buffers with multiple entities in them.

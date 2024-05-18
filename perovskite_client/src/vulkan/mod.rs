@@ -46,7 +46,7 @@ use vulkano::{
         view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
     },
     instance::{Instance, InstanceCreateInfo},
-    memory::allocator::{FreeListAllocator, GenericMemoryAllocator, StandardMemoryAllocator},
+    memory::allocator::{BuddyAllocator, GenericMemoryAllocator},
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sampler::{Filter, Sampler, SamplerCreateInfo},
@@ -68,11 +68,13 @@ use crate::game_state::settings::GameSettings;
 
 use self::util::select_physical_device;
 
+pub(crate) type VkAllocator = GenericMemoryAllocator<Arc<BuddyAllocator>>;
+
 #[derive(Clone)]
 pub(crate) struct VulkanContext {
     vk_device: Arc<Device>,
     queue: Arc<Queue>,
-    memory_allocator: Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>>,
+    memory_allocator: Arc<VkAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     /// The format of the image buffer used for rendering to *screen*. Render-to-texture always uses R8G8B8A8_SRGB
@@ -81,11 +83,11 @@ pub(crate) struct VulkanContext {
     depth_format: Format,
 }
 impl VulkanContext {
-    pub(crate) fn clone_allocator(&self) -> Arc<GenericMemoryAllocator<Arc<FreeListAllocator>>> {
+    pub(crate) fn clone_allocator(&self) -> Arc<VkAllocator> {
         self.memory_allocator.clone()
     }
 
-    pub(crate) fn allocator(&self) -> &GenericMemoryAllocator<Arc<FreeListAllocator>> {
+    pub(crate) fn allocator(&self) -> &VkAllocator {
         &self.memory_allocator
     }
 
@@ -246,7 +248,13 @@ impl VulkanWindow {
         let render_pass =
             make_render_pass(vk_device.clone(), swapchain.image_format(), depth_format)?;
 
-        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(vk_device.clone()));
+        let memory_allocator = Arc::new(GenericMemoryAllocator::new(
+            vk_device.clone(),
+            vulkano::memory::allocator::GenericMemoryAllocatorCreateInfo {
+                block_sizes: &[(0, 64 * (1 << 20)), (1 << (1 << 30), 256 * (1 << 20))],
+                ..Default::default()
+            },
+        )?);
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
             vk_device.clone(),
             Default::default(),
@@ -433,7 +441,7 @@ fn find_best_format(
 // according to those terms.
 pub(crate) fn get_framebuffers_with_depth(
     images: &[Arc<SwapchainImage>],
-    allocator: &StandardMemoryAllocator,
+    allocator: &VkAllocator,
     render_pass: Arc<RenderPass>,
     depth_format: Format,
 ) -> Vec<Arc<Framebuffer>> {
