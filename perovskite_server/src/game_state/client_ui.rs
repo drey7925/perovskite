@@ -242,11 +242,18 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         self
     }
     /// Adds a new button to this popup.
-    fn button(mut self, key: impl Into<String>, label: impl Into<String>, enabled: bool) -> Self {
+    fn button(
+        mut self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        enabled: bool,
+        will_close_popup: bool,
+    ) -> Self {
         self.push_widget(UiElement::Button(Button {
             key: key.into(),
             label: label.into(),
             enabled,
+            will_close_popup,
         }));
         self
     }

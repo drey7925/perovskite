@@ -46,6 +46,7 @@ image = { version = "0.24.7" }
 petgraph = "0.6.4"
 lazy_static = "1.4.0"
 wildmatch = "2.3.3"
+itertools = "0.13.0"
 
 [features]
 default = ["default_game", "agriculture", "circuits", "discord", "carts"]
@@ -88,3 +89,14 @@ tokio-console = ["dep:console-subscriber"]
 # Connects game chat and other events to a discord channel. WIP.
 # Requires rust 1.74.0 or higher
 discord = ["dep:serenity"]
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[[bench]]
+name = "mapgen_bench"
+harness = false
+
+[[bench]]
+name = "game_map_bench"
+harness = false

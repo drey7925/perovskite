@@ -50,6 +50,8 @@ message Button {
   string label = 2;
   // Whether the button is enabled
   bool enabled = 3;
+  // If true, clicking the button will close the popup
+  bool will_close_popup = 4;
 }
 message InventoryView {
   uint64 inventory_key = 1;

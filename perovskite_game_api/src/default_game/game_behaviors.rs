@@ -272,10 +272,14 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                 .title("Inventory")
                 .text_field("search", "Filter: ", "", true, false)
                 .text_field("count", "Creative stack size: ", "256", true, false)
-                .button("update_btn", "Update", true)
+                .button("update_btn", "Update", true, false)
                 .side_by_side_layout("Navigation", |p| {
-                    Ok(p.button("left", "Prev. page", true)
-                        .button("right", "Next page", true))
+                    Ok(p.button("left", "Prev. page", true, false).button(
+                        "right",
+                        "Next page",
+                        true,
+                        false,
+                    ))
                 })?
                 .inventory_view_virtual_output(
                     "creative",

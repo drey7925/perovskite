@@ -394,6 +394,17 @@ impl Player {
     pub fn detach_from_entity_blocking(&self) -> Result<()> {
         tokio::runtime::Handle::current().block_on(self.detach_from_entity())
     }
+
+    pub async fn show_popup(&self, popup: Popup) -> Result<()> {
+        let mut lock = self.state.lock();
+        self.sender.updated_popups.send(popup.id()).await?;
+        lock.active_popups.push(popup);
+        Ok(())
+    }
+
+    pub fn show_popup_blocking(&self, popup: Popup) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.show_popup(popup))
+    }
 }
 
 pub(crate) struct PlayerState {
@@ -571,11 +582,13 @@ struct PlayerEventSender {
     chat_messages: tokio::sync::mpsc::Sender<ChatMessage>,
     disconnection_message: tokio::sync::mpsc::Sender<String>,
     reinit_player_state: tokio::sync::mpsc::Sender<bool>,
+    updated_popups: tokio::sync::mpsc::Sender<u64>,
 }
 pub(crate) struct PlayerEventReceiver {
     pub(crate) chat_messages: tokio::sync::mpsc::Receiver<ChatMessage>,
     pub(crate) disconnection_message: tokio::sync::mpsc::Receiver<String>,
     pub(crate) reinit_player_state: tokio::sync::mpsc::Receiver<bool>,
+    pub(crate) updated_popups: tokio::sync::mpsc::Receiver<u64>,
 }
 
 fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
@@ -583,16 +596,19 @@ fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
     let (chat_sender, chat_receiver) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
     let (disconnection_sender, disconnection_receiver) = tokio::sync::mpsc::channel(2);
     let (reinit_sender, reinit_receiver) = tokio::sync::mpsc::channel(4);
+    let (popup_sender, popup_receiver) = tokio::sync::mpsc::channel(4);
     (
         PlayerEventSender {
             chat_messages: chat_sender,
             disconnection_message: disconnection_sender,
             reinit_player_state: reinit_sender,
+            updated_popups: popup_sender,
         },
         PlayerEventReceiver {
             chat_messages: chat_receiver,
             disconnection_message: disconnection_receiver,
             reinit_player_state: reinit_receiver,
+            updated_popups: popup_receiver,
         },
     )
 }

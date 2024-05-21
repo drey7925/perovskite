@@ -15,7 +15,7 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -32,8 +32,9 @@ use perovskite_server::{
         chat::commands::ChatCommandHandler,
         game_map::{TimerCallback, TimerSettings},
         items::Item,
+        GameState,
     },
-    server::ServerBuilder,
+    server::{ServerArgs, ServerBuilder},
 };
 
 use anyhow::Result;
@@ -111,6 +112,7 @@ impl From<StaticItemName> for ItemName {
 /// Unstable re-export of the raw gameserver API. This API is subject to
 /// breaking changes that do not follow semver, before 1.0
 use perovskite_server::server as server_api;
+use rand::RngCore;
 
 use crate::{
     blocks::{BlockBuilder, BuiltBlock, FallingBlocksChunkEdgePropagator, LiquidPropagator},
@@ -180,6 +182,19 @@ impl GameBuilder {
     /// the terminal and the process exits.
     pub fn from_cmdline() -> Result<GameBuilder> {
         Self::new_with_builtins(ServerBuilder::from_cmdline()?)
+    }
+
+    pub fn using_tempdir() -> Result<(GameBuilder, PathBuf)> {
+        let data_dir =
+            std::env::temp_dir().join(format!("perovskite-{}", rand::thread_rng().next_u64()));
+        let builder = ServerBuilder::from_args(&ServerArgs {
+            data_dir: data_dir.clone(),
+            bind_addr: None,
+            port: 0,
+            trace_rate_denominator: usize::MAX,
+        })?;
+
+        Ok((Self::new_with_builtins(builder)?, data_dir))
     }
 
     /// Creates a new game builder with custom server configuration
@@ -254,6 +269,15 @@ impl GameBuilder {
     pub fn run_game_server(mut self) -> Result<()> {
         self.pre_build()?;
         self.inner.build()?.serve()
+    }
+
+    pub fn run_task_in_server<T>(
+        mut self,
+        task: impl FnOnce(&GameState) -> Result<T>,
+    ) -> Result<T> {
+        self.pre_build()?;
+        let server = self.inner.build()?;
+        server.run_task_in_server(task)
     }
 
     // Instantiate some builtin content

@@ -209,7 +209,7 @@ impl EguiUi {
         id: egui::Id,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
-        clicked_button: &mut Option<String>,
+        clicked_button: &mut Option<(String, bool)>,
     ) {
         match &element.element {
             Some(proto::ui_element::Element::Label(label)) => {
@@ -246,7 +246,7 @@ impl EguiUi {
                     .clicked()
                     && self.allow_button_interaction
                 {
-                    *clicked_button = Some(button_def.key.clone());
+                    *clicked_button = Some((button_def.key.clone(), button_def.will_close_popup));
                 }
             }
             Some(proto::ui_element::Element::Inventory(inventory)) => {
@@ -325,17 +325,21 @@ impl EguiUi {
                         &mut clicked_button,
                     );
                 }
-                if let Some(clicked_button) = clicked_button {
+                if let Some((button_name, close)) = clicked_button {
                     send_event(
                         client_state,
                         GameAction::PopupResponse(PopupResponse {
                             popup_id: popup.popup_id,
                             closed: false,
-                            clicked_button,
+                            clicked_button: button_name,
                             text_fields: self.get_text_fields(popup.popup_id),
                             checkboxes: self.get_checkboxes(popup.popup_id),
                         }),
                     );
+                    if close {
+                        self.clear_fields(popup);
+                        return ControlFlow::Break(());
+                    }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     send_event(

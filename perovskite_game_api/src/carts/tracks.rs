@@ -37,7 +37,7 @@ use crate::{
 use super::b2vec;
 
 #[rustfmt::skip]
-mod c {
+pub(crate) mod c {
     // We only have 12 bits for the variant stored in the block...
     pub(crate) const ROTATION_BITS: u16   = 0b0000_0000_0000_0011;
     pub(crate) const X_SELECTOR: u16      = 0b0000_0000_0011_1100;
@@ -229,16 +229,8 @@ impl EncodedDelta {
     const fn empty() -> EncodedDelta {
         EncodedDelta(0)
     }
-    const fn eval_rotation(&self, flip_x: bool, rotation: u16) -> (i8, i8) {
-        let x = if flip_x { -self.x() } else { self.x() };
-        let z = self.z();
-        match rotation & 3 {
-            0 => (x, z),
-            1 => (z, -x),
-            2 => (-x, -z),
-            3 => (-z, x),
-            _ => unreachable!(),
-        }
+    fn eval_rotation(&self, flip_x: bool, rotation: u16) -> (i8, i8) {
+        eval_rotation(self.x(), self.z(), flip_x, rotation)
     }
     fn eval_delta(
         &self,
@@ -264,7 +256,12 @@ impl std::fmt::Debug for EncodedDelta {
     }
 }
 
-fn eval_rotation(x: i8, z: i8, flip_x: bool, rotation: u16) -> (i8, i8) {
+pub(crate) fn eval_rotation<T: Copy + std::ops::Neg<Output = T>>(
+    x: T,
+    z: T,
+    flip_x: bool,
+    rotation: u16,
+) -> (T, T) {
     let x = if flip_x { -x } else { x };
     let z = z;
     match rotation & 3 {
@@ -461,23 +458,9 @@ X <--+
      Z
 */
 
-// TODO this is going to grow. Use a bitset over 16 * 11 * 4 * 8 bits = 704 bytes
-const STRAIGHT_TRACK_ELIGIBLE_CONNECTIONS: &[TileId] = &[
-    // We can enter the 90-degree elbow at (8, 8) in its forward scan direction.
-    TileId::new(8, 8, 0, false, false, false),
-    // including if X is flipped
-    TileId::new(8, 8, 0, true, false, false),
-    // We can enter the 90-degree elbow at (8, 8) in its reverse scan direction.
-    // For this to work, the elbow must be turned 90 degrees so we're seeing its end-of-path
-    // side. We set reverse = true because we want the scan to continue in the reverse direction
-    //
-    // but if X is flipped on the elbow, we need the opposite rotation
-    TileId::new(8, 8, 1, false, true, false),
-    TileId::new(8, 8, 3, true, true, false),
-];
-
-fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
+fn build_track_tiles() -> ([[Option<TrackTile>; 16]; 11], Vec<Template>) {
     let mut track_tiles = [[None; 16]; 11];
+    let mut templates = Vec::new();
 
     // 8, 8 is the curve tile
     /*
@@ -563,9 +546,48 @@ fn build_track_tiles() -> [[Option<TrackTile>; 16]; 11] {
 
     // CONTINUE HERE
     // [0][1] and [1][1] start the 8-block switch (folded in half to make a 4 block segment in the tile space)
-    build_folded_switch(&mut track_tiles, 4, 0, 1, 6, 0, 1, 40);
+    let (t1, t2, t3) = build_folded_switch(&mut track_tiles, 4, 0, 1, 6, 0, 1, 40);
+    templates.push(t1);
+    templates.push(t2);
+    templates.push(t3);
 
-    track_tiles
+    let (t1, t2, t3) = build_folded_switch(&mut track_tiles, 8, 2, 0, 8, 0, 2, 85);
+    templates.push(t1);
+    templates.push(t2);
+    templates.push(t3);
+
+    templates.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then(a.sort_subkey.cmp(&b.sort_subkey))
+    });
+
+    for len in [8, 16, 32, 64, 128, 256] {
+        let template = build_straight_track_template(len);
+        templates.push(template);
+    }
+
+    (track_tiles, templates)
+}
+
+fn build_straight_track_template(len: u16) -> Template {
+    let mut tiles = vec![];
+    for y in 0..len {
+        tiles.push(TemplateEntry {
+            variant: 0,
+            offset_x: 0,
+            offset_z: y as i32,
+            tracks_consumed: 1,
+        });
+    }
+    Template {
+        category: "Straight Track".to_string(),
+        sort_subkey: len,
+        name: format!("{} blocks", len),
+        id: format!("straight_track_{}", len),
+        entries: tiles.into_boxed_slice(),
+        bifurcate: false,
+    }
 }
 
 fn build_folded_switch(
@@ -577,13 +599,89 @@ fn build_folded_switch(
     diag_ymin: u16,
     skip_secondary_tiles: u16,
     max_turnout_speed: u8,
-) {
+) -> (Template, Template, Template) {
+    let mut switch_template_tiles = Vec::new();
+    let mut half_switch_template_tiles = Vec::new();
+    let mut diag_template_tiles = Vec::new();
+
     for y in 0..switch_half_len {
         // The tiles on column 0 only carry straight-through traffic. Diverging traffic is always on column 1 tiles,
         // with the column 0 tile being merely a secondary tile.
         // We can just copy the 0,0 straight track into here
-        track_tiles[switch_xmin as usize][(switch_ymin + y) as usize] = track_tiles[0][0];
 
+        let switch_primary = TemplateEntry {
+            variant: TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false)
+                .block_variant(),
+            offset_x: 1,
+            offset_z: y as i32,
+            tracks_consumed: 2,
+        };
+        let switch_secondary = TemplateEntry {
+            variant: TileId::new(switch_xmin + 1, switch_ymin + y, 0, false, false, false)
+                .block_variant(),
+            offset_x: 0,
+            offset_z: y as i32,
+            tracks_consumed: 2,
+        };
+        let diag_primary = TemplateEntry {
+            variant: TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false).block_variant(),
+            offset_x: 1,
+            offset_z: y as i32,
+            tracks_consumed: 1,
+        };
+        let diag_secondary = TemplateEntry {
+            variant: TileId::new(diag_xmin + 1, diag_ymin + y, 0, false, false, false)
+                .block_variant(),
+            offset_x: 0,
+            offset_z: y as i32,
+            tracks_consumed: 1,
+        };
+
+        switch_template_tiles.push(switch_primary);
+        switch_template_tiles.push(switch_secondary);
+
+        half_switch_template_tiles.push(diag_primary);
+        half_switch_template_tiles.push(switch_secondary);
+
+        diag_template_tiles.push(diag_primary);
+        diag_template_tiles.push(diag_secondary);
+
+        let switch_farside = TemplateEntry {
+            variant: TileId::new(switch_xmin + 1, switch_ymin + y, 2, false, false, false)
+                .block_variant(),
+            offset_x: 1,
+            offset_z: (2 * switch_half_len - 1 - y) as i32,
+            tracks_consumed: 2,
+        };
+        let switch_farside_secondary = TemplateEntry {
+            variant: TileId::new(switch_xmin, switch_ymin + y, 2, false, false, false)
+                .block_variant(),
+            offset_x: 0,
+            offset_z: (2 * switch_half_len - 1 - y) as i32,
+            tracks_consumed: 2,
+        };
+        let diag_farside = TemplateEntry {
+            variant: TileId::new(diag_xmin + 1, diag_ymin + y, 2, false, false, false)
+                .block_variant(),
+            offset_x: 1,
+            offset_z: (2 * switch_half_len - 1 - y) as i32,
+            tracks_consumed: 1,
+        };
+        let diag_farside_secondary = TemplateEntry {
+            variant: TileId::new(diag_xmin, diag_ymin + y, 2, false, false, false).block_variant(),
+            offset_x: 0,
+            offset_z: (2 * switch_half_len - 1 - y) as i32,
+            tracks_consumed: 1,
+        };
+
+        switch_template_tiles.push(switch_farside);
+        switch_template_tiles.push(switch_farside_secondary);
+        half_switch_template_tiles.push(diag_farside);
+        half_switch_template_tiles.push(switch_farside_secondary);
+        diag_template_tiles.push(diag_farside);
+        diag_template_tiles.push(diag_farside_secondary);
+
+        track_tiles[switch_xmin as usize][(switch_ymin + y) as usize] = track_tiles[0][0];
         track_tiles[switch_xmin as usize + 1][(switch_ymin + y) as usize] = Some(TrackTile {
             next_delta: EncodedDelta::new(0, 1),
             // At y = 4, we are hitting the fold-in-half
@@ -832,10 +930,42 @@ fn build_folded_switch(
             ..TrackTile::default()
         });
     }
+
+    switch_template_tiles.sort_by_key(|t| t.offset_x.abs() + t.offset_z.abs());
+    half_switch_template_tiles.sort_by_key(|t| t.offset_x.abs() + t.offset_z.abs());
+    diag_template_tiles.sort_by_key(|t| t.offset_x.abs() + t.offset_z.abs());
+
+    (
+        Template {
+            category: "Crossover".to_string(),
+            name: (switch_half_len * 2).to_string() + "-block",
+            sort_subkey: switch_half_len,
+            id: format!("crossover_{}", switch_half_len),
+            entries: switch_template_tiles.into_iter().collect(),
+            bifurcate: true,
+        },
+        Template {
+            category: "Parallel Turnout".to_string(),
+            name: (switch_half_len * 2).to_string() + "-block",
+            sort_subkey: switch_half_len,
+            id: format!("parallel_turnout_{}", switch_half_len),
+            entries: half_switch_template_tiles.into_iter().collect(),
+            bifurcate: true,
+        },
+        Template {
+            category: "Diagonal".to_string(),
+            name: (switch_half_len * 2).to_string() + "-block",
+            sort_subkey: switch_half_len,
+            id: format!("diagonal_{}", switch_half_len),
+            entries: diag_template_tiles.into_iter().collect(),
+            bifurcate: true,
+        },
+    )
 }
 
 lazy_static::lazy_static! {
-    static ref TRACK_TILES: [[Option<TrackTile>; 16]; 11] = build_track_tiles();
+    static ref TRACK_TILES: [[Option<TrackTile>; 16]; 11] = build_track_tiles().0;
+    pub(crate) static ref TRACK_TEMPLATES: Vec<Template> = build_track_tiles().1;
 }
 
 pub(crate) fn register_tracks(
@@ -883,12 +1013,12 @@ pub(crate) fn register_tracks(
                         .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true, false)
                         .text_field("rotation", "Rotation", tile_id.rotation().to_string(), true, false)
                         .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
-                        .button("apply", "Apply", true)
+                        .button("apply", "Apply", true, true)
                         .label("Scan tile:")
                         .checkbox("reverse", "Reverse", false, true)
                         .checkbox("diverging", "Diverging", false, true)
-                        .button("scan", "Scan", true)
-                        .button("multiscan", "Multi-Scan", true)
+                        .button("scan", "Scan", true, false)
+                        .button("multiscan", "Multi-Scan", true, false)
                         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
                             match handle_popup_response(&response, coord) {
                                 Ok(_) => {},
@@ -1572,4 +1702,21 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
         _ => {}
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TemplateEntry {
+    pub(crate) variant: u16,
+    pub(crate) offset_x: i32,
+    pub(crate) offset_z: i32,
+    pub(crate) tracks_consumed: u8,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct Template {
+    pub(crate) category: String,
+    pub(crate) sort_subkey: u16,
+    pub(crate) name: String,
+    pub(crate) id: String,
+    pub(crate) entries: Box<[TemplateEntry]>,
+    pub(crate) bifurcate: bool,
 }

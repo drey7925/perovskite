@@ -1753,6 +1753,30 @@ impl MiscOutboundWorker {
                     // them on our end
                     self.context.cancellation.cancel();
                 },
+                popup_id = self.player_event_receiver.updated_popups.recv() => {
+                    match popup_id {
+                        Some(popup_id) => {
+                            let popup_proto = {
+                                self.context.player_context.state.lock().active_popups.iter().find(|x| x.id() == popup_id).map(|x| x.to_proto())
+                            };
+                            let popup_proto = match popup_proto {
+                                Some(x) => x,
+                                None => {
+                                    tracing::warn!("Updated popup not found: {}", popup_id);
+                                    continue;
+                                }
+                            };
+                            self.outbound_tx.send(Ok(StreamToClient {
+                                tick: self.context.game_state.tick(),
+                                server_message: Some(ServerMessage::ShowPopup(popup_proto)),
+                            })).await?;
+                        },
+                        None => {
+                            tracing::warn!("Updated popup sender disconnected")
+                        }
+                    }
+
+                }
                 _ = resync_player_state_global.changed() => {
                     let message = make_client_state_update_message(&self.context, self.context.player_context.player.state.lock(), false)?;
                     self.outbound_tx.send(Ok(message)).await?;

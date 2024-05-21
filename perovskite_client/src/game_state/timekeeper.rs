@@ -5,6 +5,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use tracy_client::plot;
 
 //  server timebase             server time
 //  |--------------[tick]------>|
@@ -81,6 +82,8 @@ impl Timekeeper {
         let now = Instant::now();
         let last_frame_nanos: i64 = (now - lock.last_frame_time).as_nanos().try_into().unwrap();
         let last_frame_nanos = last_frame_nanos as f64;
+        plot!("lock_error", lock.error as f64);
+        plot!("lock_sm_error", lock.smoothed_error as f64);
 
         if lock.error > lock.smoothed_error {
             // Error is positive. Therefore the server clock is ahead of where it was before
@@ -122,6 +125,6 @@ impl Timekeeper {
     }
 
     pub(crate) fn estimated_send_time(&self, server_tick: u64) -> Instant {
-        self.initial_timebase_estimate + Duration::from_nanos(server_tick) // + Duration::from_nanos(self.adjust_server_tick(server_tick))
+        self.initial_timebase_estimate + Duration::from_nanos(self.adjust_server_tick(server_tick))
     }
 }

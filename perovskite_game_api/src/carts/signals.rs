@@ -237,7 +237,7 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             .checkbox("right", "Right", (variant & VARIANT_RIGHT) != 0, true)
             .text_field("left_routes", "Left Routes", left_routes, true, true)
             .text_field("right_routes", "Right Routes", right_routes, true, true)
-            .button("apply", "Apply", true)
+            .button("apply", "Apply", true, true)
             .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
                 match handle_popup_response(&response, coord) {
                     Ok(_) => {}

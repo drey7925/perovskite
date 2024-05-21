@@ -542,6 +542,9 @@ struct MapChunkHolder {
     chunk: RwLock<HolderState>,
     condition: RwCondvar,
     // TODO - should these go into their own cache line to avoid ping-ponging?
+    //
+    // At this time, benchmarking shows unclear evidence regarding this.
+    // TODO: write a multithreaded benchmark with contention.
     last_accessed: AtomicInstant,
     last_written: AtomicInstant,
     block_bloom_filter: cbloom::Filter,
@@ -1497,8 +1500,11 @@ impl ServerGameMap {
         // (unwrapping will panic)
         //
         // As long as the guard lives, nobody can remove the entry from the map
-        if !guard.chunks.contains_key(&coord) {
-            return None;
+        match guard.chunks.get(&coord) {
+            None => return None,
+            Some(holder) => {
+                holder.last_accessed.update_now_relaxed();
+            }
         }
         return Some(MapChunkOuterGuard {
             read_guard: guard,
@@ -1632,7 +1638,10 @@ impl ServerGameMap {
 
     /// Get a chunk from the map and return its client proto if either load_if_missing is true, or
     /// the chunk is already cached in memory. If this loads a chunk, the chunk will stay in memory.
-    pub(crate) fn serialize_for_client(
+    ///
+    /// This is only made visible for benchmarking, and otherwise isn't useful or stable for most use-cases.
+    #[doc(hidden)]
+    pub fn serialize_for_client(
         &self,
         coord: ChunkCoordinate,
         load_if_missing: bool,

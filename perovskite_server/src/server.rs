@@ -48,17 +48,17 @@ use crate::{
 pub struct ServerArgs {
     /// The directory to use to store the world's data
     #[arg(short, long, value_name = "DATA_DIR")]
-    data_dir: PathBuf,
+    pub data_dir: PathBuf,
 
     /// The interface address to bind to. By default, bind all interfaces.
     #[arg(long)]
-    bind_addr: Option<IpAddr>,
+    pub bind_addr: Option<IpAddr>,
 
     #[arg(short, long, default_value_t = 28273)]
-    port: u16,
+    pub port: u16,
 
     #[arg(long, default_value_t = 100)]
-    trace_rate_denominator: usize,
+    pub trace_rate_denominator: usize,
 }
 
 pub struct Server {
@@ -136,6 +136,11 @@ impl Server {
             }
             self.game_state.start_shutdown();
         }).await.with_context(||"Tonic server error")
+    }
+
+    pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> Result<T>) -> Result<T> {
+        let _enter_guard = self.runtime.enter();
+        task(self.game_state())
     }
 }
 impl Drop for Server {

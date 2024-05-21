@@ -35,6 +35,7 @@ use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tr
 
 mod interlocking;
 mod signals;
+mod track_tool;
 mod tracks;
 
 #[derive(Clone)]
@@ -177,7 +178,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     ext.cart_id = cart_id;
 
     let ext_clone = ext.clone();
-
+    track_tool::register_track_tool(game_builder, &ext_clone)?;
     game_builder
         .inner
         .items_mut()
@@ -197,7 +198,6 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 place_cart(ctx, anchor, stack, ext_clone.clone())
             })),
         })?;
-
     Ok(())
 }
 
@@ -459,7 +459,6 @@ impl EntityCoroutine for CartCoroutine {
                                         whence,
                                         services,
                                         trace_buffer,
-                                        false,
                                     );
                                 }
                             }
@@ -513,21 +512,12 @@ impl CartCoroutine {
             self.unplanned_segments.len()
         );
 
-        let debug_precomputed = !self.precomputed_steps.is_empty();
-
         let maybe_deferral = self.scan_tracks(services, 2048.0, when, &trace_buffer);
         if let Some(deferral) = maybe_deferral {
             return deferral.with_trace_buffer(trace_buffer);
         }
 
-        self.finish_schedule(
-            when,
-            queue_space,
-            whence,
-            services,
-            trace_buffer,
-            debug_precomputed,
-        )
+        self.finish_schedule(when, queue_space, whence, services, trace_buffer)
     }
 
     fn parse_signal(
@@ -1450,7 +1440,6 @@ impl CartCoroutine {
         whence: Vector3<f64>,
         services: &EntityCoroutineServices<'_>,
         trace_buffer: TraceBuffer,
-        noisy: bool,
     ) -> CoroutineResult {
         trace_buffer.log("Promoting schedulable segments");
         let schedulable_segments = self.promote_schedulable(when, queue_space);
@@ -1585,11 +1574,6 @@ impl CartCoroutine {
                 returned_moves.push(movement);
             } else if !segment.segment.any_content() {
                 tracing::warn!("Segment {:?} had no movement", segment);
-            }
-        }
-        if noisy {
-            for m in &returned_moves {
-                tracing::debug!("Returned move: {:?}", m);
             }
         }
         tracing::debug!("returning {} moves", returned_moves.len());
