@@ -342,6 +342,7 @@ fn single_pathfind_attempt(
                             if defer_switch {
                                 switch_countdowns.push((switch_coord, new_block, switch_len.get()));
                             } else {
+                                tracing::info!("Clearing switch at {:?}", switch_coord);
                                 clear_switch = Some((switch_coord, *switch_block));
                             }
 
@@ -383,7 +384,11 @@ fn single_pathfind_attempt(
             *countdown = countdown.saturating_sub(1);
             if *countdown == 0 {
                 if clear_switch.is_none() {
-                    tracing::info!("Clearing switch at {:?}", coord);
+                    tracing::info!(
+                        "Clearing switch at {:?}, deferred to {:?}",
+                        coord,
+                        track_coord
+                    );
                     clear_switch = Some((*coord, *block));
                 } else {
                     // We need to clear two switches in the same block; this shouldn't happen.

@@ -350,7 +350,7 @@ impl TrackSegment {
                     seg_id: self.seg_id,
                     enter_signal: None,
                     exit_signal: self.exit_signal,
-                    pass_switch: None,
+                    pass_switch: self.pass_switch,
                 }),
             )
         } else {
@@ -615,9 +615,7 @@ impl CartCoroutine {
         when: f32,
         trace_buffer: &TraceBuffer,
     ) -> Option<CoroutineResult> {
-        let mut debug_precomputed = false;
         if !self.precomputed_steps.is_empty() {
-            debug_precomputed = true;
             trace_buffer.log("Using precomputed steps");
 
             for (i, step) in std::mem::replace(&mut self.precomputed_steps, vec![])
@@ -628,6 +626,7 @@ impl CartCoroutine {
                 let state = step.scan_state;
 
                 if let Some((switch_coord, block_id)) = step.clear_switch {
+                    tracing::info!("Clearing switch at {:?}", switch_coord);
                     self.unplanned_segments.back_mut().unwrap().pass_switch =
                         Some((switch_coord, block_id));
                 }
@@ -1557,7 +1556,13 @@ impl CartCoroutine {
                         )
                         .unwrap()
                     {
-                        (game_state::game_map::CasOutcome::Match, _, _) => {}
+                        (game_state::game_map::CasOutcome::Match, _, _) => {
+                            tracing::info!(
+                                "Pass switch match: got {:?} at {:?}",
+                                pass_switch_block,
+                                pass_switch_coord
+                            );
+                        }
                         (game_state::game_map::CasOutcome::Mismatch, id, _) => {
                             tracing::warn!(
                                 "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
