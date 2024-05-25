@@ -380,14 +380,20 @@ fn single_pathfind_attempt(
         }
 
         for (coord, block, countdown) in switch_countdowns.iter_mut() {
-            *countdown -= 1;
+            *countdown = countdown.saturating_sub(1);
             if *countdown == 0 {
                 if clear_switch.is_none() {
+                    tracing::info!("Clearing switch at {:?}", coord);
                     clear_switch = Some((*coord, *block));
                 } else {
                     // We need to clear two switches in the same block; this shouldn't happen.
-                    // Push it over to the next block.
-                    tracing::warn!("Got two switches in the same block at {:?}", track_coord);
+                    tracing::warn!(
+                        "Got two switches to be cleared at {:?}, second one's coord is {:?}",
+                        track_coord,
+                        coord
+                    );
+                    // Try again in the next block
+                    *countdown = 1;
                 }
             }
         }

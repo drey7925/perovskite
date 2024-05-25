@@ -841,7 +841,7 @@ impl CartCoroutine {
             / (last_move_delta.magnitude() * new_delta.magnitude())
             < 0.999999
         {
-            tracing::info!(
+            tracing::debug!(
                 "Splitting a segment due to angle; prev length was {}, cos similiarity was {}",
                 last_move_delta.magnitude(),
                 last_move_delta.dot(new_delta)
@@ -1534,7 +1534,7 @@ impl CartCoroutine {
                 let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
                 const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
                 let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
-                tracing::debug!(
+                tracing::info!(
                     "passing switch in {} + {} + {} seconds at {:?}",
                     returned_moves_time,
                     when,

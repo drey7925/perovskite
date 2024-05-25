@@ -371,17 +371,22 @@ impl MapgenInterface for DefaultMapgen {
                 for x in 1..15 {
                     for z in 0..16 {
                         chunk.set_block(ChunkOffset { x, y: 3, z }, self.stone, None);
-                        chunk.set_block(
-                            ChunkOffset { x, y: 4, z },
-                            self.rail_testonly.with_variant(0).unwrap(),
-                            None,
-                        );
+                        if chunk_coord.x % 32 == 0 || x == 7 || x == 8 {
+                            chunk.set_block(
+                                ChunkOffset { x, y: 4, z },
+                                self.rail_testonly.with_variant(0).unwrap(),
+                                None,
+                            );
+                        }
                         chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
                             if z == 5 && chunk_coord.z % 4 == 0 {
                                 self.desert_stone
-                            } else if z == 4 && chunk_coord.z % 4 == 0 {
+                            } else if z == 4
+                                && chunk_coord.z % 4 == 0
+                                && (chunk_coord.x % 32 == 0 || x == 7 || x == 8)
+                            {
                                 self.signal_testonly.with_variant(16).unwrap()
                             } else {
                                 self.air
