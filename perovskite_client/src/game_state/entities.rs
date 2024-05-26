@@ -124,6 +124,12 @@ impl GameEntity {
     pub(crate) fn estimated_buffer_count(&self) -> usize {
         self.move_queue.len()
     }
+    pub(crate) fn debug_cms(&self) -> u64 {
+        self.current_move_sequence
+    }
+    pub(crate) fn debug_cme(&self, time: Instant) -> f32 {
+        (time - self.current_move_started).as_secs_f32()
+    }
 
     pub(crate) fn update(
         &mut self,

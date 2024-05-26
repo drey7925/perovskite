@@ -956,6 +956,8 @@ impl CartCoroutine {
         let mut max_exit_speed: Flt = 0.0;
 
         let mut total_skipped_segments = 0.0;
+
+        let panic_max_index = self.estimate_panic_max_index();
         for (idx, seg) in self.unplanned_segments.iter().enumerate().rev() {
             tracing::debug!("> segment idx {}, {:?}", idx, seg);
             // The entrance speed, if we just consider the max acceleration
@@ -976,6 +978,7 @@ impl CartCoroutine {
                 max_entry_speed = seg.max_speed;
                 // This segment itself is not yet schedulable, so we don't set unconditionally_schedulable yet
             }
+
             // If we encountered a further segment where we were limited by track speed, we can schedule this one
             let should_panic_schedule = available_scheduled_segments < 2
                 || self.last_submitted_move_exit_speed < 0.001
@@ -988,10 +991,10 @@ impl CartCoroutine {
                     unconditionally_schedulable,
                     seg.seg_id
                 );
-            } else if should_panic_schedule && idx == 0 && when < 5.0 {
+            } else if should_panic_schedule && idx <= panic_max_index && when < 5.0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::debug!(
+                tracing::info!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg
@@ -1588,6 +1591,18 @@ impl CartCoroutine {
                 returned_moves,
             ),
         )
+    }
+
+    fn estimate_panic_max_index(&self) -> usize {
+        let mut total_time_estimate = 0.0;
+        for (idx, seg) in self.unplanned_segments.iter().enumerate() {
+            let seg_time_estimate = seg.distance() / seg.max_speed;
+            total_time_estimate += seg_time_estimate;
+            if total_time_estimate > 2.0 {
+                return idx;
+            }
+        }
+        self.unplanned_segments.len() - 1
     }
 }
 

@@ -117,6 +117,10 @@ impl ActiveGame {
                         "entity_buffer_count",
                         entity.estimated_buffer_count() as f64
                     );
+                    // Most test tracks run in the Z direction, so this is an easy metric to debug with.
+                    plot!("entity_z_coord", player_position.z);
+                    plot!("entity_cms", entity.debug_cms() as f64);
+                    plot!("entity_cme", entity.debug_cme(start_time) as f64)
                 }
             }
         }
