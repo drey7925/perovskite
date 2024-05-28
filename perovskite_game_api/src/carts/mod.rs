@@ -1,19 +1,21 @@
 use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
 
 // This is a temporary implementation used while developing the entity system
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use cgmath::{InnerSpace, Vector3};
+use interlocking::InterlockingRoute;
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
     constants::items::default_item_interaction_rules,
-    coordinates::BlockCoordinate,
+    coordinates::{BlockCoordinate, PlayerPositionUpdate},
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
     util::{TraceBuffer, TraceLog},
 };
 use perovskite_server::game_state::{
     self,
+    client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     entities::{
         ContinuationResult, ContinuationResultValue, CoroutineResult, DeferrableResult,
         EntityClassId, EntityCoroutine, EntityCoroutineServices, EntityDef, EntityTypeId, Movement,
@@ -51,6 +53,19 @@ struct CartsGameBuilderExtension {
     interlocking_signal: BlockId,
 
     cart_id: EntityClassId,
+}
+impl CartsGameBuilderExtension {
+    fn parse_speedpost(&self, signal_block: BlockId) -> Option<f32> {
+        if signal_block.equals_ignore_variant(self.speedpost_1) {
+            Some(3.0)
+        } else if signal_block.equals_ignore_variant(self.speedpost_2) {
+            Some(30.0)
+        } else if signal_block.equals_ignore_variant(self.speedpost_3) {
+            Some(90.0)
+        } else {
+            None
+        }
+    }
 }
 impl Default for CartsGameBuilderExtension {
     fn default() -> Self {
@@ -235,7 +250,53 @@ fn place_cart(
         }
     };
     let variant = rotate_nesw_azimuth_to_variant(player_pos.face_direction.0);
+    let config = config.clone();
+    let popup = ctx
+        .new_popup()
+        .title("Spawn Cart")
+        .text_field("cart_name", "Cart name", "", true, false)
+        .button("spawn", "Spawn", true, true)
+        .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
+            match response.user_action {
+                PopupAction::PopupClosed => return,
+                PopupAction::ButtonClicked(b) => {
+                    if b != "spawn" {
+                        return;
+                    }
+                }
+            }
+            let cart_name = response
+                .textfield_values
+                .get("cart_name")
+                .expect("missing cart_name");
 
+            actually_spawn_cart(config.clone(), &response.ctx, &cart_name, rail_pos, variant)
+                .unwrap();
+        }));
+
+    match ctx.initiator() {
+        game_state::event::EventInitiator::Player(p) => p.player.show_popup_blocking(popup)?,
+        game_state::event::EventInitiator::WeakPlayerRef(wp) => {
+            match wp.try_to_run(|p| p.show_popup_blocking(popup)) {
+                Some(_) => {}
+                None => {
+                    tracing::warn!("Weak player ref tried to show popup but failed");
+                }
+            }
+        }
+        _ => tracing::warn!("Not a player"),
+    };
+
+    Ok(stack.decrement())
+}
+
+fn actually_spawn_cart(
+    config: CartsGameBuilderExtension,
+    ctx: &HandlerContext,
+    cart_name: &str,
+    rail_pos: BlockCoordinate,
+    variant: u16,
+) -> Result<()> {
     let initial_state = tracks::ScanState::spawn_at(
         rail_pos,
         (variant as u8 + 2) % 4,
@@ -248,7 +309,7 @@ fn place_cart(
             ctx.initiator().send_chat_message(
                 ChatMessage::new_server_message("Can't spawn").with_color(SERVER_ERROR_COLOR),
             )?;
-            return Ok(Some(stack.clone()));
+            return Ok(());
         }
     };
 
@@ -260,6 +321,7 @@ fn place_cart(
         initial_state.vec_coord() + cgmath::Vector3::new(0.0, 1.0, 0.0),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
+            cart_name: cart_name.to_string(),
             scheduled_segments: VecDeque::new(),
             unplanned_segments: VecDeque::new(),
             // Until we encounter a speed post, proceed at minimal safe speed
@@ -270,7 +332,7 @@ fn place_cart(
             cleared_signals: FxHashMap::default(),
             held_signal: None,
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            precomputed_steps: Vec::new(),
+            precomputed_steps: None,
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -282,8 +344,7 @@ fn place_cart(
         ChatMessage::new_server_message(format!("Spawned cart with id {}", id))
             .with_color(SERVER_MESSAGE_COLOR),
     )?;
-
-    Ok(stack.decrement())
+    Ok(())
 }
 
 fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
@@ -403,7 +464,9 @@ struct CartCoroutine {
     cleared_signals: FxHashMap<BlockCoordinate, BlockId>,
     held_signal: Option<(BlockCoordinate, BlockId)>,
     // If we got a planned path from the interlocking system, this is the path
-    precomputed_steps: Vec<InterlockingStep>,
+    precomputed_steps: Option<InterlockingRoute>,
+    // The cart name, used for interlockings
+    cart_name: String,
     // debug only
     spawn_time: Instant,
 }
@@ -436,17 +499,17 @@ impl EntityCoroutine for CartCoroutine {
                     self.cleared_signals.insert(coord, block_id);
                 }
                 ContinuationResultValue::HeapResult(result) => {
-                    match result.downcast::<Option<Vec<InterlockingStep>>>() {
+                    match result.downcast::<Option<InterlockingRoute>>() {
                         Ok(steps) => {
                             match *steps {
                                 Some(steps) => {
-                                    if !self.precomputed_steps.is_empty() {
+                                    if self.precomputed_steps.is_some() {
                                         tracing::warn!(
                                             "precomputed steps is not empty: {:?}",
                                             self.precomputed_steps
                                         )
                                     }
-                                    self.precomputed_steps = steps;
+                                    self.precomputed_steps = Some(steps);
                                 }
                                 None => {
                                     // empty route plan, try to scan the interlocking again next time
@@ -527,12 +590,8 @@ impl CartCoroutine {
         signal_block: BlockId,
         trace_buffer: &TraceBuffer,
     ) -> ReenterableResult<SignalResult> {
-        if signal_block == self.config.speedpost_1 {
-            SignalResult::SpeedRestriction(3.0).into()
-        } else if signal_block == self.config.speedpost_2 {
-            SignalResult::SpeedRestriction(30.0).into()
-        } else if signal_block == self.config.speedpost_3 {
-            SignalResult::SpeedRestriction(90.0).into()
+        if let Some(speed) = self.config.parse_speedpost(signal_block) {
+            return SignalResult::SpeedRestriction(speed).into();
         } else if signal_block.equals_ignore_variant(self.config.automatic_signal) {
             let rotation = signal_block.variant() & 0b11;
             if !self.scan_state.signal_rotation_ok(rotation) {
@@ -595,10 +654,13 @@ impl CartCoroutine {
                 state_clone.block_coord
             );
             let trace_buffer = trace_buffer.clone();
+            let cart_name_clone = self.cart_name.clone();
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
-                let result = interlocking::interlock_cart(ctx, state, 256, config_clone).await;
+                let result =
+                    interlocking::interlock_cart(ctx, state, &cart_name_clone, 256, config_clone)
+                        .await;
                 trace_buffer.log("Interlocking signal done");
                 // todo better error handling?
                 ContinuationResultValue::HeapResult(Box::new(result.unwrap_or_default()))
@@ -615,13 +677,12 @@ impl CartCoroutine {
         when: f32,
         trace_buffer: &TraceBuffer,
     ) -> Option<CoroutineResult> {
-        if !self.precomputed_steps.is_empty() {
+        if self.precomputed_steps.is_some() {
             trace_buffer.log("Using precomputed steps");
 
-            for (i, step) in std::mem::replace(&mut self.precomputed_steps, vec![])
-                .into_iter()
-                .enumerate()
-            {
+            let steps = self.precomputed_steps.take().unwrap();
+
+            for (i, step) in steps.steps.into_iter().enumerate() {
                 tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
                 let state = step.scan_state;
 
@@ -632,6 +693,10 @@ impl CartCoroutine {
                 }
                 if step.clear_switch.is_some() || step.enter_signal != BlockId::from(0) {
                     self.start_new_unplanned_segment();
+                }
+
+                if let Some(speed) = step.speed_post {
+                    self.last_speed_post_indication = speed as f64;
                 }
 
                 if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {

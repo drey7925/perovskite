@@ -107,12 +107,14 @@ impl Drop for SignalTransaction<'_> {
 pub(super) async fn interlock_cart(
     handler_context: HandlerContext<'_>,
     initial_state: ScanState,
+    cart_name: &str,
     max_scan_distance: usize,
     cart_config: CartsGameBuilderExtension,
-) -> Result<Option<Vec<InterlockingStep>>> {
+) -> Result<Option<InterlockingRoute>> {
     while !handler_context.is_shutting_down() {
         let resolution = single_pathfind_attempt(
             &handler_context,
+            cart_name,
             initial_state.clone(),
             max_scan_distance,
             &cart_config,
@@ -136,10 +138,11 @@ pub(super) async fn interlock_cart(
 
 fn single_pathfind_attempt(
     handler_context: &HandlerContext<'_>,
+    cart_name: &str,
     initial_state: ScanState,
     max_scan_distance: usize,
     cart_config: &CartsGameBuilderExtension,
-) -> Result<Option<Vec<InterlockingStep>>> {
+) -> Result<Option<InterlockingRoute>> {
     let mut steps = vec![];
     let mut state = initial_state;
     let mut transaction = SignalTransaction::new(handler_context);
@@ -177,6 +180,9 @@ fn single_pathfind_attempt(
 
         let track_coord = state.block_coord;
         let signal_position = track_coord.try_delta(0, 2, 0);
+
+        let mut speed_post = None;
+
         // first parse the signal we see...
         if let Some(signal_coord) = signal_position {
             let query_result = handler_context.game_map().mutate_block_atomically(
@@ -194,7 +200,8 @@ fn single_pathfind_attempt(
                             }
                             signals::SignalLockOutcome::Acquired => {
                                 // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
-                                let query_result = query_interlocking_signal(ext.as_ref(), "test")?;
+                                let query_result =
+                                    query_interlocking_signal(ext.as_ref(), cart_name)?;
                                 if let Some(variant) = query_result.adjust_variant(block.variant())
                                 {
                                     // The signal's parsing outcome led to a new variant.
@@ -230,6 +237,9 @@ fn single_pathfind_attempt(
                                 Ok(SignalParseOutcome::Deny)
                             }
                         }
+                    } else if let Some(speed) = cart_config.parse_speedpost(*block) {
+                        speed_post = Some(speed);
+                        Ok(SignalParseOutcome::NotASignal)
                     } else {
                         Ok(SignalParseOutcome::NotASignal)
                     }
@@ -278,12 +288,13 @@ fn single_pathfind_attempt(
                         scan_state: state.clone(),
                         enter_signal: acquired_signal,
                         clear_switch,
+                        speed_post: None,
                     });
                     if !switch_countdowns.is_empty() {
                         tracing::warn!("Switch clears still remaining: {:?}", switch_countdowns)
                     }
                     transaction.commit();
-                    return Ok(Some(steps));
+                    return Ok(Some(InterlockingRoute { steps }));
                 }
             }
         }
@@ -408,6 +419,7 @@ fn single_pathfind_attempt(
             scan_state: state.clone(),
             enter_signal: acquired_signal,
             clear_switch,
+            speed_post,
         });
         let new_state =
             state.advance::<false>(|coord| handler_context.game_map().get_block(coord).into())?;
@@ -420,7 +432,7 @@ fn single_pathfind_attempt(
                 if !switch_countdowns.is_empty() {
                     tracing::warn!("Switch clears still remaining")
                 }
-                return Ok(Some(steps));
+                return Ok(Some(InterlockingRoute { steps }));
             }
             super::tracks::ScanOutcome::NotOnTrack => {
                 return Ok(None);
@@ -444,8 +456,14 @@ impl LogError for Result<(), anyhow::Error> {
 }
 
 #[derive(Debug, Clone)]
-pub struct InterlockingStep {
-    pub scan_state: ScanState,
-    pub enter_signal: BlockId,
-    pub clear_switch: Option<(BlockCoordinate, BlockId)>,
+pub(crate) struct InterlockingStep {
+    pub(crate) scan_state: ScanState,
+    pub(crate) enter_signal: BlockId,
+    pub(crate) clear_switch: Option<(BlockCoordinate, BlockId)>,
+    pub(crate) speed_post: Option<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InterlockingRoute {
+    pub(crate) steps: Vec<InterlockingStep>,
 }

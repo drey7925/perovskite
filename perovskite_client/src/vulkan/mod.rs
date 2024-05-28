@@ -250,6 +250,7 @@ impl VulkanWindow {
 
         let memory_allocator = Arc::new(GenericMemoryAllocator::new(
             vk_device.clone(),
+            // TODO upgrade to vulkano 0.34 and use the new method of specifying block sizes per type
             vulkano::memory::allocator::GenericMemoryAllocatorCreateInfo {
                 block_sizes: &[(0, 64 * (1 << 20)), (1 * (1 << 30), 256 * (1 << 20))],
                 ..Default::default()
