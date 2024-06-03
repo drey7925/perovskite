@@ -1,10 +1,15 @@
-use std::{collections::VecDeque, sync::atomic::AtomicU64, time::Instant};
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, VecDeque},
+    sync::atomic::AtomicU64,
+    time::Instant,
+};
 
 // This is a temporary implementation used while developing the entity system
 use anyhow::{Context, Result};
 
 use cgmath::{InnerSpace, Vector3};
-use interlocking::InterlockingRoute;
+use interlocking::{InterlockingResumeState, InterlockingRoute};
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
@@ -51,6 +56,7 @@ struct CartsGameBuilderExtension {
     switch_diverging: BlockId,
     automatic_signal: BlockId,
     interlocking_signal: BlockId,
+    starting_signal: BlockId,
 
     cart_id: EntityClassId,
 }
@@ -79,6 +85,7 @@ impl Default for CartsGameBuilderExtension {
             switch_diverging: 0.into(),
             automatic_signal: 0.into(),
             interlocking_signal: 0.into(),
+            starting_signal: 0.into(),
             cart_id: EntityClassId::new(0),
         }
     }
@@ -175,7 +182,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         },
     })?;
 
-    let (automatic_signal, interlocking_signal) = signals::register_signal_block(game_builder)?;
+    let (automatic_signal, interlocking_signal, starting_signal) =
+        signals::register_signal_block(game_builder)?;
 
     let rail_block_id = tracks::register_tracks(game_builder)?;
 
@@ -189,6 +197,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     ext.switch_diverging = switch_diverging.id;
     ext.automatic_signal = automatic_signal;
     ext.interlocking_signal = interlocking_signal;
+    ext.starting_signal = starting_signal;
 
     ext.cart_id = cart_id;
 
@@ -333,6 +342,10 @@ fn actually_spawn_cart(
             held_signal: None,
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             precomputed_steps: None,
+            pending_actions: BinaryHeap::new(),
+            cart_length: 1,
+
+            interlocking_resume_state: None,
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -350,7 +363,6 @@ fn actually_spawn_cart(
 fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
     cgmath::Vector3::new(b.x as f64, b.y as f64, b.z as f64)
 }
-type Flt = f64;
 
 /// A segment of track where we know we can run
 #[derive(Copy, Clone, Debug)]
@@ -358,40 +370,28 @@ struct TrackSegment {
     from: Vector3<f64>,
     to: Vector3<f64>,
     // The maximum speed we can run in this track segment
-    max_speed: Flt,
-    // test only
-    seg_id: u64,
-
-    // The signal to acquire when entering this segment
-    enter_signal: Option<(BlockCoordinate, BlockId)>,
-    // The signal to release when exiting this segment
-    exit_signal: Option<(BlockCoordinate, BlockId)>,
-    // The switch to reset when exiting this segment
-    pass_switch: Option<(BlockCoordinate, BlockId)>,
+    max_speed: f64,
+    // The odometer value at the start of this segment
+    starting_odometer: f64,
 }
-// test only
-static NEXT_SEGMENT_ID: AtomicU64 = AtomicU64::new(0);
 impl TrackSegment {
     fn manhattan_dist(&self) -> f64 {
         (self.from.x - self.to.x).abs()
             + (self.from.y - self.to.y).abs()
             + (self.from.z - self.to.z).abs()
     }
-    fn distance(&self) -> Flt {
-        let dx = self.from.x as Flt - self.to.x as Flt;
-        let dy = self.from.y as Flt - self.to.y as Flt;
-        let dz = self.from.z as Flt - self.to.z as Flt;
+    fn distance(&self) -> f64 {
+        let dx = self.from.x as f64 - self.to.x as f64;
+        let dy = self.from.y as f64 - self.to.y as f64;
+        let dz = self.from.z as f64 - self.to.z as f64;
         (dx * dx + dy * dy + dz * dz).sqrt()
     }
 
     fn any_content(&self) -> bool {
-        self.enter_signal.is_some()
-            || self.exit_signal.is_some()
-            || self.distance() > 0.0
-            || self.pass_switch.is_some()
+        self.distance() > 0.0
     }
 
-    fn split_at_offset(&self, offset: Flt) -> (Self, Option<Self>) {
+    fn split_at_offset(&self, offset: f64) -> (Self, Option<Self>) {
         if offset > 0.0 && offset < self.distance() {
             let split_point = self.from + (self.to - self.from).normalize() * offset;
             (
@@ -399,19 +399,13 @@ impl TrackSegment {
                     from: self.from,
                     to: split_point,
                     max_speed: self.max_speed,
-                    seg_id: self.seg_id,
-                    enter_signal: self.enter_signal,
-                    exit_signal: None,
-                    pass_switch: None,
+                    starting_odometer: self.starting_odometer,
                 },
                 Some(Self {
                     from: split_point,
                     to: self.to,
                     max_speed: self.max_speed,
-                    seg_id: self.seg_id,
-                    enter_signal: None,
-                    exit_signal: self.exit_signal,
-                    pass_switch: self.pass_switch,
+                    starting_odometer: self.starting_odometer + offset,
                 }),
             )
         } else {
@@ -423,9 +417,9 @@ impl TrackSegment {
 #[derive(Copy, Clone, Debug)]
 struct ScheduledSegment {
     segment: TrackSegment,
-    speed: Flt,
-    acceleration: Flt,
-    move_time: Flt,
+    speed: f64,
+    acceleration: f64,
+    move_time: f64,
     created: &'static str,
 }
 impl ScheduledSegment {
@@ -444,9 +438,76 @@ impl ScheduledSegment {
             })
         }
     }
+
+    fn event_time(&self, event_odometer: f64) -> f64 {
+        let relative_odometer = event_odometer - self.segment.starting_odometer;
+        if relative_odometer < -0.0001 {
+            panic!(
+                "odometer {} is before start of segment {}",
+                event_odometer, self.segment.starting_odometer
+            );
+        } else if relative_odometer > (self.segment.distance() + 0.0001) {
+            panic!(
+                "odometer {} is after end of segment {}",
+                event_odometer, self.segment.starting_odometer
+            );
+        }
+        // solving a quadratic of the form
+        // relative_odometer = 0.5 * a0 * t^2 + v0 * t
+        // 0 = 0.5 * a0 * t^2 + v0 * t - relative_odometer
+        let a = self.acceleration / 2.0;
+        let b = self.speed;
+        let c = -relative_odometer;
+        let t = if a.abs() < 0.01 {
+            -c / b
+        } else {
+            (-b + (b * b - 4.0 * a * c).sqrt()) / (2.0 * a)
+        };
+        tracing::info!("a {} b {} c {} t {}", a, b, c, t);
+        tracing::info!("odometer time for segment {:?} is {}", self, t);
+        t
+    }
 }
 
-const MAX_ACCEL: Flt = 8.0;
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum PendingAction {
+    SignalRelease(BlockCoordinate, BlockId),
+    SignalEnterBlock(BlockCoordinate, BlockId),
+    StartingSignalEnterBlockReverse(BlockCoordinate, BlockId),
+    SwitchRelease(BlockCoordinate, BlockId),
+}
+
+#[derive(Copy, Clone, Debug)]
+struct PendingActionEntry {
+    odometer: f64,
+    action: PendingAction,
+}
+
+impl PartialEq for PendingActionEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.odometer == other.odometer
+    }
+}
+
+impl PartialOrd for PendingActionEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for PendingActionEntry {}
+
+impl Ord for PendingActionEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .odometer
+            .partial_cmp(&self.odometer)
+            .expect("Invalid comparison of odometers - NaN or infinity?")
+            .then_with(|| self.action.cmp(&other.action))
+    }
+}
+
+pub(crate) const MAX_ACCEL: f64 = 8.0;
 struct CartCoroutine {
     config: CartsGameBuilderExtension,
     // Segments where we've already calculated a braking curve. (clearance, starting speed, acceleration, time)
@@ -454,9 +515,9 @@ struct CartCoroutine {
     // Segments where we don't yet have a braking curve
     unplanned_segments: VecDeque<TrackSegment>,
     // The last speed post we encountered while scanning
-    last_speed_post_indication: Flt,
+    last_speed_post_indication: f64,
     // The last velocity we already delivered to the entity system
-    last_submitted_move_exit_speed: Flt,
+    last_submitted_move_exit_speed: f64,
     id: u32,
     // Track scan state
     scan_state: tracks::ScanState,
@@ -464,11 +525,17 @@ struct CartCoroutine {
     cleared_signals: FxHashMap<BlockCoordinate, BlockId>,
     held_signal: Option<(BlockCoordinate, BlockId)>,
     // If we got a planned path from the interlocking system, this is the path
-    precomputed_steps: Option<InterlockingRoute>,
+    precomputed_steps: Option<Vec<InterlockingStep>>,
     // The cart name, used for interlockings
     cart_name: String,
+    // Pending actions that need to happen once the cart reaches a specific point
+    pending_actions: BinaryHeap<PendingActionEntry>,
     // debug only
     spawn_time: Instant,
+    // only 1 supported for now
+    cart_length: u32,
+
+    interlocking_resume_state: Option<InterlockingResumeState>,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -509,7 +576,8 @@ impl EntityCoroutine for CartCoroutine {
                                             self.precomputed_steps
                                         )
                                     }
-                                    self.precomputed_steps = Some(steps);
+                                    self.precomputed_steps = Some(steps.steps);
+                                    self.interlocking_resume_state = steps.resume;
                                 }
                                 None => {
                                     // empty route plan, try to scan the interlocking again next time
@@ -645,7 +713,9 @@ impl CartCoroutine {
                     }))
                 }
             }
-        } else if signal_block.equals_ignore_variant(self.config.interlocking_signal) {
+        } else if signal_block.equals_ignore_variant(self.config.interlocking_signal)
+            || signal_block.equals_ignore_variant(self.config.starting_signal)
+        {
             let state_clone = self.scan_state.clone();
             let config_clone = self.config.clone();
 
@@ -655,12 +725,21 @@ impl CartCoroutine {
             );
             let trace_buffer = trace_buffer.clone();
             let cart_name_clone = self.cart_name.clone();
+            let resume = self.interlocking_resume_state.clone();
+            let last_speed_post = self.last_speed_post_indication as f32;
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
-                let result =
-                    interlocking::interlock_cart(ctx, state, &cart_name_clone, 256, config_clone)
-                        .await;
+                let result = interlocking::interlock_cart(
+                    ctx,
+                    state,
+                    &cart_name_clone,
+                    256,
+                    config_clone,
+                    resume,
+                    last_speed_post,
+                )
+                .await;
                 trace_buffer.log("Interlocking signal done");
                 // todo better error handling?
                 ContinuationResultValue::HeapResult(Box::new(result.unwrap_or_default()))
@@ -677,46 +756,7 @@ impl CartCoroutine {
         when: f32,
         trace_buffer: &TraceBuffer,
     ) -> Option<CoroutineResult> {
-        if self.precomputed_steps.is_some() {
-            trace_buffer.log("Using precomputed steps");
-
-            let steps = self.precomputed_steps.take().unwrap();
-
-            for (i, step) in steps.steps.into_iter().enumerate() {
-                tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
-                let state = step.scan_state;
-
-                if let Some((switch_coord, block_id)) = step.clear_switch {
-                    tracing::info!("Clearing switch at {:?}", switch_coord);
-                    self.unplanned_segments.back_mut().unwrap().pass_switch =
-                        Some((switch_coord, block_id));
-                }
-                if step.clear_switch.is_some() || step.enter_signal != BlockId::from(0) {
-                    self.start_new_unplanned_segment();
-                }
-
-                if let Some(speed) = step.speed_post {
-                    self.last_speed_post_indication = speed as f64;
-                }
-
-                if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
-                    if step.enter_signal != BlockId::from(0) {
-                        tracing::debug!("Acquiring signal at {:?}", state.block_coord);
-                        tracing::debug!(
-                            "Releasing signal at {:?}",
-                            self.held_signal.as_ref().map(|x| x.0)
-                        );
-                        self.unplanned_segments.back_mut().unwrap().exit_signal =
-                            self.held_signal.take();
-                        self.start_new_unplanned_segment();
-                        self.unplanned_segments.back_mut().unwrap().enter_signal =
-                            Some((signal_coord, step.enter_signal));
-                        self.held_signal = Some((signal_coord, step.enter_signal));
-                    }
-                }
-                self.apply_step(state);
-            }
-        }
+        self.apply_precomputed_steps(trace_buffer);
 
         trace_buffer.log("Starting scan");
         let mut steps = 0.0;
@@ -764,10 +804,7 @@ impl CartCoroutine {
                 max_speed: self
                     .last_speed_post_indication
                     .min(self.scan_state.allowable_speed as f64),
-                seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
-                enter_signal: None,
-                exit_signal: None,
-                pass_switch: None,
+                starting_odometer: self.scan_state.odometer,
             };
             self.unplanned_segments.push_back(empty_segment);
         }
@@ -798,20 +835,24 @@ impl CartCoroutine {
 
             let signal_coord = new_state.block_coord.try_delta(0, 2, 0);
             if let Some(signal_coord) = signal_coord {
-                if let Some(block_id) = self.cleared_signals.remove(&signal_coord) {
+                if let Some(signal_block_id) = self.cleared_signals.remove(&signal_coord) {
                     tracing::debug!("cached clear signal at {:?}", signal_coord);
-                    if block_id.equals_ignore_variant(0.into()) {
+                    if signal_block_id.equals_ignore_variant(0.into()) {
                         // contended signal
                         break 'scan_loop;
                     } else {
                         tracing::debug!("Cached permissive signal at {:?}", new_state.block_coord);
-                        self.unplanned_segments.back_mut().unwrap().exit_signal =
-                            self.held_signal.take();
-                        self.start_new_unplanned_segment();
-                        self.unplanned_segments.back_mut().unwrap().enter_signal =
-                            Some((signal_coord, block_id));
-                        self.held_signal = Some((signal_coord, block_id))
-                        // break 'signal_loop,
+                        self.pending_actions.push(PendingActionEntry {
+                            odometer: new_state.odometer,
+                            action: PendingAction::SignalEnterBlock(signal_coord, signal_block_id),
+                        });
+                        if let Some(held_signal) = self.held_signal.take() {
+                            self.pending_actions.push(PendingActionEntry {
+                                odometer: new_state.odometer + self.cart_length as f64,
+                                action: PendingAction::SignalRelease(held_signal.0, held_signal.1),
+                            });
+                        }
+                        self.held_signal = Some((signal_coord, signal_block_id));
                     }
                 }
 
@@ -839,16 +880,21 @@ impl CartCoroutine {
                     }
                     SignalResult::Permissive => {
                         tracing::debug!("Permissive signal at {:?}", new_state.block_coord);
-                        self.unplanned_segments.back_mut().unwrap().exit_signal =
-                            self.held_signal.take();
-                        self.start_new_unplanned_segment();
-                        self.unplanned_segments.back_mut().unwrap().enter_signal =
-                            Some((signal_coord, signal_block));
-                        self.held_signal = Some((signal_coord, signal_block))
+                        self.pending_actions.push(PendingActionEntry {
+                            odometer: new_state.odometer,
+                            action: PendingAction::SignalEnterBlock(signal_coord, signal_block),
+                        });
+                        if let Some(held_signal) = self.held_signal.take() {
+                            self.pending_actions.push(PendingActionEntry {
+                                odometer: new_state.odometer + self.cart_length as f64,
+                                action: PendingAction::SignalRelease(held_signal.0, held_signal.1),
+                            });
+                        }
+                        self.held_signal = Some((signal_coord, signal_block));
                         // break 'signal_loop,
                     }
                     SignalResult::SpeedRestriction(speed) => {
-                        self.last_speed_post_indication = speed as Flt;
+                        self.last_speed_post_indication = speed as f64;
                         //break 'signal_loop;
                     }
                     SignalResult::NoSignal => {} // continue 'signal_loop,
@@ -879,6 +925,64 @@ impl CartCoroutine {
         trace_buffer.log("finished scanning");
 
         None
+    }
+
+    fn apply_precomputed_steps(&mut self, trace_buffer: &TraceBuffer) {
+        if self.precomputed_steps.is_some() {
+            trace_buffer.log("Using precomputed steps");
+
+            let steps = self.precomputed_steps.take().unwrap();
+
+            for (i, step) in steps.into_iter().enumerate() {
+                tracing::debug!("step {} at {:?}", i, step.scan_state.block_coord);
+                let state = step.scan_state;
+
+                if let Some((switch_coord, block_id, deferral)) = step.clear_switch {
+                    tracing::info!("Clearing switch at {:?}", switch_coord);
+                    self.pending_actions.push(PendingActionEntry {
+                        odometer: state.odometer + deferral as f64 + self.cart_length as f64,
+                        action: PendingAction::SwitchRelease(switch_coord, block_id),
+                    })
+                }
+
+                if let Some(speed) = step.speed_post {
+                    self.last_speed_post_indication = speed as f64;
+                }
+
+                if let Some(signal_coord) = state.block_coord.try_delta(0, 2, 0) {
+                    if step.acquired_signal != BlockId::from(0) {
+                        tracing::debug!("Acquiring signal at {:?}", state.block_coord);
+                        tracing::debug!(
+                            "Releasing signal at {:?}",
+                            self.held_signal.as_ref().map(|x| x.0)
+                        );
+
+                        let action = if step.acquired_signal_was_reverse_starting {
+                            PendingAction::StartingSignalEnterBlockReverse(
+                                signal_coord,
+                                step.acquired_signal,
+                            )
+                        } else {
+                            PendingAction::SignalEnterBlock(signal_coord, step.acquired_signal)
+                        };
+
+                        self.pending_actions.push(PendingActionEntry {
+                            odometer: state.odometer,
+                            action,
+                        });
+                        if let Some(held_signal) = self.held_signal.take() {
+                            self.pending_actions.push(PendingActionEntry {
+                                odometer: state.odometer + self.cart_length as f64,
+                                action: PendingAction::SignalRelease(held_signal.0, held_signal.1),
+                            });
+                        }
+
+                        self.held_signal = Some((signal_coord, step.acquired_signal));
+                    }
+                }
+                self.apply_step(state);
+            }
+        }
     }
 
     fn apply_step(&mut self, new_state: ScanState) {
@@ -926,7 +1030,7 @@ impl CartCoroutine {
         &mut self,
         when: f32,
         queue_space: usize,
-    ) -> VecDeque<(TrackSegment, Flt)> {
+    ) -> VecDeque<(TrackSegment, f64)> {
         // NOTE: While this function iterates in reverse order (end of track -> nearest unscheduled segment),
         // comments and names refer to segments in *track* order. So in reality, the iteration is from the
         // furthest-away segment to the closest segment.
@@ -1018,7 +1122,7 @@ impl CartCoroutine {
         // Updated to be the max entry speed of the following segment.
         // It's 0.0 to start, because there is no further segment detected by track scan (or that segment
         // cannot be entered due to a restrictive signal or a switch set against us)
-        let mut max_exit_speed: Flt = 0.0;
+        let mut max_exit_speed: f64 = 0.0;
 
         let mut total_skipped_segments = 0.0;
 
@@ -1051,15 +1155,10 @@ impl CartCoroutine {
 
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::debug!(
-                    "> seg_schedulable = {}, seg = {:?}",
-                    unconditionally_schedulable,
-                    seg.seg_id
-                );
             } else if should_panic_schedule && idx <= panic_max_index && when < 5.0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::info!(
+                tracing::debug!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg
@@ -1102,14 +1201,17 @@ impl CartCoroutine {
         let prev_segment = self.unplanned_segments.back().unwrap();
         if prev_segment.any_content() {
             tracing::debug!("new segment starting from {:?}", prev_segment.to);
+            // todo remove this log
+            tracing::info!(
+                "odometer check: track state says {}, segments say {}",
+                self.scan_state.odometer,
+                prev_segment.starting_odometer + prev_segment.distance()
+            );
             let empty_segment = TrackSegment {
                 from: prev_segment.to,
                 to: prev_segment.to,
                 max_speed: prev_segment.max_speed,
-                seg_id: NEXT_SEGMENT_ID.fetch_add(10, std::sync::atomic::Ordering::Relaxed),
-                enter_signal: None,
-                exit_signal: None,
-                pass_switch: None,
+                starting_odometer: prev_segment.starting_odometer + prev_segment.distance(),
             };
             self.unplanned_segments.push_back(empty_segment);
         } else {
@@ -1117,7 +1219,7 @@ impl CartCoroutine {
         }
     }
 
-    fn schedule_segments(&mut self, schedulable_segments: VecDeque<(TrackSegment, Flt)>) {
+    fn schedule_segments(&mut self, schedulable_segments: VecDeque<(TrackSegment, f64)>) {
         // Start with the last segment's exit speed. Note that if we sent all of our segments
         // to the entity system, self.scheduled_segments would be empty, so we would use
         // the speed stored in self.last_submitted_move_exit_speed instead.
@@ -1196,7 +1298,7 @@ impl CartCoroutine {
                 "enter_speed {} > seg.max_speed {}, seg = {:?}",
                 enter_speed,
                 seg.max_speed,
-                seg.seg_id
+                seg
             );
             // TODO see whether this happens often and the difference is greater than numerical error.
             // This really shouldn't happen, but might possibly start to happen under some complex signalling cases
@@ -1544,104 +1646,116 @@ impl CartCoroutine {
                 whence
             );
 
-            if let Some((enter_signal_coord, enter_signal_block)) = segment.segment.enter_signal {
-                tracing::debug!(
-                    "entering block in {} + {} seconds at {:?}",
-                    returned_moves_time,
-                    when,
-                    enter_signal_coord
-                );
-                services.spawn_delayed(
-                    std::time::Duration::from_secs_f64(
-                        (returned_moves_time + when as f64).max(0.0),
-                    ),
-                    move |ctx| {
-                        ctx.game_map()
-                            .mutate_block_atomically(enter_signal_coord, |b, _ext| {
-                                tracing::debug!("entering block");
-                                signals::signal_enter_block(
-                                    enter_signal_coord,
-                                    b,
-                                    enter_signal_block,
-                                );
-                                Ok(())
-                            })
-                            .unwrap();
-                    },
-                );
-            }
-            returned_moves_time += segment.move_time;
-            if let Some((exit_signal_coord, exit_signal_block)) = segment.segment.exit_signal {
-                let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
-                const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
-                let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
-                tracing::debug!(
-                    "exiting block in {} + {} + {} seconds at {:?}",
-                    returned_moves_time,
-                    when,
-                    extra_delay,
-                    exit_signal_coord
-                );
+            let odometer_end = segment.segment.starting_odometer + segment.segment.distance();
 
-                services.spawn_delayed(
-                    std::time::Duration::from_secs_f64(
-                        (returned_moves_time + when as f64 + extra_delay).max(0.0),
-                    ),
-                    move |ctx| {
-                        ctx.game_map()
-                            .mutate_block_atomically(exit_signal_coord, |b, _ext| {
-                                signals::signal_release(exit_signal_coord, b, exit_signal_block);
-                                Ok(())
-                            })
-                            .unwrap();
-                    },
-                );
+            loop {
+                if self.pending_actions.is_empty() {
+                    break;
+                }
+                let action = self.pending_actions.peek().unwrap();
+                if action.odometer > odometer_end {
+                    break;
+                }
+
+                let action = self.pending_actions.pop().unwrap();
+                tracing::debug!("action {:?} at {}", action.action, action.odometer);
+
+                let odometer_time = segment.event_time(action.odometer);
+                let action_time = (returned_moves_time + when as f64).max(0.0) + odometer_time;
+                match action.action {
+                    PendingAction::SignalEnterBlock(enter_signal_coord, enter_signal_block) => {
+                        services.spawn_delayed(
+                            std::time::Duration::from_secs_f64(action_time),
+                            move |ctx| {
+                                ctx.game_map()
+                                    .mutate_block_atomically(enter_signal_coord, |b, _ext| {
+                                        tracing::debug!("entering block");
+                                        signals::signal_enter_block(
+                                            enter_signal_coord,
+                                            b,
+                                            enter_signal_block,
+                                        );
+                                        Ok(())
+                                    })
+                                    .unwrap();
+                            },
+                        );
+                    }
+                    PendingAction::StartingSignalEnterBlockReverse(
+                        enter_signal_coord,
+                        enter_signal_block,
+                    ) => {
+                        services.spawn_delayed(
+                            std::time::Duration::from_secs_f64(action_time),
+                            move |ctx| {
+                                ctx.game_map()
+                                    .mutate_block_atomically(enter_signal_coord, |b, _ext| {
+                                        tracing::debug!("entering block");
+                                        signals::starting_signal_reverse_enter_block(
+                                            enter_signal_coord,
+                                            b,
+                                            enter_signal_block,
+                                        );
+                                        Ok(())
+                                    })
+                                    .unwrap();
+                            },
+                        );
+                    }
+                    PendingAction::SignalRelease(exit_signal_coord, exit_signal_block) => {
+                        services.spawn_delayed(
+                            std::time::Duration::from_secs_f64(action_time),
+                            move |ctx| {
+                                ctx.game_map()
+                                    .mutate_block_atomically(exit_signal_coord, |b, _ext| {
+                                        signals::signal_release(
+                                            exit_signal_coord,
+                                            b,
+                                            exit_signal_block,
+                                        );
+                                        Ok(())
+                                    })
+                                    .unwrap();
+                            },
+                        );
+                    }
+                    PendingAction::SwitchRelease(pass_switch_coord, pass_switch_block) => {
+                        let switch_unset = self.config.switch_unset;
+                        services.spawn_delayed(
+                            std::time::Duration::from_secs_f64(action_time),
+                            move |ctx| match ctx
+                                .game_map()
+                                .compare_and_set_block(
+                                    pass_switch_coord,
+                                    pass_switch_block,
+                                    switch_unset,
+                                    None,
+                                    false,
+                                )
+                                .unwrap()
+                            {
+                                (game_state::game_map::CasOutcome::Match, _, _) => {
+                                    tracing::info!(
+                                        "Pass switch match: got {:?} at {:?}",
+                                        pass_switch_block,
+                                        pass_switch_coord
+                                    );
+                                }
+                                (game_state::game_map::CasOutcome::Mismatch, id, _) => {
+                                    tracing::warn!(
+                                        "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
+                                        id,
+                                        pass_switch_block,
+                                        pass_switch_coord
+                                    );
+                                }
+                            },
+                        );
+                    }
+                };
             }
-            if let Some((pass_switch_coord, pass_switch_block)) = segment.segment.pass_switch {
-                let exit_speed = segment.speed + (segment.acceleration * segment.move_time);
-                const SIGNAL_BUFFER_DISTANCE: f64 = 1.0;
-                let extra_delay = (SIGNAL_BUFFER_DISTANCE / exit_speed).clamp(0.0, 1.0);
-                tracing::info!(
-                    "passing switch in {} + {} + {} seconds at {:?}",
-                    returned_moves_time,
-                    when,
-                    extra_delay,
-                    pass_switch_coord
-                );
-                let switch_unset = self.config.switch_unset;
-                services.spawn_delayed(
-                    std::time::Duration::from_secs_f64(
-                        (returned_moves_time + when as f64 + extra_delay).max(0.0),
-                    ),
-                    move |ctx| match ctx
-                        .game_map()
-                        .compare_and_set_block(
-                            pass_switch_coord,
-                            pass_switch_block,
-                            switch_unset,
-                            None,
-                            false,
-                        )
-                        .unwrap()
-                    {
-                        (game_state::game_map::CasOutcome::Match, _, _) => {
-                            tracing::info!(
-                                "Pass switch match: got {:?} at {:?}",
-                                pass_switch_block,
-                                pass_switch_coord
-                            );
-                        }
-                        (game_state::game_map::CasOutcome::Mismatch, id, _) => {
-                            tracing::warn!(
-                                "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
-                                id,
-                                pass_switch_block,
-                                pass_switch_coord
-                            );
-                        }
-                    },
-                );
-            }
+
+            returned_moves_time += segment.move_time;
 
             if let Some(movement) = segment.to_movement() {
                 returned_moves.push(movement);

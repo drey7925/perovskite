@@ -4,7 +4,7 @@
 use std::num::NonZeroU8;
 
 use anyhow::{Context, Result};
-use cgmath::{vec3, Vector3};
+use cgmath::{vec3, InnerSpace, Vector3};
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     chat::ChatMessage,
@@ -1143,7 +1143,7 @@ pub(crate) fn register_tracks(
 pub(crate) enum ScanOutcome {
     /// We advanced, here's the new state
     Success(ScanState),
-    /// We cannot advance
+    /// We were on a track before, but we cannot advance because the track is ending or incomplete
     CannotAdvance,
     /// We're not even on a track
     NotOnTrack,
@@ -1158,6 +1158,7 @@ pub(crate) struct ScanState {
     pub(crate) is_diverging: bool,
     pub(crate) base_track_block: BlockId,
     pub(crate) allowable_speed: f32,
+    pub(crate) odometer: f64,
     current_tile_id: TileId,
 }
 impl ScanState {
@@ -1216,6 +1217,7 @@ impl ScanState {
                 tile.max_speed as f32
             },
             current_tile_id: tile_id,
+            odometer: 0.0,
         }))
     }
 
@@ -1496,6 +1498,8 @@ impl ScanState {
         } else {
             next_tile.max_speed as f32
         };
+        next_state.odometer =
+            self.odometer + (self.vec_coord() - next_state.vec_coord()).magnitude();
 
         if CHATTY {
             tracing::info!("Found matching tile: {:?}", matching_tile_id,);
@@ -1525,6 +1529,31 @@ impl ScanState {
             (false, true) => tile.straight_through_spawn_dirs >> 4,
             (true, false) => tile.diverging_dirs_spawn_dirs & 0xf,
             (true, true) => tile.diverging_dirs_spawn_dirs >> 4,
+        };
+        bitmask & (1 << corrected_rotation) != 0
+    }
+
+    pub(crate) fn signal_reversed_rotation_ok(&self, rotation: u16) -> bool {
+        let rotation = rotation & 3;
+        let tile =
+            TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
+        let tile = match tile {
+            Some(tile) => tile,
+            None => {
+                return false;
+            }
+        };
+        let corrected_rotation = self
+            .current_tile_id
+            .with_rotation_wrapped(self.current_tile_id.rotation() + 4 - rotation)
+            .xor_flip_x(self.current_tile_id.flip_x())
+            .correct_rotation_for_x_flip(self.current_tile_id.flip_x())
+            .rotation();
+        let bitmask = match (self.is_diverging, self.is_reversed) {
+            (false, true) => tile.straight_through_spawn_dirs & 0xf,
+            (false, false) => tile.straight_through_spawn_dirs >> 4,
+            (true, true) => tile.diverging_dirs_spawn_dirs & 0xf,
+            (true, false) => tile.diverging_dirs_spawn_dirs >> 4,
         };
         bitmask & (1 << corrected_rotation) != 0
     }
@@ -1644,6 +1673,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     allowable_speed: 90.0,
                     // dummy
                     current_tile_id: TileId::empty(),
+                    odometer: 0.0,
                 };
                 state.advance::<true>(|coord| response.ctx.game_map().get_block(coord).into())?;
             }
@@ -1666,6 +1696,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     allowable_speed: 90.0,
                     // dummy
                     current_tile_id: TileId::empty(),
+                    odometer: 0.0,
                 };
                 response.ctx.run_deferred(move |ctx| {
                     for _ in 0..20 {

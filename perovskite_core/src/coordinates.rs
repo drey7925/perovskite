@@ -24,7 +24,11 @@ use anyhow::{ensure, Context, Result};
 use cgmath::{Angle, Deg};
 use rustc_hash::FxHasher;
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+/// A 3D coordinate in the world.
+///
+/// Note that the impls of PartialOrd and Ord are meant for tiebreaking (e.g. for sorted data structures) and don't
+/// have a lot of semantic meaning on their own.
+#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct BlockCoordinate {
     pub x: i32,
     pub y: i32,

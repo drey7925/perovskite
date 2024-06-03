@@ -1,3 +1,129 @@
+//! # Signalling methodology
+//!
+//! tl;dr a highly overengineered mutex
+//!
+//! First, one major priority in Perovskite is efficiency. For this reason, we avoid any sort of
+//!  1) collision detection with carts
+//!  2) scanning all possible carts anywhere in a track segment to figure out whether the segment
+//!     is occupied
+//!  3) indefinite prescanning
+//!
+//! At the same time, we have one other consideration: while real-world signals are signalled by professionals,
+//! thoroughly tested, etc, we need to be able to handle various error scenarios and avoid manual programming
+//! or wiring of interlockings.
+//!
+//! Also, since this is inherently a chunk-based game, we need to be able to handle the case where
+//! a chunk is not loaded, or contains unexpected state (e.g. missing tracks). Unlike real-world rail systems,
+//! we cannot inherently assume that the track, or next station, even physically exists.
+//!
+//! As a result, the signals behave more like mutexes than like track circuits. Each cart is responsible for
+//! acquiring any signals that it wants to traverse, and then releasing them once it has cleared the region
+//! that they protect.
+//!
+//! ## Cart state
+//!
+//! As carts compute a motion plan, they will inevitably acquire and release signals throughout the process.
+//! Because the motion plan is computed ahead of time, these signals need to actually be flipped at the time
+//! when the cart physically passes the relevant point.
+//!
+//! Each movement in the motion plan contains a signal to be acquired and/or a signal to be released. Likewise,
+//! a cart also has a pending signal, that may be released many motion plan segments later (when the next signal
+//! is acquired)
+//!
+//! ## Automatic signals
+//!
+//! Automatic signals provide the simplest functionality - they keep carts spaced apart, and avoid having
+//! a cart crash into the back of another cart. Track covered by automatic signals is inherently one-directional.
+//!
+//! During the track scan loop, if a cart encounters an automatic signal, it will attempt to acquire it.
+//! Typically, the signal is in `VARIANT_RESTRICTIVE`, meaning that it has not yet permitted a cart to pass.
+//! However, in this state, it is *eligible* to be acquired. Track scanning continues, and the cart will
+//! compute a motion plan that goes past the signal. As it passes the signal, it will unset `VARIANT_PERMISSIVE`
+//! and set `VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_RESTRICTIVE` (two red lights). Finally, once the cart
+//! reaches the *next* signal of any kind (or later on, when it's de-spawned for any reason), it will reset
+//! the signal back to `VARIANT_RESTRICTIVE`, the idle state.
+//!
+//! If the acquisition is successful, it will set `VARIANT_PERMISSIVE` on the signal, to indicate that *that*
+//! cart has permission to pass.
+//!
+//! If a cart encounters a signal that has `VARIANT_PERMISSIVE`, something is wrong (a cart was spawned
+//! improperly or encountered stale state from a shutdown). If a cart encounters a signal that's
+//! tagged `VARIANT_RESTRICTIVE_TRAFFIC`, it will be unable to pass - the signal is in use because a cart
+//! just passed it, entered the protected block, and hasn't yet entered the next block.
+//!
+//! In either case, the cart will just wait until the signal is in a more favorable state.
+//!
+//! ## Interlocking signals
+//!
+//! This is essentially a deadlock avoidance algorithm.
+//!
+//! Interlockings allow a variety of complex movements, including splitting, merging, or even stopping
+//! (which is described separately under the section on starting signals). Tracks can be bidirectional.
+//!
+//! The principle is simple: in order to avoid blocking/deadlocking, a cart needs to be able to find a
+//! complete path through the interlocking to either a physical end of the track, an automatic signal, or
+//! a starting signal that tells the cart to stop.
+//!
+//! This is handled in [crate::carts::interlocking]. In short, we use a transaction-like structure, where
+//! the track scanner tries to get through the interlocking, following any left/right guidance and setting
+//! all signals/switches along the way. As the track scanner encounters a signal/switch, it'll set the
+//! `VARIANT_PRELOCKED` flag on the signal and save it to the transaction buffer. If a complete path is found,
+//! then the transaction is committed, and all signals+switches flip to the correct states (permissive
+//! with left/right indicators as needed for signals, straight/diverging states for switches)
+//!
+//! The route plan is returned to the cart's main coroutine, which motion plans through the interlocking
+//! and releases signals and switches as the cart passes them (signals, as before,
+//! are released when the next signal is reached)
+//!
+//! If a route cannot be found, the transaction is rolled back instead, and the cart tries again after
+//! a random backoff.
+//!
+//! It's worth noting that because a switch also acts like a mutex, any path with at least one switch is
+//! fully protected against collisions, because the switches are set before a cart enters, released after
+//! the cart leaves them, and no other cart can pass through the same switches in any way until they're
+//! released. Switches set for "straight through" and "diverging" are both considered an acquired state,
+//! there's a separate idle switch state.
+//!
+//! ## Starting signals
+//!
+//! Starting signals are a special case of interlocking signal. While normal interlocking signals are
+//! used to set up a complete route through an interlocking to either a track end or to an automatic
+//! signal, starting signals allow a cart to selectively stop within the interlocking (e.g. at a platform,
+//! or a hopper for loading items once cart-with-chest + hopper is implemented).
+//!
+//! There are a few particular observations about starting signals:
+//! - They need to have a *user-controlled* proceed vs stop state, so that users can actually start and
+//!   stop the cart.
+//! - When set to proceed, they act like normal interlocking signals.
+//!     - The route plan should pass right through the signal, taking a cart from one end of the interlocking
+//!       to the other.
+//!     - In this case, the normal acquisition of switches and interlocking signals suffices to prevent
+//!       collision with other carts.
+//! - When set to stop, they almost split the track into two parts, one before and one after.
+//!     - A cart approaching from the front that encounters a stop should treat it as end-of-track,
+//!       (*not* as an unacquirable signal) and set up a route plan that approaches the signal and
+//!       then stops.
+//!     - The cart only sets up a route plan that gets it up to the starting signal, and the switches
+//!       and interlocking signals it acquired along the way will eventually be cleared.
+//!     - As a result, the starting signal is *itself* responsible for ensuring that a conflicting cart
+//!       cannot pass through the signal from the back.
+//!     - On the other hand, if there is no cart stopped in front of the starting signal (or preparing
+//!       to approach and stop), then the cart approaching from the back should pass through and complete
+//!       a path through the interlocking (unless it encounters a different starting signal's front while
+//!       it's set to stop)
+//!
+//! This safety is ensured with an additional flag bit, `VARIANT_STARTING_HELD`. When this bit is set,
+//! it is unsafe to pass the starting signal because the section track in *front* of the signal is contended.
+//! A cart approaching the front and stopping must successfully set this bit and acquire the signal in order
+//! to approach it. A cart approaching from the back must successfully set this bit and acquire the signal
+//! in order to proceed past it.
+//!
+//! If a cart is held at the signal while it is stopped, it will continue waiting for the signal to be
+//! released by a player or their circuits automations. Once it's back to proceed, the cart will acquire
+//! it normally as if it were an interlocking signal, setting the `VARIANT_PERMISSIVE` flag when acquiring,
+//! setting `VARIANT_RESTRICTIVE | VARIANT_RESTRICTIVE_TRAFFIC` when passing, and finally restoring it to
+//! an idle state when it reaches the next signal.
+
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
     blocks::{CustomData, ExtDataHandling, ExtendedData, InlineContext},
@@ -14,7 +140,8 @@ use crate::{
 use anyhow::{Context, Result};
 
 pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal");
-pub(crate) const ENHANCED_SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:enhanced_signal");
+pub(crate) const INTERLOCKING_SIGNAL_BLOCK: StaticBlockName =
+    StaticBlockName("carts:enhanced_signal");
 const SIGNAL_BLOCK_TEX_OFF: StaticTextureName = StaticTextureName("carts:signal_block_off");
 const SIGNAL_BLOCK_TEX_OFF_ENHANCED: StaticTextureName =
     StaticTextureName("carts:signal_block_off_enhanced");
@@ -39,10 +166,13 @@ const VARIANT_LEFT: u16 = 128;
 /// A cart is trying to acquire this signal in an interlocking. It hasn't yet managed
 /// to complete, but it wants to reserve the route for now.
 const VARIANT_PRELOCKED: u16 = 256;
+/// A starting signal is permitting a cart to approach it; reverse moves through it are
+/// forbidden.
+const VARIANT_STARTING_HELD: u16 = 512;
 
 pub(crate) fn register_signal_block(
     game_builder: &mut crate::game_builder::GameBuilder,
-) -> Result<(BlockId, BlockId)> {
+) -> Result<(BlockId, BlockId, BlockId)> {
     include_texture_bytes!(
         game_builder,
         SIGNAL_BLOCK_TEX_OFF,
@@ -68,12 +198,153 @@ pub(crate) fn register_signal_block(
     )?;
     let interlocking_signal = register_single_signal(
         game_builder,
-        ENHANCED_SIGNAL_BLOCK,
+        INTERLOCKING_SIGNAL_BLOCK,
         SIGNAL_BLOCK_TEX_OFF_ENHANCED,
         "Interlocking Signal",
     )?;
 
-    Ok((automatic_signal.id, interlocking_signal.id))
+    let starting_signal = register_starting_signal(game_builder)?;
+
+    Ok((
+        automatic_signal.id,
+        interlocking_signal.id,
+        starting_signal.id,
+    ))
+}
+
+fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock> {
+    const FRONT_TEXTURE: StaticTextureName = StaticTextureName("carts:starting_signal_front");
+    const BACK_TEXTURE: StaticTextureName = StaticTextureName("carts:starting_signal_back");
+    const BACK_ON_TEXTURE: StaticTextureName = StaticTextureName("carts:starting_signal_back_on");
+    const BLOCK_NAME: StaticBlockName = StaticBlockName("carts:starting_signal");
+    include_texture_bytes!(
+        game_builder,
+        FRONT_TEXTURE,
+        "textures/signal_off_orange.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        BACK_TEXTURE,
+        "textures/signal_orange_back.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        BACK_ON_TEXTURE,
+        "textures/signal_orange_back_on.png"
+    )?;
+    let signal_off_box = AaBoxProperties::new(
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        FRONT_TEXTURE,
+        BACK_TEXTURE,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    let signal_on_box = AaBoxProperties::new(
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_SIDE_TOP_TEX,
+        SIGNAL_BLOCK_TEX_ON,
+        BACK_ON_TEXTURE,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    let block = game_builder.add_block(
+        BlockBuilder::new(BLOCK_NAME)
+            .set_axis_aligned_boxes_appearance(
+                AxisAlignedBoxesAppearanceBuilder::new()
+                    .add_box(
+                        signal_off_box.clone(),
+                        /* x= */ (-0.5, 0.5),
+                        /* y= */ (-0.5, 0.5),
+                        /* z= */ (-0.125, 0.125),
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (-3.0 / 32.0, 3.0 / 32.0),
+                        /* y= */ (-11.0 / 32.0, -5.0 / 32.0),
+                        /* z= */ (-0.140, -0.125),
+                        VARIANT_PERMISSIVE as u32,
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (-11.0 / 32.0, -5.0 / 32.0),
+                        /* y= */ (-11.0 / 32.0, -5.0 / 32.0),
+                        /* z= */ (-0.140, -0.125),
+                        VARIANT_LEFT as u32,
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (5.0 / 32.0, 11.0 / 32.0),
+                        /* y= */ (-11.0 / 32.0, -5.0 / 32.0),
+                        /* z= */ (-0.140, -0.125),
+                        VARIANT_RIGHT as u32,
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (-3.0 / 32.0, 3.0 / 32.0),
+                        /* y= */ (-3.0 / 32.0, 3.0 / 32.0),
+                        /* z= */ (-0.140, -0.125),
+                        VARIANT_RESTRICTIVE_TRAFFIC as u32,
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (-3.0 / 32.0, 3.0 / 32.0),
+                        /* y= */ (5.0 / 32.0, 11.0 / 32.0),
+                        /* z= */ (-0.140, -0.125),
+                        VARIANT_RESTRICTIVE as u32,
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (5.0 / 32.0, 11.0 / 32.0),
+                        /* y= */ (5.0 / 32.0, 11.0 / 32.0),
+                        /* z= */ (-0.140, -0.125),
+                        (VARIANT_RESTRICTIVE_EXTERNAL | VARIANT_PRELOCKED) as u32,
+                    )
+                    // lamp on the back of the signal indicating that a cart is allowed to approach it,
+                    // so a reverse move past it would be forbidden
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        // This lamp is a long bar
+                        /* x= */
+                        (-11.0 / 32.0, 11.0 / 32.0),
+                        /* y= */ (-3.0 / 32.0, 3.0 / 32.0),
+                        /* z= */ (0.125, 0.140),
+                        VARIANT_STARTING_HELD as u32,
+                    )
+                    .add_box_with_variant_mask(
+                        signal_on_box.clone(),
+                        /* x= */ (-11.0 / 32.0, -5.0 / 32.0),
+                        /* y= */ (5.0 / 32.0, 11.0 / 32.0),
+                        /* z= */ (0.124, 0.140),
+                        (VARIANT_RESTRICTIVE_EXTERNAL | VARIANT_PRELOCKED) as u32,
+                    ),
+            )
+            .set_allow_light_propagation(true)
+            .set_light_emission(8)
+            .add_modifier(Box::new(|bt| {
+                bt.extended_data_handling = ExtDataHandling::ServerSide;
+                bt.interact_key_handler = Some(Box::new(spawn_popup));
+                bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
+                bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
+            }))
+            .add_item_modifier(Box::new(|it| {
+                let old_place_handler = it.place_handler.take().unwrap();
+                it.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
+                    let result = old_place_handler(ctx, coord, anchor, stack)?;
+                    ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
+                        *b = b.with_variant(b.variant() | VARIANT_RESTRICTIVE)?;
+                        Ok(())
+                    })?;
+                    Ok(result)
+                }))
+            }))
+            .set_display_name("Starting Signal"),
+    )?;
+    Ok(block)
 }
 
 fn register_single_signal(
@@ -233,6 +504,12 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                 (variant & VARIANT_PERMISSIVE) != 0,
                 true,
             )
+            .checkbox(
+                "starting_held",
+                "Starting Held",
+                (variant & VARIANT_STARTING_HELD) != 0,
+                true,
+            )
             .checkbox("left", "Left", (variant & VARIANT_LEFT) != 0, true)
             .checkbox("right", "Right", (variant & VARIANT_RIGHT) != 0, true)
             .text_field("left_routes", "Left Routes", left_routes, true, true)
@@ -289,6 +566,10 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     .checkbox_values
                     .get("right")
                     .context("missing right")?;
+                let starting_held = *response
+                    .checkbox_values
+                    .get("starting_held")
+                    .context("missing starting_held")?;
                 let left_routes = response
                     .textfield_values
                     .get("left_routes")
@@ -315,6 +596,9 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                 }
                 if right {
                     variant |= VARIANT_RIGHT;
+                }
+                if starting_held {
+                    variant |= VARIANT_STARTING_HELD;
                 }
 
                 response
@@ -368,11 +652,28 @@ pub(crate) struct SignalConfig {
     pub(crate) right_routes: Vec<String>,
 }
 
+/// The outcome of trying to acquire most signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SignalLockOutcome {
+    /// The signal is invalid (either not a signal, or it is not in the right state)
     InvalidSignal,
+    /// The signal was acquired
     Acquired,
+    /// The signal was not acquired because another cart has already acquired it
     Contended,
+}
+
+/// The outcome of trying to acquire an approach signal *from the front*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartingSignalLockOutcome {
+    /// The signal is invalid (either not a signal, or it is not in the right state)
+    InvalidSignal,
+    /// The signal was acquired
+    Acquired,
+    /// The signal was not acquired because another cart has already acquired it
+    Contended,
+    /// The signal is set to stop, but the cart is permitted to approach it then stop.
+    ApproachThenStop,
 }
 
 /// Attempts to acquire an automatic signal.
@@ -419,7 +720,6 @@ pub(crate) fn signal_enter_block(
     if !id.equals_ignore_variant(expected_id_with_rotation) {
         return;
     }
-
     let mut variant = id.variant();
 
     if variant & 3 != expected_id_with_rotation.variant() & 3 {
@@ -470,13 +770,14 @@ pub(crate) fn signal_release(
             variant
         )
     }
-    variant &= !(VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_LEFT | VARIANT_RIGHT);
+    variant &=
+        !(VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_LEFT | VARIANT_RIGHT | VARIANT_STARTING_HELD);
     variant |= VARIANT_RESTRICTIVE;
     *id = id.with_variant(variant).unwrap();
 }
 
-/// Attempts to acquire an automatic signal.
-/// This will transition it from the restrictive to the permissive state.
+/// Attempts to acquire an interlocking signal.
+/// This will mark it as preacquired, but not transition it to permissive or traffic restricted.
 pub(crate) fn interlocking_signal_preacquire(
     _block_coord: BlockCoordinate,
     id: &mut BlockId,
@@ -503,6 +804,129 @@ pub(crate) fn interlocking_signal_preacquire(
     SignalLockOutcome::Acquired
 }
 
+/// Attempts to acquire a starting signal in an interlocking signal when approaching from the front.
+/// This will mark it as preacquired, but not transition it to permissive or traffic restricted.
+///
+/// Unlike interlocking signals, the signal will still be acquired if it's in a RESTRICTIVE_EXTERNAL state;
+/// the interlocking resolver will set up a route up to just before this signal then stop.
+pub(crate) fn starting_signal_preacquire_front(
+    _block_coord: BlockCoordinate,
+    id: &mut BlockId,
+    expected_id_with_rotation: BlockId,
+) -> SignalLockOutcome {
+    let mut variant = id.variant();
+
+    if variant & (VARIANT_PRELOCKED) != 0 {
+        // Another cart is already trying to acquire this signal and beat us to it.
+        return SignalLockOutcome::Contended;
+    }
+    if variant & (VARIANT_STARTING_HELD) != 0 {
+        // Another cart is already allowed to approach it and occupy the section just in front of the signal.
+        return SignalLockOutcome::Contended;
+    }
+
+    if variant & (VARIANT_RESTRICTIVE_TRAFFIC) != 0 {
+        // A cart is still moving through the block protected by this signal
+        return SignalLockOutcome::Contended;
+    }
+    if variant & VARIANT_PERMISSIVE != 0 {
+        // The signal is already cleared, so another cart already has a path through the interlocking.
+        return SignalLockOutcome::Contended;
+    }
+
+    variant |= VARIANT_PRELOCKED;
+    *id = id.with_variant(variant).unwrap();
+    SignalLockOutcome::Acquired
+}
+
+pub(crate) fn starting_signal_depart_forward(
+    _block_coord: BlockCoordinate,
+    id: &mut BlockId,
+    expected_id_with_rotation: BlockId,
+) -> SignalLockOutcome {
+    let mut variant = id.variant();
+
+    if variant & (VARIANT_PRELOCKED) != 0 {
+        return SignalLockOutcome::Contended;
+    }
+    if variant & (VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_RESTRICTIVE_EXTERNAL) != 0 {
+        // A cart is still moving through the block protected by this signal, or we don't want to leave yet
+        return SignalLockOutcome::Contended;
+    }
+    variant |= VARIANT_PRELOCKED;
+
+    *id = id.with_variant(variant).unwrap();
+    SignalLockOutcome::Acquired
+}
+
+pub(crate) fn starting_signal_acquire_back(
+    _block_coord: BlockCoordinate,
+    id: &mut BlockId,
+    expected_id_with_rotation: BlockId,
+) -> SignalLockOutcome {
+    let mut variant = id.variant();
+
+    if variant & (VARIANT_PRELOCKED) != 0 {
+        // Another cart is already trying to acquire this signal and beat us to it.
+        return SignalLockOutcome::Contended;
+    }
+    if variant & (VARIANT_STARTING_HELD) != 0 {
+        // Another cart is already allowed to approach it and occupy the section just in front of the signal.
+        return SignalLockOutcome::Contended;
+    }
+    if variant & (VARIANT_RESTRICTIVE_TRAFFIC) != 0 {
+        // A cart is still moving through the block protected by this signal
+        // Or, a cart was allowed to approach it from the back by another caller to this function, and still hasn't passed it yet.
+        return SignalLockOutcome::Contended;
+    }
+    // We set restrictive_traffic because we haven't actually gotten the cart past it yet, but we still want to
+    // lock out traffic passing through it
+    variant |= VARIANT_RESTRICTIVE_TRAFFIC;
+    *id = id.with_variant(variant).unwrap();
+    SignalLockOutcome::Acquired
+}
+
+/// Updates a signal as a cart passes it and enters the following block.
+///
+/// This transitions it from permissive to restrictive | restrictive_traffic
+pub(crate) fn starting_signal_reverse_enter_block(
+    block_coord: BlockCoordinate,
+    id: &mut BlockId,
+    expected_id_with_rotation: BlockId,
+) {
+    if !id.equals_ignore_variant(expected_id_with_rotation) {
+        return;
+    }
+    let mut variant = id.variant();
+
+    if variant & 3 != expected_id_with_rotation.variant() & 3 {
+        return;
+    }
+
+    const EXPECTED_STATE: u16 =
+        VARIANT_STARTING_HELD | VARIANT_RESTRICTIVE | VARIANT_RESTRICTIVE_TRAFFIC;
+    const IMPORTANT_BITS: u16 = VARIANT_STARTING_HELD
+        | VARIANT_RESTRICTIVE
+        | VARIANT_RESTRICTIVE_TRAFFIC
+        | VARIANT_PERMISSIVE;
+
+    if variant & IMPORTANT_BITS == EXPECTED_STATE {
+        // This signal is not actually clear
+        tracing::warn!(
+            "Attempting to clear a signal that is already cleared at {:?}. Variant is {:x}",
+            block_coord,
+            variant
+        );
+    }
+
+    variant |= VARIANT_STARTING_HELD;
+    variant &= !VARIANT_RESTRICTIVE_TRAFFIC;
+    *id = id.with_variant(variant).unwrap();
+}
+
+/// Attempt to acquire a starting signal.
+/// This will transition it from the restrictive to the permissive state.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SignalParseOutcome {
     /// The signal indicates that the next switch is to be set straight
@@ -513,23 +937,57 @@ pub(crate) enum SignalParseOutcome {
     DivergingRight,
     Fork,
     Deny,
-    NotASignal,
+    NoIndication,
     /// This is an automatic signal, so we're done with the interlocking
     AutomaticSignal,
+    /// Starting signal, set to stop, but the cart is permitted to approach it from the front and then stop.
+    ///
+    /// This is not applicable when the cart is approaching from the back.
+    StartingSignalApproachThenStop,
 }
-impl SignalParseOutcome {
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InterlockingSignalRoute {
+    Straight,
+    DivergingLeft,
+    DivergingRight,
+    Fork,
+    StartingSignalApproachThenStop,
+}
+impl InterlockingSignalRoute {
     pub(crate) fn adjust_variant(&self, variant: u16) -> Option<u16> {
         let rotation = variant & 3;
         match self {
-            SignalParseOutcome::Straight => Some(VARIANT_PERMISSIVE | rotation),
-            SignalParseOutcome::DivergingLeft => Some(VARIANT_PERMISSIVE | rotation | VARIANT_LEFT),
-            SignalParseOutcome::DivergingRight => {
-                Some(VARIANT_PERMISSIVE | rotation | VARIANT_RIGHT)
+            InterlockingSignalRoute::Straight => Some(rotation | VARIANT_PERMISSIVE),
+            InterlockingSignalRoute::DivergingLeft => {
+                Some(rotation | VARIANT_PERMISSIVE | VARIANT_LEFT)
             }
-            SignalParseOutcome::Fork => None,
-            SignalParseOutcome::Deny => None,
-            SignalParseOutcome::NotASignal => None,
-            SignalParseOutcome::AutomaticSignal => None,
+            InterlockingSignalRoute::DivergingRight => {
+                Some(rotation | VARIANT_PERMISSIVE | VARIANT_RIGHT)
+            }
+            InterlockingSignalRoute::Fork => None,
+            InterlockingSignalRoute::StartingSignalApproachThenStop => {
+                // If we ended up in this branch, it's because VARIANT_RESTRICTIVE_EXTERNAL was set.
+                // Make sure that we keep it set.
+                Some(
+                    rotation
+                        | VARIANT_RESTRICTIVE
+                        | VARIANT_RESTRICTIVE_EXTERNAL
+                        | VARIANT_STARTING_HELD,
+                )
+            }
+        }
+    }
+
+    pub(crate) fn to_parse_outcome(&self) -> SignalParseOutcome {
+        match self {
+            InterlockingSignalRoute::Straight => SignalParseOutcome::Straight,
+            InterlockingSignalRoute::DivergingLeft => SignalParseOutcome::DivergingLeft,
+            InterlockingSignalRoute::DivergingRight => SignalParseOutcome::DivergingRight,
+            InterlockingSignalRoute::Fork => SignalParseOutcome::Fork,
+            InterlockingSignalRoute::StartingSignalApproachThenStop => {
+                SignalParseOutcome::StartingSignalApproachThenStop
+            }
         }
     }
 }
@@ -537,9 +995,9 @@ impl SignalParseOutcome {
 pub(crate) fn query_interlocking_signal(
     ext: Option<&ExtendedData>,
     cart_route_name: &str,
-) -> Result<SignalParseOutcome> {
+) -> Result<InterlockingSignalRoute> {
     if ext.is_none() {
-        return Ok(SignalParseOutcome::Straight);
+        return Ok(InterlockingSignalRoute::Straight);
     }
     let ext = ext.unwrap();
     let signal_config = match ext.custom_data.as_ref() {
@@ -554,21 +1012,32 @@ pub(crate) fn query_interlocking_signal(
     };
 
     if let Some(config) = signal_config {
-        // TODO avoid expensive wildmatch construction every time
         if config
             .left_routes
             .iter()
             .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
         {
-            return Ok(SignalParseOutcome::DivergingLeft);
+            return Ok(InterlockingSignalRoute::DivergingLeft);
         }
         if config
             .right_routes
             .iter()
             .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
         {
-            return Ok(SignalParseOutcome::DivergingRight);
+            return Ok(InterlockingSignalRoute::DivergingRight);
         }
     }
-    Ok(SignalParseOutcome::Straight)
+    Ok(InterlockingSignalRoute::Straight)
+}
+
+pub(crate) fn query_starting_signal(
+    variant: u16,
+    ext: Option<&ExtendedData>,
+    cart_route_name: &str,
+) -> Result<InterlockingSignalRoute> {
+    if variant & VARIANT_RESTRICTIVE_EXTERNAL != 0 {
+        return Ok(InterlockingSignalRoute::StartingSignalApproachThenStop);
+    }
+    // TODO allow settings in the extension to also hold the cart at the signal until cleared
+    query_interlocking_signal(ext, cart_route_name)
 }
