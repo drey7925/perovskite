@@ -115,6 +115,7 @@ pub(super) async fn interlock_cart(
     cart_config: CartsGameBuilderExtension,
     resume: Option<InterlockingResumeState>,
     last_speed_post: f32,
+    should_delay_after_clearing: bool,
 ) -> Result<Option<InterlockingRoute>> {
     if !handler_context.is_shutting_down() {
         let resolution = single_pathfind_attempt(
@@ -126,25 +127,17 @@ pub(super) async fn interlock_cart(
             resume.clone(),
         )?;
         if let Some(resolution) = resolution {
-            // TODO: Run this only when contention is detected. This requires tracking
-            // contention in the cart coroutine state itself, since we can't loop in this function
-            // for some reason.
-            //
-            // if any_contention {
-            //     // fudge factor to avoid the case where cart speeds cycle up and down as the
-            //     // trajectory optimizer runs into the back of the previous cart
-            //     let exit_speed = resolution
-            //         .steps
-            //         .iter()
-            //         .rev()
-            //         .find_map(|step| step.speed_post)
-            //         .unwrap_or(last_speed_post);
-
-            //     tokio::time::sleep(std::time::Duration::from_secs_f64(
-            //         0.5 * exit_speed as f64 / super::MAX_ACCEL,
-            //     ))
-            //     .await;
-            // }
+            if should_delay_after_clearing {
+                let exit_speed = resolution
+                    .steps
+                    .iter()
+                    .rev()
+                    .find_map(|step| step.speed_post)
+                    .unwrap_or(last_speed_post);
+                let delay_time = 0.5 * exit_speed as f64 / super::MAX_ACCEL;
+                tracing::info!("Sleeping for {} seconds", delay_time);
+                tokio::time::sleep(std::time::Duration::from_secs_f64(delay_time)).await;
+            }
             return Ok(Some(resolution));
         } else {
             tracing::debug!("No path found, trying again");

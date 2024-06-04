@@ -727,9 +727,18 @@ impl CartCoroutine {
             let cart_name_clone = self.cart_name.clone();
             let resume = self.interlocking_resume_state.clone();
             let last_speed_post = self.last_speed_post_indication as f32;
+
+            // If true, we want to add a bit of a delay before actually resuming out of the interlocking
+            // This is a fudge factor to avoid path optimizer thrashing as carts come up to speed, run into
+            // red signals ahead, and then come to a stop then start again cyclically
+            let should_delay = self.last_segment_exit_speed() <= 0.001;
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
+                if should_delay {
+                    tracing::info!("Will delay once the interlocking clears");
+                }
+
                 let result = interlocking::interlock_cart(
                     ctx,
                     state,
@@ -738,6 +747,7 @@ impl CartCoroutine {
                     config_clone,
                     resume,
                     last_speed_post,
+                    should_delay,
                 )
                 .await;
                 trace_buffer.log("Interlocking signal done");
@@ -1223,17 +1233,20 @@ impl CartCoroutine {
         // Start with the last segment's exit speed. Note that if we sent all of our segments
         // to the entity system, self.scheduled_segments would be empty, so we would use
         // the speed stored in self.last_submitted_move_exit_speed instead.
-        let mut last_segment_exit_speed = self
-            .scheduled_segments
-            .back()
-            .map(|x| (x.speed + (x.acceleration * x.move_time)))
-            .unwrap_or(self.last_submitted_move_exit_speed);
+        let mut last_segment_exit_speed = self.last_segment_exit_speed();
 
         // Each segment contributes one or more moves to the internal move queue
         for (seg, brake_curve_exit_speed) in schedulable_segments.into_iter() {
             last_segment_exit_speed =
                 self.schedule_single_segment(seg, last_segment_exit_speed, brake_curve_exit_speed);
         }
+    }
+
+    fn last_segment_exit_speed(&self) -> f64 {
+        self.scheduled_segments
+            .back()
+            .map(|x| (x.speed + (x.acceleration * x.move_time)))
+            .unwrap_or(self.last_submitted_move_exit_speed)
     }
 
     /// Schedules a single segment as one or more moves. Returns the actual speed at the exit of the segment
