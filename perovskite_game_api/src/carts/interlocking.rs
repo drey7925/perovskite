@@ -146,6 +146,9 @@ pub(super) async fn interlock_cart(
             // A "smarter" deadlock resolution strategy like wound-wait or wait-die would
             // require too many bits of block state. We could put that state into extended data,
             // but that makes extended data error handling more tricky.
+            //
+            // TODO: don't do this; it holds up panic scheduling. Instead, we should return this value and
+            // the coroutine should panic schedule, figure out its next awakening based on this, etc...
             let backoff = rand::thread_rng().gen_range(500..1000);
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
             return Ok(None);

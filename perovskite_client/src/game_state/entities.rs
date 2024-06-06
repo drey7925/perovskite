@@ -12,7 +12,7 @@ use crate::vulkan::{
     },
 };
 use anyhow::{Context, Result};
-use cgmath::{vec3, Deg, ElementWise, Matrix4, Rad, Vector3, Zero};
+use cgmath::{vec3, Deg, ElementWise, InnerSpace, Matrix4, Rad, SquareMatrix, Vector3, Zero};
 use perovskite_core::protocol::entities as entities_proto;
 use rustc_hash::FxHashMap;
 use vulkano::{
@@ -83,6 +83,8 @@ pub(crate) struct GameEntity {
     class: u32,
     // debug only
     created: Instant,
+
+    pub(crate) lookback_buffer: VecDeque<EntityMove>,
 }
 impl GameEntity {
     pub(crate) fn advance_state(&mut self, until: Instant) {
@@ -100,6 +102,8 @@ impl GameEntity {
             self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
             elapsed -= popped_move.total_time_seconds;
             self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
+
+            self.lookback_buffer.push_front(popped_move);
         }
         if any_popped && self.id == 8 {
             println!(
@@ -200,15 +204,20 @@ impl GameEntity {
         &self,
         base_position: Vector3<f64>,
         time: Instant,
-    ) -> cgmath::Matrix4<f32> {
-        let (pos, angle) = self.position(time);
-        let translation = cgmath::Matrix4::from_translation(
-            (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
-        )
-        .cast()
-        .unwrap();
+    ) -> [cgmath::Matrix4<f32>; 8] {
+        let positions = self.position_lookback(time);
 
-        translation * Matrix4::from_angle_y(angle)
+        let mut results = [Matrix4::zero(); 8];
+        for (i, (pos, angle)) in positions.iter().enumerate() {
+            let translation = cgmath::Matrix4::from_translation(
+                (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
+            )
+            .cast()
+            .unwrap();
+
+            results[i] = translation * Matrix4::from_angle_y(*angle);
+        }
+        results
     }
 
     pub(crate) fn position(&self, time: Instant) -> (Vector3<f64>, Rad<f32>) {
@@ -232,6 +241,92 @@ impl GameEntity {
             return (Vector3::zero(), Rad(0.0));
         }
         (pos, Rad(dir))
+    }
+
+    // TODO THIS IS ONLY A PROTOTYPE
+    pub(crate) fn position_lookback(&self, time: Instant) -> [(Vector3<f64>, Rad<f32>); 8] {
+        if self.move_queue.is_empty() {
+            return [(self.fallback_position, Rad(0.0)); 8];
+        }
+        let time = (time.saturating_duration_since(self.current_move_started)).as_secs_f32();
+        let mut current_move = self.move_queue.front().unwrap();
+
+        let accel_sign = (current_move
+            .acceleration
+            .dot(current_move.velocity.normalize()))
+        .signum();
+        let mut move_distance = current_move.velocity.magnitude() * time
+            + 0.5 * accel_sign * current_move.acceleration.magnitude() * time * time;
+
+        let mut results = [(self.fallback_position, Rad(0.0)); 8];
+
+        let mut lookback_iterator = self.lookback_buffer.iter();
+        for i in 0..8 {
+            results[i] = (
+                current_move.start_pos
+                    + (move_distance * current_move.velocity.normalize())
+                        .cast()
+                        .unwrap(),
+                Rad(current_move.face_direction),
+            );
+            move_distance -= 1.0;
+            while move_distance < 0.0 {
+                if let Some(m) = lookback_iterator.next() {
+                    current_move = m;
+                    let move_time = current_move.total_time_seconds;
+
+                    let accel_sign = (current_move
+                        .acceleration
+                        .dot(current_move.velocity.normalize()))
+                    .signum();
+
+                    let new_move_distance = move_time * current_move.velocity.magnitude()
+                        + 0.5
+                            * accel_sign
+                            * current_move.acceleration.magnitude()
+                            * move_time
+                            * move_time;
+                    move_distance += new_move_distance;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        results
+
+        // let mut lookback = lookback as f32;
+
+        // if self.move_queue.is_empty() {
+        //     return (self.fallback_position, Rad(0.0));
+        // }
+
+        // let time = (time.saturating_duration_since(self.current_move_started)).as_secs_f32();
+        // let mut current_move = self.move_queue.front().unwrap();
+
+        // // The distance from the start of the move to the current point in it
+        // let mut distance = current_move.velocity.magnitude() * time + 0.5 * current_move.acceleration.magnitude() * time * time;
+
+        // let mut lookback_iterator = self.lookback_buffer.iter();
+        // let (c_move, m_distance) = loop {
+        //     if lookback < distance {
+        //         break (current_move, distance - lookback);
+        //     } else {
+        //         lookback -= distance;
+
+        //         if let Some(m) = lookback_iterator.next() {
+        //             current_move = m;
+
+        //             let current_move_time = current_move.total_time_seconds;
+        //             let current_move_length = current_move_time * current_move.velocity.magnitude() + 0.5 * current_move.acceleration.magnitude() * current_move_time * current_move_time;
+        //             distance = current_move_length;
+        //         } else {
+        //             return (self.fallback_position, Rad(0.0));
+        //         }
+        //     }
+        // };
+        // // ASSUMES THAT ACCELERATION AND VELOCITY POINT IN THE SAME DIRECTION
+        // (current_move.start_pos + (current_move.velocity.normalize() * m_distance).cast().unwrap(), Rad(c_move.face_direction))
     }
 
     pub(crate) fn from_proto(
@@ -264,6 +359,7 @@ impl GameEntity {
             created: Instant::now(),
             class: update.entity_class,
             id: update.id,
+            lookback_buffer: VecDeque::new(),
         })
     }
 }
@@ -324,20 +420,24 @@ impl EntityState {
         // This will obviously not scale well, but is good enough for now.
         // A later impl should eventually:
         // * Provide multiple entities in a single draw call
-        // * Find a way to evaluate the movement of each individual entity. This will likely require a change
+        // * Find a way to evaluate the movement of each individual entity in the shader. This will likely require a change
         //    to the vertex format to include velocity, acceleration, and the necessary timing details.
         self.entities
             .iter()
-            .map(|(id, entity)| EntityGeometryDrawCall {
-                model_matrix: entity.as_transform(player_position, time),
-                model: entity_renderer
-                    .get_singleton(entity.class)
-                    // class 0 is the fallback
-                    .unwrap_or(
-                        entity_renderer
-                            .get_singleton(0)
-                            .unwrap_or(self.fallback_entity.clone()),
-                    ),
+            .flat_map(|(id, entity)| {
+                let ent_transforms = entity.as_transform(player_position, time);
+
+                ent_transforms.map(|mat| EntityGeometryDrawCall {
+                    model_matrix: mat,
+                    model: entity_renderer
+                        .get_singleton(entity.class)
+                        // class 0 is the fallback
+                        .unwrap_or(
+                            entity_renderer
+                                .get_singleton(0)
+                                .unwrap_or(self.fallback_entity.clone()),
+                        ),
+                })
             })
             .collect()
     }

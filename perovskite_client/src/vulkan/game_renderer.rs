@@ -103,7 +103,7 @@ impl ActiveGame {
             entity_lock.advance_all_states(start_time);
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
-                    (player_position, _) = entity.position(start_time);
+                    (player_position, _) = entity.position_lookback(start_time)[4];
                     self.client_state
                         .physics_state
                         .lock()
