@@ -749,7 +749,7 @@ impl CartCoroutine {
                     ctx,
                     state,
                     &cart_name_clone,
-                    256,
+                    1024,
                     config_clone,
                     resume,
                     last_speed_post,

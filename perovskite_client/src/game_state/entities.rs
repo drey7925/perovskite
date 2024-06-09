@@ -12,7 +12,7 @@ use crate::vulkan::{
     },
 };
 use anyhow::{Context, Result};
-use cgmath::{vec3, Deg, ElementWise, Matrix4, Rad, Vector3, Zero};
+use cgmath::{vec3, Deg, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
 use perovskite_core::protocol::entities as entities_proto;
 use rustc_hash::FxHashMap;
 use vulkano::{
@@ -225,6 +225,24 @@ impl GameEntity {
             return (Vector3::zero(), Rad(0.0));
         }
         (pos, Rad(dir))
+    }
+
+    pub(crate) fn debug_speed(&self, time_tick: u64) -> f32 {
+        self.move_queue
+            .front()
+            .map(|m| {
+                let time = self
+                    .move_queue
+                    .front()
+                    .map(|m| {
+                        ((time_tick.saturating_sub(m.start_tick) as f32) / 1_000_000_000.0)
+                            .clamp(0.0, m.total_time_seconds)
+                    })
+                    .unwrap_or(0.0);
+
+                (m.velocity + m.acceleration * time).magnitude()
+            })
+            .unwrap_or(0.0)
     }
 
     pub(crate) fn from_proto(update: &entities_proto::EntityUpdate) -> Result<GameEntity, &str> {

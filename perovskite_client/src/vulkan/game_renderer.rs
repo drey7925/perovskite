@@ -108,6 +108,7 @@ impl ActiveGame {
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
                     (player_position, _) = entity.position(start_tick);
+                    let debug_speed = entity.debug_speed(start_tick);
                     self.client_state
                         .physics_state
                         .lock()
@@ -124,7 +125,8 @@ impl ActiveGame {
                     // Most test tracks run in the Z direction, so this is an easy metric to debug with.
                     plot!("entity_z_coord", player_position.z);
                     plot!("entity_cms", entity.debug_cms() as f64);
-                    plot!("entity_cme", entity.debug_cme(start_tick) as f64)
+                    plot!("entity_cme", entity.debug_cme(start_tick) as f64);
+                    plot!("entity_speed", debug_speed as f64);
                 }
             }
         }
