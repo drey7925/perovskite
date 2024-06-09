@@ -120,10 +120,11 @@ impl EntityManager {
     pub(crate) fn new(
         db: Arc<dyn GameDatabase>,
         entity_types: Arc<EntityTypeManager>,
+        base_time: Instant,
     ) -> EntityManager {
         EntityManager {
             shards: std::array::from_fn(|shard_id| {
-                CachelineAligned(EntityShard::new(shard_id, db.clone()))
+                CachelineAligned(EntityShard::new(shard_id, db.clone(), base_time))
             }),
             workers: Mutex::new(Vec::new()),
             cancellation: CancellationToken::new(),
@@ -364,8 +365,10 @@ impl CoroutineResult {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct StoredMovement {
     pub(crate) sequence: u64,
+    pub(crate) start_tick: u64,
     pub(crate) movement: Movement,
 }
 
@@ -809,7 +812,7 @@ pub struct ContinuationResult {
 
 /// Warning: This trait is not stable and may change in the future. If `coroutine_trait` is stabilized,
 /// it may replace this trait. Regardless, it can still evolve quickly.
-pub trait EntityCoroutine: Send + Sync + 'static {
+pub trait EntityCoroutine: Send + Sync + Debug + 'static {
     /// Called when the entity's next move needs to be planned.
     ///
     /// Args:
@@ -847,6 +850,7 @@ pub trait EntityCoroutine: Send + Sync + 'static {
 
 const ID_MASK: u64 = (1 << 48) - 1;
 
+#[derive(Debug)]
 enum MoveQueue {
     SingleMove(Option<StoredMovement>),
     Buffer8(Box<circular_buffer::CircularBuffer<8, StoredMovement>>),
@@ -956,6 +960,7 @@ impl MoveQueue {
 /// For now, these are just standard vectors, with further SIMD optimizations coming later.
 /// The in-memory representation is subject to change and other code should not assume any particular
 /// layout.
+#[derive(Debug)]
 struct EntityCoreArray {
     // The next index to insert into. It may either be an unused slot or at the end of the arrays
     // This is an optimization for allocation speed; for now let's set it aside
@@ -963,6 +968,7 @@ struct EntityCoreArray {
     // The physical len of the arrays.
     len: usize,
 
+    // The same timebase as game_state
     base_time: Instant,
 
     // Lookup table from ID to index. This should only be used for scalar operations on a single entity (or a few)
@@ -1000,21 +1006,14 @@ struct EntityCoreArray {
     // The total time for the current move
     move_time: Vec<f32>,
     // The time already finished in the current move
-    move_time_elapsed: Vec<f32>,
+    move_start_tick: Vec<u64>,
     // When we next need to recalculate the current move
-    recalc_in: Vec<f32>,
+    recalc_at: Vec<u64>,
 
     move_queue: Vec<MoveQueue>,
 
-    // Sometimes, we might set the state of an entity outside of the usual polling cycle.
-    // This indicates how much to subtract from delta_time on the next polling cycle to
-    // account for this discrepancy
-    next_delta_bias: Vec<f32>,
-
     // TODO: Once thin_box is stabilized, we can use it here
     coroutine: Vec<Option<Pin<Box<dyn EntityCoroutine>>>>,
-
-    last_move_update_poll: Instant,
 }
 impl EntityCoreArray {
     /// Checks some preconditions that we want to assume on the vectors to make
@@ -1036,33 +1035,34 @@ impl EntityCoreArray {
         assert_eq!(self.ya.len(), self.len);
         assert_eq!(self.za.len(), self.len);
         assert_eq!(self.theta_y.len(), self.len);
-        assert_eq!(self.move_time_elapsed.len(), self.len);
-        assert_eq!(self.recalc_in.len(), self.len);
+        assert_eq!(self.move_start_tick.len(), self.len);
+        assert_eq!(self.recalc_at.len(), self.len);
         assert_eq!(self.move_queue.len(), self.len);
         assert_eq!(self.coroutine.len(), self.len);
-        assert_eq!(self.next_delta_bias.len(), self.len);
     }
 
-    fn update_times(&mut self, delta_time: f32) -> f32 {
+    // Update the times for all entities
+    //
+    // Args:
+    //   * update_tick: The tick to use for the update
+    //
+    // Returns the tick when the next event should occur
+    fn update_times(&mut self, update_tick: u64) -> u64 {
         let _span = span!("entity_update_times");
         self.check_preconditions();
-        assert!(delta_time >= 0.0);
 
-        tracing::debug!("delta_time: {}", delta_time);
-        let mut next_event = std::f32::MAX;
+        let mut next_event = u64::MAX;
 
         for i in 0..self.len {
-            let next_event_i = self.update_time_single(i, Some(delta_time));
+            let next_event_i = self.update_time_single(i, update_tick);
             if next_event_i < next_event {
                 next_event = next_event_i;
             }
         }
-        // Duration is unhappy with f32::MAX. Let's clamp it to a reasonable time to wait
-        // for the next event.
-        const MAX_WAIT_TIME: f32 = 10.0;
+        const MAX_WAIT_TIME_TICKS: u64 = 10 * 1_000_000_000;
+        let awakening_bound = update_tick + MAX_WAIT_TIME_TICKS;
 
-        let next_event = next_event.min(MAX_WAIT_TIME).max(0.0);
-        self.last_move_update_poll = Instant::now();
+        let next_event = next_event.min(awakening_bound).max(update_tick);
 
         next_event
     }
@@ -1074,22 +1074,21 @@ impl EntityCoreArray {
     ///   * delta_time: The amount of time that has passed since the last poll cycle
     ///   * sender: The channel for receiving completions from deferred tasks
     ///
-    /// Returns: The next time we should awaken
+    /// Returns: The next tick at which we should awaken
     ///
     /// TODO: more and better scheduling/prioritization algorithms
     fn run_coroutines(
         &mut self,
         services: &EntityCoroutineServices<'_>,
-        delta_time: f32,
+        game_state: &GameState,
         sender: &tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
-    ) -> f32 {
+    ) -> u64 {
         let _span = span!("entity_run_coroutines");
-
         self.check_preconditions();
-        let mut next_event = std::f32::MAX;
+        let mut next_event = std::u64::MAX;
         for i in 0..self.len {
             next_event =
-                next_event.min(self.run_coro_single(i, services, delta_time, None, sender));
+                next_event.min(self.run_coro_single(i, services, None, sender, game_state.tick()));
         }
 
         next_event
@@ -1101,9 +1100,9 @@ impl EntityCoreArray {
         pos: Vector3<f64>,
         initial_movement: Movement,
         queued_movements: InitialMoveQueue,
-        time_bias: f32,
+        tick: u64,
     ) {
-        self.last_nontrivial_modification[index] = self.to_offset(Instant::now());
+        self.last_nontrivial_modification[index] = tick;
         self.x[index] = pos.x;
         self.y[index] = pos.y;
         self.z[index] = pos.z;
@@ -1115,15 +1114,14 @@ impl EntityCoreArray {
         self.za[index] = initial_movement.acceleration.z;
         self.theta_y[index] = initial_movement.face_direction;
         self.move_time[index] = initial_movement.move_time;
-        self.move_time_elapsed[index] = 0.0;
-        self.next_delta_bias[index] = time_bias;
-        self.recalc_in[index] = if !queued_movements.has_slack() {
+        self.move_start_tick[index] = tick;
+        self.recalc_at[index] = if !queued_movements.has_slack() {
             // todo test this logic
-            f32::MAX
+            u64::MAX
         } else if self.control[index] & CONTROL_AUTONOMOUS == 0 {
-            f32::MAX
+            u64::MAX
         } else {
-            0.0
+            tick
         };
         self.current_move_seq[index] =
             self.current_move_seq[index] + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 1;
@@ -1132,33 +1130,46 @@ impl EntityCoreArray {
                 self.move_queue[index] = MoveQueue::SingleMove(movement.map(|m| StoredMovement {
                     sequence: self.current_move_seq[index] + LARGEST_POSSIBLE_QUEUE_SIZE as u64 + 2,
                     movement: m,
+                    start_tick: tick,
                 }));
             }
             InitialMoveQueue::Buffer8(movements) => {
+                let mut current_tick = tick;
                 let mut buffer: CircularBuffer<8, StoredMovement> = movements
                     .into_iter()
                     .enumerate()
-                    .map(|(i, m)| StoredMovement {
-                        sequence: self.current_move_seq[i]
-                            + LARGEST_POSSIBLE_QUEUE_SIZE as u64
-                            + 2
-                            + i as u64,
-                        movement: m,
+                    .map(|(i, m)| {
+                        let movement = StoredMovement {
+                            sequence: self.current_move_seq[i]
+                                + LARGEST_POSSIBLE_QUEUE_SIZE as u64
+                                + 2
+                                + i as u64,
+                            movement: m,
+                            start_tick: current_tick,
+                        };
+                        current_tick += (m.move_time * 1_000_000_000.0) as u64;
+                        movement
                     })
                     .collect();
                 buffer.make_contiguous();
                 self.move_queue[index] = MoveQueue::Buffer8(Box::new(buffer));
             }
             InitialMoveQueue::Buffer64(movements) => {
+                let mut current_tick = tick;
                 let mut buffer: CircularBuffer<64, StoredMovement> = movements
                     .into_iter()
                     .enumerate()
-                    .map(|(i, m)| StoredMovement {
-                        sequence: self.current_move_seq[i]
-                            + LARGEST_POSSIBLE_QUEUE_SIZE as u64
-                            + 2
-                            + i as u64,
-                        movement: m,
+                    .map(|(i, m)| {
+                        let movement = StoredMovement {
+                            sequence: self.current_move_seq[i]
+                                + LARGEST_POSSIBLE_QUEUE_SIZE as u64
+                                + 2
+                                + i as u64,
+                            movement: m,
+                            start_tick: current_tick,
+                        };
+                        current_tick += (m.move_time * 1_000_000_000.0) as u64;
+                        movement
                     })
                     .collect();
                 buffer.make_contiguous();
@@ -1167,7 +1178,7 @@ impl EntityCoreArray {
         }
     }
 
-    fn new() -> EntityCoreArray {
+    fn new(base_time: Instant) -> EntityCoreArray {
         EntityCoreArray {
             len: 0,
             id_lookup: FxHashMap::default(),
@@ -1187,30 +1198,12 @@ impl EntityCoreArray {
             za: vec![],
             theta_y: vec![],
             move_time: vec![],
-            move_time_elapsed: vec![],
-            recalc_in: vec![],
+            move_start_tick: vec![],
+            recalc_at: vec![],
             move_queue: vec![],
             coroutine: vec![],
-            next_delta_bias: vec![],
-            base_time: Instant::now(),
-            last_move_update_poll: Instant::now(),
+            base_time,
         }
-    }
-
-    fn to_offset(&self, when: Instant) -> u64 {
-        let offset = when
-            .duration_since(self.base_time)
-            .as_nanos()
-            .try_into()
-            .unwrap();
-        if offset == (u64::MAX - 1_000_000_000_000) {
-            panic!("Offset {offset} from {:?} is almost overflowing a u64 nanos counter. Either you've managed a very impressive uptime, or something's gone wrong.", self.base_time);
-        }
-        offset
-    }
-
-    fn from_offset(&self, i: u64) -> Instant {
-        self.base_time + Duration::from_nanos(i)
     }
 
     fn insert(
@@ -1221,8 +1214,8 @@ impl EntityCoreArray {
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
         services: &EntityCoroutineServices<'_>,
-        time_bias: f32,
         completion_sender: &tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
+        tick: u64,
     ) -> usize {
         // scan for the first unused slot
         let index = self
@@ -1251,7 +1244,7 @@ impl EntityCoreArray {
                 self.control[i] = control;
                 self.class[i] = entity_class.class.0;
                 // TODO use the data buffer of the entity class as well
-                self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                self.last_nontrivial_modification[i] = tick;
                 self.current_move_seq[i] = 1;
                 self.x[i] = position.x;
                 self.y[i] = position.y;
@@ -1264,12 +1257,10 @@ impl EntityCoreArray {
                 self.za[i] = 0.0;
                 self.theta_y[i] = 0.0;
                 self.move_time[i] = 0.0;
-                self.move_time_elapsed[i] = 0.0;
-                self.recalc_in[i] = 0.0;
+                self.move_start_tick[i] = 0;
+                self.recalc_at[i] = tick;
                 self.move_queue[i] = queue;
                 self.coroutine[i] = coroutine;
-                self.recalc_in[i] = 0.0;
-                self.next_delta_bias[i] = time_bias;
                 i
             }
             None => {
@@ -1280,8 +1271,7 @@ impl EntityCoreArray {
                 self.id.push(id);
                 self.class.push(entity_class.class.0);
                 self.control.push(control);
-                self.last_nontrivial_modification
-                    .push(self.to_offset(Instant::now()));
+                self.last_nontrivial_modification.push(tick);
                 self.current_move_seq.push(1);
                 self.x.push(position.x);
                 self.y.push(position.y);
@@ -1294,11 +1284,10 @@ impl EntityCoreArray {
                 self.za.push(0.0);
                 self.theta_y.push(0.0);
                 self.move_time.push(0.0);
-                self.move_time_elapsed.push(0.0);
-                self.recalc_in.push(0.0);
+                self.move_start_tick.push(0);
+                self.recalc_at.push(tick);
                 self.move_queue.push(queue);
                 self.coroutine.push(coroutine);
-                self.next_delta_bias.push(time_bias);
 
                 self.len - 1
             }
@@ -1313,8 +1302,9 @@ impl EntityCoreArray {
                 0.0,
                 self.move_queue[i].remaining_capacity(),
             ) {
+                // This is the initial move, so it starts now
                 CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
-                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    self.last_nontrivial_modification[i] = tick;
                     self.xv[i] = movement.velocity.x;
                     self.yv[i] = movement.velocity.y;
                     self.zv[i] = movement.velocity.z;
@@ -1323,14 +1313,15 @@ impl EntityCoreArray {
                     self.za[i] = movement.acceleration.z;
                     self.theta_y[i] = movement.face_direction;
                     self.move_time[i] = movement.move_time;
+                    self.move_start_tick[i] = tick;
 
                     // We only got one move. We need another.
                     self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
-                    self.recalc_in[i] = f32::MAX;
+                    self.recalc_at[i] = u64::MAX;
                     tracing::debug!("{}: queued movement (initial)", self.id[i]);
                 }
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
-                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    self.last_nontrivial_modification[i] = tick;
                     if movements.is_empty() {
                         panic!("QueueUpMultiple with no movements");
                     }
@@ -1343,22 +1334,26 @@ impl EntityCoreArray {
                     self.za[i] = first.acceleration.z;
                     self.theta_y[i] = first.face_direction;
                     self.move_time[i] = first.move_time;
+                    self.move_start_tick[i] = tick;
+                    let mut start_tick = tick + (first.move_time * 1_000_000_000.0) as u64;
                     for (seq, m) in movements.into_iter().enumerate().skip(1) {
                         tracing::debug!("{}: queued movement {}", self.id[i], seq);
                         self.move_queue[i].push(StoredMovement {
                             // Current is 1 so next is 2
                             sequence: seq as u64 + 1,
+                            start_tick,
                             movement: m,
                         });
+                        start_tick += (m.move_time * 1_000_000_000.0) as u64;
                     }
                     if self.move_queue[i].remaining_capacity() > 0 {
                         // We need to recalc
                         self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
-                        self.recalc_in[i] = f32::MAX;
+                        self.recalc_at[i] = u64::MAX;
                     }
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
-                    self.recalc_in[i] = delay;
+                    self.recalc_at[i] = (delay.max(0.0) * 1_000_000_000.0) as u64;
                     self.move_time[i] = delay;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
@@ -1366,17 +1361,17 @@ impl EntityCoreArray {
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLaterFlexible(delay)) => {
                     // Flexible timings are an optimization, not a requirement
                     // Because initializing an entity is complex, simply treat this as a non-range ask-again.
-                    self.recalc_in[i] = delay.start;
+                    self.recalc_at[i] = (delay.start.max(0.0) * 1_000_000_000.0) as u64;
                     self.move_time[i] = delay.start;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ImmediateDespawn) => {
-                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    self.last_nontrivial_modification[i] = tick;
                     self.control[i] = 0;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ResetMovement(pos, m1, m2)) => {
-                    self.reset_movement(i, pos, m1, m2, 0.0);
+                    self.reset_movement(i, pos, m1, m2, tick);
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::StopCoroutineControl) => {
@@ -1464,10 +1459,9 @@ impl EntityCoreArray {
             self.za.swap_remove(i);
             self.theta_y.swap_remove(i);
             self.move_time.swap_remove(i);
-            self.move_time_elapsed.swap_remove(i);
-            self.recalc_in.swap_remove(i);
+            self.move_start_tick.swap_remove(i);
+            self.recalc_at.swap_remove(i);
             self.move_queue.swap_remove(i);
-            self.next_delta_bias.swap_remove(i);
             self.coroutine.swap_remove(i);
 
             // fix up the id lookup since we rearranged stuff
@@ -1489,10 +1483,10 @@ impl EntityCoreArray {
         position: Vector3<f64>,
         current: Movement,
         next: InitialMoveQueue,
-        time_bias: Duration,
+        tick: u64,
     ) -> Result<usize, EntityError> {
         let index = self.find_entity(id)?;
-        self.reset_movement(index, position, current, next, time_bias.as_secs_f32());
+        self.reset_movement(index, position, current, next, tick);
         Ok(index)
     }
 
@@ -1505,27 +1499,28 @@ impl EntityCoreArray {
 
     pub(crate) fn for_each_entity(
         &self,
-        since: Option<Instant>,
+        since: Option<u64>,
         mut f: impl FnMut(IterEntity) -> Result<()>,
+        tick: u64,
     ) -> Result<()> {
-        let poll_elapsed = self.last_move_update_poll.elapsed();
         for i in 0..self.len {
             if self.control[i] & CONTROL_PRESENT == 0 {
                 continue;
             }
-            let lnm = self.from_offset(self.last_nontrivial_modification[i]);
+            let lnm = self.last_nontrivial_modification[i];
             if since.is_some_and(|x| x > lnm) {
                 continue;
             }
 
+            let elapsed = self.move_elapsed(i, tick);
             let entity = IterEntity {
                 id: self.id[i],
                 class: self.class[i],
                 starting_position: Vector3::new(self.x[i], self.y[i], self.z[i]),
                 instantaneous_position: Vector3::new(
-                    qproj(self.x[i], self.xv[i], self.xa[i], self.move_time_elapsed[i]),
-                    qproj(self.y[i], self.yv[i], self.ya[i], self.move_time_elapsed[i]),
-                    qproj(self.z[i], self.zv[i], self.za[i], self.move_time_elapsed[i]),
+                    qproj(self.x[i], self.xv[i], self.xa[i], elapsed),
+                    qproj(self.y[i], self.yv[i], self.ya[i], elapsed),
+                    qproj(self.z[i], self.zv[i], self.za[i], elapsed),
                 ),
                 current_move: StoredMovement {
                     movement: Movement {
@@ -1534,26 +1529,12 @@ impl EntityCoreArray {
                         face_direction: self.theta_y[i],
                         move_time: self.move_time[i],
                     },
+                    start_tick: self.move_start_tick[i],
                     sequence: self.current_move_seq[i],
                 },
                 next_moves: self.move_queue[i].as_slice(),
                 last_nontrivial_modification: lnm,
-                // If we have a time offset because this entity was started/reset in the middle of a polling cycle,
-                // we need to correct the elapsed time here as well.
-                // When we do the next poll cycle we'll use the bias to properly advance the elapsed time,
-                // and will reset the bias to 0 at the same time.
-                current_move_elapsed: self.move_time_elapsed[i] + poll_elapsed.as_secs_f32()
-                    - self.next_delta_bias[i],
             };
-            if entity.current_move_elapsed < 0.0 {
-                tracing::debug!("current_move_elapsed < 0.0 {}", entity.current_move_elapsed);
-                tracing::debug!(
-                    "mte: {}, pe: {}, ndb: {}",
-                    self.move_time_elapsed[i],
-                    poll_elapsed.as_secs_f32(),
-                    self.next_delta_bias[i]
-                );
-            }
             f(entity)?;
         }
         Ok(())
@@ -1565,21 +1546,20 @@ impl EntityCoreArray {
         &mut self,
         i: usize,
         services: &EntityCoroutineServices<'_>,
-        delta_time: f32,
         completion: Option<Completion<ContinuationResult>>,
         completion_sender: &tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
-    ) -> f32 {
+        tick: u64,
+    ) -> u64 {
         if self.control[i] & CONTROL_PRESENT == 0 {
-            return f32::MAX;
+            return u64::MAX;
         }
         if self.control[i] & CONTROL_AUTONOMOUS == 0 {
-            return f32::MAX;
+            return u64::MAX;
         }
         if self.control[i] & CONTROL_SUSPENDED != 0 {
-            return f32::MAX;
+            return u64::MAX;
         }
-        self.recalc_in[i] -= delta_time;
-        if self.recalc_in[i] < 0.0
+        if self.recalc_at[i] <= tick
             && self.control[i] & (CONTROL_AUTONOMOUS | CONTROL_PRESENT)
                 == (CONTROL_AUTONOMOUS | CONTROL_PRESENT)
         {
@@ -1589,20 +1569,39 @@ impl EntityCoreArray {
         if self.control[i] & (CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS | CONTROL_PRESENT)
             != (CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS | CONTROL_PRESENT)
         {
-            return f32::MAX;
+            return u64::MAX;
         }
-        let remaining_time = self.move_time[i] - self.move_time_elapsed[i];
+
+        let mut last_move_ending_tick = if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
+            tick
+        } else {
+            self.move_start_tick[i].saturating_add(self.move_time_in_ticks(i))
+        };
 
         if let Some(coroutine) = self.coroutine[i].as_mut() {
             // do some kinematics
             let mut estimated_x = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
             let mut estimated_y = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
             let mut estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
-            let mut estimated_t = remaining_time;
             let mut last_seq = self.current_move_seq[i];
-            tracing::debug!("last_seq: {}", last_seq);
-            for StoredMovement { sequence, movement } in self.move_queue[i].as_slice() {
+
+            tracing::info!("running coro. control: {}, last_seq: {}. Estimated position {}, {}, {}. Move time {}, move start tick {}, move end tick {}", self.control[i], last_seq, estimated_x, estimated_y, estimated_z, self.move_time[i], self.move_start_tick[i], last_move_ending_tick);
+            tracing::info!("queue: {:?}", self.move_queue[i]);
+            for StoredMovement {
+                sequence,
+                movement,
+                start_tick,
+            } in self.move_queue[i].as_slice()
+            {
                 tracing::debug!("> seq {}", sequence);
+                if *start_tick != last_move_ending_tick {
+                    tracing::warn!(
+                        "> seq {} wrong start tick {}, expected {}",
+                        sequence,
+                        start_tick,
+                        last_move_ending_tick
+                    );
+                }
                 assert!(last_seq < *sequence);
                 last_seq = *sequence;
                 estimated_x = qproj(
@@ -1623,12 +1622,24 @@ impl EntityCoreArray {
                     movement.acceleration.z,
                     movement.move_time,
                 );
-                estimated_t += movement.move_time;
-            }
-            if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
-                estimated_t = 0.0;
+                last_move_ending_tick = last_move_ending_tick
+                    .saturating_add((movement.move_time.max(0.0) * 1_000_000_000.0) as u64);
             }
 
+            if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
+                last_move_ending_tick = tick;
+            }
+
+            let estimated_t = (last_move_ending_tick - tick) as f32 / 1_000_000_000.0;
+
+            tracing::info!(
+                "After applying queued moves: Estimated position {}, {}, {} @ {} ({})",
+                estimated_x,
+                estimated_y,
+                estimated_z,
+                last_move_ending_tick,
+                estimated_t
+            );
             let move_queue = &mut self.move_queue[i];
 
             let planned_move = match completion {
@@ -1659,21 +1670,24 @@ impl EntityCoreArray {
 
             match planned_move {
                 CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
-                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    tracing::info!("planned single move: {:?}", movement);
+                    self.last_nontrivial_modification[i] = tick;
                     self.move_queue[i].push(StoredMovement {
                         movement,
                         sequence: last_seq + 1,
+                        start_tick: last_move_ending_tick,
                     });
                     if self.move_queue[i].remaining_capacity() == 0 {
                         self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     }
                     // We'll trigger a recalc when the movement gets advanced; no need to use recalc_in
-                    self.recalc_in[i] = f32::MAX;
+                    self.recalc_at[i] = u64::MAX;
                     tracing::debug!("{}: queued movement.", self.id[i]);
-                    self.move_time[i] - self.move_time_elapsed[i]
+                    self.current_move_ending_tick(i)
                 }
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
-                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    tracing::info!("planned multiple move: {:?}", movements);
+                    self.last_nontrivial_modification[i] = tick;
                     if movements.is_empty() {
                         // TODO this shouldn't be a panic
                         panic!("QueueUpMultiple with no movements");
@@ -1682,55 +1696,54 @@ impl EntityCoreArray {
                         self.move_queue[i].push(StoredMovement {
                             sequence: last_seq + movement_index as u64 + 1,
                             movement: m,
+                            start_tick: last_move_ending_tick,
                         });
+                        last_move_ending_tick += (m.move_time * 1_000_000_000.0) as u64
                     }
-                    self.recalc_in[i] = f32::MAX;
+                    self.recalc_at[i] = u64::MAX;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
 
                     tracing::debug!(
-                        "mt: {}, mte: {}, control: {}",
+                        "mt: {}, mst: {}, control: {}",
                         self.move_time[i],
-                        self.move_time_elapsed[i],
+                        self.move_start_tick[i],
                         self.control[i]
                     );
                     if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
-                        0.0
+                        tick
                     } else {
-                        self.move_time[i] - self.move_time_elapsed[i]
+                        self.current_move_ending_tick(i)
                     }
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
-                    self.recalc_in[i] = delay;
+                    tracing::info!("delay: {:?}", delay);
+                    self.recalc_at[i] = tick + (delay * 1_000_000_000.0) as u64;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
-                    (self.move_time[i] - self.move_time_elapsed[i]).min(delay)
+                    self.current_move_ending_tick(i).min(self.recalc_at[i])
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLaterFlexible(delay)) => {
+                    tracing::info!("delay: {:?}", delay);
                     assert!(delay.end >= delay.start);
                     // Accept a recalc if it's more than at least recalc_in
-                    self.recalc_in[i] = delay.start;
+                    self.recalc_at[i] = tick + (delay.start * 1_000_000_000.0) as u64;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     // Schedule at the latest allowed time
-                    (self.move_time[i] - self.move_time_elapsed[i]).min(delay.end)
+                    self.current_move_ending_tick(i)
+                        .min(tick + (delay.end * 1_000_000_000.0) as u64)
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ImmediateDespawn) => {
-                    self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+                    self.last_nontrivial_modification[i] = tick;
                     self.control[i] = 0;
-                    f32::MAX
+                    u64::MAX
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ResetMovement(pos, m1, m2)) => {
-                    self.reset_movement(
-                        i,
-                        pos,
-                        m1,
-                        m2,
-                        self.last_move_update_poll.elapsed().as_secs_f32(),
-                    );
+                    self.reset_movement(i, pos, m1, m2, tick);
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
-                    self.move_time[i]
+                    self.current_move_ending_tick(i)
                 }
                 CoroutineResult::Successful(EntityMoveDecision::StopCoroutineControl) => {
                     self.control[i] &= !(CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS);
-                    self.move_time[i] - self.move_time_elapsed[i]
+                    self.current_move_ending_tick(i)
                 }
                 CoroutineResult::_DeferredMoveResult(deferral) => {
                     deferral.trace_buffer.log("_dmr early");
@@ -1765,7 +1778,7 @@ impl EntityCoreArray {
                     });
                     // Don't reawaken until we get the completion
                     // TODO: completion stuckness detection
-                    f32::MAX
+                    u64::MAX
                 }
                 CoroutineResult::_DeferredReenterCoroutine(deferral) => {
                     self.control[i] |= CONTROL_SUSPENDED;
@@ -1793,58 +1806,54 @@ impl EntityCoreArray {
                     });
                     // Don't reawaken until we get the completion
                     // TODO: completion stuckness detection
-                    f32::MAX
+                    u64::MAX
                 }
             }
         } else {
-            f32::MAX
+            u64::MAX
         }
+    }
+
+    fn current_move_ending_tick(&mut self, i: usize) -> u64 {
+        self.move_start_tick[i].saturating_add(self.move_time_in_ticks(i))
     }
 
     // We *really* want this to be inlined into the loop
     #[inline(always)]
     /// Update the time elapsed for an entity
-    /// Returns the time when the move will end and a new calculation is needed
-    fn update_time_single(&mut self, i: usize, delta_time: Option<f32>) -> f32 {
-        if let Some(delta_time) = delta_time {
-            self.move_time_elapsed[i] += (delta_time - self.next_delta_bias[i]).max(0.0);
-            self.next_delta_bias[i] = 0.0;
-        }
+    /// Returns the time when the move will end and a new calculation is needed (as a tick)
+    fn update_time_single(&mut self, i: usize, update_tick: u64) -> u64 {
         // We don't update recalc_in, the coroutine handler will do that
 
         let force_advance =
             self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 && !self.move_queue[i].is_empty();
         if force_advance {
             tracing::debug!(
-                "{}: force advance, control {}, mte {}, mt {}, MoveQ available {}",
+                "{}: force advance, control {}, mst {}, mt {}, MoveQ available {}",
                 self.id[i],
                 self.control[i],
-                self.move_time_elapsed[i],
+                self.move_start_tick[i],
                 self.move_time[i],
                 self.move_queue[i].pending_movements()
             );
-            self.last_nontrivial_modification[i] = self.to_offset(Instant::now());
+            self.last_nontrivial_modification[i] = update_tick;
         };
 
-        if force_advance || (self.move_time_elapsed[i] >= self.move_time[i]) {
-            tracing::debug!(
-                "{}: finished move, control {}, mte {}, mt {}, MoveQ available {}",
+        if force_advance || self.move_elapsed(i, update_tick) > self.move_time[i] {
+            tracing::info!(
+                "{}: finished move, control {}, mst {}, mt {}, MoveQ available {}",
                 self.id[i],
                 self.control[i],
-                self.move_time_elapsed[i],
+                self.move_start_tick[i],
                 self.move_time[i],
                 self.move_queue[i].pending_movements()
             );
-            let new_elapsed = if self.control[i] & CONTROL_DEQUEUE_WHEN_READY != 0 {
-                0.0
-            } else {
-                self.move_time_elapsed[i] - self.move_time[i]
-            };
+
             self.control[i] &= !CONTROL_DEQUEUE_WHEN_READY;
-            tracing::debug!(
+            tracing::info!(
                 "{}: finished move w/ time {}/{}, seq was {}",
                 self.id[i],
-                self.move_time_elapsed[i],
+                self.move_elapsed(i, update_tick),
                 self.move_time[i],
                 self.current_move_seq[i]
             );
@@ -1860,9 +1869,20 @@ impl EntityCoreArray {
             let next_move = self.move_queue[i].pop().unwrap_or_else(|| {
                 tracing::debug!("buffer exhausted");
                 self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
+
+                let new_start_tick = self.move_start_tick[i] + self.move_time_in_ticks(i);
+
+                let move_time = if self.recalc_at[i] == u64::MAX {
+                    f32::MAX
+                } else {
+                    let diff = (self.recalc_at[i] - update_tick) as f32;
+                    diff.max(0.0) / 1_000_000_000.0
+                };
+
                 StoredMovement {
-                    movement: Movement::stop_and_stay(self.theta_y[i], self.recalc_in[i]),
+                    movement: Movement::stop_and_stay(self.theta_y[i], move_time),
                     sequence: self.current_move_seq[i] + 1,
+                    start_tick: new_start_tick,
                 }
             });
             self.xv[i] = next_move.movement.velocity.x;
@@ -1874,18 +1894,35 @@ impl EntityCoreArray {
             self.theta_y[i] = next_move.movement.face_direction;
             self.current_move_seq[i] = next_move.sequence;
             tracing::debug!("new CMS {}", next_move.sequence);
-            self.move_time_elapsed[i] = new_elapsed;
+            self.move_start_tick[i] = next_move.start_tick;
             self.move_time[i] = next_move.movement.move_time;
 
-            self.recalc_in[i] = f32::MAX;
+            self.recalc_at[i] = u64::MAX;
         }
         // We now have updated the move (if necessary); here's how long is left in it.
-        let remaining_time_kinematics = self.move_time[i] - self.move_time_elapsed[i];
+        let kinematic_event_time = self.current_move_ending_tick(i);
         if self.control[i] & (CONTROL_AUTONOMOUS_NEEDS_CALC) != 0 {
-            remaining_time_kinematics.min(self.recalc_in[i])
+            kinematic_event_time.min(self.recalc_at[i])
         } else {
-            remaining_time_kinematics
+            kinematic_event_time
         }
+    }
+
+    /// Returns the elapsed time for the current entity, saturating to 0 if it's negative
+    fn move_elapsed(&self, i: usize, tick: u64) -> f32 {
+        // We need a saturating subtraction here because we don't want to go negative
+        (tick.saturating_sub(self.move_start_tick[i])) as f32 / 1_000_000_000.0
+    }
+
+    fn move_time_in_ticks(&self, i: usize) -> u64 {
+        if self.move_time[i].is_infinite() {
+            return u64::MAX;
+        }
+        let approx_ticks = self.move_time[i].max(0.0) * 1_000_000_000.0;
+        if approx_ticks >= u64::MAX as f32 {
+            return u64::MAX;
+        }
+        (approx_ticks) as u64
     }
 }
 /// Project a coordinate into the future.
@@ -1916,9 +1953,13 @@ pub struct EntityShard {
     completion_tx: tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
 }
 impl EntityShard {
-    pub(super) fn new(shard_id: usize, db: Arc<dyn GameDatabase>) -> EntityShard {
+    pub(super) fn new(
+        shard_id: usize,
+        db: Arc<dyn GameDatabase>,
+        base_time: Instant,
+    ) -> EntityShard {
         tracing::warn!("FIXME: Need to load entities from DB for {shard_id}");
-        let core = RwLock::new(EntityCoreArray::new());
+        let core = RwLock::new(EntityCoreArray::new(base_time));
         const ENTITY_QUEUE_SIZE: usize = 64;
         const COMPLETION_QUEUE_SIZE: usize = 256;
         let (pending_actions_tx, pending_actions_rx) =
@@ -1937,10 +1978,11 @@ impl EntityShard {
 
     pub(crate) fn for_each_entity(
         &self,
-        since: Option<Instant>,
+        since: Option<u64>,
+        tick: u64,
         f: impl FnMut(IterEntity) -> Result<()>,
     ) -> Result<()> {
-        self.core.read().for_each_entity(since, f)
+        self.core.read().for_each_entity(since, f, tick)
     }
 }
 
@@ -1951,8 +1993,7 @@ pub(crate) struct IterEntity<'a> {
     pub(crate) instantaneous_position: Vector3<f64>,
     pub(crate) current_move: StoredMovement,
     pub(crate) next_moves: &'a [StoredMovement],
-    pub(crate) last_nontrivial_modification: Instant,
-    pub(crate) current_move_elapsed: f32,
+    pub(crate) last_nontrivial_modification: u64,
 }
 
 pub(crate) struct EntityShardWorker {
@@ -1981,7 +2022,7 @@ impl EntityShardWorker {
     }
 
     pub(crate) async fn run_loop(&self) -> Result<()> {
-        let mut last_iteration = Instant::now();
+        let mut last_iteration = self.game_state.tick();
         let mut rx_lock = self.entities.shards[self.shard_id]
             .pending_actions_rx
             .lock()
@@ -1997,39 +2038,35 @@ impl EntityShardWorker {
         let mut completions = Vec::with_capacity(COMPLETION_BATCH_SIZE);
 
         'main_loop: while !self.cancellation.is_cancelled() {
-            let now = Instant::now();
-            let dt = now.duration_since(last_iteration);
-
             let mut next_awakening = {
                 let mut lock = self.entities.shards[self.shard_id].core.write();
                 let services = self.services();
-                let dt_f32 = dt.as_secs_f32();
-                let next_awakening_times = lock.update_times(dt_f32);
-                let coro_awakening_times = lock.run_coroutines(&services, dt_f32, completion_tx);
+                let update_awakening_tick = lock.update_times(self.game_state.tick());
+                let coro_awakening_tick =
+                    lock.run_coroutines(&services, &self.game_state, completion_tx);
                 tracing::debug!(
                     "Entity worker for shard {} next awakening times: {:?}",
                     self.shard_id,
-                    next_awakening_times
+                    update_awakening_tick
                 );
+                tracing::info!(
+                    "next awakening: {:?}, {} from now (coro: {}, update: {})",
+                    update_awakening_tick.min(coro_awakening_tick),
+                    (update_awakening_tick as i64 - self.game_state.tick() as i64),
+                    (coro_awakening_tick as i64 - self.game_state.tick() as i64),
+                    (update_awakening_tick as i64 - self.game_state.tick() as i64)
+                );
+                tracing::info!("At tick {}", self.game_state.tick());
                 drop(lock);
-                tracing::debug!(
-                    "next awakening: {:?}",
-                    next_awakening_times.min(coro_awakening_times)
-                );
-
-                now + Duration::from_secs_f32(
-                    next_awakening_times.min(coro_awakening_times).max(0.0),
-                )
+                update_awakening_tick.min(coro_awakening_tick)
             };
-
-            last_iteration = now;
 
             rx_messages.clear();
             'poll: loop {
                 tracing::debug!(
                     "Entity worker for shard {} polling with sleep for {:?}",
                     self.shard_id,
-                    next_awakening - Instant::now()
+                    next_awakening
                 );
                 tokio::select! {
                     // TODO evaluate whether biased sampling makes sense here
@@ -2060,7 +2097,7 @@ impl EntityShardWorker {
                             }
                         }
                     }
-                    _ = tokio::time::sleep_until(next_awakening.into()) => {
+                    _ = self.game_state.sleep_until_tick(next_awakening) => {
                         tracing::debug!("Entity worker for shard {} waking up", self.shard_id);
                         break 'poll;
                     },
@@ -2074,13 +2111,12 @@ impl EntityShardWorker {
         Ok(())
     }
 
-    fn handle_messages(&self, rx_messages: &mut Vec<EntityAction>) -> Instant {
+    fn handle_messages(&self, rx_messages: &mut Vec<EntityAction>) -> u64 {
         let mut lock = self.entities.shards[self.shard_id].core.write();
         let completion_tx = &self.entities.shards[self.shard_id].completion_tx;
         let mut indices: smallvec::SmallVec<[usize; COMMAND_BATCH_SIZE]> =
             smallvec::SmallVec::new();
         for action in rx_messages.drain(..) {
-            let time_bias = lock.last_move_update_poll.elapsed();
             match action {
                 EntityAction::Insert(id, position, coroutine, entity_type) => {
                     let def = self.game_state.entities().get_by_type(&entity_type);
@@ -2092,8 +2128,8 @@ impl EntityShardWorker {
                         position,
                         coroutine,
                         &self.services(),
-                        time_bias.as_secs_f32(),
                         completion_tx,
+                        self.game_state.tick(),
                     );
                     indices.push(index);
                 }
@@ -2107,7 +2143,13 @@ impl EntityShardWorker {
                     }
                 },
                 EntityAction::SetKinematics(id, position, movement, next_movement) => {
-                    match lock.set_kinematics(id, position, movement, next_movement, time_bias) {
+                    match lock.set_kinematics(
+                        id,
+                        position,
+                        movement,
+                        next_movement,
+                        self.game_state.tick(),
+                    ) {
                         Ok(index) => {
                             indices.push(index);
                         }
@@ -2126,22 +2168,28 @@ impl EntityShardWorker {
         }
         indices.sort();
         indices.dedup();
-        let mut next_event = std::f32::MAX;
+        let mut next_event = std::u64::MAX;
         for index in indices {
             if index != 0 {
                 //println!("post control message");
             }
-            lock.run_coro_single(index, &self.services(), 0.0, None, completion_tx);
-            next_event = next_event.min(lock.update_time_single(index, None));
+            lock.run_coro_single(
+                index,
+                &self.services(),
+                None,
+                completion_tx,
+                self.game_state.tick(),
+            );
+            next_event = next_event.min(lock.update_time_single(index, self.game_state.tick()));
         }
-        Instant::now() + Duration::from_secs_f32(next_event.min(10.0))
+        next_event
     }
 
-    fn handle_completions(&self, completions: &mut Vec<Completion<ContinuationResult>>) -> Instant {
+    fn handle_completions(&self, completions: &mut Vec<Completion<ContinuationResult>>) -> u64 {
         let mut lock = self.entities.shards[self.shard_id].core.write();
         let completion_tx = &self.entities.shards[self.shard_id].completion_tx;
 
-        let mut next_event = std::f32::MAX;
+        let mut next_event = std::u64::MAX;
         for completion in completions.drain(..) {
             completion
                 .trace_buffer
@@ -2175,16 +2223,15 @@ impl EntityShardWorker {
             }
             lock.control[index] &= !CONTROL_SUSPENDED;
 
-            let delta_time = lock.last_move_update_poll.elapsed().as_secs_f32();
             next_event = next_event.min(lock.run_coro_single(
                 index,
                 &self.services(),
-                delta_time,
                 Some(completion),
                 completion_tx,
+                self.game_state.tick(),
             ));
         }
-        Instant::now() + Duration::from_secs_f32(next_event.clamp(0.0, 10.0))
+        next_event.min(self.game_state.tick() + 10 * 1_000_000_000)
     }
 
     fn services(&self) -> EntityCoroutineServices<'_> {

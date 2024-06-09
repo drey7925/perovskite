@@ -127,4 +127,9 @@ impl Timekeeper {
     pub(crate) fn estimated_send_time(&self, server_tick: u64) -> Instant {
         self.initial_timebase_estimate + Duration::from_nanos(self.adjust_server_tick(server_tick))
     }
+
+    pub(crate) fn time_to_tick_estimate(&self, time: Instant) -> u64 {
+        let raw_nanos: i128 = (time - self.initial_timebase_estimate).as_nanos() as i128;
+        (raw_nanos - self.get_offset() as i128) as u64
+    }
 }

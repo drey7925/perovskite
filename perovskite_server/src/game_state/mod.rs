@@ -103,6 +103,7 @@ impl GameState {
         commands: CommandManager,
         extensions: type_map::concurrent::TypeMap,
     ) -> Result<Arc<Self>> {
+        let server_start_time = Instant::now();
         // TODO figure out a way to replace unwrap with error propagation
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
         let mapgen = mapgen_provider(blocks.clone(), mapgen_seed);
@@ -125,8 +126,12 @@ impl GameState {
             auth: AuthService::create(db.clone()).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
             player_state_resync: tokio::sync::watch::channel(()).0,
-            entities: Arc::new(entities::EntityManager::new(db.clone(), entity_types)),
-            server_start_time: Instant::now(),
+            entities: Arc::new(entities::EntityManager::new(
+                db.clone(),
+                entity_types,
+                server_start_time,
+            )),
+            server_start_time,
             extensions,
             startup_time: Instant::now(),
         });
@@ -151,6 +156,14 @@ impl GameState {
     pub fn tick(&self) -> u64 {
         // This limits the server to a runtime of approximately 500 years.
         self.startup_time.elapsed().as_nanos().try_into().unwrap()
+    }
+
+    /// Sleep until the given tick
+    pub async fn sleep_until_tick(&self, tick: u64) {
+        let now = self.tick();
+        if now < tick {
+            tokio::time::sleep(Duration::from_nanos(tick - now)).await;
+        }
     }
 
     pub fn tick_as_duration(&self) -> Duration {

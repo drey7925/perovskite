@@ -27,6 +27,7 @@ pub(crate) struct EntityMove {
     acceleration: Vector3<f32>,
     total_time_seconds: f32,
     face_direction: f32,
+    start_tick: u64,
     seq: u64,
 }
 impl EntityMove {
@@ -42,9 +43,6 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
     type Error = anyhow::Error;
 
     fn try_from(value: &entities_proto::EntityMove) -> Result<Self, Self::Error> {
-        if !value.total_time_seconds.is_finite() {
-            return Err(anyhow::anyhow!("total_time_seconds contained NaN or inf"));
-        }
         if !value.face_direction.is_finite() {
             return Err(anyhow::anyhow!("face_direction contained NaN or inf"));
         }
@@ -64,9 +62,10 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
                 .as_ref()
                 .context("Missing acceleration")?
                 .try_into()?,
-            total_time_seconds: value.total_time_seconds,
+            total_time_seconds: value.time_ticks as f32 / 1_000_000_000.0,
             face_direction: value.face_direction,
             seq: value.sequence,
+            start_tick: value.start_tick,
         })
     }
 }
@@ -75,8 +74,6 @@ pub(crate) struct GameEntity {
     // todo refine
     // 33 should be enough, server has a queue depth of up to 32
     pub(crate) move_queue: VecDeque<EntityMove>,
-    current_move_started: Instant,
-    pub(crate) current_move_sequence: u64,
     pub fallback_position: Vector3<f64>,
     pub last_face_dir: f32,
     id: u64,
@@ -85,74 +82,68 @@ pub(crate) struct GameEntity {
     created: Instant,
 }
 impl GameEntity {
-    pub(crate) fn advance_state(&mut self, until: Instant) {
-        let mut elapsed = (until - self.current_move_started).as_secs_f32();
-        let mut any_popped = false;
-        while self
-            .move_queue
-            .front()
-            .is_some_and(|m| elapsed > m.total_time_seconds)
-        {
-            // println!("=== @ {} ===", self.created.elapsed().as_secs_f32());
-            any_popped = true;
-            let popped_move = self.move_queue.pop_front().unwrap();
-            // println!("popping move {:?}", popped_move);
-            self.current_move_started += Duration::from_secs_f32(popped_move.total_time_seconds);
-            elapsed -= popped_move.total_time_seconds;
-            self.current_move_sequence = self.move_queue.front().map(|m| m.seq).unwrap_or(0);
-        }
-        if any_popped && self.id == 8 {
+    pub(crate) fn advance_state(&mut self, until_tick: u64) {
+        let any_popped = self.pop_until(until_tick);
+        if any_popped {
             println!(
                 "remaining buffer: {:?}",
-                self.move_queue
-                    .iter()
-                    .map(|m| m.total_time_seconds)
-                    .sum::<f32>()
-                    - elapsed
+                self.move_queue.back().map(|m| m.start_tick
+                    + (m.total_time_seconds * 1_000_000_000.0) as u64
+                    - until_tick)
             );
         }
     }
 
-    pub(crate) fn estimated_buffer(&self, until: Instant) -> f32 {
-        self.move_queue
+    fn pop_until(&mut self, until_tick: u64) -> bool {
+        let idx = self
+            .move_queue
             .iter()
-            .map(|m| m.total_time_seconds)
-            .sum::<f32>()
-            - (until - self.current_move_started).as_secs_f32()
+            .rposition(|m| m.start_tick < until_tick);
+
+        if let Some(idx) = idx {
+            if idx == 0 {
+                // The first move is the only move that started in the past, so we need to keep it
+                false
+            } else {
+                // drain up to *and not including* idx
+                // e.g. if idx == 2, move_queue[2] is the last move that started in the past, so we need to drain move_queue[0..2], which is move_queue[0] and move_queue[1]
+                self.move_queue.drain(..idx);
+                true
+            }
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn estimated_buffer(&self, until_tick: u64) -> f32 {
+        let ticks = self
+            .move_queue
+            .back()
+            .map(|m| m.start_tick + (m.total_time_seconds * 1_000_000_000.0) as u64 - until_tick)
+            .unwrap_or(0);
+        (ticks as f32) / 1_000_000_000.0
     }
 
     pub(crate) fn estimated_buffer_count(&self) -> usize {
         self.move_queue.len()
     }
     pub(crate) fn debug_cms(&self) -> u64 {
-        self.current_move_sequence
+        self.move_queue.front().map(|m| m.seq).unwrap_or(0)
     }
-    pub(crate) fn debug_cme(&self, time: Instant) -> f32 {
-        (time - self.current_move_started).as_secs_f32()
+    pub(crate) fn debug_cme(&self, time_tick: u64) -> f32 {
+        self.move_queue
+            .front()
+            .map(|m| (time_tick - m.start_tick) as f32 / 1_000_000_000.0)
+            .unwrap_or(0.0)
     }
 
     pub(crate) fn update(
         &mut self,
         update: &entities_proto::EntityUpdate,
-        estimated_send_time: Instant,
+        update_tick: u64,
     ) -> Result<(), &'static str> {
         if update.id == 8 {
             println!("{:?}", update);
-            println!(
-                "estimated send was {} sec ago",
-                estimated_send_time.elapsed().as_secs_f32()
-            );
-        }
-
-        if let Some(m) = self.move_queue.back() {
-            self.fallback_position = m.qproj(m.total_time_seconds);
-        }
-        while self
-            .move_queue
-            .front()
-            .is_some_and(|m| m.seq < update.current_move_sequence)
-        {
-            self.move_queue.pop_front().unwrap();
         }
         for m in &update.planned_move {
             self.move_queue.push_back(m.try_into().map_err(|_| {
@@ -162,29 +153,22 @@ impl GameEntity {
             })?);
         }
 
-        if update.current_move_progress < 0.0 {
-            return Err("invalid current move progress: negative");
-        } else if update.current_move_progress.is_nan() {
-            return Err("invalid current move progress: NaN");
+        log::info!(
+            ">>> tick {update_tick}, queue before pops: {:?}",
+            self.move_queue
+        );
+        if let Some(m) = self.move_queue.back() {
+            self.fallback_position = m.qproj(m.total_time_seconds);
         }
 
-        if update.current_move_sequence != self.current_move_sequence {
-            if update.id == 8 {
-                println!(
-                    "retiming {} -> {}",
-                    self.current_move_sequence, update.current_move_sequence
-                );
-                println!(
-                    "{:?} -> {:?}",
-                    self.current_move_started,
-                    Instant::now() - Duration::from_secs_f32(update.current_move_progress)
-                );
-            }
+        let any_popped = self.pop_until(update_tick);
 
-            self.current_move_sequence = update.current_move_sequence;
-            self.current_move_started =
-                estimated_send_time - Duration::from_secs_f32(update.current_move_progress);
-        }
+        log::info!(
+            "tick {update_tick}, queue: {:?}, any popped? {}",
+            self.move_queue,
+            any_popped
+        );
+
         if let Some(m) = self.move_queue.back() {
             self.fallback_position = m.qproj(m.total_time_seconds);
         }
@@ -199,9 +183,9 @@ impl GameEntity {
     pub(crate) fn as_transform(
         &self,
         base_position: Vector3<f64>,
-        time: Instant,
+        time_tick: u64,
     ) -> cgmath::Matrix4<f32> {
-        let (pos, angle) = self.position(time);
+        let (pos, angle) = self.position(time_tick);
         let translation = cgmath::Matrix4::from_translation(
             (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
         )
@@ -211,12 +195,22 @@ impl GameEntity {
         translation * Matrix4::from_angle_y(angle)
     }
 
-    pub(crate) fn position(&self, time: Instant) -> (Vector3<f64>, Rad<f32>) {
-        let time = (time.saturating_duration_since(self.current_move_started)).as_secs_f32();
+    pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>) {
         let pos = self
             .move_queue
             .front()
-            .map(|m| m.qproj(time))
+            .map(|m| {
+                let time = self
+                    .move_queue
+                    .front()
+                    .map(|m| {
+                        ((time_tick.saturating_sub(m.start_tick) as f32) / 1_000_000_000.0)
+                            .clamp(0.0, m.total_time_seconds)
+                    })
+                    .unwrap_or(0.0);
+
+                m.qproj(time)
+            })
             .unwrap_or(self.fallback_position);
         let dir = self
             .move_queue
@@ -228,16 +222,12 @@ impl GameEntity {
                 "invalid position, move queue contains {:?}",
                 self.move_queue
             );
-            log::info!("CMS {:?}, time {}", self.current_move_started, time);
             return (Vector3::zero(), Rad(0.0));
         }
         (pos, Rad(dir))
     }
 
-    pub(crate) fn from_proto(
-        update: &entities_proto::EntityUpdate,
-        estimated_send_time: Instant,
-    ) -> Result<GameEntity, &str> {
+    pub(crate) fn from_proto(update: &entities_proto::EntityUpdate) -> Result<GameEntity, &str> {
         if update.planned_move.is_empty() {
             return Err("Empty move plan");
         }
@@ -249,6 +239,7 @@ impl GameEntity {
                 "invalid planned move"
             })?);
         }
+        log::info!("initial queue: {:?}", queue);
         // println!("cms: {:?}", update.current_move_progress);
         Ok(GameEntity {
             fallback_position: queue
@@ -257,10 +248,6 @@ impl GameEntity {
                 .unwrap(),
             last_face_dir: queue.back().map(|m| m.face_direction).unwrap(),
             move_queue: queue,
-            current_move_started: estimated_send_time
-                - Duration::try_from_secs_f32(update.current_move_progress)
-                    .map_err(|_| "invalid current move progress")?,
-            current_move_sequence: update.current_move_sequence,
             created: Instant::now(),
             class: update.entity_class,
             id: update.id,
@@ -308,16 +295,16 @@ impl EntityState {
         })
     }
 
-    pub(crate) fn advance_all_states(&mut self, until: Instant) {
+    pub(crate) fn advance_all_states(&mut self, until_tick: u64) {
         for entity in self.entities.values_mut() {
-            entity.advance_state(until);
+            entity.advance_state(until_tick);
         }
     }
 
     pub(crate) fn render_calls(
         &self,
         player_position: Vector3<f64>,
-        time: Instant,
+        time_tick: u64,
         entity_renderer: &EntityRenderer,
     ) -> Vec<EntityGeometryDrawCall> {
         // Current implementation will just render each entity in its own draw call.
@@ -329,7 +316,7 @@ impl EntityState {
         self.entities
             .iter()
             .map(|(id, entity)| EntityGeometryDrawCall {
-                model_matrix: entity.as_transform(player_position, time),
+                model_matrix: entity.as_transform(player_position, time_tick),
                 model: entity_renderer
                     .get_singleton(entity.class)
                     // class 0 is the fallback

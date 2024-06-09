@@ -28,12 +28,16 @@ message EntityMove {
   perovskite.protocol.coordinates.Vec3F velocity = 2;
   // The acceleration of the movement
   perovskite.protocol.coordinates.Vec3F acceleration = 3;
-  // The total time scheduled for the movement.
-  float total_time_seconds = 4;
+  reserved 4;
   // The face direction (about the vertical Y axis) in radians
   float face_direction = 5;
   // The sequence number of the move.
   uint64 sequence = 6;
+  // The total time scheduled for the movement, nanosecond ticks
+  uint64 time_ticks = 7;
+  // The tick on which the move is scheduled to start
+  // This is synchronized with the timebase used for ticks in every stream message
+  uint64 start_tick = 8;
 }
 
 message EntityUpdate {
@@ -42,11 +46,7 @@ message EntityUpdate {
   // The moves that are queued for this move, and have not yet been delivered to
   // this client
   repeated EntityMove planned_move = 2;
-  // The sequence of the current move
-  uint64 current_move_sequence = 3;
-  // How much of the current move (in seconds) has already happened at the time
-  // of this message
-  float current_move_progress = 4;
+  reserved 3, 4;
 
   // If true, the entity should stop being displayed. If so, ignore all other
   // fields

@@ -611,6 +611,12 @@ impl EntityCoroutine for CartCoroutine {
     }
 }
 
+impl std::fmt::Debug for CartCoroutine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CartCoroutine")
+    }
+}
+
 const CONTINUATION_TAG_SIGNAL: u32 = 0x516ea1;
 
 impl CartCoroutine {
@@ -622,7 +628,7 @@ impl CartCoroutine {
         queue_space: usize,
         trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
-        tracing::debug!(
+        tracing::info!(
             "{} {:?} ========== planning {} seconds in advance",
             self.id,
             self.spawn_time.elapsed(),
@@ -802,9 +808,9 @@ impl CartCoroutine {
                     .map(|seg| seg.speed + (seg.acceleration * seg.move_time))
                     .unwrap_or(self.last_speed_post_indication.max(5.0)),
             ) as f32;
-        tracing::debug!("estimated max speed {}", estimated_max_speed);
+        tracing::info!("estimated max speed {}", estimated_max_speed);
 
-        tracing::debug!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
+        tracing::info!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
 
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
@@ -925,7 +931,7 @@ impl CartCoroutine {
             self.apply_step(new_state);
         }
 
-        tracing::debug!(
+        tracing::info!(
             "Finished with {} steps, {} buffer time estimate, {} max speed, {} time limit",
             steps,
             buffer_time_estimate,
@@ -1165,10 +1171,10 @@ impl CartCoroutine {
 
             if unconditionally_schedulable {
                 schedulable_segments.push_front((*seg, max_exit_speed));
-            } else if should_panic_schedule && idx <= panic_max_index && when < 5.0 {
+            } else if should_panic_schedule && idx <= panic_max_index && when < 2.0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::debug!(
+                tracing::info!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg

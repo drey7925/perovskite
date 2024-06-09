@@ -257,7 +257,7 @@ pub(crate) async fn make_client_contexts(
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
         sent_entities: FxHashMap::default(),
-        last_update: game_state.server_start_time(),
+        last_update: 0,
     };
 
     Ok(PlayerCoroutinePack {
@@ -1860,7 +1860,7 @@ struct EntityEventSender {
     context: Arc<SharedContext>,
     // entity id -> last sequence number we've sent
     sent_entities: FxHashMap<u64, u64>,
-    last_update: Instant,
+    last_update: u64,
 }
 impl EntityEventSender {
     async fn entity_sender_loop(&mut self) -> Result<()> {
@@ -1891,7 +1891,7 @@ impl EntityEventSender {
     async fn do_tick(&mut self) -> Result<()> {
         // todo - this requires optimization
 
-        let update_time = Instant::now();
+        let update_time = self.context.game_state.tick();
         let messages = {
             let mut messages = vec![];
 
@@ -1901,8 +1901,9 @@ impl EntityEventSender {
             let known_to_us = self.sent_entities.keys().cloned().collect::<HashSet<_>>();
             let mut still_valid = HashSet::new();
 
+            let tick = self.context.game_state.tick();
             for shard in entities.shards() {
-                shard.for_each_entity(None, |entity: IterEntity| {
+                shard.for_each_entity(None, tick, |entity: IterEntity| {
                     still_valid.insert(entity.id);
                     if entity.id == self.context.player_context.entity_id {
                         return Ok(());
@@ -1933,7 +1934,8 @@ impl EntityEventSender {
                                 velocity: Some(m.movement.velocity.try_into()?),
                                 acceleration: Some(m.movement.acceleration.try_into()?),
                                 face_direction: m.movement.face_direction,
-                                total_time_seconds: m.movement.move_time,
+                                start_tick: m.start_tick,
+                                time_ticks: (m.movement.move_time * 1_000_000_000.0) as u64,
                             });
                         }
 
@@ -1944,12 +1946,9 @@ impl EntityEventSender {
                         entity_class: entity.class,
                         planned_move: moves_to_send,
                         remove: false,
-                        current_move_sequence: entity.current_move.sequence,
-                        // This has already been corrected for delta_bias in cases where a move began
-                        // in the middle of a poll cycle
-                        current_move_progress: entity.current_move_elapsed,
                     };
-                    messages.push(message);
+                    tracing::info!("Current tick {tick}");
+                    messages.push(dbg!(message));
                     Ok(())
                 })?;
             }
@@ -1959,8 +1958,6 @@ impl EntityEventSender {
                 messages.push(entities_proto::EntityUpdate {
                     id: entity_id,
                     planned_move: vec![],
-                    current_move_sequence: 0,
-                    current_move_progress: 0.0,
                     remove: true,
                     // entity class doesn't matter since we're going to remove it
                     entity_class: 0,

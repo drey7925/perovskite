@@ -480,7 +480,7 @@ impl InboundContext {
                     .shared_state
                     .client_state
                     .timekeeper
-                    .estimated_send_time(message.tick);
+                    .adjust_server_tick(message.tick);
                 self.handle_entity_update(update, estimated_send_time)
                     .await?;
             }
@@ -703,7 +703,7 @@ impl InboundContext {
     async fn handle_entity_update(
         &mut self,
         update: &entities_proto::EntityUpdate,
-        estimated_send_time: Instant,
+        estimated_send_tick: u64,
     ) -> Result<()> {
         if update.remove {
             if self
@@ -732,9 +732,9 @@ impl InboundContext {
         {
             Entry::Occupied(mut entry) => {
                 // TODO we need to correct for network delay here
-                entry.get_mut().update(update, estimated_send_time)
+                entry.get_mut().update(update, estimated_send_tick)
             }
-            Entry::Vacant(entry) => match GameEntity::from_proto(update, estimated_send_time) {
+            Entry::Vacant(entry) => match GameEntity::from_proto(update) {
                 Ok(x) => {
                     entry.insert(x);
                     Ok(())

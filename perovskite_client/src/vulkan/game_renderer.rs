@@ -97,13 +97,17 @@ impl ActiveGame {
         .unwrap();
         self.cube_draw_calls.clear();
         let start_time = Instant::now();
+        let start_tick = self
+            .client_state
+            .timekeeper
+            .time_to_tick_estimate(start_time);
 
         {
             let mut entity_lock = self.client_state.entities.lock();
-            entity_lock.advance_all_states(start_time);
+            entity_lock.advance_all_states(start_tick);
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
-                    (player_position, _) = entity.position(start_time);
+                    (player_position, _) = entity.position(start_tick);
                     self.client_state
                         .physics_state
                         .lock()
@@ -111,7 +115,7 @@ impl ActiveGame {
 
                     plot!(
                         "entity_buffer",
-                        entity.estimated_buffer(start_time).max(0.0) as f64
+                        entity.estimated_buffer(start_tick).max(0.0) as f64
                     );
                     plot!(
                         "entity_buffer_count",
@@ -120,7 +124,7 @@ impl ActiveGame {
                     // Most test tracks run in the Z direction, so this is an easy metric to debug with.
                     plot!("entity_z_coord", player_position.z);
                     plot!("entity_cms", entity.debug_cms() as f64);
-                    plot!("entity_cme", entity.debug_cme(start_time) as f64)
+                    plot!("entity_cme", entity.debug_cme(start_tick) as f64)
                 }
             }
         }
@@ -211,7 +215,7 @@ impl ActiveGame {
             let lock = self.client_state.entities.lock();
             lock.render_calls(
                 player_position,
-                start_time,
+                start_tick,
                 &self.client_state.entity_renderer,
             )
         };
