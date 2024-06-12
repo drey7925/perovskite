@@ -30,21 +30,21 @@ use perovskite_server::game_state::{
 use crate::{
     blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
     default_game::{recipes::RecipeSlot, DefaultGameBuilder},
-    game_builder::{StaticBlockName, StaticTextureName},
+    game_builder::{BlockName, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 
-use super::b2vec;
+use super::{b2vec, tracks, CartsGameBuilderExtension};
 
 #[rustfmt::skip]
 pub(crate) mod c {
     // We only have 12 bits for the variant stored in the block...
-    pub(crate) const ROTATION_BITS: u16   = 0b0000_0000_0000_0011;
-    pub(crate) const X_SELECTOR: u16      = 0b0000_0000_0011_1100;
-    pub(crate) const X_SELECTOR_DIV: u16  = 0b0000_0000_0000_0100;
-    pub(crate) const Y_SELECTOR: u16      = 0b0000_0011_1100_0000;
-    pub(crate) const Y_SELECTOR_DIV: u16  = 0b0000_0000_0100_0000;
-    pub(crate) const FLIP_X_BIT: u16      = 0b0000_0100_0000_0000;
+    pub(crate) const ROTATION_BITS: u16 = 0b0000_0000_0000_0011;
+    pub(crate) const X_SELECTOR: u16 = 0b0000_0000_0011_1100;
+    pub(crate) const X_SELECTOR_DIV: u16 = 0b0000_0000_0000_0100;
+    pub(crate) const Y_SELECTOR: u16 = 0b0000_0011_1100_0000;
+    pub(crate) const Y_SELECTOR_DIV: u16 = 0b0000_0000_0100_0000;
+    pub(crate) const FLIP_X_BIT: u16 = 0b0000_0100_0000_0000;
     // But we can still use the upper four bits for our own tracking, as long as
     // they don't need to be encoded on the game map
 
@@ -53,12 +53,14 @@ pub(crate) mod c {
     ///
     /// If set on a prev/next, it means that we shoud enter that track 
     pub(crate) const DIVERGING_ROUTE: u16 = 0b0001_0000_0000_0000;
-    pub(crate) const REVERSE_SCAN: u16    = 0b0010_0000_0000_0000;
-    pub(crate) const ENTRY_PRESENT: u16   = 0b1000_0000_0000_0000;
+    pub(crate) const REVERSE_SCAN: u16 = 0b0010_0000_0000_0000;
+    pub(crate) const SLOPE_ENCODING: u16 = 0b0100_0000_0000_0000;
+    pub(crate) const ENTRY_PRESENT: u16 = 0b1000_0000_0000_0000;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct TileId(u16);
+pub(super) struct TileId(u16);
+
 impl TileId {
     const fn new(
         x: u16,
@@ -87,6 +89,23 @@ impl TileId {
                 | if diverging { c::DIVERGING_ROUTE } else { 0 },
         )
     }
+    fn new_slope(numerator: u16, denominator: u16, rotation: u16, reverse: bool) -> TileId {
+        if denominator >= 16 {
+            panic!("denominator too big, should be < 16");
+        }
+        if numerator > denominator {
+            panic!("numerator too big, should be <= denominator");
+        }
+        TileId(
+            c::ENTRY_PRESENT
+                | c::SLOPE_ENCODING
+                | numerator * c::X_SELECTOR_DIV
+                | denominator * c::Y_SELECTOR_DIV
+                | (rotation & c::ROTATION_BITS)
+                | if reverse { c::REVERSE_SCAN } else { 0 },
+        )
+    }
+
     fn try_new(
         x: u16,
         y: u16,
@@ -112,6 +131,9 @@ impl TileId {
     const fn present(&self) -> bool {
         (self.0 & c::ENTRY_PRESENT) != 0
     }
+    const fn is_slope_encoding(&self) -> bool {
+        (self.0 & c::SLOPE_ENCODING) != 0
+    }
     const fn x(&self) -> u16 {
         (self.0 & c::X_SELECTOR) / c::X_SELECTOR_DIV
     }
@@ -119,14 +141,25 @@ impl TileId {
         (self.0 & c::Y_SELECTOR) / c::Y_SELECTOR_DIV
     }
     const fn is_same_x_y(&self, other: TileId) -> bool {
-        (self.0 & (c::X_SELECTOR | c::Y_SELECTOR)) == (other.0 & (c::X_SELECTOR | c::Y_SELECTOR))
+        (self.0 & (c::X_SELECTOR | c::Y_SELECTOR | c::SLOPE_ENCODING))
+            == (other.0 & (c::X_SELECTOR | c::Y_SELECTOR | c::SLOPE_ENCODING))
     }
     const fn same_variant(&self, other: TileId) -> bool {
-        (self.0 & (c::X_SELECTOR | c::Y_SELECTOR | c::ROTATION_BITS | c::FLIP_X_BIT))
-            == (other.0 & (c::X_SELECTOR | c::Y_SELECTOR | c::ROTATION_BITS | c::FLIP_X_BIT))
+        (self.0
+            & (c::X_SELECTOR
+                | c::Y_SELECTOR
+                | c::ROTATION_BITS
+                | c::FLIP_X_BIT
+                | c::SLOPE_ENCODING))
+            == (other.0
+                & (c::X_SELECTOR
+                    | c::Y_SELECTOR
+                    | c::ROTATION_BITS
+                    | c::FLIP_X_BIT
+                    | c::SLOPE_ENCODING))
     }
     /// The rotation, clockwise, in units of 90 degrees. Always 0, 1, 2, or 3.
-    const fn rotation(&self) -> u16 {
+    pub(crate) const fn rotation(&self) -> u16 {
         self.0 & c::ROTATION_BITS
     }
     /// Whether X coordinates (in scanning, coordinate output, and drawing) are flipped
@@ -187,6 +220,7 @@ impl std::fmt::Debug for TileId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.present() {
             f.debug_struct("TileId")
+                .field("slope_encoding", &self.is_slope_encoding())
                 .field("x", &self.x())
                 .field("y", &self.y())
                 .field("rotation", &self.rotation())
@@ -204,8 +238,10 @@ impl std::fmt::Debug for TileId {
 /// An offset in MAP coordinates
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct EncodedDelta(u8);
+
 impl EncodedDelta {
     const PRESENT: u8 = 0b1000_0000;
+    const Y_UP: u8 = 0b0100_0000;
     const fn new(x: i8, z: i8) -> EncodedDelta {
         if x < -1 || x > 1 {
             panic!();
@@ -217,11 +253,29 @@ impl EncodedDelta {
         let y_enc = (z + 1) as u8;
         EncodedDelta((x_enc << 2) | y_enc | Self::PRESENT)
     }
+    const fn new_y_up(x: i8, z: i8) -> EncodedDelta {
+        if x < -1 || x > 1 {
+            panic!();
+        }
+        if z < -1 || z > 1 {
+            panic!();
+        }
+        let x_enc = (x + 1) as u8;
+        let y_enc = (z + 1) as u8;
+        EncodedDelta((x_enc << 2) | y_enc | Self::PRESENT | Self::Y_UP)
+    }
     const fn present(&self) -> bool {
         (self.0 & Self::PRESENT) != 0
     }
     const fn x(&self) -> i8 {
         ((self.0 & 0b1100) >> 2) as i8 - 1
+    }
+    const fn y(&self) -> i8 {
+        if (self.0 & Self::Y_UP) != 0 {
+            1
+        } else {
+            0
+        }
     }
     const fn z(&self) -> i8 {
         (self.0 & 0b11) as i8 - 1
@@ -239,9 +293,11 @@ impl EncodedDelta {
         rotation: u16,
     ) -> Option<BlockCoordinate> {
         let (x, z) = self.eval_rotation(flip_x, rotation);
-        base.try_delta(x as i32, 0, z as i32)
+        let y = self.y();
+        base.try_delta(x as i32, y as i32, z as i32)
     }
 }
+
 impl std::fmt::Debug for EncodedDelta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.present() {
@@ -383,6 +439,7 @@ struct TrackTile {
     /// for the non-slip-switch case.
     switch_length: u8,
 }
+
 impl TrackTile {
     // This can't be in Default because it needs to be const
     const fn default() -> Self {
@@ -528,8 +585,8 @@ fn build_track_tiles() -> ([[Option<TrackTile>; 16]; 11], Vec<Template>) {
         straight_track_eligible_connections: (
             // We can enter the 90-degree elbow at (8, 8) in its forward scan direction.
             TileId::new(8, 8, 0, false, false, false).rotation_flip_bitset_mask()
-            // including if X is flipped
-            | TileId::new(8, 8, 0, true, false, false).rotation_flip_bitset_mask()
+                // including if X is flipped
+                | TileId::new(8, 8, 0, true, false, false).rotation_flip_bitset_mask()
         ),
         reverse_straight_track_eligible_connections: (
             // We can enter the 90-degree elbow at (8, 8) in its reverse scan direction.
@@ -567,15 +624,58 @@ fn build_track_tiles() -> ([[Option<TrackTile>; 16]; 11], Vec<Template>) {
         templates.push(template);
     }
 
+    build_slope_templates(&mut templates);
+
     (track_tiles, templates)
+}
+
+fn build_slope_templates(templates: &mut Vec<Template>) {
+    let mut template_tiles_8 = vec![];
+    for i in 1..=8 {
+        template_tiles_8.push(TemplateEntry {
+            tile_id: TileId::new_slope(i, 8, 0, false),
+            offset_x: 0,
+            offset_y: 0,
+            offset_z: (i - 1) as i32,
+            tracks_consumed: 1,
+        })
+    }
+    templates.push(Template {
+        category: "Slopes".to_string(),
+        sort_subkey: 8,
+        name: "8-block slope up".to_string(),
+        id: "slope_8".to_string(),
+        entries: template_tiles_8.into_boxed_slice(),
+        bifurcate: false,
+    });
+
+    let mut template_tiles_8_down = vec![];
+    for i in 1..=8 {
+        template_tiles_8_down.push(TemplateEntry {
+            tile_id: TileId::new_slope(9 - i, 8, 2, false),
+            offset_x: 0,
+            offset_y: -1,
+            offset_z: i as i32,
+            tracks_consumed: 1,
+        })
+    }
+    templates.push(Template {
+        category: "Slopes".to_string(),
+        sort_subkey: 9,
+        name: "8-block slope down".to_string(),
+        id: "slope_8_down".to_string(),
+        entries: template_tiles_8_down.into_boxed_slice(),
+        bifurcate: false,
+    })
 }
 
 fn build_straight_track_template(len: u16) -> Template {
     let mut tiles = vec![];
     for y in 0..len {
         tiles.push(TemplateEntry {
-            variant: 0,
+            tile_id: TileId::new(0, 0, 0, false, false, false),
             offset_x: 0,
+            offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 1,
         });
@@ -610,29 +710,30 @@ fn build_folded_switch(
         // We can just copy the 0,0 straight track into here
 
         let switch_primary = TemplateEntry {
-            variant: TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false)
-                .block_variant(),
+            tile_id: TileId::new(switch_xmin, switch_ymin + y, 0, false, false, false),
             offset_x: 1,
+            offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 2,
         };
         let switch_secondary = TemplateEntry {
-            variant: TileId::new(switch_xmin + 1, switch_ymin + y, 0, false, false, false)
-                .block_variant(),
+            tile_id: TileId::new(switch_xmin + 1, switch_ymin + y, 0, false, false, false),
             offset_x: 0,
+            offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 2,
         };
         let diag_primary = TemplateEntry {
-            variant: TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false).block_variant(),
+            tile_id: TileId::new(diag_xmin, diag_ymin + y, 0, false, false, false),
             offset_x: 1,
+            offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 1,
         };
         let diag_secondary = TemplateEntry {
-            variant: TileId::new(diag_xmin + 1, diag_ymin + y, 0, false, false, false)
-                .block_variant(),
+            tile_id: TileId::new(diag_xmin + 1, diag_ymin + y, 0, false, false, false),
             offset_x: 0,
+            offset_y: 0,
             offset_z: y as i32,
             tracks_consumed: 1,
         };
@@ -647,29 +748,30 @@ fn build_folded_switch(
         diag_template_tiles.push(diag_secondary);
 
         let switch_farside = TemplateEntry {
-            variant: TileId::new(switch_xmin + 1, switch_ymin + y, 2, false, false, false)
-                .block_variant(),
+            tile_id: TileId::new(switch_xmin + 1, switch_ymin + y, 2, false, false, false),
             offset_x: 1,
+            offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 2,
         };
         let switch_farside_secondary = TemplateEntry {
-            variant: TileId::new(switch_xmin, switch_ymin + y, 2, false, false, false)
-                .block_variant(),
+            tile_id: TileId::new(switch_xmin, switch_ymin + y, 2, false, false, false),
             offset_x: 0,
+            offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 2,
         };
         let diag_farside = TemplateEntry {
-            variant: TileId::new(diag_xmin + 1, diag_ymin + y, 2, false, false, false)
-                .block_variant(),
+            tile_id: TileId::new(diag_xmin + 1, diag_ymin + y, 2, false, false, false),
             offset_x: 1,
+            offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 1,
         };
         let diag_farside_secondary = TemplateEntry {
-            variant: TileId::new(diag_xmin, diag_ymin + y, 2, false, false, false).block_variant(),
+            tile_id: TileId::new(diag_xmin, diag_ymin + y, 2, false, false, false),
             offset_x: 0,
+            offset_y: 0,
             offset_z: (2 * switch_half_len - 1 - y) as i32,
             tracks_consumed: 1,
         };
@@ -966,15 +1068,19 @@ fn build_folded_switch(
 lazy_static::lazy_static! {
     static ref TRACK_TILES: [[Option<TrackTile>; 16]; 11] = build_track_tiles().0;
     pub(crate) static ref TRACK_TEMPLATES: Vec<Template> = build_track_tiles().1;
+    static ref SLOPE_TRACKS: [Option<TrackTile>; 16] = build_slope_tiles();
 }
+
+const RAIL_TILES_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
+const RAIL_SIMPLE_TEX: StaticTextureName = StaticTextureName("carts:rail_simple");
+const TRANSPARENT_PIXEL: StaticTextureName = StaticTextureName("carts:transparent_pixel");
 
 pub(crate) fn register_tracks(
     game_builder: &mut crate::game_builder::GameBuilder,
-) -> Result<BlockId> {
+) -> Result<(BlockId, BlockId, [BlockId; 8])> {
     const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
-    const RAIL_TILES_TEX: StaticTextureName = StaticTextureName("carts:rail_tile");
-    const TRANSPARENT_PIXEL: StaticTextureName = StaticTextureName("carts:transparent_pixel");
     include_texture_bytes!(game_builder, RAIL_TILES_TEX, "textures/rail_atlas.png")?;
+    include_texture_bytes!(game_builder, RAIL_SIMPLE_TEX, "textures/rail.png")?;
     include_texture_bytes!(game_builder, TRANSPARENT_PIXEL, "textures/transparent.png")?;
 
     let rail_tile_box = AaBoxProperties::new(
@@ -989,11 +1095,16 @@ pub(crate) fn register_tracks(
     );
     let rail_tile = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:rail_tile"))
-            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
+            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
                 rail_tile_box,
                 (-0.5, 0.5),
-                (-0.5, -0.4),
+                (-0.5, -0.4375),
                 (-0.5, 0.5),
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
             ))
             .set_allow_light_propagation(true)
             .set_display_name("Railway track")
@@ -1020,11 +1131,11 @@ pub(crate) fn register_tracks(
                         .button("scan", "Scan", true, false)
                         .button("multiscan", "Multi-Scan", true, false)
                         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
-                            match handle_popup_response(&response, coord) {
-                                Ok(_) => {},
+                            match handle_popup_response(&response, coord, response.ctx.extension::<CartsGameBuilderExtension>().as_ref().unwrap()) {
+                                Ok(_) => {}
                                 Err(e) => {
                                     response.ctx.initiator().send_chat_message(ChatMessage::new("[ERROR]", "Failed to parse popup response: ".to_string() + &e.to_string())).unwrap();
-                                },
+                                }
                             }
                         }))))
                 }));
@@ -1057,7 +1168,7 @@ pub(crate) fn register_tracks(
                                 }
                             )
                         })
-                    },
+                    }
                     _ => unreachable!()
                 }
             })),
@@ -1070,6 +1181,7 @@ pub(crate) fn register_tracks(
         "textures/curved_rail_item.png"
     )?;
     let rail_tile_id = rail_tile.id;
+    let mut rail_slopes_8 = [BlockId::from(0); 8];
     game_builder.inner.items_mut().register_item(Item {
         proto: protocol::items::ItemDef {
             short_name: "carts:rail_curve".to_string(),
@@ -1119,6 +1231,11 @@ pub(crate) fn register_tracks(
         })),
     })?;
 
+    for i in 0..8 {
+        rail_slopes_8[i] = register_rail_slope(game_builder, i as u8 + 1, 8)?;
+    }
+    let rail_slope_1 = register_rail_slope(game_builder, 1, 1)?;
+
     game_builder.register_crafting_recipe(
         [
             RecipeSlot::Empty,
@@ -1137,7 +1254,218 @@ pub(crate) fn register_tracks(
         false,
     );
 
-    Ok(rail_tile.id)
+    Ok((rail_tile.id, rail_slope_1, rail_slopes_8))
+}
+
+fn register_rail_slope(
+    game_builder: &mut crate::game_builder::GameBuilder,
+    numerator: u8,
+    denominator: u8,
+) -> Result<BlockId> {
+    let rail_tile_box = AaBoxProperties::new(
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        RAIL_SIMPLE_TEX,
+        RAIL_SIMPLE_TEX,
+        TRANSPARENT_PIXEL,
+        TRANSPARENT_PIXEL,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::RotateHorizontally,
+    );
+    let y_bottom = (numerator as f32 - 0.5) / (denominator as f32) - 0.5;
+    let y_top = y_bottom + (1.0 / 16.0);
+
+    game_builder
+        .add_block(
+            BlockBuilder::new(BlockName(format!("rail_slope_{numerator}_{denominator}")))
+                .set_axis_aligned_boxes_appearance(
+                    AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
+                        rail_tile_box,
+                        (-0.5, 0.5),
+                        (y_bottom, y_top),
+                        (-0.5, 0.5),
+                        0,
+                        0.0,
+                        1.0 / (denominator as f32),
+                        0.0,
+                        1.0 / (denominator as f32),
+                    ),
+                )
+                .set_allow_light_propagation(true)
+                .set_display_name(format!("Slope {numerator}/{denominator}"))
+                .add_modifier(Box::new(|bt| {
+                    bt.interact_key_handler = Some(Box::new(|ctx, coord| {
+                        let block = ctx.game_map().get_block(coord)?;
+                        let tile_id = TileId::from_variant(block.variant(), false, false);
+                        ctx.initiator().send_chat_message(ChatMessage::new(
+                            "[INFO]",
+                            format!("{:?}", tile_id),
+                        ))?;
+
+                        Ok(Some(
+                            ctx.new_popup()
+                                .title("Mr. Yellow")
+                                .label("Update tile:")
+                                .text_field(
+                                    "tile_x",
+                                    "Tile X",
+                                    tile_id.x().to_string(),
+                                    true,
+                                    false,
+                                )
+                                .text_field(
+                                    "tile_y",
+                                    "Tile Y",
+                                    tile_id.y().to_string(),
+                                    true,
+                                    false,
+                                )
+                                .text_field(
+                                    "rotation",
+                                    "Rotation",
+                                    tile_id.rotation().to_string(),
+                                    true,
+                                    false,
+                                )
+                                .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
+                                .button("apply", "Apply", true, true)
+                                .label("Scan tile:")
+                                .checkbox("reverse", "Reverse", false, true)
+                                .checkbox("diverging", "Diverging", false, true)
+                                .button("scan", "Scan", true, false)
+                                .button("multiscan", "Multi-Scan", true, false)
+                                .set_button_callback(Box::new(
+                                    move |response: PopupResponse<'_>| match handle_popup_response(
+                                        &response,
+                                        coord,
+                                        response.ctx.extension().as_ref().unwrap(),
+                                    ) {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            response
+                                                .ctx
+                                                .initiator()
+                                                .send_chat_message(ChatMessage::new(
+                                                    "[ERROR]",
+                                                    "Failed to parse popup response: ".to_string()
+                                                        + &e.to_string(),
+                                                ))
+                                                .unwrap();
+                                        }
+                                    },
+                                )),
+                        ))
+                    }));
+                })),
+        )
+        .map(|b| b.id)
+}
+
+fn build_slope_tiles() -> [Option<TrackTile>; 16] {
+    let mut result = [None; 16];
+    // the 1/1 steep track
+    result[0] = Some(TrackTile {
+        next_delta: EncodedDelta::new_y_up(0, 1),
+        prev_delta: EncodedDelta::new(0, -1),
+        next_diverging_delta: EncodedDelta::empty(),
+        prev_diverging_delta: EncodedDelta::empty(),
+        secondary_coord: EncodedDelta::empty(),
+        secondary_tile: [TileId::empty(); 2],
+        tertiary_coord: EncodedDelta::empty(),
+        tertiary_tile: TileId::empty(),
+        allowed_next_tiles: [
+            // connects to a straight track
+            TileId::new(0, 0, 0, false, false, false),
+            TileId::empty(),
+            TileId::empty(),
+        ],
+        allowed_next_diverging_tiles: [TileId::empty(); 2],
+        allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
+        allowed_prev_diverging_tiles: [TileId::empty(); 2],
+        straight_track_eligible_connections: (
+            // We can enter this track in its forward scan direction
+            TileId::new(0, 0, 0, false, false, false)
+                .rotation_flip_bitset_mask()
+                // including ff X is flipped
+                | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
+        ),
+        // Slopes are special: we enter them in reverse from a straight track one level HIGHER
+        // Therefore, this case cannot be encoded in this field.
+        reverse_straight_track_eligible_connections: 0,
+        diverging_straight_track_eligible_connections: 0,
+        reverse_diverging_straight_track_eligible_connections: 0,
+        physical_x_offset: 0,
+        physical_z_offset: 0,
+        diverging_physical_x_offset: 0,
+        diverging_physical_z_offset: 0,
+        max_speed: 6,
+        diverging_max_speed: 6,
+        straight_through_spawn_dirs: 0b0100_0001,
+        diverging_dirs_spawn_dirs: 0,
+        switch_length: 0,
+    });
+    // The 1/8 slope tiles will use slots 1-8
+    for i in 1..=8 {
+        result[i] = Some(TrackTile {
+            next_delta: if i == 8 {
+                EncodedDelta::new_y_up(0, 1)
+            } else {
+                EncodedDelta::new(0, 1)
+            },
+            prev_delta: EncodedDelta::new(0, -1),
+            next_diverging_delta: EncodedDelta::empty(),
+            prev_diverging_delta: EncodedDelta::empty(),
+            secondary_coord: EncodedDelta::empty(),
+            secondary_tile: [TileId::empty(); 2],
+            tertiary_coord: EncodedDelta::empty(),
+            tertiary_tile: TileId::empty(),
+            allowed_next_tiles: [
+                // connects to a straight track
+                if i == 8 {
+                    TileId::new(0, 0, 0, false, false, false)
+                } else {
+                    TileId::new_slope((i + 1) as u16, 8, 0, false)
+                },
+                TileId::empty(),
+                TileId::empty(),
+            ],
+            allowed_next_diverging_tiles: [TileId::empty(); 2],
+            allowed_prev_tiles: [
+                if i == 1 {
+                    TileId::new(0, 0, 2, false, false, false)
+                } else {
+                    TileId::new_slope((i - 1) as u16, 8, 0, true)
+                },
+                TileId::empty(),
+            ],
+            allowed_prev_diverging_tiles: [TileId::empty(); 2],
+            straight_track_eligible_connections: if i == 1 {
+                // We can enter this track in its forward scan direction
+                TileId::new(0, 0, 0, false, false, false)
+                    .rotation_flip_bitset_mask()
+                    // including if X is flipped
+                    | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
+            } else {
+                0
+            },
+            // Slopes are special: we enter them in reverse from a straight track one level HIGHER
+            // Therefore, this case cannot be encoded in this field. Instead, we check the
+            // denominator accordingly.
+            reverse_straight_track_eligible_connections: 0,
+            diverging_straight_track_eligible_connections: 0,
+            reverse_diverging_straight_track_eligible_connections: 0,
+            physical_x_offset: 0,
+            physical_z_offset: 0,
+            diverging_physical_x_offset: 0,
+            diverging_physical_z_offset: 0,
+            max_speed: 6,
+            diverging_max_speed: 6,
+            straight_through_spawn_dirs: 0b0100_0001,
+            diverging_dirs_spawn_dirs: 0,
+            switch_length: 0,
+        });
+    }
+    result
 }
 
 pub(crate) enum ScanOutcome {
@@ -1156,31 +1484,34 @@ pub(crate) struct ScanState {
     pub(crate) block_coord: BlockCoordinate,
     pub(crate) is_reversed: bool,
     pub(crate) is_diverging: bool,
-    pub(crate) base_track_block: BlockId,
     pub(crate) allowable_speed: f32,
     pub(crate) odometer: f64,
     current_tile_id: TileId,
 }
+
 impl ScanState {
     pub(crate) fn spawn_at(
         block_coord: BlockCoordinate,
         az_direction: u8,
-        base_track_block: BlockId,
         game_map: &ServerGameMap,
+        cart_config: &CartsGameBuilderExtension,
     ) -> Result<Option<Self>> {
         anyhow::ensure!(az_direction < 4);
         let block = game_map.get_block(block_coord)?;
-        if !block.equals_ignore_variant(base_track_block) {
-            // TODO detect slope tracks and other special tracks
+
+        let tile_id = if block.equals_ignore_variant(cart_config.rail_block) {
+            TileId::from_variant(block.variant(), false, false)
+        } else if let Some((num, den, rotation)) = cart_config.parse_slope(block) {
+            TileId::new_slope(num as u16, den as u16, rotation, false)
+        } else {
             return Ok(None);
-        }
-        let tile_id = TileId::from_variant(block.variant(), false, false);
+        };
         let mut corrected_rotation = (tile_id.rotation() + 4 - az_direction as u16) % 4;
         if tile_id.flip_x() && corrected_rotation & 1 == 1 {
             // If the corrected rotation is horizontal w.r.t. the tile, flip it over.
             corrected_rotation ^= 2;
         }
-        let tile = match TRACK_TILES[tile_id.x() as usize][tile_id.y() as usize] {
+        let tile = match get_track_tile(tile_id) {
             Some(tile) => tile,
             None => return Ok(None),
         };
@@ -1210,7 +1541,6 @@ impl ScanState {
             block_coord,
             is_reversed,
             is_diverging,
-            base_track_block,
             allowable_speed: if is_diverging {
                 tile.diverging_max_speed as f32
             } else {
@@ -1221,20 +1551,26 @@ impl ScanState {
         }))
     }
 
-    // Test only, prototype version that logs lots of details about each calculation
     pub(crate) fn advance<const CHATTY: bool>(
         &self,
         get_block: impl Fn(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
+        cart_config: &CartsGameBuilderExtension,
     ) -> Result<ScanOutcome> {
+        if CHATTY {
+            tracing::info!("{:?}", cart_config);
+        }
+
         let block = match get_block(self.block_coord) {
-            DeferrableResult::AvailableNow(block) => block,
+            DeferrableResult::AvailableNow(block) => block?,
             DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
         };
 
-        let variant = block.unwrap().variant();
-        let current_tile_id = TileId::from_variant(variant, self.is_reversed, self.is_diverging);
+        let current_tile_id = match self.parse_block_id::<CHATTY>(block, cart_config) {
+            Some(value) => value,
+            None => return Ok(ScanOutcome::NotOnTrack),
+        };
         if !current_tile_id.present() {}
-        let tile = TRACK_TILES[current_tile_id.x() as usize][current_tile_id.y() as usize];
+        let tile = get_track_tile(current_tile_id);
         if CHATTY {
             tracing::info!("{:?}:\n {:?}", current_tile_id, tile);
         }
@@ -1242,6 +1578,14 @@ impl ScanState {
             Some(tile) => tile,
             None => return Ok(ScanOutcome::NotOnTrack),
         };
+
+        let eligible_tiles = match (self.is_reversed, self.is_diverging) {
+            (false, false) => current_tile_def.allowed_next_tiles.as_slice(),
+            (false, true) => current_tile_def.allowed_next_diverging_tiles.as_slice(),
+            (true, false) => current_tile_def.allowed_prev_tiles.as_slice(),
+            (true, true) => current_tile_def.allowed_prev_diverging_tiles.as_slice(),
+        };
+
         // The next place we would scan
 
         let next_delta = match (self.is_reversed, self.is_diverging) {
@@ -1271,27 +1615,13 @@ impl ScanState {
             DeferrableResult::AvailableNow(block) => block.unwrap(),
             DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
         };
-        if !next_block.equals_ignore_variant(self.base_track_block) {
-            if CHATTY {
-                tracing::info!("Next block: {:?} is not the base track", next_block);
-            }
-            return Ok(ScanOutcome::CannotAdvance);
-        }
-        let next_variant = next_block.variant();
+        let next_tile_id = self
+            .parse_block_id::<CHATTY>(next_block, cart_config)
+            .unwrap_or_else(|| TileId::empty());
 
-        // This is the tile we see at the next coordinate. Does it match?
-        let next_tile_id = TileId::from_variant(next_variant, self.is_reversed, self.is_diverging);
         if CHATTY {
             tracing::info!("Next tile: {:?}", next_tile_id);
         }
-
-        // TODO: Does this generate rancid assembly because of the mismatched lengths?
-        let eligible_tiles = match (self.is_reversed, self.is_diverging) {
-            (false, false) => current_tile_def.allowed_next_tiles.as_slice(),
-            (false, true) => current_tile_def.allowed_next_diverging_tiles.as_slice(),
-            (true, false) => current_tile_def.allowed_prev_tiles.as_slice(),
-            (true, true) => current_tile_def.allowed_prev_diverging_tiles.as_slice(),
-        };
 
         // When we check the tile IDs allowed, its rotation would be this
         // (we subtract the current tile ID's rotation from the next tile ID's real rotation, since
@@ -1313,6 +1643,7 @@ impl ScanState {
             if !proposed_tile_id.present() {
                 continue;
             }
+            // (0,0) is special: it means any of the straight track eligible connections
             if proposed_tile_id.x() == 0 && proposed_tile_id.y() == 0 {
                 // we need another rotation correction here...
                 // This time, we want to subtract the adjustment made by the straight track entry, since we need
@@ -1331,9 +1662,7 @@ impl ScanState {
                     );
                 }
 
-                if let Some(tile) =
-                    TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize]
-                {
+                if let Some(tile) = get_track_tile(next_tile_id) {
                     let mask =
                         straight_track_rotation_corrected_tile_id.rotation_flip_bitset_mask();
                     if tile.straight_track_eligible_connections & mask != 0 {
@@ -1353,6 +1682,51 @@ impl ScanState {
                         break;
                     }
                 }
+                if let Some(neighbor_below) = next_coord.try_delta(0, -1, 0) {
+                    if CHATTY {
+                        tracing::info!("Checking downward slope at {:?}", neighbor_below);
+                    }
+                    let block_below = match get_block(neighbor_below) {
+                        DeferrableResult::AvailableNow(block) => block.unwrap(),
+                        DeferrableResult::Deferred(deferral) => {
+                            return Ok(ScanOutcome::Deferral(deferral));
+                        }
+                    };
+                    if let Some((num, den, rotation)) = cart_config.parse_slope(block_below) {
+                        if CHATTY {
+                            tracing::info!("Found slope: {} / {} @ {}", num, den, rotation);
+                            tracing::info!(
+                                "rotation_corrected_next_tile_id rotation {}",
+                                rotation_corrected_next_tile_id.rotation()
+                            );
+                            tracing::info!("proposed rotation {}", proposed_tile_id.rotation());
+                        }
+                        // To start a downward slope, we need the numerator and denominator to match
+                        if num == den {
+                            // The direction we expect to point when we hit the slope
+                            let expected_downslope_direction = (rotation_corrected_next_tile_id
+                                .rotation()
+                                + proposed_tile_id.rotation())
+                                & 3;
+                            // we are going down the slope, so we need to flip the rotation
+                            if expected_downslope_direction ^ 2 == rotation {
+                                if CHATTY {
+                                    tracing::info!(
+                                        "Corrected rotation: {} -> {} matches",
+                                        rotation,
+                                        rotation ^ 2
+                                    );
+                                }
+                                return Ok(ScanOutcome::Success(self.build_next_state(
+                                    neighbor_below,
+                                    TileId::new_slope(num as u16, den as u16, rotation ^ 2, false),
+                                    true,
+                                    false,
+                                )));
+                            }
+                        }
+                    }
+                }
             } else if rotation_corrected_next_tile_id.same_variant(proposed_tile_id) {
                 matching_tile_id = proposed_tile_id;
             }
@@ -1365,7 +1739,7 @@ impl ScanState {
         }
 
         // Now check secondary and tertiary tiles
-        let next_tile = match TRACK_TILES[next_tile_id.x() as usize][next_tile_id.y() as usize] {
+        let next_tile = match get_track_tile(next_tile_id) {
             Some(tile) => tile,
             None => {
                 if CHATTY {
@@ -1392,7 +1766,7 @@ impl ScanState {
                 DeferrableResult::AvailableNow(block) => block.unwrap(),
                 DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
             };
-            if !secondary_block.equals_ignore_variant(self.base_track_block) {
+            if !secondary_block.equals_ignore_variant(cart_config.rail_block) {
                 if CHATTY {
                     tracing::info!(
                         "Secondary block: {:?} is not the base track",
@@ -1455,7 +1829,7 @@ impl ScanState {
                 DeferrableResult::AvailableNow(block) => block.unwrap(),
                 DeferrableResult::Deferred(deferral) => return Ok(ScanOutcome::Deferral(deferral)),
             };
-            if !tertiary_block.equals_ignore_variant(self.base_track_block) {
+            if !tertiary_block.equals_ignore_variant(cart_config.rail_block) {
                 if CHATTY {
                     tracing::info!("Tertiary block: {:?} is not the base track", tertiary_block);
                 }
@@ -1487,31 +1861,74 @@ impl ScanState {
             }
         }
 
+        if CHATTY {
+            tracing::info!("Found matching tile: {:?}", matching_tile_id,);
+        }
+        assert!(matching_tile_id.present());
+        assert!(next_tile_id.present());
+        Ok(ScanOutcome::Success(self.build_next_state(
+            next_coord,
+            next_tile_id,
+            matching_tile_id.reverse(),
+            matching_tile_id.diverging(),
+        )))
+    }
+
+    #[inline]
+    fn build_next_state(
+        &self,
+        next_coord: BlockCoordinate,
+        next_tile_id: TileId,
+        reverse: bool,
+        diverging: bool,
+    ) -> ScanState {
         let mut next_state = self.clone();
+        let next_tile = get_track_tile(next_tile_id).unwrap();
 
         next_state.block_coord = next_coord;
-        next_state.is_reversed = matching_tile_id.reverse();
-        next_state.is_diverging = matching_tile_id.diverging();
+        next_state.is_reversed = reverse;
+        next_state.is_diverging = diverging;
         next_state.current_tile_id = next_tile_id;
-        next_state.allowable_speed = if matching_tile_id.diverging() {
+        next_state.allowable_speed = if diverging {
             next_tile.diverging_max_speed as f32
         } else {
             next_tile.max_speed as f32
         };
         next_state.odometer =
             self.odometer + (self.vec_coord() - next_state.vec_coord()).magnitude();
+        next_state
+    }
 
-        if CHATTY {
-            tracing::info!("Found matching tile: {:?}", matching_tile_id,);
+    fn parse_block_id<const CHATTY: bool>(
+        &self,
+        next_block: BlockId,
+        cart_config: &CartsGameBuilderExtension,
+    ) -> Option<TileId> {
+        if next_block.equals_ignore_variant(cart_config.rail_block) {
+            let next_variant = next_block.variant();
+            Some(TileId::from_variant(
+                next_variant,
+                self.is_reversed,
+                self.is_diverging,
+            ))
+        } else if let Some((num, den, rotation)) = cart_config.parse_slope(next_block) {
+            Some(TileId::new_slope(
+                num as u16,
+                den as u16,
+                rotation,
+                self.is_reversed,
+            ))
+        } else {
+            if CHATTY {
+                tracing::info!("block: {:?} is not the base track", next_block);
+            }
+            None
         }
-
-        Ok(ScanOutcome::Success(next_state))
     }
 
     pub(crate) fn signal_rotation_ok(&self, rotation: u16) -> bool {
         let rotation = rotation & 3;
-        let tile =
-            TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
+        let tile = get_track_tile(self.current_tile_id);
         let tile = match tile {
             Some(tile) => tile,
             None => {
@@ -1535,8 +1952,7 @@ impl ScanState {
 
     pub(crate) fn signal_reversed_rotation_ok(&self, rotation: u16) -> bool {
         let rotation = rotation & 3;
-        let tile =
-            TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
+        let tile = get_track_tile(self.current_tile_id);
         let tile = match tile {
             Some(tile) => tile,
             None => {
@@ -1559,8 +1975,7 @@ impl ScanState {
     }
 
     pub(crate) fn get_switch_length(&self) -> Option<NonZeroU8> {
-        let tile =
-            TRACK_TILES[self.current_tile_id.x() as usize][self.current_tile_id.y() as usize];
+        let tile = get_track_tile(self.current_tile_id);
         let tile = match tile {
             Some(tile) => tile,
             None => {
@@ -1592,36 +2007,88 @@ impl ScanState {
 
     pub(crate) fn vec_coord(&self) -> Vector3<f64> {
         let base_coord = b2vec(self.block_coord);
-        let tile = match TRACK_TILES[self.current_tile_id.x() as usize]
-            [self.current_tile_id.y() as usize]
-        {
-            Some(tile) => tile,
-            None => {
-                return base_coord;
+        if !self.current_tile_id.present() {
+            return base_coord;
+        }
+        let (offset_x, offset_y, offset_z) = if self.current_tile_id.is_slope_encoding() {
+            let num = self.current_tile_id.x() as u32;
+            let denom = self.current_tile_id.y() as u32;
+            (0, (128 * (2 * num - 1)) / (2 * denom), 0)
+        } else {
+            let tile = match get_track_tile(self.current_tile_id) {
+                Some(tile) => tile,
+                None => {
+                    return base_coord;
+                }
+            };
+
+            let offset_x = if self.is_diverging {
+                tile.diverging_physical_x_offset
+            } else {
+                tile.physical_x_offset
+            };
+            let offset_z = if self.is_diverging {
+                tile.diverging_physical_z_offset
+            } else {
+                tile.physical_z_offset
+            };
+            let (offset_x, offset_z) = eval_rotation(
+                offset_x,
+                offset_z,
+                self.current_tile_id.flip_x(),
+                self.current_tile_id.rotation(),
+            );
+            (offset_x, 0, offset_z)
+        };
+        base_coord
+            + vec3(
+                offset_x as f64 / 128.0,
+                offset_y as f64 / 128.0,
+                offset_z as f64 / 128.0,
+            )
+    }
+}
+
+fn get_track_tile(id: TileId) -> Option<TrackTile> {
+    if !id.present() {
+        return None;
+    }
+    if id.is_slope_encoding() {
+        match id.y() {
+            1 => {
+                if id.x() == 1 {
+                    return SLOPE_TRACKS[0];
+                } else {
+                    return None;
+                }
             }
-        };
-        let offset_x = if self.is_diverging {
-            tile.diverging_physical_x_offset
-        } else {
-            tile.physical_x_offset
-        };
-        let offset_z = if self.is_diverging {
-            tile.diverging_physical_z_offset
-        } else {
-            tile.physical_z_offset
-        };
-        let (offset_x, offset_z) = eval_rotation(
-            offset_x,
-            offset_z,
-            self.current_tile_id.flip_x(),
-            self.current_tile_id.rotation(),
-        );
-        base_coord + vec3(offset_x as f64 / 128.0, 0.0, offset_z as f64 / 128.0)
+            8 => {
+                if id.x() == 0 || id.x() > 8 {
+                    return None;
+                } else {
+                    return SLOPE_TRACKS[id.x() as usize];
+                }
+            }
+            _ => return None,
+        }
+    }
+    TRACK_TILES[id.x() as usize][id.y() as usize]
+}
+
+const fn allowable_speed_for_slope(den: u8) -> f32 {
+    match den {
+        1 => 6.0,
+        8 => 60.0,
+        _ => unreachable!(),
     }
 }
 
 // test only
-fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
+fn handle_popup_response(
+    response: &PopupResponse,
+    coord: BlockCoordinate,
+    cart_config: &CartsGameBuilderExtension,
+) -> Result<()> {
     match &response.user_action {
         PopupAction::ButtonClicked(x) => match x.as_str() {
             "apply" => {
@@ -1665,17 +2132,15 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .checkbox_values
                         .get("diverging")
                         .context("missing diverging")?,
-                    base_track_block: response
-                        .ctx
-                        .block_types()
-                        .get_by_name("carts:rail_tile")
-                        .unwrap(),
                     allowable_speed: 90.0,
                     // dummy
                     current_tile_id: TileId::empty(),
                     odometer: 0.0,
                 };
-                state.advance::<true>(|coord| response.ctx.game_map().get_block(coord).into())?;
+                state.advance::<true>(
+                    |coord| response.ctx.game_map().get_block(coord).into(),
+                    cart_config,
+                )?;
             }
             "multiscan" => {
                 let mut state = ScanState {
@@ -1688,11 +2153,6 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         .checkbox_values
                         .get("diverging")
                         .context("missing diverging")?,
-                    base_track_block: response
-                        .ctx
-                        .block_types()
-                        .get_by_name("carts:rail_tile")
-                        .unwrap(),
                     allowable_speed: 90.0,
                     // dummy
                     current_tile_id: TileId::empty(),
@@ -1702,9 +2162,10 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     for _ in 0..20 {
                         let prev = state.vec_coord() + vec3(0.0, 1.0, 0.0);
 
-                        match state
-                            .advance::<true>(|coord| ctx.game_map().get_block(coord).into())?
-                        {
+                        match state.advance::<true>(
+                            |coord| ctx.game_map().get_block(coord).into(),
+                            ctx.extension().as_ref().unwrap(),
+                        )? {
                             ScanOutcome::Success(s) => {
                                 state = s;
                             }
@@ -1737,11 +2198,13 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TemplateEntry {
-    pub(crate) variant: u16,
+    pub(crate) tile_id: TileId,
     pub(crate) offset_x: i32,
+    pub(crate) offset_y: i32,
     pub(crate) offset_z: i32,
     pub(crate) tracks_consumed: u8,
 }
+
 #[derive(Clone, Debug)]
 pub(crate) struct Template {
     pub(crate) category: String,
@@ -1750,4 +2213,40 @@ pub(crate) struct Template {
     pub(crate) id: String,
     pub(crate) entries: Box<[TemplateEntry]>,
     pub(crate) bifurcate: bool,
+}
+
+pub(crate) fn build_block(
+    config: &CartsGameBuilderExtension,
+    tile_id: TileId,
+    extra_rotation: u16,
+    flip_x: bool,
+) -> Option<BlockId> {
+    let adjusted_rotation = ((tile_id.rotation()) + (extra_rotation & 3)) & 3;
+    let mut adjusted_variant = (tile_id.block_variant() & !3) | adjusted_rotation;
+
+    if tile_id.is_slope_encoding() {
+        match tile_id.y() {
+            1 => {
+                if tile_id.x() == 1 {
+                    Some(config.rail_slope_1.with_variant(adjusted_variant).unwrap())
+                } else {
+                    None
+                }
+            }
+            8 => match tile_id.x() {
+                1..=8 => Some(
+                    config.rail_slopes_8[(tile_id.x() - 1) as usize]
+                        .with_variant(adjusted_variant)
+                        .unwrap(),
+                ),
+                _ => None,
+            },
+            _ => None,
+        }
+    } else {
+        if flip_x {
+            adjusted_variant |= c::FLIP_X_BIT;
+        }
+        Some(config.rail_block.with_variant(adjusted_variant).unwrap())
+    }
 }

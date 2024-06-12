@@ -45,9 +45,11 @@ mod signals;
 mod track_tool;
 mod tracks;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CartsGameBuilderExtension {
     rail_block: BlockId,
+    rail_slope_1: BlockId,
+    rail_slopes_8: [BlockId; 8],
     speedpost_1: BlockId,
     speedpost_2: BlockId,
     speedpost_3: BlockId,
@@ -72,11 +74,29 @@ impl CartsGameBuilderExtension {
             None
         }
     }
+
+    // Returns (numerator, denominator, rotation)
+    fn parse_slope(&self, block: BlockId) -> Option<(u8, u8, u16)> {
+        if self.rail_slope_1.equals_ignore_variant(block) {
+            Some((1, 1, block.variant() & 0b11))
+        } else if let Some(idx) = self
+            .rail_slopes_8
+            .iter()
+            .position(|b| b.equals_ignore_variant(block))
+        {
+            let numerator = idx as u8 + 1;
+            Some((numerator, 8, block.variant() & 0b11))
+        } else {
+            None
+        }
+    }
 }
 impl Default for CartsGameBuilderExtension {
     fn default() -> Self {
         CartsGameBuilderExtension {
             rail_block: 0.into(),
+            rail_slope_1: 0.into(),
+            rail_slopes_8: [0.into(); 8],
             speedpost_1: 0.into(),
             speedpost_2: 0.into(),
             speedpost_3: 0.into(),
@@ -185,10 +205,12 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     let (automatic_signal, interlocking_signal, starting_signal) =
         signals::register_signal_block(game_builder)?;
 
-    let rail_block_id = tracks::register_tracks(game_builder)?;
+    let (rail_block_id, rail_slope_1, rail_slopes_8) = tracks::register_tracks(game_builder)?;
 
     let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
     ext.rail_block = rail_block_id;
+    ext.rail_slope_1 = rail_slope_1;
+    ext.rail_slopes_8 = rail_slopes_8;
     ext.speedpost_1 = speedpost1.id;
     ext.speedpost_2 = speedpost2.id;
     ext.speedpost_3 = speedpost3.id;
@@ -306,12 +328,8 @@ fn actually_spawn_cart(
     rail_pos: BlockCoordinate,
     variant: u16,
 ) -> Result<()> {
-    let initial_state = tracks::ScanState::spawn_at(
-        rail_pos,
-        (variant as u8 + 2) % 4,
-        ctx.block_types().get_by_name("carts:rail_tile").unwrap(),
-        ctx.game_map(),
-    )?;
+    let initial_state =
+        tracks::ScanState::spawn_at(rail_pos, (variant as u8 + 2) % 4, ctx.game_map(), &config)?;
     let initial_state = match initial_state {
         Some(x) => x,
         None => {
@@ -831,7 +849,7 @@ impl CartCoroutine {
             && buffer_time_estimate < (2.0 + 2.0 * estimated_max_speed / MAX_ACCEL as f32)
         {
             // Precondition: self.scan_state is valid
-            let new_state = match self.scan_state.advance::<false>(block_getter) {
+            let new_state = match self.scan_state.advance::<false>(block_getter, &self.config) {
                 Ok(tracks::ScanOutcome::Success(state)) => state,
                 Ok(tracks::ScanOutcome::CannotAdvance) => break 'scan_loop,
                 Ok(tracks::ScanOutcome::NotOnTrack) => {

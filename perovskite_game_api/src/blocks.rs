@@ -1032,6 +1032,36 @@ impl AxisAlignedBoxesAppearanceBuilder {
         z: (f32, f32),
         variant_mask: u32,
     ) -> Self {
+        self.add_box_with_variant_mask_and_slope(
+            box_properties,
+            x,
+            y,
+            z,
+            variant_mask,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    }
+
+    /// Same as [`AxisAlignedBoxesAppearanceBuilder::add_box_with_variant_mask`] but with an additional slope_x and slope_z.
+    /// If the slopes are 0.0, the top face is flat. Otherwise, the top face slopes with the actual top y equal to
+    /// y.1 + (x*slope_x) + (z*slope_z). If the axis-aligned box is configured to rotate, then rotation is applied after the slope calculation.
+    pub fn add_box_with_variant_mask_and_slope(
+        mut self,
+        box_properties: AaBoxProperties,
+        x: (f32, f32),
+        y: (f32, f32),
+        z: (f32, f32),
+        variant_mask: u32,
+        top_slope_x: f32,
+        top_slope_z: f32,
+        bottom_slope_x: f32,
+        bottom_slope_z: f32,
+    ) -> Self {
+        // TODO: When slope is nonzero and the crop mode is set to autocrop, we need
+        // to adjust the corners of the texture to account for the slope.
         self.proto.boxes.push(AxisAlignedBox {
             x_min: x.0,
             x_max: x.1,
@@ -1080,6 +1110,10 @@ impl AxisAlignedBoxesAppearanceBuilder {
                 RotationMode::RotateHorizontally => AxisAlignedBoxRotation::Nesw.into(),
             },
             variant_mask,
+            top_slope_x,
+            top_slope_z,
+            bottom_slope_x,
+            bottom_slope_z,
         });
         self
     }

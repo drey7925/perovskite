@@ -88,6 +88,13 @@ message AxisAlignedBox {
   AxisAlignedBoxRotation rotation = 13;
   // If nonzero, this box will only be rendered if variant & variant_mask != 0.
   uint32 variant_mask = 14;
+
+  // If set, transform y values on the top face from y_max to (y_max + top_slope_x * x + top_slope_z * z)
+  float top_slope_x = 15;
+  float top_slope_z = 16;
+  // Same, but for the bottom face
+  float bottom_slope_x = 17;
+  float bottom_slope_z = 18;
 }
 
 enum AxisAlignedBoxRotation {

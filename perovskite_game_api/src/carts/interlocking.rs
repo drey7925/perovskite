@@ -516,8 +516,10 @@ fn single_pathfind_attempt(
             clear_switch,
             speed_post,
         });
-        let new_state =
-            state.advance::<false>(|coord| handler_context.game_map().get_block(coord).into())?;
+        let new_state = state.advance::<false>(
+            |coord| handler_context.game_map().get_block(coord).into(),
+            cart_config,
+        )?;
         match new_state {
             super::tracks::ScanOutcome::Success(new_state) => {
                 state = new_state;

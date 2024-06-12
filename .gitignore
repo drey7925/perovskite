@@ -3,3 +3,4 @@ rust-toolchain.toml
 /.vscode
 dhat-heap.json
 *.log
+/.idea

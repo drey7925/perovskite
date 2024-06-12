@@ -234,6 +234,19 @@ impl CubeExtents {
     fn force_face(&self, i: usize) -> bool {
         self.force[i]
     }
+
+    fn warp_top_inplace(&mut self, top_slope_x: f32, top_slope_z: f32) {
+        for idx in [0, 1, 4, 5] {
+            self.vertices[idx].y +=
+                top_slope_x * self.vertices[idx].x + top_slope_z * self.vertices[idx].z;
+        }
+    }
+    fn warp_bottom_inplace(&mut self, bottom_slope_x: f32, bottom_slope_z: f32) {
+        for idx in [2, 3, 6, 7] {
+            self.vertices[idx].y +=
+                bottom_slope_x * self.vertices[idx].x + bottom_slope_z * self.vertices[idx].z;
+        }
+    }
 }
 
 #[inline]
@@ -1078,11 +1091,14 @@ fn build_axis_aligned_box_cache_entry(
     if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
         let mut result = Vec::new();
         for (i, aa_box) in aa_boxes.boxes.iter().enumerate() {
-            let extents = CubeExtents::new(
+            let mut extents = CubeExtents::new(
                 (aa_box.x_min, aa_box.x_max),
                 (-aa_box.y_max, -aa_box.y_min),
                 (aa_box.z_min, aa_box.z_max),
             );
+            // Negate to go from API coordinates to Vulkan coordinates
+            extents.warp_top_inplace(-aa_box.top_slope_x, -aa_box.top_slope_z);
+            extents.warp_bottom_inplace(-aa_box.bottom_slope_x, -aa_box.bottom_slope_z);
             let textures = [
                 get_texture(texture_coords, aa_box.tex_right.as_ref(), w, h),
                 get_texture(texture_coords, aa_box.tex_left.as_ref(), w, h),

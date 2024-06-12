@@ -1,5 +1,6 @@
 use std::ops::ControlFlow;
 
+use crate::carts::tracks::{build_block, TileId};
 use crate::{
     blocks::variants::rotate_nesw_azimuth_to_variant,
     game_builder::{GameBuilder, StaticTextureName},
@@ -205,21 +206,19 @@ fn build_track(
     for tile in template.entries.iter() {
         let (cx, cz) = eval_rotation(tile.offset_x, tile.offset_z, flip, face_dir_as_variant);
         let coord = initial_coord
-            .try_delta(cx as i32, 0, cz as i32)
+            .try_delta(cx as i32, tile.offset_y, cz as i32)
             .with_context(|| {
                 format!(
                     "Out of bounds for {:?} + ({:?}, {:?})",
                     initial_coord, cx, cz
                 )
             })?;
-        let adjusted_rotation = ((tile.variant & 3) + (face_dir_as_variant & 3)) & 3;
-        let mut adjusted_variant = (tile.variant & !3) | adjusted_rotation;
-        if flip {
-            adjusted_variant |= tracks::c::FLIP_X_BIT;
-        }
+        let block = build_block(config, tile.tile_id, face_dir_as_variant, flip)
+            .with_context(|| format!("Invalid tile ID: {:?}", tile.tile_id))
+            .unwrap();
         let outcome = ctx.game_map().mutate_block_atomically(coord, |b, _| {
             if b.equals_ignore_variant(config.rail_block) || trivially_replaceable.contains(*b) {
-                *b = config.rail_block.with_variant(adjusted_variant).unwrap();
+                *b = block;
                 Ok(ControlFlow::Continue(()))
             } else {
                 Ok(ControlFlow::Break("Not either a rail or blank"))
