@@ -107,7 +107,8 @@ impl ActiveGame {
             entity_lock.advance_all_states(start_tick);
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
-                    (player_position, _) = entity.position(start_tick);
+                    player_position =
+                        entity.attach_position(start_tick, &self.client_state.entity_renderer);
                     let debug_speed = entity.debug_speed(start_tick);
                     self.client_state
                         .physics_state

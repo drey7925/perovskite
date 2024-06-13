@@ -8,7 +8,7 @@ use std::{
 // This is a temporary implementation used while developing the entity system
 use anyhow::{Context, Result};
 
-use cgmath::{InnerSpace, Vector3};
+use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
 use perovskite_core::{
     block_id::BlockId,
@@ -89,6 +89,15 @@ impl CartsGameBuilderExtension {
         } else {
             None
         }
+    }
+
+    fn is_any_rail_block(&self, block: BlockId) -> bool {
+        self.rail_block.equals_ignore_variant(block)
+            || self.rail_slope_1.equals_ignore_variant(block)
+            || self
+                .rail_slopes_8
+                .iter()
+                .any(|b| b.equals_ignore_variant(block))
     }
 }
 impl Default for CartsGameBuilderExtension {
@@ -199,6 +208,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         class_name: "carts:high_speed_minecart".to_string(),
         client_info: protocol::entities::EntityAppearance {
             custom_mesh: vec![CART_MESH.clone()],
+            attachment_offset: Some(vec3(0.0, 1.0, 0.0).try_into()?),
+            attachment_offset_in_model_space: false,
         },
     })?;
 
@@ -345,7 +356,7 @@ fn actually_spawn_cart(
     let id = ctx.entities().new_entity_blocking(
         // TODO: support an offset when attaching a player to an entity, so the camera position is right
         // and we don't need to do this hackery
-        initial_state.vec_coord() + cgmath::Vector3::new(0.0, 1.0, 0.0),
+        initial_state.vec_coord(),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
             cart_name: cart_name.to_string(),
@@ -379,7 +390,7 @@ fn actually_spawn_cart(
 }
 
 fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
-    cgmath::Vector3::new(b.x as f64, b.y as f64, b.z as f64)
+    Vector3::new(b.x as f64, b.y as f64, b.z as f64)
 }
 
 /// A segment of track where we know we can run
@@ -450,8 +461,11 @@ impl ScheduledSegment {
             Some(Movement {
                 velocity: self.speed as f32 * displacement_f32.normalize(),
                 acceleration: self.acceleration as f32 * displacement_f32.normalize(),
-                // TODO check this angle, might be off by pi/2 radians
                 face_direction: f32::atan2(displacement_f32.x, displacement_f32.z),
+                pitch: f32::atan2(
+                    displacement_f32.y,
+                    f32::hypot(displacement_f32.x, displacement_f32.z),
+                ),
                 move_time: self.move_time as f32,
             })
         }
@@ -1358,7 +1372,7 @@ impl CartCoroutine {
         let total_accel_distance = entrance_accel_distance + exit_accel_distance;
 
         // Simple case: no need for any acceleration.
-        if entrance_accel_distance == 0.0 && exit_accel_distance == 0.0 {
+        if entrance_accel_distance < 0.0000001 && exit_accel_distance < 0.000001 {
             tracing::debug!(
                 ">> no acceleration required. speed {} time {}",
                 seg.max_speed,
@@ -1372,7 +1386,7 @@ impl CartCoroutine {
                 created: "no acceleration required",
             });
             seg.max_speed
-        } else if entrance_accel_distance > 0.0 && exit_accel_distance == 0.0 {
+        } else if entrance_accel_distance > 0.0 && exit_accel_distance < 0.0000001 {
             // Case 2: We're cleared to exit at track speed, but we start at a lower speed.
             // We'll accelerate right away and then spend the rest of the segment running at full speed, if able
 
@@ -1414,7 +1428,7 @@ impl CartCoroutine {
                 });
                 actual_exit_speed
             }
-        } else if entrance_accel_distance == 0.0 && exit_accel_distance > 0.0 {
+        } else if entrance_accel_distance < 0.0000001 && exit_accel_distance > 0.000001 {
             // Case 3: We entered at track speed, but we need to slow down before exiting
             if exit_accel_distance > seg_distance {
                 // This shouldn't happen; we're braking the cart with more acceleration than

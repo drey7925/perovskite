@@ -592,18 +592,21 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     let limestone = game_builder.add_block(
         BlockBuilder::new(LIMESTONE)
             .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(LIMESTONE_TEXTURE)
             .set_display_name("Limestone"),
     )?;
     let limestone_light = game_builder.add_block(
         BlockBuilder::new(LIMESTONE_LIGHT)
             .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(LIMESTONE_LIGHT_TEXTURE)
             .set_display_name("Light limestone"),
     )?;
     let limestone_dark = game_builder.add_block(
         BlockBuilder::new(LIMESTONE_DARK)
             .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(LIMESTONE_DARK_TEXTURE)
             .set_display_name("Dark limestone"),
     )?;
@@ -619,6 +622,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     let desert_stone = game_builder.add_block(
         BlockBuilder::new(DESERT_STONE)
             .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(DESERT_STONE_TEXTURE)
             .set_display_name("Desert stone"),
     )?;

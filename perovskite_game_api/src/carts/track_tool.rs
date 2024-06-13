@@ -69,7 +69,7 @@ fn track_tool_interaction(
 ) -> Result<Option<ItemStack>> {
     let work = |p: &Player| -> Result<()> {
         let anchor_block = ctx.game_map().get_block(anchor_coord)?;
-        let working_block = if anchor_block.equals_ignore_variant(config.rail_block) {
+        let working_block = if config.is_any_rail_block(anchor_block) {
             anchor_coord
         } else {
             if Some(place_coord) != anchor_coord.try_delta(0, 1, 0) {
@@ -217,7 +217,7 @@ fn build_track(
             .with_context(|| format!("Invalid tile ID: {:?}", tile.tile_id))
             .unwrap();
         let outcome = ctx.game_map().mutate_block_atomically(coord, |b, _| {
-            if b.equals_ignore_variant(config.rail_block) || trivially_replaceable.contains(*b) {
+            if config.is_any_rail_block(*b) || trivially_replaceable.contains(*b) {
                 *b = block;
                 Ok(ControlFlow::Continue(()))
             } else {

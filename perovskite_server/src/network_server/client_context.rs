@@ -1357,7 +1357,7 @@ impl InboundWorker {
                             .as_ref()
                             .context("Missing position")?
                             .try_into()?,
-                        Movement::stop_and_stay(0.0, f32::MAX),
+                        Movement::stop_and_stay(0.0, 0.0, f32::MAX),
                         crate::game_state::entities::InitialMoveQueue::SingleMove(None),
                     )
                     .await;
@@ -1934,6 +1934,7 @@ impl EntityEventSender {
                                 velocity: Some(m.movement.velocity.try_into()?),
                                 acceleration: Some(m.movement.acceleration.try_into()?),
                                 face_direction: m.movement.face_direction,
+                                pitch: m.movement.pitch,
                                 start_tick: m.start_tick,
                                 time_ticks: (m.movement.move_time * 1_000_000_000.0) as u64,
                             });

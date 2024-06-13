@@ -15,6 +15,7 @@ use super::{
     VkAllocator, VulkanContext,
 };
 use anyhow::{bail, ensure, Error, Result};
+use cgmath::{Matrix3, Matrix4, Rad, Vector3, Zero};
 
 /// Manages the entity definitions and their respective meshes
 ///
@@ -101,7 +102,7 @@ impl EntityRenderer {
         for def in entity_defs {
             if let Some(appearance) = def.appearance {
                 let mesh = EntityRenderer::pre_render(
-                    &appearance.custom_mesh,
+                    &appearance,
                     &texture_coords,
                     texture_atlas.dimensions(),
                 )?;
@@ -126,10 +127,11 @@ impl EntityRenderer {
 
     /// Convert from the network mesh to a vulkan renderable mesh
     fn pre_render(
-        meshes: &[render_proto::CustomMesh],
+        appearance: &proto::EntityAppearance,
         texture_coords: &FxHashMap<String, Rect>,
         atlas_dims: (u32, u32),
     ) -> Result<EntityMesh> {
+        let meshes = &appearance.custom_mesh;
         let vertex_count = meshes.iter().map(|x| x.x.len()).sum();
         if vertex_count >= u32::MAX as usize {
             bail!("Too many vertices");
@@ -174,7 +176,34 @@ impl EntityRenderer {
         Ok(EntityMesh {
             vtx: vertices,
             idx: indices,
+            attach_offset: match &appearance.attachment_offset {
+                Some(x) => x.try_into().unwrap(),
+                None => Vector3::zero(),
+            },
+            attach_in_model_space: appearance.attachment_offset_in_model_space,
         })
+    }
+
+    pub(crate) fn transform_position(
+        &self,
+        class: u32,
+        pos: Vector3<f64>,
+        face_dir: Rad<f32>,
+        pitch: Rad<f32>,
+    ) -> Vector3<f64> {
+        let def = match self.mesh_definitions.get(&class) {
+            Some(x) => x,
+            None => return pos,
+        };
+        if def.attach_in_model_space {
+            let rotation: Matrix3<f64> = (Matrix3::from_angle_y(face_dir)
+                * Matrix3::from_angle_x(pitch))
+            .cast()
+            .unwrap();
+            pos + (rotation * def.attach_offset)
+        } else {
+            def.attach_offset + pos
+        }
     }
 
     pub(crate) fn get_singleton(&self, class: u32) -> Option<VkCgvBufferGpu> {
@@ -187,6 +216,8 @@ pub(crate) struct EntityMesh {
     // a more capable vertex type that can express entity-specific details.
     pub(crate) vtx: Vec<CubeGeometryVertex>,
     pub(crate) idx: Vec<u32>,
+    pub(crate) attach_offset: Vector3<f64>,
+    pub(crate) attach_in_model_space: bool,
 }
 
 const TESTONLY_ENTITY: &str = "builtin:temporary_player_entity";

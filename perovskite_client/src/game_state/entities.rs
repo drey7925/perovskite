@@ -27,6 +27,7 @@ pub(crate) struct EntityMove {
     acceleration: Vector3<f32>,
     total_time_seconds: f32,
     face_direction: f32,
+    pitch: f32,
     start_tick: u64,
     seq: u64,
 }
@@ -64,6 +65,7 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
                 .try_into()?,
             total_time_seconds: value.time_ticks as f32 / 1_000_000_000.0,
             face_direction: value.face_direction,
+            pitch: value.pitch,
             seq: value.sequence,
             start_tick: value.start_tick,
         })
@@ -76,6 +78,7 @@ pub(crate) struct GameEntity {
     pub(crate) move_queue: VecDeque<EntityMove>,
     pub fallback_position: Vector3<f64>,
     pub last_face_dir: f32,
+    pub last_pitch: f32,
     id: u64,
     class: u32,
     // debug only
@@ -172,11 +175,11 @@ impl GameEntity {
         if let Some(m) = self.move_queue.back() {
             self.fallback_position = m.qproj(m.total_time_seconds);
         }
-        self.last_face_dir = self
+        (self.last_face_dir, self.last_pitch) = self
             .move_queue
             .back()
-            .map(|m| m.face_direction)
-            .unwrap_or(0.0);
+            .map(|m| (m.face_direction, m.pitch))
+            .unwrap_or((0.0, 0.0));
         Ok(())
     }
 
@@ -185,17 +188,17 @@ impl GameEntity {
         base_position: Vector3<f64>,
         time_tick: u64,
     ) -> cgmath::Matrix4<f32> {
-        let (pos, angle) = self.position(time_tick);
+        let (pos, face_dir, pitch) = self.position(time_tick);
         let translation = cgmath::Matrix4::from_translation(
             (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
         )
         .cast()
         .unwrap();
 
-        translation * Matrix4::from_angle_y(angle)
+        translation * Matrix4::from_angle_y(face_dir) * Matrix4::from_angle_x(pitch)
     }
 
-    pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>) {
+    pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>, Rad<f32>) {
         let pos = self
             .move_queue
             .front()
@@ -212,19 +215,28 @@ impl GameEntity {
                 m.qproj(time)
             })
             .unwrap_or(self.fallback_position);
-        let dir = self
+        let (face_dir, pitch) = self
             .move_queue
             .front()
-            .map(|m| m.face_direction)
-            .unwrap_or(self.last_face_dir);
+            .map(|m| (m.face_direction, m.pitch))
+            .unwrap_or((self.last_face_dir, self.last_pitch));
         if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
             log::info!(
                 "invalid position, move queue contains {:?}",
                 self.move_queue
             );
-            return (Vector3::zero(), Rad(0.0));
+            return (Vector3::zero(), Rad(0.0), Rad(0.0));
         }
-        (pos, Rad(dir))
+        (pos, Rad(face_dir), Rad(pitch))
+    }
+
+    pub(crate) fn attach_position(
+        &self,
+        time_tick: u64,
+        entity_manager: &EntityRenderer,
+    ) -> Vector3<f64> {
+        let (position, face_dir, pitch) = self.position(time_tick);
+        entity_manager.transform_position(self.class, position, face_dir, pitch)
     }
 
     pub(crate) fn debug_speed(&self, time_tick: u64) -> f32 {
@@ -265,6 +277,7 @@ impl GameEntity {
                 .map(|m: &EntityMove| m.qproj(m.total_time_seconds))
                 .unwrap(),
             last_face_dir: queue.back().map(|m| m.face_direction).unwrap(),
+            last_pitch: queue.back().map(|m| m.pitch).unwrap(),
             move_queue: queue,
             created: Instant::now(),
             class: update.entity_class,

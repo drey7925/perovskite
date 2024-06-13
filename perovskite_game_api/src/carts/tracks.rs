@@ -1458,7 +1458,7 @@ fn build_slope_tiles() -> [Option<TrackTile>; 16] {
             physical_z_offset: 0,
             diverging_physical_x_offset: 0,
             diverging_physical_z_offset: 0,
-            max_speed: 6,
+            max_speed: 60,
             diverging_max_speed: 6,
             straight_through_spawn_dirs: 0b0100_0001,
             diverging_dirs_spawn_dirs: 0,
@@ -1477,6 +1477,16 @@ pub(crate) enum ScanOutcome {
     NotOnTrack,
     /// We got a deferral while reading the map
     Deferral(Deferral<Result<BlockId>, BlockCoordinate>),
+}
+impl std::fmt::Debug for ScanOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScanOutcome::Success(state) => state.fmt(f),
+            ScanOutcome::CannotAdvance => f.write_str("CannotAdvance"),
+            ScanOutcome::NotOnTrack => f.write_str("NotOnTrack"),
+            ScanOutcome::Deferral(deferral) => f.write_str("Deferral {..}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2137,10 +2147,10 @@ fn handle_popup_response(
                     current_tile_id: TileId::empty(),
                     odometer: 0.0,
                 };
-                state.advance::<true>(
+                dbg!(state.advance::<true>(
                     |coord| response.ctx.game_map().get_block(coord).into(),
                     cart_config,
-                )?;
+                ))?;
             }
             "multiscan" => {
                 let mut state = ScanState {

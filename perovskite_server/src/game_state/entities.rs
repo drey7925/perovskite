@@ -271,7 +271,9 @@ lazy_static! {
         class_name: "builtin:undefined".to_string(),
         client_info: EntityAppearance {
             // TODO generate from the OBJ file
-            custom_mesh: vec![]
+            custom_mesh: vec![],
+            attachment_offset: Some(vec3(0.0, 0.0, 0.0).try_into().unwrap()),
+        attachment_offset_in_model_space: false
         },
     };
 }
@@ -375,18 +377,28 @@ pub(crate) struct StoredMovement {
 /// A single step in the path plan for an entity.
 #[derive(Debug, Copy, Clone)]
 pub struct Movement {
+    /// The initial velocity in the movement, blocks/sec
     pub velocity: Vector3<f32>,
+    /// The acceleration to apply throughout the movement, blocks/sec/sec
+    /// This need not be parallel to the initial velocity, however the
+    /// initial implementation of trailing entities may produce nonsensical results
+    /// when non-parallel to the initial velocity
     pub acceleration: Vector3<f32>,
+    /// The direction the entity is facing, in radians. 0 means facing +z
     pub face_direction: f32,
+    /// The pitch up/down, in radians. Positive means pitch up
+    pub pitch: f32,
+    /// The length of the move, in seconds
     pub move_time: f32,
 }
 impl Movement {
     /// Returns a movement that will stop and stay at the current position for a given amount of time
-    pub fn stop_and_stay(face_direction: f32, move_time: f32) -> Self {
+    pub fn stop_and_stay(face_direction: f32, pitch: f32, move_time: f32) -> Self {
         Self {
             velocity: Vector3::zero(),
             acceleration: Vector3::zero(),
             face_direction,
+            pitch,
             move_time,
         }
     }
@@ -1003,6 +1015,8 @@ struct EntityCoreArray {
     za: Vec<f32>,
     // Face direction, radians, during the current move
     theta_y: Vec<f32>,
+    // Pitch during the current move
+    theta_x: Vec<f32>,
     // The total time for the current move
     move_time: Vec<f32>,
     // The time already finished in the current move
@@ -1035,6 +1049,7 @@ impl EntityCoreArray {
         assert_eq!(self.ya.len(), self.len);
         assert_eq!(self.za.len(), self.len);
         assert_eq!(self.theta_y.len(), self.len);
+        assert_eq!(self.theta_x.len(), self.len);
         assert_eq!(self.move_start_tick.len(), self.len);
         assert_eq!(self.recalc_at.len(), self.len);
         assert_eq!(self.move_queue.len(), self.len);
@@ -1113,6 +1128,7 @@ impl EntityCoreArray {
         self.ya[index] = initial_movement.acceleration.y;
         self.za[index] = initial_movement.acceleration.z;
         self.theta_y[index] = initial_movement.face_direction;
+        self.theta_x[index] = initial_movement.pitch;
         self.move_time[index] = initial_movement.move_time;
         self.move_start_tick[index] = tick;
         self.recalc_at[index] = if !queued_movements.has_slack() {
@@ -1197,6 +1213,7 @@ impl EntityCoreArray {
             ya: vec![],
             za: vec![],
             theta_y: vec![],
+            theta_x: vec![],
             move_time: vec![],
             move_start_tick: vec![],
             recalc_at: vec![],
@@ -1256,6 +1273,7 @@ impl EntityCoreArray {
                 self.ya[i] = 0.0;
                 self.za[i] = 0.0;
                 self.theta_y[i] = 0.0;
+                self.theta_x[i] = 0.0;
                 self.move_time[i] = 0.0;
                 self.move_start_tick[i] = 0;
                 self.recalc_at[i] = tick;
@@ -1283,6 +1301,7 @@ impl EntityCoreArray {
                 self.ya.push(0.0);
                 self.za.push(0.0);
                 self.theta_y.push(0.0);
+                self.theta_x.push(0.0);
                 self.move_time.push(0.0);
                 self.move_start_tick.push(0);
                 self.recalc_at.push(tick);
@@ -1312,6 +1331,7 @@ impl EntityCoreArray {
                     self.ya[i] = movement.acceleration.y;
                     self.za[i] = movement.acceleration.z;
                     self.theta_y[i] = movement.face_direction;
+                    self.theta_x[i] = movement.pitch;
                     self.move_time[i] = movement.move_time;
                     self.move_start_tick[i] = tick;
 
@@ -1333,6 +1353,7 @@ impl EntityCoreArray {
                     self.ya[i] = first.acceleration.y;
                     self.za[i] = first.acceleration.z;
                     self.theta_y[i] = first.face_direction;
+                    self.theta_x[i] = first.pitch;
                     self.move_time[i] = first.move_time;
                     self.move_start_tick[i] = tick;
                     let mut start_tick = tick + (first.move_time * 1_000_000_000.0) as u64;
@@ -1458,6 +1479,7 @@ impl EntityCoreArray {
             self.ya.swap_remove(i);
             self.za.swap_remove(i);
             self.theta_y.swap_remove(i);
+            self.theta_x.swap_remove(i);
             self.move_time.swap_remove(i);
             self.move_start_tick.swap_remove(i);
             self.recalc_at.swap_remove(i);
@@ -1527,6 +1549,7 @@ impl EntityCoreArray {
                         velocity: Vector3::new(self.xv[i], self.yv[i], self.zv[i]),
                         acceleration: Vector3::new(self.xa[i], self.ya[i], self.za[i]),
                         face_direction: self.theta_y[i],
+                        pitch: self.theta_x[i],
                         move_time: self.move_time[i],
                     },
                     start_tick: self.move_start_tick[i],
@@ -1880,7 +1903,7 @@ impl EntityCoreArray {
                 };
 
                 StoredMovement {
-                    movement: Movement::stop_and_stay(self.theta_y[i], move_time),
+                    movement: Movement::stop_and_stay(self.theta_y[i], self.theta_x[i], move_time),
                     sequence: self.current_move_seq[i] + 1,
                     start_tick: new_start_tick,
                 }
@@ -1892,6 +1915,7 @@ impl EntityCoreArray {
             self.ya[i] = next_move.movement.acceleration.y;
             self.za[i] = next_move.movement.acceleration.z;
             self.theta_y[i] = next_move.movement.face_direction;
+            self.theta_x[i] = next_move.movement.pitch;
             self.current_move_seq[i] = next_move.sequence;
             tracing::debug!("new CMS {}", next_move.sequence);
             self.move_start_tick[i] = next_move.start_tick;
@@ -2429,6 +2453,8 @@ fn make_unknown_entity_appearance() -> Option<EntityDef> {
                 FALLBACK_UNKNOWN_TEXTURE,
             )
             .unwrap()],
+            attachment_offset: vec3(0.0, 0.0, 0.0).try_into().ok(),
+            attachment_offset_in_model_space: false,
         },
     })
 }

@@ -29,8 +29,10 @@ message EntityMove {
   // The acceleration of the movement
   perovskite.protocol.coordinates.Vec3F acceleration = 3;
   reserved 4;
-  // The face direction (about the vertical Y axis) in radians
+  // The face direction (about the vertical Y axis) in radians. 0 means facing +z
   float face_direction = 5;
+  // The pitch up/down in radians. Positive means pitch up
+  float pitch = 9;
   // The sequence number of the move.
   uint64 sequence = 6;
   // The total time scheduled for the movement, nanosecond ticks
@@ -76,4 +78,10 @@ message EntityDef {
 message EntityAppearance {
   // The mesh to use for the entity. At least one must be specified.
   repeated perovskite.protocol.render.CustomMesh custom_mesh = 1;
+  // The offset to move the player position when attached to this entity.
+  perovskite.protocol.coordinates.Vec3D attachment_offset = 2;
+  // If true, the attachment offset is given in model space and will be transformed
+  // subject to the angle of the entity. If false, the attachment offset is given
+  // in world space and undergoes no transformation
+  bool attachment_offset_in_model_space = 3;
 }
