@@ -1,3 +1,4 @@
+use std::ops::DerefMut;
 /// This implementation is EXTREMELY unstable while it is under active development.
 /// Do not assume any functionality or performance guarantees while different techniques
 /// are under investigation.
@@ -152,7 +153,7 @@ impl EntityManager {
         self.cancellation.cancel();
     }
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        for handle in self.workers.lock().drain(..) {
+        for handle in std::mem::replace(self.workers.lock().deref_mut(), vec![]).into_iter() {
             handle.await??;
         }
         Ok(())
@@ -173,12 +174,19 @@ impl EntityManager {
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
         entity_def: EntityTypeId,
+        trailing_entities: Option<TrailingEntities>,
     ) -> u64 {
         let id = self.assign_next_id();
         let shard = self.get_shard(id);
         shard
             .pending_actions_tx
-            .send(EntityAction::Insert(id, position, coroutine, entity_def))
+            .send(EntityAction::Insert(
+                id,
+                position,
+                coroutine,
+                entity_def,
+                trailing_entities,
+            ))
             .await
             .context("Entity receiver disappeared")
             .unwrap();
@@ -189,12 +197,19 @@ impl EntityManager {
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
         entity_def: EntityTypeId,
+        trailing_entities: Option<TrailingEntities>,
     ) -> u64 {
         let id = self.assign_next_id();
         let shard = self.get_shard(id);
         shard
             .pending_actions_tx
-            .blocking_send(EntityAction::Insert(id, position, coroutine, entity_def))
+            .blocking_send(EntityAction::Insert(
+                id,
+                position,
+                coroutine,
+                entity_def,
+                trailing_entities,
+            ))
             .context("Entity receiver disappeared")
             .unwrap();
         id
@@ -1028,6 +1043,8 @@ struct EntityCoreArray {
 
     // TODO: Once thin_box is stabilized, we can use it here
     coroutine: Vec<Option<Pin<Box<dyn EntityCoroutine>>>>,
+    // This is an annoying indirect pointer, but we probably won't use it for the hot path
+    trailing_entities: Vec<Option<TrailingEntities>>,
 }
 impl EntityCoreArray {
     /// Checks some preconditions that we want to assume on the vectors to make
@@ -1054,6 +1071,7 @@ impl EntityCoreArray {
         assert_eq!(self.recalc_at.len(), self.len);
         assert_eq!(self.move_queue.len(), self.len);
         assert_eq!(self.coroutine.len(), self.len);
+        assert_eq!(self.trailing_entities.len(), self.len);
     }
 
     // Update the times for all entities
@@ -1219,6 +1237,7 @@ impl EntityCoreArray {
             recalc_at: vec![],
             move_queue: vec![],
             coroutine: vec![],
+            trailing_entities: vec![],
             base_time,
         }
     }
@@ -1230,6 +1249,7 @@ impl EntityCoreArray {
         entity_def: &EntityDef,
         position: Vector3<f64>,
         coroutine: Option<Pin<Box<dyn EntityCoroutine>>>,
+        trailing_entities: Option<TrailingEntities>,
         services: &EntityCoroutineServices<'_>,
         completion_sender: &tokio::sync::mpsc::Sender<Completion<ContinuationResult>>,
         tick: u64,
@@ -1279,6 +1299,7 @@ impl EntityCoreArray {
                 self.recalc_at[i] = tick;
                 self.move_queue[i] = queue;
                 self.coroutine[i] = coroutine;
+                self.trailing_entities[i] = trailing_entities;
                 i
             }
             None => {
@@ -1307,6 +1328,7 @@ impl EntityCoreArray {
                 self.recalc_at.push(tick);
                 self.move_queue.push(queue);
                 self.coroutine.push(coroutine);
+                self.trailing_entities.push(trailing_entities);
 
                 self.len - 1
             }
@@ -1485,6 +1507,7 @@ impl EntityCoreArray {
             self.recalc_at.swap_remove(i);
             self.move_queue.swap_remove(i);
             self.coroutine.swap_remove(i);
+            self.trailing_entities.swap_remove(i);
 
             // fix up the id lookup since we rearranged stuff
             if i != self.len {
@@ -1557,6 +1580,7 @@ impl EntityCoreArray {
                 },
                 next_moves: self.move_queue[i].as_slice(),
                 last_nontrivial_modification: lnm,
+                trailing_entities: self.trailing_entities[i].as_deref(),
             };
             f(entity)?;
         }
@@ -1961,6 +1985,7 @@ enum EntityAction {
         Vector3<f64>,
         Option<Pin<Box<dyn EntityCoroutine>>>,
         EntityTypeId,
+        Option<TrailingEntities>,
     ),
     Remove(u64),
     SetKinematics(u64, Vector3<f64>, Movement, InitialMoveQueue),
@@ -2018,6 +2043,7 @@ pub(crate) struct IterEntity<'a> {
     pub(crate) current_move: StoredMovement,
     pub(crate) next_moves: &'a [StoredMovement],
     pub(crate) last_nontrivial_modification: u64,
+    pub(crate) trailing_entities: Option<&'a [TrailingEntity]>,
 }
 
 pub(crate) struct EntityShardWorker {
@@ -2046,7 +2072,7 @@ impl EntityShardWorker {
     }
 
     pub(crate) async fn run_loop(&self) -> Result<()> {
-        let mut last_iteration = self.game_state.tick();
+        let last_iteration = self.game_state.tick();
         let mut rx_lock = self.entities.shards[self.shard_id]
             .pending_actions_rx
             .lock()
@@ -2142,7 +2168,7 @@ impl EntityShardWorker {
             smallvec::SmallVec::new();
         for action in rx_messages.drain(..) {
             match action {
-                EntityAction::Insert(id, position, coroutine, entity_type) => {
+                EntityAction::Insert(id, position, coroutine, entity_type, trailing_entities) => {
                     let def = self.game_state.entities().get_by_type(&entity_type);
 
                     let index = lock.insert(
@@ -2151,6 +2177,7 @@ impl EntityShardWorker {
                         def,
                         position,
                         coroutine,
+                        trailing_entities,
                         &self.services(),
                         completion_tx,
                         self.game_state.tick(),
@@ -2294,6 +2321,17 @@ pub struct EntityClass {
     pub class_id: u32,
 }
 
+/// An entity that is trailing behind the primary entity, e.g. a duckling
+/// following a duck, or a minecart coupled into a train
+#[derive(Debug, Clone, Copy)]
+pub struct TrailingEntity {
+    /// The class of the trailing entity
+    pub class_id: u32,
+    /// The distance from the *primary/first* (as opposed to preceding) entity
+    pub trailing_distance: f32,
+}
+pub type TrailingEntities = Box<[TrailingEntity]>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EntityClassId(u32);
 impl EntityClassId {
@@ -2371,7 +2409,7 @@ impl EntityTypeManager {
             types: vec![make_unknown_entity_appearance()],
             by_name: FxHashMap::from_iter([(
                 "builtin:unknown".to_string(),
-                UNKNOWN_ENTITY_CLASS_ID.0 as u32,
+                UNKNOWN_ENTITY_CLASS_ID.0,
             )]),
         })
     }

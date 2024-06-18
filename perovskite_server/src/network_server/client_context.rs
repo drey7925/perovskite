@@ -15,7 +15,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
-use std::iter::once;
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -336,7 +335,7 @@ async fn send_all_popups(
         for popup in player_state
             .active_popups
             .iter()
-            .chain(once(&player_state.inventory_popup))
+            .chain(std::iter::once(&player_state.inventory_popup))
         {
             for view in popup.inventory_views().values() {
                 updates.push(make_inventory_update(
@@ -994,7 +993,7 @@ impl InventoryEventSender {
                 for popup in player_state
                     .active_popups
                     .iter()
-                    .chain(once(&player_state.inventory_popup))
+                    .chain(std::iter::once(&player_state.inventory_popup))
                 {
                     for view in popup.inventory_views().values() {
                         if view.wants_update_for(&key) {
@@ -1474,7 +1473,7 @@ impl InboundWorker {
                     for popup in player_state
                         .active_popups
                         .iter()
-                        .chain(once(&player_state.inventory_popup))
+                        .chain(std::iter::once(&player_state.inventory_popup))
                     {
                         if popup.inventory_views().values().any(|x| {
                             x.id.0 == action.source_view || x.id.0 == action.destination_view
@@ -1947,6 +1946,15 @@ impl EntityEventSender {
                         entity_class: entity.class,
                         planned_move: moves_to_send,
                         remove: false,
+                        trailing_entity: entity
+                            .trailing_entities
+                            .unwrap_or(&[])
+                            .iter()
+                            .map(|e| entities_proto::TrailingEntity {
+                                class: e.class_id,
+                                distance: e.trailing_distance,
+                            })
+                            .collect(),
                     };
                     tracing::info!("Current tick {tick}");
                     messages.push(dbg!(message));
@@ -1962,6 +1970,7 @@ impl EntityEventSender {
                     remove: true,
                     // entity class doesn't matter since we're going to remove it
                     entity_class: 0,
+                    trailing_entity: vec![],
                 });
                 self.sent_entities.remove(&entity_id);
             }

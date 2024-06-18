@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use perovskite_core::block_id::BlockId;
 use perovskite_game_api::{
     carts, default_game::DefaultGameBuilder, game_builder::GameBuilder, BlockCoordinate,
     ChunkCoordinate,
@@ -17,6 +18,18 @@ fn map_benchmarks(c: &mut Criterion) {
             b.iter(|| {
                 gs.game_map()
                     .get_block(black_box(BlockCoordinate::new(0, 0, 0)))
+                    .unwrap();
+            })
+        });
+
+        c.bench_function("set_block", |b| {
+            b.iter(|| {
+                gs.game_map()
+                    .set_block(
+                        black_box(BlockCoordinate::new(0, 0, 0)),
+                        black_box(BlockId::from(0)),
+                        black_box(None),
+                    )
                     .unwrap();
             })
         });

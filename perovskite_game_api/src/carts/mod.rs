@@ -18,6 +18,7 @@ use perovskite_core::{
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
     util::{TraceBuffer, TraceLog},
 };
+use perovskite_server::game_state::entities::TrailingEntity;
 use perovskite_server::game_state::{
     self,
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
@@ -297,6 +298,7 @@ fn place_cart(
         .new_popup()
         .title("Spawn Cart")
         .text_field("cart_name", "Cart name", "", true, false)
+        .text_field("cart_length", "Cart length", "8", true, false)
         .button("spawn", "Spawn", true, true)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
             match response.user_action {
@@ -311,9 +313,22 @@ fn place_cart(
                 .textfield_values
                 .get("cart_name")
                 .expect("missing cart_name");
+            let cart_length = response
+                .textfield_values
+                .get("cart_length")
+                .expect("missing cart_length")
+                .parse::<u32>()
+                .expect("bad cart_length");
 
-            actually_spawn_cart(config.clone(), &response.ctx, &cart_name, rail_pos, variant)
-                .unwrap();
+            actually_spawn_cart(
+                config.clone(),
+                &response.ctx,
+                &cart_name,
+                cart_length,
+                rail_pos,
+                variant,
+            )
+            .unwrap();
         }));
 
     match ctx.initiator() {
@@ -336,6 +351,7 @@ fn actually_spawn_cart(
     config: CartsGameBuilderExtension,
     ctx: &HandlerContext,
     cart_name: &str,
+    cart_length: u32,
     rail_pos: BlockCoordinate,
     variant: u16,
 ) -> Result<()> {
@@ -352,6 +368,14 @@ fn actually_spawn_cart(
     };
 
     static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    let mut trailing_entities = Vec::new();
+    for i in 0..cart_length - 1 {
+        trailing_entities.push(TrailingEntity {
+            class_id: config.cart_id.as_u32(),
+            trailing_distance: i as f32 + 1.0,
+        });
+    }
 
     let id = ctx.entities().new_entity_blocking(
         // TODO: support an offset when attaching a player to an entity, so the camera position is right
@@ -380,6 +404,7 @@ fn actually_spawn_cart(
             class: dbg!(config.cart_id),
             data: None,
         },
+        Some(trailing_entities.into_boxed_slice()),
     );
 
     ctx.initiator().send_chat_message(
@@ -860,7 +885,7 @@ impl CartCoroutine {
         let block_getter = |coord| services.get_block(coord);
 
         'scan_loop: while steps < max_steps_ahead
-            && buffer_time_estimate < (2.0 + 2.0 * estimated_max_speed / MAX_ACCEL as f32)
+            && buffer_time_estimate < (5.0 + 2.0 * estimated_max_speed / MAX_ACCEL as f32)
         {
             // Precondition: self.scan_state is valid
             let new_state = match self.scan_state.advance::<false>(block_getter, &self.config) {

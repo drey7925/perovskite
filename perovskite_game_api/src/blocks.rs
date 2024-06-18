@@ -1025,7 +1025,7 @@ impl AxisAlignedBoxesAppearanceBuilder {
     /// If the variant mask is 0, or variant_mask & block.variant() is nonzero,
     /// the box will be drawn.
     pub fn add_box_with_variant_mask(
-        mut self,
+        self,
         box_properties: AaBoxProperties,
         x: (f32, f32),
         y: (f32, f32),

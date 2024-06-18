@@ -3,6 +3,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{Context, Result};
+use cgmath::{vec3, Deg, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
+use rustc_hash::FxHashMap;
+use vulkano::{
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
+    memory::allocator::{AllocationCreateInfo, MemoryUsage},
+};
+
+use perovskite_core::protocol::entities as entities_proto;
+
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
     entity_renderer::EntityRenderer,
@@ -10,14 +20,6 @@ use crate::vulkan::{
         cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex},
         entity_geometry::EntityGeometryDrawCall,
     },
-};
-use anyhow::{Context, Result};
-use cgmath::{vec3, Deg, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
-use perovskite_core::protocol::entities as entities_proto;
-use rustc_hash::FxHashMap;
-use vulkano::{
-    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
-    memory::allocator::{AllocationCreateInfo, MemoryUsage},
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -31,13 +33,50 @@ pub(crate) struct EntityMove {
     start_tick: u64,
     seq: u64,
 }
+
 impl EntityMove {
+    pub(crate) fn elapsed(&self, tick: u64) -> f32 {
+        ((tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0)
+            .clamp(0.0, self.total_time_seconds)
+    }
     fn qproj(&self, time: f32) -> Vector3<f64> {
         vec3(
             qproj(self.start_pos.x, self.velocity.x, self.acceleration.x, time),
             qproj(self.start_pos.y, self.velocity.y, self.acceleration.y, time),
             qproj(self.start_pos.z, self.velocity.z, self.acceleration.z, time),
         )
+    }
+
+    /// An *estimate* of the distance covered in this move, *only* to be used for trailing
+    /// entities. This only works when acceleration and velocity are in the same direction,
+    /// and when acceleration doesn't cause the entity to reverse, but we only support trailing
+    /// entities when that property is true.
+    ///
+    /// To properly implement this, we would need to implement the correct formulae for arc length
+    /// on the appropriate parabolic curve in question.
+    fn odometer_distance(&self) -> f64 {
+        self.partial_odometer_distance(self.total_time_seconds)
+    }
+
+    /// An *estimate* of the distance covered in this move, *only* to be used for trailing
+    /// entities.
+    fn partial_odometer_distance(&self, time: f32) -> f64 {
+        let sign_correction = self.acceleration.dot(self.velocity).signum();
+        (self.velocity.magnitude() * time
+            + 0.5 * sign_correction * self.acceleration.magnitude() * time * time) as f64
+    }
+
+    fn position_along_length(&self, move_progress_distance: f64) -> Vector3<f64> {
+        // Avoid a NaN/divide by zero for moves without any distance or initial
+        // velocity
+        let direction = if self.velocity.magnitude2() > 0.00001 {
+            self.velocity.normalize()
+        } else if self.acceleration.magnitude2() > 0.00001 {
+            self.acceleration.normalize()
+        } else {
+            return self.start_pos;
+        };
+        self.start_pos + (move_progress_distance * direction.cast().unwrap())
     }
 }
 impl TryFrom<&entities_proto::EntityMove> for EntityMove {
@@ -75,34 +114,112 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
 pub(crate) struct GameEntity {
     // todo refine
     // 33 should be enough, server has a queue depth of up to 32
-    pub(crate) move_queue: VecDeque<EntityMove>,
-    pub fallback_position: Vector3<f64>,
-    pub last_face_dir: f32,
-    pub last_pitch: f32,
+    move_queue: VecDeque<EntityMove>,
+    fallback_position: Vector3<f64>,
+    last_face_dir: f32,
+    last_pitch: f32,
+
+    back_buffer: VecDeque<EntityMove>,
+
     id: u64,
     class: u32,
+    needed_back_buffer_len: f32,
+    trailing_entities: Vec<(u32, f32)>,
     // debug only
     created: Instant,
 }
+
 impl GameEntity {
+    pub(crate) fn transforms_with_trailing_entities(
+        &self,
+        base_position: Vector3<f64>,
+        tick: u64,
+    ) -> Vec<(Matrix4<f32>, u32)> {
+        // This would be really nice as a generator expression...
+        let mut result = vec![];
+        result.push((self.as_transform(base_position, tick), self.class));
+
+        // fast path
+        if self.trailing_entities.is_empty() {
+            return result;
+        }
+        let cm_distance = match self.move_queue.front() {
+            Some(current_move) => {
+                let cme = current_move.elapsed(tick);
+                let cm_distance = current_move.partial_odometer_distance(cme) as f32;
+                // First add the trailing entities that are in the same move
+                for &(class, bb_distance) in self.trailing_entities.iter() {
+                    if bb_distance < cm_distance {
+                        let move_progress_distance = (cm_distance - bb_distance) as f64;
+                        let position = current_move.position_along_length(move_progress_distance);
+                        result.push((
+                            build_transform(
+                                base_position,
+                                position,
+                                Rad(current_move.face_direction),
+                                Rad(current_move.pitch),
+                            ),
+                            class,
+                        ))
+                    } else {
+                        break;
+                    }
+                }
+                cm_distance
+            }
+            // fast path - if we don't have a current move, we don't have a backbuffer
+            // This is ensured by the implementation of pop_until: it will never pop move 0, so
+            // the move buffer will never become empty (unless it started and remained empty), and
+            // furthermore, no buffer can end up in the backbuffer without first being in the
+            // main move buffer
+            None => 0.0,
+        };
+
+        // acc_distance represents the distance from the start of the current iterated move, to
+        // the current entity position
+        let mut acc_distance = cm_distance;
+        // Now do the same for the backbuffer, back to front
+        for m in self.back_buffer.iter().rev() {
+            let move_len = m.odometer_distance() as f32;
+            // We now generate moves between acc_end and acc_distance
+            let acc_end = acc_distance;
+            acc_distance += move_len;
+            for &(class, bb_distance) in self.trailing_entities.iter() {
+                if bb_distance >= acc_end && bb_distance < acc_distance {
+                    let move_progress_distance = (acc_distance - bb_distance) as f64;
+                    let position = m.position_along_length(move_progress_distance);
+                    result.push((
+                        build_transform(
+                            base_position,
+                            position,
+                            Rad(m.face_direction),
+                            Rad(m.pitch),
+                        ),
+                        class,
+                    ))
+                }
+            }
+        }
+
+        result
+    }
+
     pub(crate) fn advance_state(&mut self, until_tick: u64) {
         let any_popped = self.pop_until(until_tick);
         if any_popped {
-            println!(
+            log::debug!(
                 "remaining buffer: {:?}",
                 self.move_queue.back().map(|m| m.start_tick
-                    + (m.total_time_seconds * 1_000_000_000.0) as u64
-                    - until_tick)
+                    + ((m.total_time_seconds * 1_000_000_000.0) as u64).saturating_sub(until_tick))
             );
         }
     }
 
     fn pop_until(&mut self, until_tick: u64) -> bool {
-        let idx = self
+        let mut idx = self
             .move_queue
             .iter()
             .rposition(|m| m.start_tick < until_tick);
-
         if let Some(idx) = idx {
             if idx == 0 {
                 // The first move is the only move that started in the past, so we need to keep it
@@ -110,7 +227,13 @@ impl GameEntity {
             } else {
                 // drain up to *and not including* idx
                 // e.g. if idx == 2, move_queue[2] is the last move that started in the past, so we need to drain move_queue[0..2], which is move_queue[0] and move_queue[1]
-                self.move_queue.drain(..idx);
+                if self.needed_back_buffer_len > 0.0 {
+                    self.back_buffer.extend(self.move_queue.drain(..idx));
+                    // The back buffer now contains moves, in the original sequence. We need to
+                    // pop off its front to keep the total length of moves in the back buffer
+                    // not much higher than max_back_buffer_length
+                    self.pop_backbuffer();
+                }
                 true
             }
         } else {
@@ -155,23 +278,10 @@ impl GameEntity {
                 "invalid planned move"
             })?);
         }
-
-        log::info!(
-            ">>> tick {update_tick}, queue before pops: {:?}",
-            self.move_queue
-        );
         if let Some(m) = self.move_queue.back() {
             self.fallback_position = m.qproj(m.total_time_seconds);
         }
-
-        let any_popped = self.pop_until(update_tick);
-
-        log::info!(
-            "tick {update_tick}, queue: {:?}, any popped? {}",
-            self.move_queue,
-            any_popped
-        );
-
+        self.pop_until(update_tick);
         if let Some(m) = self.move_queue.back() {
             self.fallback_position = m.qproj(m.total_time_seconds);
         }
@@ -189,13 +299,8 @@ impl GameEntity {
         time_tick: u64,
     ) -> cgmath::Matrix4<f32> {
         let (pos, face_dir, pitch) = self.position(time_tick);
-        let translation = cgmath::Matrix4::from_translation(
-            (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
-        )
-        .cast()
-        .unwrap();
 
-        translation * Matrix4::from_angle_y(face_dir) * Matrix4::from_angle_x(pitch)
+        build_transform(base_position, pos, face_dir, pitch)
     }
 
     pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>, Rad<f32>) {
@@ -206,10 +311,7 @@ impl GameEntity {
                 let time = self
                     .move_queue
                     .front()
-                    .map(|m| {
-                        ((time_tick.saturating_sub(m.start_tick) as f32) / 1_000_000_000.0)
-                            .clamp(0.0, m.total_time_seconds)
-                    })
+                    .map(|m| m.elapsed(time_tick))
                     .unwrap_or(0.0);
 
                 m.qproj(time)
@@ -265,12 +367,19 @@ impl GameEntity {
         for planned_move in &update.planned_move {
             queue.push_back(planned_move.try_into().map_err(|_| {
                 dbg!(planned_move);
-
                 "invalid planned move"
             })?);
         }
         log::info!("initial queue: {:?}", queue);
         // println!("cms: {:?}", update.current_move_progress);
+
+        let mut trailing_entities: Vec<(u32, f32)> = update
+            .trailing_entity
+            .iter()
+            .map(|te| (te.class, te.distance))
+            .collect();
+        trailing_entities.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
         Ok(GameEntity {
             fallback_position: queue
                 .back()
@@ -279,16 +388,60 @@ impl GameEntity {
             last_face_dir: queue.back().map(|m| m.face_direction).unwrap(),
             last_pitch: queue.back().map(|m| m.pitch).unwrap(),
             move_queue: queue,
+            back_buffer: VecDeque::new(),
+            needed_back_buffer_len: update
+                .trailing_entity
+                .iter()
+                .map(|x| x.distance)
+                .fold(0.0, |a, b| a.max(b)),
+            trailing_entities,
             created: Instant::now(),
             class: update.entity_class,
             id: update.id,
         })
+    }
+    fn pop_backbuffer(&mut self) {
+        let mut idx = self.back_buffer.len() - 1;
+        let mut distance_so_far = 0.0;
+        loop {
+            distance_so_far += self.back_buffer[idx].odometer_distance();
+            // An LLM hallucination would try to naively decrement idx here
+            // This is a classic way to produce an underflow
+
+            if distance_so_far >= self.needed_back_buffer_len as f64 {
+                // we have enough distance
+                break;
+            } else if idx == 0 {
+                // we already checked the earliest move in the back buffer, and we didn't find
+                // enough distance
+                return;
+            }
+            idx -= 1;
+        }
+        // then drain, non-inclusively. idx is the index of the last move in the back buffer that
+        // ought to be kept
+        self.back_buffer.drain(..idx);
     }
 }
 
 #[inline]
 fn qproj(s: f64, v: f32, a: f32, t: f32) -> f64 {
     s + (v * t + 0.5 * a * t * t) as f64
+}
+
+fn build_transform(
+    base_position: Vector3<f64>,
+    pos: Vector3<f64>,
+    face_dir: Rad<f32>,
+    pitch: Rad<f32>,
+) -> Matrix4<f32> {
+    let translation = cgmath::Matrix4::from_translation(
+        (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
+    )
+    .cast()
+    .unwrap();
+
+    translation * Matrix4::from_angle_y(face_dir) * Matrix4::from_angle_x(pitch)
 }
 
 // Minimal stub implementation of the entity manager
@@ -346,16 +499,23 @@ impl EntityState {
         //    to the vertex format to include velocity, acceleration, and the necessary timing details.
         self.entities
             .iter()
-            .map(|(id, entity)| EntityGeometryDrawCall {
-                model_matrix: entity.as_transform(player_position, time_tick),
-                model: entity_renderer
-                    .get_singleton(entity.class)
-                    // class 0 is the fallback
-                    .unwrap_or(
-                        entity_renderer
-                            .get_singleton(0)
-                            .unwrap_or(self.fallback_entity.clone()),
-                    ),
+            .flat_map(|(id, entity)| {
+                entity
+                    .transforms_with_trailing_entities(player_position, time_tick)
+                    .into_iter()
+                    .map(|(model_matrix, class)| {
+                        EntityGeometryDrawCall {
+                            model_matrix,
+                            model: entity_renderer
+                                .get_singleton(class)
+                                // class 0 is the fallback
+                                .unwrap_or(
+                                    entity_renderer
+                                        .get_singleton(0)
+                                        .unwrap_or(self.fallback_entity.clone()),
+                                ),
+                        }
+                    })
             })
             .collect()
     }

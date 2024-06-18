@@ -58,6 +58,18 @@ message EntityUpdate {
   // demand
   // The entity's class, controlling its appearance
   uint32 entity_class = 6;
+  // Entities trailing behind this entity. Note that these have less functionality;
+  // they essentially just follow behind it, while the location of the primary entity
+  // is used for things like collision detection, proximity queries, etc. The exact
+  // set of limitations is still TBD
+  repeated TrailingEntity trailing_entity = 7;
+}
+
+// Secondary entities that trail behind the main entity at fixed distance, e.g.
+// ducklings following a duck, or minecarts coupled into a train.
+message TrailingEntity {
+  uint32 class = 1;
+  float distance = 2;
 }
 
 message EntityTypeAssignment {

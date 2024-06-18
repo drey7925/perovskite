@@ -134,6 +134,7 @@ impl Player {
                 class: PLAYER_ENTITY_CLASS_ID,
                 data: Some(proto.name.as_bytes().into()),
             },
+            None,
         );
 
         Ok(Player {
@@ -205,6 +206,7 @@ impl Player {
                 class: PLAYER_ENTITY_CLASS_ID,
                 data: Some(name.as_bytes().into()),
             },
+            None,
         );
 
         let player = Player {
