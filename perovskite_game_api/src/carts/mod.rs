@@ -367,6 +367,9 @@ fn actually_spawn_cart(
         }
     };
 
+    anyhow::ensure!(cart_length >= 1, "Cart length must be at least 1");
+    anyhow::ensure!(cart_length <= 256, "Cart length must be at most 256");
+
     static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     let mut trailing_entities = Vec::new();
@@ -378,8 +381,6 @@ fn actually_spawn_cart(
     }
 
     let id = ctx.entities().new_entity_blocking(
-        // TODO: support an offset when attaching a player to an entity, so the camera position is right
-        // and we don't need to do this hackery
         initial_state.vec_coord(),
         Some(Box::pin(CartCoroutine {
             config: config.clone(),
@@ -396,7 +397,7 @@ fn actually_spawn_cart(
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             precomputed_steps: None,
             pending_actions: BinaryHeap::new(),
-            cart_length: 1,
+            cart_length: cart_length,
 
             interlocking_resume_state: None,
         })),
@@ -1274,7 +1275,6 @@ impl CartCoroutine {
         let prev_segment = self.unplanned_segments.back().unwrap();
         if prev_segment.any_content() {
             tracing::debug!("new segment starting from {:?}", prev_segment.to);
-            // todo remove this log
             tracing::debug!(
                 "odometer check: track state says {}, segments say {}",
                 self.scan_state.odometer,

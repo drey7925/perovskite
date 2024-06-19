@@ -1957,7 +1957,7 @@ impl EntityEventSender {
                             .collect(),
                     };
                     tracing::info!("Current tick {tick}");
-                    messages.push(dbg!(message));
+                    messages.push(message);
                     Ok(())
                 })?;
             }
