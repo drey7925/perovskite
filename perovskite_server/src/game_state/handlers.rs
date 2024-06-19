@@ -22,7 +22,7 @@ use std::panic::AssertUnwindSafe;
 use super::event::EventInitiator;
 
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
-/// Currently a no-op
+/// Currently just catches errors
 #[inline]
 pub(crate) fn run_handler_impl<T, F>(
     closure: F,
@@ -75,10 +75,3 @@ macro_rules! run_async_handler {
         }
     };
 }
-
-// /// A thread-local context used for event handlers.
-// /// This is set by the server when an event is received from a client, and propagated
-// /// when handlers call each other.
-// pub struct EventContext {
-
-// }

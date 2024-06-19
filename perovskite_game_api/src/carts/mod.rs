@@ -520,8 +520,8 @@ impl ScheduledSegment {
         } else {
             (-b + (b * b - 4.0 * a * c).sqrt()) / (2.0 * a)
         };
-        tracing::info!("a {} b {} c {} t {}", a, b, c, t);
-        tracing::info!("odometer time for segment {:?} is {}", self, t);
+        tracing::debug!("a {} b {} c {} t {}", a, b, c, t);
+        tracing::debug!("odometer time for segment {:?} is {}", self, t);
         t
     }
 }
@@ -685,7 +685,7 @@ impl CartCoroutine {
         queue_space: usize,
         trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
-        tracing::info!(
+        tracing::debug!(
             "{} {:?} ========== planning {} seconds in advance",
             self.id,
             self.spawn_time.elapsed(),
@@ -799,7 +799,7 @@ impl CartCoroutine {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
                 if should_delay {
-                    tracing::info!("Will delay once the interlocking clears");
+                    tracing::debug!("Will delay once the interlocking clears");
                 }
 
                 let result = interlocking::interlock_cart(
@@ -865,9 +865,9 @@ impl CartCoroutine {
                     .map(|seg| seg.speed + (seg.acceleration * seg.move_time))
                     .unwrap_or(self.last_speed_post_indication.max(5.0)),
             ) as f32;
-        tracing::info!("estimated max speed {}", estimated_max_speed);
+        tracing::debug!("estimated max speed {}", estimated_max_speed);
 
-        tracing::info!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
+        tracing::debug!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
 
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
@@ -988,7 +988,7 @@ impl CartCoroutine {
             self.apply_step(new_state);
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Finished with {} steps, {} buffer time estimate, {} max speed, {} time limit",
             steps,
             buffer_time_estimate,
@@ -1011,7 +1011,7 @@ impl CartCoroutine {
                 let state = step.scan_state;
 
                 if let Some((switch_coord, block_id, deferral)) = step.clear_switch {
-                    tracing::info!("Clearing switch at {:?}", switch_coord);
+                    tracing::debug!("Clearing switch at {:?}", switch_coord);
                     self.pending_actions.push(PendingActionEntry {
                         odometer: state.odometer + deferral as f64 + self.cart_length as f64,
                         action: PendingAction::SwitchRelease(switch_coord, block_id),
@@ -1073,7 +1073,7 @@ impl CartCoroutine {
             .min(new_state.allowable_speed as f64);
         tracing::debug!("Considering split at {:?}", new_state.vec_coord());
         if last_move_delta.magnitude() > 256.0 {
-            tracing::info!(
+            tracing::debug!(
                 "Splitting a segment due to length; prev length was {}",
                 last_move_delta.magnitude()
             );
@@ -1090,7 +1090,7 @@ impl CartCoroutine {
             );
             self.start_new_unplanned_segment();
         } else if effective_speed != last_move.max_speed {
-            tracing::info!("Splitting a segment due to effective speed at {:?} (our vec coord {:?}); prev length was {}, speed changing {} -> {}", last_move.to,  new_state.vec_coord(), last_move_delta.magnitude(), last_move.max_speed, effective_speed);
+            tracing::debug!("Splitting a segment due to effective speed at {:?} (our vec coord {:?}); prev length was {}, speed changing {} -> {}", last_move.to,  new_state.vec_coord(), last_move_delta.magnitude(), last_move.max_speed, effective_speed);
             self.start_new_unplanned_segment();
         }
         let last_seg_mut = self.unplanned_segments.back_mut().unwrap();
@@ -1231,7 +1231,7 @@ impl CartCoroutine {
             } else if should_panic_schedule && idx <= panic_max_index && when < 2.0 {
                 // We're low on cached moves, so let's schedule this segment
                 schedulable_segments.push_front((*seg, max_exit_speed));
-                tracing::info!(
+                tracing::debug!(
                     "> panic scheduling! seg_schedulable = {}, seg = {:?}",
                     unconditionally_schedulable,
                     seg
@@ -1275,7 +1275,7 @@ impl CartCoroutine {
         if prev_segment.any_content() {
             tracing::debug!("new segment starting from {:?}", prev_segment.to);
             // todo remove this log
-            tracing::info!(
+            tracing::debug!(
                 "odometer check: track state says {}, segments say {}",
                 self.scan_state.odometer,
                 prev_segment.starting_odometer + prev_segment.distance()
@@ -1811,7 +1811,7 @@ impl CartCoroutine {
                                 .unwrap()
                             {
                                 (game_state::game_map::CasOutcome::Match, _, _) => {
-                                    tracing::info!(
+                                    tracing::debug!(
                                         "Pass switch match: got {:?} at {:?}",
                                         pass_switch_block,
                                         pass_switch_coord

@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Context, Error, Result};
 use cgmath::{vec3, Vector3, Zero};
 use circular_buffer::CircularBuffer;
 
@@ -39,9 +39,10 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracy_client::span;
 
+use crate::game_state::event::EventInitiator;
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
-    formats, CachelineAligned,
+    formats, run_handler, CachelineAligned,
 };
 
 use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
@@ -1336,13 +1337,25 @@ impl EntityCoreArray {
 
         if let Some(coroutine) = &mut self.coroutine[i] {
             println!("insert");
-            match coroutine.as_mut().plan_move(
-                services,
-                position,
-                position,
-                0.0,
-                self.move_queue[i].remaining_capacity(),
+            let handler_result = match run_handler!(
+                || Ok(coroutine.as_mut().plan_move(
+                    services,
+                    position,
+                    position,
+                    0.0,
+                    self.move_queue[i].remaining_capacity(),
+                )),
+                "initial_coroutine",
+                &EventInitiator::Engine
             ) {
+                Ok(handler_result) => handler_result,
+                Err(e) => {
+                    self.coro_panic_unwind(i, e);
+                    return i;
+                }
+            };
+
+            match handler_result {
                 // This is the initial move, so it starts now
                 CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
                     self.last_nontrivial_modification[i] = tick;
@@ -1632,8 +1645,19 @@ impl EntityCoreArray {
             let mut estimated_z = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
             let mut last_seq = self.current_move_seq[i];
 
-            tracing::info!("running coro. control: {}, last_seq: {}. Estimated position {}, {}, {}. Move time {}, move start tick {}, move end tick {}", self.control[i], last_seq, estimated_x, estimated_y, estimated_z, self.move_time[i], self.move_start_tick[i], last_move_ending_tick);
-            tracing::info!("queue: {:?}", self.move_queue[i]);
+            tracing::debug!(
+                "running coro. control: {}, last_seq: {}. Estimated position {}, {}, {}. \
+             Move time {}, move start tick {}, move end tick {}",
+                self.control[i],
+                last_seq,
+                estimated_x,
+                estimated_y,
+                estimated_z,
+                self.move_time[i],
+                self.move_start_tick[i],
+                last_move_ending_tick
+            );
+            tracing::debug!("queue: {:?}", self.move_queue[i]);
             for StoredMovement {
                 sequence,
                 movement,
@@ -1679,7 +1703,7 @@ impl EntityCoreArray {
 
             let estimated_t = (last_move_ending_tick - tick) as f32 / 1_000_000_000.0;
 
-            tracing::info!(
+            tracing::debug!(
                 "After applying queued moves: Estimated position {}, {}, {} @ {} ({})",
                 estimated_x,
                 estimated_y,
@@ -1690,34 +1714,53 @@ impl EntityCoreArray {
             let move_queue = &mut self.move_queue[i];
 
             let planned_move = match completion {
-                None => coroutine.as_mut().plan_move(
-                    services,
-                    vec3(self.x[i], self.y[i], self.z[i]),
-                    vec3(estimated_x, estimated_y, estimated_z),
-                    estimated_t,
-                    move_queue.remaining_capacity(),
+                None => run_handler!(
+                    || Ok(coroutine.as_mut().plan_move(
+                        services,
+                        vec3(self.x[i], self.y[i], self.z[i]),
+                        vec3(estimated_x, estimated_y, estimated_z),
+                        estimated_t,
+                        move_queue.remaining_capacity(),
+                    )),
+                    "entity_coro",
+                    &EventInitiator::Engine
                 ),
                 Some(c) => match c.result.value {
-                    ContinuationResultValue::EntityDecision(m) => CoroutineResult::Successful(m),
+                    ContinuationResultValue::EntityDecision(m) => {
+                        Ok(CoroutineResult::Successful(m))
+                    }
                     _ => {
                         c.trace_buffer.log("In run_coro_single, reentering");
-                        coroutine.as_mut().continuation(
-                            services,
-                            vec3(self.x[i], self.y[i], self.z[i]),
-                            vec3(estimated_x, estimated_y, estimated_z),
-                            estimated_t,
-                            move_queue.remaining_capacity(),
-                            c.result,
-                            c.trace_buffer,
+                        run_handler!(
+                            || Ok(coroutine.as_mut().continuation(
+                                services,
+                                vec3(self.x[i], self.y[i], self.z[i]),
+                                vec3(estimated_x, estimated_y, estimated_z),
+                                estimated_t,
+                                move_queue.remaining_capacity(),
+                                c.result,
+                                c.trace_buffer,
+                            )),
+                            "entity_coro",
+                            &EventInitiator::Engine
                         )
                     }
                 },
             };
+
+            let planned_move = match planned_move {
+                Ok(planned_move) => planned_move,
+                Err(e) => {
+                    self.coro_panic_unwind(i, e);
+                    return u64::MAX;
+                }
+            };
+
             planned_move.log_trace("In run_coro_single, after plan_move");
 
             match planned_move {
                 CoroutineResult::Successful(EntityMoveDecision::QueueSingleMovement(movement)) => {
-                    tracing::info!("planned single move: {:?}", movement);
+                    tracing::debug!("planned single move: {:?}", movement);
                     self.last_nontrivial_modification[i] = tick;
                     self.move_queue[i].push(StoredMovement {
                         movement,
@@ -1733,7 +1776,7 @@ impl EntityCoreArray {
                     self.current_move_ending_tick(i)
                 }
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
-                    tracing::info!("planned multiple move: {:?}", movements);
+                    tracing::debug!("planned multiple move: {:?}", movements);
                     self.last_nontrivial_modification[i] = tick;
                     if movements.is_empty() {
                         // TODO this shouldn't be a panic
@@ -1763,13 +1806,13 @@ impl EntityCoreArray {
                     }
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
-                    tracing::info!("delay: {:?}", delay);
+                    tracing::debug!("delay: {:?}", delay);
                     self.recalc_at[i] = tick + (delay * 1_000_000_000.0) as u64;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     self.current_move_ending_tick(i).min(self.recalc_at[i])
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLaterFlexible(delay)) => {
-                    tracing::info!("delay: {:?}", delay);
+                    tracing::debug!("delay: {:?}", delay);
                     assert!(delay.end >= delay.start);
                     // Accept a recalc if it's more than at least recalc_in
                     self.recalc_at[i] = tick + (delay.start * 1_000_000_000.0) as u64;
@@ -1887,7 +1930,7 @@ impl EntityCoreArray {
         };
 
         if force_advance || self.move_elapsed(i, update_tick) > self.move_time[i] {
-            tracing::info!(
+            tracing::debug!(
                 "{}: finished move, control {}, mst {}, mt {}, MoveQ available {}",
                 self.id[i],
                 self.control[i],
@@ -1897,7 +1940,7 @@ impl EntityCoreArray {
             );
 
             self.control[i] &= !CONTROL_DEQUEUE_WHEN_READY;
-            tracing::info!(
+            tracing::debug!(
                 "{}: finished move w/ time {}/{}, seq was {}",
                 self.id[i],
                 self.move_elapsed(i, update_tick),
@@ -1971,6 +2014,46 @@ impl EntityCoreArray {
             return u64::MAX;
         }
         (approx_ticks) as u64
+    }
+
+    #[cold]
+    fn coro_panic_unwind(&mut self, index: usize, err: Error) {
+        tracing::error!("coroutine {} panicked: {}", index, err);
+        tracing::error!("control: {:x}", self.control[index]);
+        tracing::error!("class: {}", self.class[index]);
+        tracing::error!(
+            "last nontrivial modification: {:?}",
+            self.last_nontrivial_modification[index]
+        );
+        tracing::error!("current move seq: {}", self.current_move_seq[index]);
+        tracing::error!(
+            "coords {:?} {:?} {:?}",
+            self.x[index],
+            self.y[index],
+            self.z[index]
+        );
+        tracing::error!(
+            "velocities {:?} {:?} {:?}",
+            self.xv[index],
+            self.yv[index],
+            self.zv[index]
+        );
+        tracing::error!(
+            "accelerations {:?} {:?} {:?}",
+            self.xa[index],
+            self.ya[index],
+            self.za[index]
+        );
+        tracing::error!(
+            "theta_y {:?} theta_x {:?}",
+            self.theta_y[index],
+            self.theta_x[index]
+        );
+        tracing::error!("move time {:?}", self.move_time[index]);
+        tracing::error!("move start tick {:?}", self.move_start_tick[index]);
+        tracing::error!("recalc at {:?}", self.recalc_at[index]);
+        tracing::error!("move queue: {:?}", self.move_queue[index]);
+        self.control[index] &= !CONTROL_AUTONOMOUS;
     }
 }
 /// Project a coordinate into the future.
@@ -2099,14 +2182,14 @@ impl EntityShardWorker {
                     self.shard_id,
                     update_awakening_tick
                 );
-                tracing::info!(
+                tracing::debug!(
                     "next awakening: {:?}, {} from now (coro: {}, update: {})",
                     update_awakening_tick.min(coro_awakening_tick),
                     (update_awakening_tick as i64 - self.game_state.tick() as i64),
                     (coro_awakening_tick as i64 - self.game_state.tick() as i64),
                     (update_awakening_tick as i64 - self.game_state.tick() as i64)
                 );
-                tracing::info!("At tick {}", self.game_state.tick());
+                tracing::debug!("At tick {}", self.game_state.tick());
                 drop(lock);
                 update_awakening_tick.min(coro_awakening_tick)
             };
