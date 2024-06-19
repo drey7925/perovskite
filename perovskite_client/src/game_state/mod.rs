@@ -715,6 +715,8 @@ impl ClientState {
                 self.egui.lock().open_chat();
             } else if input.take_just_pressed(BoundAction::ChatSlash) {
                 self.egui.lock().open_chat_slash();
+            } else if input.take_just_pressed(BoundAction::PhysicsDebug) {
+                self.egui.lock().toggle_debug();
             }
         }
 

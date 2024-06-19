@@ -1,15 +1,17 @@
 use anyhow::Result;
-use egui::{vec2, Button, Color32, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
+use egui::{vec2, Button, Color32, Context, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
 use perovskite_core::protocol::items::ItemStack;
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 
+use egui::WidgetText::RichText;
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
+use tracy_client::plot;
 
 use crate::game_state::items::InventoryViewManager;
 use crate::game_state::{GameAction, InventoryAction};
@@ -43,6 +45,8 @@ pub(crate) struct EguiUi {
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
 
+    debug_open: bool,
+
     visible_popups: Vec<PopupDescription>,
 
     text_fields: FxHashMap<(u64, String), String>,
@@ -73,6 +77,7 @@ impl EguiUi {
             chat_force_request_focus: false,
             chat_force_cursor_to_end: false,
             chat_force_scroll_to_end: false,
+            debug_open: false,
             inventory_view: None,
             scale: 1.0,
             visible_popups: vec![],
@@ -117,6 +122,10 @@ impl EguiUi {
         self.chat_force_request_focus = true;
         self.chat_force_cursor_to_end = true;
         self.chat_force_scroll_to_end = true;
+    }
+
+    pub(crate) fn toggle_debug(&mut self) {
+        self.debug_open = !self.debug_open;
     }
     pub(crate) fn draw_all_uis(
         &mut self,
@@ -176,8 +185,11 @@ impl EguiUi {
         if self.pause_menu_open {
             self.draw_pause_menu(ctx, client_state);
         }
-        // this renders a TopBottomPanel, so it needs to be last
+        // these render a TopBottomPanel, so they need to be last
         self.render_chat_history(ctx, client_state);
+        if self.debug_open {
+            self.render_debug(ctx, client_state);
+        }
     }
 
     fn get_text_fields(&self, popup_id: u64) -> HashMap<String, String> {
@@ -758,6 +770,78 @@ impl EguiUi {
                     });
             }
         }
+    }
+    fn render_debug(&mut self, ctx: &Context, state: &ClientState) {
+        egui::TopBottomPanel::bottom("debug_panel")
+            .max_height(240.0)
+            .frame(egui::Frame {
+                fill: Color32::from_black_alpha(192),
+                stroke: egui::Stroke {
+                    width: 0.0,
+                    color: Color32::TRANSPARENT,
+                },
+                ..Default::default()
+            })
+            .show(ctx, |ui| {
+                let pos = state.weakly_ordered_last_position();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Location: ({:.3}, {:.3}, {:.3}), facing ({:.1}, {:.1})",
+                        // cast to i32 to avoid spamming a ton of decimal places from the
+                        // smoothing algorithm
+                        pos.position.x,
+                        pos.position.y,
+                        pos.position.z,
+                        pos.face_direction.0,
+                        pos.face_direction.1
+                    ))
+                    .font(egui::FontId::monospace(16.0))
+                    .color(Color32::WHITE),
+                );
+                let block_id = state.tool_controller.lock().pointee_block_id();
+                let block_name = block_id
+                    .map(|x| state.block_types.get_blockdef(x))
+                    .flatten()
+                    .map(|x| x.short_name.clone());
+                ui.label(
+                    egui::RichText::new(format!("Block: {:x?}: {:?}", block_id, block_name))
+                        .font(egui::FontId::monospace(16.0))
+                        .color(if block_id.is_some() {
+                            Color32::WHITE
+                        } else {
+                            Color32::DARK_GRAY
+                        }),
+                );
+                {
+                    let entity_lock = state.entities.lock();
+                    if let Some(entity_id) = entity_lock.attached_to_entity {
+                        if let Some(entity) = entity_lock.entities.get(&entity_id) {
+                            let start_tick = state.timekeeper.now();
+                            let debug_speed = entity.debug_speed(start_tick);
+                            let estimated_buffer = entity.estimated_buffer(start_tick).max(0.0);
+                            let estimated_buffer_count = entity.estimated_buffer_count();
+                            let cms = entity.debug_cms();
+                            let cme = entity.debug_cme(start_tick);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Attached entity: {entity_id}, speed: {debug_speed:.2}, \
+                                estimated buffer: {estimated_buffer:.2}, \
+                                estimated buffer count: {estimated_buffer_count}, \
+                                current move sequence: {cms}, current move elapsed: {cme:.2}"
+                                ))
+                                .font(egui::FontId::monospace(16.0))
+                                .color(Color32::WHITE),
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new(format!("Attached entity: {entity_id}"))
+                                    .font(egui::FontId::monospace(16.0))
+                                    .color(Color32::DARK_GRAY),
+                            );
+                        }
+                    }
+                }
+            });
     }
 }
 

@@ -70,6 +70,10 @@ impl Timekeeper {
         }
     }
 
+    pub(crate) fn now(&self) -> u64 {
+        self.time_to_tick_estimate(Instant::now())
+    }
+
     pub(crate) fn update_error(&self, server_tick: u64) {
         let now = Instant::now();
         let new_timebase_estimate = now - Duration::from_nanos(server_tick);

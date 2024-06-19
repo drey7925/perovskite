@@ -48,6 +48,7 @@ struct DigState {
 // Computes the block that the player is pointing at, tracks the progress of digging, etc.
 pub(crate) struct ToolController {
     dig_progress: Option<DigState>,
+    hover_block: Option<BlockId>,
     current_item: ItemDef,
     current_slot: u32,
     current_item_interacting_groups: Vec<Vec<String>>,
@@ -60,6 +61,7 @@ impl ToolController {
     pub(crate) fn new() -> ToolController {
         ToolController {
             dig_progress: None,
+            hover_block: None,
             current_item: default_item(),
             current_slot: 0,
             current_item_interacting_groups: get_dig_interacting_groups(&default_item()),
@@ -101,23 +103,25 @@ impl ToolController {
     // Compute a new selected block.
     pub(crate) fn update(&mut self, client_state: &ClientState, delta: Duration) -> ToolState {
         let player_pos = client_state.last_position();
-        let (pointee, neighbor, block_def) = match self.compute_pointee(client_state, &player_pos) {
-            Some(x) => x,
-            None => {
-                // Ensure that we don't leave pending input events that fire when we finally do get a pointee
-                let mut input = client_state.input.lock();
-                input.take_just_pressed(BoundAction::Dig);
-                input.take_just_released(BoundAction::Dig);
-                input.take_just_pressed(BoundAction::Place);
-                input.take_just_pressed(BoundAction::Interact);
-                self.dig_progress = None;
-                return ToolState {
-                    pointee: None,
-                    neighbor: None,
-                    action: None,
-                };
-            }
-        };
+        let (pointee, neighbor, block_def, block_id) =
+            match self.compute_pointee(client_state, &player_pos) {
+                Some(x) => x,
+                None => {
+                    // Ensure that we don't leave pending input events that fire when we finally do get a pointee
+                    let mut input = client_state.input.lock();
+                    input.take_just_pressed(BoundAction::Dig);
+                    input.take_just_released(BoundAction::Dig);
+                    input.take_just_pressed(BoundAction::Place);
+                    input.take_just_pressed(BoundAction::Interact);
+                    self.dig_progress = None;
+                    self.hover_block = None;
+                    return ToolState {
+                        pointee: None,
+                        neighbor: None,
+                        action: None,
+                    };
+                }
+            };
         let mut action = None;
 
         let mut input = client_state.input.lock();
@@ -236,12 +240,20 @@ impl ToolController {
         if let Some(action) = &action {
             log::info!("Sending player action: {:?}", action);
         }
+
+        self.hover_block = Some(block_id);
+
         ToolState {
             pointee: Some(pointee),
             neighbor,
             action,
         }
     }
+
+    pub(crate) fn pointee_block_id(&self) -> Option<BlockId> {
+        self.hover_block
+    }
+
     fn compute_dig_behavior(item: &ItemDef, block_def: &BlockTypeDef) -> Option<DigBehavior> {
         let block_groups = block_def.groups.iter().collect::<FxHashSet<_>>();
         for rule in item.interaction_rules.iter() {
@@ -256,7 +268,12 @@ impl ToolController {
         &'a self,
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
-    ) -> Option<(BlockCoordinate, Option<BlockCoordinate>, &'a BlockTypeDef)> {
+    ) -> Option<(
+        BlockCoordinate,
+        Option<BlockCoordinate>,
+        &'a BlockTypeDef,
+        BlockId,
+    )> {
         // TODO handle custom collision boxes
         let pos = last_pos.position;
         let end = pos + (POINTEE_DISTANCE * last_pos.face_unit_vector());
@@ -308,7 +325,7 @@ impl ToolController {
                 ) {
                     for rule in self.current_item_interacting_groups.iter() {
                         if rule.iter().all(|x| block_def.groups.contains(x)) {
-                            return Some((coord, prev, block_def));
+                            return Some((coord, prev, block_def, id));
                         }
                     }
                 }
