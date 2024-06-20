@@ -54,22 +54,34 @@ impl GameHud {
         ctx: &VulkanWindow,
         client_state: &ClientState,
     ) -> Result<Vec<FlatTextureDrawCall>> {
-        let slot_delta = client_state.input.lock().take_scroll_slots();
-        if slot_delta != 0 {
-            if let Some(slots) = self.hotbar_view_id.and_then(|x| {
-                client_state
-                    .inventories
-                    .lock()
-                    .inventory_views
-                    .get(&x)
-                    .map(|x| x.dimensions.1)
-            }) {
-                let new_slot =
-                    (self.hotbar_slot as i32 - slot_delta).rem_euclid(slots.try_into().unwrap());
-                self.set_slot(new_slot.try_into().unwrap(), client_state);
+        if let Some(total_slots) = self.hotbar_view_id.and_then(|x| {
+            client_state
+                .inventories
+                .lock()
+                .inventory_views
+                .get(&x)
+                .map(|x| x.dimensions.1)
+        }) {
+            let (slot_delta, slot_selection) = {
+                let mut input_lock = client_state.input.lock();
+                (
+                    input_lock.take_scroll_slots(),
+                    input_lock.take_hotbar_selection(),
+                )
+            };
+            if slot_delta != 0 {
+                {
+                    let new_slot = (self.hotbar_slot as i32 - slot_delta)
+                        .rem_euclid(total_slots.try_into().unwrap());
+                    self.set_slot(new_slot.try_into().unwrap(), client_state);
+                }
+            }
+            if let Some(x) = slot_selection {
+                if x < total_slots as u32 {
+                    self.set_slot(x, client_state);
+                }
             }
         }
-
         let window_size = ctx.window_size();
         if self.crosshair_draw_call.is_none() || window_size != self.last_size {
             self.crosshair_draw_call = Some(self.recreate_crosshair(ctx, window_size)?);

@@ -209,6 +209,7 @@ impl MapChunk {
                     extended_data,
                 },
             )),
+            startup_counter: game_state.startup_counter,
         };
 
         Ok(proto)

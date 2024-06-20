@@ -54,6 +54,8 @@ pub(crate) struct KeybindSettings {
     pub(crate) chat_slash: Keybind,
 
     pub(crate) physics_debug: Keybind,
+
+    pub(crate) hotbar_slots: [Keybind; 8],
 }
 impl KeybindSettings {
     pub(crate) fn get(&self, action: BoundAction) -> Keybind {
@@ -100,7 +102,17 @@ impl Default for KeybindSettings {
             menu: ScanCode(0x1),
             chat: ScanCode(0x14),
             chat_slash: ScanCode(0x35),
-            physics_debug: ScanCode(0x2),
+            physics_debug: ScanCode(0x3b),
+            hotbar_slots: [
+                ScanCode(2),
+                ScanCode(3),
+                ScanCode(4),
+                ScanCode(5),
+                ScanCode(6),
+                ScanCode(7),
+                ScanCode(8),
+                ScanCode(9),
+            ],
         }
     }
 }
@@ -284,6 +296,18 @@ impl InputState {
         }
     }
 
+    pub(crate) fn take_hotbar_selection(&mut self) -> Option<u32> {
+        if self.modal_active {
+            return None;
+        }
+        let slots = self.settings.load().input.hotbar_slots;
+        for (i, slot) in slots.iter().enumerate() {
+            if self.new_presses.remove(&slot) {
+                return Some(i as u32);
+            }
+        }
+        None
+    }
     pub(crate) fn is_mouse_captured(&self) -> bool {
         self.mouse_captured && !self.modal_active
     }
