@@ -170,7 +170,7 @@ const VARIANT_PRELOCKED: u16 = 256;
 /// forbidden.
 const VARIANT_STARTING_HELD: u16 = 512;
 
-pub(crate) fn register_signal_block(
+pub(crate) fn register_signal_blocks(
     game_builder: &mut crate::game_builder::GameBuilder,
 ) -> Result<(BlockId, BlockId, BlockId)> {
     include_texture_bytes!(
@@ -204,6 +204,26 @@ pub(crate) fn register_signal_block(
     )?;
 
     let starting_signal = register_starting_signal(game_builder)?;
+
+    let automatic_signal_id = automatic_signal.id;
+    let interlocking_signal_id = interlocking_signal.id;
+    let starting_signal_id = starting_signal.id;
+
+    game_builder
+        .inner
+        .blocks_mut()
+        .register_cold_load_postprocessor(Box::new(move |data| {
+            for block in data {
+                if block.equals_ignore_variant(automatic_signal_id)
+                    || block.equals_ignore_variant(interlocking_signal_id)
+                    || block.equals_ignore_variant(starting_signal_id)
+                {
+                    // Reset the signal back to the idle state, holding the same rotation
+                    *block =
+                        block.with_variant_unchecked(block.variant() & 0x3 | VARIANT_RESTRICTIVE)
+                }
+            }
+        }));
 
     Ok((
         automatic_signal.id,
@@ -336,7 +356,7 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
                 it.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
                     let result = old_place_handler(ctx, coord, anchor, stack)?;
                     ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
-                        *b = b.with_variant(b.variant() | VARIANT_RESTRICTIVE)?;
+                        *b = b.with_variant_unchecked(b.variant() | VARIANT_RESTRICTIVE);
                         Ok(())
                     })?;
                     Ok(result)
@@ -439,7 +459,7 @@ fn register_single_signal(
                 it.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
                     let result = old_place_handler(ctx, coord, anchor, stack)?;
                     ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
-                        *b = b.with_variant(b.variant() | VARIANT_RESTRICTIVE)?;
+                        *b = b.with_variant_unchecked(b.variant() | VARIANT_RESTRICTIVE);
                         Ok(())
                     })?;
                     Ok(result)
@@ -605,7 +625,7 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                     .ctx
                     .game_map()
                     .mutate_block_atomically(coord, |b, ext| {
-                        *b = b.with_variant(variant)?;
+                        *b = b.with_variant_unchecked(variant);
                         let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
                         let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
                             left_routes: left_routes
@@ -705,7 +725,7 @@ pub(crate) fn automatic_signal_acquire(
 
     variant |= VARIANT_PERMISSIVE;
     variant &= !VARIANT_RESTRICTIVE;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
     SignalLockOutcome::Acquired
 }
 
@@ -738,7 +758,7 @@ pub(crate) fn signal_enter_block(
     variant |= VARIANT_RESTRICTIVE;
     variant |= VARIANT_RESTRICTIVE_TRAFFIC;
     variant &= !VARIANT_PERMISSIVE;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
 }
 
 /// Releases a signal as a cart leaves the block, transitioning it from restrictive_traffic | restrictive to just restrictive
@@ -773,7 +793,7 @@ pub(crate) fn signal_release(
     variant &=
         !(VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_LEFT | VARIANT_RIGHT | VARIANT_STARTING_HELD);
     variant |= VARIANT_RESTRICTIVE;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
 }
 
 /// Attempts to acquire an interlocking signal.
@@ -800,7 +820,7 @@ pub(crate) fn interlocking_signal_preacquire(
     }
 
     variant |= VARIANT_PRELOCKED;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
     SignalLockOutcome::Acquired
 }
 
@@ -835,7 +855,7 @@ pub(crate) fn starting_signal_preacquire_front(
     }
 
     variant |= VARIANT_PRELOCKED;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
     SignalLockOutcome::Acquired
 }
 
@@ -855,7 +875,7 @@ pub(crate) fn starting_signal_depart_forward(
     }
     variant |= VARIANT_PRELOCKED;
 
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
     SignalLockOutcome::Acquired
 }
 
@@ -882,7 +902,7 @@ pub(crate) fn starting_signal_acquire_back(
     // We set restrictive_traffic because we haven't actually gotten the cart past it yet, but we still want to
     // lock out traffic passing through it
     variant |= VARIANT_RESTRICTIVE_TRAFFIC;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
     SignalLockOutcome::Acquired
 }
 
@@ -921,7 +941,7 @@ pub(crate) fn starting_signal_reverse_enter_block(
 
     variant |= VARIANT_STARTING_HELD;
     variant &= !VARIANT_RESTRICTIVE_TRAFFIC;
-    *id = id.with_variant(variant).unwrap();
+    *id = id.with_variant_unchecked(variant);
 }
 
 /// Attempt to acquire a starting signal.

@@ -235,8 +235,12 @@ struct DefaultMapgen {
     tall_grass_density_noise: noise::Billow<noise::SuperSimplex>,
 
     karst_noise: karst::KarstGenerator,
+
+    // These tiles are used for the temporary prespawned railways until I have a chance to implement
+    // a suitable gameplay experience for creating long tracks
     rail_testonly: BlockTypeHandle,
     signal_testonly: BlockTypeHandle,
+    glass_testonly: BlockTypeHandle,
 
     biome_noise: BiomeNoise,
     macrobiome_noise: MacrobiomeNoise,
@@ -366,12 +370,12 @@ impl MapgenInterface for DefaultMapgen {
         self.generate_vegetation(chunk_coord, chunk, &height_map, &macrobiome_map, &biome_map);
 
         if chunk_coord.y == 0 {
-            // Rails running along Z axis
-            if chunk_coord.x % 16 == 0 {
-                for x in 1..15 {
+            // Rails running along Z axis, every half kilometer
+            if chunk_coord.x % 32 == 0 {
+                for x in 6..10 {
                     for z in 0..16 {
                         chunk.set_block(ChunkOffset { x, y: 3, z }, self.stone, None);
-                        if chunk_coord.x % 32 == 0 || x == 7 || x == 8 {
+                        if x == 7 || x == 8 {
                             chunk.set_block(
                                 ChunkOffset { x, y: 4, z },
                                 self.rail_testonly.with_variant(0).unwrap(),
@@ -382,12 +386,11 @@ impl MapgenInterface for DefaultMapgen {
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
                             if z == 5 && chunk_coord.z % 4 == 0 {
-                                self.desert_stone
-                            } else if z == 4
-                                && chunk_coord.z % 4 == 0
-                                && (chunk_coord.x % 32 == 0 || x == 7 || x == 8)
-                            {
+                                self.glass_testonly
+                            } else if z == 4 && chunk_coord.z % 4 == 0 && x == 7 {
                                 self.signal_testonly.with_variant(16).unwrap()
+                            } else if z == 6 && chunk_coord.z % 4 == 0 && x == 8 {
+                                self.signal_testonly.with_variant(18).unwrap()
                             } else {
                                 self.air
                             },
@@ -396,11 +399,11 @@ impl MapgenInterface for DefaultMapgen {
                     }
                 }
                 if chunk_coord.z % 4 == 0 {
-                    for x in [0, 15] {
+                    for x in [6, 9] {
                         // Gantries
-                        chunk.set_block(ChunkOffset { x, y: 4, z: 5 }, self.desert_stone, None);
-                        chunk.set_block(ChunkOffset { x, y: 5, z: 5 }, self.desert_stone, None);
-                        chunk.set_block(ChunkOffset { x, y: 6, z: 5 }, self.desert_stone, None);
+                        chunk.set_block(ChunkOffset { x, y: 4, z: 5 }, self.glass_testonly, None);
+                        chunk.set_block(ChunkOffset { x, y: 5, z: 5 }, self.glass_testonly, None);
+                        chunk.set_block(ChunkOffset { x, y: 6, z: 5 }, self.glass_testonly, None);
                     }
                 }
             }
@@ -835,5 +838,6 @@ pub(crate) fn build_mapgen(
 
         rail_testonly: blocks.get_by_name("carts:rail_tile").expect("rail"),
         signal_testonly: blocks.get_by_name("carts:signal").expect("signal"),
+        glass_testonly: blocks.get_by_name("default:glass").expect("glass"),
     })
 }

@@ -112,6 +112,8 @@ pub type InlineHandler = dyn Fn(
     + Send
     + Sync;
 
+pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; 4096]) + Send + Sync + 'static;
+
 // How extended data for this block type ought to be handled.
 #[derive(PartialEq, Eq)]
 pub enum ExtDataHandling {
@@ -403,6 +405,7 @@ pub struct BlockTypeManager {
     init_complete: bool,
     light_propagation: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
+    cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
 }
 impl BlockTypeManager {
     pub(crate) fn new() -> BlockTypeManager {
@@ -412,6 +415,7 @@ impl BlockTypeManager {
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
+            cold_load_postprocessors: Vec::new(),
         }
     }
     /// Given a handle, return the block.
@@ -491,6 +495,7 @@ impl BlockTypeManager {
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
+            cold_load_postprocessors: Vec::new(),
         };
         let max_index = block_proto
             .block_type
@@ -643,6 +648,24 @@ impl BlockTypeManager {
         self.fast_block_groups
             .get(block_group)
             .map(|x| FastBlockGroup { blocks: x })
+    }
+
+    /// Registers a function to run on block data whenever a chunk is loaded after it was last
+    /// modified in a *past* startup of the server (i.e. chunks that were evicted from the
+    /// cache during this run, and are now being reloaded do NOT trigger this function).
+    ///
+    /// This function must ABSOLUTELY be fast - it will be called in the hot path of the load, and
+    /// is in the critical path of the thread that triggered the chunk load AND any threads that are
+    /// blocked on the condition variable for the same chunk.
+    ///
+    /// It is currently **undefined** whether this occurs before or after extended data parsing
+    /// (this makes a distinction since the block ID is used to select the parsing function)
+    pub fn register_cold_load_postprocessor(&mut self, postprocessor: Box<ColdLoadPostprocessor>) {
+        self.cold_load_postprocessors.push(postprocessor);
+    }
+
+    pub(crate) fn cold_load_postprocessors(&self) -> &[Box<ColdLoadPostprocessor>] {
+        &self.cold_load_postprocessors
     }
 
     // Performs some last setup before the block manager becomes immutable.

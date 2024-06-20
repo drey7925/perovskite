@@ -56,19 +56,29 @@ pub mod special_block_defs {
     pub const UNLOADED_CHUNK_BLOCK_ID: BlockId = BlockId(u32::MAX);
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(transparent)]
 pub struct BlockId(pub u32);
 impl BlockId {
+    // Impl note: most calls into this are cross-crate. When LTO is off, we need to actively
+    // request inlining; see https://github.com/rust-lang/hashbrown/pull/119#issuecomment-537539046
+    // for rationale. Most of these are tiny functions with
+
+    #[inline]
     pub fn base_id(&self) -> u32 {
         self.0 & !BLOCK_VARIANT_MASK
     }
+    #[inline]
     pub fn index(&self) -> usize {
         (self.0 & !BLOCK_VARIANT_MASK) as usize >> 12
     }
+    #[inline]
     pub fn variant(&self) -> u16 {
         (self.0 & BLOCK_VARIANT_MASK) as u16
     }
+    /// Returns a new BlockId with the same base block and a different variant
+    ///
+    /// TODO: replace with [with_variant_unchecked] where feasible, for a smaller function
     pub fn with_variant(self, variant: u16) -> Result<BlockId> {
         ensure!(
             variant & (BLOCK_VARIANT_MASK as u16) == variant,
@@ -76,9 +86,16 @@ impl BlockId {
         );
         Ok(BlockId(self.base_id() | (variant as u32)))
     }
+    /// Like [with_variant], but silently truncates excess bits
+    #[inline]
+    pub fn with_variant_unchecked(self, variant: u16) -> BlockId {
+        BlockId(self.base_id() | (variant as u32 & BLOCK_VARIANT_MASK))
+    }
+    #[inline]
     pub fn with_variant_of(self, other: BlockId) -> BlockId {
         BlockId(self.base_id() | (other.0 & BLOCK_VARIANT_MASK))
     }
+    #[inline]
     pub fn new(base: u32, variant: u16) -> Result<BlockId> {
         ensure!(
             base & BLOCK_VARIANT_MASK == 0,

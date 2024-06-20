@@ -289,10 +289,15 @@ impl MapChunk {
         let _span = span!("parse chunk");
         let proto = mapchunk_proto::StoredChunk::decode(bytes)
             .with_context(|| "MapChunk proto serialization failed")?;
+        let run_cold_load_postprocessors = proto.startup_counter != game_state.startup_counter;
         match proto.chunk_data {
-            Some(mapchunk_proto::stored_chunk::ChunkData::V1(chunk_data)) => {
-                parse_v1(chunk_data, coordinate, game_state, storage)
-            }
+            Some(mapchunk_proto::stored_chunk::ChunkData::V1(chunk_data)) => parse_v1(
+                chunk_data,
+                coordinate,
+                game_state,
+                storage,
+                run_cold_load_postprocessors,
+            ),
             None => bail!("Missing chunk_data or unrecognized format"),
         }
     }
@@ -382,16 +387,27 @@ impl MapChunk {
 }
 
 fn parse_v1(
-    chunk_data: mapchunk_proto::ChunkV1,
+    mut chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
     game_state: Arc<GameState>,
     storage: Arc<[AtomicU32; 4096]>,
+    run_cold_load_postprocessors: bool,
 ) -> std::result::Result<MapChunk, anyhow::Error> {
     let mut extended_data = FxHashMap::default();
     ensure!(
         chunk_data.block_ids.len() == 4096,
         "Block IDs length != 4096"
     );
+    if run_cold_load_postprocessors {
+        // The length should be right so this should be safe and zero or low cost
+        for processor in game_state.block_types().cold_load_postprocessors() {
+            let cast: &mut [BlockId] =
+                bytemuck::cast_slice_mut(chunk_data.block_ids.as_mut_slice());
+            let sized: &mut [BlockId; 4096] =
+                cast.try_into().expect("Failed to convert to BlockId array");
+            (processor)(sized);
+        }
+    }
 
     for mapchunk_proto::ExtendedData {
         offset_in_chunk,

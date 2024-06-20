@@ -42,4 +42,6 @@ message StoredChunk {
     oneof chunk_data {
         ChunkV1 v1 = 1;
     }
+
+    uint64 startup_counter = 127;
 }

@@ -69,14 +69,24 @@ use self::player::PlayerManager;
 /// **If you hold an Arc, you must await `await_start_shutdown` (possibly in a `tokio::select!` in your
 /// main loop) or otherwise detect a shutdown, at which point you must do any cleanup actions and drop your Arc.**
 pub struct GameState {
+    /// The path to the directory where the server's data is stored.
     data_dir: PathBuf,
+    /// The map for the server.
     map: Arc<ServerGameMap>,
+    /// The map generator for the server.
     mapgen: Arc<dyn MapgenInterface>,
+    /// The database for the server. Access to map, inventory, or player data should be done through\
+    /// other abstractions, such as the player manager.
     database: Arc<dyn GameDatabase>,
+    /// Manages all inventories that are not embedded within a map chunk
     inventory_manager: Arc<InventoryManager>,
+    /// Manages the definitions of all items
     item_manager: Arc<ItemManager>,
+    /// Manages the currently-connected players
     player_manager: Arc<PlayerManager>,
+    /// Holds the media resources that should be sent to clients
     media_resources: Arc<MediaManager>,
+    /// Handles chat commands and messages
     chat: Arc<ChatState>,
     early_shutdown: CancellationToken,
     mapgen_seed: u32,
@@ -88,6 +98,8 @@ pub struct GameState {
     server_start_time: Instant,
     extensions: type_map::concurrent::TypeMap,
     startup_time: Instant,
+    /// The number of times the server has been started.
+    startup_counter: u64,
 }
 
 impl GameState {
@@ -104,12 +116,12 @@ impl GameState {
         extensions: type_map::concurrent::TypeMap,
     ) -> Result<Arc<Self>> {
         let server_start_time = Instant::now();
-        // TODO figure out a way to replace unwrap with error propagation
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
         let mapgen = mapgen_provider(blocks.clone(), mapgen_seed);
         // If we don't have a time of day yet, start in the morning.
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
         let day_length = game_behaviors.day_length;
+        let startup_counter = advance_startup_counter(db.as_ref())?;
         let result = Arc::new_cyclic(|weak| Self {
             data_dir,
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
@@ -134,6 +146,7 @@ impl GameState {
             server_start_time,
             extensions,
             startup_time: Instant::now(),
+            startup_counter,
         });
         result.entities.clone().start_workers(result.clone());
         Ok(result)
@@ -364,6 +377,42 @@ where
                 seed,
                 String::from_utf8_lossy(name)
             );
+            Ok(seed)
+        }
+    }
+}
+
+/// Returns a new value each time the function is called.
+fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
+    let key = b"startup_counter".to_vec();
+    let key = KeySpace::Metadata.make_key(&key);
+    match db.get(&key)? {
+        Some(x) => match u64::decode_var(&x) {
+            Some((val, read)) => {
+                if read != x.len() {
+                    warn!(
+                        "Saved startup counter was {} bytes but only {} bytes were decoded (to {:?})",
+                        x.len(),
+                        read,
+                        val
+                    )
+                }
+                let next_counter = val + 1;
+                info!(
+                    "Previous startup counter {:?} advanced to {:?}",
+                    val, next_counter
+                );
+                db.put(&key, &next_counter.encode_var_vec())?;
+                Ok(next_counter)
+            }
+            None => {
+                bail!("Decoding varint for startup counter failed",);
+            }
+        },
+        None => {
+            let seed = 0;
+            db.put(&key, &seed.encode_var_vec())?;
+            info!("Initialized startup counter to {:?}", seed,);
             Ok(seed)
         }
     }

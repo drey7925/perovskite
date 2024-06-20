@@ -888,7 +888,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                             let new_block = if new_variant < 0 {
                                 AIR_ID
                             } else {
-                                liquid_type.with_variant(new_variant as u16).unwrap()
+                                liquid_type.with_variant_unchecked(new_variant as u16)
                             };
                             if block != new_block {
                                 chunk.set_block(coord.offset(), new_block, None);

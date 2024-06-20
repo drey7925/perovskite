@@ -204,6 +204,23 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         ),
     )?;
 
+    let switch_straight_id = switch_straight.id;
+    let switch_diverging_id = switch_diverging.id;
+    let switch_unset_id = switch_unset.id;
+
+    game_builder
+        .inner
+        .blocks_mut()
+        .register_cold_load_postprocessor(Box::new(move |data| {
+            for block in data {
+                if block.equals_ignore_variant(switch_straight_id)
+                    || block.equals_ignore_variant(switch_diverging_id)
+                {
+                    *block = switch_unset_id.with_variant_of(*block);
+                }
+            }
+        }));
+
     let cart_id = game_builder.inner.entities_mut().register(EntityDef {
         move_queue_type: game_state::entities::MoveQueueType::Buffer64,
         class_name: "carts:high_speed_minecart".to_string(),
@@ -215,7 +232,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     })?;
 
     let (automatic_signal, interlocking_signal, starting_signal) =
-        signals::register_signal_block(game_builder)?;
+        signals::register_signal_blocks(game_builder)?;
 
     let (rail_block_id, rail_slope_1, rail_slopes_8) = tracks::register_tracks(game_builder)?;
 

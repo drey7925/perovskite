@@ -5,6 +5,7 @@ use std::num::NonZeroU8;
 
 use anyhow::{Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3};
+use perovskite_core::constants::item_groups;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     chat::ChatMessage,
@@ -1291,6 +1292,11 @@ fn register_rail_slope(
                         1.0 / (denominator as f32),
                     ),
                 )
+                .add_block_groups(if denominator == 1 {
+                    vec![]
+                } else {
+                    vec![item_groups::HIDDEN_FROM_CREATIVE]
+                })
                 .set_allow_light_propagation(true)
                 .set_display_name(format!("Slope {numerator}/{denominator}"))
                 .add_modifier(Box::new(|bt| {

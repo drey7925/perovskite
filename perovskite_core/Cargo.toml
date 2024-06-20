@@ -12,6 +12,7 @@ maintenance = { status = "experimental" }
 anyhow = "1.0.70"
 argon2 = "0.4.1"
 bitvec = "1.0.1"
+bytemuck = { version = "1.16.1", features = ["derive"] }
 cgmath = "0.18.0"
 opaque-ke = { version = "2.0.0", features = ["argon2"] }
 parking_lot = "0.12.1"
