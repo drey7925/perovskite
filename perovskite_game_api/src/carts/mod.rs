@@ -337,15 +337,23 @@ fn place_cart(
                 .parse::<u32>()
                 .expect("bad cart_length");
 
-            actually_spawn_cart(
+            if let Err(e) = actually_spawn_cart(
                 config.clone(),
                 &response.ctx,
                 &cart_name,
                 cart_length,
                 rail_pos,
                 variant,
-            )
-            .unwrap();
+            ) {
+                response
+                    .ctx
+                    .initiator()
+                    .send_chat_message(
+                        ChatMessage::new_server_message(e.to_string())
+                            .with_color(SERVER_ERROR_COLOR),
+                    )
+                    .unwrap();
+            }
         }));
 
     match ctx.initiator() {
