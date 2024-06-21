@@ -140,7 +140,7 @@ async fn build_texture_atlas(
 
                         let mut bytes: Vec<u8> = Vec::new();
                         block_tex
-                            .write_to(&mut Cursor::new(&mut bytes), image::ImageOutputFormat::Png)
+                            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
                             .unwrap();
                         cache_manager
                             .lock()
@@ -162,6 +162,7 @@ async fn build_texture_atlas(
         texture_extrusion: 1,
         trim: false,
         texture_outlines: false,
+        force_max_dimensions: false,
     };
     let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
 
@@ -230,7 +231,7 @@ async fn build_texture_atlas(
         .unwrap()
         .frame;
 
-    let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer)
+    let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
         .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
 
     let mut texture_coords = HashMap::new();

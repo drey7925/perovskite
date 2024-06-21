@@ -2718,7 +2718,7 @@ impl GameMapTimer {
         game_state: &Arc<GameState>,
         mut chunk: MapChunkInnerWriteGuard<'_>,
         holder: &MapChunkHolder,
-        block_types: &HashSet<u32, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>,
+        block_types: &FxHashSet<u32>,
         coord: ChunkCoordinate,
         state: &ShardState,
     ) -> Result<(), Error> {

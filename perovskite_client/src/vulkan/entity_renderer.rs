@@ -62,6 +62,7 @@ impl EntityRenderer {
             texture_extrusion: 2,
             trim: false,
             texture_outlines: false,
+            force_max_dimensions: false,
         };
         let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
         // TODO move these files to a sensible location
@@ -87,7 +88,7 @@ impl EntityRenderer {
                 .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
         }
 
-        let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer)
+        let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
             .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
         let texture_coords: FxHashMap<String, Rect> = texture_packer
             .get_frames()

@@ -144,7 +144,7 @@ impl Color {
             ]);
         });
         let mut bytes: Vec<u8> = Vec::new();
-        colorized_image.write_to(&mut Cursor::new(&mut bytes), image::ImageOutputFormat::Png)?;
+        colorized_image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
         Ok(bytes)
     }
 
@@ -184,7 +184,7 @@ impl Color {
             });
         let mut bytes: Vec<u8> = Vec::new();
         colorized_image
-            .write_to(&mut Cursor::new(&mut bytes), image::ImageOutputFormat::Png)
+            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
             .unwrap();
         Ok(bytes)
     }
