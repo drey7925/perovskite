@@ -118,6 +118,65 @@ pub struct EntityManager {
     next_id: AtomicU64,
     types: Arc<EntityTypeManager>,
 }
+
+impl EntityManager {
+    pub(crate) fn predictive_position(&self, entity_id: u64, tick: u64) -> Option<Vector3<f64>> {
+        let shard = self.get_shard(entity_id);
+        let core = shard.core.read();
+        let index = core.id_lookup.get(&entity_id).copied()?;
+
+        let elapsed_ticks = tick.saturating_sub(core.move_start_tick[index]);
+        let elapsed = elapsed_ticks as f32 / 1_000_000_000.0;
+        if elapsed < core.move_time[index] {
+            return Some(Vector3::new(
+                qproj(core.x[index], core.xv[index], core.xa[index], elapsed),
+                qproj(core.y[index], core.yv[index], core.ya[index], elapsed),
+                qproj(core.z[index], core.zv[index], core.za[index], elapsed),
+            ));
+        }
+        let mut remaining = elapsed - core.move_time[index];
+        let mut acc_pos = Vector3::new(
+            qproj(
+                core.x[index],
+                core.xv[index],
+                core.xa[index],
+                core.move_time[index],
+            ),
+            qproj(
+                core.y[index],
+                core.yv[index],
+                core.ya[index],
+                core.move_time[index],
+            ),
+            qproj(
+                core.z[index],
+                core.zv[index],
+                core.za[index],
+                core.move_time[index],
+            ),
+        );
+        for movement in core.move_queue[index].as_slice() {
+            let m = &movement.movement;
+            if remaining < m.move_time {
+                return Some(Vector3::new(
+                    qproj(acc_pos.x, m.velocity.x, m.acceleration.x, remaining),
+                    qproj(acc_pos.y, m.velocity.y, m.acceleration.y, remaining),
+                    qproj(acc_pos.z, m.velocity.z, m.acceleration.z, remaining),
+                ));
+            } else {
+                remaining -= m.move_time;
+                acc_pos = Vector3::new(
+                    qproj(acc_pos.x, m.velocity.x, m.acceleration.x, m.move_time),
+                    qproj(acc_pos.y, m.velocity.y, m.acceleration.y, m.move_time),
+                    qproj(acc_pos.z, m.velocity.z, m.acceleration.z, m.move_time),
+                )
+            }
+        }
+
+        None
+    }
+}
+
 impl EntityManager {
     pub(crate) fn new(
         db: Arc<dyn GameDatabase>,
@@ -884,6 +943,7 @@ enum MoveQueue {
     Buffer8(Box<circular_buffer::CircularBuffer<8, StoredMovement>>),
     Buffer64(Box<circular_buffer::CircularBuffer<64, StoredMovement>>),
 }
+
 impl MoveQueue {
     fn pop(&mut self) -> Option<StoredMovement> {
         match self {
@@ -900,6 +960,15 @@ impl MoveQueue {
             }
         }
     }
+
+    fn peek(&self) -> Option<&StoredMovement> {
+        match self {
+            MoveQueue::SingleMove(m) => m.as_ref(),
+            MoveQueue::Buffer8(b) => b.front(),
+            MoveQueue::Buffer64(b) => b.front(),
+        }
+    }
+
     fn remaining_capacity(&self) -> usize {
         match self {
             MoveQueue::SingleMove(x) => {

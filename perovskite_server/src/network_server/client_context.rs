@@ -515,7 +515,12 @@ impl MapChunkSender {
         update: PositionAndPacing,
         bump_index: u32,
     ) -> Result<()> {
-        let position = update.position;
+        let mut position = update.position;
+
+        if let Some(position_override) = self.get_position_override() {
+            position.position = position_override;
+        }
+
         // TODO anticheat/safety checks
         // TODO consider caching more in the player's movement direction as a form of prefetch???
         let player_block_coord: BlockCoordinate = match position.position.try_into() {
@@ -705,6 +710,20 @@ impl MapChunkSender {
 
     fn should_unload(&self, player_chunk: ChunkCoordinate, chunk: ChunkCoordinate) -> bool {
         player_chunk.manhattan_distance(chunk) > UNLOAD_DISTANCE as u32
+    }
+    fn get_position_override(&self) -> Option<Vector3<f64>> {
+        let entity_id = self
+            .context
+            .player_context
+            .state
+            .lock()
+            .attached_to_entity?;
+        // Add 2 seconds of predictive lookahead
+        let tick = self.context.game_state.tick().saturating_add(2_000_000_000);
+        self.context
+            .game_state
+            .entities()
+            .predictive_position(entity_id, tick)
     }
 }
 
@@ -1956,7 +1975,6 @@ impl EntityEventSender {
                             })
                             .collect(),
                     };
-                    tracing::info!("Current tick {tick}");
                     messages.push(message);
                     Ok(())
                 })?;
