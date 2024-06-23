@@ -57,7 +57,7 @@ pub struct ServerArgs {
     #[arg(short, long, default_value_t = 28273)]
     pub port: u16,
 
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 65536)]
     pub trace_rate_denominator: usize,
 }
 
