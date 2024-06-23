@@ -316,6 +316,7 @@ fn place_cart(
         .title("Spawn Cart")
         .text_field("cart_name", "Cart name", "", true, false)
         .text_field("cart_length", "Cart length", "8", true, false)
+        .checkbox("board", "Board cart?", true, true)
         .button("spawn", "Spawn", true, true)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
             match response.user_action {
@@ -336,6 +337,10 @@ fn place_cart(
                 .expect("missing cart_length")
                 .parse::<u32>()
                 .expect("bad cart_length");
+            let board_cart = response
+                .checkbox_values
+                .get("board")
+                .expect("Missing board");
 
             if let Err(e) = actually_spawn_cart(
                 config.clone(),
@@ -344,6 +349,7 @@ fn place_cart(
                 cart_length,
                 rail_pos,
                 variant,
+                *board_cart,
             ) {
                 response
                     .ctx
@@ -379,6 +385,7 @@ fn actually_spawn_cart(
     cart_length: u32,
     rail_pos: BlockCoordinate,
     variant: u16,
+    board_cart: bool,
 ) -> Result<()> {
     let initial_state =
         tracks::ScanState::spawn_at(rail_pos, (variant as u8 + 2) % 4, ctx.game_map(), &config)?;
@@ -437,6 +444,30 @@ fn actually_spawn_cart(
         ChatMessage::new_server_message(format!("Spawned cart with id {}", id))
             .with_color(SERVER_MESSAGE_COLOR),
     )?;
+
+    if board_cart {
+        match ctx.initiator() {
+            game_state::event::EventInitiator::Player(p) => {
+                p.player.attach_to_entity_blocking(id)?
+            }
+            game_state::event::EventInitiator::WeakPlayerRef(wp) => {
+                match wp.try_to_run(|p| p.attach_to_entity_blocking(id)) {
+                    Some(_) => {}
+                    None => {
+                        tracing::warn!("Weak player ref tried to board entity but failed");
+                    }
+                }
+            }
+            _ => tracing::warn!("Not a player"),
+        }
+    }
+    ctx.initiator()
+        .send_chat_message(ChatMessage::new_server_message(format!(
+            "Boarded cart with ID {id}; \
+    /detach_from_entity to get off; \
+    /attach_to_entity {id} to re-board"
+        )))?;
+
     Ok(())
 }
 

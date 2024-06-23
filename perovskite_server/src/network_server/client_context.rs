@@ -329,13 +329,18 @@ async fn send_all_popups(
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<()> {
     let updates = {
-        let player_state = context.player_context.state.lock();
+        let mut player_state = context.player_context.state.lock();
+        player_state.repair_inventory_popup(
+            &context.player_context.name,
+            context.player_context.player.main_inventory_key,
+            &context.game_state,
+        )?;
         let mut updates = vec![];
 
         for popup in player_state
             .active_popups
             .iter()
-            .chain(std::iter::once(&player_state.inventory_popup))
+            .chain(player_state.inventory_popup.iter())
         {
             for view in popup.inventory_views().values() {
                 updates.push(make_inventory_update(
@@ -880,7 +885,7 @@ impl BlockEventSender {
 
 fn make_client_state_update_message(
     ctx: &SharedContext,
-    player_state: MutexGuard<'_, PlayerState>,
+    mut player_state: MutexGuard<'_, PlayerState>,
     update_location: bool,
 ) -> Result<StreamToClient> {
     let message = {
@@ -900,13 +905,20 @@ fn make_client_state_update_message(
             let time_state = ctx.game_state.time_state().lock();
             (time_state.time_of_day(), time_state.day_length())
         };
+        player_state.repair_inventory_popup(
+            &ctx.player_context.name,
+            ctx.player_context.player.main_inventory_key,
+            &ctx.game_state,
+        )?;
         StreamToClient {
             tick: ctx.game_state.tick(),
             server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
                 proto::SetClientState {
                     position,
                     hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
-                    inventory_popup: Some(player_state.inventory_popup.to_proto()),
+                    inventory_popup: Some(
+                        player_state.inventory_popup.as_ref().unwrap().to_proto(),
+                    ),
                     inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
                     time_of_day: time_now,
                     day_length_sec: day_len.as_secs_f64(),
@@ -999,7 +1011,12 @@ impl InventoryEventSender {
             "filter and serialize inventory updates"
         )
         .in_scope(|| -> anyhow::Result<_> {
-            let player_state = self.context.player_context.state.lock();
+            let mut player_state = self.context.player_context.state.lock();
+            player_state.repair_inventory_popup(
+                &self.context.player_context.name,
+                self.context.player_context.player.main_inventory_key,
+                &self.context.game_state,
+            )?;
             let mut update_messages = vec![];
             for key in update_keys {
                 if player_state.hotbar_inventory_view.wants_update_for(&key) {
@@ -1012,7 +1029,7 @@ impl InventoryEventSender {
                 for popup in player_state
                     .active_popups
                     .iter()
-                    .chain(std::iter::once(&player_state.inventory_popup))
+                    .chain(player_state.inventory_popup.iter())
                 {
                     for view in popup.inventory_views().values() {
                         if view.wants_update_for(&key) {
@@ -1487,12 +1504,17 @@ impl InboundWorker {
                     log_trace("Locking player for inventory action");
                     let mut player_state = self.context.player_context.player.state.lock();
                     log_trace("Locked player for inventory action");
+                    player_state.repair_inventory_popup(
+                        &self.context.player_context.name,
+                        self.context.player_context.player.main_inventory_key,
+                        &self.context.game_state,
+                    )?;
                     player_state.handle_inventory_action(action)?;
 
                     for popup in player_state
                         .active_popups
                         .iter()
-                        .chain(std::iter::once(&player_state.inventory_popup))
+                        .chain(player_state.inventory_popup.iter())
                     {
                         if popup.inventory_views().values().any(|x| {
                             x.id.0 == action.source_view || x.id.0 == action.destination_view
@@ -1553,6 +1575,12 @@ impl InboundWorker {
                 game_state: self.context.game_state.clone(),
             };
             let mut player_state = self.context.player_context.state.lock();
+            player_state.repair_inventory_popup(
+                &self.context.player_context.name,
+                self.context.player_context.player.main_inventory_key,
+                &self.context.game_state,
+            )?;
+
             let mut updates = vec![];
             if action.closed {
                 player_state
@@ -1563,56 +1591,83 @@ impl InboundWorker {
                     &&player_state.inventory_manipulation_view,
                 )?);
             }
-            if let Some(popup) = player_state
+            if let Some(popup_pos) = player_state
                 .active_popups
                 .iter_mut()
-                .find(|x| x.id() == action.popup_id)
+                .position(|x| x.id() == action.popup_id)
             {
-                run_handler!(
-                    || popup.handle_response(
-                        PopupResponse {
-                            user_action,
-                            textfield_values: action.text_fields.clone(),
-                            checkbox_values: action.checkboxes.clone(),
-                            ctx: ctx.clone(),
-                        },
-                        self.context.player_context.main_inventory(),
-                    ),
-                    "popup_response",
-                    &ctx.initiator
-                )?;
-                for view in popup.inventory_views().values() {
-                    updates.push(make_inventory_update(
-                        &self.context.game_state,
-                        &InventoryViewWithContext {
-                            view,
-                            context: popup,
-                        },
-                    )?);
+                let mut popup = player_state.active_popups.swap_remove(popup_pos);
+                let handling_result = (|| -> Result<()> {
+                    MutexGuard::unlocked(&mut player_state, || {
+                        run_handler!(
+                            || popup.handle_response(
+                                PopupResponse {
+                                    user_action,
+                                    textfield_values: action.text_fields.clone(),
+                                    checkbox_values: action.checkboxes.clone(),
+                                    ctx: ctx.clone(),
+                                },
+                                self.context.player_context.main_inventory(),
+                            ),
+                            "popup_response",
+                            &ctx.initiator
+                        )
+                    })?;
+                    for view in popup.inventory_views().values() {
+                        updates.push(make_inventory_update(
+                            &self.context.game_state,
+                            &InventoryViewWithContext {
+                                view,
+                                context: &popup,
+                            },
+                        )?);
+                    }
+                    Ok(())
+                })();
+                player_state.active_popups.push(popup);
+                handling_result?;
+            } else if player_state
+                .inventory_popup
+                .as_ref()
+                .is_some_and(|x| x.id() == action.popup_id)
+            {
+                let mut inventory_popup = player_state.inventory_popup.take().unwrap();
+
+                let handling_result = (|| -> Result<()> {
+                    MutexGuard::unlocked(&mut player_state, || {
+                        run_handler!(
+                            || inventory_popup.handle_response(
+                                PopupResponse {
+                                    user_action,
+                                    textfield_values: action.text_fields.clone(),
+                                    checkbox_values: action.checkboxes.clone(),
+                                    ctx: ctx.clone(),
+                                },
+                                self.context.player_context.main_inventory(),
+                            ),
+                            "popup_response",
+                            &ctx.initiator
+                        )
+                    })?;
+                    for view in inventory_popup.inventory_views().values() {
+                        updates.push(make_inventory_update(
+                            &self.context.game_state,
+                            &InventoryViewWithContext {
+                                view,
+                                context: &inventory_popup,
+                            },
+                        )?);
+                    }
+
+                    Ok(())
+                })();
+                if player_state.inventory_popup.is_none() {
+                    player_state.inventory_popup = Some(inventory_popup);
+                } else {
+                    tracing::info!("Not restoring inventory popup since a new one was added");
                 }
-            } else if player_state.inventory_popup.id() == action.popup_id {
-                run_handler!(
-                    || player_state.inventory_popup.handle_response(
-                        PopupResponse {
-                            user_action,
-                            textfield_values: action.text_fields.clone(),
-                            checkbox_values: action.checkboxes.clone(),
-                            ctx: ctx.clone(),
-                        },
-                        self.context.player_context.main_inventory(),
-                    ),
-                    "popup_response",
-                    &ctx.initiator
-                )?;
-                for view in player_state.inventory_popup.inventory_views().values() {
-                    updates.push(make_inventory_update(
-                        &self.context.game_state,
-                        &InventoryViewWithContext {
-                            view,
-                            context: &player_state.inventory_popup,
-                        },
-                    )?);
-                }
+
+                handling_result?;
             } else {
                 log::error!(
                     "Got popup response for nonexistent popup {:?}",

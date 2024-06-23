@@ -23,10 +23,12 @@ use std::{
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::items::{ItemStack, MaybeStack},
+    run_handler,
 };
 use anyhow::{bail, ensure, Context, Result};
 use perovskite_core::{coordinates::BlockCoordinate, protocol::items as items_proto};
 
+use crate::game_state::event::EventInitiator;
 use parking_lot::{Condvar, Mutex, RwLock};
 use prost::Message;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -380,6 +382,14 @@ pub struct VirtualOutputCallbacks<T> {
     pub take: Box<dyn FnMut(&T, usize, Option<u32>) -> Option<ItemStack> + Sync + Send>,
 }
 
+pub struct VirtualInputCallbacks<T> {
+    // TODO: Consider implementing a callback that shows what items are visible in the view.
+    // For now, it's always empty
+    /// Called when an item is put into the view, taking (context, slot#, item)
+    /// Returns the leftover stack (possibly the entire provided stack if it cannot be accepted here)
+    pub put: Box<dyn FnMut(&T, usize, ItemStack) -> Result<Option<ItemStack>> + Sync + Send>,
+}
+
 /// Where the items in the inventory view actually come from.
 ///
 /// The type parameter T represents the type passed to the callbacks as context.
@@ -394,7 +404,7 @@ pub enum ViewBacking<T> {
     /// a callback of a virtual view)
     ///
     /// TODO figure out what happens if the returned items can't fit or they have an empty borrows_from
-    Transient(parking_lot::RwLock<Vec<Option<BorrowedStack>>>),
+    Transient(RwLock<Vec<Option<BorrowedStack>>>),
     /// This inventory view is generated on-the-fly and does not represent real items
     /// e.g. the output of a recipe grid.
     ///
@@ -409,7 +419,7 @@ pub enum ViewBacking<T> {
     ///
     /// Note that VirtualInput and VirtualOutput may be refactored into the same enum variant with the callbacks combined;
     /// however the edge cases involving both input and output are not yet resolved in the current MVP.
-    VirtualOutput(parking_lot::RwLock<VirtualOutputCallbacks<T>>),
+    VirtualOutput(RwLock<VirtualOutputCallbacks<T>>),
     /// This inventory view doesn't hold anything. When a stack is placed into it, it is consumed from
     /// its source and a callback will be invoked.
     ///
@@ -417,7 +427,7 @@ pub enum ViewBacking<T> {
     ///
     /// Note that VirtualInput and VirtualOutput may be refactored into the same enum variant with the callbacks combined;
     /// however the edge cases involving both input and output are not yet resolved in the current MVP.
-    VirtualInput(Box<dyn Fn(&T) + Send + Sync>),
+    VirtualInput(RwLock<VirtualInputCallbacks<T>>),
 
     /// This inventory view is stored in the database. Nothing interesting happens when the view
     /// is deleted, because any actions on the view have been written back to the database by then.
@@ -445,7 +455,7 @@ pub struct InventoryView<T> {
     /// Whether the user can take things out of this view
     pub(crate) can_take: bool,
     take_exact: bool,
-    /// The kind of inventory this view is showing    
+    /// The kind of inventory this view is showing
     pub(crate) backing: ViewBacking<T>,
     pub(crate) id: InventoryViewId,
     game_state: Arc<GameState>,
@@ -763,11 +773,19 @@ impl<T> InventoryView<T> {
                 .map(|x| x.as_ref().map(|x| x.borrowed_stack.clone()))
                 .collect()),
             ViewBacking::VirtualOutput(virt_out) => {
-                let peeked = (virt_out.read().peek)(context);
+                let peeked = run_handler!(
+                    || Ok((virt_out.read().peek)(context)),
+                    "peek_inv_virt_out",
+                    &EventInitiator::Engine
+                )?;
                 ensure!(peeked.len() == self.dimensions.0 as usize * self.dimensions.1 as usize);
                 Ok(peeked)
             }
-            ViewBacking::VirtualInput(_) => todo!(),
+            ViewBacking::VirtualInput(_) => Ok(vec![
+                None;
+                self.dimensions.0 as usize
+                    * self.dimensions.1 as usize
+            ]),
             ViewBacking::Stored(key) => Ok(self
                 .game_state
                 .inventory_manager()
@@ -832,7 +850,9 @@ impl<T> InventoryView<T> {
                 borrows_from: BorrowLocation::NotBorrowed,
                 borrowed_stack: x,
             })),
-            ViewBacking::VirtualInput(_) => todo!(),
+            ViewBacking::VirtualInput(vi) => {
+                bail!("Can't take from virtual input")
+            }
             ViewBacking::Stored(key) => Ok(self
                 .game_state
                 .inventory_manager()
@@ -901,13 +921,19 @@ impl<T> InventoryView<T> {
                     }))
                 }
             }
-            ViewBacking::VirtualOutput(_) => {
+            ViewBacking::VirtualOutput(vi) => {
                 // can't put into a virtualoutput (yet)
                 // TODO allow returning an item to the virtualoutput it came from,
                 // if the settings for that view allow it
                 Ok(Some(stack))
             }
-            ViewBacking::VirtualInput(_) => todo!(),
+            ViewBacking::VirtualInput(vi) => {
+                let resulting_stack = (vi.write().put)(_context, slot, stack.borrowed_stack)?;
+                Ok(resulting_stack.map(|x| BorrowedStack {
+                    borrows_from: stack.borrows_from,
+                    borrowed_stack: x,
+                }))
+            }
             ViewBacking::Stored(key) => Ok(self
                 .game_state
                 .inventory_manager()

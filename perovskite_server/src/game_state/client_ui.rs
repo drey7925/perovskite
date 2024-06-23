@@ -12,6 +12,7 @@ use super::{
     },
     GameState,
 };
+use crate::game_state::inventory::{InventoryViewWithContext, TypeErasedInventoryView};
 use anyhow::{bail, Result};
 use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 
@@ -115,7 +116,22 @@ pub struct Popup {
     inventory_update_callback: Option<InventoryUpdateCallback>,
     button_callback: Option<ButtonCallback>,
 }
+
 impl Popup {
+    pub(crate) fn find_view(
+        &self,
+        id: InventoryViewId,
+    ) -> Option<Box<InventoryViewWithContext<Popup>>> {
+        if let Some(view) = self.inventory_views().values().find(|x| x.id == id) {
+            return Some(Box::new(InventoryViewWithContext {
+                view,
+                context: self,
+            }));
+        } else {
+            None
+        }
+    }
+
     /// Creates a new popup. Until it's sent to a player, it is inert and has no effects
     pub fn new(game_state: Arc<GameState>) -> Self {
         Popup {

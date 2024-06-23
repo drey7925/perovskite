@@ -13,6 +13,7 @@ use super::{
     client_ui::Popup, event::HandlerContext, inventory::InventoryKey, player::Player, GameState,
 };
 
+/// Creates a [Popup] that will be shown when the player presses the inventory key
 pub trait InventoryPopupProvider: Send + Sync + 'static {
     fn make_inventory_popup(
         &self,

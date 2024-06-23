@@ -155,7 +155,8 @@ impl Player {
                         proto.name.clone(),
                         effective_permissions.into_iter().collect(),
                         main_inventory_key,
-                    )?,
+                    )?
+                    .into(),
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
                     game_state.clone(),
@@ -188,7 +189,6 @@ impl Player {
     ) -> Result<Player> {
         let main_inventory_key = game_state.inventory_manager().make_inventory(4, 8)?;
         // TODO provide hooks here
-        // TODO custom spawn location
 
         let effective_permissions = game_state
             .game_behaviors()
@@ -227,7 +227,8 @@ impl Player {
                         name.to_string(),
                         effective_permissions,
                         main_inventory_key,
-                    )?,
+                    )?
+                    .into(),
                 hotbar_inventory_view: InventoryView::new_stored(
                     main_inventory_key,
                     game_state.clone(),
@@ -301,7 +302,8 @@ impl Player {
                 self.name.clone(),
                 effective_permissions,
                 self.main_inventory_key,
-            )?;
+            )?
+            .into();
         tokio::task::block_in_place(|| {
             MutexGuard::unlocked(&mut lock, || {
                 self.sender.reinit_player_state.blocking_send(false)
@@ -413,7 +415,7 @@ pub(crate) struct PlayerState {
     /// The player's last client-reported position
     pub(crate) last_position: PlayerPositionUpdate,
     /// The inventory popup is always loaded, even when it's not shown
-    pub(crate) inventory_popup: Popup,
+    pub(crate) inventory_popup: Option<Popup>,
     /// Other active popups for the player. These get deleted when closed.
     pub(crate) active_popups: Vec<Popup>,
     /// The player's main inventory, which is shown in the user hotbar
@@ -473,11 +475,7 @@ impl PlayerState {
         } else {
             warn!("Inventory view(s) not found for {action:?}");
         }
-        for popup in self
-            .active_popups
-            .iter()
-            .chain(std::iter::once(&self.inventory_popup))
-        {
+        for popup in self.active_popups.iter().chain(self.inventory_popup.iter()) {
             if popup
                 .inventory_views()
                 .values()
@@ -500,11 +498,7 @@ impl PlayerState {
             return Ok(Box::new(&self.hotbar_inventory_view));
         }
 
-        for popup in self
-            .active_popups
-            .iter()
-            .chain(std::iter::once(&self.inventory_popup))
-        {
+        for popup in self.active_popups.iter().chain(self.inventory_popup.iter()) {
             if let Some(result) = popup.inventory_views().values().find(|x| x.id == id) {
                 return Ok(Box::new(InventoryViewWithContext {
                     view: result,
@@ -514,6 +508,46 @@ impl PlayerState {
         }
 
         bail!("View not found");
+    }
+
+    pub(crate) fn repair_inventory_popup(
+        &mut self,
+        name: &str,
+        main_inventory_key: InventoryKey,
+        game_state: &Arc<GameState>,
+    ) -> Result<()> {
+        #[cold]
+        fn actually_repair(
+            state: &mut PlayerState,
+            name: &str,
+            main_inventory_key: InventoryKey,
+            game_state: &Arc<GameState>,
+        ) -> Result<()> {
+            tracing::error!(
+                "Inventory popup wasn't returned for player {}; repairing",
+                name
+            );
+            state.inventory_popup = game_state
+                .game_behaviors()
+                .make_inventory_popup
+                .make_inventory_popup(
+                    game_state.clone(),
+                    name.to_string(),
+                    state
+                        .effective_permissions(game_state, name)
+                        .iter()
+                        .cloned()
+                        .collect(),
+                    main_inventory_key,
+                )?
+                .into();
+            Ok(())
+        }
+
+        if self.inventory_popup.is_none() {
+            actually_repair(self, name, main_inventory_key, game_state)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn effective_permissions(
