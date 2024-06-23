@@ -35,7 +35,7 @@ use crate::{
     include_texture_bytes,
 };
 
-use super::{b2vec, tracks, CartsGameBuilderExtension};
+use super::{b2vec, CartsGameBuilderExtension};
 
 #[rustfmt::skip]
 pub(crate) mod c {
@@ -52,7 +52,7 @@ pub(crate) mod c {
     /// If set on a secondary or tertiary, it means that the secondary/tertiary only
     /// applies when the diverging route is active
     ///
-    /// If set on a prev/next, it means that we shoud enter that track 
+    /// If set on a prev/next, it means that we should enter that track
     pub(crate) const DIVERGING_ROUTE: u16 = 0b0001_0000_0000_0000;
     pub(crate) const REVERSE_SCAN: u16 = 0b0010_0000_0000_0000;
     pub(crate) const SLOPE_ENCODING: u16 = 0b0100_0000_0000_0000;

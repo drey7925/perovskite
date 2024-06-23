@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_game_api"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - default game content + plugin API"
@@ -12,8 +12,8 @@ maintenance = { status = "experimental" }
 
 [dependencies]
 
-perovskite_server = { path = "../perovskite_server", version = "0.0.3" }
-perovskite_core = { path = "../perovskite_core", version = "0.0.3" }
+perovskite_server = { path = "../perovskite_server", version = "0.0.4" }
+perovskite_core = { path = "../perovskite_core", version = "0.0.4" }
 anyhow = "1.0.70"
 bitvec = "1.0.1"
 env_logger = "0.11.3"
@@ -37,7 +37,7 @@ async-trait = "0.1.73"
 ron = "0.8.0"
 serde = { version = "1.0.163", features = ["derive"] }
 cgmath = "0.18.0"
-tokio = { version = "1.29.1", features = ["full", "tracing"] }
+tokio = { version = "1.38.0", features = ["full", "tracing"] }
 smallvec = "1.11.2"
 regex = "1.10.2"
 
