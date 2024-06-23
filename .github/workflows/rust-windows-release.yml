@@ -18,7 +18,7 @@ jobs:
       run: |
         choco install protoc
         choco install ninja
-        cargo build --release --bin perovskite_client
+        cargo build --profile maxopt --bin perovskite_client
     - name: Upload the artifacts
       uses: AButler/upload-release-assets@v3.0
       with:
