@@ -344,12 +344,22 @@ impl Drop for InventoryManager {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct InventoryViewId(pub(crate) u64);
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum VirtualOutputReturnBehavior {
+    /// This item was free/cheap for the player. Get rid of it.
+    Drop,
+    /// This item was important to the player. Try to put it back in their inventory.
+    ReturnToInventory,
+}
+
 #[derive(Clone, Debug)]
 pub enum BorrowLocation {
     /// Stored in the inventory manager (inventory key, slot)
     Global(InventoryKey, usize),
     /// Stored in a block (coordinate, key, slot)
     Block(BlockCoordinate, String, usize),
+    /// Borrowed from a virtual output (inventory view, slot)
+    VirtualOutput(InventoryViewId, usize, VirtualOutputReturnBehavior),
     /// Not borrowing from somewhere
     NotBorrowed,
 }
@@ -379,7 +389,15 @@ pub struct VirtualOutputCallbacks<T> {
     pub peek: Box<dyn Fn(&T) -> Vec<Option<ItemStack>> + Sync + Send>,
     /// Callback of (context, slot#, count). If count is None, user is taking everything visible in peek.
     /// If this view is take_exact, then the impl is free to disregard the count parameter
-    pub take: Box<dyn FnMut(&T, usize, Option<u32>) -> Option<ItemStack> + Sync + Send>,
+    pub take: Box<
+        dyn FnMut(&T, usize, Option<u32>) -> Option<(ItemStack, VirtualOutputReturnBehavior)>
+            + Sync
+            + Send,
+    >,
+    /// Callback of (context, source slot#, dest slot#, stack) when a user tries to return a stack
+    /// that was borrowed from this view back to it.
+    pub return_borrowed:
+        Box<dyn FnMut(&T, usize, usize, ItemStack) -> Result<Option<ItemStack>> + Sync + Send>,
 }
 
 pub struct VirtualInputCallbacks<T> {
@@ -455,6 +473,7 @@ pub struct InventoryView<T> {
     /// Whether the user can take things out of this view
     pub(crate) can_take: bool,
     take_exact: bool,
+    pub(crate) put_without_swap: bool,
     /// The kind of inventory this view is showing
     pub(crate) backing: ViewBacking<T>,
     pub(crate) id: InventoryViewId,
@@ -476,6 +495,7 @@ impl<T> InventoryView<T> {
             can_place,
             can_take,
             take_exact: false,
+            put_without_swap: false,
             backing: ViewBacking::Stored(inventory_key),
             game_state,
             id: next_id(),
@@ -501,6 +521,7 @@ impl<T> InventoryView<T> {
             can_place,
             can_take,
             take_exact,
+            put_without_swap: false,
             backing: ViewBacking::Transient(initial_contents.into()),
             id: next_id(),
             game_state,
@@ -512,13 +533,32 @@ impl<T> InventoryView<T> {
         dimensions: (u32, u32),
         callbacks: VirtualOutputCallbacks<T>,
         take_exact: bool,
+        allow_return: bool,
     ) -> Result<InventoryView<T>> {
         Ok(InventoryView {
             dimensions,
-            can_place: false,
+            can_place: allow_return,
             can_take: true,
+            put_without_swap: allow_return,
             take_exact,
             backing: ViewBacking::VirtualOutput(RwLock::new(callbacks)),
+            id: next_id(),
+            game_state,
+        })
+    }
+
+    pub(crate) fn new_virtual_input(
+        game_state: Arc<GameState>,
+        dimensions: (u32, u32),
+        callbacks: VirtualInputCallbacks<T>,
+    ) -> Result<InventoryView<T>> {
+        Ok(InventoryView {
+            dimensions,
+            can_place: true,
+            can_take: false,
+            take_exact: false,
+            put_without_swap: true,
+            backing: ViewBacking::VirtualInput(RwLock::new(callbacks)),
             id: next_id(),
             game_state,
         })
@@ -564,6 +604,7 @@ impl<T> InventoryView<T> {
             can_place,
             can_take,
             take_exact,
+            put_without_swap: false,
             backing: ViewBacking::StoredInBlock(coord, key),
             id: next_id(),
             game_state,
@@ -611,6 +652,21 @@ impl<T> InventoryView<T> {
                                 }
                             })?,
                         BorrowLocation::NotBorrowed => Some(stack.borrowed_stack),
+                        BorrowLocation::VirtualOutput(_, _, return_behavior) => {
+                            // We can't implicitly put it back without actually getting access to
+                            // that view and its handlers. That view might also be getting dropped
+                            // in the meantime.
+                            //
+                            // So we need to return it to its owner.
+                            // However, we can either put it into the inventory of the owner, or
+                            // drop it.
+                            match return_behavior {
+                                VirtualOutputReturnBehavior::Drop => None,
+                                VirtualOutputReturnBehavior::ReturnToInventory => {
+                                    Some(stack.borrowed_stack)
+                                }
+                            }
+                        }
                     };
                     if leftover.is_some() {
                         if let Some(key) = owner_inv_key {
@@ -846,8 +902,8 @@ impl<T> InventoryView<T> {
             ViewBacking::VirtualOutput(virt_out) => Ok((virt_out.write().take)(
                 context, slot, count,
             )
-            .map(|x| BorrowedStack {
-                borrows_from: BorrowLocation::NotBorrowed,
+            .map(|(x, behavior)| BorrowedStack {
+                borrows_from: BorrowLocation::VirtualOutput(self.id, slot, behavior),
                 borrowed_stack: x,
             })),
             ViewBacking::VirtualInput(vi) => {
@@ -891,7 +947,7 @@ impl<T> InventoryView<T> {
     /// peek should be called immediate after to see what the view should display.
     pub fn put(
         &self,
-        _context: &T,
+        context: &T,
         slot: usize,
         stack: BorrowedStack,
     ) -> Result<Option<BorrowedStack>> {
@@ -921,14 +977,28 @@ impl<T> InventoryView<T> {
                     }))
                 }
             }
-            ViewBacking::VirtualOutput(vi) => {
-                // can't put into a virtualoutput (yet)
-                // TODO allow returning an item to the virtualoutput it came from,
-                // if the settings for that view allow it
-                Ok(Some(stack))
+            ViewBacking::VirtualOutput(virt_out) => {
+                if let BorrowLocation::VirtualOutput(id, src_slot, _) = &stack.borrows_from {
+                    if *id == self.id {
+                        let result = (virt_out.write().return_borrowed)(
+                            context,
+                            *src_slot,
+                            slot,
+                            stack.borrowed_stack,
+                        )?;
+                        Ok(result.map(|x| BorrowedStack {
+                            borrows_from: stack.borrows_from,
+                            borrowed_stack: x,
+                        }))
+                    } else {
+                        Ok(Some(stack))
+                    }
+                } else {
+                    Ok(Some(stack))
+                }
             }
             ViewBacking::VirtualInput(vi) => {
-                let resulting_stack = (vi.write().put)(_context, slot, stack.borrowed_stack)?;
+                let resulting_stack = (vi.write().put)(context, slot, stack.borrowed_stack)?;
                 Ok(resulting_stack.map(|x| BorrowedStack {
                     borrows_from: stack.borrows_from,
                     borrowed_stack: x,
@@ -994,6 +1064,10 @@ impl<T> InventoryView<T> {
         self.take_exact
     }
 
+    fn put_without_swap(&self) -> bool {
+        self.put_without_swap
+    }
+
     fn to_client_proto(
         &self,
         context: &T,
@@ -1012,6 +1086,7 @@ impl<T> InventoryView<T> {
             can_place: self.can_place(),
             can_take: self.can_take(),
             take_exact: self.take_exact(),
+            put_without_swap: self.put_without_swap(),
         })
     }
 }

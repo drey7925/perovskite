@@ -58,6 +58,7 @@ message InventoryView {
   bool can_place = 2;
   bool can_take = 3;
   string label = 4;
+  bool place_without_swap = 5;
 }
 
 message UiElement {

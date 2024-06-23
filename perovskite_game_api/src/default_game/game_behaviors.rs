@@ -5,6 +5,9 @@ use perovskite_core::{
     constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
     protocol::items::item_stack,
 };
+use perovskite_server::game_state::inventory::{
+    VirtualInputCallbacks, VirtualOutputReturnBehavior,
+};
 use perovskite_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     game_behaviors::InventoryPopupProvider,
@@ -96,8 +99,10 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                 if stack.is_some() && count.is_some() {
                     stack.as_mut().unwrap().proto.quantity = count.unwrap();
                 }
-                stack
+                stack.map(|x| (x, VirtualOutputReturnBehavior::Drop))
             }),
+            // Creative items are essentially free; take them back
+            return_borrowed: Box::new(|_, _, _, _| Ok(None)),
         };
 
         let craft_peek = {
@@ -136,13 +141,24 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                         }
                     }
                 }
-                result.map(|x| x.result.clone())
+                result.map(|x| {
+                    (
+                        x.result.clone(),
+                        VirtualOutputReturnBehavior::ReturnToInventory,
+                    )
+                })
             })
         };
 
         let crafting_callbacks = VirtualOutputCallbacks {
             peek: craft_peek,
             take: craft_take,
+            // Don't allow items to be returned
+            return_borrowed: Box::new(|_, _, _, stack| Ok(Some(stack))),
+        };
+
+        let trash_bin_callbacks = VirtualInputCallbacks {
+            put: Box::new(|_, _, _| Ok(None)),
         };
 
         let button_callback = {
@@ -287,6 +303,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                     (4, 8),
                     creative_inv_callbacks,
                     false,
+                    true,
                 )?
                 .side_by_side_layout("Crafting", |ui| {
                     ui.inventory_view_transient(
@@ -303,6 +320,13 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                         (1, 1),
                         crafting_callbacks,
                         true,
+                        false,
+                    )?
+                    .inventory_view_virtual_input(
+                        "trash_bin",
+                        "Trash bin:",
+                        (1, 1),
+                        trash_bin_callbacks,
                     )
                 })?
                 .inventory_view_stored("main", "Player inventory:", main_inventory_key, true, true)?
@@ -325,6 +349,13 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                         (1, 1),
                         crafting_callbacks,
                         true,
+                        false,
+                    )?
+                    .inventory_view_virtual_input(
+                        "trash_bin",
+                        "Trash bin:",
+                        (1, 1),
+                        trash_bin_callbacks,
                     )
                 })?
                 .label("Player inventory:")

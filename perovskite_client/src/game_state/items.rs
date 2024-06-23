@@ -60,6 +60,7 @@ pub(crate) struct ClientInventory {
     pub(crate) can_place: bool,
     pub(crate) can_take: bool,
     pub(crate) take_exact: bool,
+    pub(crate) put_without_swap: bool,
 }
 impl ClientInventory {
     pub(crate) fn from_proto(
@@ -83,6 +84,7 @@ impl ClientInventory {
             can_place: proto.can_place,
             can_take: proto.can_take,
             take_exact: proto.take_exact,
+            put_without_swap: proto.put_without_swap,
         }
     }
     pub(crate) fn contents(&self) -> &[Option<items_proto::ItemStack>] {

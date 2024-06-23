@@ -12,7 +12,9 @@ use super::{
     },
     GameState,
 };
-use crate::game_state::inventory::{InventoryViewWithContext, TypeErasedInventoryView};
+use crate::game_state::inventory::{
+    InventoryViewWithContext, TypeErasedInventoryView, VirtualInputCallbacks,
+};
 use anyhow::{bail, Result};
 use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 
@@ -59,6 +61,7 @@ impl UiElement {
                     label: label.clone(),
                     can_place: view.can_place,
                     can_take: view.can_take,
+                    place_without_swap: view.put_without_swap,
                 })
             }
             UiElement::SideBySideLayout(header, elements) => {
@@ -380,6 +383,7 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         dimensions: (u32, u32),
         callbacks: VirtualOutputCallbacks<Popup>,
         take_exact: bool,
+        allow_return: bool,
     ) -> Result<Self> {
         let form_key = form_key.into();
         let view = InventoryView::new_virtual_output(
@@ -387,6 +391,41 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
             dimensions,
             callbacks,
             take_exact,
+            allow_return,
+        )?;
+        self.push_widget(UiElement::InventoryView(
+            form_key.clone(),
+            label.into(),
+            view.id,
+        ));
+        match self
+            .deref_to_popup()
+            .inventory_views
+            .insert(form_key.clone(), view)
+        {
+            Some(view) => {
+                bail!(
+                    "form_key {} already registered for view {:?}",
+                    form_key,
+                    view.id
+                );
+            }
+            None => Ok(self),
+        }
+    }
+
+    fn inventory_view_virtual_input(
+        mut self,
+        form_key: impl Into<String>,
+        label: impl Into<String>,
+        dimensions: (u32, u32),
+        callbacks: VirtualInputCallbacks<Popup>,
+    ) -> Result<Self> {
+        let form_key = form_key.into();
+        let view = InventoryView::new_virtual_input(
+            self.deref_to_popup().game_state.clone(),
+            dimensions,
+            callbacks,
         )?;
         self.push_widget(UiElement::InventoryView(
             form_key.clone(),

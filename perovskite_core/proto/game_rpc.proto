@@ -279,6 +279,7 @@ message InventoryUpdate {
   // If true, the user can only take exactly the amount shown
   // in a stack (e.g. for crafting)
   bool take_exact = 5;
+  bool put_without_swap = 6;
 }
 
 message SetClientState {

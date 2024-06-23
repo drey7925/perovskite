@@ -330,11 +330,6 @@ async fn send_all_popups(
 ) -> Result<()> {
     let updates = {
         let mut player_state = context.player_context.state.lock();
-        player_state.repair_inventory_popup(
-            &context.player_context.name,
-            context.player_context.player.main_inventory_key,
-            &context.game_state,
-        )?;
         let mut updates = vec![];
 
         for popup in player_state
@@ -1011,12 +1006,7 @@ impl InventoryEventSender {
             "filter and serialize inventory updates"
         )
         .in_scope(|| -> anyhow::Result<_> {
-            let mut player_state = self.context.player_context.state.lock();
-            player_state.repair_inventory_popup(
-                &self.context.player_context.name,
-                self.context.player_context.player.main_inventory_key,
-                &self.context.game_state,
-            )?;
+            let player_state = self.context.player_context.state.lock();
             let mut update_messages = vec![];
             for key in update_keys {
                 if player_state.hotbar_inventory_view.wants_update_for(&key) {
@@ -1532,6 +1522,11 @@ impl InboundWorker {
                             player_state.find_inv_view(view)?.as_ref(),
                         )?);
                     }
+
+                    updates.push(make_inventory_update(
+                        &self.context.game_state,
+                        &&player_state.inventory_manipulation_view,
+                    )?);
                     log_trace("Done running inventory action");
                     anyhow::Result::Ok(updates)
                 })?
@@ -1632,7 +1627,7 @@ impl InboundWorker {
                 .is_some_and(|x| x.id() == action.popup_id)
             {
                 let mut inventory_popup = player_state.inventory_popup.take().unwrap();
-
+                tracing::info!("Taking inventory popup");
                 let handling_result = (|| -> Result<()> {
                     MutexGuard::unlocked(&mut player_state, || {
                         run_handler!(
@@ -1662,9 +1657,10 @@ impl InboundWorker {
                     Ok(())
                 })();
                 if player_state.inventory_popup.is_none() {
+                    tracing::info!("Returning inventory popup");
                     player_state.inventory_popup = Some(inventory_popup);
                 } else {
-                    tracing::info!("Not restoring inventory popup since a new one was added");
+                    tracing::info!("Not returning inventory popup since a new one was added");
                 }
 
                 handling_result?;

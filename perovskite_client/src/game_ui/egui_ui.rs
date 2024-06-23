@@ -887,7 +887,7 @@ fn handle_moves(
 ) {
     // we have to do a bit of a song-and-dance until get_many_mut is stabilized
     // This code generates the actual request that the server will authoritatively validate.
-    // For fluid gameplay, we need to generate requests that we expect the server will fulfull as-is
+    // For fluid gameplay, we need to generate requests that we expect the server will fulfill as-is
     // and update our own views consistently (the server will send us an update regardless)
     //
     // For now, it'll be a bit inefficient and awkward
@@ -900,6 +900,7 @@ fn handle_moves(
     let can_place = inventory.can_place;
     let can_take = inventory.can_take;
     let take_exact = inventory.take_exact;
+    let place_without_swap = inventory.put_without_swap;
 
     let carried_stack = match inventory_manager
         .inventory_views
@@ -913,7 +914,7 @@ fn handle_moves(
         }
     };
 
-    let action = if clicked_stack.is_some() && carried_stack.is_some() {
+    let action = if clicked_stack.is_some() && carried_stack.is_some() && !place_without_swap {
         // Case 1: both stacks have items
         let clicked_stack = clicked_stack.unwrap();
         let carried_stack_ref = carried_stack.as_ref().unwrap();
@@ -971,7 +972,7 @@ fn handle_moves(
                 quantity = quantity.min((clicked_stack.quantity + 1) / 2);
             }
             if take_exact && quantity < clicked_stack.quantity {
-                // we can't take enough but we need to take exactly what's given, give up
+                // we can't take enough, but we need to take exactly what's given, give up
                 return;
             }
 
@@ -1031,7 +1032,7 @@ fn handle_moves(
             return;
         }
     }
-    // We can place, and the destination is empty
+    // We can place, and the destination is empty, or we aren't swapping.
     else if carried_stack.is_some() && can_place {
         let old_carried_stack = carried_stack.clone();
         let source_quantity = carried_stack.as_ref().unwrap().quantity;
