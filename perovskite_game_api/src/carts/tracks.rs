@@ -1532,7 +1532,7 @@ impl ScanState {
             None => return Ok(None),
         };
         assert!(corrected_rotation < 4);
-        tracing::info!(
+        tracing::debug!(
             "Corrected rotation: {} -> {}",
             tile_id.rotation(),
             corrected_rotation
@@ -1708,29 +1708,40 @@ impl ScanState {
                             return Ok(ScanOutcome::Deferral(deferral));
                         }
                     };
+
                     if let Some((num, den, rotation)) = cart_config.parse_slope(block_below) {
+                        let mut slope_rotation_corrected_next_rotation = (rotation + 8
+                            - current_tile_id.rotation()
+                            - proposed_tile_id.rotation())
+                            & 3;
+                        if current_tile_id.flip_x() {
+                            slope_rotation_corrected_next_rotation ^= 2;
+                        }
+                        if proposed_tile_id.flip_x() {
+                            slope_rotation_corrected_next_rotation ^= 2;
+                        }
                         if CHATTY {
                             tracing::info!("Found slope: {} / {} @ {}", num, den, rotation);
                             tracing::info!(
                                 "rotation_corrected_next_tile_id rotation {}",
-                                rotation_corrected_next_tile_id.rotation()
+                                slope_rotation_corrected_next_rotation
+                            );
+                            tracing::info!(
+                                "straight_track_rotation_corrected_tile_id {}",
+                                straight_track_rotation_corrected_tile_id.rotation()
                             );
                             tracing::info!("proposed rotation {}", proposed_tile_id.rotation());
                         }
                         // To start a downward slope, we need the numerator and denominator to match
                         if num == den {
-                            // The direction we expect to point when we hit the slope
-                            let expected_downslope_direction = (rotation_corrected_next_tile_id
-                                .rotation()
-                                + proposed_tile_id.rotation())
-                                & 3;
-                            // we are going down the slope, so we need to flip the rotation
-                            if expected_downslope_direction ^ 2 == rotation {
+                            // we are going down the slope, so we need rotation 2 in the tile space
+                            // (i.e. after correcting for placement rotation)
+                            if slope_rotation_corrected_next_rotation == 2 {
                                 if CHATTY {
                                     tracing::info!(
                                         "Corrected rotation: {} -> {} matches",
                                         rotation,
-                                        rotation ^ 2
+                                        slope_rotation_corrected_next_rotation
                                     );
                                 }
                                 return Ok(ScanOutcome::Success(self.build_next_state(
@@ -1739,6 +1750,14 @@ impl ScanState {
                                     true,
                                     false,
                                 )));
+                            } else {
+                                if CHATTY {
+                                    tracing::info!(
+                                        "No match found: {:?} -> {:?}",
+                                        rotation,
+                                        slope_rotation_corrected_next_rotation
+                                    );
+                                }
                             }
                         }
                     }

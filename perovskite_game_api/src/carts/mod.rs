@@ -290,7 +290,7 @@ fn place_cart(
     config: CartsGameBuilderExtension,
 ) -> Result<Option<ItemStack>> {
     let block = ctx.game_map().get_block(coord)?;
-    let (rail_pos, _variant) = if block.equals_ignore_variant(config.rail_block) {
+    let (rail_pos, _variant) = if config.is_any_rail_block(block) {
         (coord, block.variant())
     } else {
         ctx.initiator().send_chat_message(
