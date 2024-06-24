@@ -130,6 +130,28 @@ pub(crate) struct GameEntity {
 }
 
 impl GameEntity {
+    pub(crate) fn buffer_debug(&self, tick: u64) -> String {
+        let idx = self.move_queue.iter().rposition(|m| m.start_tick < tick);
+        format!("now: {tick}: \n")
+            + self
+                .move_queue
+                .iter()
+                .map(|m| {
+                    format!(
+                        "[{} @ {}: {} in {}], ",
+                        m.seq,
+                        m.start_tick,
+                        m.total_time_seconds,
+                        (m.start_tick as f64 / 1_000_000_000.0 - tick as f64 / 1_000_000_000.0)
+                    )
+                })
+                .collect::<String>()
+                .as_str()
+            + format!("idx: {:?}", idx).as_str()
+    }
+}
+
+impl GameEntity {
     pub(crate) fn transforms_with_trailing_entities(
         &self,
         base_position: Vector3<f64>,
@@ -216,7 +238,7 @@ impl GameEntity {
     }
 
     fn pop_until(&mut self, until_tick: u64) -> bool {
-        let mut idx = self
+        let idx = self
             .move_queue
             .iter()
             .rposition(|m| m.start_tick < until_tick);
@@ -233,6 +255,8 @@ impl GameEntity {
                     // pop off its front to keep the total length of moves in the back buffer
                     // not much higher than max_back_buffer_length
                     self.pop_backbuffer();
+                } else {
+                    drop(self.move_queue.drain(..idx));
                 }
                 true
             }

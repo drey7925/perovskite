@@ -847,6 +847,14 @@ impl EguiUi {
                                 .font(egui::FontId::monospace(16.0))
                                 .color(Color32::WHITE),
                             );
+                            if state.settings.load().debug.extra_entity_debug {
+                                let buffer_debug = entity.buffer_debug(start_tick);
+                                ui.label(
+                                    egui::RichText::new(buffer_debug)
+                                        .font(egui::FontId::monospace(16.0))
+                                        .color(Color32::WHITE),
+                                );
+                            }
                         } else {
                             ui.label(
                                 egui::RichText::new(format!("Attached entity: {entity_id}"))

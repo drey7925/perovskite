@@ -96,11 +96,7 @@ impl ActiveGame {
         )
         .unwrap();
         self.cube_draw_calls.clear();
-        let start_time = Instant::now();
-        let start_tick = self
-            .client_state
-            .timekeeper
-            .time_to_tick_estimate(start_time);
+        let start_tick = self.client_state.timekeeper.now();
 
         {
             let mut entity_lock = self.client_state.entities.lock();

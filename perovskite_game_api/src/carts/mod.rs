@@ -742,7 +742,7 @@ impl CartCoroutine {
         queue_space: usize,
         trace_buffer: TraceBuffer,
     ) -> CoroutineResult {
-        tracing::debug!(
+        tracing::info!(
             "{} {:?} ========== planning {} seconds in advance",
             self.id,
             self.spawn_time.elapsed(),
@@ -756,7 +756,7 @@ impl CartCoroutine {
         for seg in self.unplanned_segments.iter() {
             step_count += seg.distance();
         }
-        tracing::debug!(
+        tracing::info!(
             "cart coro: step_count = {}. {} in braking curve, {} unplanned",
             step_count,
             self.scheduled_segments.len(),
@@ -922,9 +922,9 @@ impl CartCoroutine {
                     .map(|seg| seg.speed + (seg.acceleration * seg.move_time))
                     .unwrap_or(self.last_speed_post_indication.max(5.0)),
             ) as f32;
-        tracing::debug!("estimated max speed {}", estimated_max_speed);
+        tracing::info!("estimated max speed {}", estimated_max_speed);
 
-        tracing::debug!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
+        tracing::info!(">>>> steps: {}, buffer time estimate: {}, estimated max speed: {}, max steps ahead: {}", steps, buffer_time_estimate, estimated_max_speed, max_steps_ahead);
 
         if self.unplanned_segments.is_empty() {
             tracing::debug!("unplanned segments empty, adding new");
@@ -1009,7 +1009,7 @@ impl CartCoroutine {
                         break 'scan_loop;
                     }
                     SignalResult::Permissive => {
-                        tracing::debug!("Permissive signal at {:?}", new_state.block_coord);
+                        tracing::info!("Permissive signal at {:?}", new_state.block_coord);
                         self.pending_actions.push(PendingActionEntry {
                             odometer: new_state.odometer,
                             action: PendingAction::SignalEnterBlock(signal_coord, signal_block),
@@ -1045,7 +1045,7 @@ impl CartCoroutine {
             self.apply_step(new_state);
         }
 
-        tracing::debug!(
+        tracing::info!(
             "Finished with {} steps, {} buffer time estimate, {} max speed, {} time limit",
             steps,
             buffer_time_estimate,
@@ -1895,7 +1895,7 @@ impl CartCoroutine {
                 tracing::warn!("Segment {:?} had no movement", segment);
             }
         }
-        tracing::debug!("returning {} moves", returned_moves.len());
+        tracing::info!("returning {} moves", returned_moves.len());
         trace_buffer.log("Done!");
         CoroutineResult::Successful(
             perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMultiple(

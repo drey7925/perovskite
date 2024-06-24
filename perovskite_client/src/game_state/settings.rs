@@ -34,6 +34,20 @@ impl Default for RenderSettings {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub(crate) struct DebugSettings {
+    pub(crate) extra_entity_debug: bool,
+}
+
+impl Default for DebugSettings {
+    fn default() -> Self {
+        Self {
+            extra_entity_debug: false,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 pub(crate) struct GameSettings {
@@ -42,6 +56,7 @@ pub(crate) struct GameSettings {
     pub(crate) last_hostname: String,
     pub(crate) last_username: String,
     pub(crate) previous_servers: Vec<String>,
+    pub(crate) debug: DebugSettings,
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
