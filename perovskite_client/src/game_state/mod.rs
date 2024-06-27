@@ -701,11 +701,13 @@ impl ClientState {
     }
 
     pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
+        let mut egui_wants_events = false;
         {
             self.timekeeper.update_frame();
 
             let mut input = self.input.lock();
-            input.set_modal_active(self.egui.lock().wants_user_events());
+            egui_wants_events = self.egui.lock().wants_user_events();
+            input.set_modal_active(egui_wants_events);
             if input.take_just_pressed(BoundAction::Inventory) {
                 self.egui.lock().open_inventory();
             } else if input.take_just_pressed(BoundAction::Menu) {
@@ -771,6 +773,7 @@ impl ClientState {
             },
             player_position,
             tool_state,
+            ime_enabled: egui_wants_events,
         }
     }
 
@@ -838,6 +841,7 @@ pub(crate) struct FrameState {
     pub(crate) scene_state: SceneState,
     pub(crate) player_position: Vector3<f64>,
     pub(crate) tool_state: ToolState,
+    pub(crate) ime_enabled: bool,
 }
 
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};

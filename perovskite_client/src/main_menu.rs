@@ -2,11 +2,12 @@ use std::{ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
-use egui::{Color32, Layout, ProgressBar, RichText, TextEdit};
+use egui::{Color32, FontId, Layout, ProgressBar, RichText, TextEdit};
 use tokio::sync::{oneshot, watch};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
+use crate::vulkan::shaders::egui_adapter::set_up_fonts;
 use crate::{
     game_state::settings::GameSettings,
     vulkan::{
@@ -39,7 +40,7 @@ impl MainMenu {
             is_overlay: true,
             samples: SampleCount::Sample1,
         };
-        let egui_gui = egui_winit_vulkano::Gui::new_with_subpass(
+        let mut egui_gui = egui_winit_vulkano::Gui::new_with_subpass(
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_queue(),
@@ -49,6 +50,12 @@ impl MainMenu {
             ctx.swapchain().image_format(),
             gui_config,
         );
+        set_up_fonts(&mut egui_gui.egui_ctx);
+        let mut style = (*egui_gui.egui_ctx.style()).clone();
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, FontId::proportional(16.0));
+        egui_gui.egui_ctx.set_style(style);
         let settings_guard = settings.load();
         MainMenu {
             egui_gui,

@@ -703,7 +703,8 @@ impl EguiUi {
                         TextEdit::singleline(&mut self.chat_message_input)
                             .hint_text("Type a message; press Enter to send or Escape to close.")
                             .lock_focus(true)
-                            .desired_width(f32::INFINITY),
+                            .desired_width(f32::INFINITY)
+                            .font(egui::FontId::proportional(16.0)),
                     );
                     if self.chat_force_request_focus {
                         self.chat_force_request_focus = false;

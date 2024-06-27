@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{sync::Arc, u8};
+use std::sync::Arc;
 
 use opaque_ke::{
     CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,

@@ -31,6 +31,7 @@ use vulkano::{
     sync::{future::FenceSignalFuture, FlushError, GpuFuture},
 };
 
+use winit::window::ImePurpose;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
@@ -85,9 +86,11 @@ impl ActiveGame {
             scene_state,
             mut player_position,
             tool_state,
+            ime_enabled,
         } = self
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
+        ctx.window.set_ime_allowed(ime_enabled);
         ctx.start_render_pass(
             &mut command_buf_builder,
             framebuffer,
@@ -543,6 +546,8 @@ impl GameRenderer {
                             command_buf_builder,
                         )
                     } else {
+                        // we're not in the active game, allow the IME
+                        self.ctx.window.set_ime_allowed(true);
                         self.ctx
                             .start_render_pass(
                                 &mut command_buf_builder,

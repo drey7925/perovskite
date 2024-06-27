@@ -139,7 +139,7 @@ impl EguiAdapter {
     }
 }
 
-fn set_up_fonts(egui_ctx: &mut egui::Context) {
+pub(crate) fn set_up_fonts(egui_ctx: &mut egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NotoSans-Light".to_owned(),
