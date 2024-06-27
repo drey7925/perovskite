@@ -50,7 +50,12 @@ impl<T> DerefMut for CachelineAligned<T> {
 pub(crate) struct Timekeeper {
     /// The initial estimate for what the server is using as its timebase,
     /// given in terms of our own system clock.
+    ///
+    /// Note that we can't just subtract the tick from the instant at which we start the timekeeper:
+    /// On some systems like Windows, the actual value inside the Duration might underflow if the
+    /// server has been up longer than the current system uptime.
     initial_timebase_estimate: Instant,
+    initial_timebase_tick: u64,
     inner: CachelineAligned<Mutex<TimekeeperInner>>,
     current_skew: CachelineAligned<AtomicI64>,
 }
@@ -59,7 +64,8 @@ impl Timekeeper {
         let now = Instant::now();
 
         Self {
-            initial_timebase_estimate: now - Duration::from_nanos(initial_tick),
+            initial_timebase_estimate: now,
+            initial_timebase_tick: initial_tick,
             inner: CachelineAligned(Mutex::new(TimekeeperInner {
                 last_server_tick: now,
                 error: 0,
@@ -75,8 +81,15 @@ impl Timekeeper {
     }
 
     pub(crate) fn update_error(&self, server_tick: u64) {
+        if server_tick < self.initial_timebase_tick {
+            panic!(
+                "Server time ran backwards: {:?} vs {:?}",
+                server_tick, self.initial_timebase_tick
+            );
+        }
         let now = Instant::now();
-        let new_timebase_estimate = now - Duration::from_nanos(server_tick);
+        let new_timebase_estimate =
+            now - Duration::from_nanos(server_tick - self.initial_timebase_tick);
         let error = new_timebase_estimate - self.initial_timebase_estimate;
         self.inner.lock().error = error.as_nanos().try_into().unwrap();
     }
@@ -129,11 +142,24 @@ impl Timekeeper {
     }
 
     pub(crate) fn estimated_send_time(&self, server_tick: u64) -> Instant {
-        self.initial_timebase_estimate + Duration::from_nanos(self.adjust_server_tick(server_tick))
+        // Note that ticks can run negative relative to each other, due to queueing in the server.
+        // However, ticks should never run backwards relative to the first tick we received from the
+        // server.
+        if server_tick < self.initial_timebase_tick {
+            panic!(
+                "Server time ran backwards: {:?} vs {:?}",
+                server_tick, self.initial_timebase_tick
+            );
+        }
+        self.initial_timebase_estimate
+            + Duration::from_nanos(
+                self.adjust_server_tick(server_tick - self.initial_timebase_tick),
+            )
     }
 
     pub(crate) fn time_to_tick_estimate(&self, time: Instant) -> u64 {
-        let raw_nanos: i128 = (time - self.initial_timebase_estimate).as_nanos() as i128;
+        let raw_nanos: i128 = (time - self.initial_timebase_estimate).as_nanos() as i128
+            + self.initial_timebase_tick as i128;
         (raw_nanos - self.get_offset() as i128) as u64
     }
 }
