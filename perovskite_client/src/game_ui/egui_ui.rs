@@ -6,12 +6,10 @@ use perovskite_core::protocol::items::ItemStack;
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 
-use egui::WidgetText::RichText;
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
-use tracy_client::plot;
 
 use crate::game_state::items::InventoryViewManager;
 use crate::game_state::{GameAction, InventoryAction};

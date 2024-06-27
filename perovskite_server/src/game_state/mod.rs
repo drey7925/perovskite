@@ -31,7 +31,6 @@ pub mod player;
 pub mod tests;
 
 use anyhow::{bail, Result};
-use futures::Future;
 use integer_encoding::VarInt;
 use log::{info, warn};
 use parking_lot::Mutex;

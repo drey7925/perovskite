@@ -329,7 +329,7 @@ async fn send_all_popups(
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<()> {
     let updates = {
-        let mut player_state = context.player_context.state.lock();
+        let player_state = context.player_context.state.lock();
         let mut updates = vec![];
 
         for popup in player_state

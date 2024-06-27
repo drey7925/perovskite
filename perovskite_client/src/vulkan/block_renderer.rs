@@ -38,10 +38,7 @@ use texture_packer::Rect;
 
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{
-    AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryUsage,
-    StandardMemoryAllocator,
-};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
 
 use crate::cache::CacheManager;
 use crate::game_state::block_types::ClientBlockTypeManager;

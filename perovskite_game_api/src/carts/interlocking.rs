@@ -2,7 +2,6 @@ use anyhow::Result;
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::event::HandlerContext;
 use rand::Rng;
-use smallvec::SmallVec;
 
 use crate::carts::signals::{
     self, starting_signal_acquire_back, starting_signal_depart_forward,

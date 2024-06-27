@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 
-use crate::carts::tracks::{build_block, TileId};
+use crate::carts::tracks::build_block;
 use crate::{
     blocks::variants::rotate_nesw_azimuth_to_variant,
     game_builder::{GameBuilder, StaticTextureName},
@@ -22,7 +22,7 @@ use perovskite_server::game_state::{
 };
 
 use super::{
-    tracks::{self, eval_rotation, TRACK_TEMPLATES},
+    tracks::{eval_rotation, TRACK_TEMPLATES},
     CartsGameBuilderExtension,
 };
 

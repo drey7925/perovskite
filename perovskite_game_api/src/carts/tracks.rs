@@ -13,10 +13,7 @@ use perovskite_core::{
     coordinates::BlockCoordinate,
     protocol::{
         self,
-        items::{
-            item_def::{self, QuantityType},
-            item_stack,
-        },
+        items::{item_def::QuantityType, item_stack},
         render::DynamicCrop,
     },
 };
@@ -25,7 +22,7 @@ use perovskite_server::game_state::{
     entities::{DeferrableResult, Deferral},
     event::EventInitiator,
     game_map::{CasOutcome, ServerGameMap},
-    items::{Item, ItemStack},
+    items::Item,
 };
 
 use crate::{

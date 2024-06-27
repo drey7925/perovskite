@@ -28,7 +28,6 @@ use perovskite_core::{
     protocol::{
         self,
         entities::{EntityAppearance, EntityTypeAssignment, ServerEntityTypeAssignments},
-        render::{CustomMesh, TextureReference},
     },
     util::{TraceBuffer, TraceLog},
 };

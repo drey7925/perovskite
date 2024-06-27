@@ -15,11 +15,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result};
-use cgmath::{Angle, Matrix4, Rad};
-use std::{sync::Arc, time::Instant};
-use tracy_client::{plot, span};
+use cgmath::Matrix4;
+use std::sync::Arc;
+use tracy_client::span;
 use vulkano::{
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
+    buffer::{Buffer, BufferCreateInfo, BufferUsage},
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
     device::Device,
     memory::allocator::{AllocationCreateInfo, MemoryUsage},

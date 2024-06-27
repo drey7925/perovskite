@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
@@ -41,7 +41,6 @@ use crate::{
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
-    vulkan::block_renderer::{VkCgvBufferGpu, VkChunkVertexDataGpu},
 };
 
 use super::{

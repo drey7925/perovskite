@@ -16,7 +16,6 @@
 
 use std::ops::{Deref, RangeInclusive};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
@@ -31,9 +30,7 @@ use anyhow::{ensure, Context, Result};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{
-    AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryUsage,
-};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
 
 use crate::vulkan::block_renderer::{
     BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,

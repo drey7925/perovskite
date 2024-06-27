@@ -1,25 +1,15 @@
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, time::Instant};
 
 use anyhow::{Context, Result};
-use cgmath::{vec3, Deg, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
+use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
 use rustc_hash::FxHashMap;
-use vulkano::{
-    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
-    memory::allocator::{AllocationCreateInfo, MemoryUsage},
-};
 
 use perovskite_core::protocol::entities as entities_proto;
 
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
     entity_renderer::EntityRenderer,
-    shaders::{
-        cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex},
-        entity_geometry::EntityGeometryDrawCall,
-    },
+    shaders::entity_geometry::EntityGeometryDrawCall,
 };
 
 #[derive(Copy, Clone, Debug)]

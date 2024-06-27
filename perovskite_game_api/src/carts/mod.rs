@@ -1,12 +1,10 @@
 use std::{
-    cmp::Ordering,
     collections::{BinaryHeap, VecDeque},
-    sync::atomic::AtomicU64,
     time::Instant,
 };
 
 // This is a temporary implementation used while developing the entity system
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
@@ -14,14 +12,14 @@ use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
     constants::items::default_item_interaction_rules,
-    coordinates::{BlockCoordinate, PlayerPositionUpdate},
+    coordinates::BlockCoordinate,
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
     util::{TraceBuffer, TraceLog},
 };
 use perovskite_server::game_state::entities::TrailingEntity;
 use perovskite_server::game_state::{
     self,
-    client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
+    client_ui::{PopupAction, PopupResponse, UiElementContainer},
     entities::{
         ContinuationResult, ContinuationResultValue, CoroutineResult, DeferrableResult,
         EntityClassId, EntityCoroutine, EntityCoroutineServices, EntityDef, EntityTypeId, Movement,

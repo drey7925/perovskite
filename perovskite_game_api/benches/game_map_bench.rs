@@ -2,7 +2,6 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use perovskite_core::block_id::BlockId;
 use perovskite_game_api::{
     carts, default_game::DefaultGameBuilder, game_builder::GameBuilder, BlockCoordinate,
-    ChunkCoordinate,
 };
 
 fn map_benchmarks(c: &mut Criterion) {

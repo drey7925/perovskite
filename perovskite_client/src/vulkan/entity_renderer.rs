@@ -1,21 +1,16 @@
 use std::sync::Arc;
 
 use crate::{cache::CacheManager, vulkan::RectF32};
-use parking_lot::RwLock;
-use perovskite_core::{
-    constants::textures::FALLBACK_UNKNOWN_TEXTURE, protocol::entities as proto,
-    protocol::render as render_proto,
-};
+use perovskite_core::{constants::textures::FALLBACK_UNKNOWN_TEXTURE, protocol::entities as proto};
 use rustc_hash::{FxHashMap, FxHashSet};
 use texture_packer::{importer::ImageImporter, Rect};
-use vulkano::memory::allocator::{FreeListAllocator, GenericMemoryAllocator};
 
 use super::{
     block_renderer::VkCgvBufferGpu, shaders::cube_geometry::CubeGeometryVertex, Texture2DHolder,
     VkAllocator, VulkanContext,
 };
 use anyhow::{bail, ensure, Error, Result};
-use cgmath::{Matrix3, Matrix4, Rad, Vector3, Zero};
+use cgmath::{Matrix3, Rad, Vector3, Zero};
 
 /// Manages the entity definitions and their respective meshes
 ///

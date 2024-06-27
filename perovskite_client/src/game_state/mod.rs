@@ -35,7 +35,6 @@ use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracy_client::span;
-use vulkano::memory::allocator::{FreeListAllocator, GenericMemoryAllocator};
 use winit::event::Event;
 
 use crate::game_state::chunk::ClientChunk;
