@@ -906,7 +906,7 @@ impl<T> InventoryView<T> {
                 borrows_from: BorrowLocation::VirtualOutput(self.id, slot, behavior),
                 borrowed_stack: x,
             })),
-            ViewBacking::VirtualInput(vi) => {
+            ViewBacking::VirtualInput(_vi) => {
                 bail!("Can't take from virtual input")
             }
             ViewBacking::Stored(key) => Ok(self

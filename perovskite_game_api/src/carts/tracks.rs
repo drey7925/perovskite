@@ -558,16 +558,12 @@ fn build_track_tiles() -> ([[Option<TrackTile>; 16]; 11], Vec<Template>) {
             TileId::empty(),
         ],
         allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
-        straight_track_eligible_connections: (
-            // We can enter a straight track with the same rotation, regardless of flip_x
-            TileId::new(0, 0, 0, false, false, false).rotation_flip_bitset_mask()
-                | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
-        ),
-        reverse_straight_track_eligible_connections: (
-            // We can enter a straight track from the other side, and do a reverse move through it
-            TileId::new(0, 0, 2, false, true, false).rotation_flip_bitset_mask()
-                | TileId::new(0, 0, 2, true, true, false).rotation_flip_bitset_mask()
-        ),
+        straight_track_eligible_connections: TileId::new(0, 0, 0, false, false, false)
+            .rotation_flip_bitset_mask()
+            | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask(),
+        reverse_straight_track_eligible_connections: TileId::new(0, 0, 2, false, true, false)
+            .rotation_flip_bitset_mask()
+            | TileId::new(0, 0, 2, true, true, false).rotation_flip_bitset_mask(),
         ..TrackTile::default()
     });
     // [8][8] is the 90 degree curve without a switch
@@ -580,21 +576,12 @@ fn build_track_tiles() -> ([[Option<TrackTile>; 16]; 11], Vec<Template>) {
             TileId::empty(),
         ],
         allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
-        straight_track_eligible_connections: (
-            // We can enter the 90-degree elbow at (8, 8) in its forward scan direction.
-            TileId::new(8, 8, 0, false, false, false).rotation_flip_bitset_mask()
-                // including if X is flipped
-                | TileId::new(8, 8, 0, true, false, false).rotation_flip_bitset_mask()
-        ),
-        reverse_straight_track_eligible_connections: (
-            // We can enter the 90-degree elbow at (8, 8) in its reverse scan direction.
-            // For this to work, the elbow must be turned 90 degrees so we're seeing its end-of-path
-            // side. We set reverse = true because we want the scan to continue in the reverse direction
-            //
-            // but if X is flipped on the elbow, we need the opposite rotation
-            TileId::new(8, 8, 1, false, true, false).rotation_flip_bitset_mask()
-                | TileId::new(8, 8, 3, true, true, false).rotation_flip_bitset_mask()
-        ),
+        straight_track_eligible_connections: TileId::new(8, 8, 0, false, false, false).rotation_flip_bitset_mask()
+            // including if X is flipped
+            | TileId::new(8, 8, 0, true, false, false).rotation_flip_bitset_mask(),
+        reverse_straight_track_eligible_connections: TileId::new(8, 8, 1, false, true, false)
+            .rotation_flip_bitset_mask()
+            | TileId::new(8, 8, 3, true, true, false).rotation_flip_bitset_mask(),
         max_speed: 10,
         ..TrackTile::default()
     });
@@ -831,20 +818,13 @@ fn build_folded_switch(
                 [
                     TileId::new(
                         switch_xmin + 1,
-                        switch_ymin + (y + 1) as u16,
+                        switch_ymin + (y + 1),
                         0,
                         false,
                         false,
                         true,
                     ),
-                    TileId::new(
-                        diag_xmin + 1,
-                        diag_ymin + (y + 1) as u16,
-                        0,
-                        false,
-                        false,
-                        false,
-                    ),
+                    TileId::new(diag_xmin + 1, diag_ymin + (y + 1), 0, false, false, false),
                 ]
             },
             allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
@@ -853,35 +833,16 @@ fn build_folded_switch(
                 [TileId::new(0, 0, 2, false, false, false), TileId::empty()]
             } else {
                 [
-                    TileId::new(
-                        switch_xmin + 1,
-                        switch_ymin + (y - 1) as u16,
-                        0,
-                        false,
-                        true,
-                        true,
-                    ),
-                    TileId::new(
-                        diag_xmin + 1,
-                        diag_ymin + (y - 1) as u16,
-                        0,
-                        false,
-                        true,
-                        true,
-                    ),
+                    TileId::new(switch_xmin + 1, switch_ymin + (y - 1), 0, false, true, true),
+                    TileId::new(diag_xmin + 1, diag_ymin + (y - 1), 0, false, true, true),
                 ]
             },
-            straight_track_eligible_connections: (
-                // We can enter a straight track with the same rotation, regardless of flip_x
-                // Note that X and Y don't matter here; we're just getting the bitset mask.
-                TileId::new(0, 0, 0, false, false, false).rotation_flip_bitset_mask()
-                    | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
-            ),
-            reverse_straight_track_eligible_connections: (
-                // We can enter a straight track from the other side, and do a reverse move through it
-                TileId::new(0, 0, 2, false, true, false).rotation_flip_bitset_mask()
-                    | TileId::new(0, 0, 2, true, true, false).rotation_flip_bitset_mask()
-            ),
+            straight_track_eligible_connections: TileId::new(0, 0, 0, false, false, false)
+                .rotation_flip_bitset_mask()
+                | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask(),
+            reverse_straight_track_eligible_connections: TileId::new(0, 0, 2, false, true, false)
+                .rotation_flip_bitset_mask()
+                | TileId::new(0, 0, 2, true, true, false).rotation_flip_bitset_mask(),
 
             // At X+1, we need the counterpart to our main tile.
             secondary_coord: if y >= skip_secondary_tiles {
@@ -957,20 +918,13 @@ fn build_folded_switch(
                 [
                     TileId::new(
                         switch_xmin + 1,
-                        switch_ymin + (y + 1) as u16,
+                        switch_ymin + (y + 1),
                         0,
                         false,
                         false,
                         true,
                     ),
-                    TileId::new(
-                        diag_xmin + 1,
-                        diag_ymin + (y + 1) as u16,
-                        0,
-                        false,
-                        false,
-                        false,
-                    ),
+                    TileId::new(diag_xmin + 1, diag_ymin + (y + 1), 0, false, false, false),
                     TileId::empty(),
                 ]
             },
@@ -979,22 +933,8 @@ fn build_folded_switch(
                 [TileId::new(0, 0, 2, false, false, false), TileId::empty()]
             } else {
                 [
-                    TileId::new(
-                        switch_xmin + 1,
-                        switch_ymin + (y - 1) as u16,
-                        0,
-                        false,
-                        true,
-                        true,
-                    ),
-                    TileId::new(
-                        diag_xmin + 1,
-                        diag_ymin + (y - 1) as u16,
-                        0,
-                        false,
-                        true,
-                        false,
-                    ),
+                    TileId::new(switch_xmin + 1, switch_ymin + (y - 1), 0, false, true, true),
+                    TileId::new(diag_xmin + 1, diag_ymin + (y - 1), 0, false, true, false),
                 ]
             },
             // Only connects to straight track if y == 0, and only at the input side, regardless of flip_x
@@ -1093,56 +1033,80 @@ pub(crate) fn register_tracks(
     );
     let rail_tile = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:rail_tile"))
-            .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
-                rail_tile_box,
-                (-0.5, 0.5),
-                (-0.5, -0.4375),
-                (-0.5, 0.5),
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            ))
+            .set_axis_aligned_boxes_appearance(
+                AxisAlignedBoxesAppearanceBuilder::new().add_box_with_variant_mask_and_slope(
+                    rail_tile_box,
+                    (-0.5, 0.5),
+                    (-0.5, -0.4375),
+                    (-0.5, 0.5),
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ),
+            )
             .set_allow_light_propagation(true)
             .set_display_name("Railway track")
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord| {
                     let block = ctx.game_map().get_block(coord)?;
                     let tile_id = TileId::from_variant(block.variant(), false, false);
-                    ctx.initiator().send_chat_message(ChatMessage::new(
-                        "[INFO]",
-                        format!("{:?}", tile_id),
-                    ))?;
+                    ctx.initiator()
+                        .send_chat_message(ChatMessage::new("[INFO]", format!("{:?}", tile_id)))?;
 
-                    Ok(Some(ctx.new_popup()
-                        .title("Mr. Yellow")
-                        .label("Update tile:")
-                        .text_field("tile_x", "Tile X", tile_id.x().to_string(), true, false)
-                        .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true, false)
-                        .text_field("rotation", "Rotation", tile_id.rotation().to_string(), true, false)
-                        .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
-                        .button("apply", "Apply", true, true)
-                        .label("Scan tile:")
-                        .checkbox("reverse", "Reverse", false, true)
-                        .checkbox("diverging", "Diverging", false, true)
-                        .button("scan", "Scan", true, false)
-                        .button("multiscan", "Multi-Scan", true, false)
-                        .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
-                            match handle_popup_response(&response, coord, response.ctx.extension::<CartsGameBuilderExtension>().as_ref().unwrap()) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    response.ctx.initiator().send_chat_message(ChatMessage::new("[ERROR]", "Failed to parse popup response: ".to_string() + &e.to_string())).unwrap();
+                    Ok(Some(
+                        ctx.new_popup()
+                            .title("Mr. Yellow")
+                            .label("Update tile:")
+                            .text_field("tile_x", "Tile X", tile_id.x().to_string(), true, false)
+                            .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true, false)
+                            .text_field(
+                                "rotation",
+                                "Rotation",
+                                tile_id.rotation().to_string(),
+                                true,
+                                false,
+                            )
+                            .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
+                            .button("apply", "Apply", true, true)
+                            .label("Scan tile:")
+                            .checkbox("reverse", "Reverse", false, true)
+                            .checkbox("diverging", "Diverging", false, true)
+                            .button("scan", "Scan", true, false)
+                            .button("multiscan", "Multi-Scan", true, false)
+                            .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
+                                match handle_popup_response(
+                                    &response,
+                                    coord,
+                                    response
+                                        .ctx
+                                        .extension::<CartsGameBuilderExtension>()
+                                        .as_ref()
+                                        .unwrap(),
+                                ) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        response
+                                            .ctx
+                                            .initiator()
+                                            .send_chat_message(ChatMessage::new(
+                                                "[ERROR]",
+                                                "Failed to parse popup response: ".to_string()
+                                                    + &e.to_string(),
+                                            ))
+                                            .unwrap();
+                                    }
                                 }
-                            }
-                        }))))
+                            })),
+                    ))
                 }));
                 let ri = bt.client_info.render_info.as_mut().unwrap();
                 match ri {
-                    perovskite_core::protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabb) => {
+                    protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabb) => {
                         aabb.boxes.iter_mut().for_each(|b| {
-                            b.tex_top.as_mut().unwrap().crop.as_mut().unwrap().dynamic = Some(
-                                DynamicCrop {
+                            b.tex_top.as_mut().unwrap().crop.as_mut().unwrap().dynamic =
+                                Some(DynamicCrop {
                                     x_selector_bits: 0b0000_0000_0011_1100,
                                     y_selector_bits: 0b0000_0011_1100_0000,
                                     x_cells: 16,
@@ -1151,23 +1115,26 @@ pub(crate) fn register_tracks(
                                     flip_y_bit: 0,
                                     extra_flip_x: false,
                                     extra_flip_y: false,
-                                }
-                            );
-                            b.tex_bottom.as_mut().unwrap().crop.as_mut().unwrap().dynamic = Some(
-                                DynamicCrop {
-                                    x_selector_bits: 0b0000_0000_0011_1100,
-                                    y_selector_bits: 0b0000_0011_1100_0000,
-                                    x_cells: 16,
-                                    y_cells: 11,
-                                    flip_x_bit: 0b0000_0100_0000_0000,
-                                    flip_y_bit: 0,
-                                    extra_flip_x: true,
-                                    extra_flip_y: false,
-                                }
-                            )
+                                });
+                            b.tex_bottom
+                                .as_mut()
+                                .unwrap()
+                                .crop
+                                .as_mut()
+                                .unwrap()
+                                .dynamic = Some(DynamicCrop {
+                                x_selector_bits: 0b0000_0000_0011_1100,
+                                y_selector_bits: 0b0000_0011_1100_0000,
+                                x_cells: 16,
+                                y_cells: 11,
+                                flip_x_bit: 0b0000_0100_0000_0000,
+                                flip_y_bit: 0,
+                                extra_flip_x: true,
+                                extra_flip_y: false,
+                            })
                         })
                     }
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 }
             })),
     )?;
@@ -1385,13 +1352,10 @@ fn build_slope_tiles() -> [Option<TrackTile>; 16] {
         allowed_next_diverging_tiles: [TileId::empty(); 2],
         allowed_prev_tiles: [TileId::new(0, 0, 2, false, false, false), TileId::empty()],
         allowed_prev_diverging_tiles: [TileId::empty(); 2],
-        straight_track_eligible_connections: (
-            // We can enter this track in its forward scan direction
-            TileId::new(0, 0, 0, false, false, false)
-                .rotation_flip_bitset_mask()
-                // including ff X is flipped
-                | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask()
-        ),
+        straight_track_eligible_connections: TileId::new(0, 0, 0, false, false, false)
+            .rotation_flip_bitset_mask()
+            // including ff X is flipped
+            | TileId::new(0, 0, 0, true, false, false).rotation_flip_bitset_mask(),
         // Slopes are special: we enter them in reverse from a straight track one level HIGHER
         // Therefore, this case cannot be encoded in this field.
         reverse_straight_track_eligible_connections: 0,
@@ -1487,7 +1451,7 @@ impl std::fmt::Debug for ScanOutcome {
             ScanOutcome::Success(state) => state.fmt(f),
             ScanOutcome::CannotAdvance => f.write_str("CannotAdvance"),
             ScanOutcome::NotOnTrack => f.write_str("NotOnTrack"),
-            ScanOutcome::Deferral(deferral) => f.write_str("Deferral {..}"),
+            ScanOutcome::Deferral(_deferral) => f.write_str("Deferral {..}"),
         }
     }
 }

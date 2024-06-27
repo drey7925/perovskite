@@ -1020,7 +1020,7 @@ impl BlockRenderer {
 
     pub(crate) fn make_pointee_cube(
         &self,
-        player_position: cgmath::Vector3<f64>,
+        player_position: Vector3<f64>,
         pointee: perovskite_core::coordinates::BlockCoordinate,
     ) -> Result<CubeGeometryDrawCall> {
         let mut vtx = vec![];
@@ -1326,7 +1326,7 @@ lazy_static::lazy_static! {
 fn make_cgv(
     coord: Vector3<f32>,
     normal: Vector3<f32>,
-    tex_uv: cgmath::Vector2<f32>,
+    tex_uv: Vector2<f32>,
     brightness: f32,
     global_brightness: f32,
     wave_horizontal: f32,

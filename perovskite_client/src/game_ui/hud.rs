@@ -77,7 +77,7 @@ impl GameHud {
                 }
             }
             if let Some(x) = slot_selection {
-                if x < total_slots as u32 {
+                if x < total_slots {
                     self.set_slot(x, client_state);
                 }
             }
@@ -133,7 +133,7 @@ impl GameHud {
         ctx: &VulkanWindow,
         window_size: (u32, u32),
     ) -> Result<FlatTextureDrawCall> {
-        let mut builder = flat_texture::FlatTextureDrawBuilder::new();
+        let mut builder = FlatTextureDrawBuilder::new();
         builder.centered_rect(
             (window_size.0 / 2, window_size.1 / 2),
             *self.texture_coords.get(CROSSHAIR).unwrap(),
@@ -149,7 +149,7 @@ impl GameHud {
         window_size: (u32, u32),
         client_state: &ClientState,
     ) -> Result<Option<FlatTextureDrawCall>> {
-        let mut builder = flat_texture::FlatTextureDrawBuilder::new();
+        let mut builder = FlatTextureDrawBuilder::new();
         let unselected_frame = *self.texture_coords.get(FRAME_UNSELECTED).unwrap();
         let selected_frame = *self.texture_coords.get(FRAME_SELECTED).unwrap();
 

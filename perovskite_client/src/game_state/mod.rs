@@ -112,7 +112,7 @@ pub(crate) enum GameAction {
     Tap(DigTapAction),
     Place(PlaceAction),
     Inventory(InventoryAction),
-    PopupResponse(perovskite_core::protocol::ui::PopupResponse),
+    PopupResponse(protocol::ui::PopupResponse),
     InteractKey(InteractKeyAction),
     ChatMessage(String),
 }
@@ -123,7 +123,7 @@ pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
     light_columns: parking_lot::RwLock<LightColumnMap>,
-    mesh_batches: parking_lot::Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
+    mesh_batches: Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
@@ -131,7 +131,7 @@ impl ChunkManager {
             chunks: parking_lot::RwLock::new(FxHashMap::default()),
             renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
             light_columns: parking_lot::RwLock::new(FxHashMap::default()),
-            mesh_batches: parking_lot::Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
+            mesh_batches: Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -191,7 +191,7 @@ impl ChunkManager {
         proto: protocol::game_rpc::MapChunk,
         snappy_helper: &mut SnappyDecodeHelper,
         block_types: &ClientBlockTypeManager,
-    ) -> anyhow::Result<usize> {
+    ) -> Result<usize> {
         // Lock order: chunks -> [renderable_chunks] -> light_columns
         let mut chunks_lock = {
             let _span = span!("Acquire global chunk lock");
@@ -239,7 +239,7 @@ impl ChunkManager {
             let block_coord: BlockCoordinate = match &update.block_coord {
                 Some(x) => x.into(),
                 None => {
-                    log::warn!("Got delta with missing block_coord {:?}", update);
+                    warn!("Got delta with missing block_coord {:?}", update);
                     missing_coord = true;
                     continue;
                 }
@@ -260,7 +260,7 @@ impl ChunkManager {
                     }
                 }
                 None => {
-                    log::warn!("Got delta for unknown chunk {:?}", block_coord);
+                    warn!("Got delta for unknown chunk {:?}", block_coord);
                     unknown_coords.push(block_coord);
                     None
                 }
@@ -608,11 +608,11 @@ pub(crate) struct ClientState {
 
     pub(crate) block_types: Arc<ClientBlockTypeManager>,
     pub(crate) items: Arc<ClientItemManager>,
-    pub(crate) last_update: parking_lot::Mutex<Instant>,
-    pub(crate) physics_state: parking_lot::Mutex<physics::PhysicsState>,
+    pub(crate) last_update: Mutex<Instant>,
+    pub(crate) physics_state: Mutex<physics::PhysicsState>,
     pub(crate) chunks: ChunkManager,
-    pub(crate) inventories: parking_lot::Mutex<InventoryViewManager>,
-    pub(crate) tool_controller: parking_lot::Mutex<ToolController>,
+    pub(crate) inventories: Mutex<InventoryViewManager>,
+    pub(crate) tool_controller: Mutex<ToolController>,
     pub(crate) shutdown: tokio_util::sync::CancellationToken,
     pub(crate) actions: mpsc::Sender<GameAction>,
     pub(crate) light_cycle: Arc<Mutex<LightCycle>>,
@@ -672,8 +672,8 @@ impl ClientState {
             pending_error: Mutex::new(None),
             wants_exit_from_game: Mutex::new(false),
             last_position_weak: Mutex::new(PlayerPositionUpdate {
-                position: cgmath::Vector3::zero(),
-                velocity: cgmath::Vector3::zero(),
+                position: Vector3::zero(),
+                velocity: Vector3::zero(),
                 face_direction: (0.0, 0.0),
             }),
             timekeeper,
@@ -689,7 +689,7 @@ impl ClientState {
         PlayerPositionUpdate {
             // TODO tick, velocity
             position: lock.pos(),
-            velocity: cgmath::Vector3::zero(),
+            velocity: Vector3::zero(),
             face_direction: lock.angle(),
         }
     }
@@ -757,7 +757,7 @@ impl ClientState {
 
         *self.last_position_weak.lock() = PlayerPositionUpdate {
             position: player_position,
-            velocity: cgmath::Vector3::zero(),
+            velocity: Vector3::zero(),
             face_direction: (az, el),
         };
 
@@ -836,7 +836,7 @@ impl ClientState {
 
 pub(crate) struct FrameState {
     pub(crate) scene_state: SceneState,
-    pub(crate) player_position: cgmath::Vector3<f64>,
+    pub(crate) player_position: Vector3<f64>,
     pub(crate) tool_state: ToolState,
 }
 

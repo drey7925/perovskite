@@ -818,7 +818,7 @@ pub enum PinReading {
 /// Returns:
 ///     The state of the pin
 pub fn get_pin_state(
-    ctx: &events::CircuitHandlerContext<'_>,
+    ctx: &CircuitHandlerContext<'_>,
     coord: BlockCoordinate,
     into: BlockCoordinate,
 ) -> PinReading {

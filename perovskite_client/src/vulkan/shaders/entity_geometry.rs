@@ -66,7 +66,7 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
         draw_calls: Vec<EntityGeometryDrawCall>,
-        pass: (),
+        _pass: (),
     ) -> Result<()> {
         let _span = span!("draw entities");
         let pipeline = self.pipeline.clone();
@@ -221,8 +221,8 @@ impl EntityPipelineProvider {
             .build(self.device.clone())?;
 
         let solid_descriptor = tex.descriptor_set(&solid_pipeline, 0, 0)?;
-        let sparse_descriptor = tex.descriptor_set(&sparse_pipeline, 0, 0)?;
-        let translucent_descriptor = tex.descriptor_set(&translucent_pipeline, 0, 0)?;
+        tex.descriptor_set(&sparse_pipeline, 0, 0)?;
+        tex.descriptor_set(&translucent_pipeline, 0, 0)?;
         Ok(EntityPipelineWrapper {
             pipeline: solid_pipeline,
             descriptor: solid_descriptor,

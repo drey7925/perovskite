@@ -36,7 +36,7 @@ use super::mesh_worker::{
 struct SharedState {
     protocol_version: u32,
     // Some messages are sent straight from the inbound context, namely protocol bugchecks
-    outbound_tx: mpsc::Sender<rpc::StreamToServer>,
+    outbound_tx: mpsc::Sender<StreamToServer>,
     client_state: Arc<ClientState>,
     ack_map: Mutex<HashMap<u64, Instant>>,
     mesh_workers: Vec<Arc<MeshWorker>>,
@@ -50,7 +50,7 @@ impl SharedState {
     async fn send_bugcheck(&self, description: String) -> Result<()> {
         log::error!("Protocol bugcheck: {}", description);
         self.outbound_tx
-            .send(rpc::StreamToServer {
+            .send(StreamToServer {
                 sequence: 0,
                 client_tick: 0,
                 client_message: Some(rpc::stream_to_server::ClientMessage::BugCheck(
@@ -151,7 +151,7 @@ impl OutboundContext {
             .insert(self.sequence, Instant::now());
         self.shared_state
             .outbound_tx
-            .send(rpc::StreamToServer {
+            .send(StreamToServer {
                 sequence: self.sequence,
                 client_tick: 0,
                 client_message: Some(message),
@@ -317,7 +317,7 @@ impl OutboundContext {
 }
 
 pub(crate) struct InboundContext {
-    inbound_rx: tonic::Streaming<rpc::StreamToClient>,
+    inbound_rx: Streaming<StreamToClient>,
     shared_state: Arc<SharedState>,
 
     mesh_worker_handles: futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<()>>>,
@@ -411,7 +411,7 @@ impl InboundContext {
                         }
                     }
                 }
-            };
+            }
         }
         log::warn!("Exiting inbound loop");
         // Notify the mesh worker so it can exit soon
@@ -424,7 +424,7 @@ impl InboundContext {
         self.shared_state.batcher.cancel();
         Ok(())
     }
-    async fn handle_message(&mut self, message: &rpc::StreamToClient) -> Result<()> {
+    async fn handle_message(&mut self, message: &StreamToClient) -> Result<()> {
         if message.tick == 0 {
             log::warn!("Got message with tick 0");
         } else {

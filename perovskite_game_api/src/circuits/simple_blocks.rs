@@ -58,7 +58,7 @@ impl CircuitBlockCallbacks for SourceBlockCallbacks {
         _ctx: &super::events::CircuitHandlerContext<'_>,
         _coordinate: perovskite_core::coordinates::BlockCoordinate,
         _from: perovskite_core::coordinates::BlockCoordinate,
-        _state: super::PinState,
+        _state: PinState,
     ) -> Result<()> {
         // Likewise, no need to do anything.
         Ok(())
@@ -69,7 +69,7 @@ impl CircuitBlockCallbacks for SourceBlockCallbacks {
         _ctx: &super::events::CircuitHandlerContext<'_>,
         _coord: perovskite_core::coordinates::BlockCoordinate,
         _destination: perovskite_core::coordinates::BlockCoordinate,
-    ) -> super::PinState {
+    ) -> PinState {
         self.0
     }
 
@@ -109,11 +109,11 @@ impl CircuitBlockCallbacks for SimpleLampCallbacks {
         ctx: &super::events::CircuitHandlerContext<'_>,
         coord: perovskite_core::coordinates::BlockCoordinate,
         _from: perovskite_core::coordinates::BlockCoordinate,
-        _state: super::PinState,
+        _state: PinState,
     ) -> Result<()> {
         let desired = if get_incoming_pin_states(ctx, coord)
             .iter()
-            .any(|(_, _, state)| state == &super::PinState::High)
+            .any(|(_, _, state)| state == &PinState::High)
         {
             self.lamp_on
         } else {
@@ -135,8 +135,8 @@ impl CircuitBlockCallbacks for SimpleLampCallbacks {
         _ctx: &super::events::CircuitHandlerContext<'_>,
         _coord: perovskite_core::coordinates::BlockCoordinate,
         _destination: perovskite_core::coordinates::BlockCoordinate,
-    ) -> super::PinState {
-        super::PinState::Low
+    ) -> PinState {
+        PinState::Low
     }
 }
 

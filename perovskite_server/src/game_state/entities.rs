@@ -212,7 +212,7 @@ impl EntityManager {
         self.cancellation.cancel();
     }
     pub(crate) async fn await_shutdown(&self) -> Result<()> {
-        for handle in std::mem::replace(self.workers.lock().deref_mut(), vec![]).into_iter() {
+        for handle in std::mem::take(self.workers.lock().deref_mut()).into_iter() {
             handle.await??;
         }
         Ok(())
@@ -610,7 +610,7 @@ impl<'a> EntityCoroutineServices<'a> {
     ) {
         let ctx = HandlerContext {
             tick: self.game_state.tick(),
-            initiator: super::event::EventInitiator::Plugin("entity_coroutine".to_string()),
+            initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
             game_state: self.game_state.clone(),
         };
         tokio::task::spawn(async move {
@@ -624,7 +624,6 @@ impl<'a> EntityCoroutineServices<'a> {
     /// For now, this is just spawned onto the tokio runtime, but this may change in the future.
     ///
     /// Warning: If the function hangs indefinitely, the game cannot exit.
-    #[must_use = "deferrable result does nothing unless returned to the entity scheduler"]
     pub fn spawn_async<T: Send + Sync + 'static, Fut>(
         &self,
         task: impl FnOnce(HandlerContext<'static>) -> Fut,
@@ -634,7 +633,7 @@ impl<'a> EntityCoroutineServices<'a> {
     {
         let ctx: HandlerContext<'static> = HandlerContext {
             tick: self.game_state.tick(),
-            initiator: super::event::EventInitiator::Plugin("entity_coroutine".to_string()),
+            initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
             game_state: self.game_state.clone(),
         };
         let fut = task(ctx);
@@ -657,7 +656,6 @@ pub struct Deferral<T: Send + 'static, Residual: Debug + Send + 'static = ()> {
     deferred_call: Pin<Box<dyn Future<Output = (T, Residual)> + Send + 'static>>,
 }
 impl Deferral<Result<BlockId>, BlockCoordinate> {
-    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
     /// Returns a CoroutineResult that will instruct the entity system to run the deferred computation,
     /// and then re-enter the coroutine by calling [EntityCoroutine::continuation] with a ContinuationResult
     /// containing a [ContinuationResultValue::GetBlock] with the result of the deferred computation
@@ -758,7 +756,6 @@ impl_deferral!(EntityMoveDecision, EntityDecision);
 impl_deferral!(HeapResult, HeapResult);
 
 impl Deferral<ContinuationResultValue, ()> {
-    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
     pub fn defer_and_reinvoke(self, tag: u32) -> CoroutineResult {
         CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
             deferred_call: Box::pin(async move {
@@ -771,7 +768,6 @@ impl Deferral<ContinuationResultValue, ()> {
 }
 
 impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral<T, Residual> {
-    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
     pub fn and_then(
         self,
         f: impl FnOnce(T) -> EntityMoveDecision + Send + Sync + 'static,
@@ -805,7 +801,6 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> From<Def
 impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static>
     DeferrableResult<T, Residual>
 {
-    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
     pub fn map<U: Send + Sync + 'static>(
         self,
         f: impl FnOnce(T) -> U + Send + Sync + 'static,
@@ -818,7 +813,6 @@ impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static>
 }
 
 impl<T: Send + Sync + 'static, Residual: Debug + Send + Sync + 'static> Deferral<T, Residual> {
-    #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
     pub fn map<U: Send + Sync + 'static>(
         self,
         f: impl FnOnce(T) -> U + Send + Sync + 'static,
@@ -939,8 +933,8 @@ const ID_MASK: u64 = (1 << 48) - 1;
 #[derive(Debug)]
 enum MoveQueue {
     SingleMove(Option<StoredMovement>),
-    Buffer8(Box<circular_buffer::CircularBuffer<8, StoredMovement>>),
-    Buffer64(Box<circular_buffer::CircularBuffer<64, StoredMovement>>),
+    Buffer8(Box<CircularBuffer<8, StoredMovement>>),
+    Buffer64(Box<CircularBuffer<64, StoredMovement>>),
 }
 
 impl MoveQueue {
@@ -1022,7 +1016,7 @@ impl MoveQueue {
 
     fn as_slice(&self) -> &[StoredMovement] {
         match self {
-            MoveQueue::SingleMove(x) => x.as_ref().map(|x| std::slice::from_ref(x)).unwrap_or(&[]),
+            MoveQueue::SingleMove(x) => x.as_ref().map(std::slice::from_ref).unwrap_or(&[]),
             MoveQueue::Buffer8(x) => {
                 let (left_slice, right_slice) = x.as_slices();
                 if right_slice.is_empty() {
@@ -1164,9 +1158,7 @@ impl EntityCoreArray {
         const MAX_WAIT_TIME_TICKS: u64 = 10 * 1_000_000_000;
         let awakening_bound = update_tick + MAX_WAIT_TIME_TICKS;
 
-        let next_event = next_event.min(awakening_bound).max(update_tick);
-
-        next_event
+        next_event.min(awakening_bound).max(update_tick)
     }
 
     /// Run coroutines present on entities that need coroutine based recalcs.
@@ -1187,7 +1179,7 @@ impl EntityCoreArray {
     ) -> u64 {
         let _span = span!("entity_run_coroutines");
         self.check_preconditions();
-        let mut next_event = std::u64::MAX;
+        let mut next_event = u64::MAX;
         for i in 0..self.len {
             next_event =
                 next_event.min(self.run_coro_single(i, services, None, sender, game_state.tick()));
@@ -1337,10 +1329,8 @@ impl EntityCoreArray {
         };
         let queue = match entity_def.move_queue_type {
             MoveQueueType::SingleMove => MoveQueue::SingleMove(None),
-            MoveQueueType::Buffer8 => MoveQueue::Buffer8(circular_buffer::CircularBuffer::boxed()),
-            MoveQueueType::Buffer64 => {
-                MoveQueue::Buffer64(circular_buffer::CircularBuffer::boxed())
-            }
+            MoveQueueType::Buffer8 => MoveQueue::Buffer8(CircularBuffer::boxed()),
+            MoveQueueType::Buffer64 => MoveQueue::Buffer64(CircularBuffer::boxed()),
         };
         let i = match index {
             Some(i) => {
@@ -2070,7 +2060,7 @@ impl EntityCoreArray {
     /// Returns the elapsed time for the current entity, saturating to 0 if it's negative
     fn move_elapsed(&self, i: usize, tick: u64) -> f32 {
         // We need a saturating subtraction here because we don't want to go negative
-        (tick.saturating_sub(self.move_start_tick[i])) as f32 / 1_000_000_000.0
+        tick.saturating_sub(self.move_start_tick[i]) as f32 / 1_000_000_000.0
     }
 
     fn move_time_in_ticks(&self, i: usize) -> u64 {
@@ -2081,7 +2071,7 @@ impl EntityCoreArray {
         if approx_ticks >= u64::MAX as f32 {
             return u64::MAX;
         }
-        (approx_ticks) as u64
+        approx_ticks as u64
     }
 
     #[cold]
@@ -2223,7 +2213,6 @@ impl EntityShardWorker {
     }
 
     pub(crate) async fn run_loop(&self) -> Result<()> {
-        let last_iteration = self.game_state.tick();
         let mut rx_lock = self.entities.shards[self.shard_id]
             .pending_actions_rx
             .lock()
@@ -2370,7 +2359,7 @@ impl EntityShardWorker {
         }
         indices.sort();
         indices.dedup();
-        let mut next_event = std::u64::MAX;
+        let mut next_event = u64::MAX;
         for index in indices {
             if index != 0 {
                 //println!("post control message");
@@ -2391,7 +2380,7 @@ impl EntityShardWorker {
         let mut lock = self.entities.shards[self.shard_id].core.write();
         let completion_tx = &self.entities.shards[self.shard_id].completion_tx;
 
-        let mut next_event = std::u64::MAX;
+        let mut next_event = u64::MAX;
         for completion in completions.drain(..) {
             completion
                 .trace_buffer
@@ -2464,7 +2453,7 @@ pub enum MoveQueueType {
 pub struct EntityDef {
     pub move_queue_type: MoveQueueType,
     pub class_name: String,
-    pub client_info: perovskite_core::protocol::entities::EntityAppearance,
+    pub client_info: EntityAppearance,
 }
 
 pub struct EntityClass {
@@ -2550,7 +2539,7 @@ impl EntityTypeManager {
         }
 
         Ok(EntityTypeManager {
-            types: types,
+            types,
             by_name: FxHashMap::default(),
         })
     }
@@ -2636,7 +2625,7 @@ fn make_unknown_entity_appearance() -> Option<EntityDef> {
     Some(EntityDef {
         class_name: "builtin:unknown".to_string(),
         move_queue_type: MoveQueueType::SingleMove,
-        client_info: protocol::entities::EntityAppearance {
+        client_info: EntityAppearance {
             custom_mesh: vec![formats::load_obj_mesh(
                 UNKNOWN_ENTITITY_MESH,
                 FALLBACK_UNKNOWN_TEXTURE,

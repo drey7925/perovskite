@@ -129,7 +129,7 @@ impl EguiUi {
     }
     pub(crate) fn draw_all_uis(
         &mut self,
-        ctx: &egui::Context,
+        ctx: &Context,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
     ) {
@@ -228,7 +228,7 @@ impl EguiUi {
         ui: &mut egui::Ui,
         popup: &PopupDescription,
         element: &proto::UiElement,
-        id: egui::Id,
+        id: Id,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
         clicked_button: &mut Option<(String, bool)>,
@@ -244,9 +244,9 @@ impl EguiUi {
                     .or_insert(text_field.initial.clone());
                 // todo support multiline, other styling
                 let editor = if text_field.multiline {
-                    egui::TextEdit::multiline(value)
+                    TextEdit::multiline(value)
                 } else {
-                    egui::TextEdit::singleline(value)
+                    TextEdit::singleline(value)
                 };
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                     let label = ui.label(text_field.label.clone());
@@ -262,7 +262,7 @@ impl EguiUi {
                 ui.checkbox(value, checkbox.label.clone());
             }
             Some(proto::ui_element::Element::Button(button_def)) => {
-                let button = egui::Button::new(button_def.label.clone());
+                let button = Button::new(button_def.label.clone());
                 if ui
                     .add_enabled(button_def.enabled && self.allow_button_interaction, button)
                     .clicked()
@@ -280,7 +280,7 @@ impl EguiUi {
                 };
                 egui::CollapsingHeader::new(label)
                     .default_open(true)
-                    .id_source(egui::Id::new("collapsing_header_inv").with(inventory.inventory_key))
+                    .id_source(Id::new("collapsing_header_inv").with(inventory.inventory_key))
                     .show(ui, |ui| {
                         self.draw_inventory_view(
                             ui,
@@ -321,8 +321,8 @@ impl EguiUi {
 
     fn draw_popup(
         &mut self,
-        popup: &proto::PopupDescription,
-        ctx: &egui::Context,
+        popup: &PopupDescription,
+        ctx: &Context,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
         enabled: bool,
@@ -341,7 +341,7 @@ impl EguiUi {
                         ui,
                         popup,
                         element,
-                        egui::Id::new("popup_elem").with(popup.popup_id).with(index),
+                        Id::new("popup_elem").with(popup.popup_id).with(index),
                         atlas_texture_id,
                         client_state,
                         &mut clicked_button,
@@ -491,10 +491,9 @@ impl EguiUi {
             .render
             .scale_inventories_with_high_dpi
         {
-            vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32) * self.scale_override
+            vec2(frame_pixels.w as f32, frame_pixels.h as f32) * self.scale_override
         } else {
-            vec2((frame_pixels.w) as f32, (frame_pixels.h) as f32) * self.scale_override
-                / (self.scale)
+            vec2(frame_pixels.w as f32, frame_pixels.h as f32) * self.scale_override / (self.scale)
         };
         let inv_rect = egui::Rect::from_min_size(
             ui.cursor().min,
@@ -636,22 +635,19 @@ impl EguiUi {
         egui::Rect::from_x_y_ranges(left..=right, top..=bottom)
     }
 
-    pub(crate) fn get_texture_uv(
-        &self,
-        item: &perovskite_core::protocol::items::ItemStack,
-    ) -> egui::Rect {
+    pub(crate) fn get_texture_uv(&self, item: &ItemStack) -> egui::Rect {
         let pixel_rect = get_texture(item, &self.atlas_coords, &self.item_defs);
         self.pixel_rect_to_uv(pixel_rect)
     }
 
-    fn draw_pause_menu(&mut self, ctx: &egui::Context, client_state: &ClientState) {
+    fn draw_pause_menu(&mut self, ctx: &Context, client_state: &ClientState) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.pause_menu_open = false;
         }
         egui::Window::new("Game paused")
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 if ui.add_enabled(true, Button::new("Resume")).clicked() {
                     self.pause_menu_open = false;
@@ -675,7 +671,7 @@ impl EguiUi {
             });
     }
 
-    fn render_chat_history(&mut self, ctx: &egui::Context, client_state: &ClientState) {
+    fn render_chat_history(&mut self, ctx: &Context, client_state: &ClientState) {
         let chat = client_state.chat.lock();
         if self.chat_open {
             egui::TopBottomPanel::top("chat_panel")
@@ -704,7 +700,7 @@ impl EguiUi {
                         }
                     });
                     let editor = ui.add(
-                        egui::TextEdit::singleline(&mut self.chat_message_input)
+                        TextEdit::singleline(&mut self.chat_message_input)
                             .hint_text("Type a message; press Enter to send or Escape to close.")
                             .lock_focus(true)
                             .desired_width(f32::INFINITY),
@@ -716,7 +712,7 @@ impl EguiUi {
                     if self.chat_force_cursor_to_end {
                         self.chat_force_cursor_to_end = false;
                         let id = editor.id;
-                        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+                        if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
                             let ccursor =
                                 egui::text::CCursor::new(self.chat_message_input.chars().count());
                             state.set_ccursor_range(Some(egui::text::CCursorRange::one(ccursor)));
@@ -756,7 +752,7 @@ impl EguiUi {
                     .max_height(240.0)
                     .frame(egui::Frame {
                         fill: Color32::from_black_alpha(192),
-                        stroke: egui::Stroke {
+                        stroke: Stroke {
                             width: 0.0,
                             color: Color32::TRANSPARENT,
                         },
@@ -789,7 +785,7 @@ impl EguiUi {
             .max_height(240.0)
             .frame(egui::Frame {
                 fill: Color32::from_black_alpha(192),
-                stroke: egui::Stroke {
+                stroke: Stroke {
                     width: 0.0,
                     color: Color32::TRANSPARENT,
                 },

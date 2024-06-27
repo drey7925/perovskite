@@ -208,7 +208,7 @@ mod private {
         fn deref_to_popup(&mut self) -> &mut super::Popup;
     }
 }
-impl private::UiElementContainerPrivate for Popup {
+impl UiElementContainerPrivate for Popup {
     fn push_widget(&mut self, element: UiElement) {
         self.widgets.push(element);
     }
@@ -224,7 +224,7 @@ pub struct SideBySideLayoutBuilder<'a> {
     widgets: Vec<UiElement>,
 }
 
-impl private::UiElementContainerPrivate for SideBySideLayoutBuilder<'_> {
+impl UiElementContainerPrivate for SideBySideLayoutBuilder<'_> {
     fn push_widget(&mut self, element: UiElement) {
         self.widgets.push(element);
     }

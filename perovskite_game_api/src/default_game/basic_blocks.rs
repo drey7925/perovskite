@@ -883,7 +883,7 @@ fn make_chest_popup(
     coord: perovskite_core::coordinates::BlockCoordinate,
     p: &perovskite_server::game_state::event::PlayerInitiator<'_>,
 ) -> Result<perovskite_server::game_state::client_ui::Popup, anyhow::Error> {
-    Ok((ctx
+    Ok(ctx
         .new_popup()
         .title("Chest")
         .inventory_view_block(
@@ -902,5 +902,5 @@ fn make_chest_popup(
             p.player.main_inventory(),
             true,
             true,
-        ))?)
+        )?)
 }

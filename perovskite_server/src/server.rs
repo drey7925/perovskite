@@ -309,7 +309,7 @@ impl ServerBuilder {
     }
 
     /// Adds an extension to the server's game state.
-    /// This extension can be accessed through [crate::game_state::GameState::extension].
+    /// This extension can be accessed through [GameState::extension].
     pub fn add_extension<T: GameStateExtension>(&mut self, extension: T) {
         if self.extensions.contains::<T>() {
             panic!("Extension already added");

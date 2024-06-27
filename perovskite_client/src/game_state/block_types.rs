@@ -12,8 +12,8 @@ use rustc_hash::FxHashMap;
 use super::make_fallback_blockdef;
 
 pub(crate) struct ClientBlockTypeManager {
-    block_defs: Vec<Option<blocks_proto::BlockTypeDef>>,
-    fallback_block_def: blocks_proto::BlockTypeDef,
+    block_defs: Vec<Option<BlockTypeDef>>,
+    fallback_block_def: BlockTypeDef,
     air_block: BlockId,
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
@@ -23,9 +23,7 @@ pub(crate) struct ClientBlockTypeManager {
     name_to_id: FxHashMap<String, BlockId>,
 }
 impl ClientBlockTypeManager {
-    pub(crate) fn new(
-        server_defs: Vec<blocks_proto::BlockTypeDef>,
-    ) -> Result<ClientBlockTypeManager> {
+    pub(crate) fn new(server_defs: Vec<BlockTypeDef>) -> Result<ClientBlockTypeManager> {
         let max_id = server_defs
             .iter()
             .map(|x| x.id)
@@ -126,14 +124,14 @@ impl ClientBlockTypeManager {
         })
     }
 
-    pub(crate) fn all_block_defs(&self) -> impl Iterator<Item = &blocks_proto::BlockTypeDef> {
+    pub(crate) fn all_block_defs(&self) -> impl Iterator<Item = &BlockTypeDef> {
         self.block_defs.iter().flatten()
     }
 
-    pub(crate) fn get_fallback_blockdef(&self) -> &blocks_proto::BlockTypeDef {
+    pub(crate) fn get_fallback_blockdef(&self) -> &BlockTypeDef {
         &self.fallback_block_def
     }
-    pub(crate) fn get_blockdef(&self, id: BlockId) -> Option<&blocks_proto::BlockTypeDef> {
+    pub(crate) fn get_blockdef(&self, id: BlockId) -> Option<&BlockTypeDef> {
         match self.block_defs.get(id.index()) {
             // none if get() failed due to bounds check
             None => None,

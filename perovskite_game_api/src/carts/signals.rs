@@ -171,7 +171,7 @@ const VARIANT_PRELOCKED: u16 = 256;
 const VARIANT_STARTING_HELD: u16 = 512;
 
 pub(crate) fn register_signal_blocks(
-    game_builder: &mut crate::game_builder::GameBuilder,
+    game_builder: &mut GameBuilder,
 ) -> Result<(BlockId, BlockId, BlockId)> {
     include_texture_bytes!(
         game_builder,
@@ -801,7 +801,6 @@ pub(crate) fn signal_release(
 pub(crate) fn interlocking_signal_preacquire(
     _block_coord: BlockCoordinate,
     id: &mut BlockId,
-    expected_id_with_rotation: BlockId,
 ) -> SignalLockOutcome {
     let mut variant = id.variant();
 
@@ -832,7 +831,6 @@ pub(crate) fn interlocking_signal_preacquire(
 pub(crate) fn starting_signal_preacquire_front(
     _block_coord: BlockCoordinate,
     id: &mut BlockId,
-    expected_id_with_rotation: BlockId,
 ) -> SignalLockOutcome {
     let mut variant = id.variant();
 
@@ -862,7 +860,6 @@ pub(crate) fn starting_signal_preacquire_front(
 pub(crate) fn starting_signal_depart_forward(
     _block_coord: BlockCoordinate,
     id: &mut BlockId,
-    expected_id_with_rotation: BlockId,
 ) -> SignalLockOutcome {
     let mut variant = id.variant();
 
@@ -882,7 +879,6 @@ pub(crate) fn starting_signal_depart_forward(
 pub(crate) fn starting_signal_acquire_back(
     _block_coord: BlockCoordinate,
     id: &mut BlockId,
-    expected_id_with_rotation: BlockId,
 ) -> SignalLockOutcome {
     let mut variant = id.variant();
 

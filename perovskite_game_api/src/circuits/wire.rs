@@ -198,7 +198,7 @@ impl CircuitBlockCallbacks for WireCallbacksImpl {
         _ctx: &CircuitHandlerContext<'_>,
         _coord: BlockCoordinate,
         _destination: BlockCoordinate,
-    ) -> super::PinState {
+    ) -> PinState {
         self.state
     }
 }
@@ -214,7 +214,7 @@ pub(crate) fn recalculate_wire(
     first_wire: BlockCoordinate,
     // The coordinate of the block that signalled us
     who_signalled: BlockCoordinate,
-    _new_state: super::PinState,
+    _new_state: PinState,
 ) -> Result<()> {
     // TODO: use the edge type as an optimization hint
     // Essentially, do a breadth-first search of the wire, starting at first_wire. Signal all
@@ -276,7 +276,7 @@ pub(crate) fn recalculate_wire(
             };
             // prev is the wire we just explored
             let drive = callbacks.sample_pin(ctx, coord, prev);
-            if drive == super::PinState::High {
+            if drive == PinState::High {
                 any_driven_high = true;
             }
 
@@ -297,9 +297,9 @@ pub(crate) fn recalculate_wire(
     }
 
     let pin_state = if any_driven_high {
-        super::PinState::High
+        PinState::High
     } else {
-        super::PinState::Low
+        PinState::Low
     };
 
     for ((coord, prev), callbacks) in need_transition_signals {

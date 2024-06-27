@@ -644,7 +644,7 @@ impl BlockTypeManager {
     ///
     /// Panics:
     /// This function will panic if called before the game starts up.
-    pub fn fast_block_group<'a>(&'a self, block_group: &str) -> Option<FastBlockGroup<'a>> {
+    pub fn fast_block_group(&self, block_group: &str) -> Option<FastBlockGroup> {
         self.fast_block_groups
             .get(block_group)
             .map(|x| FastBlockGroup { blocks: x })
@@ -760,7 +760,7 @@ fn make_unknown_block_serverside(
     id: BlockId,
     short_name: String,
 ) -> BlockType {
-    assert!(id.variant() == 0);
+    assert_eq!(id.variant(), 0);
 
     let air = manager.make_block_name(AIR.to_string());
 

@@ -661,9 +661,9 @@ impl DefaultMapgen {
         vert_offset: i32,
         block_coord: BlockCoordinate,
         gen_ore: F,
-    ) -> perovskite_core::block_id::BlockId
+    ) -> BlockId
     where
-        F: Fn() -> perovskite_core::block_id::BlockId,
+        F: Fn() -> BlockId,
     {
         if vert_offset > 0 {
             if block_coord.y > 0 {
@@ -686,9 +686,9 @@ impl DefaultMapgen {
         vert_offset: i32,
         block_coord: BlockCoordinate,
         gen_ore: F,
-    ) -> perovskite_core::block_id::BlockId
+    ) -> BlockId
     where
-        F: Fn() -> perovskite_core::block_id::BlockId,
+        F: Fn() -> BlockId,
     {
         if vert_offset > 0 {
             if block_coord.y > 0 {
@@ -709,9 +709,9 @@ impl DefaultMapgen {
         vert_offset: i32,
         block_coord: BlockCoordinate,
         gen_ore: F,
-    ) -> perovskite_core::block_id::BlockId
+    ) -> BlockId
     where
-        F: Fn() -> perovskite_core::block_id::BlockId,
+        F: Fn() -> BlockId,
     {
         if vert_offset > 0 {
             if block_coord.y > 0 {

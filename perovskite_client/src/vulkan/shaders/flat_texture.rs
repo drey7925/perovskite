@@ -74,8 +74,8 @@ impl FlatTextureDrawBuilder {
         }
     }
     pub(crate) fn rect(&mut self, screen_coord: Rect, tex_coord: Rect, tex_dimension: (u32, u32)) {
-        let width = (tex_dimension.0) as f32;
-        let height = (tex_dimension.1) as f32;
+        let width = tex_dimension.0 as f32;
+        let height = tex_dimension.1 as f32;
 
         let bl = FlatTextureVertex {
             position: [screen_coord.left() as f32, screen_coord.bottom() as f32],
@@ -158,7 +158,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
         builder: &mut CommandBufferBuilder<L>,
         calls: &'a [FlatTextureDrawCall],
         _pass: (),
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone());
         for call in calls {
@@ -171,11 +171,11 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
 
     fn bind<L>(
         &mut self,
-        ctx: &crate::vulkan::VulkanContext,
+        ctx: &VulkanContext,
         _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: (),
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout
             .set_layouts()

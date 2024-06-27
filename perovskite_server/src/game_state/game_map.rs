@@ -249,7 +249,7 @@ impl MapChunk {
                             items: game_state.item_manager(),
                         };
 
-                        (serializer)(handler_context, x)?
+                        serializer(handler_context, x)?
                     }
                     None => {
                         if ext_data.custom_data.is_some() {
@@ -392,7 +392,7 @@ fn parse_v1(
     game_state: Arc<GameState>,
     storage: Arc<[AtomicU32; 4096]>,
     run_cold_load_postprocessors: bool,
-) -> std::result::Result<MapChunk, anyhow::Error> {
+) -> std::result::Result<MapChunk, Error> {
     let mut extended_data = FxHashMap::default();
     ensure!(
         chunk_data.block_ids.len() == 4096,
@@ -405,7 +405,7 @@ fn parse_v1(
                 bytemuck::cast_slice_mut(chunk_data.block_ids.as_mut_slice());
             let sized: &mut [BlockId; 4096] =
                 cast.try_into().expect("Failed to convert to BlockId array");
-            (processor)(sized);
+            processor(sized);
         }
     }
 
@@ -535,7 +535,7 @@ impl<'a> DerefMut for MapChunkInnerWriteGuard<'a> {
 
 enum HolderState {
     Empty,
-    Err(anyhow::Error),
+    Err(Error),
     Ok(MapChunk),
 }
 impl HolderState {
@@ -734,7 +734,7 @@ impl MapChunkHolder {
     }
 
     /// Set the chunk to an error, and notify any waiting threads so they can propagate the error
-    fn set_err(&self, err: anyhow::Error) {
+    fn set_err(&self, err: Error) {
         let mut guard = self.chunk.write();
         assert!(matches!(*guard, HolderState::Empty));
         *guard = HolderState::Err(err);
@@ -1243,7 +1243,7 @@ impl ServerGameMap {
         offset: ChunkOffset,
         mutator: F,
         game_map: &ServerGameMap,
-    ) -> anyhow::Result<(T, bool)>
+    ) -> Result<(T, bool)>
     where
         F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
     {
@@ -1407,7 +1407,7 @@ impl ServerGameMap {
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
-    fn get_chunk<'a>(&'a self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'a>> {
+    fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard> {
         log_trace("get_chunk starting");
         let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
         log_trace("get_chunk acquired writeback permit");
@@ -1443,7 +1443,7 @@ impl ServerGameMap {
             log_trace("get_chunk acquired write lock");
             if write_guard.chunks.contains_key(&coord) {
                 // Someone raced with us. Try looping again.
-                log::info!("Race while upgrading in get_chunk; retrying two-phase lock");
+                info!("Race while upgrading in get_chunk; retrying two-phase lock");
                 log_trace("get_chunk race detected");
                 drop(write_guard);
                 continue;
@@ -1489,17 +1489,17 @@ impl ServerGameMap {
             }
         };
         if load_chunk_tries > 1 {
-            log::warn!("Took {load_chunk_tries} tries to load {coord:?}");
+            warn!("Took {load_chunk_tries} tries to load {coord:?}");
         }
         result
     }
 
     #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]
-    fn try_get_chunk<'a>(
-        &'a self,
+    fn try_get_chunk(
+        &self,
         coord: ChunkCoordinate,
         want_permit: bool,
-    ) -> Option<MapChunkOuterGuard<'a>> {
+    ) -> Option<MapChunkOuterGuard> {
         let shard = shard_id(coord);
         let mut permit = None;
         if want_permit {
@@ -1603,7 +1603,7 @@ impl ServerGameMap {
                     panic!("chunk unload got a chunk with an empty holder. This should never happen - please file a bug");
                 }
                 HolderState::Err(e) => {
-                    log::warn!("chunk unload trying to unload a chunk with an error: {e:?}");
+                    warn!("chunk unload trying to unload a chunk with an error: {e:?}");
                 }
                 HolderState::Ok(chunk) => {
                     if chunk.dirty {
@@ -1706,7 +1706,7 @@ impl ServerGameMap {
                 let cleanup_handle = self.cleanup_handles[i].lock().take();
                 cleanup_handle.unwrap().await??;
             }
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, Error>(())
         };
         match tokio::time::timeout(Duration::from_secs(10), await_task).await {
             Ok(Ok(())) => {
@@ -1728,7 +1728,7 @@ impl ServerGameMap {
         for shard in 0..NUM_CHUNK_SHARDS {
             let mut lock = self.live_chunks[shard].write();
             let coords: Vec<_> = lock.chunks.keys().copied().collect();
-            log::info!(
+            info!(
                 "ServerGameMap shard {} being flushed: Writing back {} chunks",
                 shard,
                 coords.len()
@@ -1833,7 +1833,7 @@ impl MapCacheCleanup {
                 .skip(CACHE_CLEANUP_KEEP_N_RECENTLY_USED)
                 .take(CACHE_CLEANUP_RELOCK_EVERY_N)
             {
-                assert!(self.shard_id == shard_id(entry.1));
+                assert_eq!(self.shard_id, shard_id(entry.1));
                 self.map.unload_chunk_locked(&mut lock, entry.1)?;
             }
             if num_entries > (CACHE_CLEANUP_RELOCK_EVERY_N + CACHE_CLEANUP_KEEP_N_RECENTLY_USED) {
@@ -1868,7 +1868,7 @@ impl GameMapWriteback {
             tokio::task::block_in_place(|| self.do_writebacks(writebacks))?;
         }
 
-        log::info!("Map writeback exiting");
+        info!("Map writeback exiting");
         Ok(())
     }
 
@@ -1882,7 +1882,7 @@ impl GameMapWriteback {
             self.map.live_chunks[self.shard_id].read_recursive()
         };
         for coord in writebacks {
-            assert!(self.shard_id == shard_id(coord));
+            assert_eq!(self.shard_id, shard_id(coord));
             match lock.chunks.get(&coord) {
                 Some(chunk_holder) => {
                     if let Some(mut chunk) = chunk_holder.try_get_write()? {
@@ -2373,7 +2373,9 @@ impl GameMapTimer {
                         if !passed_block_presence {
                             continue;
                         }
-                        let last_update = (upper_chunk.last_written.get_acquire())
+                        let last_update = upper_chunk
+                            .last_written
+                            .get_acquire()
                             .max(lower_chunk.last_written.get_acquire());
                         let should_run = !self.settings.idle_chunk_after_unchanged
                             || last_update >= state.timer_state.prev_tick_time;
@@ -2963,7 +2965,7 @@ fn reconcile_after_bulk_handler(
 fn reacquire_writeback_permit<'a, 'b>(
     game_state: &'a Arc<GameState>,
     coarse_shard: usize,
-    read_lock: &mut parking_lot::RwLockReadGuard<'_, MapShard>,
+    read_lock: &mut RwLockReadGuard<'_, MapShard>,
 ) -> Result<mpsc::Permit<'b, WritebackReq>, Error>
 where
     'a: 'b,

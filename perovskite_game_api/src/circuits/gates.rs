@@ -164,7 +164,7 @@ impl CircuitBlockCallbacks for CombinationalGateImpl {
 
     fn on_overheat(
         &self,
-        ctx: &perovskite_server::game_state::event::HandlerContext,
+        ctx: &HandlerContext,
         coord: perovskite_core::coordinates::BlockCoordinate,
     ) {
         ctx.game_map().set_block(coord, &self.broken, None).unwrap();
@@ -464,7 +464,7 @@ impl CircuitBlockCallbacks for DelayGateImpl {
 
     fn on_overheat(
         &self,
-        ctx: &perovskite_server::game_state::event::HandlerContext,
+        ctx: &HandlerContext,
         coord: perovskite_core::coordinates::BlockCoordinate,
     ) {
         ctx.game_map().set_block(coord, &self.broken, None).unwrap();
@@ -643,7 +643,7 @@ impl CircuitBlockCallbacks for DffImpl {
 
     fn on_overheat(
         &self,
-        ctx: &perovskite_server::game_state::event::HandlerContext,
+        ctx: &HandlerContext,
         coord: perovskite_core::coordinates::BlockCoordinate,
     ) {
         ctx.game_map().set_block(coord, &self.broken, None).unwrap();

@@ -365,11 +365,9 @@ fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
         {
             log::info!("Depth format found: {format:?}");
             if format == Format::D16_UNORM {
-                log::warn!(
-                    "Depth format D16_UNORM may have low precision and cause visual glitches"
-                );
-                log::warn!("According to the vulkan spec, at least one of the other formats should be supported by any compliant GPU.");
-                log::warn!("Please reach out to the devs with details about your GPU.");
+                warn!("Depth format D16_UNORM may have low precision and cause visual glitches");
+                warn!("According to the vulkan spec, at least one of the other formats should be supported by any compliant GPU.");
+                warn!("Please reach out to the devs with details about your GPU.");
             }
             return Ok(format);
         }

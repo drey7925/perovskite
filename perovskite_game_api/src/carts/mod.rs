@@ -256,7 +256,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         .inner
         .items_mut()
         .register_item(game_state::items::Item {
-            proto: perovskite_core::perovskite::protocol::items::ItemDef {
+            proto: protocol::items::ItemDef {
                 short_name: "carts:cart_temp".to_string(),
                 display_name: "High-speed minecart".to_string(),
                 inventory_texture: Some(cart_tex.into()),
@@ -386,7 +386,7 @@ fn actually_spawn_cart(
     board_cart: bool,
 ) -> Result<()> {
     let initial_state =
-        tracks::ScanState::spawn_at(rail_pos, (variant as u8 + 2) % 4, ctx.game_map(), &config)?;
+        ScanState::spawn_at(rail_pos, (variant as u8 + 2) % 4, ctx.game_map(), &config)?;
     let initial_state = match initial_state {
         Some(x) => x,
         None => {
@@ -469,7 +469,7 @@ fn actually_spawn_cart(
     Ok(())
 }
 
-fn b2vec(b: BlockCoordinate) -> cgmath::Vector3<f64> {
+fn b2vec(b: BlockCoordinate) -> Vector3<f64> {
     Vector3::new(b.x as f64, b.y as f64, b.z as f64)
 }
 
@@ -490,9 +490,9 @@ impl TrackSegment {
             + (self.from.z - self.to.z).abs()
     }
     fn distance(&self) -> f64 {
-        let dx = self.from.x as f64 - self.to.x as f64;
-        let dy = self.from.y as f64 - self.to.y as f64;
-        let dz = self.from.z as f64 - self.to.z as f64;
+        let dx = self.from.x - self.to.x;
+        let dy = self.from.y - self.to.y;
+        let dz = self.from.z - self.to.z;
         (dx * dx + dy * dy + dz * dz).sqrt()
     }
 
@@ -632,7 +632,7 @@ struct CartCoroutine {
     last_submitted_move_exit_speed: f64,
     id: u32,
     // Track scan state
-    scan_state: tracks::ScanState,
+    scan_state: ScanState,
     // TODO improve this as needed
     cleared_signals: FxHashMap<BlockCoordinate, BlockId>,
     held_signal: Option<(BlockCoordinate, BlockId)>,
@@ -652,20 +652,20 @@ struct CartCoroutine {
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
         mut self: std::pin::Pin<&mut Self>,
-        services: &perovskite_server::game_state::entities::EntityCoroutineServices<'_>,
-        _current_position: cgmath::Vector3<f64>,
-        whence: cgmath::Vector3<f64>,
+        services: &EntityCoroutineServices<'_>,
+        _current_position: Vector3<f64>,
+        whence: Vector3<f64>,
         when: f32,
         queue_space: usize,
-    ) -> perovskite_server::game_state::entities::CoroutineResult {
+    ) -> CoroutineResult {
         let trace_buffer = TraceBuffer::new(false);
         self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
     }
     fn continuation(
         mut self: std::pin::Pin<&mut Self>,
-        services: &perovskite_server::game_state::entities::EntityCoroutineServices<'_>,
-        _current_position: cgmath::Vector3<f64>,
-        whence: cgmath::Vector3<f64>,
+        services: &EntityCoroutineServices<'_>,
+        _current_position: Vector3<f64>,
+        whence: Vector3<f64>,
         when: f32,
         queue_space: usize,
         continuation_result: ContinuationResult,
@@ -735,7 +735,7 @@ impl CartCoroutine {
     fn plan_move_impl(
         &mut self,
         services: &EntityCoroutineServices<'_>,
-        whence: cgmath::Vector3<f64>,
+        whence: Vector3<f64>,
         when: f32,
         queue_space: usize,
         trace_buffer: TraceBuffer,
@@ -1362,7 +1362,7 @@ impl CartCoroutine {
     fn last_segment_exit_speed(&self) -> f64 {
         self.scheduled_segments
             .back()
-            .map(|x| (x.speed + (x.acceleration * x.move_time)))
+            .map(|x| x.speed + (x.acceleration * x.move_time))
             .unwrap_or(self.last_submitted_move_exit_speed)
     }
 
@@ -1749,10 +1749,8 @@ impl CartCoroutine {
             // Scan every second, trying to start again.
             tracing::debug!("No schedulable segments");
             trace_buffer.log("No schedulable segments");
-            return perovskite_server::game_state::entities::CoroutineResult::Successful(
-                perovskite_server::game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(
-                    0.5..1.0,
-                ),
+            return CoroutineResult::Successful(
+                game_state::entities::EntityMoveDecision::AskAgainLaterFlexible(0.5..1.0),
             );
         }
         trace_buffer.log("Building moves");
@@ -1895,11 +1893,9 @@ impl CartCoroutine {
         }
         tracing::debug!("returning {} moves", returned_moves.len());
         trace_buffer.log("Done!");
-        CoroutineResult::Successful(
-            perovskite_server::game_state::entities::EntityMoveDecision::QueueUpMultiple(
-                returned_moves,
-            ),
-        )
+        CoroutineResult::Successful(game_state::entities::EntityMoveDecision::QueueUpMultiple(
+            returned_moves,
+        ))
     }
 
     fn estimate_panic_max_index(&self) -> usize {

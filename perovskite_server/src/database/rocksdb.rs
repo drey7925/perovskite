@@ -23,7 +23,7 @@ use tracy_client::span;
 use super::database_engine::GameDatabase;
 
 pub(crate) struct RocksDbBackend {
-    db: rocksdb::DB,
+    db: DB,
 }
 impl RocksDbBackend {
     pub(crate) fn new<P: AsRef<Path>>(path: P) -> Result<RocksDbBackend> {
@@ -65,7 +65,7 @@ impl Drop for RocksDbBackend {
     }
 }
 impl GameDatabase for RocksDbBackend {
-    fn get(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let _span = span!("db get");
         self.db.get(key).with_context(|| "RocksDB get failed")
     }
@@ -79,14 +79,14 @@ impl GameDatabase for RocksDbBackend {
             .with_context(|| "RocksDB get failed")
     }
 
-    fn put(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let _span = span!("db put");
         self.db
             .put(key, value)
             .with_context(|| "RocksDB put failed")
     }
 
-    fn delete(&self, key: &[u8]) -> anyhow::Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         let _span = span!("db delete");
         self.db.delete(key).with_context(|| "RocksDB delete failed")
     }

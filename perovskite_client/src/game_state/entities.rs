@@ -132,7 +132,7 @@ impl GameEntity {
                         m.seq,
                         m.start_tick,
                         m.total_time_seconds,
-                        (m.start_tick as f64 / 1_000_000_000.0 - tick as f64 / 1_000_000_000.0)
+                        m.start_tick as f64 / 1_000_000_000.0 - tick as f64 / 1_000_000_000.0
                     )
                 })
                 .collect::<String>()
@@ -307,11 +307,7 @@ impl GameEntity {
         Ok(())
     }
 
-    pub(crate) fn as_transform(
-        &self,
-        base_position: Vector3<f64>,
-        time_tick: u64,
-    ) -> cgmath::Matrix4<f32> {
+    pub(crate) fn as_transform(&self, base_position: Vector3<f64>, time_tick: u64) -> Matrix4<f32> {
         let (pos, face_dir, pitch) = self.position(time_tick);
 
         build_transform(base_position, pos, face_dir, pitch)
@@ -449,7 +445,7 @@ fn build_transform(
     face_dir: Rad<f32>,
     pitch: Rad<f32>,
 ) -> Matrix4<f32> {
-    let translation = cgmath::Matrix4::from_translation(
+    let translation = Matrix4::from_translation(
         (pos - base_position).mul_element_wise(Vector3::new(1., -1., 1.)),
     )
     .cast()
@@ -487,7 +483,7 @@ impl EntityState {
 
         Ok(Self {
             entities: FxHashMap::default(),
-            fallback_entity: VkCgvBufferGpu::from_buffers(&vtx, &idx, &block_renderer.allocator())?
+            fallback_entity: VkCgvBufferGpu::from_buffers(&vtx, &idx, block_renderer.allocator())?
                 .unwrap(),
             attached_to_entity: None,
         })

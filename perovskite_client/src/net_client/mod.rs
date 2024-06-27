@@ -55,12 +55,10 @@ pub(crate) mod mesh_worker;
 const MIN_PROTOCOL_VERSION: u32 = 4;
 const MAX_PROTOCOL_VERSION: u32 = 4;
 
-async fn connect_grpc(
-    server_addr: String,
-) -> Result<rpc::perovskite_game_client::PerovskiteGameClient<Channel>> {
+async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channel>> {
     PerovskiteGameClient::connect(server_addr)
         .await
-        .map_err(|e| anyhow::Error::msg(e.to_string()))
+        .map_err(|e| Error::msg(e.to_string()))
 }
 
 const TOTAL_STEPS: f32 = 10.0;
@@ -201,9 +199,7 @@ pub(crate) async fn connect_game(
         .send(StreamToServer {
             sequence: 0,
             client_tick: 0,
-            client_message: Some(rpc::stream_to_server::ClientMessage::ClientInitialReady(
-                rpc::Nop {},
-            )),
+            client_message: Some(ClientMessage::ClientInitialReady(rpc::Nop {})),
         })
         .await?;
     let initial_state_notification = Arc::new(tokio::sync::Notify::new());

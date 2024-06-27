@@ -199,20 +199,20 @@ impl GameBuilder {
 
     /// Creates a new game builder with custom server configuration
     #[cfg(feature = "unstable_api")]
-    pub fn from_args(args: &server_api::ServerArgs) -> Result<GameBuilder> {
+    pub fn from_args(args: &ServerArgs) -> Result<GameBuilder> {
         Self::new_with_builtins(ServerBuilder::from_args(args)?)
     }
 
     /// Borrows the ServerBuilder that can be used to directly register
     /// items, blocks, etc using the low-level unstable API.
     #[cfg(feature = "unstable_api")]
-    pub fn server_builder_mut(&mut self) -> &mut server_api::ServerBuilder {
+    pub fn server_builder_mut(&mut self) -> &mut ServerBuilder {
         &mut self.inner
     }
 
     /// Returns the ServerBuilder with everything built so far.
     #[cfg(feature = "unstable_api")]
-    pub fn into_server_builder(mut self) -> Result<server_api::ServerBuilder> {
+    pub fn into_server_builder(mut self) -> Result<ServerBuilder> {
         self.pre_build()?;
         Ok(self.inner)
     }
@@ -373,7 +373,7 @@ impl GameBuilder {
             .register_from_memory(&tex_name.into().0, data)
     }
 
-    pub fn data_dir(&self) -> &std::path::PathBuf {
+    pub fn data_dir(&self) -> &PathBuf {
         self.inner.data_dir()
     }
 
@@ -394,7 +394,7 @@ impl GameBuilder {
 
 /// Convenience helper for including a texture in the source tree into the game.
 ///
-/// file_name is looked up relative to the current file (see [std::include_bytes]).
+/// file_name is looked up relative to the current file (see [include_bytes]).
 ///
 /// This macro takes the following parameters:
 /// * Mutable reference to [GameBuilder]

@@ -174,7 +174,7 @@ impl CacheManager {
     fn hash_texture_reference(
         &self,
         tex: Option<&TextureReference>,
-        hasher: &mut sha2::Sha256,
+        hasher: &mut Sha256,
     ) -> Option<()> {
         if let Some(tex) = tex {
             hasher.update(b"tex_ref:");
@@ -195,7 +195,7 @@ impl CacheManager {
     fn hash_cube_render_info(
         &self,
         cube: &perovskite_core::protocol::blocks::CubeRenderInfo,
-        hasher: &mut sha2::Sha256,
+        hasher: &mut Sha256,
     ) -> Option<()> {
         hasher.update(b"cube:");
         hasher.update(cube.render_mode.to_le_bytes());
@@ -212,7 +212,7 @@ impl CacheManager {
     fn hash_aabox_render_info(
         &self,
         aa_boxes: &perovskite_core::protocol::blocks::AxisAlignedBoxes,
-        hasher: &mut sha2::Sha256,
+        hasher: &mut Sha256,
     ) -> Option<()> {
         hasher.update(b"aa_boxes:");
         for aa_box in aa_boxes.boxes.iter() {
@@ -239,7 +239,7 @@ impl CacheManager {
     fn hash_plant_render_info(
         &self,
         plant: &perovskite_core::protocol::blocks::PlantLikeRenderInfo,
-        hasher: &mut sha2::Sha256,
+        hasher: &mut Sha256,
     ) -> Option<()> {
         hasher.update(b"plant_like:");
         hasher.update(plant.wave_effect_scale.to_le_bytes());
@@ -277,7 +277,7 @@ impl CacheManager {
 
 fn get_cache_path(expected_hash: &[u8; 32], cache_dir: &Path) -> PathBuf {
     let hash_hex = hex::encode(expected_hash);
-    assert!(hash_hex.len() == 64);
+    assert_eq!(hash_hex.len(), 64);
     // Security: The hash is untrusted... But we verified its length, and we generate the hex string ourselves.
     let prefix = hash_hex[0..2].to_string();
     let suffix = hash_hex[2..].to_string();

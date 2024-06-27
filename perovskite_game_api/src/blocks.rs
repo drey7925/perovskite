@@ -295,7 +295,7 @@ impl BlockBuilder {
     /// These can affect diggability, dig speed, and other behavior in
     /// the map.
     ///
-    /// See [crate::constants::block_groups] for useful values.
+    /// See [block_groups] for useful values.
     pub fn add_block_group(mut self, group: impl Into<String>) -> Self {
         let group = group.into();
         if !self.client_info.groups.contains(&group) {
@@ -323,7 +323,7 @@ impl BlockBuilder {
     /// Adds a group to the list of groups for the item corresponding to this block.
     /// These can affect crafting with this block (crafting API is TBD)
     ///
-    /// See [crate::constants::block_groups] for useful values.
+    /// See [block_groups] for useful values.
     pub fn add_item_group(mut self, group: impl Into<String>) -> Self {
         self.item.proto.groups.push(group.into());
         self
@@ -451,7 +451,7 @@ impl BlockBuilder {
         self
     }
 
-    /// Sets the matter type of this block for tool interactions, and adds the corresponding block groun (see [crate::constants::block_groups]).
+    /// Sets the matter type of this block for tool interactions, and adds the corresponding block groun (see [block_groups]).
     /// The default is Solid
     pub fn set_matter_type(mut self, matter_type: MatterType) -> Self {
         self.matter_type = matter_type;
@@ -474,7 +474,7 @@ impl BlockBuilder {
         block.client_info.groups.dedup();
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));
         for modifier in self.modifiers {
-            (modifier)(&mut block);
+            modifier(&mut block);
         }
         let block_handle = game_builder.inner.blocks_mut().register_block(block)?;
 
@@ -487,7 +487,7 @@ impl BlockBuilder {
                 return Ok(None);
             }
             let extended_data = match &extended_data_initializer {
-                Some(x) => (x)(ctx.clone(), coord, anchor, stack)?,
+                Some(x) => x(ctx.clone(), coord, anchor, stack)?,
                 None => None,
             };
             let variant = match self.variant_effect {
@@ -513,7 +513,7 @@ impl BlockBuilder {
                             .client_info
                             .groups
                             .iter()
-                            .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
+                            .any(|g| g == TRIVIALLY_REPLACEABLE))
                     },
                     block_handle.with_variant(variant)?,
                     extended_data,
@@ -838,7 +838,7 @@ impl BulkUpdateCallback for LiquidPropagator {
                                 // Source stays source
                                 0xfff if is_same_liquid => 0xfff,
                                 // and flowing water drops by a level
-                                x => (x.saturating_sub(1)).min(7) as i32,
+                                x => x.saturating_sub(1).min(7) as i32,
                             };
                             let mut variant_from_flow = -1;
                             for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)] {
@@ -904,11 +904,7 @@ impl BulkUpdateCallback for LiquidPropagator {
 }
 
 impl LiquidPropagator {
-    fn can_flow_laterally_over(
-        &self,
-        x: perovskite_core::block_id::BlockId,
-        liquid_type: &BlockTypeHandle,
-    ) -> bool {
+    fn can_flow_laterally_over(&self, x: BlockId, liquid_type: &BlockTypeHandle) -> bool {
         if x.equals_ignore_variant(AIR_ID) {
             // if it's air below, don't let it flow laterally
             false

@@ -467,7 +467,7 @@ impl PlayerState {
                         let still_leftover =
                             source_view.put(action.source_slot as usize, leftover)?;
                         if let Some(still_leftover) = still_leftover {
-                            log::warn!("Still-leftover items were destroyed: {:?}", still_leftover);
+                            warn!("Still-leftover items were destroyed: {:?}", still_leftover);
                         }
                     }
                 }
@@ -743,7 +743,7 @@ impl PlayerManager {
     pub async fn for_all_connected_players_async<F, G>(&self, mut closure: F) -> Result<()>
     where
         F: FnMut(&Player) -> G,
-        G: Future<Output = anyhow::Result<()>>,
+        G: Future<Output = Result<()>>,
     {
         let lock = tokio::task::block_in_place(|| self.active_players.read());
         for (_, player) in lock.iter() {

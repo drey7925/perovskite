@@ -30,7 +30,7 @@ pub(crate) async fn make_uis(
     cache_manager: &Arc<Mutex<CacheManager>>,
     ctx: Arc<VulkanContext>,
     block_renderer: &BlockRenderer,
-) -> Result<(hud::GameHud, egui_ui::EguiUi)> {
+) -> Result<(GameHud, EguiUi)> {
     let (texture_atlas, texture_coords) =
         build_texture_atlas(&item_defs, cache_manager, ctx, block_renderer).await?;
 
@@ -164,7 +164,7 @@ async fn build_texture_atlas(
         texture_outlines: false,
         force_max_dimensions: false,
     };
-    let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
+    let mut texture_packer = TexturePacker::new_skyline(config);
 
     pack_tex(
         &mut texture_packer,

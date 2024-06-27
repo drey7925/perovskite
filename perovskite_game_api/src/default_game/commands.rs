@@ -314,7 +314,7 @@ impl ChatCommandHandler for TeleportCommand {
             }
             5 => (
                 params[1],
-                (params[2].parse()?, (params[3]).parse()?, params[4].parse()?),
+                (params[2].parse()?, params[3].parse()?, params[4].parse()?),
             ),
             _ => bail!("Incorrect usage: should be /teleport [player] <x> <y> <z>"),
         };

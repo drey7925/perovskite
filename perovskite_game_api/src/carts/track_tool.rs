@@ -206,7 +206,7 @@ fn build_track(
     for tile in template.entries.iter() {
         let (cx, cz) = eval_rotation(tile.offset_x, tile.offset_z, flip, face_dir_as_variant);
         let coord = initial_coord
-            .try_delta(cx as i32, tile.offset_y, cz as i32)
+            .try_delta(cx, tile.offset_y, cz)
             .with_context(|| {
                 format!(
                     "Out of bounds for {:?} + ({:?}, {:?})",

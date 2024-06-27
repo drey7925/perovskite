@@ -169,7 +169,7 @@ pub(crate) async fn make_client_contexts(
 
     let initial_position = PlayerPositionUpdate {
         position: player_context.last_position().position,
-        velocity: cgmath::Vector3::zero(),
+        velocity: Vector3::zero(),
         face_direction: (0., 0.),
     };
     let (pos_send, pos_recv) = watch::channel(PositionAndPacing {
@@ -284,9 +284,9 @@ async fn initialize_protocol_state(
     if !context.player_context.has_permission(permissions::LOG_IN) {
         context.cancellation.cancel();
         outbound_tx
-            .send(Ok(proto::StreamToClient {
+            .send(Ok(StreamToClient {
                 tick: context.game_state.tick(),
-                server_message: Some(proto::stream_to_client::ServerMessage::ShutdownMessage(
+                server_message: Some(ServerMessage::ShutdownMessage(
                     "You don't have permission to log in".to_string(),
                 )),
             }))
@@ -478,7 +478,7 @@ impl MapChunkSender {
                     // cancel the inbound context as well
                     self.context.cancellation.cancel();
                 }
-            };
+            }
         }
         Ok(())
     }
@@ -526,10 +526,9 @@ impl MapChunkSender {
         let player_block_coord: BlockCoordinate = match position.position.try_into() {
             Ok(x) => x,
             Err(e) => {
-                log::warn!(
+                warn!(
                     "Player had invalid position: {:?}, error {:?}",
-                    position.position,
-                    e
+                    position.position, e
                 );
                 let fixed_position = self.fix_position_and_notify(position.position).await?;
                 self.context
@@ -558,9 +557,9 @@ impl MapChunkSender {
             .filter(|&x| self.should_unload(player_chunk, *x))
             .cloned()
             .collect();
-        let message = proto::StreamToClient {
+        let message = StreamToClient {
             tick: self.context.game_state.tick(),
-            server_message: Some(proto::stream_to_client::ServerMessage::MapChunkUnsubscribe(
+            server_message: Some(ServerMessage::MapChunkUnsubscribe(
                 proto::MapChunkUnsubscribe {
                     chunk_coord: chunks_to_unsubscribe.iter().map(|&x| x.into()).collect(),
                 },
@@ -586,9 +585,11 @@ impl MapChunkSender {
             let finished_distance = MAX_INDEX_FOR_DISTANCE
                 .partition_point(|&x| x < self.processed_elements)
                 .saturating_sub(2);
-            let new_distance = (finished_distance.saturating_sub(moved_distance as usize)).max(0);
+            let new_distance = finished_distance
+                .saturating_sub(moved_distance as usize)
+                .max(0);
             self.processed_elements
-                .min(MIN_INDEX_FOR_DISTANCE[new_distance as usize])
+                .min(MIN_INDEX_FOR_DISTANCE[new_distance])
         };
 
         let start_time = Instant::now();
@@ -642,7 +643,7 @@ impl MapChunkSender {
             if i % 100 == 0 {
                 tokio::task::yield_now().await;
             }
-            let chunk_data = tokio::task::block_in_place(|| {
+            let chunk_data = block_in_place(|| {
                 self.context
                     .game_state
                     .game_map()
@@ -650,14 +651,12 @@ impl MapChunkSender {
             })?;
             if let Some(chunk_data) = chunk_data {
                 let chunk_bytes = self.snappy_encode(&chunk_data)?;
-                let message = proto::StreamToClient {
+                let message = StreamToClient {
                     tick: self.context.game_state.tick(),
-                    server_message: Some(proto::stream_to_client::ServerMessage::MapChunk(
-                        proto::MapChunk {
-                            chunk_coord: Some(coord.into()),
-                            snappy_encoded_bytes: chunk_bytes,
-                        },
-                    )),
+                    server_message: Some(ServerMessage::MapChunk(proto::MapChunk {
+                        chunk_coord: Some(coord.into()),
+                        snappy_encoded_bytes: chunk_bytes,
+                    })),
                 };
                 self.outbound_tx.send(Ok(message)).await.map_err(|_| {
                     self.context.cancellation.cancel();
@@ -732,7 +731,7 @@ pub(crate) struct BlockEventSender {
     context: Arc<SharedContext>,
 
     // RPC stream is sent via this channel
-    outbound_tx: mpsc::Sender<tonic::Result<proto::StreamToClient>>,
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
 
     // All updates to the map from all sources, not yet filtered by location (BlockEventSender is
     // responsible for filtering)
@@ -761,7 +760,7 @@ impl BlockEventSender {
                     info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
                     // pass
                 }
-            };
+            }
         }
         Ok(())
     }
@@ -835,13 +834,11 @@ impl BlockEventSender {
         }
 
         if !update_protos.is_empty() {
-            let message = proto::StreamToClient {
+            let message = StreamToClient {
                 tick: self.context.game_state.tick(),
-                server_message: Some(proto::stream_to_client::ServerMessage::MapDeltaUpdate(
-                    MapDeltaUpdateBatch {
-                        updates: update_protos,
-                    },
-                )),
+                server_message: Some(ServerMessage::MapDeltaUpdate(MapDeltaUpdateBatch {
+                    updates: update_protos,
+                })),
             };
             self.outbound_tx
                 .send(Ok(message))
@@ -907,24 +904,20 @@ fn make_client_state_update_message(
         )?;
         StreamToClient {
             tick: ctx.game_state.tick(),
-            server_message: Some(proto::stream_to_client::ServerMessage::ClientState(
-                proto::SetClientState {
-                    position,
-                    hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
-                    inventory_popup: Some(
-                        player_state.inventory_popup.as_ref().unwrap().to_proto(),
-                    ),
-                    inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
-                    time_of_day: time_now,
-                    day_length_sec: day_len.as_secs_f64(),
-                    permission: player_state
-                        .effective_permissions(&ctx.game_state, ctx.player_context.name())
-                        .iter()
-                        .cloned()
-                        .collect(),
-                    attached_to_entity: player_state.attached_to_entity.unwrap_or(0),
-                },
-            )),
+            server_message: Some(ServerMessage::ClientState(proto::SetClientState {
+                position,
+                hotbar_inventory_view: player_state.hotbar_inventory_view.id.0,
+                inventory_popup: Some(player_state.inventory_popup.as_ref().unwrap().to_proto()),
+                inventory_manipulation_view: player_state.inventory_manipulation_view.id.0,
+                time_of_day: time_now,
+                day_length_sec: day_len.as_secs_f64(),
+                permission: player_state
+                    .effective_permissions(&ctx.game_state, ctx.player_context.name())
+                    .iter()
+                    .cloned()
+                    .collect(),
+                attached_to_entity: player_state.attached_to_entity.unwrap_or(0),
+            })),
         }
     };
 
@@ -934,7 +927,7 @@ fn make_client_state_update_message(
 pub(crate) struct InventoryEventSender {
     context: Arc<SharedContext>,
     // RPC stream is sent via this channel
-    outbound_tx: mpsc::Sender<tonic::Result<proto::StreamToClient>>,
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
 
     // TODO consider delta updates for this
     inventory_events: broadcast::Receiver<UpdatedInventory>,
@@ -959,7 +952,7 @@ impl InventoryEventSender {
                     info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
                     // pass
                 }
-            };
+            }
         }
         Ok(())
     }
@@ -1005,7 +998,7 @@ impl InventoryEventSender {
             tracing::Level::TRACE,
             "filter and serialize inventory updates"
         )
-        .in_scope(|| -> anyhow::Result<_> {
+        .in_scope(|| -> Result<_> {
             let player_state = self.context.player_context.state.lock();
             let mut update_messages = vec![];
             for key in update_keys {
@@ -1058,7 +1051,7 @@ pub(crate) struct InboundWorker {
     // Note that there are some issues with race conditions here, especially around
     // handled_sequence messages getting sent befoe the outbound loop can send the actual
     // in-game effects for them. If this poses an issue, refactor later.
-    outbound_tx: mpsc::Sender<tonic::Result<proto::StreamToClient>>,
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
     // The client's self-reported position
     own_positions: watch::Sender<PositionAndPacing>,
     next_pos_writeback: Instant,
@@ -1098,7 +1091,7 @@ impl InboundWorker {
                     info!("Client inbound context {} detected cancellation and shutting down", self.context.id)
                     // pass
                 }
-            };
+            }
         }
         Ok(())
     }
@@ -1243,7 +1236,7 @@ impl InboundWorker {
     where
         F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
     {
-        tokio::task::block_in_place(|| {
+        block_in_place(|| {
             self.map_handler_sync(selected_inv_slot, get_item_handler, coord, player_position)
         })
     }
@@ -1254,7 +1247,7 @@ impl InboundWorker {
         get_item_handler: F,
         coord: BlockCoordinate,
         player_position: PlayerPositionUpdate,
-    ) -> std::result::Result<(), anyhow::Error>
+    ) -> std::result::Result<(), Error>
     where
         F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
     {
@@ -1318,11 +1311,9 @@ impl InboundWorker {
         if sequence == 0 {
             return Ok(());
         };
-        let message = proto::StreamToClient {
+        let message = StreamToClient {
             tick: self.context.game_state.tick(),
-            server_message: Some(proto::stream_to_client::ServerMessage::HandledSequence(
-                sequence,
-            )),
+            server_message: Some(ServerMessage::HandledSequence(sequence)),
         };
 
         self.outbound_tx.send(Ok(message)).await.map_err(|_| {
@@ -1339,7 +1330,7 @@ impl InboundWorker {
                 let (az, el) = match &pos_update.face_direction {
                     Some(x) => (x.deg_azimuth, x.deg_elevation),
                     None => {
-                        log::warn!("No angles in update from client");
+                        warn!("No angles in update from client");
                         (0., 0.)
                     }
                 };
@@ -1403,7 +1394,7 @@ impl InboundWorker {
         ),
     )]
     async fn handle_place(&mut self, place_message: &proto::PlaceAction) -> Result<()> {
-        tokio::task::block_in_place(|| {
+        block_in_place(|| {
             log_trace("Running place handlers");
             let _span = span!("handle_place");
             self.context
@@ -1490,7 +1481,7 @@ impl InboundWorker {
         let updates =
             {
                 let mut views_to_send = HashSet::new();
-                block_in_place(|| -> anyhow::Result<Vec<StreamToClient>> {
+                block_in_place(|| -> Result<Vec<StreamToClient>> {
                     log_trace("Locking player for inventory action");
                     let mut player_state = self.context.player_context.player.state.lock();
                     log_trace("Locked player for inventory action");
@@ -1528,7 +1519,7 @@ impl InboundWorker {
                         &&player_state.inventory_manipulation_view,
                     )?);
                     log_trace("Done running inventory action");
-                    anyhow::Result::Ok(updates)
+                    Ok(updates)
                 })?
             };
         for update in updates {
@@ -1562,7 +1553,7 @@ impl InboundWorker {
         } else {
             PopupAction::ButtonClicked(action.clicked_button.clone())
         };
-        let updates = tokio::task::block_in_place(|| -> anyhow::Result<_> {
+        let updates = block_in_place(|| -> Result<_> {
             let _span = span!("handle_popup_response");
             let ctx = HandlerContext {
                 tick: self.context.game_state.tick(),
@@ -1677,7 +1668,7 @@ impl InboundWorker {
             }
             // drop before async calls
             drop(player_state);
-            anyhow::Result::Ok(updates)
+            Ok(updates)
         })?;
         for update in updates {
             self.outbound_tx
@@ -1701,9 +1692,8 @@ impl InboundWorker {
         &mut self,
         interact_message: &proto::InteractKeyAction,
     ) -> Result<()> {
-        let messages = tokio::task::block_in_place(|| -> anyhow::Result<_> {
-            self.handle_interact_key_sync(interact_message)
-        })?;
+        let messages =
+            block_in_place(|| -> Result<_> { self.handle_interact_key_sync(interact_message) })?;
         for message in messages {
             self.outbound_tx
                 .send(Ok(message))

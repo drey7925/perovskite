@@ -34,17 +34,17 @@ use crate::game_state::GameState;
 
 use super::client_context::make_client_contexts;
 
-fn get_metadata(req_metadata: &MetadataMap, key: &str) -> Result<String, tonic::Status> {
+fn get_metadata(req_metadata: &MetadataMap, key: &str) -> Result<String, Status> {
     match req_metadata.get(key).map(|x| x.to_str()) {
         Some(Ok(x)) => Ok(x.to_string()),
         Some(Err(e)) => {
             warn!("Could not decode string metadata for {}: {:?}", key, e);
-            Err(tonic::Status::invalid_argument(format!(
+            Err(Status::invalid_argument(format!(
                 "String decode error for {}",
                 key
             )))
         }
-        None => Err(tonic::Status::invalid_argument(format!("Missing {}", key))),
+        None => Err(Status::invalid_argument(format!("Missing {}", key))),
     }
 }
 
@@ -60,12 +60,11 @@ impl PerovskiteGameServerImpl {
 
 #[tonic::async_trait]
 impl PerovskiteGame for PerovskiteGameServerImpl {
-    type GameStreamStream =
-        Pin<Box<dyn Stream<Item = Result<proto::StreamToClient, Status>> + Send>>;
+    type GameStreamStream = Pin<Box<dyn Stream<Item = Result<StreamToClient, Status>> + Send>>;
 
     async fn game_stream(
         &self,
-        req: Request<Streaming<proto::StreamToServer>>,
+        req: Request<Streaming<StreamToServer>>,
     ) -> Result<Response<Self::GameStreamStream>> {
         info!("Stream established from {:?}", req.remote_addr());
         let (outbound_tx, outbound_rx) = mpsc::channel(4);
@@ -78,14 +77,14 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         })
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        Result::Ok(Response::new(Box::pin(ReceiverStream::new(outbound_rx))))
+        Ok(Response::new(Box::pin(ReceiverStream::new(outbound_rx))))
     }
 
     async fn get_block_defs(
         &self,
         _req: Request<proto::GetBlockDefsRequest>,
     ) -> Result<Response<proto::GetBlockDefsResponse>> {
-        Result::Ok(Response::new(proto::GetBlockDefsResponse {
+        Ok(Response::new(proto::GetBlockDefsResponse {
             block_types: self
                 .game_state
                 .game_map()
@@ -98,7 +97,7 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         &self,
         _req: Request<proto::GetItemDefsRequest>,
     ) -> Result<Response<proto::GetItemDefsResponse>> {
-        Result::Ok(Response::new(proto::GetItemDefsResponse {
+        Ok(Response::new(proto::GetItemDefsResponse {
             item_defs: self
                 .game_state
                 .item_manager()
@@ -118,10 +117,10 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
             .get(&req.get_ref().media_name)
         {
             Some(resource) => match resource.data() {
-                Ok(data) => Result::Ok(Response::new(proto::GetMediaResponse { media: data })),
-                Err(e) => Result::Err(Status::internal(e.to_string())),
+                Ok(data) => Ok(Response::new(proto::GetMediaResponse { media: data })),
+                Err(e) => Err(Status::internal(e.to_string())),
             },
-            None => Result::Err(Status::not_found(format!(
+            None => Err(Status::not_found(format!(
                 "{} unimplemented",
                 &req.get_ref().media_name
             ))),
@@ -132,7 +131,7 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         &self,
         _req: Request<proto::ListMediaRequest>,
     ) -> Result<Response<proto::ListMediaResponse>> {
-        Result::Ok(Response::new(proto::ListMediaResponse {
+        Ok(Response::new(proto::ListMediaResponse {
             media: self
                 .game_state
                 .media_resources()
@@ -149,7 +148,7 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         &self,
         _req: Request<proto::GetEntityDefsRequest>,
     ) -> Result<Response<proto::GetEntityDefsResponse>> {
-        Result::Ok(Response::new(proto::GetEntityDefsResponse {
+        Ok(Response::new(proto::GetEntityDefsResponse {
             entity_defs: self.game_state.entities().types().to_client_protos(),
         }))
     }
@@ -160,8 +159,8 @@ pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 4;
 
 async fn game_stream_impl(
     game_state: Arc<GameState>,
-    mut inbound_rx: tonic::Streaming<StreamToServer>,
-    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    mut inbound_rx: Streaming<StreamToServer>,
+    outbound_tx: mpsc::Sender<Result<StreamToClient>>,
 ) -> anyhow::Result<()> {
     let auth_outcome = match game_state
         .auth()
@@ -169,11 +168,9 @@ async fn game_stream_impl(
         .await
     {
         Ok(outcome) => {
-            log::info!(
+            info!(
                 "Player {} successfully authenticated, protocol range {}..={}",
-                outcome.username,
-                outcome.min_protocol_version,
-                outcome.max_protocol_version
+                outcome.username, outcome.min_protocol_version, outcome.max_protocol_version
             );
             outcome
         }
@@ -188,7 +185,7 @@ async fn game_stream_impl(
 
     if SERVER_MIN_PROTOCOL_VERSION > auth_outcome.max_protocol_version {
         outbound_tx
-            .send(Err(tonic::Status::unimplemented(format!(
+            .send(Err(Status::unimplemented(format!(
                 "Client is too old; minimum server protocol version is {}",
                 SERVER_MIN_PROTOCOL_VERSION
             ))))
@@ -197,7 +194,7 @@ async fn game_stream_impl(
     }
     if SERVER_MAX_PROTOCOL_VERSION < auth_outcome.min_protocol_version {
         outbound_tx
-            .send(Err(tonic::Status::unimplemented(format!(
+            .send(Err(Status::unimplemented(format!(
                 "Client is too new; maximum server protocol version is {}",
                 SERVER_MIN_PROTOCOL_VERSION
             ))))
@@ -244,13 +241,13 @@ async fn game_stream_impl(
             ..
         }) => {
             // all OK
-            log::info!(
+            info!(
                 "Client for {} reports ready; starting up client's context on server",
                 auth_outcome.username
             );
         }
         Some(_) => {
-            let err_response = Err(tonic::Status::invalid_argument(
+            let err_response = Err(Status::invalid_argument(
                 "Client did not send a ClientInitialReady as its first message after authenticating.",
             ));
             return outbound_tx.send(err_response).await.map_err(|_| {
@@ -258,7 +255,7 @@ async fn game_stream_impl(
             });
         }
         None => {
-            let err_response = Err(tonic::Status::unavailable(
+            let err_response = Err(Status::unavailable(
                 "Client did not send a ClientInitialReady and disconnected instead.",
             ));
             return outbound_tx
@@ -282,7 +279,7 @@ async fn game_stream_impl(
         Err(e) => {
             error!("Error setting up client context: {:?}", e);
             return outbound_tx
-                .send(Err(tonic::Status::internal(format!(
+                .send(Err(Status::internal(format!(
                     "Failure setting up client contexts: {e:?}"
                 ))))
                 .await

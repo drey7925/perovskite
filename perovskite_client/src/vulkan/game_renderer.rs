@@ -62,7 +62,7 @@ pub(crate) struct ActiveGame {
     entities_provider: entity_geometry::EntityPipelineProvider,
     entities_pipeline: entity_geometry::EntityPipelineWrapper,
 
-    egui_adapter: Option<egui_adapter::EguiAdapter>,
+    egui_adapter: Option<EguiAdapter>,
 
     client_state: Arc<ClientState>,
     // Held across frames to avoid constant reallocations

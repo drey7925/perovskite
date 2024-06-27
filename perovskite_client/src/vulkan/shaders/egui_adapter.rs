@@ -43,7 +43,7 @@ impl EguiAdapter {
     }
 
     pub(crate) fn new(
-        ctx: &crate::vulkan::VulkanWindow,
+        ctx: &VulkanWindow,
         event_loop: &EventLoopWindowTarget<()>,
         egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {

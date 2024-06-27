@@ -413,4 +413,4 @@ const POINTEE_DISTANCE: f64 = 6.;
 // line_drawing seems to have problems when using Center rather than Corner
 // Fudge it manually
 // TODO file a bug for that crate
-const RAYCAST_FUDGE_VEC: cgmath::Vector3<f64> = cgmath::vec3(0.5, 0.5, 0.5);
+const RAYCAST_FUDGE_VEC: cgmath::Vector3<f64> = vec3(0.5, 0.5, 0.5);

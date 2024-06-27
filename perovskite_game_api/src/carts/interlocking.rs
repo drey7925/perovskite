@@ -209,7 +209,7 @@ fn single_pathfind_attempt(
                     if block.equals_ignore_variant(cart_config.interlocking_signal)
                         && state.signal_rotation_ok(block.variant())
                     {
-                        match interlocking_signal_preacquire(signal_coord, block, *block) {
+                        match interlocking_signal_preacquire(signal_coord, block) {
                             signals::SignalLockOutcome::Contended
                             | signals::SignalLockOutcome::InvalidSignal => {
                                 Ok(SignalParseOutcome::Deny)
@@ -242,7 +242,7 @@ fn single_pathfind_attempt(
                             .is_some_and(|(coord, _)| coord == signal_coord)
                     }) {
                         // This is the starting signal that this cart stopped in front of.
-                        match starting_signal_depart_forward(signal_coord, block, *block) {
+                        match starting_signal_depart_forward(signal_coord, block) {
                             signals::SignalLockOutcome::InvalidSignal
                             | signals::SignalLockOutcome::Contended => Ok(SignalParseOutcome::Deny),
                             signals::SignalLockOutcome::Acquired => {
@@ -272,7 +272,7 @@ fn single_pathfind_attempt(
                     } else if block.equals_ignore_variant(cart_config.starting_signal)
                         && state.signal_rotation_ok(block.variant())
                     {
-                        match starting_signal_preacquire_front(signal_coord, block, *block) {
+                        match starting_signal_preacquire_front(signal_coord, block) {
                             signals::SignalLockOutcome::InvalidSignal
                             | signals::SignalLockOutcome::Contended => Ok(SignalParseOutcome::Deny),
                             signals::SignalLockOutcome::Acquired => {
@@ -312,7 +312,7 @@ fn single_pathfind_attempt(
                     {
                         // Starting signal, approaching it from the back
 
-                        match starting_signal_acquire_back(signal_coord, block, *block) {
+                        match starting_signal_acquire_back(signal_coord, block) {
                             signals::SignalLockOutcome::InvalidSignal => {
                                 Ok(SignalParseOutcome::Deny)
                             }

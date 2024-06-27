@@ -182,7 +182,7 @@ impl<const N: usize, T> RecipeImpl<N, T> {
                 RecipeSlot::Exact(_) => None,
             })
             .collect();
-        assert!(remaining_slots.len() == remaining_stacks.len());
+        assert_eq!(remaining_slots.len(), remaining_stacks.len());
 
         match remaining_slots.len() {
             0 => return true,

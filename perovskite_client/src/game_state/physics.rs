@@ -117,7 +117,7 @@ impl PhysicsMode {
 }
 
 pub(crate) struct PhysicsState {
-    pos: cgmath::Vector3<f64>,
+    pos: Vector3<f64>,
     az: Deg<f64>,
     el: Deg<f64>,
     target_az: Deg<f64>,
@@ -138,7 +138,7 @@ pub(crate) struct PhysicsState {
 impl PhysicsState {
     pub(crate) fn new(settings: Arc<ArcSwap<GameSettings>>) -> Self {
         Self {
-            pos: cgmath::vec3(0., 0., -4.),
+            pos: vec3(0., 0., -4.),
             az: Deg(0.),
             el: Deg(0.),
             target_az: Deg(0.),
@@ -161,7 +161,7 @@ impl PhysicsState {
         client_state: &ClientState,
         _aspect_ratio: f64,
         delta: Duration,
-    ) -> (cgmath::Vector3<f64>, (f64, f64)) {
+    ) -> (Vector3<f64>, (f64, f64)) {
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
             self.physics_mode = self.physics_mode.next(self.can_fly, self.can_noclip);
@@ -193,7 +193,7 @@ impl PhysicsState {
     fn update_standard(
         &mut self,
         input: &mut InputState,
-        delta: std::time::Duration,
+        delta: Duration,
         client_state: &ClientState,
     ) {
         let _span = span!("physics_standard");
@@ -289,7 +289,7 @@ impl PhysicsState {
         bump_height: f64,
         target: Vector3<f64>,
         chunks: ChunkManagerView<'_>,
-        block_types: &std::sync::Arc<ClientBlockTypeManager>,
+        block_types: &Arc<ClientBlockTypeManager>,
         delta_secs: f64,
     ) -> Vector3<f64> {
         let pre_bump_y = new_pos.y;
@@ -422,7 +422,7 @@ impl PhysicsState {
     fn update_flying(
         &mut self,
         input: &mut InputState,
-        delta: std::time::Duration,
+        delta: Duration,
         collisions: bool,
         client_state: &ClientState,
     ) {
@@ -494,7 +494,7 @@ impl PhysicsState {
         (self.az.0, self.el.0)
     }
 
-    fn update_smooth_angles(&mut self, delta: std::time::Duration) {
+    fn update_smooth_angles(&mut self, delta: Duration) {
         let factor =
             ANGLE_SMOOTHING_FACTOR.powf(delta.as_secs_f64() / ANGLE_SMOOTHING_REFERENCE_DELTA);
         self.el = (self.el * factor) + (self.target_el * (1.0 - factor));
@@ -755,10 +755,10 @@ fn push_collision_boxes(
     output: &mut Vec<CollisionBox>,
 ) {
     match &block.physics_info {
-        Some(block_type_def::PhysicsInfo::Solid(_)) => output.push(CollisionBox::full_cube(coord)),
-        Some(block_type_def::PhysicsInfo::Fluid(_)) => {}
-        Some(block_type_def::PhysicsInfo::Air(_)) => {}
-        Some(block_type_def::PhysicsInfo::SolidCustomCollisionboxes(boxes)) => {
+        Some(PhysicsInfo::Solid(_)) => output.push(CollisionBox::full_cube(coord)),
+        Some(PhysicsInfo::Fluid(_)) => {}
+        Some(PhysicsInfo::Air(_)) => {}
+        Some(PhysicsInfo::SolidCustomCollisionboxes(boxes)) => {
             for box_ in &boxes.boxes {
                 if box_.variant_mask == 0 || (variant & box_.variant_mask as u16) != 0 {
                     output.push(CollisionBox::from_aabb(coord, box_, variant));
