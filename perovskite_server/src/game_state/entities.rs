@@ -2227,7 +2227,7 @@ impl EntityShardWorker {
         let mut rx_messages = Vec::with_capacity(COMMAND_BATCH_SIZE);
         let mut completions = Vec::with_capacity(COMPLETION_BATCH_SIZE);
 
-        let mut awakening_times = Vec::with_capacity(64);
+        let mut awakening_times = Vec::with_capacity(256);
 
         'main_loop: while !self.cancellation.is_cancelled() {
             let mut next_awakening = tokio::task::block_in_place(|| {
@@ -2254,8 +2254,8 @@ impl EntityShardWorker {
 
                 let diff = update_awakening_tick.min(coro_awakening_tick) - start_tick;
                 awakening_times.push(diff);
-                if awakening_times.len() > 64 {
-                    tracing::debug!(
+                if awakening_times.len() > 256 {
+                    tracing::info!(
                         "Avg awakening time: {:?}, max: {:?}, min: {:?}, number < 10 msec: {}",
                         awakening_times.iter().sum::<u64>() / awakening_times.len() as u64,
                         awakening_times.iter().max().unwrap(),
