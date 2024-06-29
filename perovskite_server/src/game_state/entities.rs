@@ -2227,11 +2227,14 @@ impl EntityShardWorker {
         let mut rx_messages = Vec::with_capacity(COMMAND_BATCH_SIZE);
         let mut completions = Vec::with_capacity(COMPLETION_BATCH_SIZE);
 
+        let mut awakening_times = Vec::with_capacity(64);
+
         'main_loop: while !self.cancellation.is_cancelled() {
-            let mut next_awakening = {
+            let mut next_awakening = tokio::task::block_in_place(|| {
                 let mut lock = self.entities.shards[self.shard_id].core.write();
                 let services = self.services();
-                let update_awakening_tick = lock.update_times(self.game_state.tick());
+                let start_tick = self.game_state.tick();
+                let update_awakening_tick = lock.update_times(start_tick);
                 let coro_awakening_tick =
                     lock.run_coroutines(&services, &self.game_state, completion_tx);
                 tracing::debug!(
@@ -2248,8 +2251,22 @@ impl EntityShardWorker {
                 );
                 tracing::debug!("At tick {}", self.game_state.tick());
                 drop(lock);
+
+                let diff = update_awakening_tick.min(coro_awakening_tick) - start_tick;
+                awakening_times.push(diff);
+                if awakening_times.len() > 64 {
+                    tracing::debug!(
+                        "Avg awakening time: {:?}, max: {:?}, min: {:?}, number < 10 msec: {}",
+                        awakening_times.iter().sum::<u64>() / awakening_times.len() as u64,
+                        awakening_times.iter().max().unwrap(),
+                        awakening_times.iter().min().unwrap(),
+                        awakening_times.iter().filter(|&&x| x < 10_000_000).count()
+                    );
+                    awakening_times.clear();
+                }
+
                 update_awakening_tick.min(coro_awakening_tick)
-            };
+            });
 
             rx_messages.clear();
             'poll: loop {
@@ -2269,7 +2286,7 @@ impl EntityShardWorker {
                                 break 'main_loop;
                             },
                             _ => {
-                                next_awakening = next_awakening.min(self.handle_messages(&mut rx_messages));
+                                next_awakening = next_awakening.min(tokio::task::block_in_place( || self.handle_messages(&mut rx_messages)));
                                 // then the loop repeats without sleeping
                             }
                         }
@@ -2282,7 +2299,7 @@ impl EntityShardWorker {
                                 break 'main_loop;
                             },
                             _ => {
-                                next_awakening = next_awakening.min(self.handle_completions(&mut completions));
+                                next_awakening = next_awakening.min(tokio::task::block_in_place(|| self.handle_completions(&mut completions)));
                                 // then the loop repeats without sleeping
                             }
                         }

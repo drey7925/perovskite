@@ -175,6 +175,8 @@ impl GameState {
         let now = self.tick();
         if now < tick {
             tokio::time::sleep(Duration::from_nanos(tick - now)).await;
+        } else {
+            tokio::task::yield_now().await;
         }
     }
 
