@@ -1061,6 +1061,7 @@ pub(crate) struct InboundWorker {
 impl InboundWorker {
     // Poll for world events and send them through outbound_tx
     pub(crate) async fn inbound_worker_loop(&mut self) -> Result<()> {
+        const INBOUND_TIMEOUT: Duration = Duration::from_secs(10);
         while !self.context.cancellation.is_cancelled() {
             let trace_buffer = TraceBuffer::new(false);
             trace_buffer.log("Waiting for inbound message");
@@ -1090,9 +1091,36 @@ impl InboundWorker {
                 _ = self.context.cancellation.cancelled() => {
                     info!("Client inbound context {} detected cancellation and shutting down", self.context.id)
                     // pass
+                },
+                _ = tokio::time::sleep(INBOUND_TIMEOUT) => {
+                    warn!("Client inbound context {} timed out and shutting down", self.context.id);
+                    self.context.cancellation.cancel();
+                    self.context.game_state.game_behaviors().on_player_err.handle(
+                        &self.context.player_context,
+                        HandlerContext {
+                            tick: self.context.game_state.tick(),
+                            initiator: EventInitiator::Engine,
+                            game_state: self.context.game_state.clone(),
+                        },
+                    ).await?;
+                    // Do not send the generic player-leave message
+                    return Ok(());
                 }
             }
         }
+        self.context
+            .game_state
+            .game_behaviors()
+            .on_player_leave
+            .handle(
+                &self.context.player_context,
+                HandlerContext {
+                    tick: self.context.game_state.tick(),
+                    initiator: EventInitiator::Engine,
+                    game_state: self.context.game_state.clone(),
+                },
+            )
+            .await?;
         Ok(())
     }
 
@@ -1883,19 +1911,7 @@ impl MiscOutboundWorker {
                 }
             }
         }
-        self.context
-            .game_state
-            .game_behaviors()
-            .on_player_leave
-            .handle(
-                &self.context.player_context,
-                HandlerContext {
-                    tick: self.context.game_state.tick(),
-                    initiator: EventInitiator::Engine,
-                    game_state: self.context.game_state.clone(),
-                },
-            )
-            .await?;
+
         Ok(())
     }
     async fn transmit_chat_message(&mut self, message: ChatMessage) -> Result<()> {

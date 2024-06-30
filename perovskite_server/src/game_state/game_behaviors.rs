@@ -50,8 +50,12 @@ pub struct GameBehaviors {
     /// Users that will get all permissions
     pub super_users: HashSet<String>,
 
+    /// Called when a player joins
     pub on_player_join: Box<dyn GenericAsyncHandler<Player, ()>>,
+    /// Called when a player leaves
     pub on_player_leave: Box<dyn GenericAsyncHandler<Player, ()>>,
+    /// Called when a player encounters an error and disconnects
+    pub on_player_err: Box<dyn GenericAsyncHandler<Player, ()>>,
 
     pub spawn_location: Box<dyn Fn(&str) -> Vector3<f64> + Send + Sync + 'static>,
 }
@@ -105,6 +109,12 @@ impl Default for GameBehaviors {
             on_player_join: Box::new(PlayerJoinHandlerImpl),
             on_player_leave: Box::new(SendChatMessageHandlerImpl::new(|player: &Player, _| {
                 ChatMessage::new_server_message(format!("{} left the game.", player.name()))
+            })),
+            on_player_err: Box::new(SendChatMessageHandlerImpl::new(|player: &Player, _| {
+                ChatMessage::new_server_message(format!(
+                    "{} left the game (connection error).",
+                    player.name()
+                ))
             })),
             spawn_location: Box::new(|_| vec3(0.0, 30.0, 0.0)),
         }
