@@ -2515,14 +2515,6 @@ pub struct EntityTypeId {
     pub data: Option<Box<[u8]>>,
 }
 
-pub(crate) const FAKE_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0xFFFFFFFF);
-/// The entity class ID for unknown entities and the fallback entity appearance
-pub const UNKNOWN_ENTITY_CLASS_ID: EntityClassId = EntityClassId(0);
-/// The entity class ID for a player; data is the username in UTF-8 bytes
-pub const PLAYER_ENTITY_CLASS_ID: EntityClassId = EntityClassId(1);
-/// The entity class ID for a dropped item; data is the item stack proto
-pub const DROPPED_ITEM_CLASS_ID: EntityClassId = EntityClassId(2);
-
 const ENTITY_TYPE_MANAGER_META_KEY: &[u8] = b"entity_types";
 
 pub struct EntityTypeManager {
@@ -2564,10 +2556,7 @@ impl EntityTypeManager {
     fn new_empty() -> Result<EntityTypeManager> {
         Ok(EntityTypeManager {
             types: vec![make_unknown_entity_appearance()],
-            by_name: FxHashMap::from_iter([(
-                "builtin:unknown".to_string(),
-                UNKNOWN_ENTITY_CLASS_ID.0,
-            )]),
+            by_name: FxHashMap::from_iter([("builtin:unknown".to_string(), 0)]),
         })
     }
 

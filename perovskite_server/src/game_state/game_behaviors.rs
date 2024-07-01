@@ -1,5 +1,6 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
+use crate::game_state::entities::EntityClassId;
 use anyhow::Result;
 use cgmath::{vec3, Vector3};
 use itertools::Itertools;
@@ -58,6 +59,7 @@ pub struct GameBehaviors {
     pub on_player_err: Box<dyn GenericAsyncHandler<Player, ()>>,
 
     pub spawn_location: Box<dyn Fn(&str) -> Vector3<f64> + Send + Sync + 'static>,
+    pub player_entity_class: Box<dyn Fn(&str) -> EntityClassId + Send + Sync + 'static>,
 }
 impl GameBehaviors {
     pub(crate) fn has_defined_permission(&self, permission: &str) -> bool {
@@ -117,6 +119,8 @@ impl Default for GameBehaviors {
                 ))
             })),
             spawn_location: Box::new(|_| vec3(0.0, 30.0, 0.0)),
+            // Fallback to entity class 0
+            player_entity_class: Box::new(|_| EntityClassId::new(0)),
         }
     }
 }

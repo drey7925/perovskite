@@ -14,11 +14,17 @@
 
 use std::sync::Arc;
 
-use crate::game_builder::{GameBuilder, GameBuilderExtension};
+use crate::game_builder::{GameBuilder, GameBuilderExtension, StaticTextureName};
 
 use anyhow::Result;
+use cgmath::vec3;
+use perovskite_core::protocol;
 
+use crate::include_texture_bytes;
 use perovskite_core::protocol::items as items_proto;
+use perovskite_core::protocol::render::CustomMesh;
+use perovskite_server::game_state;
+use perovskite_server::game_state::entities::{EntityClassId, EntityDef};
 use perovskite_server::game_state::items::ItemStack;
 
 use self::{
@@ -114,7 +120,7 @@ pub trait DefaultGameBuilder {
     fn register_smelting_fuel(&mut self, fuel: RecipeSlot, ticks: u32);
 }
 
-// This is a private type; other plugins cannot name it so they cannot access
+// This is a private type; other plugins cannot name it, so they cannot access
 // the builder_extension directly.
 //
 // This ensures that the builder_extension is only made available to plugins via the
@@ -125,8 +131,8 @@ struct DefaultGameBuilderExtension {
     crafting_recipes: Arc<RecipeBook<9, ()>>,
     /// Metadata is number of furnace timer ticks (period given by [`furnace::FURNACE_TICK_DURATION`]) that it takes to smelt this recipe
     smelting_recipes: Arc<RecipeBook<1, u32>>,
-    // Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
-    // Output item is ignored
+    /// Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
+    /// Output item is ignored
     smelting_fuels: Arc<RecipeBook<1, u32>>,
 
     ores: Vec<OreDefinition>,
@@ -177,12 +183,14 @@ impl DefaultGameBuilder for GameBuilder {
         tracing::info!("DefaultGame doing main initialization");
         ext.settings = game_settings::load(&data_dir)?;
         ext.initialized = true;
+        let player_entity_id = register_player_entity(self)?;
         basic_blocks::register_basic_blocks(self)?;
-        game_behaviors::register_game_behaviors(self)?;
+        game_behaviors::register_game_behaviors(self, player_entity_id)?;
         tools::register_default_tools(self)?;
         furnace::register_furnace(self)?;
         foliage::register_foliage(self)?;
         commands::register_default_commands(self)?;
+
         Ok(())
     }
 
@@ -261,6 +269,26 @@ impl DefaultGameBuilder for GameBuilder {
     }
 }
 
+fn register_player_entity(builder: &mut GameBuilder) -> Result<EntityClassId> {
+    let player_tex = StaticTextureName("default:player_uv");
+    include_texture_bytes!(builder, player_tex, "textures/player.png")?;
+    builder.inner.entities_mut().register(EntityDef {
+        move_queue_type: game_state::entities::MoveQueueType::SingleMove,
+        class_name: "default:player".to_string(),
+        client_info: protocol::entities::EntityAppearance {
+            custom_mesh: vec![PLAYER_MESH.clone()],
+            attachment_offset: None,
+            attachment_offset_in_model_space: false,
+        },
+    })
+}
+
 mod commands;
 
 pub mod game_settings;
+const PLAYER_MESH_BYTES: &[u8] = include_bytes!("player.obj");
+lazy_static::lazy_static! {
+    static ref PLAYER_MESH: CustomMesh = {
+        perovskite_server::formats::load_obj_mesh(PLAYER_MESH_BYTES, "default:player_uv").unwrap()
+    };
+}

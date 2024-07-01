@@ -1401,7 +1401,13 @@ impl InboundWorker {
                             .as_ref()
                             .context("Missing position")?
                             .try_into()?,
-                        Movement::stop_and_stay(0.0, 0.0, f32::MAX),
+                        // TODO: Player movements use degrees, entity movements use radians.
+                        // This is inconsistent and should be fixed in a later protocol version
+                        Movement::stop_and_stay(
+                            pos.face_direction.0 as f32 * std::f32::consts::PI / 180.0,
+                            0.0,
+                            f32::MAX,
+                        ),
                         crate::game_state::entities::InitialMoveQueue::SingleMove(None),
                     )
                     .await;

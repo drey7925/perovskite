@@ -5,6 +5,7 @@ use perovskite_core::{
     constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
     protocol::items::item_stack,
 };
+use perovskite_server::game_state::entities::EntityClassId;
 use perovskite_server::game_state::inventory::{
     VirtualInputCallbacks, VirtualOutputReturnBehavior,
 };
@@ -21,12 +22,14 @@ use crate::game_builder::GameBuilder;
 
 use super::{recipes::RecipeBook, DefaultGameBuilderExtension};
 
-pub(crate) fn register_game_behaviors(game_builder: &mut GameBuilder) -> Result<()> {
+pub(crate) fn register_game_behaviors(
+    game_builder: &mut GameBuilder,
+    player_entity_id: EntityClassId,
+) -> Result<()> {
     let extension = game_builder.builder_extension::<DefaultGameBuilderExtension>();
     let recipe_book = extension.crafting_recipes.clone();
     let spawn_location = extension.settings.spawn_location.into();
     let super_users = extension.settings.super_users.iter().cloned().collect();
-
     {
         let behaviors = game_builder.inner.game_behaviors_mut();
 
@@ -34,6 +37,7 @@ pub(crate) fn register_game_behaviors(game_builder: &mut GameBuilder) -> Result<
             Box::new(DefaultGameInventoryPopupProvider { recipe_book });
         behaviors.super_users = super_users;
         behaviors.spawn_location = Box::new(move |_| spawn_location);
+        behaviors.player_entity_class = Box::new(move |_| player_entity_id);
     }
     Ok(())
 }

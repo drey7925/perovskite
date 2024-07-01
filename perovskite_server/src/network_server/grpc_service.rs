@@ -107,6 +107,23 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
         }))
     }
 
+    async fn list_media(
+        &self,
+        _req: Request<proto::ListMediaRequest>,
+    ) -> Result<Response<proto::ListMediaResponse>> {
+        Ok(Response::new(proto::ListMediaResponse {
+            media: self
+                .game_state
+                .media_resources()
+                .entries()
+                .map(|(k, v)| proto::ListMediaEntry {
+                    media_name: k.clone(),
+                    sha256: v.hash().to_vec(),
+                })
+                .collect(),
+        }))
+    }
+
     async fn get_media(
         &self,
         req: Request<proto::GetMediaRequest>,
@@ -125,23 +142,6 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
                 &req.get_ref().media_name
             ))),
         }
-    }
-
-    async fn list_media(
-        &self,
-        _req: Request<proto::ListMediaRequest>,
-    ) -> Result<Response<proto::ListMediaResponse>> {
-        Ok(Response::new(proto::ListMediaResponse {
-            media: self
-                .game_state
-                .media_resources()
-                .entries()
-                .map(|(k, v)| proto::ListMediaEntry {
-                    media_name: k.clone(),
-                    sha256: v.hash().to_vec(),
-                })
-                .collect(),
-        }))
     }
 
     async fn get_entity_defs(
