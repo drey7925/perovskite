@@ -186,10 +186,7 @@ pub(crate) async fn make_client_contexts(
 
     let block_events = game_state.game_map().subscribe();
     let inventory_events = game_state.inventory_manager().subscribe();
-    let chunk_tracker = Arc::new(ChunkTracker::new(
-        game_state.clone(),
-        player_context.clone(),
-    ));
+    let chunk_tracker = Arc::new(ChunkTracker::new());
 
     let context = Arc::new(SharedContext {
         game_state: game_state.clone(),
@@ -374,8 +371,6 @@ impl Drop for SharedContext {
 
 /// Tracks what chunks are close enough to the player to be of interest
 pub(crate) struct ChunkTracker {
-    player_context: Arc<PlayerContext>,
-    game_state: Arc<GameState>,
     loaded_chunks_bloom: cbloom::Filter,
     // The client knows about these chunks, and we should send updates to them
     loaded_chunks: RwLock<FxHashSet<ChunkCoordinate>>,
@@ -383,10 +378,8 @@ pub(crate) struct ChunkTracker {
     // todo - move AIMD pacing into this
 }
 impl ChunkTracker {
-    pub(crate) fn new(game_state: Arc<GameState>, player_context: Arc<PlayerContext>) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            game_state,
-            player_context,
             // Bloom filter size is given in bytes, not bits - but many formulae and calculators use bits.
             // According to https://hur.st/bloomfilter/?n=50000&p=&m=64%20KiB&k=, we can expect a reasonable false positive rate here
             // for our current supported draw distances.
@@ -647,7 +640,9 @@ impl MapChunkSender {
                 self.context
                     .game_state
                     .game_map()
-                    .serialize_for_client(coord, should_load)
+                    .serialize_for_client(coord, should_load, || {
+                        self.chunk_tracker.mark_chunk_loaded(coord)
+                    })
             })?;
             if let Some(chunk_data) = chunk_data {
                 let chunk_bytes = self.snappy_encode(&chunk_data)?;
@@ -662,7 +657,6 @@ impl MapChunkSender {
                     self.context.cancellation.cancel();
                     Error::msg("Could not send outbound message (full mapchunk)")
                 })?;
-                self.chunk_tracker.mark_chunk_loaded(coord);
                 sent_chunks += 1;
                 if sent_chunks > update.chunks_to_send {
                     break;
@@ -777,8 +771,6 @@ impl BlockEventSender {
         &mut self,
         update: Result<BlockUpdate, broadcast::error::RecvError>,
     ) -> Result<()> {
-        // Sleep 10 msec to allow some more updates to be aggregated
-        tokio::time::sleep(Duration::from_millis(10)).await;
         let update = match update {
             Err(broadcast::error::RecvError::Lagged(num_pending)) => {
                 tracing::warn!(
@@ -801,8 +793,7 @@ impl BlockEventSender {
             updates.insert(update.location, update);
         }
         // Drain and batch as many updates as possible
-        // TODO coalesce
-        // TODO consider using recv_many after bumping the tokio version
+        let mut have_slept = false;
         while updates.len() < MAX_UPDATE_BATCH_SIZE {
             match self.block_events.try_recv() {
                 Ok(update) => {
@@ -811,7 +802,18 @@ impl BlockEventSender {
                         updates.insert(update.location, update);
                     }
                 }
-                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Empty) => {
+                    // If we have no events, try sleeping *once* to get some more events into
+                    // a batch
+                    // TODO consider making this a select so we can immediately fill a batch
+                    // without the 10-msec wait.
+                    if !have_slept {
+                        have_slept = true;
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    } else {
+                        break;
+                    }
+                }
                 Err(e) => {
                     // we'll deal with it the next time the main loop runs
                     warn!("Unexpected error from block events broadcast: {:?}", e);

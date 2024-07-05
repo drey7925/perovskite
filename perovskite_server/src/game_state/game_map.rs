@@ -1657,20 +1657,34 @@ impl ServerGameMap {
     /// the chunk is already cached in memory. If this loads a chunk, the chunk will stay in memory.
     ///
     /// This is only made visible for benchmarking, and otherwise isn't useful or stable for most use-cases.
+    ///
+    /// mark_action is called with the chunk already loaded, before its lock is taken. It should
+    /// still be fast, as it holds the read lock on the map shard.
     #[doc(hidden)]
     pub fn serialize_for_client(
         &self,
         coord: ChunkCoordinate,
         load_if_missing: bool,
+        mark_action: impl FnOnce(),
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
         if load_if_missing {
+            (mark_action)();
             let chunk_guard = self.get_chunk(coord)?;
             let chunk = chunk_guard.wait_and_get_for_read()?;
             Ok(Some(
                 chunk.serialize(ChunkUsage::Client, &self.game_state())?,
             ))
         } else {
-            Ok(None)
+            let chunk_guard = self.try_get_chunk(coord, false);
+            if let Some(chunk) = chunk_guard {
+                (mark_action)();
+                let chunk = chunk.wait_and_get_for_read()?;
+                Ok(Some(
+                    chunk.serialize(ChunkUsage::Client, &self.game_state())?,
+                ))
+            } else {
+                Ok(None)
+            }
         }
     }
 
