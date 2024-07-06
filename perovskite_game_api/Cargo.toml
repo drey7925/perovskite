@@ -49,7 +49,7 @@ wildmatch = "2.3.3"
 itertools = "0.13.0"
 
 [features]
-default = ["default_game", "agriculture", "circuits", "discord", "carts"]
+default = ["default_game", "agriculture", "animals", "circuits", "discord", "carts"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
@@ -65,6 +65,9 @@ unstable_api = []
 # * Helpers for defining tools
 # * Useful commands for game administration
 default_game = []
+
+# Animals (just ducks for now)
+animals = []
 
 # Provides a plugin for making digital circuits that have simple in-game behaviors. Still a WIP
 circuits = []

@@ -15,6 +15,7 @@ use crate::{
 use anyhow::Result;
 use cgmath::{vec3, InnerSpace};
 use futures::StreamExt;
+use log::warn;
 use parking_lot::Mutex;
 use perovskite_core::{
     chat::ChatMessage,
@@ -583,13 +584,10 @@ impl InboundContext {
                 .send_bugcheck("Missing block_coord in delta update".to_string())
                 .await?;
         }
+        // In the latest concurrency model, this is not a bug - it's a more conservative/harmless
+        // outcome of a race condition.
         for coord in unknown_coords {
-            self.shared_state
-                .send_bugcheck(format!(
-                    "Got delta at {:?} but chunk is not in cache",
-                    coord
-                ))
-                .await?;
+            warn!("Received coord {coord:?} is not in cache. This is fine if it happens occasionally, but if it happens constantly, it suggests either a bug or severe server overload.")
         }
 
         Ok(())

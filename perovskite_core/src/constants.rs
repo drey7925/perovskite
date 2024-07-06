@@ -57,7 +57,7 @@ pub mod item_groups {
 }
 
 pub mod items {
-    use crate::protocol::items::{interaction_rule::DigBehavior, InteractionRule};
+    use crate::protocol::items::{interaction_rule::DigBehavior, Empty, InteractionRule};
 
     use super::block_groups::*;
     /// Get the default interaction rules for generic items that aren't some kind of special tool
@@ -66,19 +66,17 @@ pub mod items {
         vec![
             InteractionRule {
                 block_group: vec![NOT_DIGGABLE.to_string()],
-                dig_behavior: None,
+                dig_behavior: Some(DigBehavior::Undiggable(Empty {})),
                 tool_wear: 0,
             },
             InteractionRule {
                 block_group: vec![TOOL_REQUIRED.to_string()],
-                dig_behavior: None,
+                dig_behavior: Some(DigBehavior::Undiggable(Empty {})),
                 tool_wear: 0,
             },
             InteractionRule {
                 block_group: vec![INSTANT_DIG.to_string()],
-                dig_behavior: Some(DigBehavior::InstantDigOneshot(
-                    crate::protocol::items::Empty {},
-                )),
+                dig_behavior: Some(DigBehavior::InstantDigOneshot(Empty {})),
                 tool_wear: 0,
             },
             InteractionRule {

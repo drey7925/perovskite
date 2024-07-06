@@ -56,6 +56,10 @@ pub mod discord;
 #[cfg(feature = "carts")]
 pub mod carts;
 
+/// Animals
+#[cfg(feature = "animals")]
+pub mod animals;
+
 /// Provides colors that can be used in the default game, as well as
 /// a unified set of items representing dyes in different colors.
 /// Also provides functionality to colorize textures automatically,

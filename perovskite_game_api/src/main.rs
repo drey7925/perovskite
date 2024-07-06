@@ -14,9 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use perovskite_game_api::{
-    carts, colors, default_game::DefaultGameBuilder, discord, game_builder::GameBuilder,
-};
+use perovskite_game_api::{default_game::DefaultGameBuilder, game_builder::GameBuilder};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::{prelude::*, registry::LookupSpan};
 
@@ -105,14 +103,21 @@ fn main() {
     }
     #[cfg(feature = "discord")]
     {
+        use perovskite_game_api::discord;
         discord::connect(&mut game).unwrap();
     }
     #[cfg(feature = "carts")]
     {
+        use perovskite_game_api::carts;
         carts::register_carts(&mut game).unwrap();
     }
+    #[cfg(feature = "animals")]
+    {
+        use perovskite_game_api::animals;
+        animals::register_duck(&mut game).unwrap();
+    }
 
-    colors::register_dyes(&mut game).unwrap();
+    perovskite_game_api::colors::register_dyes(&mut game).unwrap();
 
     game.run_game_server().unwrap();
     tracing::info!("Game server has shut down; exiting");
