@@ -187,13 +187,20 @@ pub(crate) async fn make_client_contexts(
     let block_events = game_state.game_map().subscribe();
     let inventory_events = game_state.inventory_manager().subscribe();
     let chunk_tracker = Arc::new(ChunkTracker::new());
-
+    let chunk_aimd = Arc::new(Mutex::new(Aimd {
+        val: crate::network_server::client_context::INITIAL_CHUNKS_PER_UPDATE as f64,
+        floor: 0.,
+        ceiling: crate::network_server::client_context::MAX_CHUNKS_PER_UPDATE as f64,
+        additive_increase: 64.,
+        multiplicative_decrease: 0.5,
+    }));
     let context = Arc::new(SharedContext {
         game_state: game_state.clone(),
         player_context,
         id,
         cancellation,
         effective_protocol_version,
+        chunk_aimd,
     });
 
     let inbound_worker = InboundWorker {
@@ -202,21 +209,7 @@ pub(crate) async fn make_client_contexts(
         own_positions: pos_send,
         outbound_tx: outbound_tx.clone(),
         next_pos_writeback: Instant::now(),
-        chunk_pacing: Aimd {
-            val: INITIAL_CHUNKS_PER_UPDATE as f64,
-            floor: 0.,
-            ceiling: MAX_CHUNKS_PER_UPDATE as f64,
-            additive_increase: 64.,
-            multiplicative_decrease: 0.5,
-        },
     };
-    let chunk_limit_aimd = Arc::new(Mutex::new(Aimd {
-        val: LOAD_LAZY_SORTED_COORDS.len() as f64,
-        floor: 1024.0f64.min(LOAD_LAZY_SORTED_COORDS.len() as f64),
-        ceiling: LOAD_LAZY_SORTED_COORDS.len() as f64,
-        additive_increase: 256.0,
-        multiplicative_decrease: 0.75,
-    }));
     let chunk_sender = MapChunkSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
@@ -227,14 +220,12 @@ pub(crate) async fn make_client_contexts(
         snappy_encoder: snap::raw::Encoder::new(),
         snappy_input_buffer: vec![],
         snappy_output_buffer: vec![],
-        chunk_limit_aimd: chunk_limit_aimd.clone(),
     };
     let block_event_sender = BlockEventSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
         block_events,
         chunk_tracker,
-        chunk_limit_aimd,
     };
     let inventory_event_sender = InventoryEventSender {
         context: context.clone(),
@@ -362,6 +353,7 @@ pub struct SharedContext {
     id: usize,
     cancellation: CancellationToken,
     effective_protocol_version: u32,
+    chunk_aimd: Arc<Mutex<Aimd>>,
 }
 impl Drop for SharedContext {
     fn drop(&mut self) {
@@ -440,8 +432,6 @@ pub(crate) struct MapChunkSender {
     snappy_encoder: snap::raw::Encoder,
     snappy_input_buffer: Vec<u8>,
     snappy_output_buffer: Vec<u8>,
-
-    chunk_limit_aimd: Arc<Mutex<Aimd>>,
 }
 const ACCESS_TIME_BUMP_SHARDS: u32 = 32;
 impl MapChunkSender {
@@ -663,7 +653,7 @@ impl MapChunkSender {
                 }
             }
         }
-        self.chunk_limit_aimd.lock().increase();
+        self.context.chunk_aimd.lock().increase();
         Ok(())
     }
 
@@ -731,9 +721,6 @@ pub(crate) struct BlockEventSender {
     // responsible for filtering)
     block_events: broadcast::Receiver<BlockUpdate>,
     chunk_tracker: Arc<ChunkTracker>,
-
-    // AIMD tracker used to control chunks to be sent to the client
-    chunk_limit_aimd: Arc<Mutex<Aimd>>,
 }
 impl BlockEventSender {
     #[tracing::instrument(
@@ -852,7 +839,7 @@ impl BlockEventSender {
 
     async fn handle_block_update_lagged(&mut self) -> Result<()> {
         // Decrease the number of chunks we're willing to send
-        self.chunk_limit_aimd.lock().decrease();
+        self.context.chunk_aimd.lock().decrease_to_floor();
 
         // this ends up racy. resubscribe first, so we get duplicate/pointless events after the
         // resubscribe, rather than missing events if we resubscribe to the broadcast after sending current
@@ -1057,14 +1044,14 @@ pub(crate) struct InboundWorker {
     // The client's self-reported position
     own_positions: watch::Sender<PositionAndPacing>,
     next_pos_writeback: Instant,
-
-    chunk_pacing: Aimd,
 }
 impl InboundWorker {
     // Poll for world events and send them through outbound_tx
     pub(crate) async fn inbound_worker_loop(&mut self) -> Result<()> {
         const INBOUND_TIMEOUT: Duration = Duration::from_secs(10);
         while !self.context.cancellation.is_cancelled() {
+            let timeout = tokio::time::sleep(INBOUND_TIMEOUT);
+            tokio::pin!(timeout);
             let trace_buffer = TraceBuffer::new(false);
             trace_buffer.log("Waiting for inbound message");
             tokio::select! {
@@ -1094,7 +1081,7 @@ impl InboundWorker {
                     info!("Client inbound context {} detected cancellation and shutting down", self.context.id)
                     // pass
                 },
-                _ = tokio::time::sleep(INBOUND_TIMEOUT) => {
+                _ = timeout => {
                     warn!("Client inbound context {} timed out and shutting down", self.context.id);
                     self.context.cancellation.cancel();
                     self.context.game_state.game_behaviors().on_player_err.handle(
@@ -1380,15 +1367,15 @@ impl InboundWorker {
 
                 if let Some(pacing) = &update.pacing {
                     if pacing.pending_chunks < 256 {
-                        self.chunk_pacing.increase();
+                        self.context.chunk_aimd.lock().increase();
                     } else if pacing.pending_chunks > 1024 {
-                        self.chunk_pacing.decrease();
+                        self.context.chunk_aimd.lock().decrease();
                     }
                 }
 
                 self.own_positions.send_replace(PositionAndPacing {
                     position: pos,
-                    chunks_to_send: self.chunk_pacing.get(),
+                    chunks_to_send: dbg!(self.context.chunk_aimd.lock().get()),
                 });
                 self.context
                     .player_context
@@ -2089,7 +2076,7 @@ const FORCE_LOAD_DISTANCE: i32 = 3;
 const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 128;
-const MAX_CHUNKS_PER_UPDATE: usize = 256;
+const MAX_CHUNKS_PER_UPDATE: usize = 4096;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {
@@ -2156,6 +2143,10 @@ impl Aimd {
     fn decrease(&mut self) {
         debug_assert!(self.multiplicative_decrease < 1.);
         self.val = (self.val * self.multiplicative_decrease).clamp(self.floor, self.ceiling);
+    }
+
+    fn decrease_to_floor(&mut self) {
+        self.val = self.floor;
     }
     fn get(&self) -> usize {
         self.val as usize
