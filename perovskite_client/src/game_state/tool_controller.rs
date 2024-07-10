@@ -395,6 +395,8 @@ fn default_item() -> ItemDef {
         interaction_rules: rules,
         quantity_type: None,
         block_apperance: "".to_string(),
+        // Sort key is irrelevant
+        sort_key: String::new(),
     }
 }
 
