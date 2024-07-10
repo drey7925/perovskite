@@ -54,6 +54,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(foliage_groups::MAPLE)
             .add_item_group(item_groups::TREE_TRUNK)
             .add_item_group(foliage_groups::MAPLE)
+            .set_item_sort_key("default:trees:tree_trunk:maple")
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 MAPLE_TREE_SIDE_TEX,
                 MAPLE_TREE_SIDE_TEX,
@@ -78,7 +79,13 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
 
     builder.register_smelting_fuel(RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()), 2);
 
-    builder.register_basic_item(STICK_ITEM, "Wooden stick", STICK_TEX, vec![])?;
+    builder.register_basic_item(
+        STICK_ITEM,
+        "Wooden stick",
+        STICK_TEX,
+        vec![],
+        "default:stick",
+    )?;
 
     let maple_planks = builder.add_block(
         BlockBuilder::new(MAPLE_PLANKS)
@@ -88,6 +95,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .add_item_group(item_groups::WOOD_PLANKS)
             .add_item_group(foliage_groups::MAPLE)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(MAPLE_PLANKS_TEX))
+            .set_item_sort_key("default:trees:wood_planks:maple")
             .set_display_name("Maple planks"),
     )?;
 
@@ -137,6 +145,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
                     .set_single_texture(MAPLE_LEAVES_TEX)
                     .set_needs_transparency(),
             )
+            .set_item_sort_key("default:trees:tree_leaves:maple")
             .set_allow_light_propagation(true),
     )?;
     builder.add_block(
@@ -177,7 +186,8 @@ fn register_flowers(builder: &mut GameBuilder) -> Result<()> {
                 .set_allow_light_propagation(true)
                 .add_modifier(Box::new(|block: &mut BlockType| {
                     block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
-                })),
+                }))
+                .set_item_sort_key(format!("default:flowers:{}", block.0)),
         )?;
         builder.register_crafting_recipe(
             [

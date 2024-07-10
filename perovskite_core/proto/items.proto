@@ -50,6 +50,8 @@ message ItemDef {
   }
   // Rules on how this tool ought to behave. The first matching rule applies.
   repeated InteractionRule interaction_rules = 21;
+  // For systems that sort items, the sort key
+  string sort_key = 22;
 }
 
 message InteractionRule {

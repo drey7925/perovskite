@@ -67,6 +67,23 @@ impl Color {
         }
     }
 
+    pub fn sort_key(&self) -> usize {
+        match self {
+            Color::Red => 0,
+            Color::Orange => 1,
+            Color::Yellow => 2,
+            Color::Lime => 3,
+            Color::Green => 4,
+            Color::Teal => 5,
+            Color::Blue => 6,
+            Color::Purple => 7,
+            Color::Pink => 8,
+            Color::Black => 9,
+            Color::White => 10,
+            Color::Gray => 11,
+        }
+    }
+
     /// Converts this color to a string for display names
     pub fn as_display_string(&self) -> &'static str {
         match self {
@@ -241,6 +258,7 @@ pub fn register_dyes(game_builder: &mut GameBuilder) -> Result<()> {
                 item_groups::DYES.to_string(),
                 color.color_group_name().to_string(),
             ],
+            format!("colors:dyes:{:03}", color.sort_key()),
         )?;
     }
     // TODO crafting recipes

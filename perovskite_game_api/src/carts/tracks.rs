@@ -1156,6 +1156,7 @@ pub(crate) fn register_tracks(
             block_apperance: String::new(),
             interaction_rules: default_item_interaction_rules(),
             quantity_type: Some(QuantityType::Stack(256)),
+            sort_key: "carts:rail_curve".to_string(),
         },
         dig_handler: None,
         tap_handler: None,

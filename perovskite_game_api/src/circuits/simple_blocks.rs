@@ -292,6 +292,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_light_emission(0)
                 .set_display_name(format!("{} lamp", color.as_display_string()))
                 .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&off_texture))
+                .set_item_sort_key(format!("circuits:lamp:{:03}", color.sort_key()))
                 .register_circuit_callbacks(),
         )?;
         let on_block = builder.add_block(

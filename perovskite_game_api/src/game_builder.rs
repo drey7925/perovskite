@@ -38,6 +38,7 @@ use perovskite_server::{
 };
 
 use anyhow::Result;
+use itertools::Itertools;
 
 /// Type-safe newtype wrapper for a texture name
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -312,6 +313,7 @@ impl GameBuilder {
         display_name: impl Into<String>,
         texture: impl Into<TextureReference>,
         groups: Vec<String>,
+        sort_key: impl Into<String>,
     ) -> Result<()> {
         self.inner.items_mut().register_item(Item {
             proto: ItemDef {
@@ -324,6 +326,7 @@ impl GameBuilder {
                     perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
                 ),
                 block_apperance: "".to_string(),
+                sort_key: sort_key.into(),
             },
             dig_handler: None,
             tap_handler: None,

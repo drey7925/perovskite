@@ -24,7 +24,11 @@ pub(crate) fn register_pickaxe(
     name: impl Into<String>,
     display_name: impl Into<String>,
     durability: u32,
+    base_dig_time: f64,
+    sort_key_component: &str,
 ) -> Result<()> {
+    // TODO: crafting recipes
+
     // TODO: consider implementing this using an ItemBuilder
     let item = Item {
         proto: items_proto::ItemDef {
@@ -39,7 +43,7 @@ pub(crate) fn register_pickaxe(
                 InteractionRule {
                     block_group: vec![BRITTLE.to_string()],
                     tool_wear: 1,
-                    dig_behavior: Some(DigBehavior::ScaledTime(0.25)),
+                    dig_behavior: Some(DigBehavior::ScaledTime(base_dig_time)),
                 },
                 InteractionRule {
                     block_group: vec![INSTANT_DIG.to_string()],
@@ -54,6 +58,7 @@ pub(crate) fn register_pickaxe(
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
             block_apperance: "".to_string(),
+            sort_key: "default:tools:pickaxes:".to_string() + sort_key_component,
         },
         dig_handler: None,
         tap_handler: None,
@@ -98,6 +103,7 @@ fn register_superuser_pickaxe(
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
             block_apperance: "".to_string(),
+            sort_key: "default:tools:pickaxes:superuser".to_string(),
         },
         dig_handler: Some(Box::new(move |ctx, coord, tool| {
             let (old_block, _) = ctx.game_map().set_block(coord, AIR_ID, None)?;
@@ -121,18 +127,65 @@ pub(crate) fn register_shovel() -> Result<()> {
 }
 
 pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> Result<()> {
-    let test_pick_texture = StaticTextureName("textures/test_pickaxe.png");
-    include_texture_bytes!(game_builder, test_pick_texture, "textures/test_pickaxe.png")?;
+    let admin_pick_texture = StaticTextureName("default:admin_pickaxe");
+    include_texture_bytes!(
+        game_builder,
+        admin_pick_texture,
+        "textures/admin_pickaxe.png"
+    )?;
+
+    let wood_pick_texture = StaticTextureName("default:wood_pickaxe");
+    include_texture_bytes!(game_builder, wood_pick_texture, "textures/wood_pickaxe.png")?;
+    let iron_pick_texture = StaticTextureName("default:iron_pickaxe");
+    include_texture_bytes!(game_builder, iron_pick_texture, "textures/iron_pickaxe.png")?;
+    let gold_pick_texture = StaticTextureName("default:gold_pickaxe");
+    include_texture_bytes!(game_builder, gold_pick_texture, "textures/gold_pickaxe.png")?;
+    let diamond_pick_texture = StaticTextureName("default:diamond_pickaxe");
+    include_texture_bytes!(
+        game_builder,
+        diamond_pick_texture,
+        "textures/diamond_pickaxe.png"
+    )?;
+
     register_pickaxe(
         game_builder,
-        test_pick_texture,
-        "default:test_pickaxe",
-        "Test Pickaxe",
+        wood_pick_texture,
+        "default:wood_pickaxe",
+        "Wood Pickaxe",
         256,
+        2.0,
+        "wood",
+    )?;
+    register_pickaxe(
+        game_builder,
+        iron_pick_texture,
+        "default:iron_pickaxe",
+        "Iron Pickaxe",
+        256,
+        1.0,
+        "iron",
+    )?;
+    register_pickaxe(
+        game_builder,
+        gold_pick_texture,
+        "default:gold_pickaxe",
+        "Gold Pickaxe",
+        256,
+        0.6,
+        "gold",
+    )?;
+    register_pickaxe(
+        game_builder,
+        diamond_pick_texture,
+        "default:diamond_pickaxe",
+        "Diamond Pickaxe",
+        256,
+        0.3,
+        "diamond",
     )?;
     register_superuser_pickaxe(
         game_builder,
-        test_pick_texture,
+        admin_pick_texture,
         "default:superuser_pickaxe",
         "Superuser Pickaxe",
         256,

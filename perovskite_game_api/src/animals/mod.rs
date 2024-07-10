@@ -156,6 +156,7 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
                     tool_wear: 0,
                 }],
                 quantity_type: Some(QuantityType::Stack(256)),
+                sort_key: "animals:duck".to_string(),
             },
             dig_handler: None,
             tap_handler: None,

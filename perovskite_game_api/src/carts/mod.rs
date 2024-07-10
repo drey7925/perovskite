@@ -264,6 +264,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 block_apperance: "".to_string(),
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
+                sort_key: "carts:cart".to_string(),
             },
             dig_handler: None,
             tap_handler: None,

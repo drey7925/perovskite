@@ -17,6 +17,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use itertools::Itertools;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
@@ -217,6 +218,7 @@ impl BlockBuilder {
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
                 block_apperance: name.clone(),
+                sort_key: "".to_string(),
             },
             dig_handler: None,
             tap_handler: None,
@@ -272,6 +274,13 @@ impl BlockBuilder {
         self.dropped_item = DroppedItem::Fixed(item_name.into(), count);
         self
     }
+
+    /// Sets the sort key for the item in inventories/menus
+    pub fn set_item_sort_key(mut self, sort_key: impl Into<String>) -> Self {
+        self.item.proto.sort_key = sort_key.into();
+        self
+    }
+
     /// Sets a closure that indicates what item a player will get when digging this
     /// block. Examples may include randomized drop rates.
     ///

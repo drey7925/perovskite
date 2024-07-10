@@ -1,4 +1,5 @@
 use anyhow::Result;
+use itertools::Itertools;
 use parking_lot::RwLock;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_ERROR_COLOR},
@@ -79,9 +80,15 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
             .item_manager()
             .registered_items()
             .filter(|item| !item.proto.groups.iter().any(|x| x == HIDDEN_FROM_CREATIVE))
+            .sorted_by_key(|x| {
+                if x.proto.sort_key.is_empty() {
+                    &x.proto.short_name
+                } else {
+                    &x.proto.sort_key
+                }
+            })
             .map(|x| x.make_max_stack())
             .collect::<Vec<ItemStack>>();
-        items.sort_by(|x, y| x.proto.item_name.cmp(&y.proto.item_name));
 
         let creative_state_for_peek = Arc::new(RwLock::new(CreativeInvState {
             all_items: items.clone(),

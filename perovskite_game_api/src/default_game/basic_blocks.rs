@@ -162,6 +162,7 @@ pub mod ores {
             "Piece of coal",
             COAL_PIECE_TEXTURE,
             vec![],
+            "default:ore_pieces:coal",
         )?;
         let coal_ore = game_builder.add_block(
             BlockBuilder::new(COAL_ORE)
@@ -170,7 +171,8 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2))),
+                .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_item_sort_key("default:ore_blocks:coal"),
         )?;
 
         game_builder
@@ -202,12 +204,14 @@ pub mod ores {
             "Piece of iron",
             IRON_PIECE_TEXTURE,
             vec![item_groups::RAW_ORES.into()],
+            "default:ore_pieces:iron",
         )?;
         game_builder.register_basic_item(
             IRON_INGOT,
             "Iron ingot",
             IRON_INGOT_TEXTURE,
             vec![item_groups::METAL_INGOTS.into()],
+            "default:ingots:iron",
         )?;
         // todo clean this up when ore APIs are more mature
         game_builder
@@ -234,7 +238,8 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (IRON_PIECE, rand::thread_rng().gen_range(1..=2))),
+                .set_dropped_item_closure(|| (IRON_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_item_sort_key("default:ore_blocks:iron"),
         )?;
 
         game_builder
@@ -273,6 +278,7 @@ pub mod ores {
             "Piece of diamond",
             DIAMOND_PIECE_TEXTURE,
             vec![item_groups::GEMS.into()],
+            "default:ore_pieces:diamond",
         )?;
         let diamond_ore = game_builder.add_block(
             BlockBuilder::new(DIAMOND_ORE)
@@ -281,7 +287,8 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (DIAMOND_PIECE, rand::thread_rng().gen_range(1..=2))),
+                .set_dropped_item_closure(|| (DIAMOND_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_item_sort_key("default:ore_blocks:diamond"),
         )?;
 
         game_builder
@@ -317,12 +324,14 @@ pub mod ores {
             "Piece of gold",
             GOLD_PIECE_TEXTURE,
             vec![item_groups::RAW_ORES.into()],
+            "default:ore_pieces:gold",
         )?;
         game_builder.register_basic_item(
             GOLD_INGOT,
             "Gold ingot",
             GOLD_INGOT_TEXTURE,
             vec![item_groups::METAL_INGOTS.into()],
+            "default:ore_pieces:gold",
         )?;
         let gold_ore = game_builder.add_block(
             BlockBuilder::new(GOLD_ORE)
@@ -331,7 +340,8 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (GOLD_PIECE, rand::thread_rng().gen_range(1..=2))),
+                .set_dropped_item_closure(|| (GOLD_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_item_sort_key("default:ore_blocks:gold"),
         )?;
 
         game_builder
@@ -434,6 +444,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
             }],
             quantity_type: None,
             block_apperance: "".to_string(),
+            sort_key: "default:internal:tnt_actor_tool".to_string(),
         },
         dig_handler: None,
         tap_handler: None,

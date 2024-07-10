@@ -48,6 +48,7 @@ pub(crate) fn register_track_tool(
             block_apperance: "".to_string(),
             interaction_rules: default_item_interaction_rules(),
             quantity_type: None,
+            sort_key: "carts:track_tool".to_string(),
         },
         dig_handler: None,
         place_handler: Some(Box::new(move |ctx, place_coord, anchor_coord, stack| {

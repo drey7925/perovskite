@@ -1375,7 +1375,7 @@ impl InboundWorker {
 
                 self.own_positions.send_replace(PositionAndPacing {
                     position: pos,
-                    chunks_to_send: dbg!(self.context.chunk_aimd.lock().get()),
+                    chunks_to_send: self.context.chunk_aimd.lock().get(),
                 });
                 self.context
                     .player_context
