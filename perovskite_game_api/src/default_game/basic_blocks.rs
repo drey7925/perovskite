@@ -331,7 +331,7 @@ pub mod ores {
             "Gold ingot",
             GOLD_INGOT_TEXTURE,
             vec![item_groups::METAL_INGOTS.into()],
-            "default:ore_pieces:gold",
+            "default:ingots:gold",
         )?;
         let gold_ore = game_builder.add_block(
             BlockBuilder::new(GOLD_ORE)
