@@ -71,6 +71,9 @@ pub(crate) struct ActiveGame {
 }
 
 impl ActiveGame {
+    fn advance_without_rendering(&mut self) {
+        let _ = self.client_state.next_frame(1.0);
+    }
     fn build_command_buffers(
         &mut self,
         window_size: PhysicalSize<u32>,
@@ -503,6 +506,10 @@ impl GameRenderer {
                             Err(AcquireError::OutOfDate) => {
                                 info!("Swapchain out of date");
                                 recreate_swapchain = true;
+                                if let GameStateMutRef::Active(game) = game_lock.as_mut()
+                                {
+                                    game.advance_without_rendering();
+                                }
                                 return;
                             }
                             Err(e) => panic!("failed to acquire next image: {e}"),
