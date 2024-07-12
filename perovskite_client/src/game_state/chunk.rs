@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ops::{Deref, RangeInclusive};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
@@ -557,10 +558,12 @@ impl ClientChunk {
     }
 
     pub(crate) fn chunk_data(&self) -> LockedChunkDataView<'_> {
+        let _ = span!("chunk_data");
         LockedChunkDataView(self.chunk_data.read())
     }
 
     pub(crate) fn chunk_data_mut(&self) -> ChunkDataViewMut<'_> {
+        let _ = span!("chunk_data_mut");
         ChunkDataViewMut(self.chunk_data.write())
     }
 }

@@ -288,8 +288,15 @@ impl ChunkManager {
         chunk: ChunkCoordinate,
         result: &mut FastChunkNeighbors,
     ) {
-        let chunk_lock = self.chunks.read();
-        let lights_lock = self.light_columns.read();
+        let _ = span!("cloned_neighbors_fast");
+        let chunk_lock = {
+            let _span = span!("chunk read lock");
+            self.chunks.read()
+        };
+        let lights_lock = {
+            let _span = span!("light column read lock");
+            self.light_columns.read()
+        };
 
         for i in -1..=1 {
             for k in -1..=1 {
@@ -517,12 +524,6 @@ impl ChunkManager {
                     for spilled_coord in spilled_batch.coords() {
                         if let Some(spilled_chunk) = chunks.get(spilled_coord) {
                             spilled_chunk.spill_back_to_solo(batch_id);
-                            // if batch_lock.1.occupancy() < TARGET_BATCH_OCCUPANCY {
-                            //     if let Some(data) = spilled_chunk.data_for_batch() {
-                            //         batch_lock.1.append(*spilled_coord, data);
-                            //         spilled_chunk.set_batch(batch_lock.1.id());
-                            //     }
-                            // }
                         }
                     }
                 }
