@@ -1,4 +1,5 @@
 use anyhow::Result;
+use perovskite_core::protocol::items::item_stack::QuantityType;
 use perovskite_core::{
     block_id::special_block_defs::AIR_ID,
     constants::{
@@ -12,6 +13,11 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::items::{Item, ItemInteractionResult};
 
+use crate::default_game::basic_blocks::ores::{DIAMOND_PIECE, GOLD_INGOT, IRON_INGOT};
+use crate::default_game::foliage::STICK_ITEM;
+use crate::default_game::recipes::RecipeSlot;
+use crate::default_game::{item_groups, DefaultGameBuilder};
+use crate::game_builder::StaticItemName;
 use crate::{game_builder::StaticTextureName, include_texture_bytes};
 
 use super::block_groups::BRITTLE;
@@ -26,13 +32,13 @@ pub(crate) fn register_pickaxe(
     durability: u32,
     base_dig_time: f64,
     sort_key_component: &str,
+    craft_component: Option<RecipeSlot>,
 ) -> Result<()> {
-    // TODO: crafting recipes
-
+    let name = name.into();
     // TODO: consider implementing this using an ItemBuilder
     let item = Item {
         proto: items_proto::ItemDef {
-            short_name: name.into(),
+            short_name: name.clone(),
             display_name: display_name.into(),
             inventory_texture: Some(TextureReference {
                 texture_name: texture.0.to_string(),
@@ -64,7 +70,28 @@ pub(crate) fn register_pickaxe(
         tap_handler: None,
         place_handler: None,
     };
-    game_builder.inner.items_mut().register_item(item)
+    game_builder.inner.items_mut().register_item(item)?;
+
+    if let Some(craft_component) = craft_component {
+        game_builder.register_crafting_recipe(
+            [
+                craft_component.clone(),
+                craft_component.clone(),
+                craft_component,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+            ],
+            name,
+            durability,
+            Some(QuantityType::Wear(durability)),
+            false,
+        );
+    }
+    Ok(())
 }
 
 fn register_superuser_pickaxe(
@@ -155,6 +182,7 @@ pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> R
         256,
         2.0,
         "wood",
+        Some(RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string())),
     )?;
     register_pickaxe(
         game_builder,
@@ -164,6 +192,7 @@ pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> R
         256,
         1.0,
         "iron",
+        Some(RecipeSlot::Exact(IRON_INGOT.0.to_string())),
     )?;
     register_pickaxe(
         game_builder,
@@ -173,6 +202,7 @@ pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> R
         256,
         0.6,
         "gold",
+        Some(RecipeSlot::Exact(GOLD_INGOT.0.to_string())),
     )?;
     register_pickaxe(
         game_builder,
@@ -182,6 +212,7 @@ pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> R
         256,
         0.3,
         "diamond",
+        Some(RecipeSlot::Exact(DIAMOND_PIECE.0.to_string())),
     )?;
     register_superuser_pickaxe(
         game_builder,
