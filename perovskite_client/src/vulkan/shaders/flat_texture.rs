@@ -17,13 +17,27 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use smallvec::smallvec;
 use texture_packer::Rect;
 use tracy_client::span;
+use vulkano::memory::allocator::MemoryTypeFilter;
+use vulkano::pipeline::graphics::color_blend::{
+    AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
+};
+use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState};
+use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
+use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
+use vulkano::pipeline::graphics::vertex_input::{VertexDefinition, VertexInputState};
+use vulkano::pipeline::graphics::viewport::{Scissor, Viewport};
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
     device::Device,
-    memory::allocator::{AllocationCreateInfo, MemoryUsage},
+    memory::allocator::AllocationCreateInfo,
     pipeline::{
         graphics::{
             depth_stencil::DepthStencilState, input_assembly::InputAssemblyState,
@@ -131,13 +145,14 @@ impl FlatTextureDrawBuilder {
     pub(crate) fn build(self, ctx: &VulkanContext) -> Result<FlatTextureDrawCall> {
         Ok(FlatTextureDrawCall {
             vertex_buffer: Buffer::from_iter(
-                &ctx.memory_allocator,
+                ctx.memory_allocator.clone(),
                 BufferCreateInfo {
                     usage: BufferUsage::VERTEX_BUFFER,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
+                    memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                        | MemoryTypeFilter::PREFER_DEVICE,
                     ..Default::default()
                 },
                 self.vertices.into_iter(),
@@ -160,10 +175,10 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
         _pass: (),
     ) -> Result<()> {
         let _span = span!("Draw flat graphics");
-        builder.bind_pipeline_graphics(self.pipeline.clone());
+        builder.bind_pipeline_graphics(self.pipeline.clone())?;
         for call in calls {
             builder
-                .bind_vertex_buffers(0, call.vertex_buffer.clone())
+                .bind_vertex_buffers(0, call.vertex_buffer.clone())?
                 .draw(call.vertex_buffer.len() as u32, 1, 0, 0)?;
         }
         Ok(())
@@ -185,13 +200,14 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
             &ctx.descriptor_set_allocator,
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, self.buffer.clone())],
+            [],
         )?;
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout,
             0,
             vec![self.texture_descriptor_set.clone(), per_frame_set],
-        );
+        )?;
         Ok(())
     }
 }
@@ -208,53 +224,111 @@ impl FlatTexPipelineProvider {
         Ok(FlatTexPipelineProvider { device, vs, fs })
     }
 }
+pub(crate) struct FlatPipelineConfig<'a> {
+    pub(crate) atlas: &'a Texture2DHolder,
+    pub(crate) subpass: u32,
+    pub(crate) enable_depth_stencil: bool,
+}
+
 impl PipelineProvider for FlatTexPipelineProvider {
     type DrawCall<'a> = &'a [FlatTextureDrawCall];
+    // texture atlas, subpass number
+    type PerPipelineConfig<'a> = FlatPipelineConfig<'a>;
     type PerFrameConfig = ();
     type PipelineWrapperImpl = FlatTexPipelineWrapper;
-    // texture atlas, subpass number
-    type PerPipelineConfig<'a> = (&'a Texture2DHolder, u32);
 
     fn make_pipeline(
         &self,
         ctx: &VulkanWindow,
-        config: (&Texture2DHolder, u32),
+        config: FlatPipelineConfig<'_>,
     ) -> Result<Self::PipelineWrapperImpl> {
-        let (atlas, subpass) = config;
-        let pipeline = GraphicsPipeline::start()
-            .vertex_input_state(FlatTextureVertex::per_vertex())
-            .vertex_shader(self.vs.entry_point("main").unwrap(), ())
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([ctx
-                .viewport
-                .clone()]))
-            .fragment_shader(self.fs.entry_point("main").unwrap(), ())
-            .depth_stencil_state(DepthStencilState::disabled())
-            .rasterization_state(
-                RasterizationState::default()
-                    .front_face(
-                        vulkano::pipeline::graphics::rasterization::FrontFace::CounterClockwise,
-                    )
-                    .cull_mode(vulkano::pipeline::graphics::rasterization::CullMode::None),
-            )
-            .color_blend_state(
-                vulkano::pipeline::graphics::color_blend::ColorBlendState::default().blend_alpha(),
-            )
-            .render_pass(Subpass::from(ctx.render_pass.clone(), subpass).unwrap())
-            .build(self.device.clone())?;
+        let FlatPipelineConfig {
+            atlas,
+            subpass,
+            enable_depth_stencil,
+        } = config;
+        let vs = self
+            .vs
+            .entry_point("main")
+            .context("Missing vertex shader")?;
+        let fs = self
+            .fs
+            .entry_point("main")
+            .context("Missing fragment shader")?;
+        let vertex_input_state =
+            FlatTextureVertex::per_vertex().definition(&vs.info().input_interface)?;
+        let stages = smallvec![
+            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(fs),
+        ];
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                .into_pipeline_layout_create_info(self.device.clone())?,
+        )?;
+        let depth_stencil_state = if !enable_depth_stencil {
+            None
+        } else {
+            Some(DepthStencilState {
+                depth: Some(DepthState {
+                    write_enable: false,
+                    compare_op: CompareOp::Always,
+                }),
+                ..Default::default()
+            })
+        };
 
+        let pipeline = GraphicsPipeline::new(
+            self.device.clone(),
+            None,
+            GraphicsPipelineCreateInfo {
+                stages,
+                vertex_input_state: Some(vertex_input_state),
+                input_assembly_state: Some(InputAssemblyState::default()),
+                rasterization_state: Some(RasterizationState {
+                    cull_mode: CullMode::Back,
+                    front_face: FrontFace::CounterClockwise,
+                    ..Default::default()
+                }),
+                // TODO multisample state later when we have MSAA
+                multisample_state: Some(MultisampleState::default()),
+                viewport_state: Some(ViewportState {
+                    viewports: smallvec![ctx.viewport.clone()],
+                    scissors: smallvec![Scissor {
+                        offset: [0, 0],
+                        extent: [ctx.viewport.extent[0] as u32, ctx.viewport.extent[1] as u32],
+                    }],
+                    ..Default::default()
+                }),
+                depth_stencil_state,
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![ColorBlendAttachmentState {
+                        blend: Some(AttachmentBlend::alpha()),
+                        color_write_mask: ColorComponents::all(),
+                        color_write_enable: true,
+                    }],
+                    ..Default::default()
+                }),
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(ctx.render_pass.clone(), subpass).context("Missing subpass")?,
+                )),
+                ..GraphicsPipelineCreateInfo::layout(layout)
+            },
+        )?;
+        // TODO turn this into push constants
         let buffer = Buffer::from_data(
-            &ctx.memory_allocator,
+            ctx.memory_allocator.clone(),
             BufferCreateInfo {
                 usage: BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                usage: MemoryUsage::Upload,
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                    | MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
             UniformData {
-                device_w_h: ctx.viewport.dimensions,
+                device_w_h: ctx.viewport.extent,
             },
         )
         .with_context(|| "Failed to make buffer for uniforms")?;

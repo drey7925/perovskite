@@ -16,13 +16,26 @@
 
 use anyhow::{Context, Result};
 use cgmath::{Angle, Matrix4, Rad};
+use smallvec::smallvec;
 use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
+use vulkano::memory::allocator::MemoryTypeFilter;
+use vulkano::pipeline::graphics::color_blend::{
+    AttachmentBlend, ColorBlendAttachmentState, ColorComponents,
+};
+use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
+use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
+use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
+use vulkano::pipeline::graphics::viewport::Scissor;
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::{PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
     device::Device,
-    memory::allocator::{AllocationCreateInfo, MemoryUsage},
+    memory::allocator::AllocationCreateInfo,
     pipeline::{
         graphics::{
             color_blend::ColorBlendState,
@@ -32,7 +45,7 @@ use vulkano::{
             vertex_input::Vertex,
             viewport::{Viewport, ViewportState},
         },
-        GraphicsPipeline, Pipeline, StateMode,
+        GraphicsPipeline, Pipeline,
     },
     render_pass::{RenderPass, Subpass},
     shader::ShaderModule,
@@ -44,6 +57,7 @@ use crate::vulkan::{
     CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
 };
 
+use crate::vulkan::shaders::flat_texture::FlatTextureVertex;
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
     PipelineProvider, PipelineWrapper,
@@ -130,7 +144,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
         };
         let layout = pipeline.layout().clone();
-        builder.bind_pipeline_graphics(pipeline);
+        builder.bind_pipeline_graphics(pipeline)?;
         let mut effective_calls = 0;
         for call in draw_calls.iter_mut() {
             let pass_data = match pass {
@@ -143,9 +157,9 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
 
                 let push_data: ModelMatrix = call.model_matrix.into();
                 builder
-                    .push_constants(layout.clone(), 0, push_data)
-                    .bind_vertex_buffers(0, pass_data.vtx.clone())
-                    .bind_index_buffer(pass_data.idx.clone())
+                    .push_constants(layout.clone(), 0, push_data)?
+                    .bind_vertex_buffers(0, pass_data.vtx.clone())?
+                    .bind_index_buffer(pass_data.idx.clone())?
                     .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
             }
         }
@@ -189,13 +203,14 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             .with_context(|| "Layout missing set 1")?;
 
         let uniform_buffer = Buffer::from_data(
-            &ctx.memory_allocator,
+            ctx.memory_allocator.clone(),
             BufferCreateInfo {
                 usage: BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                usage: MemoryUsage::Upload,
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                    | MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
             UniformData {
@@ -210,6 +225,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             &ctx.descriptor_set_allocator,
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
+            [],
         )?;
 
         let descriptor = match pass {
@@ -222,7 +238,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             layout,
             0,
             vec![descriptor, per_frame_set],
-        );
+        )?;
 
         Ok(())
     }
@@ -249,72 +265,107 @@ impl CubePipelineProvider {
 
     pub(crate) fn build_pipeline(
         &self,
-        _ctx: &VulkanContext,
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
-        let default_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(CubeGeometryVertex::per_vertex())
-            .vertex_shader(
-                self.vs_cube
-                    .entry_point("main")
-                    .context("Could not find vertex shader entry point")?,
-                (),
-            )
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_fixed_scissor_irrelevant([viewport]))
-            .rasterization_state(
-                RasterizationState::default()
-                    .front_face(
-                        vulkano::pipeline::graphics::rasterization::FrontFace::CounterClockwise,
-                    )
-                    .cull_mode(vulkano::pipeline::graphics::rasterization::CullMode::Back),
-            )
-            .color_blend_state(ColorBlendState::default().blend_alpha())
-            .depth_stencil_state(DepthStencilState::simple_depth_test())
-            .render_pass(
-                Subpass::from(render_pass.clone(), 0).context("Could not find subpass 0")?,
-            );
+        let vs = self
+            .vs_cube
+            .entry_point("main")
+            .context("Missing vertex shader")?;
+        let fs_solid = self
+            .fs_solid
+            .entry_point("main")
+            .context("Missing fragment shader")?;
+        let fs_sparse = self
+            .fs_sparse
+            .entry_point("main")
+            .context("Missing fragment shader")?;
+        let vertex_input_state =
+            CubeGeometryVertex::per_vertex().definition(&vs.info().input_interface)?;
+        let stages_solid = smallvec![
+            PipelineShaderStageCreateInfo::new(vs.clone()),
+            PipelineShaderStageCreateInfo::new(fs_solid),
+        ];
+        let stages_sparse = smallvec![
+            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(fs_sparse),
+        ];
+        let layout_solid = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_solid)
+                .into_pipeline_layout_create_info(self.device.clone())?,
+        )?;
+        let layout_sparse = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_sparse)
+                .into_pipeline_layout_create_info(self.device.clone())?,
+        )?;
 
-        let solid_pipeline = default_pipeline
-            .clone()
-            .fragment_shader(
-                self.fs_solid
-                    .entry_point("main")
-                    .with_context(|| "Couldn't find dense fragment shader entry point")?,
-                (),
-            )
-            .build(self.device.clone())?;
+        let solid_pipeline_info = GraphicsPipelineCreateInfo {
+            stages: stages_solid,
+            vertex_input_state: Some(vertex_input_state),
+            input_assembly_state: Some(InputAssemblyState::default()),
+            rasterization_state: Some(RasterizationState {
+                cull_mode: CullMode::Back,
+                front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            }),
+            // TODO multisample state later when we have MSAA
+            multisample_state: Some(MultisampleState::default()),
+            viewport_state: Some(ViewportState {
+                viewports: smallvec![viewport.clone()],
+                scissors: smallvec![Scissor {
+                    offset: [0, 0],
+                    extent: [viewport.extent[0] as u32, viewport.extent[1] as u32],
+                }],
+                ..Default::default()
+            }),
+            depth_stencil_state: Some(DepthStencilState {
+                depth: Some(DepthState::simple()),
+                ..Default::default()
+            }),
+            color_blend_state: Some(ColorBlendState {
+                attachments: vec![ColorBlendAttachmentState {
+                    blend: Some(AttachmentBlend::alpha()),
+                    color_write_mask: ColorComponents::all(),
+                    color_write_enable: true,
+                }],
+                ..Default::default()
+            }),
+            subpass: Some(PipelineSubpassType::BeginRenderPass(
+                Subpass::from(render_pass.clone(), 0).context("Missing subpass")?,
+            )),
+            ..GraphicsPipelineCreateInfo::layout(layout_solid.clone())
+        };
 
-        let sparse_pipeline = default_pipeline
-            .clone()
-            .fragment_shader(
-                self.fs_sparse
-                    .entry_point("main")
-                    .with_context(|| "Couldn't find sparse fragment shader entry point")?,
-                (),
-            )
-            .build(self.device.clone())?;
-
-        let translucent_pipeline = default_pipeline
-            .clone()
-            .fragment_shader(
-                self.fs_solid
-                    .entry_point("main")
-                    .with_context(|| "Couldn't find dense fragment shader entry point")?,
-                (),
-            )
-            .depth_stencil_state(DepthStencilState {
+        // This should use the derivative pipeline mechanism, but vulkano doesn't seem to be
+        // validating it properly
+        // See https://stackoverflow.com/a/59312390/1424875 as well
+        let sparse_pipeline_info = GraphicsPipelineCreateInfo {
+            // This pipeline just needs a shader swap, but can use the same depth test
+            stages: stages_sparse,
+            ..solid_pipeline_info.clone()
+        };
+        let translucent_pipeline_info = GraphicsPipelineCreateInfo {
+            // This pipeline uses the same solid shader (since we don't want discards as performed
+            // by the sparse pipeline), but it needs to adjust the depth test to read but not write
+            depth_stencil_state: Some(DepthStencilState {
                 depth: Some(DepthState {
-                    enable_dynamic: false,
-                    compare_op: StateMode::Fixed(CompareOp::Less),
-                    write_enable: StateMode::Fixed(false),
+                    compare_op: CompareOp::Less,
+                    write_enable: false,
                 }),
                 depth_bounds: Default::default(),
                 stencil: Default::default(),
-            })
-            .build(self.device.clone())?;
+                ..Default::default()
+            }),
+            ..solid_pipeline_info.clone()
+        };
+        let solid_pipeline = GraphicsPipeline::new(self.device.clone(), None, solid_pipeline_info)?;
+        let sparse_pipeline =
+            GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
+        let translucent_pipeline =
+            GraphicsPipeline::new(self.device.clone(), None, translucent_pipeline_info)?;
 
         let solid_descriptor = tex.descriptor_set(&solid_pipeline, 0, 0)?;
         let sparse_descriptor = tex.descriptor_set(&sparse_pipeline, 0, 0)?;
@@ -336,12 +387,7 @@ impl PipelineProvider for CubePipelineProvider {
         wnd: &VulkanWindow,
         config: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
-        self.build_pipeline(
-            &wnd.vk_ctx,
-            wnd.viewport.clone(),
-            wnd.render_pass.clone(),
-            config,
-        )
+        self.build_pipeline(wnd.viewport.clone(), wnd.render_pass.clone(), config)
     }
 
     type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];

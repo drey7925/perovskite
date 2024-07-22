@@ -6,6 +6,7 @@ use perovskite_core::protocol::items::ItemStack;
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 
+use egui::load::SizedTexture;
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
@@ -504,9 +505,12 @@ impl EguiUi {
         for row in 0..dims.0 {
             for col in 0..dims.1 {
                 let index = ((row * dims.1) + col) as usize;
-                let frame_image = egui::Image::new(atlas_texture, frame_size)
-                    .uv(frame_uv)
-                    .sense(Sense::click_and_drag());
+                let frame_image = egui::Image::from_texture(SizedTexture {
+                    id: atlas_texture,
+                    size: frame_size,
+                })
+                .uv(frame_uv)
+                .sense(Sense::click_and_drag());
 
                 let min_corner =
                     inv_rect.min + vec2(frame_size.x * col as f32, frame_size.y * row as f32);
@@ -534,10 +538,10 @@ impl EguiUi {
 
                     if !stack.item_name.is_empty() {
                         let texture_uv = self.get_texture_uv(stack);
-                        let image = egui::Image::new(
-                            atlas_texture,
-                            vec2(drawing_rect.width(), drawing_rect.height()),
-                        )
+                        let image = egui::Image::from_texture(SizedTexture {
+                            id: atlas_texture,
+                            size: drawing_rect.size(),
+                        })
                         .uv(texture_uv)
                         .sense(Sense::hover());
                         ui.put(drawing_rect, image);
@@ -593,10 +597,10 @@ impl EguiUi {
                                     .unwrap_or_else(|| panic!("Missing texture {}", wear_texture)),
                             );
 
-                            let wear_bar_image = egui::Image::new(
-                                atlas_texture,
-                                vec2(wear_bar_rectangle.width(), wear_bar_rectangle.height()),
-                            )
+                            let wear_bar_image = egui::Image::from_texture(SizedTexture {
+                                id: atlas_texture,
+                                size: vec2(wear_bar_rectangle.width(), wear_bar_rectangle.height()),
+                            })
                             .uv(texture_uv);
                             ui.put(wear_bar_rectangle, wear_bar_image);
                         }

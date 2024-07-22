@@ -272,7 +272,7 @@ impl MeshBatcher {
             let pos = self.client_state.weakly_ordered_last_position().position;
             self.client_state
                 .chunks
-                .do_batch_round(pos, self.client_state.block_renderer.allocator())?;
+                .do_batch_round(pos, self.client_state.block_renderer.clone_allocator())?;
         }
 
         Ok(())

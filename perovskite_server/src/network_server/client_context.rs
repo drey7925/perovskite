@@ -1058,7 +1058,9 @@ impl InboundWorker {
                 message = self.inbound_rx.message() => {
                     match message {
                         Err(e) => {
-                            warn!("Client {}, Failure reading inbound message: {:?}", self.context.id, e)
+                            error!("Client {}, Failure reading inbound message: {:?}", self.context.id, e);
+                            self.context.cancellation.cancel();
+                            return Ok(());
                         },
                         Ok(None) => {
                             info!("Client {} disconnected", self.context.id);

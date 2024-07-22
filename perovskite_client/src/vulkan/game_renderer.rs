@@ -23,21 +23,25 @@ use log::info;
 
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
+use tracy_client::GpuContextType::Vulkan;
 use tracy_client::{plot, span, Client};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, SubpassEndInfo};
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
     render_pass::Framebuffer,
-    swapchain::{self, AcquireError, SwapchainPresentInfo},
-    sync::{future::FenceSignalFuture, FlushError, GpuFuture},
+    swapchain::{self, SwapchainPresentInfo},
+    sync::{future::FenceSignalFuture, GpuFuture},
+    Validated, VulkanError,
 };
 
-use winit::window::ImePurpose;
+use winit::window::{ImePurpose, WindowId};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
 
+use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::{
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
@@ -79,11 +83,8 @@ impl ActiveGame {
         window_size: PhysicalSize<u32>,
         ctx: &VulkanWindow,
         framebuffer: Arc<Framebuffer>,
-        mut command_buf_builder: vulkano::command_buffer::AutoCommandBufferBuilder<
-            PrimaryAutoCommandBuffer,
-            Arc<vulkano::command_buffer::allocator::StandardCommandBufferAllocator>,
-        >,
-    ) -> PrimaryAutoCommandBuffer {
+        mut command_buf_builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) -> Arc<PrimaryAutoCommandBuffer> {
         let _span = span!("build renderer buffers");
         let FrameState {
             scene_state,
@@ -262,9 +263,17 @@ impl ActiveGame {
         self.entities_pipeline = self
             .entities_provider
             .make_pipeline(ctx, self.client_state.entity_renderer.atlas())?;
-        self.flat_pipeline = self
-            .flat_provider
-            .make_pipeline(ctx, (self.client_state.hud.lock().texture_atlas(), 0))?;
+        self.flat_pipeline = {
+            let hud_lock = self.client_state.hud.lock();
+            self.flat_provider.make_pipeline(
+                ctx,
+                FlatPipelineConfig {
+                    atlas: hud_lock.texture_atlas.as_ref(),
+                    subpass: 0,
+                    enable_depth_stencil: true,
+                },
+            )?
+        };
         self.egui_adapter.as_mut().unwrap().notify_resize(ctx)?;
         Ok(())
     }
@@ -306,7 +315,7 @@ impl GameState {
                             game.egui_adapter = Some(x);
                             *self = GameState::Active(game);
                         }
-                        Err(x) => *self = GameState::ConnectError(x.to_string()),
+                        Err(x) => *self = GameState::ConnectError(format!("{x:?}")),
                     };
                 }
                 Ok(Err(e)) => {
@@ -492,7 +501,7 @@ impl GameRenderer {
                         self.ctx.recreate_swapchain(size).unwrap();
                         if resized {
                             resized = false;
-                            self.ctx.viewport.dimensions = size.into();
+                            self.ctx.viewport.extent = size.into();
                             if let GameStateMutRef::Active(game) = game_lock.as_mut() {
                                 game.handle_resize(&mut self.ctx).unwrap();
                             }
@@ -503,7 +512,7 @@ impl GameRenderer {
                     let (image_i, suboptimal, acquire_future) =
                         match swapchain::acquire_next_image(self.ctx.swapchain.clone(), None) {
                             Ok(r) => r,
-                            Err(AcquireError::OutOfDate) => {
+                            Err(Validated::Error(VulkanError::OutOfDate)) => {
                                 info!("Swapchain out of date");
                                 recreate_swapchain = true;
                                 if let GameStateMutRef::Active(game) = game_lock.as_mut()
@@ -590,7 +599,7 @@ impl GameRenderer {
                             // Holding this in an Arc makes this easier
                             #[allow(clippy::arc_with_non_send_sync)]
                             Ok(value) => Some(Arc::new(value)),
-                            Err(FlushError::OutOfDate) => {
+                            Err(Validated::Error(VulkanError::OutOfDate)) => {
                                 recreate_swapchain = true;
                                 None
                             }
@@ -640,10 +649,12 @@ impl Drop for ActiveGame {
 }
 
 fn finish_command_buffer(
-    mut builder: CommandBufferBuilder<PrimaryAutoCommandBuffer>,
-) -> Result<PrimaryAutoCommandBuffer> {
+    mut builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+) -> Result<Arc<PrimaryAutoCommandBuffer>> {
     let _span = span!();
-    builder.end_render_pass()?;
+    builder.end_render_pass(SubpassEndInfo {
+        ..Default::default()
+    })?;
     builder
         .build()
         .with_context(|| "Command buffer build failed")
@@ -688,8 +699,17 @@ async fn connect_impl(
         entities_provider.make_pipeline(&ctx, client_state.entity_renderer.atlas())?;
 
     let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
-    let flat_pipeline =
-        flat_provider.make_pipeline(&ctx, (client_state.hud.lock().texture_atlas(), 0))?;
+    let flat_pipeline = {
+        let hud_lock = client_state.hud.lock();
+        flat_provider.make_pipeline(
+            &ctx,
+            FlatPipelineConfig {
+                atlas: hud_lock.texture_atlas.as_ref(),
+                subpass: 0,
+                enable_depth_stencil: true,
+            },
+        )?
+    };
 
     let game = ActiveGame {
         cube_provider,

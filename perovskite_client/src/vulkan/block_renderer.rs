@@ -38,7 +38,7 @@ use texture_packer::Rect;
 
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use crate::cache::CacheManager;
 use crate::game_state::block_types::ClientBlockTypeManager;
@@ -307,7 +307,7 @@ pub(crate) struct VkCgvBufferCpu {
     pub(crate) idx: Vec<u32>,
 }
 impl VkCgvBufferCpu {
-    fn to_gpu(&self, allocator: &VkAllocator) -> Result<Option<VkCgvBufferGpu>> {
+    fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<Option<VkCgvBufferGpu>> {
         VkCgvBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
     }
 }
@@ -321,20 +321,24 @@ impl VkCgvBufferGpu {
     pub(crate) fn from_buffers(
         vtx: &[CubeGeometryVertex],
         idx: &[u32],
-        allocator: &VkAllocator,
+        allocator: Arc<VkAllocator>,
     ) -> Result<Option<VkCgvBufferGpu>> {
         if vtx.is_empty() {
             Ok(None)
         } else {
             Ok(Some(VkCgvBufferGpu {
                 vtx: Buffer::from_iter(
-                    allocator,
+                    allocator.clone(),
                     BufferCreateInfo {
                         usage: BufferUsage::VERTEX_BUFFER,
                         ..Default::default()
                     },
                     AllocationCreateInfo {
-                        usage: MemoryUsage::Upload,
+                        // TODO: Consider whether we should manage our own staging buffer,
+                        // and copy into VRAM, or just use one buffer that's host sequential write
+                        // plus device local
+                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                            | MemoryTypeFilter::PREFER_DEVICE,
                         ..Default::default()
                     },
                     vtx.iter().copied(),
@@ -346,7 +350,8 @@ impl VkCgvBufferGpu {
                         ..Default::default()
                     },
                     AllocationCreateInfo {
-                        usage: MemoryUsage::Upload,
+                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                            | MemoryTypeFilter::PREFER_DEVICE,
                         ..Default::default()
                     },
                     idx.iter().copied(),
@@ -395,14 +400,14 @@ impl VkChunkVertexDataCpu {
         }
     }
 
-    pub(crate) fn to_gpu(&self, allocator: &VkAllocator) -> Result<VkChunkVertexDataGpu> {
+    pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<VkChunkVertexDataGpu> {
         Ok(VkChunkVertexDataGpu {
             solid_opaque: match &self.solid_opaque {
-                Some(x) => x.to_gpu(allocator)?,
+                Some(x) => x.to_gpu(allocator.clone())?,
                 None => None,
             },
             transparent: match &self.transparent {
-                Some(x) => x.to_gpu(allocator)?,
+                Some(x) => x.to_gpu(allocator.clone())?,
                 None => None,
             },
             translucent: match &self.translucent {
@@ -676,6 +681,10 @@ impl BlockRenderer {
 
     pub(crate) fn allocator(&self) -> &VkAllocator {
         &self.allocator
+    }
+
+    pub(crate) fn clone_allocator(&self) -> Arc<VkAllocator> {
+        self.allocator.clone()
     }
 
     pub(crate) fn mesh_chunk(
@@ -1038,25 +1047,27 @@ impl BlockRenderer {
         }
 
         let vtx = Buffer::from_iter(
-            self.allocator(),
+            self.allocator.clone(),
             BufferCreateInfo {
                 usage: BufferUsage::VERTEX_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                usage: MemoryUsage::Upload,
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                    | MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
             vtx.into_iter(),
         )?;
         let idx = Buffer::from_iter(
-            self.allocator(),
+            self.allocator.clone(),
             BufferCreateInfo {
                 usage: BufferUsage::INDEX_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                usage: MemoryUsage::Upload,
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                    | MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
             idx.into_iter(),

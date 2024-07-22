@@ -5,6 +5,9 @@ use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
 use std::sync::Arc;
+use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
+use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};
+use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
@@ -13,12 +16,13 @@ use vulkano::{
     format::Format,
     image::{
         view::{ImageView, ImageViewCreateInfo},
-        AttachmentImage, ImageUsage,
+        ImageUsage,
     },
-    memory::allocator::{AllocationCreateInfo, MemoryUsage},
+    memory::allocator::AllocationCreateInfo,
     pipeline::graphics::viewport::Viewport,
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sync::GpuFuture,
+    DeviceSize,
 };
 
 use crate::{
@@ -43,7 +47,7 @@ pub(crate) struct MiniBlockRenderer {
     surface_size: [u32; 2],
     render_pass: Arc<RenderPass>,
     framebuffer: Arc<Framebuffer>,
-    target_image: Arc<ImageView<AttachmentImage>>,
+    target_image: Arc<ImageView>,
     cube_provider: CubePipelineProvider,
     cube_pipeline: CubePipelineWrapper,
     download_buffer: Subbuffer<[u8]>,
@@ -62,21 +66,45 @@ impl MiniBlockRenderer {
             Format::R8G8B8A8_SRGB,
             ctx.depth_format,
         )?;
-        let target_image = AttachmentImage::with_usage(
-            ctx.allocator(),
-            surface_size,
-            Format::R8G8B8A8_SRGB,
-            ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+
+        let target_image = Image::new(
+            ctx.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: Format::R8G8B8A8_SRGB,
+                view_formats: vec![Format::R8G8B8A8_SRGB],
+                extent: [surface_size[0], surface_size[1], 1],
+                usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
         )?;
+
         let create_info = ImageViewCreateInfo {
             usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
             ..ImageViewCreateInfo::from_image(&target_image)
         };
         let target_image = ImageView::new(target_image, create_info)?;
 
-        let depth_buffer = ImageView::new_default(
-            AttachmentImage::transient(ctx.allocator(), surface_size, ctx.depth_format).unwrap(),
-        )?;
+        let depth_buffer = ImageView::new_default(Image::new(
+            ctx.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: ctx.depth_format,
+                view_formats: vec![ctx.depth_format],
+                extent: [surface_size[0], surface_size[1], 1],
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                initial_layout: ImageLayout::Undefined,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?)?;
 
         let framebuffer_create_info = FramebufferCreateInfo {
             attachments: vec![target_image.clone(), depth_buffer.clone()],
@@ -84,25 +112,29 @@ impl MiniBlockRenderer {
         };
         let framebuffer = Framebuffer::new(render_pass.clone(), framebuffer_create_info)?;
         let viewport = Viewport {
-            origin: [0.0, 0.0],
-            dimensions: [surface_size[0] as f32, surface_size[1] as f32],
-            depth_range: 0.0..1.0,
+            offset: [0.0, 0.0],
+            extent: [surface_size[0] as f32, surface_size[1] as f32],
+            depth_range: 0.0..=1.0,
         };
 
         let cube_provider = CubePipelineProvider::new(ctx.vk_device.clone())?;
         let cube_pipeline =
-            cube_provider.build_pipeline(&ctx, viewport, render_pass.clone(), atlas_texture)?;
+            cube_provider.build_pipeline(viewport, render_pass.clone(), atlas_texture)?;
         let download_buffer = Buffer::new_slice(
-            ctx.allocator(),
+            ctx.clone_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                usage: MemoryUsage::Download,
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST,
                 ..Default::default()
             },
-            target_image.image().mem_size(),
+            (surface_size[0] as DeviceSize)
+                .checked_mul(surface_size[1] as DeviceSize)
+                .context("Surface too big")?
+                .checked_mul(4)
+                .context("Surface too big")?,
         )?;
         Ok(Self {
             ctx,
@@ -151,9 +183,12 @@ impl MiniBlockRenderer {
                 ],
                 ..RenderPassBeginInfo::framebuffer(self.framebuffer.clone())
             },
-            SubpassContents::Inline,
+            SubpassBeginInfo {
+                contents: SubpassContents::Inline,
+                ..Default::default()
+            },
         )?;
-        let pass = VkCgvBufferGpu::from_buffers(&vtx, &idx, self.ctx.allocator())?;
+        let pass = VkCgvBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
 
         if let Some(pass) = pass {
             self.cube_pipeline.bind(
@@ -177,8 +212,18 @@ impl MiniBlockRenderer {
             )?;
         }
 
-        commands.next_subpass(SubpassContents::Inline)?;
-        commands.end_render_pass()?;
+        commands.next_subpass(
+            SubpassEndInfo {
+                ..Default::default()
+            },
+            SubpassBeginInfo {
+                contents: SubpassContents::Inline,
+                ..Default::default()
+            },
+        )?;
+        commands.end_render_pass(SubpassEndInfo {
+            ..Default::default()
+        })?;
         commands.copy_image_to_buffer(CopyImageToBufferInfo {
             dst_buffer: self.download_buffer.clone(),
             ..CopyImageToBufferInfo::image_buffer(

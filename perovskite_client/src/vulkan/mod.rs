@@ -25,9 +25,23 @@ use std::{ops::Deref, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
+use image::GenericImageView;
 use log::warn;
+use smallvec::smallvec;
 
 use texture_packer::Rect;
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::command_buffer::{BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo};
+use vulkano::format::NumericFormat;
+use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
+use vulkano::image::{
+    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers, ImageType,
+};
+use vulkano::memory::allocator::{
+    AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter,
+};
+use vulkano::memory::{MemoryProperties, MemoryPropertyFlags};
+use vulkano::swapchain::{ColorSpace, Surface};
 use vulkano::{
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
@@ -42,33 +56,27 @@ use vulkano::{
         QueueCreateInfo,
     },
     format::{ClearValue, Format, FormatFeatures, NumericType},
-    image::{
-        view::ImageView, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, SwapchainImage,
-    },
+    image::{view::ImageView, ImageUsage},
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{BuddyAllocator, GenericMemoryAllocator},
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
-    sampler::{Filter, Sampler, SamplerCreateInfo},
-    swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError},
+    swapchain::{Swapchain, SwapchainCreateInfo},
     sync::GpuFuture,
-    Version,
+    DeviceSize, Validated, Version,
 };
 use vulkano_win::VkSurfaceBuild;
-use winit::{
-    dpi::PhysicalSize,
-    event_loop::EventLoop,
-    window::{Window, WindowBuilder},
-};
+use winit::dpi::Size;
+use winit::window::{WindowAttributes, WindowBuilder};
+use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 
-pub(crate) type CommandBufferBuilder<L> =
-    AutoCommandBufferBuilder<L, Arc<StandardCommandBufferAllocator>>;
+pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
 use crate::game_state::settings::GameSettings;
 
 use self::util::select_physical_device;
 
-pub(crate) type VkAllocator = GenericMemoryAllocator<Arc<BuddyAllocator>>;
+pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
 
 #[derive(Clone)]
 pub(crate) struct VulkanContext {
@@ -95,9 +103,9 @@ impl VulkanContext {
         self.queue.clone()
     }
 
-    fn start_command_buffer(&self) -> Result<CommandBufferBuilder<PrimaryAutoCommandBuffer>> {
+    fn start_command_buffer(&self) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> {
         let builder = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
+            self.command_buffer_allocator.as_ref(),
             self.queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
@@ -106,7 +114,7 @@ impl VulkanContext {
     }
 
     pub(crate) fn depth_clear_value(&self) -> ClearValue {
-        if self.depth_format.type_stencil().is_some() {
+        if self.depth_format.aspects().contains(ImageAspects::STENCIL) {
             ClearValue::DepthStencil((1.0, 0))
         } else {
             ClearValue::Depth(1.0)
@@ -119,7 +127,7 @@ pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
     render_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
-    swapchain_images: Vec<Arc<SwapchainImage>>,
+    swapchain_images: Vec<Arc<Image>>,
     framebuffers: Vec<Arc<Framebuffer>>,
     window: Arc<Window>,
     viewport: Viewport,
@@ -146,7 +154,7 @@ impl VulkanWindow {
     ) -> Result<VulkanWindow> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
-        let required_extensions = vulkano_win::required_extensions(&library);
+        let required_extensions = Surface::required_extensions(event_loop);
         let instance = Instance::new(
             library,
             InstanceCreateInfo {
@@ -161,24 +169,18 @@ impl VulkanWindow {
             },
         )?;
 
-        let surface = WindowBuilder::new()
-            .with_title("Perovskite Game Client")
-            .build_vk_surface(event_loop, instance.clone())?;
-
-        let window = surface
-            .object()
-            .with_context(|| "Surface was missing its object")?
-            .clone()
-            .downcast::<Window>()
-            .map_err(|_| anyhow::Error::msg("downcast to Window failed"))?;
-
-        // TODO adjust this
-        window.set_min_inner_size(Some(PhysicalSize::new(256, 256)));
+        let window = Arc::new(
+            WindowBuilder::new()
+                .with_title("Perovskite Game Client")
+                .with_min_inner_size(Size::Physical((256, 256).into()))
+                .build(event_loop)?,
+        );
+        let surface = Surface::from_window(instance.clone(), window.clone())?;
 
         let viewport = Viewport {
-            origin: [0.0, 0.0],
-            dimensions: window.inner_size().into(),
-            depth_range: 0.0..1.0,
+            offset: [0.0, 0.0],
+            extent: window.inner_size().into(),
+            depth_range: 0.0..=1.0,
         };
 
         let device_extensions = DeviceExtensions {
@@ -208,6 +210,7 @@ impl VulkanWindow {
                 ..Default::default()
             },
         )?;
+
         let queue = queues.next().with_context(|| "expected a queue")?;
 
         let (swapchain, swapchain_images, color_format) = {
@@ -232,7 +235,7 @@ impl VulkanWindow {
                 surface,
                 SwapchainCreateInfo {
                     min_image_count: image_count,
-                    image_format: Some(image_format),
+                    image_format,
                     image_extent: window.inner_size().into(),
                     image_usage: ImageUsage::COLOR_ATTACHMENT,
                     composite_alpha,
@@ -248,26 +251,65 @@ impl VulkanWindow {
         let render_pass =
             make_render_pass(vk_device.clone(), swapchain.image_format(), depth_format)?;
 
+        // Copied from vulkano source - they implement it only for the freelist allocator, but we
+        // need it for the buddy allocator
+        let MemoryProperties {
+            memory_types,
+            memory_heaps,
+            ..
+        } = vk_device.physical_device().memory_properties();
+
+        let mut block_sizes = vec![0; memory_types.len()];
+        let mut memory_type_bits = u32::MAX;
+
+        for (index, memory_type) in memory_types.iter().enumerate() {
+            const LARGE_HEAP_THRESHOLD: DeviceSize = 1024 * 1024 * 1024;
+
+            let heap_size = memory_heaps[memory_type.heap_index as usize].size;
+
+            block_sizes[index] = if heap_size >= LARGE_HEAP_THRESHOLD {
+                256 * 1024 * 1024
+            } else {
+                64 * 1024 * 1024
+            };
+
+            if memory_type.property_flags.intersects(
+                MemoryPropertyFlags::LAZILY_ALLOCATED
+                    | MemoryPropertyFlags::PROTECTED
+                    | MemoryPropertyFlags::DEVICE_COHERENT
+                    | MemoryPropertyFlags::RDMA_CAPABLE,
+            ) {
+                // VUID-VkMemoryAllocateInfo-memoryTypeIndex-01872
+                // VUID-vkAllocateMemory-deviceCoherentMemory-02790
+                // Lazily allocated memory would just cause problems for suballocation in general.
+                memory_type_bits &= !(1 << index);
+            }
+        }
+
+        let allocator_params = GenericMemoryAllocatorCreateInfo {
+            block_sizes: &block_sizes,
+            memory_type_bits,
+            ..Default::default()
+        };
+
         let memory_allocator = Arc::new(GenericMemoryAllocator::new(
             vk_device.clone(),
-            // TODO upgrade to vulkano 0.34 and use the new method of specifying block sizes per type
-            vulkano::memory::allocator::GenericMemoryAllocatorCreateInfo {
-                block_sizes: &[(0, 64 * (1 << 20)), (1 * (1 << 30), 256 * (1 << 20))],
-                ..Default::default()
-            },
-        )?);
+            allocator_params,
+        ));
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
             vk_device.clone(),
             Default::default(),
         ));
-        let descriptor_set_allocator =
-            Arc::new(StandardDescriptorSetAllocator::new(vk_device.clone()));
+        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+            vk_device.clone(),
+            Default::default(),
+        ));
         let framebuffers = get_framebuffers_with_depth(
             &swapchain_images,
-            &memory_allocator,
+            memory_allocator.clone(),
             render_pass.clone(),
             depth_format,
-        );
+        )?;
 
         Ok(VulkanWindow {
             vk_ctx: Arc::new(VulkanContext {
@@ -295,15 +337,8 @@ impl VulkanWindow {
             ..self.swapchain.create_info()
         }) {
             Ok(r) => r,
-            Err(SwapchainCreationError::ImageExtentNotSupported {
-                provided,
-                min_supported,
-                max_supported,
-            }) => {
-                warn!(
-                    "Ignoring ImageExtentNotSupported: provided {:?}, min {:?}, max {:?}",
-                    provided, min_supported, max_supported
-                );
+            Err(Validated::Error(e)) => {
+                warn!("Ignoring swapchain creation error: {e}");
                 return Ok(());
             }
             Err(e) => panic!("failed to recreate swapchain: {e}"),
@@ -312,16 +347,16 @@ impl VulkanWindow {
         self.swapchain_images = new_images.clone();
         self.framebuffers = get_framebuffers_with_depth(
             &new_images,
-            &self.memory_allocator,
+            self.memory_allocator.clone(),
             self.render_pass.clone(),
             self.depth_format,
-        );
+        )?;
         Ok(())
     }
 
     fn start_render_pass(
         &self,
-        builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         framebuffer: Arc<Framebuffer>,
         clear_color: [f32; 4],
     ) -> Result<()> {
@@ -330,13 +365,16 @@ impl VulkanWindow {
                 clear_values: vec![Some(clear_color.into()), Some(self.depth_clear_value())],
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
-            SubpassContents::Inline,
+            SubpassBeginInfo {
+                contents: SubpassContents::Inline,
+                ..Default::default()
+            },
         )?;
         Ok(())
     }
 
     pub(crate) fn window_size(&self) -> (u32, u32) {
-        let dims = self.viewport.dimensions;
+        let dims = self.viewport.extent;
         (dims[0] as u32, dims[1] as u32)
     }
 
@@ -384,16 +422,16 @@ pub(crate) fn make_render_pass(
         vk_device,
         attachments: {
             color: {
-                load: Clear,
-                store: Store,
                 format: output_format,
                 samples: 1,
+                load_op: Clear,
+                store_op: Store,
             },
             depth: {
-                load: Clear,
-                store: DontCare,
                 format: depth_format,
                 samples: 1,
+                load_op: Clear,
+                store_op: DontCare,
             },
         },
         passes: [
@@ -419,9 +457,12 @@ fn find_best_format(
     // This requires enabling ext_swapchain_colorspace and also getting shaders to do
     // srgb conversions if applicable
 
-    formats
+    dbg!(formats)
         .iter()
-        .find(|(format, _space)| format.type_color() == Some(NumericType::SRGB))
+        .find(|(format, space)| {
+            *space == ColorSpace::SrgbNonLinear
+                && format.numeric_format_color() == Some(NumericFormat::SRGB)
+        })
         .cloned()
         .with_context(|| "Could not find an image format")
 }
@@ -439,42 +480,50 @@ fn find_best_format(
 // notice may not be copied, modified, or distributed except
 // according to those terms.
 pub(crate) fn get_framebuffers_with_depth(
-    images: &[Arc<SwapchainImage>],
-    allocator: &VkAllocator,
+    images: &[Arc<Image>],
+    allocator: Arc<VkAllocator>,
     render_pass: Arc<RenderPass>,
     depth_format: Format,
-) -> Vec<Arc<Framebuffer>> {
+) -> Result<Vec<Arc<Framebuffer>>> {
     images
         .iter()
-        .map(|image| {
+        .map(|image| -> anyhow::Result<_> {
             let view = ImageView::new_default(image.clone()).unwrap();
-            let depth_buffer = ImageView::new_default(
-                AttachmentImage::transient(
-                    allocator,
-                    image.dimensions().width_height(),
-                    depth_format,
-                )
-                .unwrap(),
-            )
-            .unwrap();
+            let depth_buffer = ImageView::new_default(Image::new(
+                allocator.clone(),
+                ImageCreateInfo {
+                    image_type: ImageType::Dim2d,
+                    format: depth_format,
+                    view_formats: vec![depth_format],
+                    extent: image.extent(),
+                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                    initial_layout: ImageLayout::Undefined,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )?)?;
 
-            Framebuffer::new(
+            let fb = Framebuffer::new(
                 render_pass.clone(),
                 FramebufferCreateInfo {
                     attachments: vec![view, depth_buffer],
                     ..Default::default()
                 },
-            )
-            .unwrap()
+            )?;
+
+            Ok(fb)
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>>>()
 }
 
 pub(crate) struct Texture2DHolder {
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     sampler: Arc<Sampler>,
-    image_view: Arc<ImageView<ImmutableImage>>,
-    dimensions: vulkano::image::ImageDimensions,
+    image_view: Arc<ImageView>,
+    dimensions: [u32; 2],
 }
 impl Texture2DHolder {
     // Creates a texture, uploads it to the device, and returns a TextureHolder
@@ -487,30 +536,56 @@ impl Texture2DHolder {
             .with_context(|| "rgba8 buffer was empty")?
             .clone()
             .into_vec();
-        let mut builder = AutoCommandBufferBuilder::primary(
+
+        let dimensions = image.dimensions();
+        let image = Image::new(
+            ctx.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: Format::R8G8B8A8_SRGB,
+                view_formats: vec![Format::R8G8B8A8_SRGB],
+                extent: [image.width(), image.height(), 1],
+                usage: ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?;
+
+        let region = BufferImageCopy {
+            buffer_offset: 0,
+            image_subresource: ImageSubresourceLayers::from_parameters(Format::R8G8B8A8_SRGB, 1),
+            image_extent: [dimensions.0, dimensions.1, 1],
+            ..Default::default()
+        };
+
+        let source = Buffer::from_iter(
+            ctx.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            img_rgba.iter().cloned(),
+        )?;
+
+        let mut copy_builder = AutoCommandBufferBuilder::primary(
             &ctx.command_buffer_allocator,
             ctx.queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
-        let dimensions = vulkano::image::ImageDimensions::Dim2d {
-            width: image.width(),
-            height: image.height(),
-            array_layers: 1,
-        };
-        let image = ImmutableImage::from_iter(
-            &ctx.memory_allocator,
-            img_rgba,
-            dimensions,
-            vulkano::image::MipmapsCount::Log2,
-            // Ideally, we would probe for support between RGB and BGR, but we can't swizzle the
-            // colors currently, so BGR formats wouldn't render properly.
-            // According to https://registry.khronos.org/vulkan/site/spec/latest/chapters/formats.html#features-required-format-support,
-            // any compliant GPU should support RGB.
-            Format::R8G8B8A8_SRGB,
-            &mut builder,
-        )?;
 
-        builder.build()?.execute(ctx.queue.clone())?.flush()?;
+        copy_builder.copy_buffer_to_image(CopyBufferToImageInfo {
+            regions: smallvec![region],
+            ..CopyBufferToImageInfo::buffer_image(source, image.clone())
+        })?;
+
+        copy_builder.build()?.execute(ctx.queue.clone())?.flush()?;
 
         let sampler = Sampler::new(
             ctx.vk_device.clone(),
@@ -526,7 +601,7 @@ impl Texture2DHolder {
             descriptor_set_allocator: ctx.descriptor_set_allocator.clone(),
             sampler,
             image_view,
-            dimensions,
+            dimensions: [dimensions.0, dimensions.1],
         })
     }
 
@@ -549,14 +624,15 @@ impl Texture2DHolder {
                 self.image_view.clone(),
                 self.sampler.clone(),
             )],
+            [],
         )?;
         Ok(descriptor_set)
     }
 
     pub(crate) fn dimensions(&self) -> (u32, u32) {
-        (self.dimensions.width(), self.dimensions.height())
+        (self.dimensions[0], self.dimensions[1])
     }
-    pub(crate) fn clone_image_view(&self) -> Arc<ImageView<ImmutableImage>> {
+    pub(crate) fn clone_image_view(&self) -> Arc<ImageView> {
         self.image_view.clone()
     }
 }

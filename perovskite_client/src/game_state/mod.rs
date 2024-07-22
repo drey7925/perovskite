@@ -384,7 +384,7 @@ impl ChunkManager {
     pub(crate) fn do_batch_round(
         &self,
         player_pos: Vector3<f64>,
-        allocator: &VkAllocator,
+        allocator: Arc<VkAllocator>,
     ) -> Result<()> {
         let _span = span!("batch_round");
         let mut chunks = self.chunks.read();
@@ -447,7 +447,7 @@ impl ChunkManager {
                         chunk.set_batch(batches.1.id());
 
                         if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
-                            let new_batch = batches.1.build_and_reset(allocator)?;
+                            let new_batch = batches.1.build_and_reset(allocator.clone())?;
                             batches.0.insert(new_batch.id(), new_batch);
                             // We're going to start a new batch. As soon as we put an item into it, we should
                             // try to get some locality around it.

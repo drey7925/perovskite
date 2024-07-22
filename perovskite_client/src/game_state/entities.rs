@@ -483,8 +483,12 @@ impl EntityState {
 
         Ok(Self {
             entities: FxHashMap::default(),
-            fallback_entity: VkCgvBufferGpu::from_buffers(&vtx, &idx, block_renderer.allocator())?
-                .unwrap(),
+            fallback_entity: VkCgvBufferGpu::from_buffers(
+                &vtx,
+                &idx,
+                block_renderer.clone_allocator(),
+            )?
+            .unwrap(),
             attached_to_entity: None,
         })
     }

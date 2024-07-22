@@ -4,6 +4,8 @@ use anyhow::Context;
 use arc_swap::ArcSwap;
 use egui::{Color32, FontId, Layout, ProgressBar, RichText, TextEdit};
 use tokio::sync::{oneshot, watch};
+use vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers;
+use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
@@ -290,7 +292,15 @@ impl MainMenu {
         self.egui_gui.begin_frame();
         let result = self.draw_ui(game_state);
         builder
-            .next_subpass(vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers)
+            .next_subpass(
+                SubpassEndInfo {
+                    ..Default::default()
+                },
+                SubpassBeginInfo {
+                    contents: SecondaryCommandBuffers,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let secondary = self
             .egui_gui

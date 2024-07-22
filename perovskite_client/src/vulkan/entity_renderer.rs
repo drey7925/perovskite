@@ -103,7 +103,7 @@ impl EntityRenderer {
                     texture_atlas.dimensions(),
                 )?;
                 let singleton_buffer =
-                    VkCgvBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.allocator())?;
+                    VkCgvBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.clone_allocator())?;
                 singleton_gpu_buffers.insert(def.entity_class, singleton_buffer);
 
                 all_meshes.insert(def.entity_class, mesh);

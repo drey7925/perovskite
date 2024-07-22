@@ -31,7 +31,7 @@ use anyhow::{ensure, Context, Result};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use crate::vulkan::block_renderer::{
     BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
@@ -306,7 +306,7 @@ impl ClientChunk {
                 Ok(MeshResult::SameMesh)
             } else {
                 *mesh_lock = ChunkMesh {
-                    solo_gpu: Some(vertex_data.to_gpu(renderer.allocator())?),
+                    solo_gpu: Some(vertex_data.to_gpu(renderer.clone_allocator())?),
                     solo_cpu: Some(vertex_data),
                     batch: None,
                 };
@@ -739,10 +739,10 @@ impl MeshBatchBuilder {
         self.chunks.push(coord);
     }
 
-    pub(crate) fn build_and_reset(&mut self, allocator: &VkAllocator) -> Result<MeshBatch> {
+    pub(crate) fn build_and_reset(&mut self, allocator: Arc<VkAllocator>) -> Result<MeshBatch> {
         fn build_vertex(
             buf: &[CubeGeometryVertex],
-            allocator: &VkAllocator,
+            allocator: Arc<VkAllocator>,
         ) -> Result<Option<Subbuffer<[CubeGeometryVertex]>>> {
             if buf.is_empty() {
                 Ok(None)
@@ -754,7 +754,8 @@ impl MeshBatchBuilder {
                         ..Default::default()
                     },
                     AllocationCreateInfo {
-                        usage: MemoryUsage::Upload,
+                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                            | MemoryTypeFilter::PREFER_DEVICE,
                         ..Default::default()
                     },
                     buf.iter().copied(),
@@ -762,7 +763,10 @@ impl MeshBatchBuilder {
             }
         }
 
-        fn build_index(buf: &[u32], allocator: &VkAllocator) -> Result<Option<Subbuffer<[u32]>>> {
+        fn build_index(
+            buf: &[u32],
+            allocator: Arc<VkAllocator>,
+        ) -> Result<Option<Subbuffer<[u32]>>> {
             if buf.is_empty() {
                 Ok(None)
             } else {
@@ -773,7 +777,8 @@ impl MeshBatchBuilder {
                         ..Default::default()
                     },
                     AllocationCreateInfo {
-                        usage: MemoryUsage::Upload,
+                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                            | MemoryTypeFilter::PREFER_DEVICE,
                         ..Default::default()
                     },
                     buf.iter().copied(),
@@ -782,12 +787,12 @@ impl MeshBatchBuilder {
         }
         let result = MeshBatch {
             id: self.id,
-            solid_vtx: build_vertex(&self.solid_vtx, allocator)?,
-            solid_idx: build_index(&self.solid_idx, allocator)?,
-            transparent_vtx: build_vertex(&self.transparent_vtx, allocator)?,
-            transparent_idx: build_index(&self.transparent_idx, allocator)?,
-            translucent_vtx: build_vertex(&self.translucent_vtx, allocator)?,
-            translucent_idx: build_index(&self.translucent_idx, allocator)?,
+            solid_vtx: build_vertex(&self.solid_vtx, allocator.clone())?,
+            solid_idx: build_index(&self.solid_idx, allocator.clone())?,
+            transparent_vtx: build_vertex(&self.transparent_vtx, allocator.clone())?,
+            transparent_idx: build_index(&self.transparent_idx, allocator.clone())?,
+            translucent_vtx: build_vertex(&self.translucent_vtx, allocator.clone())?,
+            translucent_idx: build_index(&self.translucent_idx, allocator.clone())?,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
         };

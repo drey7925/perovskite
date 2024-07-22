@@ -15,8 +15,8 @@ anyhow = "1.0.71"
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
 perovskite_core = { path = "../perovskite_core", version = "0.0.4" }
-egui = "0.22"
-egui_winit_vulkano = "0.25.0"
+egui = "0.24.1"
+egui_winit_vulkano = "0.27.0"
 env_logger = "0.11.3"
 fps_counter = "3.0.0"
 hex = "0.4.3"
@@ -33,17 +33,17 @@ tokio = { version = "1.38.0", features = ["full"] }
 tokio-scoped = "0.2.0"
 tokio-stream = "0.1.14"
 tokio-util = "0.7.8"
-tonic = { version = "0.11.0", features = ["gzip", "tls"] }
+tonic = { version = "0.12.1", features = ["gzip", "tls"] }
 tracy-client = { version = "0.17.0", default-features = false, features = ["system-tracing", "context-switch-tracing", "sampling", "code-transfer",
             "broadcast"] }
-vulkano = "0.33.0"
-vulkano-shaders = { version = "0.33.0", features = ["shaderc-build-from-source"] }
-vulkano-win = "0.33.0"
-winit = { version = "0.28.3", features = ["serde"] }
+vulkano = "0.34.1"
+vulkano-shaders = { version = "0.34.0", features = ["shaderc-build-from-source"] }
+vulkano-win = "0.34.0"
+winit = { version = "0.28", features = ["serde"] }
 unicode-normalization = "0.1.22"
 textwrap = { version = "0.16.0", default-features = false }
 serde = { version = "1.0.163", features = ["derive"] }
-prost = "0.12.6"
+prost = "0.13.1"
 toml = "0.8.14"
 directories = "5.0.1"
 arc-swap = "1.6.0"

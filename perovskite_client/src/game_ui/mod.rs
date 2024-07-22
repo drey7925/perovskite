@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
-use anyhow::{Error, Result};
+use anyhow::{bail, Error, Result};
 
 use crate::{
     cache::CacheManager,
@@ -105,14 +105,13 @@ async fn build_texture_atlas(
                         tasks.push(name);
                     }
                 }
-                handles.push(s.spawn(|| {
+                handles.push(s.spawn(|| -> Result<()> {
                     let mut renderer = MiniBlockRenderer::new(
                         ctx,
                         [64, 64],
                         block_renderer.atlas(),
                         block_renderer.block_types().air_block(),
-                    )
-                    .unwrap();
+                    )?;
                     for name in tasks {
                         let block_id = match block_renderer.block_types().get_block_by_name(name) {
                             Some(id) => id,
@@ -123,35 +122,46 @@ async fn build_texture_atlas(
                             None => continue,
                         };
 
-                        let cached_content = cache_manager
-                            .lock()
-                            .try_get_block_appearance(block_def)
-                            .unwrap();
+                        let cached_content =
+                            cache_manager.lock().try_get_block_appearance(block_def)?;
                         if let Some(content) = cached_content {
-                            rendered_block_textures
-                                .lock()
-                                .insert(name, ImageImporter::import_from_memory(&content).unwrap());
+                            let imported = match ImageImporter::import_from_memory(&content) {
+                                Ok(x) => x,
+                                Err(x) => {
+                                    bail!("Failed to import block appearance: {:?}", x);
+                                }
+                            };
+                            rendered_block_textures.lock().insert(name, imported);
                             continue;
                         }
 
-                        let block_tex = renderer
-                            .render(block_renderer, block_id, block_def)
-                            .unwrap();
+                        let block_tex = renderer.render(block_renderer, block_id, block_def)?;
 
                         let mut bytes: Vec<u8> = Vec::new();
                         block_tex
-                            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
-                            .unwrap();
+                            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
                         cache_manager
                             .lock()
-                            .insert_block_appearance(block_def, bytes)
-                            .unwrap();
+                            .insert_block_appearance(block_def, bytes)?;
                         rendered_block_textures.lock().insert(name, block_tex);
                     }
+                    Ok(())
                 }));
             }
-        });
-    });
+            for handle in handles {
+                match handle.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(x)) => {
+                        panic!("Mini render thread failed: {:?}", x);
+                    }
+                    Err(x) => {
+                        panic!("Mini render thread panic: {:?}", x);
+                    }
+                };
+            }
+            Ok::<(), Error>(())
+        })
+    })?;
     let config = texture_packer::TexturePackerConfig {
         // todo tweak these or make into a setting
         allow_rotation: false,

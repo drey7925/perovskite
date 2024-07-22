@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use egui::TextureId;
@@ -8,7 +9,7 @@ use vulkano::{
     image::SampleCount,
     render_pass::Subpass,
 };
-use winit::{event::WindowEvent, event_loop::EventLoopWindowTarget};
+use winit::event::WindowEvent;
 
 use crate::{
     game_state::ClientState,
@@ -16,7 +17,11 @@ use crate::{
     vulkan::{Texture2DHolder, VulkanWindow},
 };
 
+use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};
+use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
+use vulkano::image::sampler::{Filter, SamplerCreateInfo};
+use winit::event_loop::EventLoopWindowTarget;
 
 use super::{
     flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
@@ -62,9 +67,9 @@ impl EguiAdapter {
         );
         let atlas = egui_ui.lock().clone_texture_atlas();
 
-        let sampler_create_info = vulkano::sampler::SamplerCreateInfo {
-            mag_filter: vulkano::sampler::Filter::Nearest,
-            min_filter: vulkano::sampler::Filter::Linear,
+        let sampler_create_info = SamplerCreateInfo {
+            mag_filter: Filter::Nearest,
+            min_filter: Filter::Linear,
             ..Default::default()
         };
 
@@ -72,8 +77,14 @@ impl EguiAdapter {
             gui_adapter.register_user_image_view(atlas.clone_image_view(), sampler_create_info);
 
         let flat_overlay_provider = FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
-        let flat_overlay_pipeline =
-            flat_overlay_provider.make_pipeline(ctx, (atlas.as_ref(), 1))?;
+        let flat_overlay_pipeline = flat_overlay_provider.make_pipeline(
+            ctx,
+            FlatPipelineConfig {
+                atlas: atlas.as_ref(),
+                subpass: 1,
+                enable_depth_stencil: false,
+            },
+        )?;
 
         set_up_fonts(&mut gui_adapter.egui_ctx);
 
@@ -103,12 +114,20 @@ impl EguiAdapter {
         let cmdbuf = self
             .gui_adapter
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
-        builder.next_subpass(SubpassContents::SecondaryCommandBuffers)?;
+        builder.next_subpass(
+            SubpassEndInfo {
+                ..Default::default()
+            },
+            SubpassBeginInfo {
+                contents: SubpassContents::SecondaryCommandBuffers,
+                ..Default::default()
+            },
+        )?;
         builder.execute_commands(cmdbuf)?;
 
         if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
             let mut secondary_builder = AutoCommandBufferBuilder::secondary(
-                &ctx.command_buffer_allocator,
+                ctx.command_buffer_allocator.deref(),
                 ctx.queue.queue_family_index(),
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
@@ -132,9 +151,14 @@ impl EguiAdapter {
     }
 
     pub(crate) fn notify_resize(&mut self, ctx: &VulkanWindow) -> Result<()> {
-        self.flat_overlay_pipeline = self
-            .flat_overlay_provider
-            .make_pipeline(ctx, (self.atlas.as_ref(), 1))?;
+        self.flat_overlay_pipeline = self.flat_overlay_provider.make_pipeline(
+            ctx,
+            FlatPipelineConfig {
+                atlas: self.atlas.as_ref(),
+                subpass: 1,
+                enable_depth_stencil: false,
+            },
+        )?;
         Ok(())
     }
 }
