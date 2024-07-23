@@ -143,7 +143,12 @@ pub(crate) async fn connect_game(
     ))?;
     let block_renderer = {
         let cache_manager_lock = cache_manager.lock();
-        BlockRenderer::new(block_types.clone(), cache_manager_lock, window).await?
+        BlockRenderer::new(
+            block_types.clone(),
+            cache_manager_lock,
+            window.clone_context(),
+        )
+        .await?
     };
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;

@@ -25,7 +25,7 @@ pub(crate) fn select_physical_device(
     surface: &Arc<Surface>,
     device_extensions: &DeviceExtensions,
     preferred_gpu: &str,
-) -> Result<(Arc<PhysicalDevice>, u32)> {
+) -> Result<(Arc<PhysicalDevice>, u32, u32)> {
     log::info!(
         "Detected GPUs: {:?}",
         instance
@@ -34,7 +34,7 @@ pub(crate) fn select_physical_device(
             .map(|x| x.properties().device_name.clone())
             .collect::<Vec<String>>()
     );
-    let (selected_gpu, queue_family_index) = instance
+    let (selected_gpu, graphics_queue_family_index) = instance
         .enumerate_physical_devices()
         .expect("failed to enumerate physical devices")
         .filter(|p| p.supported_extensions().contains(device_extensions))
@@ -66,10 +66,35 @@ pub(crate) fn select_physical_device(
             }
         })
         .with_context(|| "no device available")?;
+    let transfer_queue = selected_gpu
+        .queue_family_properties()
+        .iter()
+        .enumerate()
+        .position(|(i, q)| {
+            q.queue_flags.contains(QueueFlags::TRANSFER)
+                && i != (graphics_queue_family_index as usize)
+        });
+    let transfer_queue_family_index = match transfer_queue {
+        Some(q) => q as u32,
+        None => selected_gpu
+            .queue_family_properties()
+            .iter()
+            .position(|q| q.queue_flags.contains(QueueFlags::TRANSFER))
+            .context("no transfer queue available")? as u32,
+    };
     log::info!(
-        "Selected GPU: {:?}, queue family index: {}",
-        selected_gpu.properties().device_name,
-        queue_family_index
+        "GPU queue families: {:?}",
+        selected_gpu.queue_family_properties()
     );
-    Ok((selected_gpu, queue_family_index))
+    log::info!(
+        "Selected GPU: {:?}, graphics queue family index: {}, transfer queue family index: {}",
+        selected_gpu.properties().device_name,
+        graphics_queue_family_index,
+        transfer_queue_family_index
+    );
+    Ok((
+        selected_gpu,
+        graphics_queue_family_index,
+        transfer_queue_family_index,
+    ))
 }

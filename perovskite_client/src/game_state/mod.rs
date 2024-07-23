@@ -44,7 +44,7 @@ use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
 use crate::vulkan::entity_renderer::EntityRenderer;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
-use crate::vulkan::VkAllocator;
+use crate::vulkan::{VkAllocator, VulkanContext};
 
 use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;
@@ -384,7 +384,7 @@ impl ChunkManager {
     pub(crate) fn do_batch_round(
         &self,
         player_pos: Vector3<f64>,
-        allocator: Arc<VkAllocator>,
+        vk_ctx: &VulkanContext,
     ) -> Result<()> {
         let _span = span!("batch_round");
         let mut chunks = self.chunks.read();
@@ -447,7 +447,7 @@ impl ChunkManager {
                         chunk.set_batch(batches.1.id());
 
                         if batches.1.occupancy() >= TARGET_BATCH_OCCUPANCY {
-                            let new_batch = batches.1.build_and_reset(allocator.clone())?;
+                            let new_batch = batches.1.build_and_reset(vk_ctx)?;
                             batches.0.insert(new_batch.id(), new_batch);
                             // We're going to start a new batch. As soon as we put an item into it, we should
                             // try to get some locality around it.

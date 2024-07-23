@@ -81,7 +81,8 @@ pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
 #[derive(Clone)]
 pub(crate) struct VulkanContext {
     vk_device: Arc<Device>,
-    queue: Arc<Queue>,
+    graphics_queue: Arc<Queue>,
+    transfer_queue: Arc<Queue>,
     memory_allocator: Arc<VkAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
@@ -90,7 +91,12 @@ pub(crate) struct VulkanContext {
     /// The format of the depth buffer used for rendering to *screen*. Probed at startup, and used for both render-to-screen and render-to-texture
     depth_format: Format,
 }
+
 impl VulkanContext {
+    pub(crate) fn command_buffer_allocator(&self) -> &StandardCommandBufferAllocator {
+        &self.command_buffer_allocator
+    }
+
     pub(crate) fn clone_allocator(&self) -> Arc<VkAllocator> {
         self.memory_allocator.clone()
     }
@@ -99,14 +105,18 @@ impl VulkanContext {
         &self.memory_allocator
     }
 
-    pub(crate) fn clone_queue(&self) -> Arc<Queue> {
-        self.queue.clone()
+    pub(crate) fn clone_graphics_queue(&self) -> Arc<Queue> {
+        self.graphics_queue.clone()
+    }
+
+    pub(crate) fn clone_transfer_queue(&self) -> Arc<Queue> {
+        self.transfer_queue.clone()
     }
 
     fn start_command_buffer(&self) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> {
         let builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.as_ref(),
-            self.queue.queue_family_index(),
+            self.graphics_queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
 
@@ -191,27 +201,35 @@ impl VulkanWindow {
             ..Features::empty()
         };
 
-        let (physical_device, queue_family_index) = select_physical_device(
-            &instance,
-            &surface,
-            &device_extensions,
-            &settings.load().render.preferred_gpu,
-        )?;
+        let (physical_device, graphics_family_index, transfer_family_index) =
+            select_physical_device(
+                &instance,
+                &surface,
+                &device_extensions,
+                &settings.load().render.preferred_gpu,
+            )?;
 
         let (vk_device, mut queues) = Device::new(
             physical_device.clone(),
             DeviceCreateInfo {
-                queue_create_infos: vec![QueueCreateInfo {
-                    queue_family_index,
-                    ..Default::default()
-                }],
+                queue_create_infos: vec![
+                    QueueCreateInfo {
+                        queue_family_index: graphics_family_index,
+                        ..Default::default()
+                    },
+                    QueueCreateInfo {
+                        queue_family_index: transfer_family_index,
+                        ..Default::default()
+                    },
+                ],
                 enabled_extensions: device_extensions,
                 enabled_features: device_features,
                 ..Default::default()
             },
         )?;
 
-        let queue = queues.next().with_context(|| "expected a queue")?;
+        let graphics_queue = queues.next().with_context(|| "expected a queue")?;
+        let transfer_queue = queues.next().with_context(|| "expected a transfer queue")?;
 
         let (swapchain, swapchain_images, color_format) = {
             let caps = physical_device
@@ -314,7 +332,8 @@ impl VulkanWindow {
         Ok(VulkanWindow {
             vk_ctx: Arc::new(VulkanContext {
                 vk_device,
-                queue,
+                graphics_queue,
+                transfer_queue,
                 memory_allocator,
                 command_buffer_allocator,
                 descriptor_set_allocator,
@@ -576,7 +595,7 @@ impl Texture2DHolder {
 
         let mut copy_builder = AutoCommandBufferBuilder::primary(
             &ctx.command_buffer_allocator,
-            ctx.queue.queue_family_index(),
+            ctx.transfer_queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
 
@@ -585,7 +604,10 @@ impl Texture2DHolder {
             ..CopyBufferToImageInfo::buffer_image(source, image.clone())
         })?;
 
-        copy_builder.build()?.execute(ctx.queue.clone())?.flush()?;
+        copy_builder
+            .build()?
+            .execute(ctx.graphics_queue.clone())?
+            .flush()?;
 
         let sampler = Sampler::new(
             ctx.vk_device.clone(),

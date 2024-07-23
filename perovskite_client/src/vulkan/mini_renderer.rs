@@ -233,7 +233,7 @@ impl MiniBlockRenderer {
         })?;
 
         let commands = commands.build()?;
-        commands.execute(self.ctx.clone_queue())?.flush()?;
+        commands.execute(self.ctx.clone_graphics_queue())?.flush()?;
 
         let guard = self.download_buffer.read()?;
         let image = RgbaImage::from_raw(self.surface_size[0], self.surface_size[1], guard.to_vec())

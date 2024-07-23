@@ -585,10 +585,10 @@ impl GameRenderer {
                         let _span = span!("submit to Vulkan");
                         let future = previous_future
                             .join(acquire_future)
-                            .then_execute(self.ctx.queue.clone(), command_buffers)
+                            .then_execute(self.ctx.graphics_queue.clone(), command_buffers)
                             .unwrap()
                             .then_swapchain_present(
-                                self.ctx.queue.clone(),
+                                self.ctx.graphics_queue.clone(),
                                 SwapchainPresentInfo::swapchain_image_index(
                                     self.ctx.swapchain.clone(),
                                     image_i,

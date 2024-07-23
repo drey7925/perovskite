@@ -60,7 +60,7 @@ impl EguiAdapter {
         let mut gui_adapter = Gui::new_with_subpass(
             event_loop,
             ctx.swapchain.surface().clone(),
-            ctx.queue.clone(),
+            ctx.graphics_queue.clone(),
             Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
             ctx.swapchain.image_format(),
             config,
@@ -128,7 +128,7 @@ impl EguiAdapter {
         if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
             let mut secondary_builder = AutoCommandBufferBuilder::secondary(
                 ctx.command_buffer_allocator.deref(),
-                ctx.queue.queue_family_index(),
+                ctx.graphics_queue.queue_family_index(),
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
                     render_pass: Some(

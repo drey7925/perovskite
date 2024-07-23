@@ -30,15 +30,21 @@ use anyhow::{ensure, Context, Result};
 
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use crate::vulkan::block_renderer::{
     BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
-use crate::vulkan::VkAllocator;
+use crate::vulkan::{CommandBufferBuilder, VkAllocator, VulkanContext};
 use prost::Message;
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
+    PrimaryCommandBufferAbstract,
+};
+use vulkano::sync::GpuFuture;
+use vulkano::DeviceSize;
 
 use super::block_types::ClientBlockTypeManager;
 
@@ -306,7 +312,7 @@ impl ClientChunk {
                 Ok(MeshResult::SameMesh)
             } else {
                 *mesh_lock = ChunkMesh {
-                    solo_gpu: Some(vertex_data.to_gpu(renderer.clone_allocator())?),
+                    solo_gpu: Some(vertex_data.to_gpu(renderer.clone_vk_allocator())?),
                     solo_cpu: Some(vertex_data),
                     batch: None,
                 };
@@ -739,63 +745,112 @@ impl MeshBatchBuilder {
         self.chunks.push(coord);
     }
 
-    pub(crate) fn build_and_reset(&mut self, allocator: Arc<VkAllocator>) -> Result<MeshBatch> {
-        fn build_vertex(
-            buf: &[CubeGeometryVertex],
+    pub(crate) fn build_and_reset(&mut self, ctx: &VulkanContext) -> Result<MeshBatch> {
+        fn build_buffer<T: Copy + BufferContents>(
+            buf: &[T],
             allocator: Arc<VkAllocator>,
-        ) -> Result<Option<Subbuffer<[CubeGeometryVertex]>>> {
+            command_buffer_builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+            any_commands: &mut bool,
+            usage: BufferUsage,
+        ) -> Result<Option<Subbuffer<[T]>>> {
             if buf.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(Buffer::from_iter(
-                    allocator,
+                let staging_buffer = Buffer::from_iter(
+                    allocator.clone(),
                     BufferCreateInfo {
-                        usage: BufferUsage::VERTEX_BUFFER,
+                        usage: BufferUsage::TRANSFER_SRC,
                         ..Default::default()
                     },
                     AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
-                            | MemoryTypeFilter::PREFER_DEVICE,
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                         ..Default::default()
                     },
                     buf.iter().copied(),
-                )?))
+                )?;
+                let target_buffer = Buffer::new_slice(
+                    allocator,
+                    BufferCreateInfo {
+                        usage: BufferUsage::TRANSFER_DST | usage,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                        ..Default::default()
+                    },
+                    buf.len() as DeviceSize,
+                )?;
+
+                command_buffer_builder.copy_buffer(CopyBufferInfo::buffers(
+                    staging_buffer,
+                    target_buffer.clone(),
+                ))?;
+                *any_commands = true;
+
+                Ok(Some(target_buffer))
             }
         }
 
-        fn build_index(
-            buf: &[u32],
-            allocator: Arc<VkAllocator>,
-        ) -> Result<Option<Subbuffer<[u32]>>> {
-            if buf.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(Buffer::from_iter(
-                    allocator,
-                    BufferCreateInfo {
-                        usage: BufferUsage::INDEX_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
-                            | MemoryTypeFilter::PREFER_DEVICE,
-                        ..Default::default()
-                    },
-                    buf.iter().copied(),
-                )?))
-            }
-        }
+        let transfer_queue = ctx.clone_transfer_queue();
+        let mut any_commands = false;
+        let mut command_buffer = AutoCommandBufferBuilder::primary(
+            ctx.command_buffer_allocator(),
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+
         let result = MeshBatch {
             id: self.id,
-            solid_vtx: build_vertex(&self.solid_vtx, allocator.clone())?,
-            solid_idx: build_index(&self.solid_idx, allocator.clone())?,
-            transparent_vtx: build_vertex(&self.transparent_vtx, allocator.clone())?,
-            transparent_idx: build_index(&self.transparent_idx, allocator.clone())?,
-            translucent_vtx: build_vertex(&self.translucent_vtx, allocator.clone())?,
-            translucent_idx: build_index(&self.translucent_idx, allocator.clone())?,
+            solid_vtx: build_buffer(
+                &self.solid_vtx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::VERTEX_BUFFER,
+            )?,
+            solid_idx: build_buffer(
+                &self.solid_idx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::INDEX_BUFFER,
+            )?,
+            transparent_vtx: build_buffer(
+                &self.transparent_vtx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::VERTEX_BUFFER,
+            )?,
+            transparent_idx: build_buffer(
+                &self.transparent_idx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::INDEX_BUFFER,
+            )?,
+            translucent_vtx: build_buffer(
+                &self.translucent_vtx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::VERTEX_BUFFER,
+            )?,
+            translucent_idx: build_buffer(
+                &self.translucent_idx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::INDEX_BUFFER,
+            )?,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
         };
+
+        if any_commands {
+            command_buffer.build()?.execute(transfer_queue)?.flush()?;
+        }
 
         self.reset();
         Ok(result)

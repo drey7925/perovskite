@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::ops::Deref;
 
 use std::sync::Arc;
 
@@ -495,13 +496,13 @@ pub(crate) struct BlockRenderer {
     simple_block_tex_coords: SimpleTexCoordCache,
     axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
     fake_entity_tex_coords: RectF32,
-    allocator: Arc<VkAllocator>,
+    vk_ctx: Arc<VulkanContext>,
 }
 impl BlockRenderer {
     pub(crate) async fn new(
         block_defs: Arc<ClientBlockTypeManager>,
         mut cache_manager: parking_lot::MutexGuard<'_, CacheManager>,
-        ctx: &VulkanContext,
+        ctx: Arc<VulkanContext>,
     ) -> Result<BlockRenderer> {
         let mut all_texture_names = HashSet::new();
         for def in block_defs.all_block_defs() {
@@ -652,7 +653,7 @@ impl BlockRenderer {
                 .collect(),
         };
 
-        let texture_atlas = Arc::new(Texture2DHolder::create(ctx, &texture_atlas)?);
+        let texture_atlas = Arc::new(Texture2DHolder::create(ctx.deref(), &texture_atlas)?);
 
         let selection_rect: RectF32 = (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into();
         let fallback_rect: RectF32 =
@@ -667,7 +668,7 @@ impl BlockRenderer {
             fake_entity_tex_coords: fake_entity_rect.div(atlas_dims),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
-            allocator: ctx.clone_allocator(),
+            vk_ctx: ctx,
         })
     }
 
@@ -680,11 +681,15 @@ impl BlockRenderer {
     }
 
     pub(crate) fn allocator(&self) -> &VkAllocator {
-        &self.allocator
+        &self.vk_ctx.allocator()
     }
 
-    pub(crate) fn clone_allocator(&self) -> Arc<VkAllocator> {
-        self.allocator.clone()
+    pub(crate) fn clone_vk_allocator(&self) -> Arc<VkAllocator> {
+        self.vk_ctx.clone_allocator()
+    }
+
+    pub(crate) fn vk_ctx(&self) -> &VulkanContext {
+        &self.vk_ctx
     }
 
     pub(crate) fn mesh_chunk(
@@ -1047,7 +1052,7 @@ impl BlockRenderer {
         }
 
         let vtx = Buffer::from_iter(
-            self.allocator.clone(),
+            self.vk_ctx.clone_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::VERTEX_BUFFER,
                 ..Default::default()
@@ -1060,7 +1065,7 @@ impl BlockRenderer {
             vtx.into_iter(),
         )?;
         let idx = Buffer::from_iter(
-            self.allocator.clone(),
+            self.vk_ctx.clone_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::INDEX_BUFFER,
                 ..Default::default()

@@ -45,7 +45,7 @@ impl MainMenu {
         let mut egui_gui = egui_winit_vulkano::Gui::new_with_subpass(
             event_loop,
             ctx.swapchain().surface().clone(),
-            ctx.clone_queue(),
+            ctx.clone_graphics_queue(),
             Subpass::from(ctx.clone_render_pass(), 1)
                 .context("Could not find subpass 0")
                 .unwrap(),
