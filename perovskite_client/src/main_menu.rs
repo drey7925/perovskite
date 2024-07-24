@@ -46,7 +46,7 @@ impl MainMenu {
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_graphics_queue(),
-            Subpass::from(ctx.clone_render_pass(), 1)
+            Subpass::from(ctx.post_blit_render_pass(), 0)
                 .context("Could not find subpass 0")
                 .unwrap(),
             ctx.swapchain().image_format(),
@@ -291,17 +291,6 @@ impl MainMenu {
     ) -> Option<ConnectionSettings> {
         self.egui_gui.begin_frame();
         let result = self.draw_ui(game_state);
-        builder
-            .next_subpass(
-                SubpassEndInfo {
-                    ..Default::default()
-                },
-                SubpassBeginInfo {
-                    contents: SecondaryCommandBuffers,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
         let secondary = self
             .egui_gui
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);

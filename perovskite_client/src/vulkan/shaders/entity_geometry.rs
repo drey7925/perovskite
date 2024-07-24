@@ -206,10 +206,16 @@ impl EntityPipelineProvider {
             // TODO multisample state later when we have MSAA
             multisample_state: Some(MultisampleState::default()),
             viewport_state: Some(ViewportState {
-                viewports: smallvec![viewport.clone()],
+                viewports: smallvec![Viewport {
+                    offset: [0.0, 0.0],
+                    depth_range: 0.0..=1.0,
+                    // TODO DO NOT COMMIT
+                    extent: [viewport.extent[0] * 4.0, viewport.extent[1] * 4.0],
+                }],
                 scissors: smallvec![Scissor {
                     offset: [0, 0],
-                    extent: [viewport.extent[0] as u32, viewport.extent[1] as u32],
+                    // TODO DO NOT COMMIT
+                    extent: [viewport.extent[0] as u32 * 4, viewport.extent[1] as u32 * 4],
                 }],
                 ..Default::default()
             }),
@@ -248,7 +254,7 @@ impl PipelineProvider for EntityPipelineProvider {
         self.build_pipeline(
             &wnd.vk_ctx,
             wnd.viewport.clone(),
-            wnd.render_pass.clone(),
+            wnd.ssaa_render_pass.clone(),
             config,
         )
     }

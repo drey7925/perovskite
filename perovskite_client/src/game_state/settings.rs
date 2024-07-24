@@ -6,6 +6,35 @@ use serde::{Deserialize, Serialize};
 
 const SETTINGS_RON_FILE: &str = "settings.ron";
 
+#[derive(Clone, Serialize, Deserialize, Debug, Copy, PartialEq, Eq)]
+pub(crate) enum Supersampling {
+    None,
+    X2,
+    X4,
+    X8,
+}
+impl Supersampling {
+    pub(crate) fn to_int(self) -> u32 {
+        match self {
+            Supersampling::None => 1,
+            Supersampling::X2 => 2,
+            Supersampling::X4 => 4,
+            Supersampling::X8 => 8,
+        }
+    }
+    pub(crate) fn to_float(self) -> f32 {
+        self.to_int() as f32
+    }
+    pub(crate) fn blit_steps(self) -> usize {
+        match self {
+            Supersampling::None => 0,
+            Supersampling::X2 => 1,
+            Supersampling::X4 => 2,
+            Supersampling::X8 => 3,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub(crate) struct RenderSettings {
@@ -17,6 +46,7 @@ pub(crate) struct RenderSettings {
     pub(crate) preferred_gpu: String,
     pub(crate) scale_inventories_with_high_dpi: bool,
     pub(crate) fov_degrees: f64,
+    pub(crate) supersampling: Supersampling,
 }
 
 impl Default for RenderSettings {
@@ -30,6 +60,7 @@ impl Default for RenderSettings {
             preferred_gpu: String::from(""),
             scale_inventories_with_high_dpi: false,
             fov_degrees: 75.0,
+            supersampling: Supersampling::X4,
         }
     }
 }

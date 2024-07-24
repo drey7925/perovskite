@@ -25,6 +25,7 @@ use vulkano::{
     DeviceSize,
 };
 
+use crate::game_state::settings::Supersampling;
 use crate::{
     game_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
@@ -32,7 +33,7 @@ use crate::{
 
 use super::{
     block_renderer::{BlockRenderer, VkCgvBufferGpu, VkChunkVertexDataGpu},
-    make_render_pass,
+    make_ssaa_render_pass,
     shaders::{
         cube_geometry::{
             BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
@@ -61,7 +62,7 @@ impl MiniBlockRenderer {
         air_block: BlockId,
     ) -> Result<Self> {
         // All compliant GPUs should be able to render to R8G8B8A8_SRGB
-        let render_pass = make_render_pass(
+        let render_pass = make_ssaa_render_pass(
             ctx.vk_device.clone(),
             Format::R8G8B8A8_SRGB,
             ctx.depth_format,
@@ -118,8 +119,12 @@ impl MiniBlockRenderer {
         };
 
         let cube_provider = CubePipelineProvider::new(ctx.vk_device.clone())?;
-        let cube_pipeline =
-            cube_provider.build_pipeline(viewport, render_pass.clone(), atlas_texture)?;
+        let cube_pipeline = cube_provider.build_pipeline(
+            viewport,
+            render_pass.clone(),
+            atlas_texture,
+            Supersampling::None,
+        )?;
         let download_buffer = Buffer::new_slice(
             ctx.clone_allocator(),
             BufferCreateInfo {

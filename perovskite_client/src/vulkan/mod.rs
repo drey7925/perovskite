@@ -31,7 +31,10 @@ use smallvec::smallvec;
 
 use texture_packer::Rect;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
-use vulkano::command_buffer::{BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo};
+use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
+use vulkano::command_buffer::{
+    BlitImageInfo, BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo, SubpassEndInfo,
+};
 use vulkano::format::NumericFormat;
 use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
 use vulkano::image::{
@@ -72,7 +75,7 @@ use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 
 pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
-use crate::game_state::settings::GameSettings;
+use crate::game_state::settings::{GameSettings, Supersampling};
 
 use self::util::select_physical_device;
 
@@ -135,12 +138,14 @@ impl VulkanContext {
 #[derive(Clone)]
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
-    render_pass: Arc<RenderPass>,
+    ssaa_render_pass: Arc<RenderPass>,
+    post_blit_render_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<Image>>,
-    framebuffers: Vec<Arc<Framebuffer>>,
+    framebuffers: Vec<FramebufferHolder>,
     window: Arc<Window>,
     viewport: Viewport,
+    supersampling: Supersampling,
 }
 impl Deref for VulkanWindow {
     type Target = VulkanContext;
@@ -209,6 +214,8 @@ impl VulkanWindow {
                 &settings.load().render.preferred_gpu,
             )?;
 
+        let supersampling = settings.load().render.supersampling;
+
         let (vk_device, mut queues) = Device::new(
             physical_device.clone(),
             DeviceCreateInfo {
@@ -255,7 +262,7 @@ impl VulkanWindow {
                     min_image_count: image_count,
                     image_format,
                     image_extent: window.inner_size().into(),
-                    image_usage: ImageUsage::COLOR_ATTACHMENT,
+                    image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                     composite_alpha,
                     image_color_space: color_space,
                     ..Default::default()
@@ -266,8 +273,10 @@ impl VulkanWindow {
 
         let depth_format = find_best_depth_format(&physical_device)?;
 
-        let render_pass =
-            make_render_pass(vk_device.clone(), swapchain.image_format(), depth_format)?;
+        let ssaa_render_pass =
+            make_ssaa_render_pass(vk_device.clone(), color_format, depth_format)?;
+        let post_blit_render_pass =
+            make_post_blit_render_pass(vk_device.clone(), color_format, depth_format)?;
 
         // Copied from vulkano source - they implement it only for the freelist allocator, but we
         // need it for the buddy allocator
@@ -316,7 +325,11 @@ impl VulkanWindow {
         ));
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
             vk_device.clone(),
-            Default::default(),
+            StandardCommandBufferAllocatorCreateInfo {
+                primary_buffer_count: 32,
+                secondary_buffer_count: 16,
+                ..Default::default()
+            },
         ));
         let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
             vk_device.clone(),
@@ -325,8 +338,10 @@ impl VulkanWindow {
         let framebuffers = get_framebuffers_with_depth(
             &swapchain_images,
             memory_allocator.clone(),
-            render_pass.clone(),
+            ssaa_render_pass.clone(),
+            post_blit_render_pass.clone(),
             depth_format,
+            supersampling,
         )?;
 
         Ok(VulkanWindow {
@@ -340,12 +355,14 @@ impl VulkanWindow {
                 color_format,
                 depth_format,
             }),
-            render_pass,
+            ssaa_render_pass,
+            post_blit_render_pass,
             swapchain,
             swapchain_images,
             framebuffers,
             window,
             viewport,
+            supersampling,
         })
     }
 
@@ -367,13 +384,15 @@ impl VulkanWindow {
         self.framebuffers = get_framebuffers_with_depth(
             &new_images,
             self.memory_allocator.clone(),
-            self.render_pass.clone(),
+            self.ssaa_render_pass.clone(),
+            self.post_blit_render_pass.clone(),
             self.depth_format,
+            self.supersampling,
         )?;
         Ok(())
     }
 
-    fn start_render_pass(
+    fn start_ssaa_render_pass(
         &self,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         framebuffer: Arc<Framebuffer>,
@@ -381,11 +400,36 @@ impl VulkanWindow {
     ) -> Result<()> {
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                clear_values: vec![Some(clear_color.into()), Some(self.depth_clear_value())],
+                clear_values: vec![
+                    // Supersampled color buffer
+                    Some(clear_color.into()),
+                    // Supersampled depth buffer
+                    Some(self.depth_clear_value()),
+                ],
+                render_pass: self.ssaa_render_pass.clone(),
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
             },
             SubpassBeginInfo {
                 contents: SubpassContents::Inline,
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    fn start_post_blit_render_pass(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer: Arc<Framebuffer>,
+    ) -> Result<()> {
+        builder.begin_render_pass(
+            RenderPassBeginInfo {
+                render_pass: self.post_blit_render_pass.clone(),
+                clear_values: vec![None],
+                ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
+            },
+            SubpassBeginInfo {
+                contents: SubpassContents::SecondaryCommandBuffers,
                 ..Default::default()
             },
         )?;
@@ -401,8 +445,11 @@ impl VulkanWindow {
         self.swapchain.as_ref()
     }
 
-    pub(crate) fn clone_render_pass(&self) -> Arc<RenderPass> {
-        self.render_pass.clone()
+    pub(crate) fn ssaa_render_pass(&self) -> Arc<RenderPass> {
+        self.ssaa_render_pass.clone()
+    }
+    pub(crate) fn post_blit_render_pass(&self) -> Arc<RenderPass> {
+        self.post_blit_render_pass.clone()
     }
 }
 
@@ -432,7 +479,7 @@ fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
     bail!("No depth format found");
 }
 
-pub(crate) fn make_render_pass(
+pub(crate) fn make_ssaa_render_pass(
     vk_device: Arc<Device>,
     output_format: Format,
     depth_format: Format,
@@ -440,7 +487,7 @@ pub(crate) fn make_render_pass(
     vulkano::ordered_passes_renderpass!(
         vk_device,
         attachments: {
-            color: {
+            color_ssaa: {
                 format: output_format,
                 samples: 1,
                 load_op: Clear,
@@ -455,14 +502,35 @@ pub(crate) fn make_render_pass(
         },
         passes: [
             {
-                color: [color],
+                color: [color_ssaa],
                 depth_stencil: {depth},
                 input: [],
             },
+        ]
+    )
+    .context("Renderpass creation failed")
+}
+
+fn make_post_blit_render_pass(
+    vk_device: Arc<Device>,
+    output_format: Format,
+    depth_format: Format,
+) -> Result<Arc<RenderPass>> {
+    vulkano::ordered_passes_renderpass!(
+        vk_device,
+        attachments: {
+            color_blitted: {
+                format: output_format,
+                samples: 1,
+                load_op: Load,
+                store_op: Store,
+            },
+        },
+        passes: [
             {
-                color: [color],
+                color: [color_blitted],
                 depth_stencil: {},
-                input: []
+                input: [],
             },
         ]
     )
@@ -486,6 +554,31 @@ fn find_best_format(
         .with_context(|| "Could not find an image format")
 }
 
+#[derive(Clone)]
+pub(crate) struct FramebufferHolder {
+    ssaa_framebuffer: Arc<Framebuffer>,
+    // Vector starting with the source and ending with the target. It may be a singleton, but must
+    // not be empty.
+    blit_path: Vec<Arc<Image>>,
+    post_blit_framebuffer: Arc<Framebuffer>,
+}
+
+impl FramebufferHolder {
+    pub(crate) fn blit_supersampling(
+        &self,
+        command_buf_builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) -> Result<()> {
+        for i in 0..(self.blit_path.len() - 1) {
+            command_buf_builder.blit_image(BlitImageInfo {
+                filter: Filter::Linear,
+                ..BlitImageInfo::images(self.blit_path[i].clone(), self.blit_path[i + 1].clone())
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
 // Helper to get framebuffers for swapchain images
 // Modified from a sample function from the vulkano examples.
 //
@@ -501,20 +594,27 @@ fn find_best_format(
 pub(crate) fn get_framebuffers_with_depth(
     images: &[Arc<Image>],
     allocator: Arc<VkAllocator>,
-    render_pass: Arc<RenderPass>,
+    ssaa_renderpass: Arc<RenderPass>,
+    post_blit_renderpass: Arc<RenderPass>,
     depth_format: Format,
-) -> Result<Vec<Arc<Framebuffer>>> {
+    supersampling: Supersampling,
+) -> Result<Vec<FramebufferHolder>> {
     images
         .iter()
         .map(|image| -> anyhow::Result<_> {
             let view = ImageView::new_default(image.clone()).unwrap();
-            let depth_buffer = ImageView::new_default(Image::new(
+            let ssaa_depth_view = ImageView::new_default(Image::new(
                 allocator.clone(),
                 ImageCreateInfo {
                     image_type: ImageType::Dim2d,
                     format: depth_format,
                     view_formats: vec![depth_format],
-                    extent: image.extent(),
+                    // TODO make adjustable
+                    extent: [
+                        image.extent()[0] * supersampling.to_int(),
+                        image.extent()[1] * supersampling.to_int(),
+                        1,
+                    ],
                     usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
                     initial_layout: ImageLayout::Undefined,
                     ..Default::default()
@@ -524,16 +624,77 @@ pub(crate) fn get_framebuffers_with_depth(
                     ..Default::default()
                 },
             )?)?;
+            // Now build the blit path
+            let blit_path = if supersampling == Supersampling::None {
+                // The blit path is trivial - just the original image
+                // In fact, we do no blitting here - see the implementation of FramebufferHolder
+                vec![image.clone()]
+            } else {
+                let mut blit_path = vec![];
+                let mut multiplier = supersampling.to_int();
 
-            let fb = Framebuffer::new(
-                render_pass.clone(),
+                for i in 0..supersampling.blit_steps() {
+                    let usage = if i == 0 {
+                        // First image: We render to it, and we blit from it
+                        ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
+                    } else {
+                        // Intermediate image: We blit into it, and we blit from it
+                        ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
+                    };
+                    log::debug!(
+                        "Creating blit path image {i} with usage {usage:?}, {multiplier}x samples"
+                    );
+
+                    let buffer = Image::new(
+                        allocator.clone(),
+                        ImageCreateInfo {
+                            image_type: ImageType::Dim2d,
+                            format: image.format(),
+                            view_formats: vec![image.format()],
+                            extent: [
+                                image.extent()[0] * multiplier,
+                                image.extent()[1] * multiplier,
+                                1,
+                            ],
+                            usage,
+                            initial_layout: ImageLayout::Undefined,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo {
+                            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                            ..Default::default()
+                        },
+                    )?;
+                    blit_path.push(buffer);
+                    multiplier /= 2;
+                }
+                blit_path.push(image.clone());
+                blit_path
+            };
+
+            // We always render into the first image in the blit path
+            let ssaa_color_view = ImageView::new_default(blit_path[0].clone())?;
+
+            let ssaa_framebuffer = Framebuffer::new(
+                ssaa_renderpass.clone(),
                 FramebufferCreateInfo {
-                    attachments: vec![view, depth_buffer],
+                    attachments: vec![ssaa_color_view, ssaa_depth_view],
+                    ..Default::default()
+                },
+            )?;
+            let post_blit_framebuffer = Framebuffer::new(
+                post_blit_renderpass.clone(),
+                FramebufferCreateInfo {
+                    attachments: vec![view],
                     ..Default::default()
                 },
             )?;
 
-            Ok(fb)
+            Ok(FramebufferHolder {
+                ssaa_framebuffer,
+                blit_path,
+                post_blit_framebuffer,
+            })
         })
         .collect::<Result<Vec<_>>>()
 }

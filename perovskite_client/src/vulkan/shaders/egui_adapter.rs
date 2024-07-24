@@ -21,6 +21,7 @@ use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::image::sampler::{Filter, SamplerCreateInfo};
+use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoopWindowTarget;
 
 use super::{
@@ -61,7 +62,8 @@ impl EguiAdapter {
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.graphics_queue.clone(),
-            Subpass::from(ctx.render_pass.clone(), 1).context("Could not find subpass 0")?,
+            Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                .context("Could not find subpass 0")?,
             ctx.swapchain.image_format(),
             config,
         );
@@ -81,8 +83,10 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: atlas.as_ref(),
-                subpass: 1,
+                subpass: Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                    .context("Post-blit subpass 0 missing")?,
                 enable_depth_stencil: false,
+                enable_supersampling: false,
             },
         )?;
 
@@ -114,15 +118,6 @@ impl EguiAdapter {
         let cmdbuf = self
             .gui_adapter
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
-        builder.next_subpass(
-            SubpassEndInfo {
-                ..Default::default()
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::SecondaryCommandBuffers,
-                ..Default::default()
-            },
-        )?;
         builder.execute_commands(cmdbuf)?;
 
         if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
@@ -132,8 +127,8 @@ impl EguiAdapter {
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
                     render_pass: Some(
-                        Subpass::from(ctx.render_pass.clone(), 1)
-                            .with_context(|| "Render subpass 1 not found")?
+                        Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                            .with_context(|| "Render subpass 0 not found")?
                             .into(),
                     ),
                     ..Default::default()
@@ -155,8 +150,10 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: self.atlas.as_ref(),
-                subpass: 1,
+                subpass: Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                    .context("Post-blit subpass 0 missing")?,
                 enable_depth_stencil: false,
+                enable_supersampling: false,
             },
         )?;
         Ok(())

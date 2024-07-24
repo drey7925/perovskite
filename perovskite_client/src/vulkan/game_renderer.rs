@@ -25,7 +25,13 @@ use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 use tracy_client::GpuContextType::Vulkan;
 use tracy_client::{plot, span, Client};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, SubpassEndInfo};
+use vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers;
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, BlitImageInfo, RenderPassBeginInfo, SubpassBeginInfo,
+    SubpassContents, SubpassEndInfo,
+};
+use vulkano::image::sampler::Filter;
+use vulkano::render_pass::Subpass;
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
     render_pass::Framebuffer,
@@ -54,7 +60,7 @@ use super::{
         egui_adapter::{self, EguiAdapter},
         entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
     },
-    CommandBufferBuilder, VulkanWindow,
+    CommandBufferBuilder, FramebufferHolder, VulkanWindow,
 };
 
 pub(crate) struct ActiveGame {
@@ -82,7 +88,7 @@ impl ActiveGame {
         &mut self,
         window_size: PhysicalSize<u32>,
         ctx: &VulkanWindow,
-        framebuffer: Arc<Framebuffer>,
+        framebuffer: &FramebufferHolder,
         mut command_buf_builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) -> Arc<PrimaryAutoCommandBuffer> {
         let _span = span!("build renderer buffers");
@@ -95,9 +101,10 @@ impl ActiveGame {
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
         ctx.window.set_ime_allowed(ime_enabled);
-        ctx.start_render_pass(
+
+        ctx.start_ssaa_render_pass(
             &mut command_buf_builder,
-            framebuffer,
+            framebuffer.ssaa_framebuffer.clone(),
             scene_state.clear_color,
         )
         .unwrap();
@@ -246,13 +253,38 @@ impl ActiveGame {
                 (),
             )
             .unwrap();
+
+        command_buf_builder
+            .end_render_pass(SubpassEndInfo {
+                ..Default::default()
+            })
+            .unwrap();
+        // With the render pass done, blit to the final framebuffer
+        framebuffer
+            .blit_supersampling(&mut command_buf_builder)
+            .unwrap();
+        ctx.start_post_blit_render_pass(
+            &mut command_buf_builder,
+            framebuffer.post_blit_framebuffer.clone(),
+        )
+        .unwrap();
+
+        // Then draw the UI
         self.egui_adapter
             .as_mut()
             .unwrap()
             .draw(ctx, &mut command_buf_builder, &self.client_state)
             .unwrap();
 
-        finish_command_buffer(command_buf_builder).unwrap()
+        command_buf_builder
+            .end_render_pass(SubpassEndInfo {
+                ..Default::default()
+            })
+            .unwrap();
+        command_buf_builder
+            .build()
+            .with_context(|| "Command buffer build failed")
+            .unwrap()
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
@@ -269,8 +301,10 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    subpass: 0,
+                    subpass: Subpass::from(ctx.ssaa_render_pass.clone(), 0)
+                        .context("SSAA subpass 0 missing")?,
                     enable_depth_stencil: true,
+                    enable_supersampling: true,
                 },
             )?
         };
@@ -319,7 +353,7 @@ impl GameState {
                     };
                 }
                 Ok(Err(e)) => {
-                    *self = GameState::ConnectError(e.to_string());
+                    *self = GameState::ConnectError(format!("{e:?}"));
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
                     *self = GameState::ConnectError("Connection thread crashed".to_string())
@@ -546,6 +580,7 @@ impl GameRenderer {
                     drop(_swapchain_span);
                     let window_size = self.ctx.window.inner_size();
 
+                    let fb_holder = &self.ctx.framebuffers[image_i as usize];
                     // From https://vulkano.rs/compute_pipeline/descriptor_sets.html:
                     // Once you have created a descriptor set, you may also use it with other pipelines,
                     // as long as the bindings' types match those the pipelines' shaders expect.
@@ -558,19 +593,29 @@ impl GameRenderer {
                         game.build_command_buffers(
                             window_size,
                             &self.ctx,
-                            self.ctx.framebuffers[image_i as usize].clone(),
+                            fb_holder,
                             command_buf_builder,
                         )
                     } else {
                         // we're not in the active game, allow the IME
                         self.ctx.window.set_ime_allowed(true);
                         self.ctx
-                            .start_render_pass(
+                            .start_ssaa_render_pass(
                                 &mut command_buf_builder,
-                                self.ctx.framebuffers[image_i as usize].clone(),
+                                fb_holder.ssaa_framebuffer.clone(),
                                 [0.0, 0.0, 0.0, 0.0],
                             )
                             .unwrap();
+                        command_buf_builder.end_render_pass(SubpassEndInfo {
+                            ..Default::default()
+                        }).unwrap();
+                        // With the render pass done, blit to the final framebuffer
+                        fb_holder.blit_supersampling(&mut command_buf_builder).unwrap();
+                        self.ctx.start_post_blit_render_pass(
+                            &mut command_buf_builder,
+                            fb_holder.post_blit_framebuffer.clone(),
+                        ).unwrap();
+
                         if let Some(connection_settings) = self.main_menu.lock().draw(
                             &self.ctx,
                             &mut game_lock,
@@ -578,7 +623,14 @@ impl GameRenderer {
                         ) {
                             self.start_connection(connection_settings);
                         }
-                        finish_command_buffer(command_buf_builder).unwrap()
+                        command_buf_builder.end_render_pass(SubpassEndInfo {
+                            ..Default::default()
+                        }).unwrap();
+
+                        command_buf_builder
+                            .build()
+                            .with_context(|| "Command buffer build failed")
+                            .unwrap()
                     };
 
                     {
@@ -648,18 +700,6 @@ impl Drop for ActiveGame {
     }
 }
 
-fn finish_command_buffer(
-    mut builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-) -> Result<Arc<PrimaryAutoCommandBuffer>> {
-    let _span = span!();
-    builder.end_render_pass(SubpassEndInfo {
-        ..Default::default()
-    })?;
-    builder
-        .build()
-        .with_context(|| "Command buffer build failed")
-}
-
 pub(crate) struct ConnectionSettings {
     pub(crate) host: String,
     pub(crate) user: String,
@@ -705,8 +745,10 @@ async fn connect_impl(
             &ctx,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: 0,
+                subpass: Subpass::from(ctx.ssaa_render_pass.clone(), 0)
+                    .context("SSAA subpass 0 missing")?,
                 enable_depth_stencil: true,
+                enable_supersampling: true,
             },
         )?
     };

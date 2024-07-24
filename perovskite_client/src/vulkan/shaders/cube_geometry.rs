@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::game_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use cgmath::{Angle, Matrix4, Rad};
 use smallvec::smallvec;
@@ -268,6 +269,7 @@ impl CubePipelineProvider {
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,
+        supersampling: Supersampling,
     ) -> Result<CubePipelineWrapper> {
         let vs = self
             .vs_cube
@@ -314,10 +316,20 @@ impl CubePipelineProvider {
             // TODO multisample state later when we have MSAA
             multisample_state: Some(MultisampleState::default()),
             viewport_state: Some(ViewportState {
-                viewports: smallvec![viewport.clone()],
+                viewports: smallvec![Viewport {
+                    offset: [0.0, 0.0],
+                    depth_range: 0.0..=1.0,
+                    extent: [
+                        viewport.extent[0] * supersampling.to_float(),
+                        viewport.extent[1] * supersampling.to_float()
+                    ],
+                }],
                 scissors: smallvec![Scissor {
                     offset: [0, 0],
-                    extent: [viewport.extent[0] as u32, viewport.extent[1] as u32],
+                    extent: [
+                        viewport.extent[0] as u32 * supersampling.to_int(),
+                        viewport.extent[1] as u32 * supersampling.to_int()
+                    ],
                 }],
                 ..Default::default()
             }),
@@ -387,7 +399,12 @@ impl PipelineProvider for CubePipelineProvider {
         wnd: &VulkanWindow,
         config: &Texture2DHolder,
     ) -> Result<CubePipelineWrapper> {
-        self.build_pipeline(wnd.viewport.clone(), wnd.render_pass.clone(), config)
+        self.build_pipeline(
+            wnd.viewport.clone(),
+            wnd.ssaa_render_pass.clone(),
+            config,
+            wnd.supersampling,
+        )
     }
 
     type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];

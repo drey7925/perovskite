@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use crate::game_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use smallvec::smallvec;
 use texture_packer::Rect;
@@ -226,8 +227,9 @@ impl FlatTexPipelineProvider {
 }
 pub(crate) struct FlatPipelineConfig<'a> {
     pub(crate) atlas: &'a Texture2DHolder,
-    pub(crate) subpass: u32,
+    pub(crate) subpass: Subpass,
     pub(crate) enable_depth_stencil: bool,
+    pub(crate) enable_supersampling: bool,
 }
 
 impl PipelineProvider for FlatTexPipelineProvider {
@@ -246,7 +248,15 @@ impl PipelineProvider for FlatTexPipelineProvider {
             atlas,
             subpass,
             enable_depth_stencil,
+            enable_supersampling,
         } = config;
+
+        let supersampling = if enable_supersampling {
+            ctx.supersampling
+        } else {
+            Supersampling::None
+        };
+
         let vs = self
             .vs
             .entry_point("main")
@@ -290,13 +300,22 @@ impl PipelineProvider for FlatTexPipelineProvider {
                     front_face: FrontFace::CounterClockwise,
                     ..Default::default()
                 }),
-                // TODO multisample state later when we have MSAA
                 multisample_state: Some(MultisampleState::default()),
                 viewport_state: Some(ViewportState {
-                    viewports: smallvec![ctx.viewport.clone()],
+                    viewports: smallvec![Viewport {
+                        offset: [0.0, 0.0],
+                        depth_range: 0.0..=1.0,
+                        extent: [
+                            ctx.viewport.extent[0] * supersampling.to_float(),
+                            ctx.viewport.extent[1] * supersampling.to_float()
+                        ],
+                    }],
                     scissors: smallvec![Scissor {
                         offset: [0, 0],
-                        extent: [ctx.viewport.extent[0] as u32, ctx.viewport.extent[1] as u32],
+                        extent: [
+                            ctx.viewport.extent[0] as u32 * supersampling.to_int(),
+                            ctx.viewport.extent[1] as u32 * supersampling.to_int()
+                        ],
                     }],
                     ..Default::default()
                 }),
@@ -309,9 +328,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
                     }],
                     ..Default::default()
                 }),
-                subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.render_pass.clone(), subpass).context("Missing subpass")?,
-                )),
+                subpass: Some(PipelineSubpassType::BeginRenderPass(subpass)),
                 ..GraphicsPipelineCreateInfo::layout(layout)
             },
         )?;
