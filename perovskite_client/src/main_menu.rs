@@ -30,6 +30,7 @@ pub(crate) struct MainMenu {
     show_register_popup: bool,
     previous_servers: Vec<String>,
     settings: Arc<ArcSwap<GameSettings>>,
+    settings_parse_error_acknowledged: bool,
 }
 impl MainMenu {
     pub(crate) fn new(
@@ -71,6 +72,7 @@ impl MainMenu {
             show_register_popup: false,
             previous_servers: settings_guard.previous_servers.clone(),
             settings,
+            settings_parse_error_acknowledged: false,
         }
     }
 
@@ -164,6 +166,32 @@ impl MainMenu {
                 self.show_register_popup = true;
             }
         });
+
+        if !self.settings_parse_error_acknowledged {
+            if let Some(err) = self
+                .settings
+                .load()
+                .internal_parsing_failure_message
+                .as_ref()
+            {
+                egui::Window::new("Settings error").collapsible(false).show(
+                    &self.egui_gui.egui_ctx,
+                    |ui| {
+                        ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                        ui.label(
+                            "The settings file could not be parsed. Default settings will be used; recent servers will not be saved.",
+                        );
+                        ui.label(err);
+                        if ui.button("OK").clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
+                            self.settings_parse_error_acknowledged = true;
+                        }
+                    },
+                );
+            }
+        }
+
         match game_state {
             GameState::MainMenu => {}
             GameState::Connecting(state) => {

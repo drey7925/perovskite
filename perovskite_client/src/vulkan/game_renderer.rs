@@ -407,9 +407,7 @@ pub struct GameRenderer {
 }
 impl GameRenderer {
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<GameRenderer> {
-        let settings = Arc::new(ArcSwap::new(
-            GameSettings::load_from_disk()?.unwrap_or_default().into(),
-        ));
+        let settings = Arc::new(ArcSwap::new(GameSettings::load_from_disk()?.into()));
 
         let ctx = VulkanWindow::create(event_loop, &settings).unwrap();
         let rt = Arc::new(

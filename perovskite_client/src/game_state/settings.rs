@@ -88,9 +88,16 @@ pub(crate) struct GameSettings {
     pub(crate) last_username: String,
     pub(crate) previous_servers: Vec<String>,
     pub(crate) debug: DebugSettings,
+    // If set, the settings couldn't be parsed and shouldn't be saved
+    #[serde(skip)]
+    pub(crate) internal_parsing_failure_message: Option<String>,
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
+        if let Some(err) = self.internal_parsing_failure_message.as_ref() {
+            log::warn!("Not saving settings because parsing failed: {}", err);
+            return Ok(());
+        }
         let project_dirs = project_dirs().context("couldn't find config dir")?;
         let config_dir = project_dirs.config_dir();
         if !config_dir.exists() {
@@ -103,19 +110,29 @@ impl GameSettings {
         Ok(())
     }
 
-    pub(crate) fn load_from_disk() -> Result<Option<Self>> {
+    pub(crate) fn load_from_disk() -> Result<Self> {
         let config_file = directories::ProjectDirs::from("foo", "drey7925", "perovskite")
             .context("couldn't find config dir")?
             .config_dir()
             .join(SETTINGS_RON_FILE);
         if !config_file.exists() {
             log::warn!("No settings found at {}", clean_path(config_file));
-            return Ok(None);
+            return Ok(Default::default());
         }
         let config = std::fs::read_to_string(&config_file)?;
         log::info!("Loaded settings from {}", clean_path(config_file));
-        let parsed = ron::from_str(&config)?;
-        Ok(Some(parsed))
+        let parsed = match ron::from_str(&config) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                log::error!("Failed to parse settings: {}", err);
+
+                return Ok(GameSettings {
+                    internal_parsing_failure_message: Some(err.to_string()),
+                    ..Default::default()
+                });
+            }
+        };
+        Ok(parsed)
     }
 
     pub(crate) fn push_hostname(&mut self, hostname: String) {
