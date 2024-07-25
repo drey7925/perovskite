@@ -601,6 +601,13 @@ impl Deref for ChunkManagerClonedView {
         &self.data
     }
 }
+impl IntoIterator for ChunkManagerClonedView {
+    type Item = (ChunkCoordinate, Arc<ClientChunk>);
+    type IntoIter = std::collections::hash_map::IntoIter<ChunkCoordinate, Arc<ClientChunk>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
 
 // todo clean up, make private
 pub(crate) struct ClientState {

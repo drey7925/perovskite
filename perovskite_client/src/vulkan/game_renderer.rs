@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use arc_swap::ArcSwap;
+use cgmath::{vec3, InnerSpace};
 use log::info;
 
 use parking_lot::Mutex;
@@ -150,11 +151,12 @@ impl ActiveGame {
             );
         }
 
-        let chunk_lock = {
+        let chunks = {
             let _span = span!("Waiting for chunk_lock");
             self.client_state.chunks.renderable_chunks_cloned_view()
         };
-        plot!("total_chunks", chunk_lock.len() as f64);
+        let mut chunks = chunks.into_iter().collect::<Vec<_>>();
+        plot!("total_chunks", chunks.len() as f64);
 
         let (batched_calls, batched_handled) = self
             .client_state
@@ -163,8 +165,18 @@ impl ActiveGame {
 
         self.cube_draw_calls.extend(batched_calls);
 
+        // Sort by expected draw order, closest to farthest
+        chunks.sort_unstable_by_key(|(coord, _)| {
+            let world_coord = vec3(
+                coord.x as f64 * 16.0 + 8.0,
+                coord.y as f64 * 16.0 + 8.0,
+                coord.z as f64 * 16.0 + 8.0,
+            );
+            -1 * ((player_position - world_coord).magnitude2() as i64)
+        });
+
         self.cube_draw_calls
-            .extend(chunk_lock.iter().filter_map(|(coord, chunk)| {
+            .extend(chunks.iter().filter_map(|(coord, chunk)| {
                 if !batched_handled.contains(coord) {
                     chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)
                 } else {
@@ -173,7 +185,7 @@ impl ActiveGame {
             }));
         plot!(
             "chunk_rate",
-            self.cube_draw_calls.len() as f64 / chunk_lock.len() as f64
+            self.cube_draw_calls.len() as f64 / chunks.len() as f64
         );
 
         if !self.cube_draw_calls.is_empty() {

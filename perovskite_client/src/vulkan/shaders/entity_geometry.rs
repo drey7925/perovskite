@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::game_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
 use smallvec::smallvec;
@@ -168,10 +169,11 @@ impl EntityPipelineProvider {
 
     pub(crate) fn build_pipeline(
         &self,
-        _ctx: &VulkanContext,
+        ctx: &VulkanContext,
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,
+        supersampling: Supersampling,
     ) -> Result<EntityPipelineWrapper> {
         let vs = self
             .vs_entity
@@ -209,13 +211,17 @@ impl EntityPipelineProvider {
                 viewports: smallvec![Viewport {
                     offset: [0.0, 0.0],
                     depth_range: 0.0..=1.0,
-                    // TODO DO NOT COMMIT
-                    extent: [viewport.extent[0] * 4.0, viewport.extent[1] * 4.0],
+                    extent: [
+                        viewport.extent[0] * supersampling.to_float(),
+                        viewport.extent[1] * supersampling.to_float()
+                    ],
                 }],
                 scissors: smallvec![Scissor {
                     offset: [0, 0],
-                    // TODO DO NOT COMMIT
-                    extent: [viewport.extent[0] as u32 * 4, viewport.extent[1] as u32 * 4],
+                    extent: [
+                        viewport.extent[0] as u32 * supersampling.to_int(),
+                        viewport.extent[1] as u32 * supersampling.to_int()
+                    ],
                 }],
                 ..Default::default()
             }),
@@ -256,6 +262,7 @@ impl PipelineProvider for EntityPipelineProvider {
             wnd.viewport.clone(),
             wnd.ssaa_render_pass.clone(),
             config,
+            wnd.supersampling,
         )
     }
 
