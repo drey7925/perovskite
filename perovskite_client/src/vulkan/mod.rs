@@ -216,27 +216,43 @@ impl VulkanWindow {
 
         let supersampling = settings.load().render.supersampling;
 
+        let queue_create_infos = if graphics_family_index == transfer_family_index {
+            vec![QueueCreateInfo {
+                queue_family_index: graphics_family_index,
+                ..Default::default()
+            }]
+        } else {
+            vec![
+                QueueCreateInfo {
+                    queue_family_index: graphics_family_index,
+                    ..Default::default()
+                },
+                QueueCreateInfo {
+                    queue_family_index: transfer_family_index,
+                    ..Default::default()
+                },
+            ]
+        };
+
         let (vk_device, mut queues) = Device::new(
             physical_device.clone(),
             DeviceCreateInfo {
-                queue_create_infos: vec![
-                    QueueCreateInfo {
-                        queue_family_index: graphics_family_index,
-                        ..Default::default()
-                    },
-                    QueueCreateInfo {
-                        queue_family_index: transfer_family_index,
-                        ..Default::default()
-                    },
-                ],
+                queue_create_infos,
                 enabled_extensions: device_extensions,
                 enabled_features: device_features,
                 ..Default::default()
             },
         )?;
 
-        let graphics_queue = queues.next().with_context(|| "expected a queue")?;
-        let transfer_queue = queues.next().with_context(|| "expected a transfer queue")?;
+        let graphics_queue;
+        let transfer_queue;
+        if graphics_family_index == transfer_family_index {
+            graphics_queue = queues.next().with_context(|| "expected a graphics queue")?;
+            transfer_queue = graphics_queue.clone();
+        } else {
+            graphics_queue = queues.next().with_context(|| "expected a graphics queue")?;
+            transfer_queue = queues.next().with_context(|| "expected a transfer queue")?;
+        }
 
         let (swapchain, swapchain_images, color_format) = {
             let caps = physical_device

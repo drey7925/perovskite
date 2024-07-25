@@ -60,7 +60,7 @@ impl Default for RenderSettings {
             preferred_gpu: String::from(""),
             scale_inventories_with_high_dpi: false,
             fov_degrees: 75.0,
-            supersampling: Supersampling::X4,
+            supersampling: Supersampling::X2,
         }
     }
 }
