@@ -1,15 +1,19 @@
+use std::fmt::Display;
+use std::str::FromStr;
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
-use egui::{Color32, FontId, Layout, ProgressBar, RichText, TextEdit};
+use egui::{CollapsingHeader, Color32, FontId, Layout, ProgressBar, RichText, TextEdit};
 use tokio::sync::{oneshot, watch};
 use vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers;
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
+use crate::game_state::settings::Supersampling;
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
+use crate::vulkan::VulkanContext;
 use crate::{
     game_state::settings::GameSettings,
     vulkan::{
@@ -28,8 +32,10 @@ pub(crate) struct MainMenu {
     register_pass_field: String,
     confirm_pass_field: String,
     show_register_popup: bool,
+    show_settings_popup: bool,
     previous_servers: Vec<String>,
     settings: Arc<ArcSwap<GameSettings>>,
+    prospective_settings: GameSettings,
     settings_parse_error_acknowledged: bool,
 }
 impl MainMenu {
@@ -60,6 +66,7 @@ impl MainMenu {
             .insert(egui::TextStyle::Body, FontId::proportional(16.0));
         egui_gui.egui_ctx.set_style(style);
         let settings_guard = settings.load();
+        let prospective_settings = (**settings_guard).clone();
         MainMenu {
             egui_gui,
             host_field: settings_guard.last_hostname.clone(),
@@ -70,17 +77,23 @@ impl MainMenu {
             register_pass_field: "".to_string(),
             confirm_pass_field: "".to_string(),
             show_register_popup: false,
+            show_settings_popup: false,
             previous_servers: settings_guard.previous_servers.clone(),
             settings,
+            prospective_settings,
             settings_parse_error_acknowledged: false,
         }
     }
 
-    fn draw_ui(&mut self, game_state: &mut GameState) -> Option<ConnectionSettings> {
+    fn draw_ui(
+        &mut self,
+        game_state: &mut GameState,
+        vk_ctx: &VulkanContext,
+    ) -> Option<ConnectionSettings> {
         let mut result = None;
-
+        let enable_main_controls = self.should_enable_main_controls(&game_state);
         egui::CentralPanel::default().show(&self.egui_gui.egui_ctx, |ui| {
-            ui.set_enabled(matches!(game_state, GameState::MainMenu) && !self.show_register_popup);
+            ui.set_enabled(enable_main_controls);
             ui.visuals_mut().override_text_color = Some(Color32::WHITE);
             if cfg!(debug_assertions) {
                 ui.label(
@@ -164,6 +177,11 @@ impl MainMenu {
                 self.register_host_field = self.host_field.clone();
                 self.register_user_field = self.user_field.clone();
                 self.show_register_popup = true;
+            }
+
+            let settings_button = egui::Button::new("Settings");
+            if ui.add(settings_button).clicked() {
+                self.show_settings_popup = true;
             }
         });
 
@@ -307,6 +325,9 @@ impl MainMenu {
                 }
             });
         }
+        if self.show_settings_popup {
+            self.render_settings(vk_ctx);
+        }
 
         result
     }
@@ -318,7 +339,7 @@ impl MainMenu {
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
     ) -> Option<ConnectionSettings> {
         self.egui_gui.begin_frame();
-        let result = self.draw_ui(game_state);
+        let result = self.draw_ui(game_state, ctx.context());
         let secondary = self
             .egui_gui
             .draw_on_subpass_image([ctx.window_size().0, ctx.window_size().1]);
@@ -328,6 +349,184 @@ impl MainMenu {
     }
     pub(crate) fn update(&mut self, event: &WindowEvent) {
         self.egui_gui.update(event);
+    }
+    fn should_enable_main_controls(&self, game_state: &GameState) -> bool {
+        if let GameState::MainMenu = game_state {
+            if self.show_register_popup {
+                false
+            } else if self
+                .settings
+                .load()
+                .internal_parsing_failure_message
+                .is_some()
+                && !self.settings_parse_error_acknowledged
+            {
+                false
+            } else if self.show_settings_popup {
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    }
+
+    fn render_settings(&mut self, vk_ctx: &VulkanContext) {
+        egui::Window::new("Settings: ").show(&self.egui_gui.egui_ctx, |ui| {
+            if self.prospective_settings.internal_parsing_failure_message.is_some() {
+                ui.label("Warning: Settings file is corrupt; saving will overwrite with default settings.");
+            }
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.set_min_width(250.0);
+
+                CollapsingHeader::new("Render settings")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.label("Coming soon...");
+                    });
+
+
+                CollapsingHeader::new("Render settings")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        egui::Grid::new("my_grid")
+                            .num_columns(2)
+                            .spacing([40.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.label("Mesh threads");
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut self.prospective_settings.render.num_mesh_workers,
+                                        1..=8,
+                                    )
+                                    .suffix(" threads"),
+                                );
+                                ui.end_row();
+
+                                ui.label("Pre-mesh threads");
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut self
+                                            .prospective_settings
+                                            .render
+                                            .num_neighbor_propagators,
+                                        1..=8,
+                                    )
+                                    .suffix(" threads"),
+                                );
+                                ui.end_row();
+
+                                ui.label("Show placement guide");
+                                ui.checkbox(
+                                    &mut self.prospective_settings.render.show_placement_guide,
+                                    "Enable",
+                                );
+                                ui.end_row();
+
+                                let gpu_label = ui.label("Preferred GPU");
+                                let selected_gpu =
+                                    if self.prospective_settings.render.preferred_gpu.is_empty() {
+                                        "Select..."
+                                    } else {
+                                        &self.prospective_settings.render.preferred_gpu
+                                    };
+                                let mut preferred_gpu =
+                                    self.prospective_settings.render.preferred_gpu.clone();
+                                egui::ComboBox::from_id_source(gpu_label.id)
+                                    .selected_text(selected_gpu)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut preferred_gpu,
+                                            String::new(),
+                                            "No preference",
+                                        );
+                                        for gpu in vk_ctx.all_gpus() {
+                                            ui.selectable_value(
+                                                &mut preferred_gpu,
+                                                gpu.to_string(),
+                                                gpu.to_string(),
+                                            );
+                                        }
+                                    });
+                                self.prospective_settings.render.preferred_gpu = preferred_gpu;
+                                ui.end_row();
+
+                                ui.label("Scale inventory at high DPI");
+                                ui.checkbox(
+                                    &mut self
+                                        .prospective_settings
+                                        .render
+                                        .scale_inventories_with_high_dpi,
+                                    "Enable",
+                                );
+                                ui.end_row();
+
+                                ui.label("FOV");
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut self.prospective_settings.render.fov_degrees,
+                                        30.0..=170.0,
+                                    )
+                                    .suffix("°"),
+                                );
+                                ui.end_row();
+
+                                let ssaa_label = ui.label("Supersampling");
+                                egui::ComboBox::from_id_source(ssaa_label.id)
+                                    .selected_text(
+                                        match self.prospective_settings.render.supersampling {
+                                            Supersampling::None => "Disabled",
+                                            Supersampling::X2 => "x2",
+                                            Supersampling::X4 => "x4",
+                                            Supersampling::X8 => "x8",
+                                        },
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.prospective_settings.render.supersampling,
+                                            Supersampling::None,
+                                            "Disabled",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.prospective_settings.render.supersampling,
+                                            Supersampling::X2,
+                                            "x2",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.prospective_settings.render.supersampling,
+                                            Supersampling::X4,
+                                            "x4",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.prospective_settings.render.supersampling,
+                                            Supersampling::X8,
+                                            "x8",
+                                        );
+                                    });
+                                ui.end_row();
+                            });
+                    });
+            });
+
+            let save_button = egui::Button::new("Save");
+            if ui.add(save_button).clicked() {
+                self.settings
+                    .store(Arc::new(self.prospective_settings.clone()));
+                if let Err(e) = self.prospective_settings.save_to_disk() {
+                    log::error!("Failure saving settings: {}", e);
+                    // TODO show error popup
+                }
+                self.show_settings_popup = false;
+                self.settings_parse_error_acknowledged = true;
+            }
+            let cancel_button = egui::Button::new("Cancel");
+            if ui.add(cancel_button).clicked() || ui.input(|x| x.key_pressed(egui::Key::Escape)) {
+                self.prospective_settings = (**self.settings.load()).clone();
+                self.show_settings_popup = false;
+            }
+        });
     }
 }
 

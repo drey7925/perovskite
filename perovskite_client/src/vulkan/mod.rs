@@ -93,6 +93,9 @@ pub(crate) struct VulkanContext {
     color_format: Format,
     /// The format of the depth buffer used for rendering to *screen*. Probed at startup, and used for both render-to-screen and render-to-texture
     depth_format: Format,
+
+    /// For settings, all GPUs detected on this machine
+    all_gpus: Vec<String>,
 }
 
 impl VulkanContext {
@@ -114,6 +117,10 @@ impl VulkanContext {
 
     pub(crate) fn clone_transfer_queue(&self) -> Arc<Queue> {
         self.transfer_queue.clone()
+    }
+
+    pub(crate) fn all_gpus(&self) -> &[String] {
+        &self.all_gpus
     }
 
     fn start_command_buffer(&self) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> {
@@ -359,6 +366,11 @@ impl VulkanWindow {
             depth_format,
             supersampling,
         )?;
+        let all_gpus = instance
+            .enumerate_physical_devices()
+            .unwrap()
+            .map(|x| x.properties().device_name.clone())
+            .collect::<Vec<String>>();
 
         Ok(VulkanWindow {
             vk_ctx: Arc::new(VulkanContext {
@@ -370,6 +382,7 @@ impl VulkanWindow {
                 descriptor_set_allocator,
                 color_format,
                 depth_format,
+                all_gpus,
             }),
             ssaa_render_pass,
             post_blit_render_pass,
