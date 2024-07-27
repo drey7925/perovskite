@@ -836,9 +836,6 @@ async fn connect_impl(
     mut progress: watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
     progress.send((0.1, format!("Connecting to {}", server_addr)))?;
-    let global_render_config = LiveRenderConfig {
-        supersampling: settings.load().render.supersampling,
-    };
     let client_state = net_client::connect_game(
         server_addr,
         username,

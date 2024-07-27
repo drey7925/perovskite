@@ -132,7 +132,8 @@ impl MiniBlockRenderer {
                 ..Default::default()
             },
             AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST,
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
             (surface_size[0] as DeviceSize)
@@ -216,16 +217,6 @@ impl MiniBlockRenderer {
                 BlockRenderPass::Transparent,
             )?;
         }
-
-        commands.next_subpass(
-            SubpassEndInfo {
-                ..Default::default()
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
         commands.end_render_pass(SubpassEndInfo {
             ..Default::default()
         })?;
