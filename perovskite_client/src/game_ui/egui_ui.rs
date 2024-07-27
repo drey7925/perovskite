@@ -6,6 +6,7 @@ use perovskite_core::protocol::items::ItemStack;
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
 
+use arc_swap::ArcSwap;
 use egui::load::SizedTexture;
 use parking_lot::MutexGuard;
 use rustc_hash::FxHashMap;
@@ -13,9 +14,11 @@ use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
 
 use crate::game_state::items::InventoryViewManager;
+use crate::game_state::settings::GameSettings;
 use crate::game_state::{GameAction, InventoryAction};
+use crate::main_menu::{draw_settings_menu, InputCapture};
 use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};
-use crate::vulkan::VulkanContext;
+use crate::vulkan::{VulkanContext, VulkanWindow};
 use crate::{
     game_state::{items::ClientItemManager, ClientState},
     vulkan::Texture2DHolder,
@@ -37,6 +40,7 @@ pub(crate) struct EguiUi {
 
     inventory_open: bool,
     pause_menu_open: bool,
+    settings_menu_open: bool,
     chat_open: bool,
     chat_force_request_focus: bool,
     chat_force_cursor_to_end: bool,
@@ -60,12 +64,15 @@ pub(crate) struct EguiUi {
 
     chat_message_input: String,
     chat_scroll_counter: usize,
+
+    prospective_settings: GameSettings,
 }
 impl EguiUi {
     pub(crate) fn new(
         texture_atlas: Arc<Texture2DHolder>,
         atlas_coords: HashMap<String, texture_packer::Rect>,
         item_defs: Arc<ClientItemManager>,
+        settings: Arc<ArcSwap<GameSettings>>,
     ) -> EguiUi {
         EguiUi {
             texture_atlas,
@@ -73,6 +80,7 @@ impl EguiUi {
             item_defs,
             inventory_open: false,
             pause_menu_open: false,
+            settings_menu_open: false,
             chat_open: false,
             chat_force_request_focus: false,
             chat_force_cursor_to_end: false,
@@ -92,6 +100,8 @@ impl EguiUi {
 
             chat_message_input: String::new(),
             chat_scroll_counter: 0,
+
+            prospective_settings: (**settings.load()).clone(),
         }
     }
     pub(crate) fn wants_user_events(&self) -> bool {
@@ -133,7 +143,11 @@ impl EguiUi {
         ctx: &Context,
         atlas_texture_id: TextureId,
         client_state: &ClientState,
+        input_capture: &mut InputCapture,
+        vk_ctx: &VulkanWindow,
     ) {
+        let mut want_recreate = false;
+
         self.scale = ctx.input(|i| i.pixels_per_point);
         // TODO have more things controlled by the scale. e.g. font sizes?
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::PlusEquals)) {
@@ -194,8 +208,25 @@ impl EguiUi {
         }
 
         if self.pause_menu_open {
-            self.draw_pause_menu(ctx, client_state);
+            self.draw_pause_menu(ctx, client_state, !self.settings_menu_open);
         }
+
+        if self.settings_menu_open {
+            match draw_settings_menu(
+                ctx,
+                &client_state.settings,
+                &mut self.prospective_settings,
+                input_capture,
+                vk_ctx,
+            ) {
+                ControlFlow::Continue(()) => {}
+                ControlFlow::Break(()) => {
+                    vk_ctx.request_recreate();
+                    self.settings_menu_open = false;
+                }
+            }
+        }
+
         // these render a TopBottomPanel, so they need to be last
         self.render_chat_history(ctx, client_state);
         if self.debug_open {
@@ -644,23 +675,22 @@ impl EguiUi {
         self.pixel_rect_to_uv(pixel_rect)
     }
 
-    fn draw_pause_menu(&mut self, ctx: &Context, client_state: &ClientState) {
+    fn draw_pause_menu(&mut self, ctx: &Context, client_state: &ClientState, enabled: bool) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.pause_menu_open = false;
         }
         egui::Window::new("Game paused")
             .collapsible(false)
             .resizable(false)
+            .enabled(enabled)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 if ui.add_enabled(true, Button::new("Resume")).clicked() {
                     self.pause_menu_open = false;
                 }
-                if ui
-                    .add_enabled(false, Button::new("Settings (TODO)"))
-                    .clicked()
-                {
-                    todo!();
+                if ui.add_enabled(true, Button::new("Settings")).clicked() {
+                    self.prospective_settings = (**client_state.settings.load()).clone();
+                    self.settings_menu_open = true;
                 }
                 if ui
                     .add_enabled(true, Button::new("Return to Main Menu"))

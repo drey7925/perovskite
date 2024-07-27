@@ -380,7 +380,6 @@ impl GameEntity {
                 "invalid planned move"
             })?);
         }
-        log::info!("initial queue: {:?}", queue);
         // println!("cms: {:?}", update.current_move_progress);
 
         let mut trailing_entities: Vec<(u32, f32)> = update

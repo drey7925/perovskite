@@ -53,7 +53,7 @@ impl Loadtester {
                 "test_pass".to_string(),
                 true,
                 settings,
-                &vk_ctx,
+                vk_ctx.clone_context(),
                 &mut progress.0,
             )
             .await

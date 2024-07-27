@@ -55,7 +55,7 @@ use crate::vulkan::{
     CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
 };
 
-use super::{frag_simple, vert_2d::UniformData};
+use super::{frag_simple, vert_2d::UniformData, LiveRenderConfig};
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
@@ -243,6 +243,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
         &self,
         ctx: &VulkanWindow,
         config: FlatPipelineConfig<'_>,
+        global_config: &LiveRenderConfig,
     ) -> Result<Self::PipelineWrapperImpl> {
         let FlatPipelineConfig {
             atlas,
@@ -252,7 +253,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
         } = config;
 
         let supersampling = if enable_supersampling {
-            ctx.supersampling
+            global_config.supersampling
         } else {
             Supersampling::None
         };

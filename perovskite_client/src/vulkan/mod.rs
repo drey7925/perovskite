@@ -21,6 +21,7 @@ pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
 pub(crate) mod util;
 
+use std::sync::atomic::AtomicBool;
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::{bail, Context, Result};
@@ -142,7 +143,6 @@ impl VulkanContext {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
     ssaa_render_pass: Arc<RenderPass>,
@@ -152,8 +152,9 @@ pub(crate) struct VulkanWindow {
     framebuffers: Vec<FramebufferHolder>,
     window: Arc<Window>,
     viewport: Viewport,
-    supersampling: Supersampling,
+    want_recreate: AtomicBool,
 }
+
 impl Deref for VulkanWindow {
     type Target = VulkanContext;
     fn deref(&self) -> &Self::Target {
@@ -162,6 +163,11 @@ impl Deref for VulkanWindow {
 }
 
 impl VulkanWindow {
+    pub(crate) fn request_recreate(&self) {
+        self.want_recreate
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn context(&self) -> &VulkanContext {
         &self.vk_ctx
     }
@@ -391,11 +397,15 @@ impl VulkanWindow {
             framebuffers,
             window,
             viewport,
-            supersampling,
+            want_recreate: AtomicBool::new(false),
         })
     }
 
-    fn recreate_swapchain(&mut self, size: PhysicalSize<u32>) -> Result<()> {
+    fn recreate_swapchain(
+        &mut self,
+        size: PhysicalSize<u32>,
+        supersampling: Supersampling,
+    ) -> Result<()> {
         let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent: size.into(),
@@ -416,7 +426,7 @@ impl VulkanWindow {
             self.ssaa_render_pass.clone(),
             self.post_blit_render_pass.clone(),
             self.depth_format,
-            self.supersampling,
+            supersampling,
         )?;
         Ok(())
     }
@@ -585,6 +595,7 @@ fn find_best_format(
 
 #[derive(Clone)]
 pub(crate) struct FramebufferHolder {
+    supersampling: Supersampling,
     ssaa_framebuffer: Arc<Framebuffer>,
     // Vector starting with the source and ending with the target. It may be a singleton, but must
     // not be empty.
@@ -720,6 +731,7 @@ pub(crate) fn get_framebuffers_with_depth(
             )?;
 
             Ok(FramebufferHolder {
+                supersampling,
                 ssaa_framebuffer,
                 blit_path,
                 post_blit_framebuffer,

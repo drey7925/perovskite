@@ -59,7 +59,7 @@ use crate::vulkan::{
 
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
-    PipelineProvider, PipelineWrapper,
+    LiveRenderConfig, PipelineProvider, PipelineWrapper,
 };
 
 use super::{cube_geometry::CubeGeometryVertex, frag_lighting_sparse, SceneState};
@@ -256,13 +256,14 @@ impl PipelineProvider for EntityPipelineProvider {
         &self,
         wnd: &VulkanWindow,
         config: &Texture2DHolder,
+        global_config: &LiveRenderConfig,
     ) -> Result<EntityPipelineWrapper> {
         self.build_pipeline(
             &wnd.vk_ctx,
             wnd.viewport.clone(),
             wnd.ssaa_render_pass.clone(),
             config,
-            wnd.supersampling,
+            global_config.supersampling,
         )
     }
 

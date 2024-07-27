@@ -61,7 +61,7 @@ use crate::vulkan::{
 use crate::vulkan::shaders::flat_texture::FlatTextureVertex;
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
-    PipelineProvider, PipelineWrapper,
+    LiveRenderConfig, PipelineProvider, PipelineWrapper,
 };
 
 use super::{frag_lighting_sparse, SceneState};
@@ -394,21 +394,22 @@ impl CubePipelineProvider {
     }
 }
 impl PipelineProvider for CubePipelineProvider {
+    type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];
+
+    type PerPipelineConfig<'a> = &'a Texture2DHolder;
+    type PerFrameConfig = SceneState;
+    type PipelineWrapperImpl = CubePipelineWrapper;
     fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
         config: &Texture2DHolder,
+        global_config: &LiveRenderConfig,
     ) -> Result<CubePipelineWrapper> {
         self.build_pipeline(
             wnd.viewport.clone(),
             wnd.ssaa_render_pass.clone(),
             config,
-            wnd.supersampling,
+            global_config.supersampling,
         )
     }
-
-    type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];
-    type PerFrameConfig = SceneState;
-    type PipelineWrapperImpl = CubePipelineWrapper;
-    type PerPipelineConfig<'a> = &'a Texture2DHolder;
 }

@@ -17,6 +17,8 @@ use crate::{
     vulkan::{Texture2DHolder, VulkanWindow},
 };
 
+use crate::game_state::settings::Supersampling;
+use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
@@ -26,7 +28,7 @@ use winit::event_loop::EventLoopWindowTarget;
 
 use super::{
     flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
-    PipelineProvider, PipelineWrapper,
+    LiveRenderConfig, PipelineProvider, PipelineWrapper,
 };
 
 // Main thread components of egui rendering (e.g. the Gui which contains a non-Send event loop)
@@ -88,6 +90,9 @@ impl EguiAdapter {
                 enable_depth_stencil: false,
                 enable_supersampling: false,
             },
+            &LiveRenderConfig {
+                supersampling: Supersampling::None,
+            },
         )?;
 
         set_up_fonts(&mut gui_adapter.egui_ctx);
@@ -107,6 +112,7 @@ impl EguiAdapter {
         ctx: &VulkanWindow,
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
         client_state: &ClientState,
+        input_capture: &mut InputCapture,
     ) -> Result<()> {
         let mut egui = self.egui_ui.lock();
         self.gui_adapter.begin_frame();
@@ -114,6 +120,8 @@ impl EguiAdapter {
             &self.gui_adapter.egui_ctx,
             self.atlas_texture_id,
             client_state,
+            input_capture,
+            ctx,
         );
         let cmdbuf = self
             .gui_adapter
@@ -154,6 +162,9 @@ impl EguiAdapter {
                     .context("Post-blit subpass 0 missing")?,
                 enable_depth_stencil: false,
                 enable_supersampling: false,
+            },
+            &LiveRenderConfig {
+                supersampling: Supersampling::None,
             },
         )?;
         Ok(())

@@ -40,6 +40,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::vulkan::VulkanContext;
 use crate::{
     cache::CacheManager,
     game_state::{
@@ -69,7 +70,7 @@ pub(crate) async fn connect_game(
     password: String,
     register: bool,
     settings: Arc<ArcSwap<GameSettings>>,
-    window: &VulkanWindow,
+    vk_ctx: Arc<VulkanContext>,
     progress: &mut watch::Sender<(f32, String)>,
 ) -> Result<Arc<ClientState>> {
     progress.send((1.0 / TOTAL_STEPS, "Connecting to server...".to_string()))?;
@@ -143,12 +144,7 @@ pub(crate) async fn connect_game(
     ))?;
     let block_renderer = {
         let cache_manager_lock = cache_manager.lock();
-        BlockRenderer::new(
-            block_types.clone(),
-            cache_manager_lock,
-            window.clone_context(),
-        )
-        .await?
+        BlockRenderer::new(block_types.clone(), cache_manager_lock, vk_ctx.clone()).await?
     };
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
@@ -159,15 +155,15 @@ pub(crate) async fn connect_game(
     );
     let items = Arc::new(ClientItemManager::new(
         item_defs_proto.into_inner().item_defs,
-        window,
     )?);
 
     progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
         &cache_manager,
-        window.clone_context(),
+        vk_ctx.clone(),
         &block_renderer,
+        settings.clone(),
     )
     .await?;
 
@@ -183,7 +179,7 @@ pub(crate) async fn connect_game(
     let entitity_renderer = EntityRenderer::new(
         entity_defs.into_inner().entity_defs,
         cache_manager.lock(),
-        window.context(),
+        &vk_ctx,
     )
     .await?;
 

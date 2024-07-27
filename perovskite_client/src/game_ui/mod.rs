@@ -10,7 +10,9 @@ use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
 use anyhow::{bail, Error, Result};
+use arc_swap::ArcSwap;
 
+use crate::game_state::settings::GameSettings;
 use crate::{
     cache::CacheManager,
     game_state::items::ClientItemManager,
@@ -30,6 +32,7 @@ pub(crate) async fn make_uis(
     cache_manager: &Arc<Mutex<CacheManager>>,
     ctx: Arc<VulkanContext>,
     block_renderer: &BlockRenderer,
+    settings: Arc<ArcSwap<GameSettings>>,
 ) -> Result<(GameHud, EguiUi)> {
     let (texture_atlas, texture_coords) =
         build_texture_atlas(&item_defs, cache_manager, ctx, block_renderer).await?;
@@ -46,7 +49,7 @@ pub(crate) async fn make_uis(
         fps_counter: fps_counter::FPSCounter::new(),
     };
 
-    let egui_ui = EguiUi::new(texture_atlas, texture_coords, item_defs.clone());
+    let egui_ui = EguiUi::new(texture_atlas, texture_coords, item_defs.clone(), settings);
 
     Ok((hud, egui_ui))
 }

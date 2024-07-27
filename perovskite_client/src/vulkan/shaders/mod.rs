@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::game_state::settings::Supersampling;
 use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
 
@@ -202,6 +203,10 @@ pub(crate) trait PipelineWrapper<T, U> {
     ) -> Result<()>;
 }
 
+pub(crate) struct LiveRenderConfig {
+    pub(crate) supersampling: Supersampling,
+}
+
 pub(crate) trait PipelineProvider
 where
     Self: Sized,
@@ -218,6 +223,7 @@ where
         &self,
         ctx: &VulkanWindow,
         config: Self::PerPipelineConfig<'_>,
+        global_config: &LiveRenderConfig,
     ) -> Result<Self::PipelineWrapperImpl>;
 }
 

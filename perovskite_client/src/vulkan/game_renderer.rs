@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -41,6 +42,7 @@ use vulkano::{
     Validated, VulkanError,
 };
 
+use winit::event::ElementState;
 use winit::window::{ImePurpose, WindowId};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
@@ -48,7 +50,10 @@ use winit::{
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
 
+use crate::game_state::input::Keybind;
+use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
+use crate::vulkan::shaders::LiveRenderConfig;
 use crate::{
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
@@ -61,7 +66,7 @@ use super::{
         egui_adapter::{self, EguiAdapter},
         entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
     },
-    CommandBufferBuilder, FramebufferHolder, VulkanWindow,
+    CommandBufferBuilder, FramebufferHolder, VulkanContext, VulkanWindow,
 };
 
 pub(crate) struct ActiveGame {
@@ -91,6 +96,7 @@ impl ActiveGame {
         ctx: &VulkanWindow,
         framebuffer: &FramebufferHolder,
         mut command_buf_builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        input_capture: &mut InputCapture,
     ) -> Arc<PrimaryAutoCommandBuffer> {
         let _span = span!("build renderer buffers");
         let FrameState {
@@ -285,7 +291,12 @@ impl ActiveGame {
         self.egui_adapter
             .as_mut()
             .unwrap()
-            .draw(ctx, &mut command_buf_builder, &self.client_state)
+            .draw(
+                ctx,
+                &mut command_buf_builder,
+                &self.client_state,
+                input_capture,
+            )
             .unwrap();
 
         command_buf_builder
@@ -300,13 +311,19 @@ impl ActiveGame {
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
-        self.cube_pipeline = self
-            .cube_provider
-            .make_pipeline(ctx, self.client_state.block_renderer.atlas())
-            .unwrap();
-        self.entities_pipeline = self
-            .entities_provider
-            .make_pipeline(ctx, self.client_state.entity_renderer.atlas())?;
+        let global_config = LiveRenderConfig {
+            supersampling: self.client_state.settings.load().render.supersampling,
+        };
+        self.cube_pipeline = self.cube_provider.make_pipeline(
+            ctx,
+            self.client_state.block_renderer.atlas(),
+            &global_config,
+        )?;
+        self.entities_pipeline = self.entities_provider.make_pipeline(
+            ctx,
+            self.client_state.entity_renderer.atlas(),
+            &global_config,
+        )?;
         self.flat_pipeline = {
             let hud_lock = self.client_state.hud.lock();
             self.flat_provider.make_pipeline(
@@ -318,6 +335,7 @@ impl ActiveGame {
                     enable_depth_stencil: true,
                     enable_supersampling: true,
                 },
+                &global_config,
             )?
         };
         self.egui_adapter.as_mut().unwrap().notify_resize(ctx)?;
@@ -327,7 +345,7 @@ impl ActiveGame {
 
 pub(crate) struct ConnectionState {
     pub(crate) progress: watch::Receiver<(f32, String)>,
-    pub(crate) result: oneshot::Receiver<Result<ActiveGame>>,
+    pub(crate) result: oneshot::Receiver<Result<Arc<ClientState>>>,
 }
 
 pub(crate) enum GameState {
@@ -353,7 +371,14 @@ impl GameState {
     ) {
         if let GameState::Connecting(state) = self {
             match state.result.try_recv() {
-                Ok(Ok(mut game)) => {
+                Ok(Ok(mut client_state)) => {
+                    let mut game = match make_active_game(ctx, client_state) {
+                        Ok(game) => game,
+                        Err(e) => {
+                            *self = GameState::ConnectError(format!("{e:?}"));
+                            return;
+                        }
+                    };
                     let egui_adapter =
                         EguiAdapter::new(ctx, event_loop, game.client_state.egui.clone());
                     match egui_adapter {
@@ -386,6 +411,56 @@ impl GameState {
             }
         }
     }
+}
+
+fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Result<ActiveGame> {
+    let global_render_config = LiveRenderConfig {
+        supersampling: client_state.settings.load().render.supersampling,
+    };
+
+    let cube_provider = cube_geometry::CubePipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let cube_pipeline = cube_provider.make_pipeline(
+        &vk_wnd,
+        client_state.block_renderer.atlas(),
+        &global_render_config,
+    )?;
+
+    let entities_provider = entity_geometry::EntityPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let entities_pipeline = entities_provider.make_pipeline(
+        &vk_wnd,
+        client_state.entity_renderer.atlas(),
+        &global_render_config,
+    )?;
+
+    let flat_provider = flat_texture::FlatTexPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let flat_pipeline = {
+        let hud_lock = client_state.hud.lock();
+        flat_provider.make_pipeline(
+            &vk_wnd,
+            FlatPipelineConfig {
+                atlas: hud_lock.texture_atlas.as_ref(),
+                subpass: Subpass::from(vk_wnd.ssaa_render_pass.clone(), 0)
+                    .context("SSAA subpass 0 missing")?,
+                enable_depth_stencil: true,
+                enable_supersampling: true,
+            },
+            &global_render_config,
+        )?
+    };
+
+    let game = ActiveGame {
+        cube_provider,
+        cube_pipeline,
+        flat_provider,
+        flat_pipeline,
+        entities_provider,
+        entities_pipeline,
+        client_state,
+        egui_adapter: None,
+        cube_draw_calls: vec![],
+    };
+
+    Ok(game)
 }
 
 pub(crate) enum GameStateMutRef<'a> {
@@ -428,17 +503,42 @@ impl GameRenderer {
     }
 
     pub fn run_loop(mut self, event_loop: EventLoop<()>) {
-        let mut resized = false;
         let mut recreate_swapchain = false;
+
         let frames_in_flight = self.ctx.swapchain_images.len();
         let mut fences: Vec<Option<Arc<FenceSignalFuture<_>>>> = vec![None; frames_in_flight];
         let mut previous_fence_i = 0;
+
+        let mut input_capture = InputCapture::NotCapturing;
 
         event_loop.run(move |event, event_loop, control_flow| {
             let mut game_lock = self.game.lock();
             game_lock.update_if_connected(&self.ctx, event_loop, control_flow);
             {
                 let _span = span!("client_state handling window event");
+
+                if let InputCapture::Capturing(action) = input_capture {
+                    if let Event::WindowEvent {
+                        window_id: _,
+                        event
+                    } = &event {
+                        match event {WindowEvent::KeyboardInput { input, .. } => {
+                            input_capture =
+                                InputCapture::Captured(action, Keybind::ScanCode(input.scancode));
+                            return;
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button,
+                            ..
+                        } => {
+                            input_capture =
+                                InputCapture::Captured(action, Keybind::MouseButton(*button));
+                            return;
+                        }
+                        _ => {}
+                    }}
+                }
 
                 if let GameStateMutRef::Active(game) = game_lock.as_mut() {
                     let consumed = if let Event::WindowEvent {
@@ -476,10 +576,14 @@ impl GameRenderer {
                     event: WindowEvent::Resized(_),
                     ..
                 } => {
-                    resized = true;
+                    recreate_swapchain = true;
                 }
                 Event::MainEventsCleared => {
                     if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                        if self.ctx.want_recreate.swap(false, Ordering::AcqRel) {
+                            recreate_swapchain = true;
+                        }
+
                         let _span = span!("MainEventsCleared");
                         if self.ctx.window.has_focus()
                             && game.client_state.input.lock().is_mouse_captured()
@@ -538,17 +642,14 @@ impl GameRenderer {
                         self.ctx.window.set_cursor_visible(true);
                     }
 
-                    if resized || recreate_swapchain {
+                    if recreate_swapchain {
                         let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
                         recreate_swapchain = false;
-                        self.ctx.recreate_swapchain(size).unwrap();
-                        if resized {
-                            resized = false;
-                            self.ctx.viewport.extent = size.into();
-                            if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                                game.handle_resize(&mut self.ctx).unwrap();
-                            }
+                        self.ctx.recreate_swapchain(size, self.settings.load().render.supersampling).unwrap();
+                        self.ctx.viewport.extent = size.into();
+                        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                            game.handle_resize(&mut self.ctx).unwrap();
                         }
                     }
 
@@ -605,6 +706,7 @@ impl GameRenderer {
                             &self.ctx,
                             fb_holder,
                             command_buf_builder,
+                            &mut input_capture,
                         )
                     } else {
                         // we're not in the active game, allow the IME
@@ -627,9 +729,10 @@ impl GameRenderer {
                         ).unwrap();
 
                         if let Some(connection_settings) = self.main_menu.lock().draw(
-                            &self.ctx,
+                            &mut self.ctx,
                             &mut game_lock,
                             &mut command_buf_builder,
+                            &mut input_capture
                         ) {
                             self.start_connection(connection_settings);
                         }
@@ -680,8 +783,11 @@ impl GameRenderer {
 
     fn start_connection(&self, connection: ConnectionSettings) {
         let game_settings = self.settings.clone();
+        let global_render_config = LiveRenderConfig {
+            supersampling: game_settings.load().render.supersampling,
+        };
         {
-            let ctx = self.ctx.clone();
+            let ctx = self.ctx.clone_context();
             self.rt.spawn(async move {
                 let active_game = connect_impl(
                     ctx,
@@ -717,63 +823,31 @@ pub(crate) struct ConnectionSettings {
     pub(crate) register: bool,
 
     pub(crate) progress: watch::Sender<(f32, String)>,
-    pub(crate) result: oneshot::Sender<Result<ActiveGame>>,
+    pub(crate) result: oneshot::Sender<Result<Arc<ClientState>>>,
 }
 
 async fn connect_impl(
-    ctx: VulkanWindow,
+    ctx: Arc<VulkanContext>,
     settings: Arc<ArcSwap<GameSettings>>,
     server_addr: String,
     username: String,
     password: String,
     register: bool,
     mut progress: watch::Sender<(f32, String)>,
-) -> Result<ActiveGame> {
+) -> Result<Arc<ClientState>> {
     progress.send((0.1, format!("Connecting to {}", server_addr)))?;
+    let global_render_config = LiveRenderConfig {
+        supersampling: settings.load().render.supersampling,
+    };
     let client_state = net_client::connect_game(
         server_addr,
         username,
         password,
         register,
         settings,
-        &ctx,
+        ctx,
         &mut progress,
     )
     .await?;
-
-    let cube_provider = cube_geometry::CubePipelineProvider::new(ctx.vk_device.clone())?;
-    let cube_pipeline = cube_provider.make_pipeline(&ctx, client_state.block_renderer.atlas())?;
-
-    let entities_provider = entity_geometry::EntityPipelineProvider::new(ctx.vk_device.clone())?;
-    let entities_pipeline =
-        entities_provider.make_pipeline(&ctx, client_state.entity_renderer.atlas())?;
-
-    let flat_provider = flat_texture::FlatTexPipelineProvider::new(ctx.vk_device.clone())?;
-    let flat_pipeline = {
-        let hud_lock = client_state.hud.lock();
-        flat_provider.make_pipeline(
-            &ctx,
-            FlatPipelineConfig {
-                atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: Subpass::from(ctx.ssaa_render_pass.clone(), 0)
-                    .context("SSAA subpass 0 missing")?,
-                enable_depth_stencil: true,
-                enable_supersampling: true,
-            },
-        )?
-    };
-
-    let game = ActiveGame {
-        cube_provider,
-        cube_pipeline,
-        flat_provider,
-        flat_pipeline,
-        entities_provider,
-        entities_pipeline,
-        client_state,
-        egui_adapter: None,
-        cube_draw_calls: vec![],
-    };
-
-    Ok(game)
+    Ok(client_state)
 }
