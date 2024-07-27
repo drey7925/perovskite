@@ -26,6 +26,81 @@ pub(crate) enum BoundAction {
     ChatSlash,
     PhysicsDebug,
 }
+impl std::fmt::Display for BoundAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+impl BoundAction {
+    pub(crate) fn user_friendly_name(&self) -> &str {
+        match self {
+            BoundAction::MoveForward => "Move forward",
+            BoundAction::MoveBackward => "Move backward",
+            BoundAction::MoveLeft => "Move left",
+            BoundAction::MoveRight => "Move right",
+            BoundAction::Jump => "Jump",
+            BoundAction::Descend => "Descend",
+            BoundAction::FastMove => "Fast move",
+            BoundAction::Interact => "Interact",
+            BoundAction::Dig => "Dig",
+            BoundAction::Place => "Place",
+            BoundAction::MouseCapture => "Capture/release mouse",
+            BoundAction::Inventory => "Open inventory",
+            BoundAction::TogglePhysics => "Toggle physics mode",
+            BoundAction::Menu => "Pause menu",
+            BoundAction::Chat => "Chat",
+            BoundAction::ChatSlash => "Chat slash command",
+            BoundAction::PhysicsDebug => "Physics debug",
+        }
+    }
+
+    pub(crate) fn tooltip(&self) -> &str {
+        match self {
+            BoundAction::MoveForward => "Walk/fly/swim forward",
+            BoundAction::MoveBackward => "Walk/fly/swim backward",
+            BoundAction::MoveLeft => "Walk/fly/swim left",
+            BoundAction::MoveRight => "Walk/fly/swim right",
+            BoundAction::Jump => "Jump, climb ladders, swim upward",
+            BoundAction::Descend => "Descend ladders, swim downward",
+            BoundAction::FastMove => "Hold to move quickly, if you have the right permission",
+            BoundAction::Interact => "Interact with blocks like chests, furnaces, etc.",
+            BoundAction::Dig => "Hold to dig the block you're pointing at",
+            BoundAction::Place => "Click/press to place the block in your hand",
+            BoundAction::MouseCapture => "Toggle whether the mouse is captured in the window",
+            BoundAction::Inventory => "Open the inventory view",
+            BoundAction::TogglePhysics => {
+                "Switch between normal, flying, and noclip (if your permissions allow)"
+            }
+            BoundAction::Menu => "Pause the game and open the pause menu",
+            BoundAction::Chat => "View chat and/or type a chat message",
+            BoundAction::ChatSlash => "Open chat with / prefilled for a command - it's highly recommended to keep this bound to your slash key in your choice of keyboard layout",
+            BoundAction::PhysicsDebug => "Hold to see physics debug information (used during development, not always available)",
+        }
+    }
+
+    pub(crate) fn all_bound_actions() -> &'static [BoundAction] {
+        const ALL: &[BoundAction] = &[
+            BoundAction::MoveForward,
+            BoundAction::MoveBackward,
+            BoundAction::MoveLeft,
+            BoundAction::MoveRight,
+            BoundAction::Jump,
+            BoundAction::Descend,
+            BoundAction::FastMove,
+            BoundAction::Interact,
+            BoundAction::Dig,
+            BoundAction::Place,
+            BoundAction::MouseCapture,
+            BoundAction::Inventory,
+            BoundAction::TogglePhysics,
+            BoundAction::Menu,
+            BoundAction::Chat,
+            BoundAction::ChatSlash,
+            BoundAction::PhysicsDebug,
+        ];
+        ALL
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -77,6 +152,28 @@ impl KeybindSettings {
             BoundAction::Chat => self.chat,
             BoundAction::ChatSlash => self.chat_slash,
             BoundAction::PhysicsDebug => self.physics_debug,
+        }
+    }
+
+    pub(crate) fn set(&mut self, action: BoundAction, keybind: Keybind) {
+        match action {
+            BoundAction::MoveForward => self.move_forward = keybind,
+            BoundAction::MoveBackward => self.move_backward = keybind,
+            BoundAction::MoveLeft => self.move_left = keybind,
+            BoundAction::MoveRight => self.move_right = keybind,
+            BoundAction::Jump => self.jump = keybind,
+            BoundAction::Descend => self.descend = keybind,
+            BoundAction::FastMove => self.fast_move = keybind,
+            BoundAction::Interact => self.interact_key = keybind,
+            BoundAction::Dig => self.dig = keybind,
+            BoundAction::Place => self.place = keybind,
+            BoundAction::MouseCapture => self.mouse_capture = keybind,
+            BoundAction::Inventory => self.inventory = keybind,
+            BoundAction::TogglePhysics => self.toggle_physics = keybind,
+            BoundAction::Menu => self.menu = keybind,
+            BoundAction::Chat => self.chat = keybind,
+            BoundAction::ChatSlash => self.chat_slash = keybind,
+            BoundAction::PhysicsDebug => self.physics_debug = keybind,
         }
     }
 }
