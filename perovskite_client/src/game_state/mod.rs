@@ -640,7 +640,7 @@ pub(crate) struct ClientState {
     // This is a leaf mutex - consider using some sort of atomic instead
     pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>,
 
-    pub(crate) timekeeper: Timekeeper,
+    pub(crate) timekeeper: Arc<Timekeeper>,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -652,7 +652,7 @@ impl ClientState {
         egui: EguiUi,
         block_renderer: BlockRenderer,
         entity_renderer: EntityRenderer,
-        timekeeper: Timekeeper,
+        timekeeper: Arc<Timekeeper>,
     ) -> Result<ClientState> {
         Ok(ClientState {
             settings: settings.clone(),

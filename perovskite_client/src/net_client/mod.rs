@@ -91,7 +91,7 @@ pub(crate) async fn connect_game(
         tick: initial_tick,
     } = do_auth_handshake(&tx_send, &mut stream, username, password, register).await?;
 
-    let timekeeper = Timekeeper::new(initial_tick);
+    let timekeeper = Arc::new(Timekeeper::new(initial_tick));
 
     if protocol_version < MIN_PROTOCOL_VERSION {
         bail!(

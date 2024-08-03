@@ -55,6 +55,7 @@ pub(crate) struct Timekeeper {
     /// On some systems like Windows, the actual value inside the Duration might underflow if the
     /// server has been up longer than the current system uptime.
     initial_timebase_estimate: Instant,
+    /// The tick at which we observed initial_timebase_estimate.
     initial_timebase_tick: u64,
     inner: CachelineAligned<Mutex<TimekeeperInner>>,
     current_skew: CachelineAligned<AtomicI64>,

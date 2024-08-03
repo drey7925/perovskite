@@ -22,4 +22,7 @@ pub(crate) mod main_menu;
 pub(crate) mod net_client;
 pub mod vulkan;
 
+// Made public for early testing
+pub mod audio;
+
 pub mod loadtester;
