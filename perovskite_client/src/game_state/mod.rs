@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::f64::consts::{FRAC_PI_2, PI};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -641,6 +642,8 @@ pub(crate) struct ClientState {
     pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>,
 
     pub(crate) timekeeper: Arc<Timekeeper>,
+
+    pub(crate) audio: audio::EngineHandle,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -653,6 +656,7 @@ impl ClientState {
         block_renderer: BlockRenderer,
         entity_renderer: EntityRenderer,
         timekeeper: Arc<Timekeeper>,
+        audio: audio::EngineHandle,
     ) -> Result<ClientState> {
         Ok(ClientState {
             settings: settings.clone(),
@@ -685,6 +689,8 @@ impl ClientState {
                 face_direction: (0.0, 0.0),
             }),
             timekeeper,
+
+            audio,
         })
     }
 
@@ -737,10 +743,17 @@ impl ClientState {
             delta
         };
 
-        let (player_position, (az, el)) =
-            self.physics_state
-                .lock()
-                .update_and_get(self, aspect_ratio, delta);
+        let (player_position, player_velocity, (az, el)) = self
+            .physics_state
+            .lock()
+            .update_and_get(self, aspect_ratio, delta);
+
+        self.audio.update_position(
+            self.timekeeper.now(),
+            player_position,
+            player_velocity.cast().unwrap(),
+            az * PI / 180.,
+        );
 
         let rotation = cgmath::Matrix4::from_angle_x(Deg(el))
             * cgmath::Matrix4::from_angle_y(Deg(180.) - Deg(az));
@@ -852,6 +865,7 @@ pub(crate) struct FrameState {
     pub(crate) ime_enabled: bool,
 }
 
+use crate::audio;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {

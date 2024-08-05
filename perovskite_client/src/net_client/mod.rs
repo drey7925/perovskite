@@ -42,6 +42,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::vulkan::VulkanContext;
 use crate::{
+    audio,
     cache::CacheManager,
     game_state::{
         block_types::ClientBlockTypeManager, items::ClientItemManager, settings::GameSettings,
@@ -185,6 +186,8 @@ pub(crate) async fn connect_game(
 
     let (action_sender, action_receiver) = mpsc::channel(4);
 
+    let audio = audio::start_engine_for_testing(Some(timekeeper.clone())).await?;
+
     let client_state = Arc::new(ClientState::new(
         settings,
         block_types,
@@ -195,6 +198,7 @@ pub(crate) async fn connect_game(
         block_renderer,
         entitity_renderer,
         timekeeper,
+        audio,
     )?);
     tx_send
         .send(StreamToServer {

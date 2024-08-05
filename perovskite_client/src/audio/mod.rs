@@ -9,65 +9,123 @@ use crate::game_state::timekeeper::Timekeeper;
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::OutputCallbackInfo;
+use parking_lot::Mutex;
 use rand::Rng;
 use seqlock::SeqLock;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 // Public for testing
 pub struct EngineHandle {
     control: Arc<SharedControl>,
-    cpal_stream: cpal::Stream,
+    drop_guard: DropGuard,
+}
+
+impl EngineHandle {
+    pub(crate) fn update_position(
+        &self,
+        tick: u64,
+        pos: Vector3<f64>,
+        velocity: Vector3<f32>,
+        azimuth: f64,
+    ) {
+        // TODO: velocity, acceleration
+        {
+            let mut lock = self.control.player_state.lock_write();
+            lock.position = pos;
+            lock.velocity = velocity;
+            lock.azimuth_radian = azimuth;
+            lock.position_timebase_tick = tick;
+        }
+    }
 }
 
 /// Starts an engine and returns the handle that controls it
 ///
 /// Made public for testing during early development
-pub(crate) fn start_engine(
+pub(crate) async fn start_engine(
     //settings: Arc<ArcSwap<GameSettings>>,
     timekeeper: Arc<Timekeeper>,
     initial_position: Vector3<f64>,
 ) -> Result<EngineHandle> {
-    let control = Arc::new(SharedControl::new(initial_position));
-
     use cpal::traits::HostTrait;
-    let host = cpal::default_host();
-    // TODO use a selected device from the settings
-    let output_device = host
-        .default_output_device()
-        .context("no default output device")?;
-    log::info!("Using default output device: {}", output_device.name()?);
-    let mut device_configs: Vec<_> = output_device.supported_output_configs()?.collect();
-    device_configs.sort_by(cpal::SupportedStreamConfigRange::cmp_default_heuristics);
-    log::info!("Available device configs: {:?}", device_configs);
-    // TODO use a selected config from the settings
-    let selected_config_range = device_configs.last().context("no supported config")?;
-    let selected_config = selected_config_range.with_max_sample_rate();
-    log::info!("Using config: {:?}", selected_config);
 
-    let mut engine_state = EngineState::new(control.clone(), selected_config.clone(), timekeeper);
+    let control = Arc::new(SharedControl::new(initial_position));
+    let control_clone = control.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
+    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    let token_clone = cancellation_token.clone();
+    tokio::task::block_in_place(move || {
+        let host = cpal::default_host();
+        // TODO use a selected device from the settings
+        let output_device = host
+            .default_output_device()
+            .context("no default output device")?;
+        log::info!("Using default output device: {}", output_device.name()?);
+        let mut device_configs: Vec<_> = output_device.supported_output_configs()?.collect();
+        device_configs.sort_by(cpal::SupportedStreamConfigRange::cmp_default_heuristics);
+        log::info!("Available device configs: {:?}", device_configs);
+        // TODO use a selected config from the settings
+        let selected_config_range = device_configs.last().context("no supported config")?;
+        let selected_config = selected_config_range.with_max_sample_rate();
+        log::info!("Using config: {:?}", selected_config);
 
-    let stream = output_device
-        .build_output_stream(
-            &selected_config.into(),
-            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                engine_state.callback(data, info);
-            },
-            move |err| {
-                log::error!("Output stream error: {}", err);
-            },
-            None,
-        )
-        .context("error creating output stream")?;
-    stream.play().context("error playing stream")?;
+        let mut engine_state = EngineState::new(control_clone, selected_config.clone(), timekeeper);
+
+        let handle = tokio::runtime::Handle::current();
+
+        let _ = std::thread::spawn(move || {
+            let startup_work = move || {
+                let stream = output_device
+                    .build_output_stream(
+                        &selected_config.into(),
+                        move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                            engine_state.callback(data, info);
+                        },
+                        move |err| {
+                            log::error!("Output stream error: {}", err);
+                        },
+                        None,
+                    )
+                    .context("error creating output stream")?;
+
+                stream.play().context("error playing stream")?;
+                Ok(stream)
+            };
+            // We need to not drop the stream until after the cancellation token is cancelled
+            let stream = match startup_work() {
+                Ok(stream) => {
+                    tx.send(Ok(()))
+                        .expect("Audio startup notification: Listener dropped");
+                    stream
+                }
+                Err(e) => {
+                    log::error!("Failed to start audio: {}", e);
+                    tx.send(Err(e)).unwrap();
+                    return;
+                }
+            };
+            handle.block_on(token_clone.cancelled());
+            stream.pause().unwrap();
+            drop(stream);
+        });
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    rx.await??;
+    log::info!("Audio engine started successfully");
 
     Ok(EngineHandle {
-        //settings,
         control,
-        cpal_stream: stream,
+        drop_guard: cancellation_token.drop_guard(),
     })
 }
 
-pub fn start_engine_for_testing() -> Result<EngineHandle> {
-    let handle = start_engine(Arc::new(Timekeeper::new(0)), Vector3::new(0.0, 0.0, 0.0))?;
+pub async fn start_engine_for_testing(timekeeper: Option<Arc<Timekeeper>>) -> Result<EngineHandle> {
+    let handle = start_engine(
+        timekeeper.unwrap_or(Arc::new(Timekeeper::new(0))),
+        Vector3::new(0.0, 0.0, 0.0),
+    )
+    .await?;
 
     let mut freq = 440.0;
     let mult = 2.0f64.powf(1.0 / 12.0);
@@ -89,6 +147,20 @@ pub fn start_engine_for_testing() -> Result<EngineHandle> {
         }
         freq *= mult;
     }
+    {
+        let mut lock = handle.control.simple_sounds[12].lock_write();
+        *lock = SimpleSoundControlBlock {
+            flags: SOUND_PRESENT
+                | SOUND_SQUARELAW_ENABLED
+                | SOUND_MOVESPEED_ENABLED
+                | SOUND_DIRECTIONAL,
+            position: Vector3::new(3.0, 0.0, 3.0),
+            volume: 0.25,
+            start_tick: 0,
+            id: 440,
+            end_tick: u64::MAX,
+        };
+    }
 
     Ok(handle)
 }
@@ -109,7 +181,7 @@ struct EngineState {
 
 // Const rather than using log! because I don't know what locks we might have to deal when the
 // logger checks whether it's enabled
-const ENABLE_DEBUG_PRINT: bool = true;
+const ENABLE_DEBUG_PRINT: bool = false;
 
 impl EngineState {
     pub(crate) fn callback(&mut self, data: &mut [f32], info: &OutputCallbackInfo) {
@@ -214,6 +286,8 @@ impl EngineState {
 
                     private_state.start_tick = control_block.start_tick;
                     private_state.elapsed_samples = 0;
+                    private_state.last_distance.clear();
+                    private_state.last_balance.clear();
                     // A new sound is starting at some point in ths current buffer.
                     // This is how many samples into the buffer.
                     let start_offset_samples =
@@ -250,11 +324,14 @@ impl EngineState {
                     private_state.elapsed_samples
                 );
             }
-            self.sample_simple_sound(
+            Self::sample_simple_sound(
+                self.stream_config.channels() as usize,
+                self.nanos_per_sample,
                 data,
                 sample_range,
                 &player_state,
                 &control_block,
+                private_state,
                 eval_start_tick,
             );
         }
@@ -280,25 +357,28 @@ impl EngineState {
         }
     }
     fn sample_simple_sound(
-        &self,
+        channels: usize,
+        nanos_per_sample: f64,
         buffer: &mut [f32],
         sample_range: Range<usize>,
         player_state: &PlayerState,
         control: &SimpleSoundControlBlock,
+        state: &mut SimpleSoundState,
         start_tick: u64,
     ) {
-        let channels = self.stream_config.channels() as usize;
         let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
         let left_ear_z = left_ear_azimuth.cos();
         let left_ear_x = left_ear_azimuth.sin();
         let left_ear_vec = Vector3::new(left_ear_x, 0.0, left_ear_z);
 
         for sample in sample_range {
-            let tick = start_tick + (sample as f64 * self.nanos_per_sample) as u64;
+            let tick = start_tick + (sample as f64 * nanos_per_sample) as u64;
             let tick_delta = tick - control.start_tick;
 
             let position = player_state.position(tick);
-            let distance = (position - control.position).magnitude();
+            let distance = state
+                .last_distance
+                .update((position - control.position).magnitude(), 0.001);
             let travel_time = if control.flags & SOUND_MOVESPEED_ENABLED != 0 {
                 distance / SPEED_OF_SOUND_METER_PER_SECOND
             } else {
@@ -322,7 +402,8 @@ impl EngineState {
                 control.volume
             };
 
-            let balance_left = left_ear_vec.dot(control.position - position);
+            let balance_left = left_ear_vec.dot(position - control.position);
+            let balance_left = state.last_balance.update(balance_left, 0.001);
             let l_amplitude = amplitude * (1.0 + 0.8 * balance_left as f32);
 
             let r_amplitude = amplitude * (1.0 - 0.8 * balance_left as f32);
@@ -455,13 +536,47 @@ impl SimpleSoundControlBlock {
 struct SimpleSoundState {
     start_tick: u64,
     elapsed_samples: u64,
+    last_distance: SmoothedVar,
+    last_balance: SmoothedVar,
 }
 impl Default for SimpleSoundState {
     fn default() -> Self {
         SimpleSoundState {
             start_tick: 0,
             elapsed_samples: 0,
+            last_distance: SmoothedVar::default(),
+            last_balance: SmoothedVar::default(),
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct SmoothedVar {
+    val: f64,
+}
+impl Default for SmoothedVar {
+    fn default() -> Self {
+        SmoothedVar { val: 0.0 }
+    }
+}
+impl SmoothedVar {
+    #[inline]
+    fn update(&mut self, val: f64, mix: f64) -> f64 {
+        if self.val.is_nan() {
+            self.val = val;
+        } else {
+            self.val = self.val * (1.0 - mix) + val * mix;
+        }
+        self.val
+    }
+    fn reset(&mut self, val: f64) {
+        self.val = val;
+    }
+    fn get(&self) -> f64 {
+        self.val
+    }
+    fn clear(&mut self) {
+        self.val = f64::NAN;
     }
 }
 

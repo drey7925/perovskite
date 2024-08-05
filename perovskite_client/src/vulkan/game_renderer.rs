@@ -783,9 +783,7 @@ impl GameRenderer {
 
     fn start_connection(&self, connection: ConnectionSettings) {
         let game_settings = self.settings.clone();
-        let global_render_config = LiveRenderConfig {
-            supersampling: game_settings.load().render.supersampling,
-        };
+
         {
             let ctx = self.ctx.clone_context();
             self.rt.spawn(async move {

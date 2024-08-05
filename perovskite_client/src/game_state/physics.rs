@@ -17,7 +17,7 @@
 use std::{ops::RangeInclusive, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3};
+use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3, Zero};
 use perovskite_core::{
     constants::permissions,
     coordinates::BlockCoordinate,
@@ -55,7 +55,7 @@ const _PLAYER_COLLISIONBOX_CORNERS: [Vector3<f64>; 8] = [
 ];
 const TRAVERSABLE_BUMP_HEIGHT_LANDED: f64 = 0.51;
 const TRAVERSABLE_BUMP_HEIGHT_MIDAIR: f64 = 0.2;
-const FLY_SPEED: f64 = 6.0;
+const FLY_SPEED: f64 = 24.0;
 const JUMP_VELOCITY: f64 = 6.0;
 // Not quite earth gravity; tuned for a natural feeling
 const GRAVITY_ACCEL: f64 = 16.;
@@ -118,13 +118,12 @@ impl PhysicsMode {
 
 pub(crate) struct PhysicsState {
     pos: Vector3<f64>,
+    last_velocity: Vector3<f64>,
     az: Deg<f64>,
     el: Deg<f64>,
     target_az: Deg<f64>,
     target_el: Deg<f64>,
     physics_mode: PhysicsMode,
-    // Used for the standard physics mode
-    y_velocity: f64,
     landed_last_frame: bool,
     last_land_height: f64,
     bump_decay: f64,
@@ -139,12 +138,12 @@ impl PhysicsState {
     pub(crate) fn new(settings: Arc<ArcSwap<GameSettings>>) -> Self {
         Self {
             pos: vec3(0., 0., -4.),
+            last_velocity: vec3(0., 0., 0.),
             az: Deg(0.),
             el: Deg(0.),
             target_az: Deg(0.),
             target_el: Deg(0.),
             physics_mode: PhysicsMode::Standard,
-            y_velocity: 0.,
             landed_last_frame: false,
             last_land_height: 0.,
             bump_decay: 0.,
@@ -161,7 +160,7 @@ impl PhysicsState {
         client_state: &ClientState,
         _aspect_ratio: f64,
         delta: Duration,
-    ) -> (Vector3<f64>, (f64, f64)) {
+    ) -> (Vector3<f64>, Vector3<f64>, (f64, f64)) {
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
             self.physics_mode = self.physics_mode.next(self.can_fly, self.can_noclip);
@@ -187,18 +186,17 @@ impl PhysicsState {
             PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
         }
         let adjusted_for_bump = vec3(self.pos.x, self.pos.y - self.bump_decay, self.pos.z);
-        (adjusted_for_bump, self.angle())
+        (adjusted_for_bump, self.last_velocity, self.angle())
     }
 
     fn update_standard(
         &mut self,
         input: &mut InputState,
+        // todo handle long deltas without falling through the ground
         delta: Duration,
         client_state: &ClientState,
     ) {
         let _span = span!("physics_standard");
-        // todo handle long deltas without falling through the ground
-        let delta_secs = delta.as_secs_f64();
 
         let chunks = client_state.chunks.read_lock();
         let block_types = &client_state.block_types;
@@ -215,10 +213,10 @@ impl PhysicsState {
         );
 
         let block_physics = surrounding_block.and_then(|(x, _)| x.physics_info.as_ref());
-        let (mut new_yv, target) = match block_physics {
-            Some(PhysicsInfo::Air(_)) => {
-                self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
-            }
+
+        let delta = delta.as_secs_f64();
+        let (target, mut velocity) = match block_physics {
+            Some(PhysicsInfo::Air(_)) => self.update_target_air(input, self.pos, 3.0, delta),
             Some(PhysicsInfo::Fluid(fluid_data)) => {
                 let surface_test_block = get_block(
                     BlockCoordinate {
@@ -239,12 +237,12 @@ impl PhysicsState {
                 // We're in a block, possibly one we just placed. This shouldn't happen, so allow
                 // the user to jump or walk out of it (unless they would run into other solid blocks
                 // in the process)
-                self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
+                self.update_target_air(input, self.pos, 3.0, delta)
             }
             Some(PhysicsInfo::SolidCustomCollisionboxes(_)) => {
-                self.update_target_air(input, self.pos, delta_secs * 3.0, delta)
+                self.update_target_air(input, self.pos, 3.0, delta)
             }
-            None => self.update_target_air(input, self.pos, delta_secs * 3.0, delta),
+            None => self.update_target_air(input, self.pos, 3.0, delta),
         };
 
         plot!("physics_delta", (target - self.pos).magnitude());
@@ -254,9 +252,9 @@ impl PhysicsState {
         if (new_pos.y - target.y) > COLLISION_EPS {
             self.landed_last_frame = true;
             self.last_land_height = new_pos.y;
-            new_yv = 0.;
+            velocity.y = 0.;
         } else if (new_pos.y - target.y) < -COLLISION_EPS {
-            new_yv = 0.;
+            velocity.y = 0.;
             self.landed_last_frame = false;
         } else {
             self.landed_last_frame = false;
@@ -272,15 +270,9 @@ impl PhysicsState {
                 .clamp(0., TRAVERSABLE_BUMP_HEIGHT_MIDAIR)
         };
 
-        self.pos = self.update_with_bumping(
-            new_pos,
-            bump_height,
-            target,
-            chunks,
-            block_types,
-            delta_secs,
-        );
-        self.y_velocity = new_yv;
+        self.pos =
+            self.update_with_bumping(new_pos, bump_height, target, chunks, block_types, delta);
+        self.last_velocity = velocity;
     }
 
     fn update_with_bumping(
@@ -337,48 +329,43 @@ impl PhysicsState {
         &mut self,
         input: &mut InputState,
         pos: Vector3<f64>,
-        distance: f64,
-        time_delta: Duration,
-    ) -> (f64, Vector3<f64>) {
-        let mut target = self.apply_movement_input(pos, input, distance);
+        speed: f64,
+        delta_seconds: f64,
+    ) -> (Vector3<f64>, Vector3<f64>) {
+        let mut velocity = self.apply_movement_input(input, speed);
         // velocity if unperturbed
-        let mut new_yv = self.y_velocity - (time_delta.as_secs_f64() * GRAVITY_ACCEL)
-            + (DAMPING * self.y_velocity.min(0.).powi(2) * time_delta.as_secs_f64());
+        velocity.y = self.last_velocity.y - (delta_seconds * GRAVITY_ACCEL)
+            + (DAMPING * self.last_velocity.y.min(0.).powi(2) * delta_seconds);
         // Jump key
         if input.is_pressed(BoundAction::Jump) && self.landed_last_frame {
             self.landed_last_frame = false;
-            new_yv = JUMP_VELOCITY;
+            velocity.y = JUMP_VELOCITY;
         }
-        target.y += new_yv * time_delta.as_secs_f64();
-        (new_yv, target)
+        let target = pos + velocity * delta_seconds;
+        (target, velocity)
     }
 
-    fn apply_movement_input(
-        &self,
-        pos: Vector3<f64>,
-        input: &mut InputState,
-        mut distance: f64,
-    ) -> Vector3<f64> {
+    fn apply_movement_input(&self, input: &mut InputState, mut multiplier: f64) -> Vector3<f64> {
         if self.can_fast && input.is_pressed(BoundAction::FastMove) {
-            distance *= Self::FAST_MOVE_RATIO;
+            multiplier *= Self::FAST_MOVE_RATIO;
         }
-        let mut target = pos;
+        let mut result = Vector3::zero();
         if input.is_pressed(BoundAction::MoveForward) {
-            target.z += self.az.cos() * distance;
-            target.x += self.az.sin() * distance;
+            result.z += self.az.cos() * multiplier;
+            result.x += self.az.sin() * multiplier;
         } else if input.is_pressed(BoundAction::MoveBackward) {
-            target.z -= self.az.cos() * distance;
-            target.x -= self.az.sin() * distance;
+            result.z -= self.az.cos() * multiplier;
+            result.x -= self.az.sin() * multiplier;
         }
 
         if input.is_pressed(BoundAction::MoveLeft) {
-            target.z += self.az.sin() * distance;
-            target.x -= self.az.cos() * distance;
+            result.z += self.az.sin() * multiplier;
+            result.x -= self.az.cos() * multiplier;
         } else if input.is_pressed(BoundAction::MoveRight) {
-            target.z -= self.az.sin() * distance;
-            target.x += self.az.cos() * distance;
+            result.z -= self.az.sin() * multiplier;
+            result.x += self.az.cos() * multiplier;
         }
-        target
+        result
     }
 
     const FAST_MOVE_RATIO: f64 = 3.0;
@@ -388,10 +375,9 @@ impl PhysicsState {
         input: &mut InputState,
         pos: Vector3<f64>,
         fluid_data: &perovskite_core::protocol::blocks::FluidPhysicsInfo,
-        delta: Duration,
+        delta: f64,
         is_surface: bool,
-    ) -> (f64, Vector3<f64>) {
-        let delta = delta.as_secs_f64();
+    ) -> (Vector3<f64>, Vector3<f64>) {
         let (horizontal_speed, vertical_velocity, jump_velocity, sink_velocity) = if is_surface {
             (
                 fluid_data.surf_horizontal_speed,
@@ -407,16 +393,16 @@ impl PhysicsState {
                 fluid_data.sink_speed,
             )
         };
-        let mut target = self.apply_movement_input(pos, input, horizontal_speed * delta);
-        let vy = if input.is_pressed(BoundAction::Jump) {
+        let mut velocity = self.apply_movement_input(input, horizontal_speed);
+        velocity.y = if input.is_pressed(BoundAction::Jump) {
             jump_velocity
         } else if input.is_pressed(BoundAction::Descend) {
             sink_velocity
         } else {
             vertical_velocity
         };
-        target.y += vy * delta;
-        (vy, target)
+        let target = pos + velocity * delta;
+        (target, velocity)
     }
 
     fn update_flying(
@@ -426,14 +412,13 @@ impl PhysicsState {
         collisions: bool,
         client_state: &ClientState,
     ) {
-        let distance = delta.as_secs_f64() * FLY_SPEED * 4.0;
-
-        let mut target_pos = self.apply_movement_input(self.pos, input, distance);
+        let mut velocity = self.apply_movement_input(input, FLY_SPEED);
         if input.is_pressed(BoundAction::Jump) {
-            target_pos.y += distance;
+            velocity.y += FLY_SPEED;
         } else if input.is_pressed(BoundAction::Descend) {
-            target_pos.y -= distance;
+            velocity.y -= FLY_SPEED;
         }
+        let target_pos = self.pos + velocity * delta.as_secs_f64();
 
         if collisions {
             let chunks = client_state.chunks.read_lock();
