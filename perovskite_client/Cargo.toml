@@ -69,3 +69,10 @@ default = []
 tracy = ["tracy-client/enable"]
 # malloc tracing (slow)
 tracy_malloc = ["tracy"]
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[[bench]]
+name = "audio_bench"
+harness = false

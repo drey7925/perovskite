@@ -3250,6 +3250,7 @@ dependencies = [
  "circular-buffer",
  "clap 4.4.7",
  "cpal",
+ "criterion",
  "directories",
  "egui",
  "egui_winit_vulkano",

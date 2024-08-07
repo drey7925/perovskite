@@ -120,12 +120,12 @@ pub(crate) async fn start_engine(
     })
 }
 
-pub async fn start_engine_for_testing(timekeeper: Option<Arc<Timekeeper>>) -> Result<EngineHandle> {
-    let handle = start_engine(
-        timekeeper.unwrap_or(Arc::new(Timekeeper::new(0))),
-        Vector3::new(0.0, 0.0, 0.0),
-    )
-    .await?;
+pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
+    start_engine(Arc::new(Timekeeper::new(0)), Vector3::new(0.0, 0.0, 0.0)).await
+}
+
+pub(crate) async fn start_engine_for_testing(timekeeper: Arc<Timekeeper>) -> Result<EngineHandle> {
+    let handle = start_engine(timekeeper, Vector3::new(0.0, 0.0, 0.0)).await?;
 
     let mut freq = 440.0;
     let mult = 2.0f64.powf(1.0 / 12.0);
@@ -595,3 +595,77 @@ pub const SOUND_DIRECTIONAL: u8 = 0x8;
 pub const MIN_DISTANCE: f64 = 1.0;
 
 pub const SPEED_OF_SOUND_METER_PER_SECOND: f64 = 343.0;
+
+// Exposed for benchmarks
+#[doc(hidden)]
+pub mod generated_eqns {
+    #[inline]
+    #[doc(hidden)]
+    pub fn travel_time_newton_raphson(
+        dt: f64,
+        rt: f64,
+        px: f64,
+        py: f64,
+        pz: f64,
+        vx: f64,
+        vy: f64,
+        vz: f64,
+        ax: f64,
+        ay: f64,
+        az: f64,
+    ) -> f64 {
+        /*
+        See attached ipynb for symbolic derivation.
+
+        It's tempting to optimize this using Herbie. Sadly, the results are nonsensical.
+        e.g. there are results with higher reported accuracy that disregard dt entirely.
+
+        Nevertheless, here's the FPCore form for reference:
+
+        FPCore form:
+        (FPCore (dt SPEED_OF_SOUND_METER_PER_SECOND ax rt px vx ay py vy az pz vz)
+        :precision binary64
+        (let* ((t_0 (- (* 2.0 dt) (* 2.0 rt)))
+               (t_1 (+ (- dt) rt))
+               (t_2 (pow t_1 2.0))
+               (t_3 (+ (+ (* (* 0.5 ay) t_2) py) (* vy t_1)))
+               (t_4 (+ (+ (* (* 0.5 ax) t_2) px) (* vx t_1)))
+               (t_5 (+ (+ (* (* 0.5 az) t_2) pz) (* vz t_1)))
+               (t_6 (sqrt (+ (+ (pow t_4 2.0) (pow t_3 2.0)) (pow t_5 2.0)))))
+          (-
+           dt
+           (/
+            (- (* dt SPEED_OF_SOUND_METER_PER_SECOND) t_6)
+            (-
+             SPEED_OF_SOUND_METER_PER_SECOND
+             (/
+              (+
+               (+
+                (* (* (/ 1.0 2.0) (- (* ax t_0) (* 2.0 vx))) t_4)
+                (* (* (/ 1.0 2.0) (- (* ay t_0) (* 2.0 vy))) t_3))
+               (* (* (/ 1.0 2.0) (- (* az t_0) (* 2.0 vz))) t_5))
+              t_6))))))
+        */
+        //
+        // Naive Rust code from sympy:
+        dt - (dt * super::SPEED_OF_SOUND_METER_PER_SECOND
+            - ((0.5 * ax * (-dt + rt).powi(2) + px + vx * (-dt + rt)).powi(2)
+                + (0.5 * ay * (-dt + rt).powi(2) + py + vy * (-dt + rt)).powi(2)
+                + (0.5 * az * (-dt + rt).powi(2) + pz + vz * (-dt + rt)).powi(2))
+            .sqrt())
+            / (super::SPEED_OF_SOUND_METER_PER_SECOND
+                - ((1_f64 / 2.0)
+                    * (ax * (2.0 * dt - 2.0 * rt) - 2.0 * vx)
+                    * (0.5 * ax * (-dt + rt).powi(2) + px + vx * (-dt + rt))
+                    + (1_f64 / 2.0)
+                        * (ay * (2.0 * dt - 2.0 * rt) - 2.0 * vy)
+                        * (0.5 * ay * (-dt + rt).powi(2) + py + vy * (-dt + rt))
+                    + (1_f64 / 2.0)
+                        * (az * (2.0 * dt - 2.0 * rt) - 2.0 * vz)
+                        * (0.5 * az * (-dt + rt).powi(2) + pz + vz * (-dt + rt)))
+                    / ((0.5 * ax * (-dt + rt).powi(2) + px + vx * (-dt + rt)).powi(2)
+                        + (0.5 * ay * (-dt + rt).powi(2) + py + vy * (-dt + rt)).powi(2)
+                        + (0.5 * az * (-dt + rt).powi(2) + pz + vz * (-dt + rt)).powi(2))
+                    .sqrt())
+    }
+}
