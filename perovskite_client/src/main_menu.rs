@@ -78,7 +78,13 @@ impl MainMenu {
             .insert(egui::TextStyle::Body, FontId::proportional(16.0));
         egui_gui.egui_ctx.set_style(style);
         let settings_guard = settings.load();
-        let prospective_settings = (**settings_guard).clone();
+        let mut prospective_settings = (**settings_guard).clone();
+        match prospective_settings.audio.fill_audio_devices() {
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("Failure loading audio devices: {}", e);
+            }
+        }
         MainMenu {
             egui_gui,
             host_field: settings_guard.last_hostname.clone(),
@@ -457,6 +463,11 @@ pub(crate) fn draw_settings_menu(
                 .show(ui, |ui| {
                     draw_render_settings(ui, prospective_settings, vk_ctx);
                 });
+            CollapsingHeader::new("Audio settings")
+                .default_open(true)
+                .show(ui, |ui| {
+                    draw_audio_settings(ui, prospective_settings);
+                });
         });
         ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
             let save_button = egui::Button::new("Save");
@@ -471,6 +482,12 @@ pub(crate) fn draw_settings_menu(
             let cancel_button = egui::Button::new("Cancel");
             if ui.add(cancel_button).clicked() || ui.input(|x| x.key_pressed(egui::Key::Escape)) {
                 *prospective_settings = (**settings.load()).clone();
+                match prospective_settings.audio.fill_audio_devices() {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::error!("Failure loading audio devices: {}", e);
+                    }
+                }
                 result = ControlFlow::Break(());
             }
         });
@@ -662,6 +679,82 @@ fn draw_render_settings(
                         "x8",
                     );
                 });
+            ui.end_row();
+        });
+}
+
+fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
+    egui::Grid::new("audio_grid")
+        .num_columns(2)
+        .spacing([40.0, 4.0])
+        .striped(true)
+        .show(ui, |ui| {
+            ui.label("Global volume")
+                .on_hover_text("The overall volume of the game.");
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.audio.global_volume,
+                0.0..=1.0,
+            ));
+            ui.end_row();
+
+            ui.label("Background volume")
+                .on_hover_text("The volume of background effects (not implemented yet).");
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.audio.background_volume,
+                0.0..=1.0,
+            ));
+            ui.end_row();
+
+            ui.label("Self volume")
+                .on_hover_text("The volume of sounds from your own actions.");
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.audio.self_volume,
+                0.0..=1.0,
+            ));
+            ui.end_row();
+
+            ui.label("Other player volume")
+                .on_hover_text("The volume of sounds from other players.");
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.audio.other_players_volume,
+                0.0..=1.0,
+            ));
+            ui.end_row();
+
+            ui.label("World volume")
+                .on_hover_text("The volume of sounds from the world.");
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.audio.world_volume,
+                0.0..=1.0,
+            ));
+            ui.end_row();
+
+            let output_label = ui
+                .label("Preferred output device")
+                .on_hover_text("The output audio device to use, if available.");
+            let selected_gpu = if prospective_settings
+                .audio
+                .preferred_output_device
+                .is_empty()
+            {
+                "Select..."
+            } else {
+                &prospective_settings.audio.preferred_output_device
+            };
+            let mut preferred_device = prospective_settings.audio.preferred_output_device.clone();
+            egui::ComboBox::from_id_source(output_label.id)
+                .selected_text(selected_gpu)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut preferred_device, String::new(), "No preference");
+                    for device in &prospective_settings.audio.output_devices {
+                        ui.selectable_value(
+                            &mut preferred_device,
+                            device.to_string(),
+                            device.to_string(),
+                        );
+                    }
+                });
+            prospective_settings.audio.preferred_output_device = preferred_device;
             ui.end_row();
         });
 }

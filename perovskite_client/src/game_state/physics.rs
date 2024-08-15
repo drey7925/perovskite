@@ -126,6 +126,7 @@ pub(crate) struct PhysicsState {
     physics_mode: PhysicsMode,
     landed_last_frame: bool,
     last_land_height: f64,
+    walk_sound_odometer: f64,
     bump_decay: f64,
     settings: Arc<ArcSwap<GameSettings>>,
 
@@ -146,6 +147,7 @@ impl PhysicsState {
             physics_mode: PhysicsMode::Standard,
             landed_last_frame: false,
             last_land_height: 0.,
+            walk_sound_odometer: 0.,
             bump_decay: 0.,
             settings,
             can_fly: false,
@@ -250,8 +252,17 @@ impl PhysicsState {
         let new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
         // If we hit a floor or ceiling
         if (new_pos.y - target.y) > COLLISION_EPS {
-            self.landed_last_frame = true;
             self.last_land_height = new_pos.y;
+            self.walk_sound_odometer += (new_pos - self.pos).magnitude();
+            if self.walk_sound_odometer > 1.0 || !self.landed_last_frame {
+                client_state
+                    .audio
+                    .testonly_play_footstep(client_state.timekeeper.now(), new_pos);
+                self.walk_sound_odometer = 0.0;
+                log::info!("landed at {new_pos:?}");
+            }
+
+            self.landed_last_frame = true;
             velocity.y = 0.;
         } else if (new_pos.y - target.y) < -COLLISION_EPS {
             velocity.y = 0.;

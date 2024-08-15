@@ -2,15 +2,19 @@ use crate::game_state::settings::GameSettings;
 use arc_swap::ArcSwap;
 use cgmath::{InnerSpace, Vector3, Zero};
 use std::ops::{Add, Range};
+use std::sync::atomic::{AtomicU32, AtomicU8};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::audio::testdata::FOOTSTEP_WAV_BYTES;
 use crate::game_state::timekeeper::Timekeeper;
-use anyhow::{Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::OutputCallbackInfo;
+use cpal::{Host, OutputCallbackInfo};
 use parking_lot::Mutex;
 use rand::Rng;
+use rubato::VecResampler;
 use seqlock::SeqLock;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -37,19 +41,34 @@ impl EngineHandle {
             lock.position_timebase_tick = tick;
         }
     }
+
+    pub(crate) fn testonly_play_footstep(&self, tick: u64, position: Vector3<f64>) {
+        {
+            let mut lock = self.control.simple_sounds[63].lock_write();
+            *lock = SimpleSoundControlBlock {
+                flags: SOUND_PRESENT
+                    | SOUND_SQUARELAW_ENABLED
+                    | SOUND_MOVESPEED_ENABLED
+                    | SOUND_DIRECTIONAL,
+                position,
+                volume: 1.0,
+                start_tick: tick,
+                id: 0,
+                end_tick: u64::MAX,
+            }
+        }
+    }
 }
 
 /// Starts an engine and returns the handle that controls it
-///
-/// Made public for testing during early development
 pub(crate) async fn start_engine(
-    //settings: Arc<ArcSwap<GameSettings>>,
+    settings: Arc<ArcSwap<GameSettings>>,
     timekeeper: Arc<Timekeeper>,
     initial_position: Vector3<f64>,
 ) -> Result<EngineHandle> {
     use cpal::traits::HostTrait;
 
-    let control = Arc::new(SharedControl::new(initial_position));
+    let control = Arc::new(SharedControl::new(settings.clone(), initial_position));
     let control_clone = control.clone();
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
     let cancellation_token = tokio_util::sync::CancellationToken::new();
@@ -57,10 +76,8 @@ pub(crate) async fn start_engine(
     tokio::task::block_in_place(move || {
         let host = cpal::default_host();
         // TODO use a selected device from the settings
-        let output_device = host
-            .default_output_device()
-            .context("no default output device")?;
-        log::info!("Using default output device: {}", output_device.name()?);
+        let output_device =
+            select_output_device(&host, &settings.load().audio.preferred_output_device)?;
         let mut device_configs: Vec<_> = output_device.supported_output_configs()?.collect();
         device_configs.sort_by(cpal::SupportedStreamConfigRange::cmp_default_heuristics);
         log::info!("Available device configs: {:?}", device_configs);
@@ -69,7 +86,8 @@ pub(crate) async fn start_engine(
         let selected_config = selected_config_range.with_max_sample_rate();
         log::info!("Using config: {:?}", selected_config);
 
-        let mut engine_state = EngineState::new(control_clone, selected_config.clone(), timekeeper);
+        let mut engine_state =
+            EngineState::new(control_clone, selected_config.clone(), timekeeper)?;
 
         let handle = tokio::runtime::Handle::current();
 
@@ -120,13 +138,33 @@ pub(crate) async fn start_engine(
     })
 }
 
-pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
-    start_engine(Arc::new(Timekeeper::new(0)), Vector3::new(0.0, 0.0, 0.0)).await
+fn select_output_device(host: &Host, prefix: &str) -> Result<cpal::Device> {
+    if prefix.is_empty() {
+        log::info!("Using default output device");
+        return host
+            .default_output_device()
+            .context("no default output device");
+    }
+    let devices = host.output_devices()?;
+    for device in devices {
+        if device.name().unwrap().starts_with(prefix) {
+            log::info!("Using output device: {}", device.name().unwrap());
+            return Ok(device);
+        }
+    }
+    log::warn!("No output device with name starting with {} found", prefix);
+    host.default_output_device()
+        .context("no default output device")
 }
 
-pub(crate) async fn start_engine_for_testing(timekeeper: Arc<Timekeeper>) -> Result<EngineHandle> {
-    let handle = start_engine(timekeeper, Vector3::new(0.0, 0.0, 0.0)).await?;
-
+pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
+    let settings = Arc::new(ArcSwap::from_pointee(GameSettings::default()));
+    let handle = start_engine(
+        settings,
+        Arc::new(Timekeeper::new(0)),
+        Vector3::new(0.0, 0.0, 0.0),
+    )
+    .await?;
     let mut freq = 440.0;
     let mult = 2.0f64.powf(1.0 / 12.0);
     for i in 0..12 {
@@ -147,6 +185,14 @@ pub(crate) async fn start_engine_for_testing(timekeeper: Arc<Timekeeper>) -> Res
         }
         freq *= mult;
     }
+    Ok(handle)
+}
+
+pub(crate) async fn start_engine_for_testing(
+    settings: Arc<ArcSwap<GameSettings>>,
+    timekeeper: Arc<Timekeeper>,
+) -> Result<EngineHandle> {
+    let handle = start_engine(settings, timekeeper, Vector3::new(0.0, 0.0, 0.0)).await?;
     {
         let mut lock = handle.control.simple_sounds[12].lock_write();
         *lock = SimpleSoundControlBlock {
@@ -177,6 +223,8 @@ struct EngineState {
 
     nanos_per_sample: f64,
     total_samples_seen: u64,
+
+    test_sampler: Sampler,
 }
 
 // Const rather than using log! because I don't know what locks we might have to deal when the
@@ -333,6 +381,7 @@ impl EngineState {
                 &control_block,
                 private_state,
                 eval_start_tick,
+                &self.test_sampler,
             );
         }
     }
@@ -341,8 +390,8 @@ impl EngineState {
         control: Arc<SharedControl>,
         stream_config: cpal::SupportedStreamConfig,
         timekeeper: Arc<Timekeeper>,
-    ) -> EngineState {
-        EngineState {
+    ) -> Result<EngineState> {
+        Ok(EngineState {
             buffer_counter: 0,
             control,
             stream_config: stream_config.clone(),
@@ -354,7 +403,9 @@ impl EngineState {
             nanos_per_sample: 1_000_000_000.0 / stream_config.sample_rate().0 as f64,
             previous_tick: 0,
             total_samples_seen: 0,
-        }
+
+            test_sampler: Sampler::from_wav(FOOTSTEP_WAV_BYTES, stream_config.sample_rate().0)?,
+        })
     }
     fn sample_simple_sound(
         channels: usize,
@@ -365,6 +416,7 @@ impl EngineState {
         control: &SimpleSoundControlBlock,
         state: &mut SimpleSoundState,
         start_tick: u64,
+        sampler: &Sampler,
     ) {
         let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
         let left_ear_z = left_ear_azimuth.cos();
@@ -408,9 +460,17 @@ impl EngineState {
 
             let r_amplitude = amplitude * (1.0 - 0.8 * balance_left as f32);
 
+            let (l, r) = sampler.sample(effective_time_delta / nanos_per_sample * 1_000_000_000.0);
+            let (l, r) = if channels == 1 {
+                (l + r / 2.0, 0.0)
+            } else {
+                (l, r)
+            };
+
             for chan in 0..channels {
-                let sample_value =
-                    (2.0 * std::f64::consts::PI * effective_time_delta * (control.id as f64)).sin();
+                // let sample_value =
+                //     (2.0 * std::f64::consts::PI * effective_time_delta * (control.id as f64)).sin();
+                let sample_value = if chan == 0 { l } else { r };
                 let amplitude = if channels == 2 && control.flags & SOUND_DIRECTIONAL != 0 {
                     if chan == 0 {
                         l_amplitude
@@ -421,7 +481,7 @@ impl EngineState {
                     amplitude
                 };
                 let index = sample * channels + chan;
-                buffer[index] += amplitude * sample_value as f32;
+                buffer[index] += amplitude * sample_value / 4000.0;
             }
         }
     }
@@ -475,9 +535,10 @@ impl Default for PrivateControl {
 pub(crate) struct SharedControl {
     player_state: SeqLock<PlayerState>,
     simple_sounds: Box<[SeqLock<SimpleSoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
+    settings: Arc<ArcSwap<GameSettings>>,
 }
 impl SharedControl {
-    fn new(initial_position: Vector3<f64>) -> SharedControl {
+    fn new(settings: Arc<ArcSwap<GameSettings>>, initial_position: Vector3<f64>) -> SharedControl {
         const SIMPLE_SOUND_CONST_INIT: SeqLock<SimpleSoundControlBlock> =
             SeqLock::new(SimpleSoundControlBlock::const_default());
         SharedControl {
@@ -489,6 +550,8 @@ impl SharedControl {
                 position_timebase_tick: 0,
             }),
             simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; 64]),
+            // Start all volumes at 0 until they are set by the game loop
+            settings,
         }
     }
 }
@@ -596,6 +659,97 @@ pub const MIN_DISTANCE: f64 = 1.0;
 
 pub const SPEED_OF_SOUND_METER_PER_SECOND: f64 = 343.0;
 
+const OVERSAMPLE_FACTOR: u32 = 1;
+
+struct Sampler {
+    data: Vec<(f32, f32)>,
+}
+impl Sampler {
+    #[inline]
+    fn sample(&self, sample: f64) -> (f32, f32) {
+        let upscaled = sample * OVERSAMPLE_FACTOR as f64;
+        let preceding = upscaled.floor();
+        let following = upscaled.ceil();
+        let fpart = (upscaled - preceding) as f32;
+
+        let preceding_sample = if preceding < 0.0 {
+            (0.0, 0.0)
+        } else if preceding as usize >= self.data.len() {
+            (0.0, 0.0)
+        } else {
+            self.data[preceding as usize]
+        };
+
+        let following_sample = if following < 0.0 {
+            (0.0, 0.0)
+        } else if following as usize >= self.data.len() {
+            (0.0, 0.0)
+        } else {
+            self.data[following as usize]
+        };
+
+        (
+            (1.0 - fpart) * preceding_sample.0 + fpart * following_sample.0,
+            (1.0 - fpart) * preceding_sample.1 + fpart * following_sample.1,
+        )
+    }
+
+    fn from_wav(wav_bytes: &[u8], target_sample_rate: u32) -> Result<Self> {
+        let wav = hound::WavReader::new(wav_bytes).unwrap();
+        let source_rate = wav.spec().sample_rate;
+        let source_channels = wav.spec().channels as usize;
+        let internal_target_rate = target_sample_rate * OVERSAMPLE_FACTOR;
+        if source_channels != 1 && source_channels != 2 {
+            bail!(
+                "Unsupported number of channels: {}; only 1 or 2 are supported",
+                source_channels
+            );
+        }
+
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for (i, sample) in wav.into_samples::<i32>().enumerate() {
+            let sample = sample.unwrap();
+            if source_channels == 1 {
+                left.push(sample as f32);
+                right.push(sample as f32);
+            } else if source_channels == 2 && i % 2 == 0 {
+                left.push(sample as f32);
+            } else if source_channels == 2 && i % 2 == 1 {
+                right.push(sample as f32);
+            }
+        }
+
+        // let mut resampler = rubato::FftFixedInOut::new(
+        //     source_rate as usize,
+        //     internal_target_rate as usize,
+        //     4096,
+        //     2,
+        // )?;
+        let inputs = [left, right];
+        let outputs = inputs; //resampler.process(&inputs, None)?;
+        ensure!(
+            outputs.len() == 2,
+            "Resampling error: did not get 2 outputs, got {}",
+            outputs.len()
+        );
+        let left = outputs[0].to_vec();
+        let right = outputs[1].to_vec();
+        ensure!(
+            left.len() == right.len(),
+            "Resampling error: left and right have different lengths: {} vs {}",
+            left.len(),
+            right.len()
+        );
+        let data = left
+            .into_iter()
+            .zip(right.into_iter())
+            .map(|(l, r)| (l, r))
+            .collect();
+        Ok(Self { data })
+    }
+}
+
 // Exposed for benchmarks
 #[doc(hidden)]
 pub mod generated_eqns {
@@ -668,4 +822,8 @@ pub mod generated_eqns {
                         + (0.5 * az * (-dt + rt).powi(2) + pz + vz * (-dt + rt)).powi(2))
                     .sqrt())
     }
+}
+
+mod testdata {
+    pub(super) const FOOTSTEP_WAV_BYTES: &[u8] = include_bytes!("footstep_temp.wav");
 }

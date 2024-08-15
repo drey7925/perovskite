@@ -1,5 +1,8 @@
 fn main() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let engine = rt

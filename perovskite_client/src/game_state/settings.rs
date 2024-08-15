@@ -67,6 +67,48 @@ impl Default for RenderSettings {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
+pub(crate) struct AudioSettings {
+    pub(crate) global_volume: f64,
+    pub(crate) background_volume: f64,
+    pub(crate) self_volume: f64,
+    pub(crate) other_players_volume: f64,
+    pub(crate) world_volume: f64,
+    pub(crate) preferred_output_device: String,
+    // The detected audio devices
+    #[serde(skip)]
+    pub(crate) output_devices: Vec<String>,
+}
+
+impl AudioSettings {
+    pub(crate) fn fill_audio_devices(&mut self) -> Result<()> {
+        use cpal::traits::DeviceTrait;
+        use cpal::traits::HostTrait;
+        let host = cpal::default_host();
+
+        self.output_devices = host
+            .output_devices()?
+            .map(|d| d.name().unwrap_or(String::from("")))
+            .collect();
+        Ok(())
+    }
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            global_volume: 1.0,
+            background_volume: 1.0,
+            self_volume: 1.0,
+            other_players_volume: 1.0,
+            world_volume: 1.0,
+            preferred_output_device: String::from(""),
+            output_devices: vec![],
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(default)]
 pub(crate) struct DebugSettings {
     pub(crate) extra_entity_debug: bool,
 }
@@ -84,6 +126,7 @@ impl Default for DebugSettings {
 pub(crate) struct GameSettings {
     pub(crate) input: KeybindSettings,
     pub(crate) render: RenderSettings,
+    pub(crate) audio: AudioSettings,
     pub(crate) last_hostname: String,
     pub(crate) last_username: String,
     pub(crate) previous_servers: Vec<String>,

@@ -690,6 +690,12 @@ impl EguiUi {
                 }
                 if ui.add_enabled(true, Button::new("Settings")).clicked() {
                     self.prospective_settings = (**client_state.settings.load()).clone();
+                    match self.prospective_settings.audio.fill_audio_devices() {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("Failure loading audio devices: {}", e);
+                        }
+                    };
                     self.settings_menu_open = true;
                 }
                 if ui

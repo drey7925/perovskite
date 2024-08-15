@@ -186,7 +186,7 @@ pub(crate) async fn connect_game(
 
     let (action_sender, action_receiver) = mpsc::channel(4);
 
-    let audio = audio::start_engine_for_testing(timekeeper.clone()).await?;
+    let audio = audio::start_engine_for_testing(settings.clone(), timekeeper.clone()).await?;
 
     let client_state = Arc::new(ClientState::new(
         settings,
