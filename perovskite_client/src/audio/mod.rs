@@ -14,7 +14,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
 use parking_lot::Mutex;
 use rand::Rng;
-use rubato::VecResampler;
+use rubato::Resampler;
 use seqlock::SeqLock;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -696,9 +696,9 @@ impl Sampler {
 
     fn from_wav(wav_bytes: &[u8], target_sample_rate: u32) -> Result<Self> {
         let wav = hound::WavReader::new(wav_bytes).unwrap();
-        let source_rate = wav.spec().sample_rate;
+        let source_rate = dbg!(wav.spec().sample_rate);
         let source_channels = wav.spec().channels as usize;
-        let internal_target_rate = target_sample_rate * OVERSAMPLE_FACTOR;
+        let internal_target_rate = dbg!(target_sample_rate * OVERSAMPLE_FACTOR);
         if source_channels != 1 && source_channels != 2 {
             bail!(
                 "Unsupported number of channels: {}; only 1 or 2 are supported",
@@ -720,30 +720,58 @@ impl Sampler {
             }
         }
 
-        // let mut resampler = rubato::FftFixedInOut::new(
-        //     source_rate as usize,
-        //     internal_target_rate as usize,
-        //     4096,
-        //     2,
-        // )?;
-        let inputs = [left, right];
-        let outputs = inputs; //resampler.process(&inputs, None)?;
-        ensure!(
-            outputs.len() == 2,
-            "Resampling error: did not get 2 outputs, got {}",
-            outputs.len()
-        );
-        let left = outputs[0].to_vec();
-        let right = outputs[1].to_vec();
-        ensure!(
-            left.len() == right.len(),
-            "Resampling error: left and right have different lengths: {} vs {}",
-            left.len(),
-            right.len()
-        );
-        let data = left
+        const CHUNK_SIZE: usize = 4096;
+
+        let mut resampler = rubato::FftFixedInOut::new(
+            source_rate as usize,
+            internal_target_rate as usize,
+            CHUNK_SIZE,
+            2,
+        )?;
+        let mut left_output = Vec::new();
+        let mut right_output = Vec::new();
+
+        let mut pos = 0;
+
+        loop {
+            use rubato::Resampler;
+            let input_frames = resampler.input_frames_next();
+            let remaining = left.len() - pos;
+            if remaining < input_frames {
+                if remaining > 0 {
+                    let outputs =
+                        resampler.process_partial(Some(&[&left[pos..], &right[pos..]]), None)?;
+                    assert_eq!(outputs.len(), 2);
+                    let mut outputs = outputs.into_iter();
+                    left_output.extend(outputs.next().unwrap());
+                    right_output.extend(outputs.next().unwrap());
+                }
+
+                let leftover_outputs = resampler.process_partial::<Vec<f32>>(None, None)?;
+                assert_eq!(leftover_outputs.len(), 2);
+                let mut leftover_outputs = leftover_outputs.into_iter();
+                left_output.extend(leftover_outputs.next().unwrap());
+                right_output.extend(leftover_outputs.next().unwrap());
+                break;
+            } else {
+                let outputs = resampler.process(
+                    &[
+                        &left[pos..pos + input_frames],
+                        &right[pos..pos + input_frames],
+                    ],
+                    None,
+                )?;
+                assert_eq!(outputs.len(), 2);
+                let mut outputs = outputs.into_iter();
+                left_output.extend(outputs.next().unwrap());
+                right_output.extend(outputs.next().unwrap());
+                pos += input_frames;
+            }
+        }
+
+        let data = left_output
             .into_iter()
-            .zip(right.into_iter())
+            .zip(right_output.into_iter())
             .map(|(l, r)| (l, r))
             .collect();
         Ok(Self { data })
