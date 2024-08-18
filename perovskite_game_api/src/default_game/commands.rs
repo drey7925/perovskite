@@ -290,6 +290,13 @@ impl ChatCommandHandler for DiscardAllCommand {
     }
 }
 
+const TELEPORT_USAGE_MESSAGE: &str = r"Incorrect usage: should be:
+    /teleport <x> <y> <z> - teleport yourself to a coordinate,
+    /teleport <player> <x> <y> <z> - teleport a player to a coordinate,
+    /teleport <player> - teleport yourself to a player
+    /teleport <player1> <player2> - teleport player1 to player2
+";
+
 struct TeleportCommand;
 #[async_trait]
 impl ChatCommandHandler for TeleportCommand {
@@ -302,6 +309,23 @@ impl ChatCommandHandler for TeleportCommand {
         }
         let params = message.split_whitespace().collect::<Vec<_>>();
         let (name, coords) = match params.len() {
+            2 => {
+                let player = match context.initiator() {
+                    EventInitiator::Player(p) => p.player.name(),
+                    _ => bail!("Incorrect usage: trying to teleport to a player, and caller was not a player"),
+                };
+                let dst = context
+                    .player_manager()
+                    .with_connected_player(params[1], |p| Ok(p.last_position().position))?;
+                (player, dst)
+            }
+            3 => {
+                let player = params[1];
+                let dst = context
+                    .player_manager()
+                    .with_connected_player(params[1], |p| Ok(p.last_position().position))?;
+                (player, dst)
+            }
             4 => {
                 let name = match context.initiator() {
                     EventInitiator::Player(p) => p.player.name(),
@@ -309,16 +333,15 @@ impl ChatCommandHandler for TeleportCommand {
                 };
                 (
                     name,
-                    (params[1].parse()?, params[2].parse()?, params[3].parse()?),
+                    Vector3::new(params[1].parse()?, params[2].parse()?, params[3].parse()?),
                 )
             }
             5 => (
                 params[1],
-                (params[2].parse()?, params[3].parse()?, params[4].parse()?),
+                Vector3::new(params[2].parse()?, params[3].parse()?, params[4].parse()?),
             ),
-            _ => bail!("Incorrect usage: should be /teleport [player] <x> <y> <z>"),
+            _ => bail!(TELEPORT_USAGE_MESSAGE),
         };
-        let coords = Vector3::<f64>::new(coords.0, coords.1, coords.2);
 
         if !coords.x.is_finite() || !coords.y.is_finite() || !coords.z.is_finite() {
             bail!("Incorrect usage: a coordinate was infinite/NaN");
