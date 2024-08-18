@@ -689,7 +689,6 @@ impl ClientState {
                 face_direction: (0.0, 0.0),
             }),
             timekeeper,
-
             audio,
         })
     }

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::audio::testdata::FOOTSTEP_WAV_BYTES;
 use crate::game_state::timekeeper::Timekeeper;
 use anyhow::{bail, ensure, Context, Result};
+use bitvec::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
 use parking_lot::Mutex;
@@ -17,14 +18,84 @@ use rand::Rng;
 use rubato::Resampler;
 use seqlock::SeqLock;
 use tokio_util::sync::{CancellationToken, DropGuard};
-
 // Public for testing
 pub struct EngineHandle {
     control: Arc<SharedControl>,
     drop_guard: DropGuard,
+    simple_sounds_bitmap: Mutex<AllocatorState>,
+}
+
+/// An opaque token used to modify/remove a sound in a slot.
+/// Resilient to evictions, since it keeps a sequence number.
+///
+/// Note: PartialOrd/Ord derived implementation is only for the benefit of
+/// ord-based datastructures (e.g. BTreeMap). No semantic meaning should
+/// be ascribed to the result of these comparisons.
+#[derive(PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct SimpleSoundToken(u64);
+
+struct AllocatorState {
+    simple_sound_tokens: [u64; NUM_SIMPLE_SOUND_SLOTS],
+    simple_sounds_next_sequence: u64,
+}
+
+impl AllocatorState {
+    fn new() -> AllocatorState {
+        AllocatorState {
+            simple_sound_tokens: [0; NUM_SIMPLE_SOUND_SLOTS],
+            // This must start at a nonzero value, since 0 is a sentinel
+            simple_sounds_next_sequence: NUM_SIMPLE_SOUND_SLOTS as u64,
+        }
+    }
 }
 
 impl EngineHandle {
+    fn alloc_simple_sound(
+        &self,
+        tick_now: u64,
+        player_position: Vector3<f64>,
+        sound: SimpleSoundControlBlock,
+    ) -> Option<SimpleSoundToken> {
+        assert_ne!(sound.flags & SOUND_PRESENT, 0);
+        let mut alloc_lock = self.simple_sounds_bitmap.lock();
+
+        let seqnum = alloc_lock.simple_sounds_next_sequence;
+        alloc_lock.simple_sounds_next_sequence += NUM_SIMPLE_SOUND_SLOTS as u64;
+
+        if let Some(index) = alloc_lock.simple_sound_tokens.iter().position(|x| *x == 0) {
+            let token = seqnum + (index as u64);
+            alloc_lock.simple_sound_tokens[index] = token;
+            {
+                let mut lock = self.control.simple_sounds[index].lock_write();
+                *lock = sound;
+            }
+            return Some(SimpleSoundToken(token));
+        } else {
+            let candidate_score = sound.compute_score(tick_now, player_position);
+            let mut scores = [0; NUM_SIMPLE_SOUND_SLOTS];
+            for i in 0..NUM_SIMPLE_SOUND_SLOTS {
+                let control_block = self.control.simple_sounds[i].read();
+                scores[i] = control_block.compute_score(tick_now, player_position);
+            }
+            let (min_index, min_score) = scores
+                .iter()
+                .copied()
+                .enumerate()
+                .min_by_key(|&(i, score)| score)
+                .unwrap();
+            if min_score < candidate_score {
+                let token = seqnum + (min_index as u64);
+                alloc_lock.simple_sound_tokens[min_index] = token;
+                {
+                    let mut lock = self.control.simple_sounds[min_index].lock_write();
+                    *lock = sound;
+                }
+                return Some(SimpleSoundToken(token));
+            }
+            return None;
+        }
+    }
+
     pub(crate) fn update_position(
         &self,
         tick: u64,
@@ -32,7 +103,6 @@ impl EngineHandle {
         velocity: Vector3<f32>,
         azimuth: f64,
     ) {
-        // TODO: velocity, acceleration
         {
             let mut lock = self.control.player_state.lock_write();
             lock.position = pos;
@@ -44,17 +114,25 @@ impl EngineHandle {
 
     pub(crate) fn testonly_play_footstep(&self, tick: u64, position: Vector3<f64>) {
         {
-            let mut lock = self.control.simple_sounds[63].lock_write();
-            *lock = SimpleSoundControlBlock {
-                flags: SOUND_PRESENT
-                    | SOUND_SQUARELAW_ENABLED
-                    | SOUND_MOVESPEED_ENABLED
-                    | SOUND_DIRECTIONAL,
-                position,
-                volume: 1.0,
-                start_tick: tick,
-                id: 0,
-                end_tick: u64::MAX,
+            if self
+                .alloc_simple_sound(
+                    tick,
+                    position,
+                    SimpleSoundControlBlock {
+                        flags: SOUND_PRESENT
+                            | SOUND_SQUARELAW_ENABLED
+                            | SOUND_MOVESPEED_ENABLED
+                            | SOUND_DIRECTIONAL,
+                        position,
+                        volume: 1.0,
+                        start_tick: tick,
+                        id: 0,
+                        end_tick: u64::MAX,
+                    },
+                )
+                .is_none()
+            {
+                log::warn!("Failed to allocate a sound slot for footstep")
             }
         }
     }
@@ -135,6 +213,7 @@ pub(crate) async fn start_engine(
     Ok(EngineHandle {
         control,
         drop_guard: cancellation_token.drop_guard(),
+        simple_sounds_bitmap: Mutex::new(AllocatorState::new()),
     })
 }
 
@@ -582,6 +661,7 @@ pub(crate) struct SimpleSoundControlBlock {
     /// based on
     pub end_tick: u64,
 }
+
 impl SimpleSoundControlBlock {
     const fn const_default() -> Self {
         SimpleSoundControlBlock {
@@ -592,6 +672,50 @@ impl SimpleSoundControlBlock {
             id: 0,
             end_tick: 0,
         }
+    }
+
+    /// Heuristically identify which sounds are most important. Higher values are considered more
+    /// important.
+    pub(crate) fn compute_score(&self, tick_now: u64, player_position: Vector3<f64>) -> u64 {
+        if self.flags & SOUND_PRESENT == 0 {
+            return 0;
+        }
+        if self.flags & SOUND_STICKY != 0 {
+            return u64::MAX;
+        }
+
+        // We assume that the player won't move faster than the speed of sound
+        let distance = (self.position - player_position).magnitude();
+        let estimated_end_tick = if self.flags & SOUND_MOVESPEED_ENABLED != 0 {
+            let delay_ticks =
+                ((distance / SPEED_OF_SOUND_METER_PER_SECOND) * 1_000_000_000.0) as u64;
+            // The estimated end tick in the *player* reference frame
+            self.end_tick.saturating_add(delay_ticks)
+        } else {
+            self.end_tick
+        };
+        if estimated_end_tick < tick_now {
+            return 0;
+        }
+
+        const BASE_SCORE: u64 = 1 << 60;
+        const BASE_SCORE_F64: f64 = BASE_SCORE as f64;
+        return if self.flags & SOUND_SQUARELAW_ENABLED != 0 {
+            let dropoff = (distance * distance).max(1.0);
+            let score = BASE_SCORE_F64 / dropoff;
+            if !score.is_finite() || !score.is_sign_positive() {
+                log::warn!(
+                    "Nonsensical score for control block {:?}, tick {}, pos {:?}",
+                    self,
+                    tick_now,
+                    player_position
+                );
+                return 0;
+            }
+            score as u64
+        } else {
+            BASE_SCORE
+        };
     }
 }
 
@@ -652,6 +776,8 @@ pub const SOUND_MOVESPEED_ENABLED: u8 = 0x2;
 pub const SOUND_SQUARELAW_ENABLED: u8 = 0x4;
 /// If set, the sound undergoes directionality effects
 pub const SOUND_DIRECTIONAL: u8 = 0x8;
+/// If set, the sound is considered sticky, and will never be deallocated
+pub const SOUND_STICKY: u8 = 0x10;
 
 /// The minimum distance considered for square-law effects. By enforcing this, we avoid
 /// excessive amplitudes for near-zero distances.

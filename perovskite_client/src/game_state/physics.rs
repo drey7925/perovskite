@@ -259,7 +259,6 @@ impl PhysicsState {
                     .audio
                     .testonly_play_footstep(client_state.timekeeper.now(), new_pos);
                 self.walk_sound_odometer = 0.0;
-                log::info!("landed at {new_pos:?}");
             }
 
             self.landed_last_frame = true;

@@ -13,7 +13,7 @@ fn chunk_benchmarks(c: &mut Criterion) {
             b.iter(|| {
                 z += 1;
                 gs.game_map()
-                    .serialize_for_client(ChunkCoordinate::new(1, 0, z), true)
+                    .serialize_for_client(ChunkCoordinate::new(1, 0, z), true, || {})
             })
         });
 
@@ -21,7 +21,7 @@ fn chunk_benchmarks(c: &mut Criterion) {
             b.iter(|| {
                 z += 1;
                 gs.game_map()
-                    .serialize_for_client(ChunkCoordinate::new(1, -8, z), true)
+                    .serialize_for_client(ChunkCoordinate::new(1, -8, z), true, || {})
             })
         });
 
@@ -29,7 +29,7 @@ fn chunk_benchmarks(c: &mut Criterion) {
             b.iter(|| {
                 z += 1;
                 gs.game_map()
-                    .serialize_for_client(ChunkCoordinate::new(1, 16, z), true)
+                    .serialize_for_client(ChunkCoordinate::new(1, 16, z), true, || {})
             })
         });
 
