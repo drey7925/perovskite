@@ -668,16 +668,9 @@ impl Deferral<Result<BlockId>, BlockCoordinate> {
         CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
             deferred_call: Box::pin(async move {
                 let (t, resid) = self.deferred_call.await;
-                if let Ok(block) = t {
-                    ContinuationResult {
-                        value: ContinuationResultValue::GetBlock(block, resid),
-                        tag,
-                    }
-                } else {
-                    ContinuationResult {
-                        value: ContinuationResultValue::Error(t.unwrap_err()),
-                        tag,
-                    }
+                ContinuationResult {
+                    value: t.map(|block| ContinuationResultValue::GetBlock(block, resid)),
+                    tag,
                 }
             }),
             trace_buffer: TraceBuffer::empty(),
@@ -693,15 +686,11 @@ macro_rules! impl_deferral {
                 CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
                     deferred_call: Box::pin(async move {
                         let (t, _) = self.deferred_call.await;
-                        match t {
-                            Ok(t) => ContinuationResult {
-                                value: ContinuationResultValue::$Variant(t),
+                        {
+                            ContinuationResult {
+                                value: t.map(|val| ContinuationResultValue::$Variant(val)),
                                 tag,
-                            },
-                            Err(e) => ContinuationResult {
-                                value: ContinuationResultValue::Error(e),
-                                tag,
-                            },
+                            }
                         }
                     }),
                     trace_buffer: TraceBuffer::empty(),
@@ -716,11 +705,11 @@ macro_rules! impl_deferral {
                         let (t, _) = self.deferred_call.await;
                         match t {
                             Some(t) => ContinuationResult {
-                                value: ContinuationResultValue::$Variant(t),
+                                value: Ok(ContinuationResultValue::$Variant(t)),
                                 tag,
                             },
                             None => ContinuationResult {
-                                value: ContinuationResultValue::None,
+                                value: Ok(ContinuationResultValue::None),
                                 tag,
                             },
                         }
@@ -736,7 +725,7 @@ macro_rules! impl_deferral {
                     deferred_call: Box::pin(async move {
                         let (t, _) = self.deferred_call.await;
                         ContinuationResult {
-                            value: ContinuationResultValue::$Variant(t),
+                            value: Ok(ContinuationResultValue::$Variant(t)),
                             tag,
                         }
                     }),
@@ -760,7 +749,10 @@ impl Deferral<ContinuationResultValue, ()> {
         CoroutineResult::_DeferredReenterCoroutine(DeferredPrivate {
             deferred_call: Box::pin(async move {
                 let (value, _) = self.deferred_call.await;
-                ContinuationResult { tag, value }
+                ContinuationResult {
+                    tag,
+                    value: Ok(value),
+                }
             }),
             trace_buffer: TraceBuffer::empty(),
         })
@@ -873,8 +865,6 @@ pub enum ContinuationResultValue {
     Boolean(bool),
     /// A movement result from a deferred call
     EntityDecision(EntityMoveDecision),
-    /// An anyhow::Error result from a deferred call
-    Error(anyhow::Error),
     /// A heap-allocated result from a deferred call
     HeapResult(HeapResult),
     /// None. Don't even reinvoke the coroutine
@@ -887,7 +877,7 @@ pub struct ContinuationResult {
     /// The tag that was passed when deferring the call
     pub tag: u32,
     /// The result of the deferred call
-    pub value: ContinuationResultValue,
+    pub value: Result<ContinuationResultValue>,
 }
 
 /// Warning: This trait is not stable and may change in the future. If `coroutine_trait` is stabilized,
@@ -1513,7 +1503,7 @@ impl EntityCoreArray {
                                 entity_id: id,
                                 index: i,
                                 result: ContinuationResult {
-                                    value: ContinuationResultValue::EntityDecision(result),
+                                    value: Ok(ContinuationResultValue::EntityDecision(result)),
                                     // The tag doesn't matter in this case
                                     tag: 0,
                                 },
@@ -1784,7 +1774,7 @@ impl EntityCoreArray {
                     &EventInitiator::Engine
                 ),
                 Some(c) => match c.result.value {
-                    ContinuationResultValue::EntityDecision(m) => {
+                    Ok(ContinuationResultValue::EntityDecision(m)) => {
                         Ok(CoroutineResult::Successful(m))
                     }
                     _ => {
@@ -1913,7 +1903,7 @@ impl EntityCoreArray {
                                 entity_id: id,
                                 index: i,
                                 result: ContinuationResult {
-                                    value: ContinuationResultValue::EntityDecision(result),
+                                    value: Ok(ContinuationResultValue::EntityDecision(result)),
                                     // The tag doesn't matter in this case
                                     tag: 0,
                                 },

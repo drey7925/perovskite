@@ -16,7 +16,7 @@ use perovskite_core::{
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
     util::{TraceBuffer, TraceLog},
 };
-use perovskite_server::game_state::entities::TrailingEntity;
+use perovskite_server::game_state::entities::{EntityMoveDecision, TrailingEntity};
 use perovskite_server::game_state::{
     self,
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
@@ -675,10 +675,10 @@ impl EntityCoroutine for CartCoroutine {
         trace_buffer.log("In continuation");
         if continuation_result.tag == CONTINUATION_TAG_SIGNAL {
             match continuation_result.value {
-                ContinuationResultValue::GetBlock(block_id, coord) => {
+                Ok(ContinuationResultValue::GetBlock(block_id, coord)) => {
                     self.cleared_signals.insert(coord, block_id);
                 }
-                ContinuationResultValue::HeapResult(result) => {
+                Ok(ContinuationResultValue::HeapResult(result)) => {
                     match result.downcast::<Option<InterlockingRoute>>() {
                         Ok(steps) => {
                             match *steps {
@@ -707,10 +707,17 @@ impl EntityCoroutine for CartCoroutine {
                                 }
                             }
                         }
+                        // err from downcasting
                         Err(_) => {
                             log::error!("Unexpected heap result");
                         }
                     }
+                }
+                // Err from the deferred task
+                Err(e) => {
+                    log::error!("Cart coroutine got an error: {e:?}");
+                    // Consider best-effort release of held signals
+                    return CoroutineResult::Successful(EntityMoveDecision::ImmediateDespawn);
                 }
                 _ => {
                     log::error!(
