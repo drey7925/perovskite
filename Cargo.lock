@@ -3408,6 +3408,7 @@ dependencies = [
  "perovskite_core",
  "prost 0.13.1",
  "rand",
+ "rlimit",
  "rocksdb",
  "rustc-hash 2.0.0",
  "sha2",
@@ -3981,6 +3982,15 @@ dependencies = [
  "spin",
  "untrusted",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "rlimit"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3560f70f30a0f16d11d01ed078a07740fe6b489667abc7c7b029155d9f21c3d8"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

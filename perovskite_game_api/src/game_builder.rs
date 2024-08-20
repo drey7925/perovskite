@@ -193,6 +193,8 @@ impl GameBuilder {
             bind_addr: None,
             port: 0,
             trace_rate_denominator: usize::MAX,
+            rocksdb_num_fds: 512,
+            rocksdb_point_lookup_cache_mib: 128,
         })?;
 
         Ok((Self::new_with_builtins(builder)?, data_dir))

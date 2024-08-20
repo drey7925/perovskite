@@ -52,6 +52,7 @@ circular-buffer = "0.1.6"
 arrayvec = "^0.7.4"
 obj-rs = "0.7.1"
 bytemuck = { version = "1.16.1", features = ["derive"] }
+rlimit = "0.10.1"
 
 [dev-dependencies]
 ctor = "0.2.0"

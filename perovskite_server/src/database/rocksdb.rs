@@ -21,16 +21,14 @@ use rocksdb::{Options, ReadOptions, DB};
 use tracy_client::span;
 
 use super::database_engine::GameDatabase;
+pub use rocksdb::Options as RocksdbOptions;
 
 pub(crate) struct RocksDbBackend {
     db: DB,
 }
 impl RocksDbBackend {
-    pub(crate) fn new<P: AsRef<Path>>(path: P) -> Result<RocksDbBackend> {
-        let mut opts = Options::default();
-        opts.create_if_missing(true);
-        opts.optimize_for_point_lookup(128);
-        let db = DB::open(&opts, path.as_ref())?;
+    pub(crate) fn new<P: AsRef<Path>>(path: P, options: RocksdbOptions) -> Result<RocksDbBackend> {
+        let db = DB::open(&options, path.as_ref())?;
         tracing::info!("Opened DB at {:?}", path.as_ref());
         tracing::info!(
             "db stats: \n{}\n{}\ntotal size: {}",

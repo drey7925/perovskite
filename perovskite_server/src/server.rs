@@ -28,6 +28,7 @@ use perovskite_core::{
     util::set_trace_rate_denominator,
 };
 
+use crate::database::rocksdb::RocksdbOptions;
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
@@ -59,6 +60,12 @@ pub struct ServerArgs {
 
     #[arg(long, default_value_t = 65536)]
     pub trace_rate_denominator: usize,
+
+    #[arg(long, default_value_t = 128)]
+    pub rocksdb_point_lookup_cache_mib: u64,
+
+    #[arg(long, default_value_t = 512)]
+    pub rocksdb_num_fds: std::os::raw::c_int,
 }
 
 pub struct Server {
@@ -184,7 +191,16 @@ impl ServerBuilder {
 
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
-        let db = Arc::new(RocksDbBackend::new(db_dir)?);
+        let mut options = RocksdbOptions::default();
+        options.optimize_for_point_lookup(args.rocksdb_point_lookup_cache_mib);
+        let rocksdb_fds = set_rlimit_for_rocksdb(args.rocksdb_num_fds)?;
+        tracing::info!(
+            "Using up to {} open file descriptors for rocksdb",
+            rocksdb_fds
+        );
+        options.set_max_open_files(rocksdb_fds);
+
+        let db = Arc::new(RocksDbBackend::new(db_dir, options)?);
 
         let blocks = BlockTypeManager::create_or_load(db.as_ref())?;
         let entities = EntityTypeManager::create_or_load(db.as_ref())?;
@@ -322,5 +338,34 @@ impl ServerBuilder {
         action: impl FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static,
     ) {
         self.startup_actions.push(Box::new(action));
+    }
+}
+
+fn set_rlimit_for_rocksdb(rocksdb_desired_fds: std::os::raw::c_int) -> Result<std::os::raw::c_int> {
+    let rocksdb_desired_fds = rocksdb_desired_fds.clamp(32, 524288);
+    let intended_limit = rocksdb_desired_fds as u64 * 4 / 3;
+    let actual_limit = rlimit::increase_nofile_limit(intended_limit)?;
+    tracing::info!(
+        "File descriptor limit updated to {} (wanted at least {})",
+        actual_limit,
+        intended_limit
+    );
+    if actual_limit >= intended_limit {
+        Ok(rocksdb_desired_fds)
+    } else {
+        let rocksdb_allowed_fds = actual_limit * 3 / 4;
+        if rocksdb_allowed_fds < 64 {
+            tracing::warn!(
+                "The rocksdb file descriptor count is very low. DB performance may be slow."
+            );
+            Ok(rocksdb_allowed_fds
+                .max(16)
+                .try_into()
+                .context("Integer overflow converting number of file descriptors")?)
+        } else {
+            Ok(rocksdb_allowed_fds
+                .try_into()
+                .context("Integer overflow converting number of file descriptors")?)
+        }
     }
 }
