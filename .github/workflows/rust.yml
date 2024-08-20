@@ -27,6 +27,6 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build      
       run: |
-        sudo apt-get install protobuf-compiler
+        sudo apt-get install protobuf-compiler libasound-dev
         cargo build --verbose
       # TODO add tests
