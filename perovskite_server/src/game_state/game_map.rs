@@ -864,9 +864,28 @@ impl ServerGameMap {
                 cancellation: cancellation.clone(),
                 shard_id: i,
             };
-            let writeback_handle = crate::spawn_async(&format!("map_cleanup_{}", i), async move {
-                writeback.run_loop().await
-            })?;
+            let writeback_handle =
+                crate::spawn_async(&format!("map_writeback_{}", i), async move {
+                    let result = writeback.run_loop().await;
+                    match &result {
+                        Ok(()) => {
+                            if !writeback.cancellation.is_cancelled() {
+                                tracing::error!(
+                                    "Map writeback for shard {} exited while map wasn't shut down.",
+                                    i
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Map writeback for shard {} exited with an error: {:?}",
+                                i,
+                                e
+                            );
+                        }
+                    }
+                    result
+                })?;
             *result.writeback_handles[i].lock() = Some(writeback_handle);
 
             let mut cache_cleanup = MapCacheCleanup {
@@ -876,7 +895,25 @@ impl ServerGameMap {
             };
 
             let cleanup_handle = crate::spawn_async(&format!("map_cleanup_{}", i), async move {
-                cache_cleanup.run_loop().await
+                let result = cache_cleanup.run_loop().await;
+                match &result {
+                    Ok(()) => {
+                        if !cache_cleanup.cancellation.is_cancelled() {
+                            tracing::error!(
+                                "Map cache cleanup for shard {} exited while map wasn't shut down.",
+                                i
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Map cache cleanup for shard {} exited with an error: {:?}",
+                            i,
+                            e
+                        );
+                    }
+                }
+                result
             })?;
             *result.cleanup_handles[i].lock() = Some(cleanup_handle);
         }
