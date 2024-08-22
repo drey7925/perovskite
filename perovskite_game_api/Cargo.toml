@@ -82,6 +82,8 @@ agriculture = ["default_game"]
 
 # If enabled, server will detect deadlocks and log them.
 deadlock_detection = ["perovskite_server/deadlock_detection"]
+# If enabled, provide slash commands to inject failures into db ops. DANGEROUS, For testing only.
+db_failure_injection = ["perovskite_server/db_failure_injection"]
 # Performance tracing
 tracy = ["perovskite_server/tracy", "tracing-tracy/enable"]
 # Heap profiling

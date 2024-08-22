@@ -27,6 +27,7 @@ use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
     util::set_trace_rate_denominator,
 };
+use rocksdb::Options;
 
 use crate::database::rocksdb::RocksdbOptions;
 use crate::{
@@ -153,8 +154,14 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         tracing::info!("Server dropped, starting shutdown");
-        self.runtime.block_on(self.game_state.shut_down());
-        tracing::info!("Server shutdown complete.");
+        match self.runtime.block_on(self.game_state.shut_down()) {
+            Ok(_) => {
+                tracing::info!("Server shutdown complete.");
+            }
+            Err(e) => {
+                tracing::error!("Server shutdown was unclean: {e:?}");
+            }
+        };
     }
 }
 
@@ -200,7 +207,7 @@ impl ServerBuilder {
         );
         options.set_max_open_files(rocksdb_fds);
 
-        let db = Arc::new(RocksDbBackend::new(db_dir, options)?);
+        let db = Self::make_rocksdb_backend(db_dir, options)?;
 
         let blocks = BlockTypeManager::create_or_load(db.as_ref())?;
         let entities = EntityTypeManager::create_or_load(db.as_ref())?;
@@ -225,6 +232,27 @@ impl ServerBuilder {
             startup_actions: Vec::new(),
         })
     }
+
+    #[cfg(not(feature = "db_failure_injection"))]
+    fn make_rocksdb_backend(
+        mut db_dir: PathBuf,
+        mut options: Options,
+    ) -> Result<Arc<dyn GameDatabase>> {
+        Ok(Arc::new(RocksDbBackend::new(db_dir, options)?))
+    }
+
+    #[cfg(feature = "db_failure_injection")]
+    fn make_rocksdb_backend(
+        mut db_dir: PathBuf,
+        mut options: Options,
+    ) -> Result<Arc<dyn GameDatabase>> {
+        use crate::database::failure_injection::FailureInjectedDbWrapper;
+        tracing::warn!("This server is running with DB failure injection on. This is DANGEROUS and meant only for development.");
+        Ok(Arc::new(FailureInjectedDbWrapper::new(
+            RocksDbBackend::new(db_dir, options)?,
+        )))
+    }
+
     pub fn blocks_mut(&mut self) -> &mut BlockTypeManager {
         &mut self.blocks
     }

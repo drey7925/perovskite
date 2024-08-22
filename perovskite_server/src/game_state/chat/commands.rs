@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, ensure, Result};
 
 use itertools::Itertools;
 use perovskite_core::{
@@ -10,6 +11,8 @@ use perovskite_core::{
 
 use tonic::async_trait;
 
+#[cfg(feature = "db_failure_injection")]
+use crate::database::failure_injection::{FAILURE_CHANCE_OVER_256, HANG_CHANCE_OVER_256};
 use crate::{
     game_state::event::{EventInitiator, HandlerContext},
     run_async_handler,
@@ -82,6 +85,19 @@ impl CommandManager {
                         .to_string(),
             },
         );
+
+        #[cfg(feature = "db_failure_injection")]
+        {
+            commands.insert(
+                "inject_db_failure".to_string(),
+                ChatCommand {
+                    action: Box::new(DbFailureInjectionChatHandler),
+                    help_text:
+                    "val1 val2 inject db crashes and hangs with these probabilities, respectively. Valid values are 0-256 inclusive."
+                        .to_string(),
+                },
+            );
+        }
 
         Self { commands }
     }
@@ -424,5 +440,31 @@ impl ChatCommandHandler for ListPermissionsImpl {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(feature = "db_failure_injection")]
+struct DbFailureInjectionChatHandler;
+#[cfg(feature = "db_failure_injection")]
+#[async_trait]
+impl ChatCommandHandler for DbFailureInjectionChatHandler {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let params = message.split_whitespace().collect::<Vec<_>>();
+
+        if params.len() != 3 {
+            bail!("Incorrect usage: should be /inject_db_failure val1 val2, each val 0-256");
+        }
+        let val1: u32 = params[1].parse()?;
+        let val2: u32 = params[2].parse()?;
+        ensure!((0..=256).contains(&val1));
+        ensure!((0..=256).contains(&val2));
+        FAILURE_CHANCE_OVER_256.store(val1, Ordering::Relaxed);
+        HANG_CHANCE_OVER_256.store(val2, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
+        true
     }
 }

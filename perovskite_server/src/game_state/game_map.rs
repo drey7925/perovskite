@@ -858,16 +858,18 @@ impl ServerGameMap {
             timer_controller: None.into(),
         });
         for (i, receiver) in writeback_receivers.into_iter().enumerate() {
+            let game_state_clone = game_state.clone();
             let mut writeback = GameMapWriteback {
                 map: result.clone(),
                 receiver,
                 cancellation: cancellation.clone(),
                 shard_id: i,
             };
-            let writeback_handle =
-                crate::spawn_async(&format!("map_writeback_{}", i), async move {
+            let writeback_handle = crate::spawn_async(
+                &format!("map_writeback_{}", i),
+                async move {
                     let result = writeback.run_loop().await;
-                    match &result {
+                    match result {
                         Ok(()) => {
                             if !writeback.cancellation.is_cancelled() {
                                 tracing::error!(
@@ -875,6 +877,7 @@ impl ServerGameMap {
                                     i
                                 );
                             }
+                            Ok(())
                         }
                         Err(e) => {
                             tracing::error!(
@@ -882,10 +885,16 @@ impl ServerGameMap {
                                 i,
                                 e
                             );
+                            if let Some(gs) = game_state_clone.upgrade() {
+                                gs.crash_shutdown(e);
+                            } else {
+                                tracing::error!("Game state is gone, cannot start crash shutdown. Did it shut down before us?")
+                            }
+                            bail!("Crash initiated");
                         }
                     }
-                    result
-                })?;
+                },
+            )?;
             *result.writeback_handles[i].lock() = Some(writeback_handle);
 
             let mut cache_cleanup = MapCacheCleanup {
@@ -894,9 +903,10 @@ impl ServerGameMap {
                 shard_id: i,
             };
 
+            let game_state_clone = game_state.clone();
             let cleanup_handle = crate::spawn_async(&format!("map_cleanup_{}", i), async move {
                 let result = cache_cleanup.run_loop().await;
-                match &result {
+                match result {
                     Ok(()) => {
                         if !cache_cleanup.cancellation.is_cancelled() {
                             tracing::error!(
@@ -904,6 +914,7 @@ impl ServerGameMap {
                                 i
                             );
                         }
+                        Ok(())
                     }
                     Err(e) => {
                         tracing::error!(
@@ -911,9 +922,14 @@ impl ServerGameMap {
                             i,
                             e
                         );
+                        if let Some(gs) = game_state_clone.upgrade() {
+                            gs.crash_shutdown(e);
+                        } else {
+                            tracing::error!("Game state is gone, cannot start crash shutdown. Did it shut down before us?")
+                        }
+                        bail!("Crash initiated");
                     }
                 }
-                result
             })?;
             *result.cleanup_handles[i].lock() = Some(cleanup_handle);
         }

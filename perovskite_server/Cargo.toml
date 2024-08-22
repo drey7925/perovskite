@@ -60,6 +60,7 @@ ctor = "0.2.0"
 [features]
 default = []
 deadlock_detection = ["parking_lot/deadlock_detection"]
+db_failure_injection = []
 
 # Performance tracing
 tracy = ["tracy-client/enable"]

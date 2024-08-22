@@ -274,6 +274,13 @@ impl Player {
         Ok(())
     }
 
+    pub fn kick_player_blocking(&self, reason: &str) -> Result<()> {
+        self.sender
+            .disconnection_message
+            .blocking_send(format!("Kicked: {reason}"))?;
+        Ok(())
+    }
+
     pub fn grant_permission(&self, permission: &str) -> Result<()> {
         if !self
             .game_state

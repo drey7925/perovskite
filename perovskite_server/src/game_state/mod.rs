@@ -34,6 +34,8 @@ use anyhow::{bail, Result};
 use integer_encoding::VarInt;
 use log::{info, warn};
 use parking_lot::Mutex;
+use perovskite_core::chat::{ChatMessage, SERVER_ERROR_COLOR};
+use perovskite_core::constants::permissions::{ELIGIBLE_PREFIX, GRANT};
 use perovskite_core::time::TimeState;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -226,17 +228,17 @@ impl GameState {
 
     // Shut down things that handle events (e.g. map, database)
     // and wait for them to safely flush data.
-    pub(crate) async fn shut_down(&self) {
+    pub(crate) async fn shut_down(&self) -> Result<()> {
         self.player_manager.request_shutdown();
-        self.player_manager.await_shutdown().await.unwrap();
 
         self.map.do_shutdown().await.unwrap();
+        self.player_manager.await_shutdown().await.unwrap();
         put_double_meta_value(
             self.database.as_ref(),
             b"time_of_day",
             self.time_state().lock().time_of_day(),
-        )
-        .unwrap();
+        )?;
+        Ok(())
     }
 
     // Await a call to self.start_shutdown
@@ -296,6 +298,89 @@ impl GameState {
     /// Returns the time when the server started.
     pub fn server_start_time(&self) -> Instant {
         self.server_start_time
+    }
+
+    /// Attempts a best-effort shutdown in response to an error. This should
+    /// be used when the game is truly crashing and cannot continue.
+    ///
+    /// Where possible, prefer to fail a single interaction, user session, etc.
+    ///
+    /// This is best-effort, and relies on tokio still being functional. We also expect
+    /// a working memory allocator. i.e. this is application-level code trying to salvage
+    /// the player experience, not a signal-safe handler to dump stack.
+    pub fn crash_shutdown(&self, e: anyhow::Error) {
+        tracing::error!("Crash shutdown activated: {e:?}");
+
+        // Try to notify players
+        let player_manager_clone = self.player_manager.clone();
+        let chat_clone = self.chat.clone();
+        // do this in a tokio task so we can try to continue shutdown even if that deadlocks.
+        let notification_work = async move {
+            if let Err(chat_err) = chat_clone.broadcast_chat_message(
+                ChatMessage::new_server_message(format!("Server crashing: {e:?}"))
+                    .with_color(SERVER_ERROR_COLOR),
+            ) {
+                tracing::error!("Chat notification for crash failed: {chat_err:?}")
+            }
+            let kick_result = player_manager_clone.for_all_connected_players(move |p| {
+                // GRANT is a proxy for superuser-like powers
+                let crash_reason = if p.has_permission(&(ELIGIBLE_PREFIX.to_string() + GRANT))
+                    || p.has_permission(GRANT)
+                {
+                    format!("Server crashing: {e:?}")
+                } else {
+                    "Server is crashing".to_string()
+                };
+                if let Err(kick_err) = p.kick_player_blocking(&crash_reason) {
+                    tracing::error!("Crash kick failed: {kick_err:?}");
+                }
+
+                Ok(())
+            });
+            if let Err(kick_err) = kick_result {
+                tracing::error!("Crash kick outer look failed: {kick_err:?}");
+            }
+        };
+
+        tokio::task::spawn(async move {
+            match tokio::time::timeout(Duration::from_secs(5), notification_work).await {
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::error!("Chat notification for crash timed out");
+                }
+            }
+        });
+        // Put a bound on shutdown, in case we're deadlocked.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(30));
+            tracing::error!("Shutdown not complete after 30 seconds. Exiting.");
+            std::process::exit(1);
+        });
+
+        // Put a second bound on shutdown, in case we're deadlocked in graceful exit.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(60));
+            tracing::error!("Shutdown still not complete after 60 seconds. Aborting.");
+            std::process::abort()
+        });
+
+        let db_clone = self.database.clone();
+        std::thread::spawn(move || match db_clone.flush() {
+            Ok(_) => {
+                tracing::warn!("DB flushed during a crash shutdown");
+            }
+            Err(e) => {
+                tracing::error!("DB flush failed: {e:?}")
+            }
+        });
+
+        // This is a bit awkward to avoid blocking a possible tokio thread that we're on
+        tokio::task::block_in_place(|| std::thread::sleep(Duration::from_secs(1)));
+
+        tracing::error!("Starting crash shutdown");
+        self.start_shutdown();
+
+        // TODO get the stacktrace here
     }
 }
 
