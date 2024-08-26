@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
 use rustc_hash::FxHashMap;
 
+use crate::audio::EngineHandle;
 use perovskite_core::protocol::entities as entities_proto;
 
 use crate::vulkan::{
@@ -24,17 +25,54 @@ pub(crate) struct EntityMove {
     seq: u64,
 }
 
+pub(crate) enum ElapsedOrOverflow {
+    ElapsedThisMove(f32),
+    OverflowIntoNext(f32),
+}
+
 impl EntityMove {
     pub(crate) fn elapsed(&self, tick: u64) -> f32 {
         ((tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0)
             .clamp(0.0, self.total_time_seconds)
     }
-    fn qproj(&self, time: f32) -> Vector3<f64> {
+
+    pub(crate) fn elapsed_or_overflow(&self, tick: u64) -> ElapsedOrOverflow {
+        let time = (tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0;
+        if time < 0.0 {
+            return ElapsedOrOverflow::ElapsedThisMove(0.0);
+        } else if time <= self.total_time_seconds {
+            return ElapsedOrOverflow::ElapsedThisMove(time);
+        } else {
+            return ElapsedOrOverflow::OverflowIntoNext(time - self.total_time_seconds);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn qproj(&self, time: f32) -> Vector3<f64> {
         vec3(
             qproj(self.start_pos.x, self.velocity.x, self.acceleration.x, time),
             qproj(self.start_pos.y, self.velocity.y, self.acceleration.y, time),
             qproj(self.start_pos.z, self.velocity.z, self.acceleration.z, time),
         )
+    }
+
+    #[inline]
+    pub(crate) fn instantaneous_velocity(&self, time: f32) -> Vector3<f32> {
+        vec3(
+            self.velocity.x + (self.acceleration.x * time),
+            self.velocity.y + (self.acceleration.y * time),
+            self.velocity.z + (self.acceleration.z * time),
+        )
+    }
+
+    #[inline]
+    pub(crate) fn current_seqnum(&self) -> u64 {
+        self.seq
+    }
+
+    #[inline]
+    pub(crate) fn total_time_sec(&self) -> f32 {
+        self.total_time_seconds
     }
 
     /// An *estimate* of the distance covered in this move, *only* to be used for trailing
@@ -67,6 +105,19 @@ impl EntityMove {
             return self.start_pos;
         };
         self.start_pos + (move_progress_distance * direction.cast().unwrap())
+    }
+
+    pub(crate) const fn zero() -> Self {
+        EntityMove {
+            start_pos: Vector3::new(0.0, 0.0, 0.0),
+            velocity: Vector3::new(0.0, 0.0, 0.0),
+            acceleration: Vector3::new(0.0, 0.0, 0.0),
+            total_time_seconds: f32::MAX,
+            face_direction: 0.0,
+            pitch: 0.0,
+            start_tick: 0,
+            seq: 0,
+        }
     }
 }
 impl TryFrom<&entities_proto::EntityMove> for EntityMove {
@@ -216,7 +267,7 @@ impl GameEntity {
         result
     }
 
-    pub(crate) fn advance_state(&mut self, until_tick: u64) {
+    pub(crate) fn advance_state(&mut self, until_tick: u64, audio_handle: &EngineHandle) {
         let any_popped = self.pop_until(until_tick);
         if any_popped {
             log::debug!(
@@ -224,6 +275,15 @@ impl GameEntity {
                 self.move_queue.back().map(|m| m.start_tick
                     + ((m.total_time_seconds * 1_000_000_000.0) as u64).saturating_sub(until_tick))
             );
+            let front = self.move_queue.front();
+            if let Some(front) = front {
+                audio_handle.testonly_update_entity(
+                    self.id,
+                    *front,
+                    self.move_queue.get(1).copied(),
+                    self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
+                );
+            }
         }
     }
 
@@ -492,9 +552,9 @@ impl EntityState {
         })
     }
 
-    pub(crate) fn advance_all_states(&mut self, until_tick: u64) {
+    pub(crate) fn advance_all_states(&mut self, until_tick: u64, audio_handle: &EngineHandle) {
         for entity in self.entities.values_mut() {
-            entity.advance_state(until_tick);
+            entity.advance_state(until_tick, audio_handle);
         }
     }
 

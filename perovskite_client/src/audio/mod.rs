@@ -1,23 +1,25 @@
-use crate::game_state::settings::GameSettings;
-use arc_swap::ArcSwap;
-use cgmath::{InnerSpace, Vector3, Zero};
 use std::ops::{Add, Range};
-use std::sync::atomic::{AtomicU32, AtomicU8};
-use std::sync::mpsc::channel;
+use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::audio::testdata::FOOTSTEP_WAV_BYTES;
-use crate::game_state::timekeeper::Timekeeper;
 use anyhow::{bail, ensure, Context, Result};
-use bitvec::prelude::*;
+use arc_swap::ArcSwap;
+use cgmath::{InnerSpace, Vector3, Zero};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
 use parking_lot::Mutex;
-use rand::Rng;
-use rubato::Resampler;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use seqlock::SeqLock;
 use tokio_util::sync::{CancellationToken, DropGuard};
+use tracy_client::{plot, span};
+
+use crate::audio::testdata::FOOTSTEP_WAV_BYTES;
+use crate::game_state::entities::{ElapsedOrOverflow, EntityMove};
+use crate::game_state::settings::GameSettings;
+use crate::game_state::timekeeper::Timekeeper;
+
 // Public for testing
 pub struct EngineHandle {
     control: Arc<SharedControl>,
@@ -112,6 +114,26 @@ impl EngineHandle {
         }
     }
 
+    pub(crate) fn testonly_update_entity(
+        &self,
+        entity_id: u64,
+        mv: EntityMove,
+        mv2: Option<EntityMove>,
+        len: f32,
+    ) {
+        if entity_id < NUM_TURBULENCE_ENTITY_SLOTS as u64 {
+            let mut lock = self.control.turbulence_sources[entity_id as usize].lock_write();
+            *lock = EntityTurbulenceControlBlock {
+                flags: SOUND_PRESENT,
+                entity_id,
+                leading: mv,
+                second: mv2,
+                entity_len: len,
+                volume: 1.0,
+            }
+        }
+    }
+
     pub(crate) fn testonly_play_footstep(&self, tick: u64, position: Vector3<f64>) {
         {
             if self
@@ -144,8 +166,6 @@ pub(crate) async fn start_engine(
     timekeeper: Arc<Timekeeper>,
     initial_position: Vector3<f64>,
 ) -> Result<EngineHandle> {
-    use cpal::traits::HostTrait;
-
     let control = Arc::new(SharedControl::new(settings.clone(), initial_position));
     let control_clone = control.clone();
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
@@ -244,26 +264,19 @@ pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
         Vector3::new(0.0, 0.0, 0.0),
     )
     .await?;
-    let mut freq = 440.0;
-    let mult = 2.0f64.powf(1.0 / 12.0);
-    for i in 0..12 {
-        {
-            let angle = (i as f64) * 2.0 * std::f64::consts::PI / 12.0;
-            let mut lock = handle.control.simple_sounds[i].lock_write();
-            *lock = SimpleSoundControlBlock {
-                flags: SOUND_PRESENT
-                    | SOUND_SQUARELAW_ENABLED
-                    | SOUND_MOVESPEED_ENABLED
-                    | SOUND_DIRECTIONAL,
-                position: Vector3::new(angle.sin(), 0.0, angle.cos()),
-                volume: 0.25,
-                start_tick: (i as u64 + 1) * 800_000_000,
-                id: freq as u32,
-                end_tick: (i as u64 + 2) * 800_000_000,
-            }
+
+    {
+        let mut lock = handle.control.turbulence_sources[15].lock_write();
+        *lock = EntityTurbulenceControlBlock {
+            flags: SOUND_PRESENT,
+            entity_id: 0,
+            leading: EntityMove::zero(),
+            second: None,
+            entity_len: 0.0,
+            volume: 1.0,
         }
-        freq *= mult;
     }
+
     Ok(handle)
 }
 
@@ -272,21 +285,6 @@ pub(crate) async fn start_engine_for_testing(
     timekeeper: Arc<Timekeeper>,
 ) -> Result<EngineHandle> {
     let handle = start_engine(settings, timekeeper, Vector3::new(0.0, 0.0, 0.0)).await?;
-    {
-        let mut lock = handle.control.simple_sounds[12].lock_write();
-        *lock = SimpleSoundControlBlock {
-            flags: SOUND_PRESENT
-                | SOUND_SQUARELAW_ENABLED
-                | SOUND_MOVESPEED_ENABLED
-                | SOUND_DIRECTIONAL,
-            position: Vector3::new(3.0, 0.0, 3.0),
-            volume: 0.25,
-            start_tick: 0,
-            id: 440,
-            end_tick: u64::MAX,
-        };
-    }
-
     Ok(handle)
 }
 
@@ -303,7 +301,10 @@ struct EngineState {
     nanos_per_sample: f64,
     total_samples_seen: u64,
 
-    test_sampler: Sampler,
+    test_sampler: PrerecordedSampler,
+    test_turbulence_sampler: ApproximateTurbulenceSampler,
+
+    rng: rand::rngs::SmallRng,
 }
 
 // Const rather than using log! because I don't know what locks we might have to deal when the
@@ -423,6 +424,7 @@ impl EngineState {
                     // rounding error
                     ((control_block.start_tick.saturating_sub(buffer_start_tick) as f64)
                         / self.nanos_per_sample) as usize;
+
                     let remaining_samples = (samples.saturating_sub(start_offset_samples)) as u64;
                     // TODO: If a sound is truly short (fitting entirely into this buffer), we don't
                     // handle it quite right in the current prototype.
@@ -444,13 +446,16 @@ impl EngineState {
             private_state.elapsed_samples += sample_range.len() as u64;
             if ENABLE_DEBUG_PRINT && self.buffer_counter % 30 == 0 {
                 log::info!(
-                    "{} Hz, sample range: {:?}, start tick: {:?}, elapsed samples: {:?}",
+                    "ID {:?}, sample range: {:?}, start tick: {:?}, elapsed samples: {:?}",
                     control_block.id,
                     sample_range,
                     eval_start_tick,
                     private_state.elapsed_samples
                 );
             }
+
+            let sampler = &self.test_sampler;
+
             Self::sample_simple_sound(
                 self.stream_config.channels() as usize,
                 self.nanos_per_sample,
@@ -460,8 +465,29 @@ impl EngineState {
                 &control_block,
                 private_state,
                 eval_start_tick,
-                &self.test_sampler,
+                sampler,
             );
+        }
+        for i in 0..NUM_TURBULENCE_ENTITY_SLOTS {
+            let control_block = self.control.turbulence_sources[i].read();
+            if control_block.flags & SOUND_PRESENT == 0 {
+                continue;
+            }
+
+            let private_state = &mut self.private_control.turbulence_sounds[i];
+
+            Self::sample_entity_turbulence(
+                self.stream_config.channels() as usize,
+                self.nanos_per_sample,
+                data,
+                control_block,
+                &player_state,
+                &control_block,
+                private_state,
+                &mut self.rng,
+                buffer_start_tick,
+                samples,
+            )
         }
     }
 
@@ -483,7 +509,12 @@ impl EngineState {
             previous_tick: 0,
             total_samples_seen: 0,
 
-            test_sampler: Sampler::from_wav(FOOTSTEP_WAV_BYTES, stream_config.sample_rate().0)?,
+            test_sampler: PrerecordedSampler::from_wav(
+                FOOTSTEP_WAV_BYTES,
+                stream_config.sample_rate().0,
+            )?,
+            test_turbulence_sampler: ApproximateTurbulenceSampler {},
+            rng: rand::rngs::SmallRng::from_rng(&mut rand::thread_rng())?,
         })
     }
     fn sample_simple_sound(
@@ -495,7 +526,7 @@ impl EngineState {
         control: &SimpleSoundControlBlock,
         state: &mut SimpleSoundState,
         start_tick: u64,
-        sampler: &Sampler,
+        sampler: &PrerecordedSampler,
     ) {
         let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
         let left_ear_z = left_ear_azimuth.cos();
@@ -564,6 +595,170 @@ impl EngineState {
             }
         }
     }
+    fn sample_entity_turbulence(
+        channels: usize,
+        nanos_per_sample: f64,
+        data: &mut [f32],
+        control_block: EntityTurbulenceControlBlock,
+        player_state: &PlayerState,
+        entity_turbulence_control_block: &EntityTurbulenceControlBlock,
+        scratchpad: &mut TurbulenceScratchpad,
+        rng: &mut SmallRng,
+        buffer_start_tick: u64,
+        samples: usize,
+    ) {
+        let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
+        let left_ear_z = left_ear_azimuth.cos();
+        let left_ear_x = left_ear_azimuth.sin();
+        let left_ear_vec = Vector3::new(left_ear_x, 0.0, left_ear_z);
+
+        if control_block.flags & SOUND_MOVESPEED_ENABLED != 0 {
+            panic!("Doppler effect support not yet implemented, requires larger move queues")
+        }
+        if control_block.entity_id != scratchpad.entity_id {
+            *scratchpad = TurbulenceScratchpad {
+                entity_id: control_block.entity_id,
+                ..TurbulenceScratchpad::default()
+            }
+        }
+
+        for sample in 0..samples {
+            let tick = buffer_start_tick + (sample as f64 * nanos_per_sample) as u64;
+
+            let elapsed_or_overflow = control_block.leading.elapsed_or_overflow(tick);
+            let (entity_move, entity_move_elapsed) = match elapsed_or_overflow {
+                ElapsedOrOverflow::ElapsedThisMove(time) => (control_block.leading, time),
+                ElapsedOrOverflow::OverflowIntoNext(time) => {
+                    if let Some(second) = control_block.second {
+                        (second, time.min(second.total_time_sec()))
+                    } else {
+                        (
+                            control_block.leading,
+                            control_block.leading.total_time_sec(),
+                        )
+                    }
+                }
+            };
+
+            let entity_pos = entity_move.qproj(entity_move_elapsed);
+            let player_pos = player_state.position;
+            // distance this sample
+            let distance = (player_pos - entity_pos).magnitude();
+            // distance in this sample if the player hadn't moved
+            let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
+            let distance_diff = (distance_unmoved_player - scratchpad.last_distance);
+            plot!("seq", entity_move.current_seqnum() as f64);
+            plot!("last_dist", scratchpad.last_distance);
+            plot!("dup", distance_unmoved_player);
+            plot!("diff", distance_diff);
+
+            scratchpad.last_distance = distance;
+            scratchpad.last_player_pos = player_pos;
+
+            let acc = match scratchpad.approach_state {
+                ApproachState::Initial(x) => x,
+                ApproachState::DecreaseDetected(x) => -x,
+                ApproachState::Passing(_, _, _) => 0.0,
+                ApproachState::Recovering(_) => 0.0,
+            };
+            plot!("acc", acc);
+
+            scratchpad.approach_state = match scratchpad.approach_state {
+                ApproachState::Initial(acc) => {
+                    // Looking for a decrease
+                    let new_acc = (acc - distance_diff).max(0.0);
+                    if new_acc > 0.1 {
+                        let _span = span!("detect decrease");
+                        println!(
+                            "detect decrease {entity_move_elapsed} {} < {}",
+                            distance_unmoved_player, scratchpad.last_distance
+                        );
+                        ApproachState::DecreaseDetected(0.0)
+                    } else {
+                        ApproachState::Initial(new_acc)
+                    }
+                }
+                ApproachState::DecreaseDetected(acc) => {
+                    let new_acc = (acc + distance_diff).max(0.0);
+                    if new_acc > 0.1 {
+                        let _span = span!("start passing");
+                        // This is a local minimum
+                        println!(
+                            "start passing {entity_move_elapsed} {} > {}",
+                            distance_unmoved_player, scratchpad.last_distance
+                        );
+                        ApproachState::Passing(0.0, entity_pos, player_pos - entity_pos)
+                    } else {
+                        ApproachState::DecreaseDetected(new_acc)
+                    }
+                }
+                x => x,
+            };
+
+            let (effective_displacement, start_recovery) = match &mut scratchpad.approach_state {
+                ApproachState::Initial(_) => (player_pos - entity_pos, false),
+                ApproachState::DecreaseDetected(_) => (player_pos - entity_pos, false),
+                ApproachState::Passing(travel_since, captured_entity_location, captured_e2p) => {
+                    *travel_since += (entity_move
+                        .instantaneous_velocity(entity_move_elapsed)
+                        .magnitude() as f64)
+                        * nanos_per_sample
+                        / 1_000_000_000.0;
+                    let current_displacement = player_pos - *captured_entity_location;
+                    let projected_displacement = current_displacement.project_on(*captured_e2p);
+                    (
+                        projected_displacement,
+                        *travel_since > control_block.entity_len as f64,
+                    )
+                }
+                ApproachState::Recovering(_) => {
+                    // TODO consider whether we need blending, also update the if start_recovery
+                    // block below in that case
+                    todo!()
+                }
+            };
+            if start_recovery {
+                let _span = span!("recover");
+                // TODO: If we use blending in recovery, update this
+                println!("start recovery");
+                scratchpad.approach_state = ApproachState::Initial(0.0);
+            }
+            let effective_distance = effective_displacement.magnitude();
+            let clamped_distance = effective_distance.max(MIN_DISTANCE) as f32;
+            let amplitude = control_block.volume / (clamped_distance * clamped_distance);
+
+            let mut balance_left = left_ear_vec.dot(effective_displacement.normalize());
+            if balance_left.is_nan() {
+                balance_left = 0.0;
+            }
+            let balance_left = scratchpad.last_balance.update(balance_left, 0.001);
+            let l_amplitude = amplitude * (1.0 + 0.8 * balance_left as f32);
+
+            let r_amplitude = amplitude * (1.0 - 0.8 * balance_left as f32);
+            let (l, r) = ApproximateTurbulenceSampler::sample(scratchpad, rng);
+            let (l, r) = if channels == 1 {
+                (l + r / 2.0, 0.0)
+            } else {
+                (l, r)
+            };
+            for chan in 0..channels {
+                // let sample_value =
+                //     (2.0 * std::f64::consts::PI * effective_time_delta * (control.id as f64)).sin();
+                let sample_value = if chan == 0 { l } else { r };
+                let amplitude = if channels == 2 {
+                    if chan == 0 {
+                        l_amplitude
+                    } else {
+                        r_amplitude
+                    }
+                } else {
+                    amplitude
+                };
+                let index = sample * channels + chan;
+                data[index] += amplitude * sample_value / 4000.0;
+            }
+        }
+    }
 }
 
 /// The player's movement state
@@ -596,16 +791,21 @@ impl PlayerState {
 }
 
 pub const NUM_SIMPLE_SOUND_SLOTS: usize = 64;
+pub const NUM_TURBULENCE_ENTITY_SLOTS: usize = 64;
 
 /// The private control state, used internally by the audio engine to track the state of
 /// the player and sounds
 struct PrivateControl {
     simple_sounds: Box<[SimpleSoundState; NUM_SIMPLE_SOUND_SLOTS]>,
+    turbulence_sounds: Box<[TurbulenceScratchpad; NUM_TURBULENCE_ENTITY_SLOTS]>,
 }
 impl Default for PrivateControl {
     fn default() -> PrivateControl {
         PrivateControl {
             simple_sounds: Box::new([SimpleSoundState::default(); NUM_SIMPLE_SOUND_SLOTS]),
+            turbulence_sounds: Box::new(
+                [TurbulenceScratchpad::default(); NUM_TURBULENCE_ENTITY_SLOTS],
+            ),
         }
     }
 }
@@ -614,12 +814,15 @@ impl Default for PrivateControl {
 pub(crate) struct SharedControl {
     player_state: SeqLock<PlayerState>,
     simple_sounds: Box<[SeqLock<SimpleSoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
+    turbulence_sources: Box<[SeqLock<EntityTurbulenceControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
     settings: Arc<ArcSwap<GameSettings>>,
 }
 impl SharedControl {
     fn new(settings: Arc<ArcSwap<GameSettings>>, initial_position: Vector3<f64>) -> SharedControl {
         const SIMPLE_SOUND_CONST_INIT: SeqLock<SimpleSoundControlBlock> =
             SeqLock::new(SimpleSoundControlBlock::const_default());
+        const TURBULENCE_SOURCE_CONST_INIT: SeqLock<EntityTurbulenceControlBlock> =
+            SeqLock::new(EntityTurbulenceControlBlock::const_default());
         SharedControl {
             player_state: SeqLock::new(PlayerState {
                 position: initial_position,
@@ -628,7 +831,10 @@ impl SharedControl {
                 azimuth_radian: 0.0,
                 position_timebase_tick: 0,
             }),
-            simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; 64]),
+            simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; NUM_SIMPLE_SOUND_SLOTS]),
+            turbulence_sources: Box::new(
+                [TURBULENCE_SOURCE_CONST_INIT; NUM_TURBULENCE_ENTITY_SLOTS],
+            ),
             // Start all volumes at 0 until they are set by the game loop
             settings,
         }
@@ -719,6 +925,29 @@ impl SimpleSoundControlBlock {
     }
 }
 
+#[derive(Clone, Copy)]
+struct EntityTurbulenceControlBlock {
+    flags: u8,
+    entity_id: u64,
+    leading: EntityMove,
+    second: Option<EntityMove>,
+    entity_len: f32,
+    volume: f32,
+}
+
+impl EntityTurbulenceControlBlock {
+    const fn const_default() -> EntityTurbulenceControlBlock {
+        EntityTurbulenceControlBlock {
+            flags: 0,
+            entity_id: 0,
+            leading: EntityMove::zero(),
+            second: None,
+            entity_len: 0.0,
+            volume: 0.0,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct SimpleSoundState {
     start_tick: u64,
@@ -787,39 +1016,10 @@ pub const SPEED_OF_SOUND_METER_PER_SECOND: f64 = 343.0;
 
 const OVERSAMPLE_FACTOR: u32 = 1;
 
-struct Sampler {
+struct PrerecordedSampler {
     data: Vec<(f32, f32)>,
 }
-impl Sampler {
-    #[inline]
-    fn sample(&self, sample: f64) -> (f32, f32) {
-        let upscaled = sample * OVERSAMPLE_FACTOR as f64;
-        let preceding = upscaled.floor();
-        let following = upscaled.ceil();
-        let fpart = (upscaled - preceding) as f32;
-
-        let preceding_sample = if preceding < 0.0 {
-            (0.0, 0.0)
-        } else if preceding as usize >= self.data.len() {
-            (0.0, 0.0)
-        } else {
-            self.data[preceding as usize]
-        };
-
-        let following_sample = if following < 0.0 {
-            (0.0, 0.0)
-        } else if following as usize >= self.data.len() {
-            (0.0, 0.0)
-        } else {
-            self.data[following as usize]
-        };
-
-        (
-            (1.0 - fpart) * preceding_sample.0 + fpart * following_sample.0,
-            (1.0 - fpart) * preceding_sample.1 + fpart * following_sample.1,
-        )
-    }
-
+impl PrerecordedSampler {
     fn from_wav(wav_bytes: &[u8], target_sample_rate: u32) -> Result<Self> {
         let wav = hound::WavReader::new(wav_bytes).unwrap();
         let source_rate = dbg!(wav.spec().sample_rate);
@@ -901,6 +1101,101 @@ impl Sampler {
             .map(|(l, r)| (l, r))
             .collect();
         Ok(Self { data })
+    }
+
+    #[inline]
+    fn sample(&self, sample: f64) -> (f32, f32) {
+        let upscaled = sample * OVERSAMPLE_FACTOR as f64;
+        let preceding = upscaled.floor();
+        let following = upscaled.ceil();
+        let fpart = (upscaled - preceding) as f32;
+
+        let preceding_sample = if preceding < 0.0 {
+            (0.0, 0.0)
+        } else if preceding as usize >= self.data.len() {
+            (0.0, 0.0)
+        } else {
+            self.data[preceding as usize]
+        };
+
+        let following_sample = if following < 0.0 {
+            (0.0, 0.0)
+        } else if following as usize >= self.data.len() {
+            (0.0, 0.0)
+        } else {
+            self.data[following as usize]
+        };
+
+        (
+            (1.0 - fpart) * preceding_sample.0 + fpart * following_sample.0,
+            (1.0 - fpart) * preceding_sample.1 + fpart * following_sample.1,
+        )
+    }
+}
+
+struct ApproximateTurbulenceSampler {}
+impl ApproximateTurbulenceSampler {
+    fn sample(scratchpad: &mut TurbulenceScratchpad, rng: &mut SmallRng) -> (f32, f32) {
+        let rng_val = rng.gen_range(-1.0..1.0) * 4000.0;
+        let filtered = rng_val * 0.1 + scratchpad.iir_state * 0.9;
+        scratchpad.iir_state = filtered;
+        (filtered as f32, filtered as f32)
+    }
+}
+
+trait Sampler {
+    fn sample(
+        &self,
+        sample: f64,
+        player_state: &PlayerState,
+        scratchpad: &mut TurbulenceScratchpad,
+        rng: &mut SmallRng,
+    ) -> (f32, f32);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ApproachState {
+    // Haven't seen a large enough decrease yet, value is accumulated decrease
+    Initial(f64),
+    // Haven't seen a large enough increase yet, value is accumulated increase
+    DecreaseDetected(f64),
+    // Fields:
+    // * Distance of the approach
+    // * Entity travel since that approach
+    // * Entity location at capture time
+    // * Entity->player displacement at capture time
+    Passing(f64, Vector3<f64>, Vector3<f64>),
+    Recovering(f32),
+}
+
+#[derive(Copy, Clone, Debug)]
+struct TurbulenceScratchpad {
+    // Really simple first-order IIR filter, single state
+    iir_state: f64,
+    // The entity ID, used to make sure that we're looking at the same entity
+    entity_id: u64,
+    // Last player position, used for close-approach detection
+    last_player_pos: Vector3<f64>,
+    // Last distance
+    last_distance: f64,
+    approach_state: ApproachState,
+    // Overview of algorithm:
+    // Track distance from last_player_pos vs current player pos
+    // Once it hits a local minimum, reset acc_since_last_approach,
+    // and start counting it up. Snapshot the actual approach distance
+    // into last_approach_distance
+    last_balance: SmoothedVar,
+}
+impl Default for TurbulenceScratchpad {
+    fn default() -> Self {
+        TurbulenceScratchpad {
+            iir_state: 0.0,
+            entity_id: u64::MAX,
+            last_player_pos: Vector3::zero(),
+            last_distance: 0.0,
+            approach_state: ApproachState::Initial(0.0),
+            last_balance: Default::default(),
+        }
     }
 }
 
