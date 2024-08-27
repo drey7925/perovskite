@@ -141,10 +141,8 @@ impl EngineHandle {
                     tick,
                     position,
                     SimpleSoundControlBlock {
-                        flags: SOUND_PRESENT
-                            | SOUND_SQUARELAW_ENABLED
-                            | SOUND_MOVESPEED_ENABLED
-                            | SOUND_DIRECTIONAL,
+                        // This sounds awful when directionality is enabled
+                        flags: SOUND_PRESENT | SOUND_SQUARELAW_ENABLED | SOUND_MOVESPEED_ENABLED,
                         position,
                         volume: 1.0,
                         start_tick: tick,
@@ -647,32 +645,17 @@ impl EngineState {
             // distance in this sample if the player hadn't moved
             let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
             let distance_diff = (distance_unmoved_player - scratchpad.last_distance);
-            plot!("seq", entity_move.current_seqnum() as f64);
-            plot!("last_dist", scratchpad.last_distance);
-            plot!("dup", distance_unmoved_player);
-            plot!("diff", distance_diff);
 
             scratchpad.last_distance = distance;
             scratchpad.last_player_pos = player_pos;
 
-            let acc = match scratchpad.approach_state {
-                ApproachState::Initial(x) => x,
-                ApproachState::DecreaseDetected(x) => -x,
-                ApproachState::Passing(_, _, _) => 0.0,
-                ApproachState::Recovering(_) => 0.0,
-            };
-            plot!("acc", acc);
+            let current_velocity = entity_move.instantaneous_velocity(entity_move_elapsed);
 
             scratchpad.approach_state = match scratchpad.approach_state {
                 ApproachState::Initial(acc) => {
                     // Looking for a decrease
                     let new_acc = (acc - distance_diff).max(0.0);
                     if new_acc > 0.1 {
-                        let _span = span!("detect decrease");
-                        println!(
-                            "detect decrease {entity_move_elapsed} {} < {}",
-                            distance_unmoved_player, scratchpad.last_distance
-                        );
                         ApproachState::DecreaseDetected(0.0)
                     } else {
                         ApproachState::Initial(new_acc)
@@ -682,12 +665,16 @@ impl EngineState {
                     let new_acc = (acc + distance_diff).max(0.0);
                     if new_acc > 0.1 {
                         let _span = span!("start passing");
+                        scratchpad.edge_cycle = 0.0;
                         // This is a local minimum
-                        println!(
-                            "start passing {entity_move_elapsed} {} > {}",
-                            distance_unmoved_player, scratchpad.last_distance
-                        );
-                        ApproachState::Passing(0.0, entity_pos, player_pos - entity_pos)
+                        ApproachState::Passing(
+                            0.0,
+                            entity_pos,
+                            player_pos - entity_pos,
+                            entity_move
+                                .instantaneous_velocity(entity_move_elapsed)
+                                .normalize(),
+                        )
                     } else {
                         ApproachState::DecreaseDetected(new_acc)
                     }
@@ -698,34 +685,67 @@ impl EngineState {
             let (effective_displacement, start_recovery) = match &mut scratchpad.approach_state {
                 ApproachState::Initial(_) => (player_pos - entity_pos, false),
                 ApproachState::DecreaseDetected(_) => (player_pos - entity_pos, false),
-                ApproachState::Passing(travel_since, captured_entity_location, captured_e2p) => {
-                    *travel_since += (entity_move
-                        .instantaneous_velocity(entity_move_elapsed)
-                        .magnitude() as f64)
-                        * nanos_per_sample
-                        / 1_000_000_000.0;
+                ApproachState::Passing(
+                    travel_since,
+                    captured_entity_location,
+                    captured_e2p,
+                    captured_velocity,
+                ) => {
+                    let additional_travel =
+                        (current_velocity.magnitude() as f64) * nanos_per_sample / 1_000_000_000.0;
+
+                    let new_travel = *travel_since + additional_travel;
+                    if (new_travel / 32.0).floor() != (*travel_since / 32.0).floor() {
+                        scratchpad.edge_cycle = 0.0;
+                    }
+
+                    *travel_since = new_travel;
                     let current_displacement = player_pos - *captured_entity_location;
-                    let projected_displacement = current_displacement.project_on(*captured_e2p);
+                    let captured_velocity = captured_velocity.cast().unwrap();
+                    let parallel = current_displacement.project_on(captured_velocity);
+                    let perpendicular = current_displacement - parallel;
+
+                    // How far the player has moved *along* with the entity
+                    let parallel_displacement = current_displacement.dot(captured_velocity);
                     (
-                        projected_displacement,
-                        *travel_since > control_block.entity_len as f64,
+                        perpendicular,
+                        *travel_since > (control_block.entity_len as f64 + parallel_displacement),
                     )
                 }
-                ApproachState::Recovering(_) => {
-                    // TODO consider whether we need blending, also update the if start_recovery
-                    // block below in that case
-                    todo!()
-                }
             };
-            if start_recovery {
-                let _span = span!("recover");
-                // TODO: If we use blending in recovery, update this
-                println!("start recovery");
-                scratchpad.approach_state = ApproachState::Initial(0.0);
-            }
             let effective_distance = effective_displacement.magnitude();
-            let clamped_distance = effective_distance.max(MIN_DISTANCE) as f32;
-            let amplitude = control_block.volume / (clamped_distance * clamped_distance);
+            let clamped_distance = effective_distance.max(MIN_ENTITY_DISTANCE) as f32;
+            // multiplier affects amplitude, not power
+            let multiplier = 1.0 / (clamped_distance);
+            if start_recovery {
+                scratchpad.approach_state = ApproachState::Initial(0.0);
+                scratchpad.trailing_edge_blend_factor = 1.0;
+                scratchpad.trailing_edge_blend_value = multiplier;
+            }
+            let edge_multiplier = if scratchpad.edge_cycle < 0.0 {
+                1.0
+            } else if scratchpad.edge_cycle < 0.25 {
+                scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
+                1.0 + (2.0 * scratchpad.edge_cycle)
+            } else if scratchpad.edge_cycle < 1.0 {
+                scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
+                (5.0 / 3.0) - (2.0 / 3.0 * scratchpad.edge_cycle)
+            } else {
+                scratchpad.edge_cycle = -1.0;
+                1.0
+            };
+
+            // Theoretically should be N^5 or N^6, but this is subjectively better
+            let speed_multiplier = (current_velocity.magnitude() / 70.0).powi(4);
+
+            let multiplier = scratchpad.trailing_edge_blend_value
+                * scratchpad.trailing_edge_blend_factor
+                + multiplier * (1.0 - scratchpad.trailing_edge_blend_factor);
+            scratchpad.trailing_edge_blend_factor = (scratchpad.trailing_edge_blend_factor
+                - nanos_per_sample as f32 / 3_000_000_000.0)
+                .clamp(0.0, 1.0);
+
+            let amplitude = control_block.volume * multiplier * edge_multiplier * speed_multiplier;
 
             let mut balance_left = left_ear_vec.dot(effective_displacement.normalize());
             if balance_left.is_nan() {
@@ -755,7 +775,7 @@ impl EngineState {
                     amplitude
                 };
                 let index = sample * channels + chan;
-                data[index] += amplitude * sample_value / 4000.0;
+                data[index] += amplitude * sample_value / 800.0;
             }
         }
     }
@@ -1011,6 +1031,7 @@ pub const SOUND_STICKY: u8 = 0x10;
 /// The minimum distance considered for square-law effects. By enforcing this, we avoid
 /// excessive amplitudes for near-zero distances.
 pub const MIN_DISTANCE: f64 = 1.0;
+pub const MIN_ENTITY_DISTANCE: f64 = 5.0;
 
 pub const SPEED_OF_SOUND_METER_PER_SECOND: f64 = 343.0;
 
@@ -1163,9 +1184,9 @@ enum ApproachState {
     // * Distance of the approach
     // * Entity travel since that approach
     // * Entity location at capture time
-    // * Entity->player displacement at capture time
-    Passing(f64, Vector3<f64>, Vector3<f64>),
-    Recovering(f32),
+    // * Entity->player displacement at capture time, unnormalized
+    // * Entity movement direction at capture time, normalized
+    Passing(f64, Vector3<f64>, Vector3<f64>, Vector3<f32>),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1185,6 +1206,10 @@ struct TurbulenceScratchpad {
     // and start counting it up. Snapshot the actual approach distance
     // into last_approach_distance
     last_balance: SmoothedVar,
+    trailing_edge_blend_factor: f32,
+    trailing_edge_blend_value: f32,
+    // Used to provide an extra burst of sound at edges
+    edge_cycle: f32,
 }
 impl Default for TurbulenceScratchpad {
     fn default() -> Self {
@@ -1195,6 +1220,9 @@ impl Default for TurbulenceScratchpad {
             last_distance: 0.0,
             approach_state: ApproachState::Initial(0.0),
             last_balance: Default::default(),
+            trailing_edge_blend_value: 0.0,
+            trailing_edge_blend_factor: 0.0,
+            edge_cycle: -1.0,
         }
     }
 }
