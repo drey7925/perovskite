@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod audio_crossbar;
 pub mod blocks;
 pub mod chat;
 pub mod client_ui;
@@ -47,6 +48,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::database::database_engine::{GameDatabase, KeySpace};
 
+use crate::game_state::audio_crossbar::AudioCrossbarSender;
 use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
 use crate::media::MediaManager;
 use crate::network_server::auth::AuthService;
@@ -89,6 +91,9 @@ pub struct GameState {
     media_resources: Arc<MediaManager>,
     /// Handles chat commands and messages
     chat: Arc<ChatState>,
+
+    audio: Arc<AudioCrossbarSender>,
+
     early_shutdown: CancellationToken,
     mapgen_seed: u32,
     game_behaviors: GameBehaviors,
@@ -144,6 +149,7 @@ impl GameState {
                 entity_types,
                 server_start_time,
             )),
+            audio: Arc::new(AudioCrossbarSender::new()),
             server_start_time,
             extensions,
             startup_time: Instant::now(),
@@ -298,6 +304,10 @@ impl GameState {
     /// Returns the time when the server started.
     pub fn server_start_time(&self) -> Instant {
         self.server_start_time
+    }
+
+    pub fn audio(&self) -> &AudioCrossbarSender {
+        &self.audio
     }
 
     /// Attempts a best-effort shutdown in response to an error. This should

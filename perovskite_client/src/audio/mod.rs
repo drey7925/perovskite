@@ -52,7 +52,7 @@ impl AllocatorState {
 }
 
 impl EngineHandle {
-    fn alloc_simple_sound(
+    pub(crate) fn alloc_simple_sound(
         &self,
         tick_now: u64,
         player_position: Vector3<f64>,
@@ -120,6 +120,7 @@ impl EngineHandle {
         mv: EntityMove,
         mv2: Option<EntityMove>,
         len: f32,
+        volume: f32,
     ) {
         if entity_id < NUM_TURBULENCE_ENTITY_SLOTS as u64 {
             let mut lock = self.control.turbulence_sources[entity_id as usize].lock_write();
@@ -129,7 +130,7 @@ impl EngineHandle {
                 leading: mv,
                 second: mv2,
                 entity_len: len,
-                volume: 1.0,
+                volume,
             }
         }
     }
@@ -557,7 +558,8 @@ impl EngineState {
             }
             let amplitude = if control.flags & SOUND_SQUARELAW_ENABLED != 0 {
                 let clamped_distance = distance.max(MIN_DISTANCE) as f32;
-                control.volume / (clamped_distance * clamped_distance)
+                // this affects amplitude, not power, so it should be non-squared
+                control.volume / clamped_distance
             } else {
                 control.volume
             };
@@ -721,6 +723,9 @@ impl EngineState {
                 scratchpad.approach_state = ApproachState::Initial(0.0);
                 scratchpad.trailing_edge_blend_factor = 1.0;
                 scratchpad.trailing_edge_blend_value = multiplier;
+                scratchpad.trailing_edge_blend_source_direction =
+                    effective_displacement.normalize();
+                scratchpad.edge_cycle = -1.0;
             }
             let edge_multiplier = if scratchpad.edge_cycle < 0.0 {
                 1.0
@@ -742,12 +747,18 @@ impl EngineState {
                 * scratchpad.trailing_edge_blend_factor
                 + multiplier * (1.0 - scratchpad.trailing_edge_blend_factor);
             scratchpad.trailing_edge_blend_factor = (scratchpad.trailing_edge_blend_factor
-                - nanos_per_sample as f32 / 3_000_000_000.0)
+                - nanos_per_sample as f32 / 2_000_000_000.0)
                 .clamp(0.0, 1.0);
+
+            let effective_displacement_smoothed = scratchpad.trailing_edge_blend_source_direction
+                * scratchpad.trailing_edge_blend_factor as f64
+                + effective_displacement.normalize()
+                    * (1.0 - scratchpad.trailing_edge_blend_factor as f64);
+            let effective_dir = effective_displacement_smoothed.normalize();
 
             let amplitude = control_block.volume * multiplier * edge_multiplier * speed_multiplier;
 
-            let mut balance_left = left_ear_vec.dot(effective_displacement.normalize());
+            let mut balance_left = left_ear_vec.dot(effective_dir);
             if balance_left.is_nan() {
                 balance_left = 0.0;
             }
@@ -1208,6 +1219,7 @@ struct TurbulenceScratchpad {
     last_balance: SmoothedVar,
     trailing_edge_blend_factor: f32,
     trailing_edge_blend_value: f32,
+    trailing_edge_blend_source_direction: Vector3<f64>,
     // Used to provide an extra burst of sound at edges
     edge_cycle: f32,
 }
@@ -1222,6 +1234,7 @@ impl Default for TurbulenceScratchpad {
             last_balance: Default::default(),
             trailing_edge_blend_value: 0.0,
             trailing_edge_blend_factor: 0.0,
+            trailing_edge_blend_source_direction: Vector3::zero(),
             edge_cycle: -1.0,
         }
     }

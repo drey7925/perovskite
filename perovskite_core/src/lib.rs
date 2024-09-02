@@ -43,6 +43,9 @@ pub mod perovskite {
         pub mod entities {
             tonic::include_proto!("perovskite.protocol.entities");
         }
+        pub mod audio {
+            tonic::include_proto!("perovskite.protocol.audio");
+        }
         pub const DESCRIPTOR_SET: &[u8] =
             tonic::include_file_descriptor_set!("perovskite_descriptor");
     }

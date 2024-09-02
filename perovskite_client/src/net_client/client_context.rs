@@ -12,8 +12,8 @@ use crate::{
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
-use anyhow::Result;
-use cgmath::{vec3, InnerSpace};
+use anyhow::{ensure, Context, Result};
+use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use futures::StreamExt;
 use log::warn;
 use parking_lot::Mutex;
@@ -24,6 +24,9 @@ use perovskite_core::{
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
 
+use crate::audio::{
+    SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT, SOUND_SQUARELAW_ENABLED,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
@@ -198,12 +201,20 @@ impl OutboundContext {
             .try_into()
             .unwrap();
         let hotbar_slot = self.shared_state.client_state.hud.lock().hotbar_slot;
+
+        let animation_state = self
+            .shared_state
+            .client_state
+            .physics_state
+            .lock()
+            .take_animation_state();
         let sequence = self
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
                 rpc::ClientUpdate {
                     position: Some(pos.to_proto()?),
                     pacing: Some(rpc::ClientPacing { pending_chunks }),
                     hotbar_slot,
+                    footstep_coordinate: animation_state.footstep_coord.map(|x| x.into()),
                 },
             ))
             .await?;
@@ -484,6 +495,46 @@ impl InboundContext {
                     .adjust_server_tick(message.tick);
                 self.handle_entity_update(update, estimated_send_time)
                     .await?;
+            }
+            Some(rpc::stream_to_client::ServerMessage::PlaySampledSound(sound)) => {
+                let position = match sound.position {
+                    Some(p) => p.try_into()?,
+                    None => {
+                        ensure!(sound.disable_doppler && sound.disable_falloff);
+                        Vector3::zero()
+                    }
+                };
+                let tick_now = self.shared_state.client_state.timekeeper.now();
+                let tick = if sound.tick == 0 {
+                    tick_now
+                } else {
+                    sound.tick
+                };
+
+                let mut flags = SOUND_PRESENT;
+                if !sound.disable_doppler {
+                    flags |= SOUND_MOVESPEED_ENABLED;
+                };
+                if !sound.disable_falloff {
+                    flags |= SOUND_SQUARELAW_ENABLED;
+                };
+                let control_block = SimpleSoundControlBlock {
+                    flags,
+                    position,
+                    volume: sound.volume.clamp(0.0, 1.0),
+                    start_tick: tick,
+                    id: sound.sound_id,
+                    // TODO: get end tick from sound file details
+                    end_tick: 0,
+                };
+                self.shared_state.client_state.audio.alloc_simple_sound(
+                    tick_now,
+                    self.shared_state
+                        .client_state
+                        .weakly_ordered_last_position()
+                        .position,
+                    control_block,
+                );
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);

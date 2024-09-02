@@ -267,7 +267,12 @@ impl GameEntity {
         result
     }
 
-    pub(crate) fn advance_state(&mut self, until_tick: u64, audio_handle: &EngineHandle) {
+    pub(crate) fn advance_state(
+        &mut self,
+        until_tick: u64,
+        audio_handle: &EngineHandle,
+        volume: f32,
+    ) {
         let any_popped = self.pop_until(until_tick);
         if any_popped {
             log::debug!(
@@ -282,6 +287,7 @@ impl GameEntity {
                     *front,
                     self.move_queue.get(1).copied(),
                     self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
+                    volume,
                 );
             }
         }
@@ -554,7 +560,12 @@ impl EntityState {
 
     pub(crate) fn advance_all_states(&mut self, until_tick: u64, audio_handle: &EngineHandle) {
         for entity in self.entities.values_mut() {
-            entity.advance_state(until_tick, audio_handle);
+            let volume = if self.attached_to_entity == Some(entity.id) {
+                0.01
+            } else {
+                1.0
+            };
+            entity.advance_state(until_tick, audio_handle, volume);
         }
     }
 

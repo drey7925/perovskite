@@ -58,13 +58,16 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
+use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
 use itertools::iproduct;
 use log::error;
 use log::info;
 use log::warn;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use perovskite_core::protocol::audio::{SampledSoundPlayback, SoundSource};
 use perovskite_core::protocol::coordinates as coords_proto;
+use perovskite_core::protocol::coordinates::Vec3D;
 use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::game_rpc as proto;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
@@ -93,6 +96,7 @@ pub(crate) struct PlayerCoroutinePack {
     inbound_worker: InboundWorker,
     misc_outbound_worker: MiscOutboundWorker,
     entity_sender: EntityEventSender,
+    audio_sender: AudioSender,
 }
 impl PlayerCoroutinePack {
     pub(crate) async fn run_all(mut self) -> Result<()> {
@@ -140,9 +144,15 @@ impl PlayerCoroutinePack {
         })?;
         crate::spawn_async(&format!("entity_sender_{}", username), async move {
             if let Err(e) = self.entity_sender.entity_sender_loop().await {
-                log::error!("Error running misc outbound worker loop: {:?}", e);
+                log::error!("Error running entity sender worker loop: {:?}", e);
             }
         })?;
+        crate::spawn_async(&format!("audio_sender_{}", username), async move {
+            if let Err(e) = self.audio_sender.audio_sender_loop().await {
+                log::error!("Error running audio sender worker loop: {:?}", e);
+            }
+        })?;
+
         let cancellation = self.context.cancellation.clone();
         crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
             cancellation.cancelled().await;
@@ -176,6 +186,7 @@ pub(crate) async fn make_client_contexts(
         position: initial_position,
         chunks_to_send: 16,
     });
+    let pos_recv_clone = pos_recv.clone();
 
     let cancellation = CancellationToken::new();
     // TODO add other inventories from the inventory UI layer
@@ -247,6 +258,13 @@ pub(crate) async fn make_client_contexts(
         last_update: 0,
     };
 
+    let audio_sender = AudioSender {
+        context: context.clone(),
+        outbound_tx,
+        events: context.game_state.audio().subscribe(),
+        position_watch: pos_recv_clone,
+    };
+
     Ok(PlayerCoroutinePack {
         context,
         chunk_sender,
@@ -255,6 +273,7 @@ pub(crate) async fn make_client_contexts(
         inbound_worker,
         misc_outbound_worker,
         entity_sender,
+        audio_sender,
     })
 }
 
@@ -1402,6 +1421,25 @@ impl InboundWorker {
                         crate::game_state::entities::InitialMoveQueue::SingleMove(None),
                     )
                     .await;
+                if let Some(coord) = update.footstep_coordinate {
+                    self.context.game_state.audio().send_event(AudioEvent {
+                        context_id: self.context.id,
+                        instruction: AudioInstruction::PlaySampledSound(SampledSoundPlayback {
+                            tick: 0,
+                            sound_id: 0,
+                            position: Some(Vec3D {
+                                x: coord.x as f64,
+                                y: coord.y as f64,
+                                z: coord.z as f64,
+                            }),
+                            disable_doppler: false,
+                            disable_falloff: false,
+                            disable_balance: false,
+                            source: SoundSource::SoundsourcePlayer.into(),
+                            volume: 1.0,
+                        }),
+                    })
+                }
             }
             None => {
                 warn!("No position in update message from client");
@@ -2165,4 +2203,56 @@ fn make_inventory_update(
             server_message: Some(ServerMessage::InventoryUpdate(view.to_client_proto()?)),
         })
     })
+}
+
+pub(crate) struct AudioSender {
+    context: Arc<SharedContext>,
+
+    // RPC stream is sent via this channel
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    events: AudioCrossbarReceiver,
+    position_watch: watch::Receiver<PositionAndPacing>,
+}
+impl AudioSender {
+    #[tracing::instrument(
+        name = "AudioSenderLoop",
+        level = "info",
+        skip(self),
+        fields(
+            player_name=%self.context.player_context.name(),
+        )
+    )]
+    pub(crate) async fn audio_sender_loop(&mut self) -> Result<()> {
+        while !self.context.cancellation.is_cancelled() {
+            tokio::select! {
+                event = self.events.recv(self.position_watch.borrow().position.position) => {
+                    self.handle_event(event?).await?;
+                }
+                _ = self.context.cancellation.cancelled() => {
+                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
+                    // pass
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn handle_event(&mut self, event: AudioEvent) -> Result<()> {
+        if event.context_id == self.context.id {
+            // Don't send player-initiated events back to themselves
+            return Ok(());
+        }
+        match event.instruction {
+            AudioInstruction::PlaySampledSound(x) => {
+                self.outbound_tx
+                    .send(Ok(StreamToClient {
+                        tick: self.context.game_state.tick(),
+                        server_message: Some(ServerMessage::PlaySampledSound(x)),
+                    }))
+                    .await?
+            }
+        }
+
+        Ok(())
+    }
 }

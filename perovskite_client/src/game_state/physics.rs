@@ -133,6 +133,11 @@ pub(crate) struct PhysicsState {
     can_fly: bool,
     can_fast: bool,
     can_noclip: bool,
+    animation_state: AnimationState,
+}
+
+pub(crate) struct AnimationState {
+    pub(crate) footstep_coord: Option<BlockCoordinate>,
 }
 
 impl PhysicsState {
@@ -153,6 +158,9 @@ impl PhysicsState {
             can_fly: false,
             can_fast: false,
             can_noclip: false,
+            animation_state: AnimationState {
+                footstep_coord: None,
+            },
         }
     }
 
@@ -204,15 +212,12 @@ impl PhysicsState {
         let block_types = &client_state.block_types;
 
         // The block that the player's foot is in
-        let surrounding_block = get_block(
-            BlockCoordinate {
-                x: self.pos.x.round() as i32,
-                y: (self.pos.y - EYE_TO_BTM).round() as i32,
-                z: self.pos.z.round() as i32,
-            },
-            &chunks,
-            block_types,
-        );
+        let surrounding_coord = BlockCoordinate {
+            x: self.pos.x.round() as i32,
+            y: (self.pos.y - EYE_TO_BTM).round() as i32,
+            z: self.pos.z.round() as i32,
+        };
+        let surrounding_block = get_block(surrounding_coord, &chunks, block_types);
 
         let block_physics = surrounding_block.and_then(|(x, _)| x.physics_info.as_ref());
 
@@ -255,9 +260,11 @@ impl PhysicsState {
             self.last_land_height = new_pos.y;
             self.walk_sound_odometer += (new_pos - self.pos).magnitude();
             if self.walk_sound_odometer > 1.0 || !self.landed_last_frame {
+                // TODO consult block types to identify the correct sound
                 client_state
                     .audio
                     .testonly_play_footstep(client_state.timekeeper.now(), new_pos);
+                self.animation_state.footstep_coord = surrounding_coord.try_delta(0, -1, 0);
                 self.walk_sound_odometer = 0.0;
             }
 
@@ -497,6 +504,12 @@ impl PhysicsState {
         let az_x = (self.az.cos() * factor) + (self.target_az.cos() * (1.0 - factor));
         let az_y = (self.az.sin() * factor) + (self.target_az.sin() * (1.0 - factor));
         self.az = Deg::atan2(az_y, az_x);
+    }
+
+    pub(crate) fn take_animation_state(&mut self) -> AnimationState {
+        AnimationState {
+            footstep_coord: self.animation_state.footstep_coord.take(),
+        }
     }
 }
 

@@ -54,8 +54,8 @@ use crate::{
 mod client_context;
 pub(crate) mod mesh_worker;
 
-const MIN_PROTOCOL_VERSION: u32 = 4;
-const MAX_PROTOCOL_VERSION: u32 = 4;
+const MIN_PROTOCOL_VERSION: u32 = 5;
+const MAX_PROTOCOL_VERSION: u32 = 5;
 
 async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channel>> {
     PerovskiteGameClient::connect(server_addr)

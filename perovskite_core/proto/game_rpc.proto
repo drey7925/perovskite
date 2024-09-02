@@ -23,6 +23,7 @@ import "blocks.proto";
 import "items.proto";
 import "ui.proto";
 import "entities.proto";
+import "audio.proto";
 
 service PerovskiteGame {
   // Represents a stream carrying game events.
@@ -59,6 +60,11 @@ message GetItemDefsResponse {
 message GetEntityDefsRequest {}
 message GetEntityDefsResponse {
   repeated perovskite.protocol.entities.EntityDef entity_defs = 1;
+}
+
+message GetAudioDefsRequest {}
+message GetAudioDefsResponse {
+  repeated perovskite.protocol.audio.SampledSound sampled_sounds = 1;
 }
 
 message GetMediaRequest { string media_name = 1; }
@@ -158,6 +164,8 @@ message StreamToClient {
     ChatMessage chat_message = 88;
     // An entity changed in some way. This part of the protocol is under development
     perovskite.protocol.entities.EntityUpdate entity_update = 89;
+    // Play a sound from a sampled media file
+    perovskite.protocol.audio.SampledSoundPlayback play_sampled_sound = 90;
 
     // The server->client message sent as part of registration in the OPAQUE
     // protocol
@@ -263,6 +271,8 @@ message ClientUpdate {
   ClientPacing pacing = 2;
   uint32 hotbar_slot = 3;
   // todo animation state
+  // If set, player had a footstep.
+  perovskite.protocol.coordinates.BlockCoordinate footstep_coordinate = 4;
 }
 
 message PlayerPosition {
