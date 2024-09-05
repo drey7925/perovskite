@@ -122,9 +122,9 @@ impl EngineHandle {
         len: f32,
         volume: f32,
     ) {
-        if entity_id < NUM_TURBULENCE_ENTITY_SLOTS as u64 {
-            let mut lock = self.control.turbulence_sources[entity_id as usize].lock_write();
-            *lock = EntityTurbulenceControlBlock {
+        if entity_id < NUM_PROCEDURAL_ENTITY_SLOTS as u64 {
+            let mut lock = self.control.entity_slots[entity_id as usize].lock_write();
+            *lock = ProceduralEntitySoundControlBlock {
                 flags: SOUND_PRESENT,
                 entity_id,
                 leading: mv,
@@ -265,8 +265,8 @@ pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
     .await?;
 
     {
-        let mut lock = handle.control.turbulence_sources[15].lock_write();
-        *lock = EntityTurbulenceControlBlock {
+        let mut lock = handle.control.entity_slots[15].lock_write();
+        *lock = ProceduralEntitySoundControlBlock {
             flags: SOUND_PRESENT,
             entity_id: 0,
             leading: EntityMove::zero(),
@@ -301,7 +301,6 @@ struct EngineState {
     total_samples_seen: u64,
 
     test_sampler: PrerecordedSampler,
-    test_turbulence_sampler: ApproximateTurbulenceSampler,
 
     rng: rand::rngs::SmallRng,
 }
@@ -467,13 +466,13 @@ impl EngineState {
                 sampler,
             );
         }
-        for i in 0..NUM_TURBULENCE_ENTITY_SLOTS {
-            let control_block = self.control.turbulence_sources[i].read();
+        for i in 0..NUM_PROCEDURAL_ENTITY_SLOTS {
+            let control_block = self.control.entity_slots[i].read();
             if control_block.flags & SOUND_PRESENT == 0 {
                 continue;
             }
 
-            let private_state = &mut self.private_control.turbulence_sounds[i];
+            let private_state = &mut self.private_control.procedural_entity_sounds[i];
 
             Self::sample_entity_turbulence(
                 self.stream_config.channels() as usize,
@@ -481,7 +480,6 @@ impl EngineState {
                 data,
                 control_block,
                 &player_state,
-                &control_block,
                 private_state,
                 &mut self.rng,
                 buffer_start_tick,
@@ -512,7 +510,6 @@ impl EngineState {
                 FOOTSTEP_WAV_BYTES,
                 stream_config.sample_rate().0,
             )?,
-            test_turbulence_sampler: ApproximateTurbulenceSampler {},
             rng: rand::rngs::SmallRng::from_rng(&mut rand::thread_rng())?,
         })
     }
@@ -599,10 +596,9 @@ impl EngineState {
         channels: usize,
         nanos_per_sample: f64,
         data: &mut [f32],
-        control_block: EntityTurbulenceControlBlock,
+        control_block: ProceduralEntitySoundControlBlock,
         player_state: &PlayerState,
-        entity_turbulence_control_block: &EntityTurbulenceControlBlock,
-        scratchpad: &mut TurbulenceScratchpad,
+        scratchpad: &mut EntityScratchpad,
         rng: &mut SmallRng,
         buffer_start_tick: u64,
         samples: usize,
@@ -616,9 +612,9 @@ impl EngineState {
             panic!("Doppler effect support not yet implemented, requires larger move queues")
         }
         if control_block.entity_id != scratchpad.entity_id {
-            *scratchpad = TurbulenceScratchpad {
+            *scratchpad = EntityScratchpad {
                 entity_id: control_block.entity_id,
-                ..TurbulenceScratchpad::default()
+                ..EntityScratchpad::default()
             }
         }
 
@@ -766,7 +762,7 @@ impl EngineState {
             let l_amplitude = amplitude * (1.0 + 0.8 * balance_left as f32);
 
             let r_amplitude = amplitude * (1.0 - 0.8 * balance_left as f32);
-            let (l, r) = ApproximateTurbulenceSampler::sample(scratchpad, rng);
+            let (l, r) = sample_turbulence(scratchpad, rng);
             let (l, r) = if channels == 1 {
                 (l + r / 2.0, 0.0)
             } else {
@@ -822,20 +818,20 @@ impl PlayerState {
 }
 
 pub const NUM_SIMPLE_SOUND_SLOTS: usize = 64;
-pub const NUM_TURBULENCE_ENTITY_SLOTS: usize = 64;
+pub const NUM_PROCEDURAL_ENTITY_SLOTS: usize = 64;
 
 /// The private control state, used internally by the audio engine to track the state of
 /// the player and sounds
 struct PrivateControl {
     simple_sounds: Box<[SimpleSoundState; NUM_SIMPLE_SOUND_SLOTS]>,
-    turbulence_sounds: Box<[TurbulenceScratchpad; NUM_TURBULENCE_ENTITY_SLOTS]>,
+    procedural_entity_sounds: Box<[EntityScratchpad; NUM_PROCEDURAL_ENTITY_SLOTS]>,
 }
 impl Default for PrivateControl {
     fn default() -> PrivateControl {
         PrivateControl {
             simple_sounds: Box::new([SimpleSoundState::default(); NUM_SIMPLE_SOUND_SLOTS]),
-            turbulence_sounds: Box::new(
-                [TurbulenceScratchpad::default(); NUM_TURBULENCE_ENTITY_SLOTS],
+            procedural_entity_sounds: Box::new(
+                [EntityScratchpad::default(); NUM_PROCEDURAL_ENTITY_SLOTS],
             ),
         }
     }
@@ -845,15 +841,15 @@ impl Default for PrivateControl {
 pub(crate) struct SharedControl {
     player_state: SeqLock<PlayerState>,
     simple_sounds: Box<[SeqLock<SimpleSoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
-    turbulence_sources: Box<[SeqLock<EntityTurbulenceControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
+    entity_slots: Box<[SeqLock<ProceduralEntitySoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
     settings: Arc<ArcSwap<GameSettings>>,
 }
 impl SharedControl {
     fn new(settings: Arc<ArcSwap<GameSettings>>, initial_position: Vector3<f64>) -> SharedControl {
         const SIMPLE_SOUND_CONST_INIT: SeqLock<SimpleSoundControlBlock> =
             SeqLock::new(SimpleSoundControlBlock::const_default());
-        const TURBULENCE_SOURCE_CONST_INIT: SeqLock<EntityTurbulenceControlBlock> =
-            SeqLock::new(EntityTurbulenceControlBlock::const_default());
+        const PROCEDURAL_ENTITY_CONST_INIT: SeqLock<ProceduralEntitySoundControlBlock> =
+            SeqLock::new(ProceduralEntitySoundControlBlock::const_default());
         SharedControl {
             player_state: SeqLock::new(PlayerState {
                 position: initial_position,
@@ -863,9 +859,7 @@ impl SharedControl {
                 position_timebase_tick: 0,
             }),
             simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; NUM_SIMPLE_SOUND_SLOTS]),
-            turbulence_sources: Box::new(
-                [TURBULENCE_SOURCE_CONST_INIT; NUM_TURBULENCE_ENTITY_SLOTS],
-            ),
+            entity_slots: Box::new([PROCEDURAL_ENTITY_CONST_INIT; NUM_PROCEDURAL_ENTITY_SLOTS]),
             // Start all volumes at 0 until they are set by the game loop
             settings,
         }
@@ -880,7 +874,7 @@ pub(crate) struct SimpleSoundControlBlock {
     /// The flags for the sound. See SOUND_* constants
     ///
     /// Note that the type of this field is subject to change if more than 8 flags are needed.
-    pub flags: u8,
+    pub flags: FlagsType,
     /// The position of the sound in 3D space. The sound is assumed to be stationary,
     /// but the player's motion may be considered for Doppler effect.
     pub position: Vector3<f64>,
@@ -957,8 +951,8 @@ impl SimpleSoundControlBlock {
 }
 
 #[derive(Clone, Copy)]
-struct EntityTurbulenceControlBlock {
-    flags: u8,
+struct ProceduralEntitySoundControlBlock {
+    flags: FlagsType,
     entity_id: u64,
     leading: EntityMove,
     second: Option<EntityMove>,
@@ -966,9 +960,9 @@ struct EntityTurbulenceControlBlock {
     volume: f32,
 }
 
-impl EntityTurbulenceControlBlock {
-    const fn const_default() -> EntityTurbulenceControlBlock {
-        EntityTurbulenceControlBlock {
+impl ProceduralEntitySoundControlBlock {
+    const fn const_default() -> ProceduralEntitySoundControlBlock {
+        ProceduralEntitySoundControlBlock {
             flags: 0,
             entity_id: 0,
             leading: EntityMove::zero(),
@@ -1027,17 +1021,19 @@ impl SmoothedVar {
     }
 }
 
+pub type FlagsType = u8;
+
 /// If set, the entry in the control block is valid and enabled
-pub const SOUND_PRESENT: u8 = 0x1;
+pub const SOUND_PRESENT: FlagsType = 0x1;
 
 /// If set, the sound will be subject to speed-of-sound and doppler effects
-pub const SOUND_MOVESPEED_ENABLED: u8 = 0x2;
+pub const SOUND_MOVESPEED_ENABLED: FlagsType = 0x2;
 /// If set, the sound will be subject to square-law effects affecting its amplitude
-pub const SOUND_SQUARELAW_ENABLED: u8 = 0x4;
+pub const SOUND_SQUARELAW_ENABLED: FlagsType = 0x4;
 /// If set, the sound undergoes directionality effects
-pub const SOUND_DIRECTIONAL: u8 = 0x8;
+pub const SOUND_DIRECTIONAL: FlagsType = 0x8;
 /// If set, the sound is considered sticky, and will never be deallocated
-pub const SOUND_STICKY: u8 = 0x10;
+pub const SOUND_STICKY: FlagsType = 0x10;
 
 /// The minimum distance considered for square-law effects. By enforcing this, we avoid
 /// excessive amplitudes for near-zero distances.
@@ -1165,24 +1161,12 @@ impl PrerecordedSampler {
     }
 }
 
-struct ApproximateTurbulenceSampler {}
-impl ApproximateTurbulenceSampler {
-    fn sample(scratchpad: &mut TurbulenceScratchpad, rng: &mut SmallRng) -> (f32, f32) {
-        let rng_val = rng.gen_range(-1.0..1.0) * 4000.0;
-        let filtered = rng_val * 0.1 + scratchpad.iir_state * 0.9;
-        scratchpad.iir_state = filtered;
-        (filtered as f32, filtered as f32)
-    }
-}
-
-trait Sampler {
-    fn sample(
-        &self,
-        sample: f64,
-        player_state: &PlayerState,
-        scratchpad: &mut TurbulenceScratchpad,
-        rng: &mut SmallRng,
-    ) -> (f32, f32);
+#[inline]
+fn sample_turbulence(scratchpad: &mut EntityScratchpad, rng: &mut SmallRng) -> (f32, f32) {
+    let rng_val = rng.gen_range(-1.0..1.0) * 4000.0;
+    let filtered = rng_val * 0.1 + scratchpad.turbulence_iir_state * 0.9;
+    scratchpad.turbulence_iir_state = filtered;
+    (filtered as f32, filtered as f32)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1201,9 +1185,9 @@ enum ApproachState {
 }
 
 #[derive(Copy, Clone, Debug)]
-struct TurbulenceScratchpad {
+struct EntityScratchpad {
     // Really simple first-order IIR filter, single state
-    iir_state: f64,
+    turbulence_iir_state: f64,
     // The entity ID, used to make sure that we're looking at the same entity
     entity_id: u64,
     // Last player position, used for close-approach detection
@@ -1223,10 +1207,10 @@ struct TurbulenceScratchpad {
     // Used to provide an extra burst of sound at edges
     edge_cycle: f32,
 }
-impl Default for TurbulenceScratchpad {
+impl Default for EntityScratchpad {
     fn default() -> Self {
-        TurbulenceScratchpad {
-            iir_state: 0.0,
+        EntityScratchpad {
+            turbulence_iir_state: 0.0,
             entity_id: u64::MAX,
             last_player_pos: Vector3::zero(),
             last_distance: 0.0,
