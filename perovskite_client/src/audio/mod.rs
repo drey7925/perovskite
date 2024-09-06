@@ -1,4 +1,5 @@
-use std::ops::{Add, Range};
+use std::arch::x86_64::_mm_cvtss_f32;
+use std::ops::{Add, DerefMut, Range};
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -104,6 +105,7 @@ impl EngineHandle {
         pos: Vector3<f64>,
         velocity: Vector3<f32>,
         azimuth: f64,
+        testonly_entity_attached: bool,
     ) {
         {
             let mut lock = self.control.player_state.lock_write();
@@ -111,6 +113,18 @@ impl EngineHandle {
             lock.velocity = velocity;
             lock.azimuth_radian = azimuth;
             lock.position_timebase_tick = tick;
+            lock.entity_filter_state = if testonly_entity_attached {
+                EntityFilterState {
+                    cutoff_hz: 250,
+                    degree: 2,
+                }
+            } else {
+                EntityFilterState {
+                    cutoff_hz: 0,
+                    degree: 0,
+                }
+            };
+            lock.entity_filter_extra_gain = if testonly_entity_attached { 5.0 } else { 1.0 };
         }
     }
 
@@ -130,7 +144,10 @@ impl EngineHandle {
                 leading: mv,
                 second: mv2,
                 entity_len: len,
-                volume,
+                turbulence: TurbulenceSourceControlBlock {
+                    volume,
+                    lpf_cutoff_hz: 1000.0,
+                },
             }
         }
     }
@@ -272,7 +289,10 @@ pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
             leading: EntityMove::zero(),
             second: None,
             entity_len: 0.0,
-            volume: 1.0,
+            turbulence: TurbulenceSourceControlBlock {
+                volume: 1.0,
+                lpf_cutoff_hz: 1000.0,
+            },
         }
     }
 
@@ -303,6 +323,11 @@ struct EngineState {
     test_sampler: PrerecordedSampler,
 
     rng: rand::rngs::SmallRng,
+
+    entity_filter_state: EntityFilterState,
+    entity_filter_left: IirLpfCascade<8>,
+    entity_filter_right: IirLpfCascade<8>,
+    entity_filter_input_buffer: Vec<f32>,
 }
 
 // Const rather than using log! because I don't know what locks we might have to deal when the
@@ -392,6 +417,24 @@ impl EngineState {
 
         let player_state = self.control.player_state.read();
 
+        if player_state.entity_filter_state != self.entity_filter_state {
+            self.entity_filter_state = player_state.entity_filter_state;
+            let degree = self.entity_filter_state.degree;
+            // Recreate the entity filter
+            self.entity_filter_left = if degree == 0 {
+                IirLpfCascade::default()
+            } else {
+                IirLpfCascade::new_for_degree(
+                    self.entity_filter_state.degree as usize,
+                    self.entity_filter_state.cutoff_hz as f32,
+                    (1_000_000_000.0 / self.nanos_per_sample) as f32,
+                )
+            };
+            self.entity_filter_right = self.entity_filter_left;
+        }
+        self.entity_filter_input_buffer.clear();
+        self.entity_filter_input_buffer.resize(data.len(), 0.0);
+
         for i in 0..NUM_SIMPLE_SOUND_SLOTS {
             let control_block = self.control.simple_sounds[i].read();
             let private_state = &mut self.private_control.simple_sounds[i];
@@ -453,11 +496,15 @@ impl EngineState {
             }
 
             let sampler = &self.test_sampler;
-
+            let buf = if control_block.flags & SOUND_BYPASS_ATTACHED_ENTITY_FILTER == 0 {
+                self.entity_filter_input_buffer.deref_mut()
+            } else {
+                &mut *data
+            };
             Self::sample_simple_sound(
                 self.stream_config.channels() as usize,
                 self.nanos_per_sample,
-                data,
+                buf,
                 sample_range,
                 &player_state,
                 &control_block,
@@ -474,10 +521,16 @@ impl EngineState {
 
             let private_state = &mut self.private_control.procedural_entity_sounds[i];
 
+            let buf = if control_block.flags & SOUND_BYPASS_ATTACHED_ENTITY_FILTER == 0 {
+                self.entity_filter_input_buffer.deref_mut()
+            } else {
+                &mut *data
+            };
+
             Self::sample_entity_turbulence(
                 self.stream_config.channels() as usize,
                 self.nanos_per_sample,
-                data,
+                buf,
                 control_block,
                 &player_state,
                 private_state,
@@ -485,6 +538,12 @@ impl EngineState {
                 buffer_start_tick,
                 samples,
             )
+        }
+        match self.stream_config.channels() {
+            1 => self.downmix_mono(data, player_state.entity_filter_extra_gain),
+            2 => self.downmix_stereo(data, player_state.entity_filter_extra_gain),
+            // TODO handle the messed-up sample rate here
+            x => self.downmix_mono(data, player_state.entity_filter_extra_gain),
         }
     }
 
@@ -511,6 +570,16 @@ impl EngineState {
                 stream_config.sample_rate().0,
             )?,
             rng: rand::rngs::SmallRng::from_rng(&mut rand::thread_rng())?,
+            entity_filter_state: EntityFilterState {
+                cutoff_hz: 0,
+                degree: 0,
+            },
+            entity_filter_left: Default::default(),
+            entity_filter_right: Default::default(),
+            // Generously allocate memory for one second
+            entity_filter_input_buffer: Vec::with_capacity(
+                stream_config.sample_rate().0 as usize * 2,
+            ),
         })
     }
     fn sample_simple_sound(
@@ -614,6 +683,10 @@ impl EngineState {
         if control_block.entity_id != scratchpad.entity_id {
             *scratchpad = EntityScratchpad {
                 entity_id: control_block.entity_id,
+                turbulence_iir_state: IirLpfCascade::new_equal_cascade(
+                    control_block.turbulence.lpf_cutoff_hz,
+                    (1_000_000_000.0 / nanos_per_sample) as f32,
+                ),
                 ..EntityScratchpad::default()
             }
         }
@@ -653,7 +726,7 @@ impl EngineState {
                 ApproachState::Initial(acc) => {
                     // Looking for a decrease
                     let new_acc = (acc - distance_diff).max(0.0);
-                    if new_acc > 0.1 {
+                    if new_acc > 10.0 {
                         ApproachState::DecreaseDetected(0.0)
                     } else {
                         ApproachState::Initial(new_acc)
@@ -752,16 +825,17 @@ impl EngineState {
                     * (1.0 - scratchpad.trailing_edge_blend_factor as f64);
             let effective_dir = effective_displacement_smoothed.normalize();
 
-            let amplitude = control_block.volume * multiplier * edge_multiplier * speed_multiplier;
+            let turbulence_amplitude =
+                control_block.turbulence.volume * multiplier * edge_multiplier * speed_multiplier;
 
             let mut balance_left = left_ear_vec.dot(effective_dir);
             if balance_left.is_nan() {
                 balance_left = 0.0;
             }
             let balance_left = scratchpad.last_balance.update(balance_left, 0.001);
-            let l_amplitude = amplitude * (1.0 + 0.8 * balance_left as f32);
+            let l_amplitude = turbulence_amplitude * (1.0 + 0.8 * balance_left as f32);
 
-            let r_amplitude = amplitude * (1.0 - 0.8 * balance_left as f32);
+            let r_amplitude = turbulence_amplitude * (1.0 - 0.8 * balance_left as f32);
             let (l, r) = sample_turbulence(scratchpad, rng);
             let (l, r) = if channels == 1 {
                 (l + r / 2.0, 0.0)
@@ -779,10 +853,40 @@ impl EngineState {
                         r_amplitude
                     }
                 } else {
-                    amplitude
+                    turbulence_amplitude
                 };
                 let index = sample * channels + chan;
                 data[index] += amplitude * sample_value / 800.0;
+            }
+        }
+    }
+    fn downmix_mono(&mut self, dst: &mut [f32], gain: f32) {
+        assert_eq!(self.entity_filter_input_buffer.len(), dst.len());
+        for (in_sample, out_sample) in self.entity_filter_input_buffer.iter().zip(dst.iter_mut()) {
+            *out_sample = gain * self.entity_filter_left.sample(*in_sample);
+        }
+    }
+    fn downmix_stereo(&mut self, dst: &mut [f32], gain: f32) {
+        assert_eq!(self.entity_filter_input_buffer.len(), dst.len());
+        assert_eq!(self.entity_filter_input_buffer.len() % 2, 0);
+        for (idx, (in_sample, out_sample)) in self
+            .entity_filter_input_buffer
+            .iter()
+            .zip(dst.iter_mut())
+            .enumerate()
+        {
+            if idx % 2 == 0 {
+                *out_sample = gain * self.entity_filter_left.sample(*in_sample);
+            }
+        }
+        for (idx, (in_sample, out_sample)) in self
+            .entity_filter_input_buffer
+            .iter()
+            .zip(dst.iter_mut())
+            .enumerate()
+        {
+            if idx % 2 == 1 {
+                *out_sample = gain * self.entity_filter_right.sample(*in_sample);
             }
         }
     }
@@ -798,6 +902,14 @@ pub(crate) struct PlayerState {
     acceleration: Vector3<f32>,
     azimuth_radian: f64,
     position_timebase_tick: u64,
+    entity_filter_state: EntityFilterState,
+    entity_filter_extra_gain: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EntityFilterState {
+    cutoff_hz: u32,
+    degree: u32,
 }
 
 impl PlayerState {
@@ -857,6 +969,11 @@ impl SharedControl {
                 acceleration: Vector3::zero(),
                 azimuth_radian: 0.0,
                 position_timebase_tick: 0,
+                entity_filter_state: EntityFilterState {
+                    cutoff_hz: 0,
+                    degree: 0,
+                },
+                entity_filter_extra_gain: 1.0,
             }),
             simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; NUM_SIMPLE_SOUND_SLOTS]),
             entity_slots: Box::new([PROCEDURAL_ENTITY_CONST_INIT; NUM_PROCEDURAL_ENTITY_SLOTS]),
@@ -950,14 +1067,19 @@ impl SimpleSoundControlBlock {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ProceduralEntitySoundControlBlock {
     flags: FlagsType,
     entity_id: u64,
     leading: EntityMove,
     second: Option<EntityMove>,
     entity_len: f32,
+    turbulence: TurbulenceSourceControlBlock,
+}
+#[derive(Clone, Copy, Debug)]
+struct TurbulenceSourceControlBlock {
     volume: f32,
+    lpf_cutoff_hz: f32,
 }
 
 impl ProceduralEntitySoundControlBlock {
@@ -968,7 +1090,10 @@ impl ProceduralEntitySoundControlBlock {
             leading: EntityMove::zero(),
             second: None,
             entity_len: 0.0,
-            volume: 0.0,
+            turbulence: TurbulenceSourceControlBlock {
+                volume: 0.0,
+                lpf_cutoff_hz: 1000.0,
+            },
         }
     }
 }
@@ -1034,6 +1159,9 @@ pub const SOUND_SQUARELAW_ENABLED: FlagsType = 0x4;
 pub const SOUND_DIRECTIONAL: FlagsType = 0x8;
 /// If set, the sound is considered sticky, and will never be deallocated
 pub const SOUND_STICKY: FlagsType = 0x10;
+/// If set, the sound bypasses the attached entity filter. Otherwise, the attached entity filter
+/// is applied.
+pub const SOUND_BYPASS_ATTACHED_ENTITY_FILTER: FlagsType = 0x20;
 
 /// The minimum distance considered for square-law effects. By enforcing this, we avoid
 /// excessive amplitudes for near-zero distances.
@@ -1164,9 +1292,8 @@ impl PrerecordedSampler {
 #[inline]
 fn sample_turbulence(scratchpad: &mut EntityScratchpad, rng: &mut SmallRng) -> (f32, f32) {
     let rng_val = rng.gen_range(-1.0..1.0) * 4000.0;
-    let filtered = rng_val * 0.1 + scratchpad.turbulence_iir_state * 0.9;
-    scratchpad.turbulence_iir_state = filtered;
-    (filtered as f32, filtered as f32)
+    let filtered = scratchpad.turbulence_iir_state.sample(rng_val);
+    (filtered, filtered)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1187,7 +1314,7 @@ enum ApproachState {
 #[derive(Copy, Clone, Debug)]
 struct EntityScratchpad {
     // Really simple first-order IIR filter, single state
-    turbulence_iir_state: f64,
+    turbulence_iir_state: IirLpfCascade<1>,
     // The entity ID, used to make sure that we're looking at the same entity
     entity_id: u64,
     // Last player position, used for close-approach detection
@@ -1210,7 +1337,7 @@ struct EntityScratchpad {
 impl Default for EntityScratchpad {
     fn default() -> Self {
         EntityScratchpad {
-            turbulence_iir_state: 0.0,
+            turbulence_iir_state: IirLpfCascade::default(),
             entity_id: u64::MAX,
             last_player_pos: Vector3::zero(),
             last_distance: 0.0,
@@ -1300,4 +1427,51 @@ pub mod generated_eqns {
 
 mod testdata {
     pub(super) const FOOTSTEP_WAV_BYTES: &[u8] = include_bytes!("footstep_temp.wav");
+}
+
+/// A cascade of *single-pole* filters.
+#[derive(Clone, Copy, Debug)]
+struct IirLpfCascade<const N: usize> {
+    gains: [f32; N],
+    states: [f32; N],
+}
+impl<const N: usize> IirLpfCascade<N> {
+    fn new_equal_cascade(cutoff_freq: f32, sample_rate: f32) -> Self {
+        let decay = f32::exp(-std::f32::consts::TAU * (cutoff_freq / sample_rate));
+        let gain = 1.0 - decay;
+        IirLpfCascade {
+            gains: [gain; N],
+            states: [0.0; N],
+        }
+    }
+
+    fn new_for_degree(degree: usize, cutoff_freq: f32, sample_rate: f32) -> Self {
+        let decay = f32::exp(-std::f32::consts::TAU * (cutoff_freq / sample_rate));
+        let gain = 1.0 - decay;
+        let mut gains = [1.0; N];
+        for i in 0..degree {
+            gains[i] = gain;
+        }
+        IirLpfCascade {
+            gains,
+            states: [0.0; N],
+        }
+    }
+
+    fn sample(&mut self, input: f32) -> f32 {
+        let mut val = input;
+        for i in 0..N {
+            self.states[i] += self.gains[i] * (val - self.states[i]);
+            val = self.states[i];
+        }
+        val
+    }
+}
+impl<const N: usize> Default for IirLpfCascade<N> {
+    fn default() -> Self {
+        IirLpfCascade {
+            gains: [1.0; N],
+            states: [0.0; N],
+        }
+    }
 }

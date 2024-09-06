@@ -752,6 +752,7 @@ impl ClientState {
             player_position,
             player_velocity.cast().unwrap(),
             az * PI / 180.,
+            self.entities.lock().attached_to_entity.is_some(),
         );
 
         let rotation = cgmath::Matrix4::from_angle_x(Deg(el))

@@ -561,7 +561,7 @@ impl EntityState {
     pub(crate) fn advance_all_states(&mut self, until_tick: u64, audio_handle: &EngineHandle) {
         for entity in self.entities.values_mut() {
             let volume = if self.attached_to_entity == Some(entity.id) {
-                0.01
+                0.25
             } else {
                 1.0
             };
