@@ -25,7 +25,7 @@ use crate::game_state::timekeeper::Timekeeper;
 pub struct EngineHandle {
     control: Arc<SharedControl>,
     drop_guard: DropGuard,
-    simple_sounds_bitmap: Mutex<AllocatorState>,
+    allocator_state: Mutex<AllocatorState>,
 }
 
 /// An opaque token used to modify/remove a sound in a slot.
@@ -34,12 +34,16 @@ pub struct EngineHandle {
 /// Note: PartialOrd/Ord derived implementation is only for the benefit of
 /// ord-based datastructures (e.g. BTreeMap). No semantic meaning should
 /// be ascribed to the result of these comparisons.
-#[derive(PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Clone, Copy)]
 pub struct SimpleSoundToken(u64);
+#[derive(PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Clone, Copy)]
+pub struct ProceduralEntityToken(u64);
 
 struct AllocatorState {
     simple_sound_tokens: [u64; NUM_SIMPLE_SOUND_SLOTS],
     simple_sounds_next_sequence: u64,
+    entity_slot_tokens: [u64; NUM_PROCEDURAL_ENTITY_SLOTS],
+    entity_slots_next_sequence: u64,
 }
 
 impl AllocatorState {
@@ -48,6 +52,9 @@ impl AllocatorState {
             simple_sound_tokens: [0; NUM_SIMPLE_SOUND_SLOTS],
             // This must start at a nonzero value, since 0 is a sentinel
             simple_sounds_next_sequence: NUM_SIMPLE_SOUND_SLOTS as u64,
+            entity_slot_tokens: [0; NUM_PROCEDURAL_ENTITY_SLOTS],
+            // Likewise
+            entity_slots_next_sequence: NUM_PROCEDURAL_ENTITY_SLOTS as u64,
         }
     }
 }
@@ -60,7 +67,7 @@ impl EngineHandle {
         sound: SimpleSoundControlBlock,
     ) -> Option<SimpleSoundToken> {
         assert_ne!(sound.flags & SOUND_PRESENT, 0);
-        let mut alloc_lock = self.simple_sounds_bitmap.lock();
+        let mut alloc_lock = self.allocator_state.lock();
 
         let seqnum = alloc_lock.simple_sounds_next_sequence;
         alloc_lock.simple_sounds_next_sequence += NUM_SIMPLE_SOUND_SLOTS as u64;
@@ -99,6 +106,63 @@ impl EngineHandle {
         }
     }
 
+    pub(crate) fn update_entity_state(
+        &self,
+        tick_now: u64,
+        player_position: Vector3<f64>,
+        sound: ProceduralEntitySoundControlBlock,
+        previous_token: Option<ProceduralEntityToken>,
+    ) -> Option<ProceduralEntityToken> {
+        assert_ne!(sound.flags & SOUND_PRESENT, 0);
+        let mut alloc_lock = self.allocator_state.lock();
+
+        if let Some(token) = previous_token {
+            let index = token.0 % (NUM_PROCEDURAL_ENTITY_SLOTS as u64);
+            // If the entity hasn't been evicted, put it back in the same slot
+            if alloc_lock.entity_slot_tokens[index as usize] == token.0 {
+                let mut lock = self.control.entity_slots[index as usize].lock_write();
+                *lock = sound;
+                return Some(token);
+            }
+        }
+
+        let seqnum = alloc_lock.entity_slots_next_sequence;
+        alloc_lock.entity_slots_next_sequence += NUM_PROCEDURAL_ENTITY_SLOTS as u64;
+
+        if let Some(index) = alloc_lock.entity_slot_tokens.iter().position(|x| *x == 0) {
+            let token = seqnum + (index as u64);
+            alloc_lock.entity_slot_tokens[index] = token;
+            {
+                let mut lock = self.control.entity_slots[index].lock_write();
+                *lock = sound;
+            }
+            return Some(ProceduralEntityToken(token));
+        } else {
+            let candidate_score = sound.compute_score(tick_now, player_position);
+            let mut scores = [0; NUM_PROCEDURAL_ENTITY_SLOTS];
+            for i in 0..NUM_PROCEDURAL_ENTITY_SLOTS {
+                let control_block = self.control.entity_slots[i].read();
+                scores[i] = control_block.compute_score(tick_now, player_position);
+            }
+            let (min_index, min_score) = scores
+                .iter()
+                .copied()
+                .enumerate()
+                .min_by_key(|&(i, score)| score)
+                .unwrap();
+            if min_score < candidate_score {
+                let token = seqnum + (min_index as u64);
+                alloc_lock.entity_slot_tokens[min_index] = token;
+                {
+                    let mut lock = self.control.entity_slots[min_index].lock_write();
+                    *lock = sound;
+                }
+                return Some(ProceduralEntityToken(token));
+            }
+            return None;
+        }
+    }
+
     pub(crate) fn update_position(
         &self,
         tick: u64,
@@ -125,30 +189,6 @@ impl EngineHandle {
                 }
             };
             lock.entity_filter_extra_gain = if testonly_entity_attached { 5.0 } else { 1.0 };
-        }
-    }
-
-    pub(crate) fn testonly_update_entity(
-        &self,
-        entity_id: u64,
-        mv: EntityMove,
-        mv2: Option<EntityMove>,
-        len: f32,
-        volume: f32,
-    ) {
-        if entity_id < NUM_PROCEDURAL_ENTITY_SLOTS as u64 {
-            let mut lock = self.control.entity_slots[entity_id as usize].lock_write();
-            *lock = ProceduralEntitySoundControlBlock {
-                flags: SOUND_PRESENT,
-                entity_id,
-                leading: mv,
-                second: mv2,
-                entity_len: len,
-                turbulence: TurbulenceSourceControlBlock {
-                    volume,
-                    lpf_cutoff_hz: 1000.0,
-                },
-            }
         }
     }
 
@@ -249,7 +289,7 @@ pub(crate) async fn start_engine(
     Ok(EngineHandle {
         control,
         drop_guard: cancellation_token.drop_guard(),
-        simple_sounds_bitmap: Mutex::new(AllocatorState::new()),
+        allocator_state: Mutex::new(AllocatorState::new()),
     })
 }
 
@@ -677,9 +717,6 @@ impl EngineState {
         let left_ear_x = left_ear_azimuth.sin();
         let left_ear_vec = Vector3::new(left_ear_x, 0.0, left_ear_z);
 
-        if control_block.flags & SOUND_MOVESPEED_ENABLED != 0 {
-            panic!("Doppler effect support not yet implemented, requires larger move queues")
-        }
         if control_block.entity_id != scratchpad.entity_id {
             *scratchpad = EntityScratchpad {
                 entity_id: control_block.entity_id,
@@ -708,130 +745,144 @@ impl EngineState {
                     }
                 }
             };
-
-            let entity_pos = entity_move.qproj(entity_move_elapsed);
-            let player_pos = player_state.position;
-            // distance this sample
-            let distance = (player_pos - entity_pos).magnitude();
-            // distance in this sample if the player hadn't moved
-            let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
-            let distance_diff = (distance_unmoved_player - scratchpad.last_distance);
-
-            scratchpad.last_distance = distance;
-            scratchpad.last_player_pos = player_pos;
-
             let current_velocity = entity_move.instantaneous_velocity(entity_move_elapsed);
 
-            scratchpad.approach_state = match scratchpad.approach_state {
-                ApproachState::Initial(acc) => {
-                    // Looking for a decrease
-                    let new_acc = (acc - distance_diff).max(0.0);
-                    if new_acc > 10.0 {
-                        ApproachState::DecreaseDetected(0.0)
-                    } else {
-                        ApproachState::Initial(new_acc)
+            let (distance_falloff_multiplier, edge_multiplier, balance_left) = if control_block
+                .flags
+                & SOUND_ENTITY_SPATIAL
+                != 0
+            {
+                let entity_pos = entity_move.qproj(entity_move_elapsed);
+                let player_pos = player_state.position;
+                // distance this sample
+                let distance = (player_pos - entity_pos).magnitude();
+                // distance in this sample if the player hadn't moved
+                let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
+                let distance_diff = (distance_unmoved_player - scratchpad.last_distance);
+
+                scratchpad.last_distance = distance;
+                scratchpad.last_player_pos = player_pos;
+
+                scratchpad.approach_state = match scratchpad.approach_state {
+                    ApproachState::Initial(acc) => {
+                        // Looking for a decrease
+                        let new_acc = (acc - distance_diff).max(0.0);
+                        if new_acc > 10.0 {
+                            ApproachState::DecreaseDetected(0.0)
+                        } else {
+                            ApproachState::Initial(new_acc)
+                        }
                     }
-                }
-                ApproachState::DecreaseDetected(acc) => {
-                    let new_acc = (acc + distance_diff).max(0.0);
-                    if new_acc > 0.1 {
-                        let _span = span!("start passing");
-                        scratchpad.edge_cycle = 0.0;
-                        // This is a local minimum
-                        ApproachState::Passing(
-                            0.0,
-                            entity_pos,
-                            player_pos - entity_pos,
-                            entity_move
-                                .instantaneous_velocity(entity_move_elapsed)
-                                .normalize(),
+                    ApproachState::DecreaseDetected(acc) => {
+                        let new_acc = (acc + distance_diff).max(0.0);
+                        if new_acc > 0.1 {
+                            let _span = span!("start passing");
+                            scratchpad.edge_cycle = 0.0;
+                            // This is a local minimum
+                            ApproachState::Passing(
+                                0.0,
+                                entity_pos,
+                                player_pos - entity_pos,
+                                entity_move
+                                    .instantaneous_velocity(entity_move_elapsed)
+                                    .normalize(),
+                            )
+                        } else {
+                            ApproachState::DecreaseDetected(new_acc)
+                        }
+                    }
+                    x => x,
+                };
+
+                let (effective_displacement, start_recovery) = match &mut scratchpad.approach_state
+                {
+                    ApproachState::Initial(_) => (player_pos - entity_pos, false),
+                    ApproachState::DecreaseDetected(_) => (player_pos - entity_pos, false),
+                    ApproachState::Passing(
+                        travel_since,
+                        captured_entity_location,
+                        captured_e2p,
+                        captured_velocity,
+                    ) => {
+                        let additional_travel = (current_velocity.magnitude() as f64)
+                            * nanos_per_sample
+                            / 1_000_000_000.0;
+
+                        let new_travel = *travel_since + additional_travel;
+                        if (new_travel / 32.0).floor() != (*travel_since / 32.0).floor() {
+                            scratchpad.edge_cycle = 0.0;
+                        }
+
+                        *travel_since = new_travel;
+                        let current_displacement = player_pos - *captured_entity_location;
+                        let captured_velocity = captured_velocity.cast().unwrap();
+                        let parallel = current_displacement.project_on(captured_velocity);
+                        let perpendicular = current_displacement - parallel;
+
+                        // How far the player has moved *along* with the entity
+                        let parallel_displacement = current_displacement.dot(captured_velocity);
+                        (
+                            perpendicular,
+                            *travel_since
+                                > (control_block.entity_len as f64 + parallel_displacement),
                         )
-                    } else {
-                        ApproachState::DecreaseDetected(new_acc)
                     }
+                };
+                let effective_distance = effective_displacement.magnitude();
+                let clamped_distance = effective_distance.max(MIN_ENTITY_DISTANCE) as f32;
+                // multiplier affects amplitude, not power
+                let distance_falloff_multiplier = 1.0 / (clamped_distance);
+                if start_recovery {
+                    scratchpad.approach_state = ApproachState::Initial(0.0);
+                    scratchpad.trailing_edge_blend_factor = 1.0;
+                    scratchpad.trailing_edge_blend_value = distance_falloff_multiplier;
+                    scratchpad.trailing_edge_blend_source_direction =
+                        effective_displacement.normalize();
+                    scratchpad.edge_cycle = -1.0;
                 }
-                x => x,
-            };
+                let edge_multiplier = if scratchpad.edge_cycle < 0.0 {
+                    1.0
+                } else if scratchpad.edge_cycle < 0.25 {
+                    scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
+                    1.0 + (2.0 * scratchpad.edge_cycle)
+                } else if scratchpad.edge_cycle < 1.0 {
+                    scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
+                    (5.0 / 3.0) - (2.0 / 3.0 * scratchpad.edge_cycle)
+                } else {
+                    scratchpad.edge_cycle = -1.0;
+                    1.0
+                };
 
-            let (effective_displacement, start_recovery) = match &mut scratchpad.approach_state {
-                ApproachState::Initial(_) => (player_pos - entity_pos, false),
-                ApproachState::DecreaseDetected(_) => (player_pos - entity_pos, false),
-                ApproachState::Passing(
-                    travel_since,
-                    captured_entity_location,
-                    captured_e2p,
-                    captured_velocity,
-                ) => {
-                    let additional_travel =
-                        (current_velocity.magnitude() as f64) * nanos_per_sample / 1_000_000_000.0;
+                let distance_falloff_multiplier = scratchpad.trailing_edge_blend_value
+                    * scratchpad.trailing_edge_blend_factor
+                    + distance_falloff_multiplier * (1.0 - scratchpad.trailing_edge_blend_factor);
+                scratchpad.trailing_edge_blend_factor = (scratchpad.trailing_edge_blend_factor
+                    - nanos_per_sample as f32 / 2_000_000_000.0)
+                    .clamp(0.0, 1.0);
 
-                    let new_travel = *travel_since + additional_travel;
-                    if (new_travel / 32.0).floor() != (*travel_since / 32.0).floor() {
-                        scratchpad.edge_cycle = 0.0;
-                    }
-
-                    *travel_since = new_travel;
-                    let current_displacement = player_pos - *captured_entity_location;
-                    let captured_velocity = captured_velocity.cast().unwrap();
-                    let parallel = current_displacement.project_on(captured_velocity);
-                    let perpendicular = current_displacement - parallel;
-
-                    // How far the player has moved *along* with the entity
-                    let parallel_displacement = current_displacement.dot(captured_velocity);
-                    (
-                        perpendicular,
-                        *travel_since > (control_block.entity_len as f64 + parallel_displacement),
-                    )
+                let effective_displacement_smoothed = scratchpad
+                    .trailing_edge_blend_source_direction
+                    * scratchpad.trailing_edge_blend_factor as f64
+                    + effective_displacement.normalize()
+                        * (1.0 - scratchpad.trailing_edge_blend_factor as f64);
+                let effective_dir = effective_displacement_smoothed.normalize();
+                let mut balance_left = left_ear_vec.dot(effective_dir);
+                if balance_left.is_nan() {
+                    balance_left = 0.0;
                 }
-            };
-            let effective_distance = effective_displacement.magnitude();
-            let clamped_distance = effective_distance.max(MIN_ENTITY_DISTANCE) as f32;
-            // multiplier affects amplitude, not power
-            let multiplier = 1.0 / (clamped_distance);
-            if start_recovery {
-                scratchpad.approach_state = ApproachState::Initial(0.0);
-                scratchpad.trailing_edge_blend_factor = 1.0;
-                scratchpad.trailing_edge_blend_value = multiplier;
-                scratchpad.trailing_edge_blend_source_direction =
-                    effective_displacement.normalize();
-                scratchpad.edge_cycle = -1.0;
-            }
-            let edge_multiplier = if scratchpad.edge_cycle < 0.0 {
-                1.0
-            } else if scratchpad.edge_cycle < 0.25 {
-                scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
-                1.0 + (2.0 * scratchpad.edge_cycle)
-            } else if scratchpad.edge_cycle < 1.0 {
-                scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
-                (5.0 / 3.0) - (2.0 / 3.0 * scratchpad.edge_cycle)
+                (distance_falloff_multiplier, edge_multiplier, balance_left)
             } else {
-                scratchpad.edge_cycle = -1.0;
-                1.0
+                (1.0, 1.0, 0.0)
             };
 
             // Theoretically should be N^5 or N^6, but this is subjectively better
             let speed_multiplier = (current_velocity.magnitude() / 70.0).powi(4);
 
-            let multiplier = scratchpad.trailing_edge_blend_value
-                * scratchpad.trailing_edge_blend_factor
-                + multiplier * (1.0 - scratchpad.trailing_edge_blend_factor);
-            scratchpad.trailing_edge_blend_factor = (scratchpad.trailing_edge_blend_factor
-                - nanos_per_sample as f32 / 2_000_000_000.0)
-                .clamp(0.0, 1.0);
+            let turbulence_amplitude = control_block.turbulence.volume
+                * distance_falloff_multiplier
+                * edge_multiplier
+                * speed_multiplier;
 
-            let effective_displacement_smoothed = scratchpad.trailing_edge_blend_source_direction
-                * scratchpad.trailing_edge_blend_factor as f64
-                + effective_displacement.normalize()
-                    * (1.0 - scratchpad.trailing_edge_blend_factor as f64);
-            let effective_dir = effective_displacement_smoothed.normalize();
-
-            let turbulence_amplitude =
-                control_block.turbulence.volume * multiplier * edge_multiplier * speed_multiplier;
-
-            let mut balance_left = left_ear_vec.dot(effective_dir);
-            if balance_left.is_nan() {
-                balance_left = 0.0;
-            }
             let balance_left = scratchpad.last_balance.update(balance_left, 0.001);
             let l_amplitude = turbulence_amplitude * (1.0 + 0.8 * balance_left as f32);
 
@@ -1049,7 +1100,7 @@ impl SimpleSoundControlBlock {
         const BASE_SCORE: u64 = 1 << 60;
         const BASE_SCORE_F64: f64 = BASE_SCORE as f64;
         return if self.flags & SOUND_SQUARELAW_ENABLED != 0 {
-            let dropoff = (distance * distance).max(1.0);
+            let dropoff = distance.max(1.0);
             let score = BASE_SCORE_F64 / dropoff;
             if !score.is_finite() || !score.is_sign_positive() {
                 log::warn!(
@@ -1068,18 +1119,101 @@ impl SimpleSoundControlBlock {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ProceduralEntitySoundControlBlock {
-    flags: FlagsType,
-    entity_id: u64,
-    leading: EntityMove,
-    second: Option<EntityMove>,
-    entity_len: f32,
-    turbulence: TurbulenceSourceControlBlock,
+pub(crate) struct ProceduralEntitySoundControlBlock {
+    pub(crate) flags: FlagsType,
+    pub(crate) entity_id: u64,
+    pub(crate) leading: EntityMove,
+    pub(crate) second: Option<EntityMove>,
+    pub(crate) entity_len: f32,
+    pub(crate) turbulence: TurbulenceSourceControlBlock,
 }
+
+impl ProceduralEntitySoundControlBlock {
+    pub(crate) fn compute_score(&self, tick_now: u64, player_position: Vector3<f64>) -> u64 {
+        if self.flags & SOUND_PRESENT == 0 {
+            return 0;
+        }
+        // TODO: What does sticky mean for an entity that exhausts its moves?
+        if self.flags & SOUND_STICKY != 0 {
+            return u64::MAX;
+        }
+
+        let (overflow, position) = match self.leading.elapsed_or_overflow(tick_now) {
+            ElapsedOrOverflow::ElapsedThisMove(t) => (0.0, self.leading.qproj(t)),
+            ElapsedOrOverflow::OverflowIntoNext(t) => match self.second {
+                None => (t, self.leading.qproj(self.leading.total_time_sec())),
+                Some(mv) => match mv.elapsed_or_overflow(tick_now) {
+                    ElapsedOrOverflow::ElapsedThisMove(t) => (0.0, mv.qproj(t)),
+                    ElapsedOrOverflow::OverflowIntoNext(t) => (t, mv.qproj(mv.total_time_sec())),
+                },
+            },
+        };
+        let distance = (position - player_position).magnitude();
+
+        const BASE_SCORE: u64 = 1 << 60;
+        const BASE_SCORE_F64: f64 = BASE_SCORE as f64;
+        let mut distance_score = if self.flags & SOUND_SQUARELAW_ENABLED != 0 {
+            let dropoff = distance.max(1.0);
+            let score = BASE_SCORE_F64 / dropoff;
+            if !score.is_finite() || !score.is_sign_positive() {
+                log::warn!(
+                    "Nonsensical score for control block {:?}, tick {}, pos {:?}",
+                    self,
+                    tick_now,
+                    player_position
+                );
+                return 0;
+            }
+            score as u64
+        } else {
+            BASE_SCORE
+        };
+
+        let mut vague_speed_estimate = self
+            .leading
+            .instantaneous_velocity(0.0)
+            .magnitude()
+            .max(
+                self.leading
+                    .instantaneous_velocity(self.leading.total_time_sec() / 2.0)
+                    .magnitude(),
+            )
+            .max(
+                self.leading
+                    .instantaneous_velocity(self.leading.total_time_sec())
+                    .magnitude(),
+            );
+        if let Some(second) = self.second {
+            vague_speed_estimate = vague_speed_estimate
+                .max(second.instantaneous_velocity(0.0).magnitude())
+                .max(
+                    second
+                        .instantaneous_velocity(second.total_time_sec() / 2.0)
+                        .magnitude(),
+                )
+                .max(
+                    second
+                        .instantaneous_velocity(second.total_time_sec())
+                        .magnitude(),
+                )
+        }
+
+        let mut volume_estimate = 0.0;
+        volume_estimate += (self.turbulence.volume * (vague_speed_estimate / 70.0).powi(4));
+
+        if volume_estimate < 0.001 {
+            distance_score /= 10;
+        }
+
+        let overflow_demerit = (overflow as f64 / 10.0) * BASE_SCORE_F64;
+        return distance_score.saturating_sub(overflow_demerit as u64);
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
-struct TurbulenceSourceControlBlock {
-    volume: f32,
-    lpf_cutoff_hz: f32,
+pub(crate) struct TurbulenceSourceControlBlock {
+    pub(crate) volume: f32,
+    pub(crate) lpf_cutoff_hz: f32,
 }
 
 impl ProceduralEntitySoundControlBlock {
@@ -1152,11 +1286,19 @@ pub type FlagsType = u8;
 pub const SOUND_PRESENT: FlagsType = 0x1;
 
 /// If set, the sound will be subject to speed-of-sound and doppler effects
+/// Applicable for simple sounds
 pub const SOUND_MOVESPEED_ENABLED: FlagsType = 0x2;
 /// If set, the sound will be subject to square-law effects affecting its amplitude
+/// Applicable for simple sounds
 pub const SOUND_SQUARELAW_ENABLED: FlagsType = 0x4;
 /// If set, the sound undergoes directionality effects
+/// Applicable for simple sounds
 pub const SOUND_DIRECTIONAL: FlagsType = 0x8;
+
+/// If set, the entity sound has spatial effects
+/// This should not be set for an entity to which the player is attached.
+pub const SOUND_ENTITY_SPATIAL: FlagsType = 0x2;
+
 /// If set, the sound is considered sticky, and will never be deallocated
 pub const SOUND_STICKY: FlagsType = 0x10;
 /// If set, the sound bypasses the attached entity filter. Otherwise, the attached entity filter

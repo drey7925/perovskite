@@ -120,7 +120,7 @@ impl ActiveGame {
 
         {
             let mut entity_lock = self.client_state.entities.lock();
-            entity_lock.advance_all_states(start_tick, &self.client_state.audio);
+            entity_lock.advance_all_states(start_tick, &self.client_state.audio, player_position);
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
                     player_position =

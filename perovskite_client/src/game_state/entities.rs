@@ -4,8 +4,12 @@ use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
 use rustc_hash::FxHashMap;
 
-use crate::audio::EngineHandle;
+use crate::audio::{
+    EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_MOVESPEED_ENABLED,
+    SOUND_PRESENT,
+};
 use perovskite_core::protocol::entities as entities_proto;
+use perovskite_core::protocol::game_rpc::PlayerPosition;
 
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
@@ -166,6 +170,9 @@ pub(crate) struct GameEntity {
     class: u32,
     needed_back_buffer_len: f32,
     trailing_entities: Vec<(u32, f32)>,
+
+    audio_token: Option<ProceduralEntityToken>,
+
     // debug only
     created: Instant,
 }
@@ -269,25 +276,42 @@ impl GameEntity {
 
     pub(crate) fn advance_state(
         &mut self,
-        until_tick: u64,
+        tick_now: u64,
         audio_handle: &EngineHandle,
         volume: f32,
+        player_position: Vector3<f64>,
+        is_attached: bool,
     ) {
-        let any_popped = self.pop_until(until_tick);
+        let any_popped = self.pop_until(tick_now);
         if any_popped {
             log::debug!(
                 "remaining buffer: {:?}",
                 self.move_queue.back().map(|m| m.start_tick
-                    + ((m.total_time_seconds * 1_000_000_000.0) as u64).saturating_sub(until_tick))
+                    + ((m.total_time_seconds * 1_000_000_000.0) as u64).saturating_sub(tick_now))
             );
             let front = self.move_queue.front();
             if let Some(front) = front {
-                audio_handle.testonly_update_entity(
-                    self.id,
-                    *front,
-                    self.move_queue.get(1).copied(),
-                    self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
-                    volume,
+                let mut flags = SOUND_PRESENT;
+                if !is_attached {
+                    flags |= SOUND_ENTITY_SPATIAL;
+                }
+
+                let control = crate::audio::ProceduralEntitySoundControlBlock {
+                    flags,
+                    entity_id: self.id,
+                    leading: *front,
+                    second: self.move_queue.get(1).copied(),
+                    entity_len: self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
+                    turbulence: crate::audio::TurbulenceSourceControlBlock {
+                        volume,
+                        lpf_cutoff_hz: 1000.0,
+                    },
+                };
+                self.audio_token = audio_handle.update_entity_state(
+                    tick_now,
+                    player_position,
+                    control,
+                    self.audio_token,
                 );
             }
         }
@@ -348,9 +372,6 @@ impl GameEntity {
         update: &entities_proto::EntityUpdate,
         update_tick: u64,
     ) -> Result<(), &'static str> {
-        if update.id == 8 {
-            println!("{:?}", update);
-        }
         for m in &update.planned_move {
             self.move_queue.push_back(m.try_into().map_err(|_| {
                 dbg!(m);
@@ -473,6 +494,7 @@ impl GameEntity {
             created: Instant::now(),
             class: update.entity_class,
             id: update.id,
+            audio_token: None,
         })
     }
     fn pop_backbuffer(&mut self) {
@@ -558,14 +580,25 @@ impl EntityState {
         })
     }
 
-    pub(crate) fn advance_all_states(&mut self, until_tick: u64, audio_handle: &EngineHandle) {
+    pub(crate) fn advance_all_states(
+        &mut self,
+        tick_now: u64,
+        audio_handle: &EngineHandle,
+        player_position: Vector3<f64>,
+    ) {
         for entity in self.entities.values_mut() {
             let volume = if self.attached_to_entity == Some(entity.id) {
                 0.25
             } else {
                 1.0
             };
-            entity.advance_state(until_tick, audio_handle, volume);
+            entity.advance_state(
+                tick_now,
+                audio_handle,
+                volume,
+                player_position,
+                Some(entity.id) == self.attached_to_entity,
+            );
         }
     }
 

@@ -779,10 +779,7 @@ impl InboundContext {
             .entities
             .entry(update.id)
         {
-            Entry::Occupied(mut entry) => {
-                // TODO we need to correct for network delay here
-                entry.get_mut().update(update, estimated_send_tick)
-            }
+            Entry::Occupied(mut entry) => entry.get_mut().update(update, estimated_send_tick),
             Entry::Vacant(entry) => match GameEntity::from_proto(update) {
                 Ok(x) => {
                     entry.insert(x);
