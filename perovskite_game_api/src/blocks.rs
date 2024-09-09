@@ -174,6 +174,7 @@ pub struct BuiltBlock {
     pub item_name: ItemName,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MatterType {
     /// Most tools target this block, and can try to dig it.
     Solid,
@@ -242,6 +243,7 @@ impl BlockBuilder {
                 wear_multiplier: 1.0,
                 light_emission: 0,
                 allow_light_propagation: false,
+                footstep_sound: 0,
                 render_info: Some(RenderInfo::Cube(CubeRenderInfo {
                     tex_left: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                     tex_right: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
@@ -479,6 +481,9 @@ impl BlockBuilder {
             MatterType::Liquid => DEFAULT_LIQUID.to_string(),
             MatterType::Gas => DEFAULT_GAS.to_string(),
         });
+        if self.matter_type == MatterType::Solid {
+            block.client_info.footstep_sound = game_builder.footstep_sound.0;
+        }
         block.client_info.groups.sort();
         block.client_info.groups.dedup();
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));

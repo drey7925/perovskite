@@ -2,6 +2,7 @@ use std::{collections::VecDeque, time::Instant};
 
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
+use perovskite_core::protocol::audio::SoundSource;
 use rustc_hash::FxHashMap;
 
 use crate::audio::{
@@ -296,6 +297,7 @@ impl GameEntity {
                     flags |= SOUND_ENTITY_SPATIAL;
                 }
 
+                // TODO get this from the entity
                 let control = crate::audio::ProceduralEntitySoundControlBlock {
                     flags,
                     entity_id: self.id,
@@ -306,6 +308,7 @@ impl GameEntity {
                         volume,
                         lpf_cutoff_hz: 1000.0,
                     },
+                    sound_source: SoundSource::SoundsourceWorld,
                 };
                 self.audio_token = audio_handle.update_entity_state(
                     tick_now,

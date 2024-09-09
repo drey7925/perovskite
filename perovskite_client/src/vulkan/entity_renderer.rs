@@ -27,7 +27,7 @@ pub(crate) struct EntityRenderer {
 impl EntityRenderer {
     pub(crate) async fn new(
         entity_defs: Vec<proto::EntityDef>,
-        mut cache_manager: parking_lot::MutexGuard<'_, CacheManager>,
+        cache_manager: &mut CacheManager,
         ctx: &VulkanContext,
     ) -> Result<EntityRenderer> {
         let mut all_texture_names = FxHashSet::default();

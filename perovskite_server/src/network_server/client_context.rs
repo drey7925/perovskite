@@ -1421,24 +1421,43 @@ impl InboundWorker {
                         crate::game_state::entities::InitialMoveQueue::SingleMove(None),
                     )
                     .await;
+
                 if let Some(coord) = update.footstep_coordinate {
-                    self.context.game_state.audio().send_event(AudioEvent {
-                        context_id: self.context.id,
-                        instruction: AudioInstruction::PlaySampledSound(SampledSoundPlayback {
-                            tick: 0,
-                            sound_id: 0,
-                            position: Some(Vec3D {
-                                x: coord.x as f64,
-                                y: coord.y as f64,
-                                z: coord.z as f64,
+                    let footstep_sound_id = self
+                        .context
+                        .game_state
+                        .game_map()
+                        .try_get_block(coord.into())
+                        .and_then(|id| {
+                            self.context
+                                .game_state
+                                .block_types()
+                                .get_block_by_id(id)
+                                .ok()
+                        })
+                        .and_then(|block_def| match block_def.0.client_info.footstep_sound {
+                            0 => None,
+                            x => Some(x),
+                        });
+                    if let Some(sound_id) = footstep_sound_id {
+                        self.context.game_state.audio().send_event(dbg!(AudioEvent {
+                            context_id: self.context.id,
+                            instruction: AudioInstruction::PlaySampledSound(SampledSoundPlayback {
+                                tick: 0,
+                                sound_id,
+                                position: Some(Vec3D {
+                                    x: coord.x as f64,
+                                    y: coord.y as f64,
+                                    z: coord.z as f64,
+                                }),
+                                disable_doppler: false,
+                                disable_falloff: false,
+                                disable_balance: false,
+                                source: SoundSource::SoundsourcePlayer.into(),
+                                volume: 1.0,
                             }),
-                            disable_doppler: false,
-                            disable_falloff: false,
-                            disable_balance: false,
-                            source: SoundSource::SoundsourcePlayer.into(),
-                            volume: 1.0,
-                        }),
-                    })
+                        }))
+                    }
                 }
             }
             None => {

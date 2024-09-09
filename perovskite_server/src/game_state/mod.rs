@@ -82,17 +82,17 @@ pub struct GameState {
     /// other abstractions, such as the player manager.
     database: Arc<dyn GameDatabase>,
     /// Manages all inventories that are not embedded within a map chunk
-    inventory_manager: Arc<InventoryManager>,
+    inventory_manager: InventoryManager,
     /// Manages the definitions of all items
-    item_manager: Arc<ItemManager>,
+    item_manager: ItemManager,
     /// Manages the currently-connected players
     player_manager: Arc<PlayerManager>,
     /// Holds the media resources that should be sent to clients
-    media_resources: Arc<MediaManager>,
+    media_resources: MediaManager,
     /// Handles chat commands and messages
     chat: Arc<ChatState>,
 
-    audio: Arc<AudioCrossbarSender>,
+    audio: AudioCrossbarSender,
 
     early_shutdown: CancellationToken,
     mapgen_seed: u32,
@@ -113,7 +113,7 @@ impl GameState {
         data_dir: PathBuf,
         db: Arc<dyn GameDatabase>,
         blocks: Arc<BlockTypeManager>,
-        entity_types: Arc<entities::EntityTypeManager>,
+        entity_types: entities::EntityTypeManager,
         items: ItemManager,
         media: MediaManager,
         mapgen_provider: Box<dyn FnOnce(Arc<BlockTypeManager>, u32) -> Arc<dyn MapgenInterface>>,
@@ -133,10 +133,10 @@ impl GameState {
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
             mapgen,
             database: db.clone(),
-            inventory_manager: Arc::new(InventoryManager::new(db.clone())),
-            item_manager: Arc::new(items),
+            inventory_manager: InventoryManager::new(db.clone()),
+            item_manager: items,
             player_manager: PlayerManager::new(weak.clone(), db.clone()).unwrap(),
-            media_resources: Arc::new(media),
+            media_resources: media,
             chat: Arc::new(ChatState::new(commands)),
             early_shutdown: CancellationToken::new(),
             mapgen_seed,
@@ -149,7 +149,7 @@ impl GameState {
                 entity_types,
                 server_start_time,
             )),
-            audio: Arc::new(AudioCrossbarSender::new()),
+            audio: AudioCrossbarSender::new(),
             server_start_time,
             extensions,
             startup_time: Instant::now(),
@@ -253,7 +253,7 @@ impl GameState {
     }
 
     pub fn inventory_manager(&self) -> &InventoryManager {
-        self.inventory_manager.as_ref()
+        &self.inventory_manager
     }
 
     pub fn player_manager(&self) -> &Arc<PlayerManager> {
@@ -261,7 +261,7 @@ impl GameState {
     }
 
     pub fn item_manager(&self) -> &ItemManager {
-        self.item_manager.as_ref()
+        &self.item_manager
     }
 
     pub fn game_behaviors(&self) -> &GameBehaviors {

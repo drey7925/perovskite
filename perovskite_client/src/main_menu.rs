@@ -692,7 +692,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.label("Global volume")
                 .on_hover_text("The overall volume of the game.");
             ui.add(egui::Slider::new(
-                &mut prospective_settings.audio.global_volume,
+                &mut prospective_settings.audio.volumes.global_volume,
                 0.0..=1.0,
             ));
             ui.end_row();
@@ -700,7 +700,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.label("Background volume")
                 .on_hover_text("The volume of background effects (not implemented yet).");
             ui.add(egui::Slider::new(
-                &mut prospective_settings.audio.background_volume,
+                &mut prospective_settings.audio.volumes.background_volume,
                 0.0..=1.0,
             ));
             ui.end_row();
@@ -708,7 +708,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.label("Self volume")
                 .on_hover_text("The volume of sounds from your own actions.");
             ui.add(egui::Slider::new(
-                &mut prospective_settings.audio.self_volume,
+                &mut prospective_settings.audio.volumes.self_volume,
                 0.0..=1.0,
             ));
             ui.end_row();
@@ -716,7 +716,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.label("Other player volume")
                 .on_hover_text("The volume of sounds from other players.");
             ui.add(egui::Slider::new(
-                &mut prospective_settings.audio.other_players_volume,
+                &mut prospective_settings.audio.volumes.other_players_volume,
                 0.0..=1.0,
             ));
             ui.end_row();
@@ -724,7 +724,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.label("World volume")
                 .on_hover_text("The volume of sounds from the world.");
             ui.add(egui::Slider::new(
-                &mut prospective_settings.audio.world_volume,
+                &mut prospective_settings.audio.volumes.world_volume,
                 0.0..=1.0,
             ));
             ui.end_row();
@@ -732,7 +732,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             let output_label = ui
                 .label("Preferred output device")
                 .on_hover_text("The output audio device to use, if available.");
-            let selected_gpu = if prospective_settings
+            let selected_audio_device = if prospective_settings
                 .audio
                 .preferred_output_device
                 .is_empty()
@@ -743,7 +743,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             };
             let mut preferred_device = prospective_settings.audio.preferred_output_device.clone();
             egui::ComboBox::from_id_source(output_label.id)
-                .selected_text(selected_gpu)
+                .selected_text(selected_audio_device)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut preferred_device, String::new(), "No preference");
                     for device in &prospective_settings.audio.output_devices {

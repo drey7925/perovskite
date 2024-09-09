@@ -427,7 +427,7 @@ fn get_selector_shift(bits: u32) -> u32 {
         log::warn!("Selector with non-contiguous bits: {:b}", bits);
     }
 
-    dbg!(1 << trailing_zeros)
+    1 << trailing_zeros
 }
 
 fn get_texture(
@@ -501,7 +501,7 @@ pub(crate) struct BlockRenderer {
 impl BlockRenderer {
     pub(crate) async fn new(
         block_defs: Arc<ClientBlockTypeManager>,
-        mut cache_manager: parking_lot::MutexGuard<'_, CacheManager>,
+        cache_manager: &mut CacheManager,
         ctx: Arc<VulkanContext>,
     ) -> Result<BlockRenderer> {
         let mut all_texture_names = HashSet::new();

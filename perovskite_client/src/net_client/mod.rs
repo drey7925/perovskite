@@ -25,6 +25,7 @@ use opaque_ke::{
     RegistrationResponse,
 };
 use parking_lot::Mutex;
+use perovskite_core::protocol::game_rpc::GetAudioDefsRequest;
 use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
     protocol::game_rpc::{
@@ -63,7 +64,7 @@ async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channe
         .map_err(|e| Error::msg(e.to_string()))
 }
 
-const TOTAL_STEPS: f32 = 10.0;
+const TOTAL_STEPS: f32 = 12.0;
 
 pub(crate) async fn connect_game(
     server_addr: String,
@@ -118,10 +119,7 @@ pub(crate) async fn connect_game(
     let texture_loader = GrpcTextureLoader {
         connection: connection.clone(),
     };
-    let cache_manager = Arc::new(Mutex::new(CacheManager::new(
-        media_list.into_inner(),
-        Box::new(texture_loader),
-    )?));
+    let mut cache_manager = CacheManager::new(media_list.into_inner(), Box::new(texture_loader))?;
 
     progress.send((
         4.0 / TOTAL_STEPS,
@@ -143,10 +141,8 @@ pub(crate) async fn connect_game(
         6.0 / TOTAL_STEPS,
         "Setting up block renderer...".to_string(),
     ))?;
-    let block_renderer = {
-        let cache_manager_lock = cache_manager.lock();
-        BlockRenderer::new(block_types.clone(), cache_manager_lock, vk_ctx.clone()).await?
-    };
+    let block_renderer =
+        { BlockRenderer::new(block_types.clone(), &mut cache_manager, vk_ctx.clone()).await? };
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
@@ -161,7 +157,7 @@ pub(crate) async fn connect_game(
     progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
-        &cache_manager,
+        &mut cache_manager,
         vk_ctx.clone(),
         &block_renderer,
         settings.clone(),
@@ -179,14 +175,25 @@ pub(crate) async fn connect_game(
     );
     let entitity_renderer = EntityRenderer::new(
         entity_defs.into_inner().entity_defs,
-        cache_manager.lock(),
+        &mut cache_manager,
         &vk_ctx,
+    )
+    .await?;
+    progress.send((10.0 / TOTAL_STEPS, "Loading audio files...".to_string()))?;
+    let audio_defs = connection
+        .get_audio_defs(GetAudioDefsRequest {})
+        .await?
+        .into_inner();
+
+    let audio = audio::start_engine(
+        settings.clone(),
+        timekeeper.clone(),
+        &audio_defs.sampled_sounds,
+        &mut cache_manager,
     )
     .await?;
 
     let (action_sender, action_receiver) = mpsc::channel(4);
-
-    let audio = audio::start_engine_for_testing(settings.clone(), timekeeper.clone()).await?;
 
     let client_state = Arc::new(ClientState::new(
         settings,
@@ -217,17 +224,19 @@ pub(crate) async fn connect_game(
         initial_state_notification.clone(),
     )
     .await?;
-    // todo track exit status and catch errors?
-    // Right now we just print a panic message, but don't actually exit because of it
+    let client_state_clone = client_state.clone();
     tokio::spawn(async move {
         match inbound.run_inbound_loop().await {
             Ok(_) => log::info!("Inbound loop shut down normally"),
-            Err(e) => log::error!("Inbound loop crashed: {e:?}"),
+            Err(e) => {
+                log::error!("Inbound loop crashed: {e:?}");
+                *client_state_clone.pending_error.lock() = Some(e.to_string());
+            }
         }
     });
 
     progress.send((
-        10.0 / TOTAL_STEPS,
+        11.0 / TOTAL_STEPS,
         "Waiting for initial game state...".to_string(),
     ))?;
     initial_state_notification.notified().await;
@@ -238,7 +247,7 @@ pub(crate) async fn connect_game(
         }
     });
 
-    progress.send((11.0 / TOTAL_STEPS, "Connected!".to_string()))?;
+    progress.send((12.0 / TOTAL_STEPS, "Connected!".to_string()))?;
     // Sleep for a moment so the user can see the connected message
     tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
     Ok(client_state)
@@ -414,8 +423,6 @@ struct GrpcTextureLoader {
 #[async_trait]
 impl AsyncMediaLoader for GrpcTextureLoader {
     async fn load_media(&mut self, tex_name: &str) -> Result<Vec<u8>> {
-        // TODO caching - right now we fetch all resources every time we start the game
-        // Some resources are even fetched twice (once for blocks, once for items)
         log::info!("Loading resource {}", tex_name);
         let resp = self
             .connection

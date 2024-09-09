@@ -524,8 +524,14 @@ impl InboundContext {
                     volume: sound.volume.clamp(0.0, 1.0),
                     start_tick: tick,
                     id: sound.sound_id,
-                    // TODO: get end tick from sound file details
-                    end_tick: 0,
+                    end_tick: tick
+                        + self
+                            .shared_state
+                            .client_state
+                            .audio
+                            .sampled_sound_length(sound.sound_id)
+                            .unwrap_or(0),
+                    source: sound.source(),
                 };
                 self.shared_state.client_state.audio.alloc_simple_sound(
                     tick_now,

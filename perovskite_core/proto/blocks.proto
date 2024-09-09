@@ -46,6 +46,8 @@ message BlockTypeDef {
   uint32 light_emission = 6;
   // Whether the block allows light to propagate through it
   bool allow_light_propagation = 7;
+  // The sampled sound ID when the block is stepped on, or 0 for none
+  uint32 footstep_sound = 8;
 
   // How the client should render the block
   oneof render_info {
@@ -65,6 +67,7 @@ message BlockTypeDef {
     // Any texture/rendering related info is ignored; rotation and variant_mask are used
     AxisAlignedBoxes solid_custom_collisionboxes = 23;
   }
+
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans (-0.5, 0.5) on

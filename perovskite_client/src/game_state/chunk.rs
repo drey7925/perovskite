@@ -212,7 +212,7 @@ pub(crate) struct MeshVectorReclaim {
 }
 impl MeshVectorReclaim {
     fn new() -> MeshVectorReclaim {
-        let (sender, receiver) = flume::bounded(1024);
+        let (sender, receiver) = flume::bounded(4096);
         MeshVectorReclaim { sender, receiver }
     }
     pub(crate) fn take(&self) -> Option<(Vec<u32>, Vec<CubeGeometryVertex>)> {

@@ -45,6 +45,9 @@ service PerovskiteGame {
 
   // Get entity definitions
   rpc GetEntityDefs(GetEntityDefsRequest) returns (GetEntityDefsResponse);
+
+  // Get audio definitions
+  rpc GetAudioDefs(GetAudioDefsRequest) returns (GetAudioDefsResponse);
 }
 
 message GetBlockDefsRequest {}

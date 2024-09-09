@@ -317,15 +317,14 @@ impl ServerBuilder {
         blocks.save_to(self.db.as_ref())?;
 
         self.entities.pre_build()?;
-        let entities = Arc::new(self.entities);
-        entities.save_to(self.db.as_ref())?;
+        self.entities.save_to(self.db.as_ref())?;
 
         let _rt_guard = self.runtime.enter();
         let game_state = GameState::new(
             self.data_dir,
             self.db,
             blocks,
-            entities,
+            self.entities,
             self.items,
             self.media,
             self.mapgen.with_context(|| "Mapgen not specified")?,

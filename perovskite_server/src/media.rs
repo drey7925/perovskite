@@ -14,8 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use perovskite_core::protocol::audio::SampledSound;
 use sha2::Digest;
+use std::io::Cursor;
 use std::{
     collections::HashMap,
     fs::File,
@@ -30,6 +32,10 @@ pub enum ResourceError {
     #[error("Resource `{0}` already exists")]
     ResourceAlreadyExists(String),
 }
+
+/// An token identifying a sampled sound
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SoundKey(pub u32);
 
 enum ResourceData {
     Owned(Vec<u8>),
@@ -61,12 +67,19 @@ impl Resource {
     }
 }
 
+struct SampledAudioDetails {
+    key: u32,
+    filename: String,
+}
+
 pub struct MediaManager {
     resources: HashMap<String, Resource>,
+    sampled_audio: Vec<SampledAudioDetails>,
 }
+
 impl MediaManager {
-    pub fn register_from_memory(&mut self, key: &str, data: &[u8]) -> Result<()> {
-        let key = key.to_string();
+    pub fn register_from_memory(&mut self, name: &str, data: &[u8]) -> Result<()> {
+        let key = name.to_string();
         match self.resources.entry(key.clone()) {
             std::collections::hash_map::Entry::Occupied(_) => {
                 bail!(ResourceError::ResourceAlreadyExists(key))
@@ -82,9 +95,9 @@ impl MediaManager {
             }
         }
     }
-    pub fn register_from_file<P: AsRef<Path>>(&mut self, key: &str, path: P) -> Result<()> {
+    pub fn register_from_file<P: AsRef<Path>>(&mut self, name: &str, path: P) -> Result<()> {
         let path_buf = PathBuf::from(path.as_ref());
-        let key = key.to_string();
+        let key = name.to_string();
         match self.resources.entry(key.clone()) {
             std::collections::hash_map::Entry::Occupied(_) => {
                 bail!(ResourceError::ResourceAlreadyExists(key))
@@ -108,10 +121,44 @@ impl MediaManager {
     pub(crate) fn new() -> MediaManager {
         MediaManager {
             resources: HashMap::new(),
+            sampled_audio: Vec::new(),
         }
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Resource)> {
         self.resources.iter()
+    }
+
+    /// Registers the given file to be used as sampled. The file data must be a valid
+    /// WAV file with header.
+    ///
+    /// Errors:
+    ///   * If no file has been registered with that key
+    pub fn register_file_for_sampled_audio(&mut self, name: &str) -> Result<SoundKey> {
+        if !self.resources.contains_key(name) {
+            bail!("File with name {name} not found");
+        }
+        // Index 0 is reserved for no-sound
+        let index = self.sampled_audio.len() + 1;
+        if index > (u32::MAX as usize) {
+            bail!("Audio resource count overflowed 2^32")
+        }
+        self.sampled_audio.push(SampledAudioDetails {
+            key: index as u32,
+            filename: name.to_string(),
+        });
+
+        log::info!("Registered sound {} with id {}", name, index);
+        Ok(SoundKey(index as u32))
+    }
+
+    pub(crate) fn sampled_sound_client_protos(&self) -> Vec<SampledSound> {
+        self.sampled_audio
+            .iter()
+            .map(|x| SampledSound {
+                sound_id: x.key,
+                media_filename: x.filename.clone(),
+            })
+            .collect()
     }
 }

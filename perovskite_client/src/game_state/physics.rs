@@ -27,6 +27,7 @@ use perovskite_core::{
     },
 };
 
+use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
 use tracy_client::{plot, span};
 
 use super::{
@@ -260,11 +261,32 @@ impl PhysicsState {
             self.last_land_height = new_pos.y;
             self.walk_sound_odometer += (new_pos - self.pos).magnitude();
             if self.walk_sound_odometer > 1.0 || !self.landed_last_frame {
-                // TODO consult block types to identify the correct sound
-                client_state
-                    .audio
-                    .testonly_play_footstep(client_state.timekeeper.now(), new_pos);
-                self.animation_state.footstep_coord = surrounding_coord.try_delta(0, -1, 0);
+                let footstep_coord = surrounding_coord.try_delta(0, -1, 0);
+                self.animation_state.footstep_coord = footstep_coord;
+                if let Some(coord) = footstep_coord {
+                    if let Some(block) = get_block(coord, &chunks, block_types) {
+                        if block.0.footstep_sound != 0 {
+                            let tick = client_state.timekeeper.now();
+                            let _ = client_state.audio.alloc_simple_sound(
+                                tick,
+                                new_pos,
+                                SimpleSoundControlBlock {
+                                    flags: SOUND_PRESENT | SOUND_STICKY,
+                                    position: new_pos,
+                                    volume: 1.0,
+                                    start_tick: tick,
+                                    id: block.0.footstep_sound,
+                                    end_tick: tick
+                                        + client_state
+                                            .audio
+                                            .sampled_sound_length(block.0.footstep_sound)
+                                            .unwrap_or(0),
+                                    source: Default::default(),
+                                },
+                            );
+                        }
+                    }
+                }
                 self.walk_sound_odometer = 0.0;
             }
 

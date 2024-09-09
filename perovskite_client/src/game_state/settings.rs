@@ -2,6 +2,7 @@ use std::{fs::create_dir_all, path::PathBuf};
 
 use super::input::KeybindSettings;
 use anyhow::{Context, Result};
+use perovskite_core::protocol::audio::SoundSource;
 use serde::{Deserialize, Serialize};
 
 const SETTINGS_RON_FILE: &str = "settings.ron";
@@ -65,14 +66,33 @@ impl Default for RenderSettings {
     }
 }
 
+#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub(crate) struct AudioVolumes {
+    pub(crate) global_volume: f32,
+    pub(crate) background_volume: f32,
+    pub(crate) self_volume: f32,
+    pub(crate) other_players_volume: f32,
+    pub(crate) world_volume: f32,
+}
+
+impl AudioVolumes {
+    pub(crate) fn volume_for(&self, source: SoundSource) -> f32 {
+        let specific_volume = match source {
+            SoundSource::SoundsourceUnspecified => 1.0,
+            SoundSource::SoundsourceBackground => self.background_volume,
+            SoundSource::SoundsourceSelf => self.self_volume,
+            SoundSource::SoundsourcePlayer => self.other_players_volume,
+            SoundSource::SoundsourceWorld => self.world_volume,
+        };
+        self.global_volume * specific_volume
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub(crate) struct AudioSettings {
-    pub(crate) global_volume: f64,
-    pub(crate) background_volume: f64,
-    pub(crate) self_volume: f64,
-    pub(crate) other_players_volume: f64,
-    pub(crate) world_volume: f64,
+    pub(crate) volumes: AudioVolumes,
     pub(crate) preferred_output_device: String,
     // The detected audio devices
     #[serde(skip)]
@@ -93,7 +113,7 @@ impl AudioSettings {
     }
 }
 
-impl Default for AudioSettings {
+impl Default for AudioVolumes {
     fn default() -> Self {
         Self {
             global_volume: 1.0,
@@ -101,6 +121,14 @@ impl Default for AudioSettings {
             self_volume: 1.0,
             other_players_volume: 1.0,
             world_volume: 1.0,
+        }
+    }
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            volumes: AudioVolumes::default(),
             preferred_output_device: String::from(""),
             output_devices: vec![],
         }

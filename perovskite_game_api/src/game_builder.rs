@@ -100,8 +100,12 @@ impl From<StaticBlockName> for BlockName {
 }
 
 /// Type-safe newtype wrapper for a const/static item name
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StaticItemName(pub &'static str);
+
 /// Type-safe wrapper for an item name
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemName(pub String);
 impl From<StaticItemName> for ItemName {
     fn from(value: StaticItemName) -> Self {
@@ -176,6 +180,8 @@ pub struct GameBuilder {
     // We cannot use a typemap here because we want to be able to iterate
     // over all the extensions for various things like pre_run
     pub(crate) builder_extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
+
+    pub(crate) footstep_sound: SoundKey,
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -289,12 +295,23 @@ impl GameBuilder {
             FALLBACK_UNKNOWN_TEXTURE,
             include_bytes!("media/block_unknown.png"),
         )?;
+
+        inner.media_mut().register_from_memory(
+            DEFAULT_FOOTSTEP_SOUND_NAME,
+            include_bytes!("media/simple_footstep.wav"),
+        )?;
+
+        let footstep_key = inner
+            .media_mut()
+            .register_file_for_sampled_audio(DEFAULT_FOOTSTEP_SOUND_NAME)?;
+
         const EMPTY: Empty = Empty {};
         Ok(GameBuilder {
             inner,
             liquids_by_flow_time: HashMap::new(),
             falling_blocks: vec![],
             builder_extensions: HashMap::new(),
+            footstep_sound: footstep_key,
         })
     }
     /// Registers a block and its corresponding item in the game.
@@ -412,3 +429,6 @@ macro_rules! include_texture_bytes {
     };
 }
 pub use include_texture_bytes;
+use perovskite_server::media::SoundKey;
+
+pub const DEFAULT_FOOTSTEP_SOUND_NAME: &str = "default:footstep.wav";

@@ -1,6 +1,7 @@
 use std::arch::x86_64::_mm_cvtss_f32;
+use std::io::Cursor;
 use std::ops::{Add, DerefMut, Range};
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,14 +10,18 @@ use arc_swap::ArcSwap;
 use cgmath::{InnerSpace, Vector3, Zero};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
+use egui::ahash::HashMap;
+use hound::WavReader;
 use parking_lot::Mutex;
+use perovskite_core::protocol::audio::{SampledSound, SoundSource};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use rustc_hash::FxHashMap;
 use seqlock::SeqLock;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracy_client::{plot, span};
 
-use crate::audio::testdata::FOOTSTEP_WAV_BYTES;
+use crate::cache::CacheManager;
 use crate::game_state::entities::{ElapsedOrOverflow, EntityMove};
 use crate::game_state::settings::GameSettings;
 use crate::game_state::timekeeper::Timekeeper;
@@ -26,6 +31,7 @@ pub struct EngineHandle {
     control: Arc<SharedControl>,
     drop_guard: DropGuard,
     allocator_state: Mutex<AllocatorState>,
+    simple_sound_lengths: FxHashMap<u32, u64>,
 }
 
 /// An opaque token used to modify/remove a sound in a slot.
@@ -190,29 +196,11 @@ impl EngineHandle {
             };
             lock.entity_filter_extra_gain = if testonly_entity_attached { 5.0 } else { 1.0 };
         }
+        self.control.enabled.store(true, Ordering::Release);
     }
 
-    pub(crate) fn testonly_play_footstep(&self, tick: u64, position: Vector3<f64>) {
-        {
-            if self
-                .alloc_simple_sound(
-                    tick,
-                    position,
-                    SimpleSoundControlBlock {
-                        // This sounds awful when directionality is enabled
-                        flags: SOUND_PRESENT | SOUND_SQUARELAW_ENABLED | SOUND_MOVESPEED_ENABLED,
-                        position,
-                        volume: 1.0,
-                        start_tick: tick,
-                        id: 0,
-                        end_tick: u64::MAX,
-                    },
-                )
-                .is_none()
-            {
-                log::warn!("Failed to allocate a sound slot for footstep")
-            }
-        }
+    pub(crate) fn sampled_sound_length(&self, id: u32) -> Option<u64> {
+        self.simple_sound_lengths.get(&id).copied()
     }
 }
 
@@ -220,9 +208,31 @@ impl EngineHandle {
 pub(crate) async fn start_engine(
     settings: Arc<ArcSwap<GameSettings>>,
     timekeeper: Arc<Timekeeper>,
-    initial_position: Vector3<f64>,
+    sampled_sounds: &[SampledSound],
+    cache_manager: &mut CacheManager,
 ) -> Result<EngineHandle> {
-    let control = Arc::new(SharedControl::new(settings.clone(), initial_position));
+    let mut wavs = FxHashMap::default();
+    let mut wav_lengths = FxHashMap::default();
+    for sound in sampled_sounds {
+        let bytes = cache_manager
+            .load_media_by_name(&sound.media_filename)
+            .await?;
+        let wav = WavReader::new(Cursor::new(bytes))?;
+        let samples = wav.duration() as f64;
+        let rate = wav.spec().sample_rate as f64;
+        let length_nanos = (1_000_000_000.0 * samples / rate) as u64;
+
+        if wavs.insert(sound.sound_id, wav).is_some() {
+            log::warn!(
+                "Duplicate sound with ID {}, name {}",
+                sound.sound_id,
+                sound.media_filename
+            );
+        };
+        wav_lengths.insert(sound.sound_id, length_nanos);
+    }
+
+    let control = Arc::new(SharedControl::new(settings.clone(), Vector3::zero()));
     let control_clone = control.clone();
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
     let cancellation_token = tokio_util::sync::CancellationToken::new();
@@ -240,10 +250,9 @@ pub(crate) async fn start_engine(
         let selected_config = selected_config_range.with_max_sample_rate();
         log::info!("Using config: {:?}", selected_config);
 
-        let mut engine_state =
-            EngineState::new(control_clone, selected_config.clone(), timekeeper)?;
-
         let handle = tokio::runtime::Handle::current();
+        let mut engine_state =
+            EngineState::new(control_clone, selected_config.clone(), timekeeper, wavs)?;
 
         let _ = std::thread::spawn(move || {
             let startup_work = move || {
@@ -290,6 +299,7 @@ pub(crate) async fn start_engine(
         control,
         drop_guard: cancellation_token.drop_guard(),
         allocator_state: Mutex::new(AllocatorState::new()),
+        simple_sound_lengths: wav_lengths,
     })
 }
 
@@ -312,41 +322,6 @@ fn select_output_device(host: &Host, prefix: &str) -> Result<cpal::Device> {
         .context("no default output device")
 }
 
-pub async fn start_engine_for_standalone_test() -> Result<EngineHandle> {
-    let settings = Arc::new(ArcSwap::from_pointee(GameSettings::default()));
-    let handle = start_engine(
-        settings,
-        Arc::new(Timekeeper::new(0)),
-        Vector3::new(0.0, 0.0, 0.0),
-    )
-    .await?;
-
-    {
-        let mut lock = handle.control.entity_slots[15].lock_write();
-        *lock = ProceduralEntitySoundControlBlock {
-            flags: SOUND_PRESENT,
-            entity_id: 0,
-            leading: EntityMove::zero(),
-            second: None,
-            entity_len: 0.0,
-            turbulence: TurbulenceSourceControlBlock {
-                volume: 1.0,
-                lpf_cutoff_hz: 1000.0,
-            },
-        }
-    }
-
-    Ok(handle)
-}
-
-pub(crate) async fn start_engine_for_testing(
-    settings: Arc<ArcSwap<GameSettings>>,
-    timekeeper: Arc<Timekeeper>,
-) -> Result<EngineHandle> {
-    let handle = start_engine(settings, timekeeper, Vector3::new(0.0, 0.0, 0.0)).await?;
-    Ok(handle)
-}
-
 struct EngineState {
     control: Arc<SharedControl>,
     private_control: PrivateControl,
@@ -360,14 +335,15 @@ struct EngineState {
     nanos_per_sample: f64,
     total_samples_seen: u64,
 
-    test_sampler: PrerecordedSampler,
-
     rng: rand::rngs::SmallRng,
 
     entity_filter_state: EntityFilterState,
     entity_filter_left: IirLpfCascade<8>,
     entity_filter_right: IirLpfCascade<8>,
     entity_filter_input_buffer: Vec<f32>,
+
+    // HashMap: While the server has the IDs as consecutive, this isn't a protocol guarantee
+    samplers: FxHashMap<u32, PrerecordedSampler>,
 }
 
 // Const rather than using log! because I don't know what locks we might have to deal when the
@@ -454,6 +430,9 @@ impl EngineState {
         self.buffer_counter += 1;
 
         self.total_samples_seen += samples as u64;
+        if !self.control.enabled.load(Ordering::Acquire) {
+            return;
+        }
 
         let player_state = self.control.player_state.read();
 
@@ -475,7 +454,9 @@ impl EngineState {
         self.entity_filter_input_buffer.clear();
         self.entity_filter_input_buffer.resize(data.len(), 0.0);
 
-        for i in 0..NUM_SIMPLE_SOUND_SLOTS {
+        let volumes = self.control.settings.load().audio.volumes;
+
+        'slots: for i in 0..NUM_SIMPLE_SOUND_SLOTS {
             let control_block = self.control.simple_sounds[i].read();
             let private_state = &mut self.private_control.simple_sounds[i];
 
@@ -535,12 +516,18 @@ impl EngineState {
                 );
             }
 
-            let sampler = &self.test_sampler;
+            let sampler = match self.samplers.get(&control_block.id) {
+                Some(x) => x,
+                None => {
+                    continue 'slots;
+                }
+            };
             let buf = if control_block.flags & SOUND_BYPASS_ATTACHED_ENTITY_FILTER == 0 {
                 self.entity_filter_input_buffer.deref_mut()
             } else {
                 &mut *data
             };
+
             Self::sample_simple_sound(
                 self.stream_config.channels() as usize,
                 self.nanos_per_sample,
@@ -551,6 +538,7 @@ impl EngineState {
                 private_state,
                 eval_start_tick,
                 sampler,
+                volumes.volume_for(control_block.source),
             );
         }
         for i in 0..NUM_PROCEDURAL_ENTITY_SLOTS {
@@ -577,6 +565,7 @@ impl EngineState {
                 &mut self.rng,
                 buffer_start_tick,
                 samples,
+                volumes.volume_for(control_block.sound_source),
             )
         }
         match self.stream_config.channels() {
@@ -591,7 +580,17 @@ impl EngineState {
         control: Arc<SharedControl>,
         stream_config: cpal::SupportedStreamConfig,
         timekeeper: Arc<Timekeeper>,
+        sampled_sounds: FxHashMap<u32, WavReader<Cursor<Vec<u8>>>>,
     ) -> Result<EngineState> {
+        let mut samplers = FxHashMap::default();
+        for (k, v) in sampled_sounds {
+            println!("{}", k);
+            samplers.insert(
+                k,
+                PrerecordedSampler::from_wav(v, stream_config.sample_rate().0)?,
+            );
+        }
+
         Ok(EngineState {
             buffer_counter: 0,
             control,
@@ -605,10 +604,6 @@ impl EngineState {
             previous_tick: 0,
             total_samples_seen: 0,
 
-            test_sampler: PrerecordedSampler::from_wav(
-                FOOTSTEP_WAV_BYTES,
-                stream_config.sample_rate().0,
-            )?,
             rng: rand::rngs::SmallRng::from_rng(&mut rand::thread_rng())?,
             entity_filter_state: EntityFilterState {
                 cutoff_hz: 0,
@@ -620,6 +615,7 @@ impl EngineState {
             entity_filter_input_buffer: Vec::with_capacity(
                 stream_config.sample_rate().0 as usize * 2,
             ),
+            samplers,
         })
     }
     fn sample_simple_sound(
@@ -632,6 +628,7 @@ impl EngineState {
         state: &mut SimpleSoundState,
         start_tick: u64,
         sampler: &PrerecordedSampler,
+        volume_multiplier: f32,
     ) {
         let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
         let left_ear_z = left_ear_azimuth.cos();
@@ -665,9 +662,9 @@ impl EngineState {
             let amplitude = if control.flags & SOUND_SQUARELAW_ENABLED != 0 {
                 let clamped_distance = distance.max(MIN_DISTANCE) as f32;
                 // this affects amplitude, not power, so it should be non-squared
-                control.volume / clamped_distance
+                volume_multiplier * control.volume / clamped_distance
             } else {
-                control.volume
+                volume_multiplier * control.volume
             };
 
             let balance_left = left_ear_vec.dot(position - control.position);
@@ -711,6 +708,7 @@ impl EngineState {
         rng: &mut SmallRng,
         buffer_start_tick: u64,
         samples: usize,
+        volume_multiplier: f32,
     ) {
         let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
         let left_ear_z = left_ear_azimuth.cos();
@@ -881,7 +879,8 @@ impl EngineState {
             let turbulence_amplitude = control_block.turbulence.volume
                 * distance_falloff_multiplier
                 * edge_multiplier
-                * speed_multiplier;
+                * speed_multiplier
+                * volume_multiplier;
 
             let balance_left = scratchpad.last_balance.update(balance_left, 0.001);
             let l_amplitude = turbulence_amplitude * (1.0 + 0.8 * balance_left as f32);
@@ -1002,6 +1001,7 @@ impl Default for PrivateControl {
 
 /// The shared control state, via which sounds can be controlled
 pub(crate) struct SharedControl {
+    enabled: AtomicBool,
     player_state: SeqLock<PlayerState>,
     simple_sounds: Box<[SeqLock<SimpleSoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
     entity_slots: Box<[SeqLock<ProceduralEntitySoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
@@ -1014,6 +1014,7 @@ impl SharedControl {
         const PROCEDURAL_ENTITY_CONST_INIT: SeqLock<ProceduralEntitySoundControlBlock> =
             SeqLock::new(ProceduralEntitySoundControlBlock::const_default());
         SharedControl {
+            enabled: AtomicBool::new(false),
             player_state: SeqLock::new(PlayerState {
                 position: initial_position,
                 velocity: Vector3::zero(),
@@ -1051,7 +1052,7 @@ pub(crate) struct SimpleSoundControlBlock {
     pub volume: f32,
     /// The starting tick of the sound
     pub start_tick: u64,
-    /// The sound ID (not yet used, *current test will play a sine with this frequency*)
+    /// The sound ID
     pub id: u32,
     /// The ending tick of the sound. If the span from start_tick to end_tick is greater than
     /// the length of the sound, it will loop. u64::MAX is treated as effectively infinite.
@@ -1059,6 +1060,8 @@ pub(crate) struct SimpleSoundControlBlock {
     /// Skew policy: If the tick clock and codec sample clock go out of skew, the sound will stop
     /// based on
     pub end_tick: u64,
+    /// The source to attribute the sound to
+    pub source: SoundSource,
 }
 
 impl SimpleSoundControlBlock {
@@ -1070,6 +1073,7 @@ impl SimpleSoundControlBlock {
             start_tick: 0,
             id: 0,
             end_tick: 0,
+            source: SoundSource::SoundsourceUnspecified,
         }
     }
 
@@ -1078,9 +1082,6 @@ impl SimpleSoundControlBlock {
     pub(crate) fn compute_score(&self, tick_now: u64, player_position: Vector3<f64>) -> u64 {
         if self.flags & SOUND_PRESENT == 0 {
             return 0;
-        }
-        if self.flags & SOUND_STICKY != 0 {
-            return u64::MAX;
         }
 
         // We assume that the player won't move faster than the speed of sound
@@ -1093,10 +1094,14 @@ impl SimpleSoundControlBlock {
         } else {
             self.end_tick
         };
+        // Check if the sound is over first; we want sticky sounds to still get cleaned up, just not
+        // while they're still running.
         if estimated_end_tick < tick_now {
             return 0;
         }
-
+        if self.flags & SOUND_STICKY != 0 {
+            return u64::MAX;
+        }
         const BASE_SCORE: u64 = 1 << 60;
         const BASE_SCORE_F64: f64 = BASE_SCORE as f64;
         return if self.flags & SOUND_SQUARELAW_ENABLED != 0 {
@@ -1126,6 +1131,7 @@ pub(crate) struct ProceduralEntitySoundControlBlock {
     pub(crate) second: Option<EntityMove>,
     pub(crate) entity_len: f32,
     pub(crate) turbulence: TurbulenceSourceControlBlock,
+    pub(crate) sound_source: SoundSource,
 }
 
 impl ProceduralEntitySoundControlBlock {
@@ -1228,6 +1234,7 @@ impl ProceduralEntitySoundControlBlock {
                 volume: 0.0,
                 lpf_cutoff_hz: 1000.0,
             },
+            sound_source: SoundSource::SoundsourceUnspecified,
         }
     }
 }
@@ -1318,11 +1325,10 @@ struct PrerecordedSampler {
     data: Vec<(f32, f32)>,
 }
 impl PrerecordedSampler {
-    fn from_wav(wav_bytes: &[u8], target_sample_rate: u32) -> Result<Self> {
-        let wav = hound::WavReader::new(wav_bytes).unwrap();
-        let source_rate = dbg!(wav.spec().sample_rate);
+    fn from_wav<R: std::io::Read>(wav: WavReader<R>, target_sample_rate: u32) -> Result<Self> {
+        let source_rate = wav.spec().sample_rate;
         let source_channels = wav.spec().channels as usize;
-        let internal_target_rate = dbg!(target_sample_rate * OVERSAMPLE_FACTOR);
+        let internal_target_rate = target_sample_rate * OVERSAMPLE_FACTOR;
         if source_channels != 1 && source_channels != 2 {
             bail!(
                 "Unsupported number of channels: {}; only 1 or 2 are supported",
@@ -1565,10 +1571,6 @@ pub mod generated_eqns {
                         + (0.5 * az * (-dt + rt).powi(2) + pz + vz * (-dt + rt)).powi(2))
                     .sqrt())
     }
-}
-
-mod testdata {
-    pub(super) const FOOTSTEP_WAV_BYTES: &[u8] = include_bytes!("footstep_temp.wav");
 }
 
 /// A cascade of *single-pole* filters.

@@ -44,8 +44,8 @@ use super::blocks::BlockInteractionResult;
 use super::event::log_trace;
 use super::{
     blocks::{
-        self, BlockTypeHandle, BlockTypeManager, ExtDataHandling, ExtendedData, ExtendedDataHolder,
-        InlineContext, TryAsHandle,
+        self, BlockTypeManager, ExtDataHandling, ExtendedData, ExtendedDataHolder, InlineContext,
+        TryAsHandle,
     },
     event::{EventInitiator, HandlerContext},
     items::ItemStack,
@@ -308,7 +308,7 @@ impl MapChunk {
     pub fn set_block(
         &mut self,
         coordinate: ChunkOffset,
-        block: BlockTypeHandle,
+        block: BlockId,
         extended_data: Option<ExtendedData>,
     ) {
         // We have a &mut MapChunk, meaning we can use relaxed loads and stores
@@ -380,7 +380,7 @@ impl MapChunk {
     }
 
     #[inline]
-    pub fn get_block(&self, coordinate: ChunkOffset) -> BlockTypeHandle {
+    pub fn get_block(&self, coordinate: ChunkOffset) -> BlockId {
         // We have a &MapChunk, meaning we can use relaxed loads
         BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed))
     }
@@ -971,7 +971,7 @@ impl ServerGameMap {
         &self,
         coord: BlockCoordinate,
         extended_data_callback: F,
-    ) -> Result<(BlockTypeHandle, Option<T>)>
+    ) -> Result<(BlockId, Option<T>)>
     where
         F: FnOnce(&ExtendedData) -> Result<Option<T>>,
     {
@@ -994,7 +994,7 @@ impl ServerGameMap {
         &self,
         coord: BlockCoordinate,
         extended_data_callback: F,
-    ) -> Result<Option<(BlockTypeHandle, Option<T>)>>
+    ) -> Result<Option<(BlockId, Option<T>)>>
     where
         F: FnOnce(&ExtendedData) -> Option<T>,
     {
@@ -1021,7 +1021,7 @@ impl ServerGameMap {
 
     /// Gets a block + variant without its extended data. This will perform a data load if the chunk
     /// is not loaded
-    pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockTypeHandle> {
+    pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockId> {
         tokio::task::block_in_place(|| {
             let chunk_guard = self.get_chunk(coord.chunk())?;
             let chunk = chunk_guard.wait_and_get_for_read()?;
@@ -1038,7 +1038,7 @@ impl ServerGameMap {
     ///
     /// However, it will still wait to get a read lock for the chunk map itself. The only circumstances
     /// where this should fail is if the chunk is unloaded.
-    pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockTypeHandle> {
+    pub fn try_get_block(&self, coord: BlockCoordinate) -> Option<BlockId> {
         let chunk_guard = self.try_get_chunk(coord.chunk(), false)?;
         // We don't have a mapchunk lock, so we need actual atomic ordering here
         if chunk_guard.fast_path_read_ready.load(Ordering::Acquire) {
@@ -1059,7 +1059,7 @@ impl ServerGameMap {
         coord: BlockCoordinate,
         block: T,
         new_data: Option<ExtendedData>,
-    ) -> Result<(BlockTypeHandle, Option<ExtendedData>)> {
+    ) -> Result<(BlockId, Option<ExtendedData>)> {
         let new_id = block
             .as_handle(&self.block_type_manager)
             .with_context(|| "Block not found")?;
@@ -1148,9 +1148,9 @@ impl ServerGameMap {
         predicate: F,
         block: T,
         new_extended_data: Option<ExtendedData>,
-    ) -> Result<(CasOutcome, BlockTypeHandle, Option<ExtendedData>)>
+    ) -> Result<(CasOutcome, BlockId, Option<ExtendedData>)>
     where
-        F: FnOnce(BlockTypeHandle, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
+        F: FnOnce(BlockId, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
     {
         let new_id = block
             .as_handle(&self.block_type_manager)
@@ -1298,7 +1298,7 @@ impl ServerGameMap {
         game_map: &ServerGameMap,
     ) -> Result<(T, bool)>
     where
-        F: FnOnce(&mut BlockTypeHandle, &mut ExtendedDataHolder) -> Result<T>,
+        F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
         let mut extended_data = chunk
             .extended_data
@@ -2097,7 +2097,7 @@ pub trait TimerInlineCallback: Send + Sync {
         &self,
         coordinate: BlockCoordinate,
         timer_state: &TimerState,
-        block_type: &mut BlockTypeHandle,
+        block_type: &mut BlockId,
         data: &mut ExtendedDataHolder,
         ctx: &InlineContext,
     ) -> Result<()>;
@@ -2212,7 +2212,7 @@ pub struct TimerSettings {
     /// Intermediate values - spread the shards out, but in a smaller span of time
     pub spreading: f64,
     /// The set of block types (*not* including variant types) that this timer should act on
-    pub block_types: Vec<BlockTypeHandle>,
+    pub block_types: Vec<BlockId>,
     /// If set, do *not* use block bloom filters to determine whether a block is present.
     /// This is useful for bulk update callbacks that might need to run in all chunks.
     pub ignore_block_type_presence_check: bool,

@@ -33,9 +33,10 @@ enum SoundSource {
   SOUNDSOURCE_UNSPECIFIED = 0;
   // Background effects (e.g. natural sounds, running water, etc)
   SOUNDSOURCE_BACKGROUND = 1;
-  // Sound came from oneself (but was handled server-side)
+  // Sound came from oneself (if we see this in a network packet, the sound was routed via the server
+  // e.g. because a player did something that produced a sound through game content)
   SOUNDSOURCE_SELF = 2;
-  // Sound came from a player
+  // Sound came from a player other than self; this is always routed via the server
   SOUNDSOURCE_PLAYER = 3;
   // Sound came from a world interaction (e.g. entity, block)
   SOUNDSOURCE_WORLD = 4;

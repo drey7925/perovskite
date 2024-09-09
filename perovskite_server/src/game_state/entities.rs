@@ -115,7 +115,7 @@ pub struct EntityManager {
     workers: Mutex<Vec<tokio::task::JoinHandle<Result<()>>>>,
     cancellation: CancellationToken,
     next_id: AtomicU64,
-    types: Arc<EntityTypeManager>,
+    types: EntityTypeManager,
 }
 
 impl EntityManager {
@@ -179,7 +179,7 @@ impl EntityManager {
 impl EntityManager {
     pub(crate) fn new(
         db: Arc<dyn GameDatabase>,
-        entity_types: Arc<EntityTypeManager>,
+        entity_types: EntityTypeManager,
         base_time: Instant,
     ) -> EntityManager {
         EntityManager {

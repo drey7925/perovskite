@@ -95,6 +95,7 @@ impl AddAssign for BlockInteractionResult {
     }
 }
 
+use crate::media::SoundKey;
 pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
@@ -780,6 +781,7 @@ fn make_unknown_block_serverside(
             wear_multiplier: 0.0,
             light_emission: 0,
             allow_light_propagation: false,
+            footstep_sound: 0,
         },
         extended_data_handling: ExtDataHandling::ServerSide,
         deserialize_extended_data_handler: Some(Box::new(
@@ -817,6 +819,7 @@ fn make_air_block() -> BlockType {
             wear_multiplier: 1.0,
             light_emission: 0,
             allow_light_propagation: true,
+            footstep_sound: 0,
         },
         ..Default::default()
     }

@@ -29,7 +29,7 @@ pub(crate) mod hud;
 
 pub(crate) async fn make_uis(
     item_defs: Arc<ClientItemManager>,
-    cache_manager: &Arc<Mutex<CacheManager>>,
+    cache_manager: &mut CacheManager,
     ctx: Arc<VulkanContext>,
     block_renderer: &BlockRenderer,
     settings: Arc<ArcSwap<GameSettings>>,
@@ -66,7 +66,7 @@ fn pack_tex(
 
 async fn build_texture_atlas(
     item_defs: &ClientItemManager,
-    cache_manager: &Arc<Mutex<CacheManager>>,
+    cache_manager: &mut CacheManager,
     ctx: Arc<VulkanContext>,
     block_renderer: &BlockRenderer,
 ) -> Result<(Arc<Texture2DHolder>, HashMap<String, Rect>)> {
@@ -89,12 +89,13 @@ async fn build_texture_atlas(
 
     let mut simple_textures = HashMap::new();
     let rendered_block_textures = Arc::new(Mutex::new(HashMap::new()));
-    let mut cache_manager_lock = cache_manager.lock();
     for name in all_texture_names {
-        let texture = cache_manager_lock.load_media_by_name(&name).await?;
+        let texture = cache_manager.load_media_by_name(&name).await?;
         simple_textures.insert(name, texture);
     }
-    drop(cache_manager_lock);
+
+    let cache_insertions = Arc::new(Mutex::new(Vec::new()));
+
     tokio::task::block_in_place(|| {
         std::thread::scope(|s| {
             const NUM_MINI_RENDER_THREADS: usize = 4;
@@ -125,8 +126,7 @@ async fn build_texture_atlas(
                             None => continue,
                         };
 
-                        let cached_content =
-                            cache_manager.lock().try_get_block_appearance(block_def)?;
+                        let cached_content = cache_manager.try_get_block_appearance(block_def)?;
                         if let Some(content) = cached_content {
                             let imported = match ImageImporter::import_from_memory(&content) {
                                 Ok(x) => x,
@@ -143,9 +143,7 @@ async fn build_texture_atlas(
                         let mut bytes: Vec<u8> = Vec::new();
                         block_tex
                             .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
-                        cache_manager
-                            .lock()
-                            .insert_block_appearance(block_def, bytes)?;
+                        cache_insertions.lock().push((block_def, bytes));
                         rendered_block_textures.lock().insert(name, block_tex);
                     }
                     Ok(())
@@ -165,6 +163,11 @@ async fn build_texture_atlas(
             Ok::<(), Error>(())
         })
     })?;
+
+    for (key, value) in cache_insertions.lock().drain(..) {
+        cache_manager.insert_block_appearance(key, value)?;
+    }
+
     let config = texture_packer::TexturePackerConfig {
         // todo tweak these or make into a setting
         allow_rotation: false,

@@ -152,6 +152,18 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
             entity_defs: self.game_state.entities().types().to_client_protos(),
         }))
     }
+
+    async fn get_audio_defs(
+        &self,
+        _req: Request<proto::GetAudioDefsRequest>,
+    ) -> Result<Response<proto::GetAudioDefsResponse>> {
+        Ok(Response::new(proto::GetAudioDefsResponse {
+            sampled_sounds: self
+                .game_state
+                .media_resources()
+                .sampled_sound_client_protos(),
+        }))
+    }
 }
 
 pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 5;
