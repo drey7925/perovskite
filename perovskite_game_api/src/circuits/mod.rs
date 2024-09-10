@@ -18,6 +18,8 @@ mod wire;
 // Todo: consider making this pub if it has useful abstractions for custom gates
 mod gates;
 
+mod switches;
+
 /// Constants for blocks that are part of the circuits mechanism
 ///
 /// These should be used to *detect* circuits; in order to make a block have
@@ -373,6 +375,7 @@ impl CircuitGameBuilder for GameBuilder {
         wire::register_wire(self)?;
         simple_blocks::register_simple_blocks(self)?;
         gates::register_base_gates(self)?;
+        switches::register_switches(self)?;
         Ok(())
     }
     fn define_circuit_callbacks(

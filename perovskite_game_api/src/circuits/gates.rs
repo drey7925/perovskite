@@ -19,7 +19,7 @@ use super::{
 
 const SIDE_TEX: StaticTextureName = StaticTextureName("circuits:gate_side");
 const SIDE_PIN_TEX: StaticTextureName = StaticTextureName("circuits:gate_side_pin");
-const BOTTOM_TEX: StaticTextureName = StaticTextureName("circuits:gate_bottom");
+pub(super) const BOTTOM_TEX: StaticTextureName = StaticTextureName("circuits:gate_bottom");
 
 const BROKEN_GATE: StaticBlockName = StaticBlockName("circuits:broken_gate");
 const BROKEN_TOP_TEX: StaticTextureName = StaticTextureName("circuits:broken_gate_top");

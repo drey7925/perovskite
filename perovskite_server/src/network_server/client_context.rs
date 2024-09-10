@@ -1440,7 +1440,7 @@ impl InboundWorker {
                             x => Some(x),
                         });
                     if let Some(sound_id) = footstep_sound_id {
-                        self.context.game_state.audio().send_event(dbg!(AudioEvent {
+                        self.context.game_state.audio().send_event(AudioEvent {
                             context_id: self.context.id,
                             instruction: AudioInstruction::PlaySampledSound(SampledSoundPlayback {
                                 tick: 0,
@@ -1456,7 +1456,7 @@ impl InboundWorker {
                                 source: SoundSource::SoundsourcePlayer.into(),
                                 volume: 1.0,
                             }),
-                        }))
+                        })
                     }
                 }
             }

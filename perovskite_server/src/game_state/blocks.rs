@@ -454,7 +454,10 @@ impl BlockTypeManager {
             Entry::Occupied(x) => {
                 let id = BlockId(*x.get());
                 let existing = &mut self.block_types[id.index()];
-                ensure!(existing.is_unknown_block);
+                ensure!(
+                    existing.is_unknown_block,
+                    "Block with this name already registered"
+                );
 
                 block.client_info.id = id.base_id();
                 info!("Registering block {} as {:?}", block.short_name(), id);
@@ -593,16 +596,16 @@ impl BlockTypeManager {
 
     /// Creates a BlockTypeName that refers to the indicated block. See the doc for
     /// [`BlockTypeManager`] and [`BlockTypeName`] for an example of where this should be used.
-    pub fn make_block_name(&self, name: String) -> FastBlockName {
+    pub fn make_block_name(&self, name: impl Into<String>) -> FastBlockName {
         FastBlockName {
-            name,
+            name: name.into(),
             base_id: AtomicU32::new(u32::MAX),
         }
     }
 
     /// Tries to resolve a BlockTypeName from `make_block_name()`. If a block with a matching
     /// name was registered, returns a handle to it. Otherwise, returns None.
-    pub fn resolve_name(&self, block_name: &FastBlockName) -> Option<BlockTypeHandle> {
+    pub fn resolve_name(&self, block_name: &FastBlockName) -> Option<BlockId> {
         let cached = block_name.base_id.load(Ordering::Relaxed);
         if cached == u32::MAX {
             // Need to fill the cache.

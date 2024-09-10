@@ -40,7 +40,7 @@ const CIRCUITS_SOURCE_CONNECTIVITIES: [BlockConnectivity; 4] = [
     BlockConnectivity::unrotated(0, 0, -1, 0),
 ];
 
-struct SourceBlockCallbacks(PinState);
+pub(super) struct SourceBlockCallbacks(pub(crate) PinState);
 impl CircuitBlockCallbacks for SourceBlockCallbacks {
     fn update_connectivity(
         &self,
@@ -200,7 +200,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
                 (-0.5, -0.1),
                 (-0.2, 0.2),
             ))
-            .set_dropped_item(LAMP_ON_BLOCK.0, 1)
+            .set_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
             .set_display_name("Oscillator")
             .set_allow_light_propagation(true)
             .register_circuit_callbacks(),
