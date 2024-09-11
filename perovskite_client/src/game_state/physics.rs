@@ -28,6 +28,7 @@ use perovskite_core::{
 };
 
 use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
+use perovskite_core::protocol::audio::SoundSource;
 use tracy_client::{plot, span};
 
 use super::{
@@ -281,7 +282,7 @@ impl PhysicsState {
                                             .audio
                                             .sampled_sound_length(block.0.footstep_sound)
                                             .unwrap_or(0),
-                                    source: Default::default(),
+                                    source: SoundSource::SoundsourceSelf,
                                 },
                             );
                         }
