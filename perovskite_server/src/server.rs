@@ -14,6 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::convert::Infallible;
+use std::fmt::Debug;
+use std::io::Error;
+use std::pin::Pin;
+use std::task::Poll;
 use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -28,6 +33,8 @@ use perovskite_core::{
     util::set_trace_rate_denominator,
 };
 use rocksdb::Options;
+use serde::{Deserialize, Serialize};
+use tonic::transport::{Identity, ServerTlsConfig};
 
 use crate::database::rocksdb::RocksdbOptions;
 use crate::{
@@ -73,17 +80,20 @@ pub struct Server {
     runtime: tokio::runtime::Runtime,
     game_state: Arc<GameState>,
     bind_address: SocketAddr,
+    tls_config: LoadedTlsConfig,
 }
 impl Server {
     fn new(
         runtime: tokio::runtime::Runtime,
         game_state: Arc<GameState>,
         bind_address: SocketAddr,
+        tls_config: LoadedTlsConfig,
     ) -> Result<Server> {
         Ok(Server {
             runtime,
             game_state,
             bind_address,
+            tls_config,
         })
     }
 
@@ -129,10 +139,10 @@ impl Server {
             .register_encoded_file_descriptor_set(perovskite_core::protocol::DESCRIPTOR_SET)
             .build()
             .unwrap();
-        tonic::transport::Server::builder()
-        .add_service(perovskite_service)
-        .add_service(reflection_service)
-        .serve_with_shutdown(self.bind_address, async {
+
+        let mut server_builder = tonic::transport::Server::builder();
+
+        let shutdown_task = async {
             tokio::select! {
                 result = tokio::signal::ctrl_c() => {
                     result.unwrap();
@@ -143,7 +153,23 @@ impl Server {
                 }
             }
             self.game_state.start_shutdown();
-        }).await.with_context(||"Tonic server error")
+        };
+
+        match &self.tls_config {
+            LoadedTlsConfig::NoTls => server_builder
+                .add_service(perovskite_service)
+                .add_service(reflection_service)
+                .serve_with_shutdown(self.bind_address, shutdown_task)
+                .await
+                .with_context(|| "Tonic server error"),
+            LoadedTlsConfig::Identity(i) => server_builder
+                .tls_config(ServerTlsConfig::new().identity(i.clone()))?
+                .add_service(perovskite_service)
+                .add_service(reflection_service)
+                .serve_with_shutdown(self.bind_address, shutdown_task)
+                .await
+                .with_context(|| "Tonic server error"),
+        }
     }
 
     pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> Result<T>) -> Result<T> {
@@ -151,6 +177,7 @@ impl Server {
         task(self.game_state())
     }
 }
+
 impl Drop for Server {
     fn drop(&mut self) {
         tracing::info!("Server dropped, starting shutdown");
@@ -321,7 +348,7 @@ impl ServerBuilder {
 
         let _rt_guard = self.runtime.enter();
         let game_state = GameState::new(
-            self.data_dir,
+            self.data_dir.clone(),
             self.db,
             blocks,
             self.entities,
@@ -340,7 +367,9 @@ impl ServerBuilder {
         for action in self.startup_actions {
             action(&game_state)?;
         }
-        Server::new(self.runtime, game_state, addr)
+
+        let tls_config = Self::build_tls_config(self.data_dir.clone())?;
+        Server::new(self.runtime, game_state, addr, tls_config)
     }
 
     pub fn game_behaviors_mut(&mut self) -> &mut GameBehaviors {
@@ -365,6 +394,70 @@ impl ServerBuilder {
         action: impl FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static,
     ) {
         self.startup_actions.push(Box::new(action));
+    }
+
+    fn build_tls_config(data_dir: PathBuf) -> Result<LoadedTlsConfig> {
+        let mut tls_config_file = data_dir.join("tls.ron");
+
+        if !tls_config_file.exists() {
+            log::info!(
+                "{} not present; using defaults (no TLS)",
+                tls_config_file.display()
+            );
+        }
+        log::info!("Loading TLS settings from {}", tls_config_file.display());
+        let config = ron::from_str::<TlsSettings>(&std::fs::read_to_string(&tls_config_file)?)?;
+        match config.mode {
+            TlsMode::NoTls => Ok(LoadedTlsConfig::NoTls),
+            TlsMode::CertificateFiles => {
+                let certificate_path = config.certificate_pem_filename.as_ref().context(
+                    "If TLS mode is CertificateFiles, certificate_pem_filename must be specified",
+                )?;
+                let key_pair_path = config.keypair_pem_filename.as_ref().context(
+                    "If TLS mode is CertificateFiles, keypair_pem_filename must also be specified",
+                )?;
+                tracing::info!(
+                "Loading TLS certificates and keys from {certificate_path:?} and {key_pair_path:?}"
+            );
+                let certificate_bytes = std::fs::read(certificate_path)?;
+                let key_pair_bytes = std::fs::read(key_pair_path)?;
+                Ok(LoadedTlsConfig::Identity(Identity::from_pem(
+                    certificate_bytes,
+                    key_pair_bytes,
+                )))
+            }
+        }
+    }
+}
+
+enum LoadedTlsConfig {
+    NoTls,
+    Identity(tonic::transport::Identity),
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+enum TlsMode {
+    NoTls,
+    CertificateFiles,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub struct TlsSettings {
+    pub mode: TlsMode,
+    pub certificate_pem_filename: Option<String>,
+    pub keypair_pem_filename: Option<String>,
+}
+
+pub const FILENAME: &str = "settings.ron";
+
+impl Default for TlsSettings {
+    fn default() -> Self {
+        Self {
+            mode: TlsMode::NoTls,
+            certificate_pem_filename: None,
+            keypair_pem_filename: None,
+        }
     }
 }
 

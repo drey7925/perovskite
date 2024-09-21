@@ -34,7 +34,7 @@ rand = "0.8.5"
 rustc-hash = "2.0.0"
 mimalloc = { version = "0.1.37", default-features = false }
 async-trait = "0.1.73"
-ron = "0.8.0"
+ron = "0.8.1"
 serde = { version = "1.0.163", features = ["derive"] }
 cgmath = "0.18.0"
 tokio = { version = "1.38.0", features = ["full", "tracing"] }

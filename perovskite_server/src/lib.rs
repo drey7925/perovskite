@@ -18,7 +18,7 @@
 mod database;
 /// Various utilities to convert between formats.
 pub mod formats;
-/// The state of the actual game world and all of the things inside it
+/// The state of the actual game world and all the things inside it
 pub mod game_state;
 /// Media files that the client will need
 pub mod media;

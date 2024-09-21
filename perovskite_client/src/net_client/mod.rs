@@ -38,6 +38,7 @@ use perovskite_core::{
 use rand::rngs::OsRng;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::{Certificate, ClientTlsConfig};
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
@@ -59,9 +60,16 @@ const MIN_PROTOCOL_VERSION: u32 = 5;
 const MAX_PROTOCOL_VERSION: u32 = 5;
 
 async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channel>> {
-    PerovskiteGameClient::connect(server_addr)
-        .await
-        .map_err(|e| Error::msg(e.to_string()))
+    let tls = ClientTlsConfig::new()
+        .with_native_roots()
+        .with_webpki_roots();
+    let channel = Channel::from_shared(server_addr)?
+        .tls_config(tls)?
+        .connect_timeout(Duration::from_secs(10))
+        .connect()
+        .await?;
+
+    Ok(PerovskiteGameClient::new(channel))
 }
 
 const TOTAL_STEPS: f32 = 12.0;

@@ -37,6 +37,10 @@ The limitations:
 * A lot of basic features, like a player model, are still missing
 * No scripting language yet - all game logic is written in Rust
     * And no dynamic content loading yet. It might be possible once crABI stabilizes.
+* TLS support is a WIP. At this time, you need to bring your own certificate.
+    * Let's Encrypt (certbot) works for this. One day, I'd like to implement automatic certificate provisioning using ACME + ALPN challenges. This ran into some problems on my first attempt.
+    * TLS-secured servers should use address format `https://domain:port`
+    * Unsecured servers should use the existing format `grpc://domain:port`
 
 The benefits:
 * The engine is optimized for scalability and performance where possible
@@ -44,6 +48,7 @@ The benefits:
 * The minecarts can move at an unusually high speed, comparable to real-world HSR
 * All game logic is written in Rust
 * Authentication uses a secure remote password protocol that avoids sending the password over the network
+* Communication is secured with TLS
 
 ## How do I play it?
 
