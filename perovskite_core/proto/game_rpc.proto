@@ -352,6 +352,10 @@ message StartAuth {
   //        * MVP of entity kinematics w/ pending move queues
   //        * Entity definition with meshes
   //        * Checkboxes in popups
+  // 5 - circa 2024-09-01 onward
+  //        * Audio (sampled sounds, entity sounds without per-entity-class details)
+  //        * TLS supported
+  //        * opaque_ke bump to v3
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }
