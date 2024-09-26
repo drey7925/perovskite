@@ -165,6 +165,8 @@ pub(crate) mod vert_2d {
     }
 }
 
+pub(crate) mod sky;
+
 // Fragment shader(s) that simply render colors directly
 pub(crate) mod frag_simple {
     vulkano_shaders::shader! {
@@ -232,5 +234,5 @@ pub(crate) struct SceneState {
     pub(crate) vp_matrix: Matrix4<f32>,
     pub(crate) global_light_color: [f32; 3],
     pub(crate) clear_color: [f32; 4],
-    pub(crate) global_light_direction: Vector3<f32>,
+    pub(crate) sun_direction: Vector3<f32>,
 }

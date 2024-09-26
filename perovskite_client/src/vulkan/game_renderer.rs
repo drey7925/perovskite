@@ -53,7 +53,7 @@ use winit::{
 use crate::game_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
-use crate::vulkan::shaders::LiveRenderConfig;
+use crate::vulkan::shaders::{sky, LiveRenderConfig};
 use crate::{
     game_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
@@ -78,6 +78,9 @@ pub(crate) struct ActiveGame {
 
     entities_provider: entity_geometry::EntityPipelineProvider,
     entities_pipeline: entity_geometry::EntityPipelineWrapper,
+
+    sky_provider: sky::SkyPipelineProvider,
+    sky_pipeline: sky::SkyPipelineWrapper,
 
     egui_adapter: Option<EguiAdapter>,
 
@@ -115,6 +118,14 @@ impl ActiveGame {
             scene_state.clear_color,
         )
         .unwrap();
+
+        self.sky_pipeline
+            .bind(ctx, scene_state, &mut command_buf_builder, ())
+            .unwrap();
+        self.sky_pipeline
+            .draw(&mut command_buf_builder, (), ())
+            .unwrap();
+
         self.cube_draw_calls.clear();
         let start_tick = self.client_state.timekeeper.now();
 
@@ -338,6 +349,7 @@ impl ActiveGame {
                 &global_config,
             )?
         };
+        self.sky_pipeline = self.sky_provider.make_pipeline(ctx, (), &global_config)?;
         self.egui_adapter.as_mut().unwrap().notify_resize(ctx)?;
         Ok(())
     }
@@ -448,6 +460,9 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         )?
     };
 
+    let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, (), &global_render_config)?;
+
     let game = ActiveGame {
         cube_provider,
         cube_pipeline,
@@ -455,6 +470,8 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         flat_pipeline,
         entities_provider,
         entities_pipeline,
+        sky_provider,
+        sky_pipeline,
         client_state,
         egui_adapter: None,
         cube_draw_calls: vec![],

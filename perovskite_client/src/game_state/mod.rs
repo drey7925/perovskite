@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Deg, InnerSpace, Vector3, Zero};
+use cgmath::{vec3, Deg, ElementWise, InnerSpace, Vector3, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
@@ -784,13 +784,13 @@ impl ClientState {
             face_direction: (az, el),
         };
 
-        let (sky, lighting, light_direction) = self.light_cycle.lock().get_colors();
+        let (sky, lighting, sun_direction) = self.light_cycle.lock().get_colors();
         FrameState {
             scene_state: SceneState {
                 vp_matrix: view_proj_matrix,
                 clear_color: [sky.x, sky.y, sky.z, 1.],
                 global_light_color: lighting.into(),
-                global_light_direction: light_direction,
+                sun_direction,
             },
             player_position,
             tool_state,

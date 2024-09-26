@@ -66,7 +66,7 @@ impl LightCycle {
     pub(crate) fn get_light_direction(&self) -> Vector3<f32> {
         let sun_angle = Deg(360.) * (self.time_state.time_of_day() as f32);
         Vector3::new(
-            // At midnight, 0. Moves toward the easy, then during the day, decreases from east to west
+            // At midnight, 0. Moves toward the east, then during the day, decreases from east to west
             sun_angle.sin(),
             // At midnight, 1.0 (down in vulkan)
             sun_angle.cos(),

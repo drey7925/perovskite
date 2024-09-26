@@ -265,7 +265,7 @@ lazy_static::lazy_static! {
             vp_matrix,
             clear_color: [0.0, 0.0, 0.0, 0.0],
             global_light_color: [0.0, 0.0, 0.0],
-            global_light_direction: vec3(0., 0., 0.)
+            sun_direction: vec3(0., 0., 0.)
         }
     };
 }

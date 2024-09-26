@@ -128,7 +128,7 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
                 vp_matrix: per_frame_config.vp_matrix.into(),
                 plant_wave_vector: [0.0, 0.0].into(),
                 global_brightness_color: per_frame_config.global_light_color.into(),
-                global_light_direction: per_frame_config.global_light_direction.into(),
+                global_light_direction: per_frame_config.sun_direction.into(),
             },
         )?;
 

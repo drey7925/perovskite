@@ -192,16 +192,17 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Transparent => span!("bind transparent"),
             BlockRenderPass::Translucent => span!("bind translucent"),
         };
-        let layout = match pass {
-            BlockRenderPass::Opaque => self.solid_pipeline.layout().clone(),
-            BlockRenderPass::Transparent => self.sparse_pipeline.layout().clone(),
-            BlockRenderPass::Translucent => self.translucent_pipeline.layout().clone(),
+        let pipeline = match pass {
+            BlockRenderPass::Opaque => self.solid_pipeline.clone(),
+            BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
+            BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
         };
-
+        let layout = pipeline.layout().clone();
+        command_buf_builder.bind_pipeline_graphics(pipeline)?;
         let per_frame_set_layout = layout
             .set_layouts()
             .get(1)
-            .with_context(|| "Layout missing set 1")?;
+            .with_context(|| "Sky layout missing set 1")?;
 
         let uniform_buffer = Buffer::from_data(
             ctx.memory_allocator.clone(),
@@ -218,7 +219,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
                 vp_matrix: per_frame_config.vp_matrix.into(),
                 plant_wave_vector: self.get_plant_wave_vector().into(),
                 global_brightness_color: per_frame_config.global_light_color.into(),
-                global_light_direction: per_frame_config.global_light_direction.into(),
+                global_light_direction: per_frame_config.sun_direction.into(),
             },
         )?;
 
@@ -313,7 +314,6 @@ impl CubePipelineProvider {
                 front_face: FrontFace::CounterClockwise,
                 ..Default::default()
             }),
-            // TODO multisample state later when we have MSAA
             multisample_state: Some(MultisampleState::default()),
             viewport_state: Some(ViewportState {
                 viewports: smallvec![Viewport {
@@ -357,6 +357,7 @@ impl CubePipelineProvider {
         let sparse_pipeline_info = GraphicsPipelineCreateInfo {
             // This pipeline just needs a shader swap, but can use the same depth test
             stages: stages_sparse,
+            layout: layout_sparse,
             ..solid_pipeline_info.clone()
         };
         let translucent_pipeline_info = GraphicsPipelineCreateInfo {
