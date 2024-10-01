@@ -33,7 +33,7 @@ tokio = { version = "1.38.0", features = ["full"] }
 tokio-scoped = "0.2.0"
 tokio-stream = "0.1.14"
 tokio-util = "0.7.8"
-tonic = { version = "0.12.2", features = ["gzip", "tls", "tls-webpki-roots", "tls-native-roots"] }
+tonic = { version = "0.12.3", features = ["gzip", "tls", "tls-webpki-roots", "tls-native-roots"] }
 tracy-client = { version = "0.17.0", default-features = false, features = ["system-tracing", "context-switch-tracing", "sampling", "code-transfer",
             "broadcast"] }
 vulkano = "0.34.1"
