@@ -21,7 +21,7 @@ prost-types = "0.13.1"
 rand = "0.8.5"
 rustc-hash = "2.0.0"
 thiserror = "1.0.40"
-tonic = "0.12.1"
+tonic = "0.12.3"
 vec3D = "0.3.0"
 
 [build-dependencies]
