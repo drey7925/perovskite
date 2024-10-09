@@ -1250,10 +1250,18 @@ impl ServerGameMap {
 
     /// Same as [mutate_block_atomically], but returns None if it cannot immediately run the mutator without
     /// having to block (for a mutex, writeback permit, or IO).
+    ///
+    /// Args:
+    ///   `coord` - the block coordinate
+    ///   `mutator` - the function to run. Same signature and warnings apply as
+    ///               `mutate_block_atomically`
+    ///   `wait_for_inner` - If true, we're willing to wait for the inner mutex; this is useful if
+    ///                      the caller is OK with blocking but doesn't want to load unloaded chunks
     pub fn try_mutate_block_atomically<F, T>(
         &self,
         coord: BlockCoordinate,
         mutator: F,
+        wait_for_inner: bool,
     ) -> Result<Option<T>>
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
@@ -1262,9 +1270,13 @@ impl ServerGameMap {
             Some(x) => x,
             None => return Ok(None),
         };
-        let mut chunk = match chunk_guard.try_get_write()? {
-            Some(x) => x,
-            None => return Ok(None),
+        let mut chunk = if wait_for_inner {
+            chunk_guard.wait_and_get_for_write()?
+        } else {
+            match chunk_guard.try_get_write()? {
+                Some(x) => x,
+                None => return Ok(None),
+            }
         };
 
         let (result, block_changed) = self.mutate_block_atomically_locked(

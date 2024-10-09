@@ -544,7 +544,8 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                             .initiator()
                             .send_chat_message(ChatMessage::new(
                                 "[ERROR]",
-                                "Failed to parse popup response: ".to_string() + &e.to_string(),
+                                "Failed to parse popup response: ".to_string()
+                                    + e.to_string().as_str(),
                             ))
                             .unwrap();
                     }

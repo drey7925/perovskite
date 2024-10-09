@@ -566,7 +566,7 @@ impl<'a> EntityCoroutineServices<'a> {
     /// As with all calls to mutate_block_atomically, it's always possible that the block has changed between the time
     /// when the caller decides to call (based on some old block value) and when the mutator is actually invoked.
     ///
-    /// The mutator itself must be very careful to avoid blocking for performance, *just like any other coroutine.*
+    /// The mutator itself must be very careful to avoid blocking, *just like any other coroutine.*
     pub fn mutate_block_atomically<T: Send + Sync + 'static>(
         &self,
         coord: BlockCoordinate,
@@ -578,7 +578,7 @@ impl<'a> EntityCoroutineServices<'a> {
         match self
             .game_state
             .game_map()
-            .try_mutate_block_atomically(coord, &mut mutator)
+            .try_mutate_block_atomically(coord, &mut mutator, false)
         {
             Ok(Some(t)) => DeferrableResult::AvailableNow(Ok(t)),
             Ok(None) => {

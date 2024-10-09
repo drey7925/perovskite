@@ -6,7 +6,10 @@ use crate::{
     include_texture_bytes,
 };
 
+use crate::circuits::events::CircuitHandlerContext;
 use anyhow::Result;
+use lazy_static::lazy_static;
+use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::{block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE};
 use perovskite_server::game_state::{blocks::FastBlockName, event::HandlerContext};
 use smallvec::SmallVec;
@@ -14,7 +17,7 @@ use smallvec::SmallVec;
 use super::{
     events::{make_root_context, transmit_edge},
     get_incoming_pin_states, get_pin_state, BlockConnectivity, CircuitBlockBuilder,
-    CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilder,
+    CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilder, PinState,
 };
 
 const SIDE_TEX: StaticTextureName = StaticTextureName("circuits:gate_side");
@@ -92,7 +95,7 @@ struct CombinationalGateImpl {
     config: CombinationalGate,
     on: BlockId,
     off: BlockId,
-    broken: FastBlockName,
+    broken: BlockId,
 }
 impl CircuitBlockCallbacks for CombinationalGateImpl {
     fn on_incoming_edge(
@@ -167,7 +170,7 @@ impl CircuitBlockCallbacks for CombinationalGateImpl {
         ctx: &HandlerContext,
         coord: perovskite_core::coordinates::BlockCoordinate,
     ) {
-        ctx.game_map().set_block(coord, &self.broken, None).unwrap();
+        ctx.game_map().set_block(coord, self.broken, None).unwrap();
     }
 }
 
@@ -184,13 +187,14 @@ const RIGHT_CONNECTIVITY: BlockConnectivity =
 pub fn register_combinational_gate(
     builder: &mut GameBuilder,
     gate: CombinationalGate,
+    broken: BlockId,
 ) -> Result<()> {
     register_gate(builder, gate.clone(), move |off_block, on_block| {
         Box::new(CombinationalGateImpl {
             config: gate.clone(),
             on: on_block,
             off: off_block,
-            broken: FastBlockName::new(BROKEN_GATE.0.to_string()),
+            broken,
         })
     })?;
     Ok(())
@@ -316,10 +320,7 @@ pub(crate) fn register_base_gates(builder: &mut GameBuilder) -> Result<()> {
         "textures/xor_gate_top_on.png"
     )?;
 
-    register_delay_gate(builder)?;
-    register_dff(builder)?;
-
-    builder.add_block(
+    let broken_block = builder.add_block(
         BlockBuilder::new(BROKEN_GATE)
             .set_axis_aligned_boxes_appearance(make_chip_shape(box_properties_broken))
             .set_allow_light_propagation(true)
@@ -328,9 +329,13 @@ pub(crate) fn register_base_gates(builder: &mut GameBuilder) -> Result<()> {
             .add_item_group(HIDDEN_FROM_CREATIVE),
     )?;
 
-    register_combinational_gate(builder, AND_GATE_CONFIG)?;
-    register_combinational_gate(builder, NOT_GATE_CONFIG)?;
-    register_combinational_gate(builder, XOR_GATE_CONFIG)?;
+    register_delay_gate(builder, broken_block.id)?;
+    register_dff(builder, broken_block.id)?;
+    microcontroller::register_microcontroller(builder)?;
+
+    register_combinational_gate(builder, AND_GATE_CONFIG, broken_block.id)?;
+    register_combinational_gate(builder, NOT_GATE_CONFIG, broken_block.id)?;
+    register_combinational_gate(builder, XOR_GATE_CONFIG, broken_block.id)?;
     Ok(())
 }
 
@@ -359,7 +364,7 @@ const DELAY_GATE_PROPERTIES: CombinationalGate = CombinationalGate {
     on_name: StaticBlockName("circuits:delay_gate_on"),
     off_texture: StaticTextureName("circuits:delay_gate_off"),
     on_texture: StaticTextureName("circuits:delay_gate_on"),
-    // 001, 011, 100, 110: left xor right, front is dont care
+    // irrelevant, doesn't use the combinational callbacks
     truth_table: 0,
     connects_left: false,
     connects_front: true,
@@ -371,7 +376,7 @@ const DFF_PROPERTIES: CombinationalGate = CombinationalGate {
     on_name: StaticBlockName("circuits:dff_on"),
     off_texture: StaticTextureName("circuits:dff_off"),
     on_texture: StaticTextureName("circuits:dff_on"),
-    // 001, 011, 100, 110: left xor right, front is dont care
+    // irrelevant, doesn't use the combinational callbacks
     truth_table: 0,
     connects_left: false,
     connects_front: true,
@@ -383,7 +388,7 @@ const DELAY_GATE_INPUT_WAS_HIGH_VARIANT_BIT: u16 = 4;
 struct DelayGateImpl {
     on: BlockId,
     off: BlockId,
-    broken: FastBlockName,
+    broken: BlockId,
 }
 impl CircuitBlockCallbacks for DelayGateImpl {
     fn on_incoming_edge(
@@ -413,7 +418,7 @@ impl CircuitBlockCallbacks for DelayGateImpl {
             };
             if block.equals_ignore_variant(self.off) || block.equals_ignore_variant(self.on) {
                 if pending_count > 8 {
-                    *block = ctx.block_types().resolve_name(&self.broken).unwrap();
+                    *block = self.broken;
                     return Ok(false);
                 }
 
@@ -467,7 +472,7 @@ impl CircuitBlockCallbacks for DelayGateImpl {
         ctx: &HandlerContext,
         coord: perovskite_core::coordinates::BlockCoordinate,
     ) {
-        ctx.game_map().set_block(coord, &self.broken, None).unwrap();
+        ctx.game_map().set_block(coord, self.broken, None).unwrap();
     }
 }
 
@@ -518,7 +523,7 @@ fn delayed_edge(
     Ok(())
 }
 
-fn register_delay_gate(builder: &mut GameBuilder) -> Result<()> {
+fn register_delay_gate(builder: &mut GameBuilder, broken: BlockId) -> Result<()> {
     include_texture_bytes!(
         builder,
         DELAY_GATE_PROPERTIES.off_texture,
@@ -531,21 +536,18 @@ fn register_delay_gate(builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     register_gate(builder, DELAY_GATE_PROPERTIES, |off, on| {
-        Box::new(DelayGateImpl {
-            on,
-            off,
-            broken: FastBlockName::new(BROKEN_GATE.0.to_string()),
-        })
+        Box::new(DelayGateImpl { on, off, broken })
     })?;
 
     Ok(())
 }
+mod microcontroller;
 
 const DFF_GATE_INPUT_CLOCK_WAS_HIGH_VARIANT_BIT: u16 = 4;
 struct DffImpl {
     on: BlockId,
     off: BlockId,
-    broken: FastBlockName,
+    broken: BlockId,
 }
 impl CircuitBlockCallbacks for DffImpl {
     fn on_incoming_edge(
@@ -588,7 +590,7 @@ impl CircuitBlockCallbacks for DffImpl {
             };
             if block.equals_ignore_variant(self.off) || block.equals_ignore_variant(self.on) {
                 if pending_count > 8 {
-                    *block = ctx.block_types().resolve_name(&self.broken).unwrap();
+                    *block = self.broken;
                     return Ok(false);
                 }
                 if variant != new_variant {
@@ -646,11 +648,11 @@ impl CircuitBlockCallbacks for DffImpl {
         ctx: &HandlerContext,
         coord: perovskite_core::coordinates::BlockCoordinate,
     ) {
-        ctx.game_map().set_block(coord, &self.broken, None).unwrap();
+        ctx.game_map().set_block(coord, self.broken, None).unwrap();
     }
 }
 
-fn register_dff(builder: &mut GameBuilder) -> Result<()> {
+fn register_dff(builder: &mut GameBuilder, broken: BlockId) -> Result<()> {
     include_texture_bytes!(builder, DFF_PROPERTIES.off_texture, "textures/dff_top.png")?;
     include_texture_bytes!(
         builder,
@@ -659,11 +661,7 @@ fn register_dff(builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     register_gate(builder, DFF_PROPERTIES, |off, on| {
-        Box::new(DffImpl {
-            on,
-            off,
-            broken: FastBlockName::new(BROKEN_GATE.0.to_string()),
-        })
+        Box::new(DffImpl { on, off, broken })
     })?;
     Ok(())
 }

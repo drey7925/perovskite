@@ -123,7 +123,7 @@ fn track_build_popup(
                 if template.bifurcate {
                     group = group.button(
                         &(template.id.to_string() + "_l"),
-                        &("<-".to_string() + &template.name),
+                        &("<-".to_string() + template.name.as_str()),
                         true,
                         false,
                     );

@@ -301,7 +301,12 @@ impl GameState {
         &self.data_dir
     }
 
-    /// Returns the time when the server started.
+    /// The number of times the server has started up. Guaranteed nonzero.
+    pub fn startup_counter(&self) -> u64 {
+        self.startup_counter
+    }
+
+    /// The time when the server started.
     pub fn server_start_time(&self) -> Instant {
         self.server_start_time
     }
@@ -506,10 +511,10 @@ fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
             }
         },
         None => {
-            let seed = 0;
-            db.put(&key, &seed.encode_var_vec())?;
-            info!("Initialized startup counter to {:?}", seed,);
-            Ok(seed)
+            let counter = 1;
+            db.put(&key, &counter.encode_var_vec())?;
+            info!("Initialized startup counter to {:?}", counter,);
+            Ok(counter)
         }
     }
 }

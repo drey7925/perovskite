@@ -47,6 +47,8 @@ petgraph = "0.6.4"
 lazy_static = "1.4.0"
 wildmatch = "2.3.3"
 itertools = "0.13.0"
+rhai = { version = "1.19.0", features = ["no_closure", "no_custom_syntax", "sync"] }
+circular-buffer = "0.1.9"
 
 [features]
 default = ["default_game", "agriculture", "animals", "circuits", "discord", "carts"]

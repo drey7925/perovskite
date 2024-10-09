@@ -227,6 +227,23 @@ impl<'a> HandlerContext<'a> {
         });
     }
 
+    pub fn run_deferred_async<U: Future<Output = Result<()>> + Send + Sync + 'static>(
+        &self,
+        f: impl FnOnce(HandlerContext<'static>) -> U,
+    ) {
+        let our_clone = HandlerContext {
+            tick: self.tick,
+            initiator: self.initiator.clone_to_static(),
+            game_state: self.game_state.clone(),
+        };
+        let fut = f(our_clone);
+        tokio::task::spawn(async move {
+            if let Err(e) = fut.await {
+                tracing::error!("Error in deferred function: {}", e);
+            }
+        });
+    }
+
     /// Same as run_deferred, but runs the function after the given delay
     ///
     /// Warning: If the function hangs indefinitely, the game cannot exit.
@@ -268,14 +285,11 @@ pub fn log_trace(msg: &'static str) {
 }
 
 pub fn clone_trace_buffer() -> TraceBuffer {
-    match TRACE_BUFFER.try_with(|t| t.clone()) {
-        Ok(t) => t,
-        Err(_) => {
-            let buf = TraceBuffer::new(false);
-            buf.log("Failed to clone trace buffer, creating a new one");
-            buf
-        }
-    }
+    TRACE_BUFFER.try_with(|t| t.clone()).unwrap_or_else(|_| {
+        let buf = TraceBuffer::new(false);
+        buf.log("Failed to clone trace buffer, creating a new one");
+        buf
+    })
 }
 
 pub(crate) fn run_traced<F: Future>(buf: TraceBuffer, f: F) -> TaskLocalFuture<TraceBuffer, F> {

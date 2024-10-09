@@ -456,7 +456,8 @@ impl BlockTypeManager {
                 let existing = &mut self.block_types[id.index()];
                 ensure!(
                     existing.is_unknown_block,
-                    "Block with this name already registered"
+                    "Block with this name already registered: {}",
+                    &block.short_name()
                 );
 
                 block.client_info.id = id.base_id();
@@ -858,7 +859,7 @@ impl TryAsHandle for BlockTypeHandle {
 /// only a non-mutable & reference is needed to use this struct.
 ///
 /// There is no protection against accidentally using a FastBlockName with two different block type
-/// managers, if there are somehow two perovskite worlds runninng in the same process and sharing
+/// managers, if there are somehow two perovskite worlds running in the same process and sharing
 /// objects. However, that should be a rare case.
 pub struct FastBlockName {
     name: String,
@@ -888,9 +889,9 @@ impl TryAsHandle for &str {
     }
 }
 impl FastBlockName {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         Self {
-            name,
+            name: name.into(),
             base_id: AtomicU32::new(u32::MAX),
         }
     }

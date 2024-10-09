@@ -10,6 +10,7 @@ use perovskite_server::game_state::{
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
+use std::pin::Pin;
 
 use self::events::CircuitHandlerContext;
 
@@ -120,6 +121,43 @@ pub enum PinState {
     Low,
     /// The signal is being driven high
     High,
+}
+macro_rules! delegate_bin_op {
+    ($trait:path, $method:ident) => {
+        impl $trait for PinState {
+            type Output = PinState;
+            #[inline]
+            fn $method(self, rhs: Self) -> Self::Output {
+                if (self == PinState::High).$method(rhs == PinState::High) {
+                    PinState::High
+                } else {
+                    PinState::Low
+                }
+            }
+        }
+    };
+}
+delegate_bin_op!(std::ops::BitOr, bitor);
+delegate_bin_op!(std::ops::BitAnd, bitand);
+delegate_bin_op!(std::ops::BitXor, bitxor);
+impl std::ops::Not for PinState {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            PinState::Low => PinState::High,
+            PinState::High => PinState::Low,
+        }
+    }
+}
+impl From<bool> for PinState {
+    fn from(value: bool) -> Self {
+        if value {
+            PinState::High
+        } else {
+            PinState::Low
+        }
+    }
 }
 
 pub trait CircuitBlockCallbacks: Send + Sync + 'static {
@@ -692,6 +730,16 @@ pub mod events {
                 Some(CircuitHandlerContext {
                     inner: self.inner,
                     ttl: self.ttl - 1,
+                })
+            }
+        }
+        pub fn consume_multiple_ttl(&self, count: u32) -> Option<Self> {
+            if self.ttl < count {
+                None
+            } else {
+                Some(CircuitHandlerContext {
+                    inner: self.inner,
+                    ttl: self.ttl.checked_sub(count).unwrap(),
                 })
             }
         }

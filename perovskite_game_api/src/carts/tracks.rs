@@ -1093,7 +1093,7 @@ pub(crate) fn register_tracks(
                                             .send_chat_message(ChatMessage::new(
                                                 "[ERROR]",
                                                 "Failed to parse popup response: ".to_string()
-                                                    + &e.to_string(),
+                                                    + e.to_string().as_str(),
                                             ))
                                             .unwrap();
                                     }
@@ -1319,7 +1319,7 @@ fn register_rail_slope(
                                                 .send_chat_message(ChatMessage::new(
                                                     "[ERROR]",
                                                     "Failed to parse popup response: ".to_string()
-                                                        + &e.to_string(),
+                                                        + e.to_string().as_str(),
                                                 ))
                                                 .unwrap();
                                         }
