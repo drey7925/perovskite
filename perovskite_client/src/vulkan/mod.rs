@@ -808,7 +808,7 @@ impl Texture2DHolder {
 
         copy_builder
             .build()?
-            .execute(ctx.graphics_queue.clone())?
+            .execute(ctx.transfer_queue.clone())?
             .flush()?;
 
         let sampler = Sampler::new(
