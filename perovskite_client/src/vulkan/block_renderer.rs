@@ -42,6 +42,7 @@ use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use crate::cache::CacheManager;
+use crate::clog;
 use crate::game_state::block_types::ClientBlockTypeManager;
 use crate::game_state::chunk::{
     ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, SOLID_RECLAIMER,
@@ -566,6 +567,7 @@ impl BlockRenderer {
             let texture = cache_manager.load_media_by_name(&x).await?;
             all_textures.insert(x, texture);
         }
+        log::info!("all media loaded");
 
         let config = texture_packer::TexturePackerConfig {
             // todo break these out into config
@@ -610,6 +612,7 @@ impl BlockRenderer {
                 .pack_own(name, texture)
                 .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
         }
+        log::info!("Static textures packed");
 
         let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
             .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
@@ -635,6 +638,7 @@ impl BlockRenderer {
                 })
                 .collect(),
         };
+        log::info!("Simple block tex coords done");
 
         let axis_aligned_box_blocks = AxisAlignedBoxBlocksCache {
             blocks: block_defs
@@ -652,14 +656,17 @@ impl BlockRenderer {
                 })
                 .collect(),
         };
+        log::info!("aabb blocks done");
 
         let texture_atlas = Arc::new(Texture2DHolder::create(ctx.deref(), &texture_atlas)?);
+        log::info!("atlas created (GPU)");
 
         let selection_rect: RectF32 = (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into();
         let fallback_rect: RectF32 =
             (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into();
         let fake_entity_rect: RectF32 = (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into();
         let atlas_dims = texture_atlas.dimensions();
+        log::info!("BlockRenderer ready");
         Ok(BlockRenderer {
             block_defs,
             texture_atlas,
@@ -1077,6 +1084,8 @@ impl BlockRenderer {
             },
             idx.into_iter(),
         )?;
+
+        clog!("pointee buffers allocated");
         let offset = (vec3(pointee.x as f64, pointee.y as f64, pointee.z as f64) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         Ok(CubeGeometryDrawCall {

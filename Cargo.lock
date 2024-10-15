@@ -3002,7 +3002,7 @@ dependencies = [
  "rand",
  "serde",
  "subtle",
- "voprf",
+ "voprf 0.4.0-pre.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "zeroize",
 ]
 
@@ -5204,8 +5204,6 @@ dependencies = [
 [[package]]
 name = "voprf"
 version = "0.4.0-pre.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "081acbe8fcf05d5e8e2aad8ef3d40e02eddeaec07c75a9770d862a0fc0874322"
 dependencies = [
  "curve25519-dalek",
  "derive-where",
@@ -5219,6 +5217,13 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "voprf"
+version = "0.4.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "081acbe8fcf05d5e8e2aad8ef3d40e02eddeaec07c75a9770d862a0fc0874322"
+replace = "voprf 0.4.0-pre.3"
 
 [[package]]
 name = "vulkano"

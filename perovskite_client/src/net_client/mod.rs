@@ -90,9 +90,9 @@ pub(crate) async fn connect_game(
         protocol_version,
         tick: initial_tick,
     } = do_auth_handshake(&tx_send, &mut stream, username, password, register).await?;
-
+    log::info!("auth success");
     let timekeeper = Timekeeper::new(initial_tick);
-
+    log::info!("timekeeper created");
     if protocol_version < MIN_PROTOCOL_VERSION {
         bail!(
             "Client is too new to handle protocol version {}",
@@ -137,7 +137,7 @@ pub(crate) async fn connect_game(
     let block_types = Arc::new(tokio::task::block_in_place(|| {
         ClientBlockTypeManager::new(block_defs_proto.into_inner().block_types)
     })?);
-
+    log::info!("ClientBlockTypeManager initialized");
     progress.send((
         6.0 / TOTAL_STEPS,
         "Setting up block renderer...".to_string(),
@@ -146,6 +146,7 @@ pub(crate) async fn connect_game(
         let cache_manager_lock = cache_manager.lock();
         BlockRenderer::new(block_types.clone(), cache_manager_lock, vk_ctx.clone()).await?
     };
+    log::info!("block renderer set up");
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
@@ -153,10 +154,11 @@ pub(crate) async fn connect_game(
         "{} item defs loaded from server",
         item_defs_proto.get_ref().item_defs.len()
     );
+    log::info!("item defs obtained");
     let items = Arc::new(ClientItemManager::new(
         item_defs_proto.into_inner().item_defs,
     )?);
-
+    log::info!("item manager built");
     progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
@@ -167,21 +169,27 @@ pub(crate) async fn connect_game(
     )
     .await?;
 
+    log::info!("uis built");
     progress.send((
         9.0 / TOTAL_STEPS,
         "Loading entity definitions...".to_string(),
     ))?;
+
     let entity_defs = connection.get_entity_defs(GetEntityDefsRequest {}).await?;
     log::info!(
         "{} entity defs loaded from server",
         entity_defs.get_ref().entity_defs.len()
     );
+
+    log::info!("entity defs built");
     let entitity_renderer = EntityRenderer::new(
         entity_defs.into_inner().entity_defs,
         cache_manager.lock(),
         &vk_ctx,
     )
     .await?;
+
+    log::info!("entity renderer built");
 
     let (action_sender, action_receiver) = mpsc::channel(4);
 
@@ -237,6 +245,8 @@ pub(crate) async fn connect_game(
     progress.send((11.0 / TOTAL_STEPS, "Connected!".to_string()))?;
     // Sleep for a moment so the user can see the connected message
     tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
+
+    log::info!("client state OK");
     Ok(client_state)
 }
 

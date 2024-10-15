@@ -203,6 +203,7 @@ pub(crate) trait PipelineWrapper<T, U> {
     ) -> Result<()>;
 }
 
+#[derive(Debug)]
 pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
 }

@@ -34,6 +34,7 @@ pub(crate) async fn make_uis(
     block_renderer: &BlockRenderer,
     settings: Arc<ArcSwap<GameSettings>>,
 ) -> Result<(GameHud, EguiUi)> {
+    log::info!("make_uis start");
     let (texture_atlas, texture_coords) =
         build_texture_atlas(&item_defs, cache_manager, ctx, block_renderer).await?;
 
@@ -48,8 +49,9 @@ pub(crate) async fn make_uis(
         hotbar_view_id: None,
         fps_counter: fps_counter::FPSCounter::new(),
     };
-
+    log::info!("GameHud constructed");
     let egui_ui = EguiUi::new(texture_atlas, texture_coords, item_defs.clone(), settings);
+    log::info!("egui_ui constructed");
 
     Ok((hud, egui_ui))
 }
@@ -94,6 +96,7 @@ async fn build_texture_atlas(
         let texture = cache_manager_lock.load_media_by_name(&name).await?;
         simple_textures.insert(name, texture);
     }
+    log::info!("simple item tex inserted");
     drop(cache_manager_lock);
     tokio::task::block_in_place(|| {
         std::thread::scope(|s| {
@@ -101,7 +104,7 @@ async fn build_texture_atlas(
             let mut handles = Vec::with_capacity(NUM_MINI_RENDER_THREADS);
             for i in 0..NUM_MINI_RENDER_THREADS {
                 let ctx = ctx.clone();
-
+                log::info!("thread spawn {i}");
                 let mut tasks = vec![];
                 for (j, name) in all_rendered_blocks.iter().enumerate() {
                     if (j % NUM_MINI_RENDER_THREADS) == i {
@@ -109,12 +112,21 @@ async fn build_texture_atlas(
                     }
                 }
                 handles.push(s.spawn(|| -> Result<()> {
-                    let mut renderer = MiniBlockRenderer::new(
+                    log::info!("thread start");
+                    let mut renderer = match MiniBlockRenderer::new(
                         ctx,
                         [64, 64],
                         block_renderer.atlas(),
                         block_renderer.block_types().air_block(),
-                    )?;
+                    ) {
+                        Ok(x) => x,
+                        Err(e) => {
+                            log::error!("{e:?}");
+                            bail!(e);
+                        }
+                    };
+                    log::info!("MBR created");
+
                     for name in tasks {
                         let block_id = match block_renderer.block_types().get_block_by_name(name) {
                             Some(id) => id,
@@ -146,12 +158,15 @@ async fn build_texture_atlas(
                         cache_manager
                             .lock()
                             .insert_block_appearance(block_def, bytes)?;
+
                         rendered_block_textures.lock().insert(name, block_tex);
+                        log::info!("MBR insert CM + RBT");
                     }
                     Ok(())
                 }));
             }
             for handle in handles {
+                log::info!("joining");
                 match handle.join() {
                     Ok(Ok(())) => {}
                     Ok(Err(x)) => {
@@ -243,10 +258,10 @@ async fn build_texture_atlas(
         .get_frame(&String::from(FALLBACK_UNKNOWN_TEXTURE))
         .unwrap()
         .frame;
-
+    log::info!("game_ui textures packed");
     let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
         .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
-
+    log::info!("game_ui tex atlas exported");
     let mut texture_coords = HashMap::new();
 
     for item in item_defs.all_item_defs() {
@@ -278,6 +293,7 @@ async fn build_texture_atlas(
     }
 
     let texture_atlas = Arc::new(Texture2DHolder::create(&ctx, &texture_atlas)?);
+    log::info!("texture atlas created");
     Ok((texture_atlas, texture_coords))
 }
 

@@ -175,6 +175,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
         calls: &'a [FlatTextureDrawCall],
         _pass: (),
     ) -> Result<()> {
+        clog!("draw flat");
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone())?;
         for call in calls {
@@ -182,6 +183,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
                 .bind_vertex_buffers(0, call.vertex_buffer.clone())?
                 .draw(call.vertex_buffer.len() as u32, 1, 0, 0)?;
         }
+        clog!("draw flat done");
         Ok(())
     }
 
@@ -192,6 +194,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: (),
     ) -> Result<()> {
+        clog!("bind flat");
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout
             .set_layouts()
@@ -203,6 +206,7 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
             [WriteDescriptorSet::buffer(0, self.buffer.clone())],
             [],
         )?;
+        clog!("flat pds done");
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout,

@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -69,6 +69,10 @@ use super::{
     CommandBufferBuilder, FramebufferHolder, VulkanContext, VulkanWindow,
 };
 
+#[macro_export]
+macro_rules! clog {
+    ($($arg:tt)+) => (if $crate::vulkan::game_renderer::SHOULD_LOG.load(std::sync::atomic::Ordering::Relaxed) {log::info!($($arg)+)})
+}
 pub(crate) struct ActiveGame {
     cube_provider: cube_geometry::CubePipelineProvider,
     cube_pipeline: cube_geometry::CubePipelineWrapper,
@@ -99,6 +103,7 @@ impl ActiveGame {
         input_capture: &mut InputCapture,
     ) -> Arc<PrimaryAutoCommandBuffer> {
         let _span = span!("build renderer buffers");
+        clog!("start bcb for activegame");
         let FrameState {
             scene_state,
             mut player_position,
@@ -107,14 +112,16 @@ impl ActiveGame {
         } = self
             .client_state
             .next_frame((window_size.width as f64) / (window_size.height as f64));
+        clog!("framestate");
         ctx.window.set_ime_allowed(ime_enabled);
-
+        clog!("IME");
         ctx.start_ssaa_render_pass(
             &mut command_buf_builder,
             framebuffer.ssaa_framebuffer.clone(),
             scene_state.clear_color,
         )
         .unwrap();
+        clog!("SSAA renderpass");
         self.cube_draw_calls.clear();
         let start_tick = self.client_state.timekeeper.now();
 
@@ -147,6 +154,7 @@ impl ActiveGame {
                 }
             }
         }
+        clog!("entity updates");
 
         if let Some(pointee) = tool_state.pointee {
             self.cube_draw_calls.push(
@@ -157,6 +165,7 @@ impl ActiveGame {
             );
         }
 
+        clog!("pointee created");
         let chunks = {
             let _span = span!("Waiting for chunk_lock");
             self.client_state.chunks.renderable_chunks_cloned_view()
@@ -193,7 +202,7 @@ impl ActiveGame {
             "chunk_rate",
             self.cube_draw_calls.len() as f64 / chunks.len() as f64
         );
-
+        clog!("CDCs ready");
         if !self.cube_draw_calls.is_empty() {
             self.cube_pipeline
                 .bind(
@@ -249,6 +258,8 @@ impl ActiveGame {
                 &self.client_state.entity_renderer,
             )
         };
+
+        clog!("EDCs ready");
         self.entities_pipeline
             .bind(ctx, scene_state, &mut command_buf_builder, ())
             .unwrap();
@@ -277,16 +288,18 @@ impl ActiveGame {
                 ..Default::default()
             })
             .unwrap();
+        clog!("end rp");
         // With the render pass done, blit to the final framebuffer
         framebuffer
             .blit_supersampling(&mut command_buf_builder)
             .unwrap();
+        clog!("blit");
         ctx.start_post_blit_render_pass(
             &mut command_buf_builder,
             framebuffer.post_blit_framebuffer.clone(),
         )
         .unwrap();
-
+        clog!("start postblit");
         // Then draw the UI
         self.egui_adapter
             .as_mut()
@@ -298,22 +311,26 @@ impl ActiveGame {
                 input_capture,
             )
             .unwrap();
-
+        clog!("egui draw");
         command_buf_builder
             .end_render_pass(SubpassEndInfo {
                 ..Default::default()
             })
             .unwrap();
-        command_buf_builder
+        clog!("end rp");
+        let cmd = command_buf_builder
             .build()
             .with_context(|| "Command buffer build failed")
-            .unwrap()
+            .unwrap();
+        clog!("cmd built");
+        cmd
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
         let global_config = LiveRenderConfig {
             supersampling: self.client_state.settings.load().render.supersampling,
         };
+        clog!("handle_resize");
         self.cube_pipeline = self.cube_provider.make_pipeline(
             ctx,
             self.client_state.block_renderer.atlas(),
@@ -479,7 +496,11 @@ pub struct GameRenderer {
     rt: Arc<tokio::runtime::Runtime>,
 
     warned_about_capture_issue: bool,
+    entered_active_yet: bool,
+    finished_active_frame: bool,
 }
+pub static SHOULD_LOG: AtomicBool = AtomicBool::new(false);
+
 impl GameRenderer {
     pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<GameRenderer> {
         let settings = Arc::new(ArcSwap::new(GameSettings::load_from_disk()?.into()));
@@ -499,6 +520,8 @@ impl GameRenderer {
             main_menu: Mutex::new(main_menu),
             rt,
             warned_about_capture_issue: false,
+            entered_active_yet: false,
+            finished_active_frame: false,
         })
     }
 
@@ -580,7 +603,11 @@ impl GameRenderer {
                 }
                 Event::MainEventsCleared => {
                     if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                        self.entered_active_yet = true;
+                        SHOULD_LOG.store(self.entered_active_yet && !self.finished_active_frame, Ordering::Relaxed);
+                        clog!("logging frame");
                         if self.ctx.want_recreate.swap(false, Ordering::AcqRel) {
+                            clog!("wants recreate");
                             recreate_swapchain = true;
                         }
 
@@ -588,6 +615,7 @@ impl GameRenderer {
                         if self.ctx.window.has_focus()
                             && game.client_state.input.lock().is_mouse_captured()
                         {
+
                             let size = self.ctx.window.inner_size();
                             self.ctx
                                 .window
@@ -601,6 +629,7 @@ impl GameRenderer {
                             } else {
                                 winit::window::CursorGrabMode::Confined
                             };
+                            clog!("cursor grab {mode:?}");
                             match self
                                 .ctx
                                 .window
@@ -618,6 +647,7 @@ impl GameRenderer {
                             }
                             self.ctx.window.set_cursor_visible(false);
                         } else {
+                            clog!("ungrab");
                             self.ctx.window.set_cursor_visible(true);
                             // todo this is actually fallible, and some window managers get unhappy
                             match self.ctx
@@ -643,12 +673,14 @@ impl GameRenderer {
                     }
 
                     if recreate_swapchain {
+                        clog!("actually recreating");
                         let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
                         recreate_swapchain = false;
                         self.ctx.recreate_swapchain(size, self.settings.load().render.supersampling).unwrap();
                         self.ctx.viewport.extent = size.into();
                         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                            clog!("handle_resize");
                             game.handle_resize(&mut self.ctx).unwrap();
                         }
                     }
@@ -748,6 +780,7 @@ impl GameRenderer {
 
                     {
                         let _span = span!("submit to Vulkan");
+                        clog!("submit vk");
                         let future = previous_future
                             .join(acquire_future)
                             .then_execute(self.ctx.graphics_queue.clone(), command_buffers)
@@ -760,6 +793,7 @@ impl GameRenderer {
                                 ),
                             )
                             .then_signal_fence_and_flush();
+                        clog!("future ready");
                         fences[image_i as usize] = match future {
                             // Holding this in an Arc makes this easier
                             #[allow(clippy::arc_with_non_send_sync)]
@@ -773,8 +807,10 @@ impl GameRenderer {
                                 None
                             }
                         };
+                        clog!("fences updated");
                     }
                     previous_fence_i = image_i;
+                    self.finished_active_frame = self.entered_active_yet;
                 }
                 _ => {}
             }

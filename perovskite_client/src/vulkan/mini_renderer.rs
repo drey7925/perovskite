@@ -68,6 +68,8 @@ impl MiniBlockRenderer {
             ctx.depth_format,
         )?;
 
+        log::info!("MBR SSAA pass created");
+
         let target_image = Image::new(
             ctx.memory_allocator.clone(),
             ImageCreateInfo {
@@ -83,6 +85,7 @@ impl MiniBlockRenderer {
                 ..Default::default()
             },
         )?;
+        log::info!("MBR target image allocated");
 
         let create_info = ImageViewCreateInfo {
             usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
@@ -161,6 +164,7 @@ impl MiniBlockRenderer {
         block_id: BlockId,
         block_def: &BlockTypeDef,
     ) -> Result<DynamicImage> {
+        log::info!("start MBR render {:?} {}", block_id, block_def.short_name);
         let mut vtx = vec![];
         let mut idx = vec![];
 
@@ -179,21 +183,25 @@ impl MiniBlockRenderer {
             &mut idx,
             &|_, _| false,
         );
-
+        log::info!("MBR render RSB");
         let mut commands = self.ctx.start_command_buffer()?;
-        commands.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![
-                    Some([0.0, 0.0, 0.0, 0.0].into()),
-                    Some(self.ctx.depth_clear_value()),
-                ],
-                ..RenderPassBeginInfo::framebuffer(self.framebuffer.clone())
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
+        log::info!("command buffer started");
+        commands
+            .begin_render_pass(
+                RenderPassBeginInfo {
+                    clear_values: vec![
+                        Some([0.0, 0.0, 0.0, 0.0].into()),
+                        Some(self.ctx.depth_clear_value()),
+                    ],
+                    ..RenderPassBeginInfo::framebuffer(self.framebuffer.clone())
+                },
+                SubpassBeginInfo {
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        log::info!("render pass started");
         let pass = VkCgvBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
 
         if let Some(pass) = pass {
@@ -203,6 +211,7 @@ impl MiniBlockRenderer {
                 &mut commands,
                 BlockRenderPass::Transparent,
             )?;
+            log::info!("bind");
             let draw_call = CubeGeometryDrawCall {
                 models: VkChunkVertexDataGpu {
                     solid_opaque: None,
@@ -228,12 +237,21 @@ impl MiniBlockRenderer {
             )
         })?;
 
-        let commands = commands.build()?;
-        commands.execute(self.ctx.clone_graphics_queue())?.flush()?;
+        let commands = commands.build().unwrap();
+        log::info!("cmd buffer built");
+        commands
+            .execute(self.ctx.clone_graphics_queue())
+            .unwrap()
+            .flush()
+            .unwrap();
+        log::info!("executed and flushed");
 
-        let guard = self.download_buffer.read()?;
+        let guard = self.download_buffer.read().unwrap();
+        log::info!("read guard");
         let image = RgbaImage::from_raw(self.surface_size[0], self.surface_size[1], guard.to_vec())
-            .context("Failed to create image")?;
+            .unwrap();
+        log::info!("read completed");
+
         Ok(image.into())
     }
 }

@@ -17,3 +17,10 @@ debug = 1
 opt-level = 3
 lto = "thin"
 inherits = "release"
+
+#[patch.crates-io]
+#opaque-ke = { git = 'https://github.com/drey7925/opaque-ke.git', branch="v2-voprf-override" }
+
+[replace]
+#"voprf:0.4.0-pre.3" = { git = 'https://github.com/drey7925/voprf.git', branch='v0.4' }
+"voprf:0.4.0-pre.3" = { path = 'C:/tmp/voprf' }

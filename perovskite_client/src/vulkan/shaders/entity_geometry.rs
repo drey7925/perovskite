@@ -83,6 +83,7 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
         _pass: (),
     ) -> Result<()> {
         let _span = span!("draw entities");
+        clog!("draw  entities");
         let pipeline = self.pipeline.clone();
         let layout = pipeline.layout().clone();
         builder.bind_pipeline_graphics(pipeline)?;
@@ -94,7 +95,7 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
                 .bind_index_buffer(call.model.idx.clone())?
                 .draw_indexed(call.model.idx.len().try_into()?, 1, 0, 0, 0)?;
         }
-
+        clog!("draw entities done");
         Ok(())
     }
 
@@ -105,6 +106,7 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: (),
     ) -> Result<()> {
+        clog!("bind entities");
         let _span = span!("bind entities");
         let layout = self.pipeline.layout().clone();
 
@@ -131,14 +133,14 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
                 global_light_direction: per_frame_config.global_light_direction.into(),
             },
         )?;
-
+        clog!("uniform uploaded");
         let per_frame_set = PersistentDescriptorSet::new(
             &ctx.descriptor_set_allocator,
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
             [],
         )?;
-
+        clog!("pfs");
         let descriptor = self.descriptor.clone();
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
@@ -146,7 +148,7 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
             0,
             vec![descriptor, per_frame_set],
         )?;
-
+        clog!("bind entities done");
         Ok(())
     }
 }

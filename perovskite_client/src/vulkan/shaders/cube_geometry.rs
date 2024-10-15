@@ -119,7 +119,7 @@ impl CubePipelineWrapper {
 }
 
 /// Which render step we are rendering now.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum BlockRenderPass {
     Opaque,
     Transparent,
@@ -134,6 +134,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
         draw_calls: &mut [CubeGeometryDrawCall],
         pass: BlockRenderPass,
     ) -> Result<()> {
+        clog!("cube pipeline draw {pass:?}");
         let _span = match pass {
             BlockRenderPass::Opaque => span!("draw opaque"),
             BlockRenderPass::Transparent => span!("draw transparent"),
@@ -177,6 +178,8 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
                 plot!("translucent_rate", draw_rate);
             }
         };
+
+        clog!("cube pipeline draw done {pass:?}");
         Ok(())
     }
 
@@ -187,6 +190,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
         command_buf_builder: &mut CommandBufferBuilder<L>,
         pass: BlockRenderPass,
     ) -> Result<()> {
+        clog!("cube pipeline bind {pass:?}");
         let _span = match pass {
             BlockRenderPass::Opaque => span!("bind opaque"),
             BlockRenderPass::Transparent => span!("bind transparent"),
@@ -221,6 +225,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
                 global_light_direction: per_frame_config.global_light_direction.into(),
             },
         )?;
+        clog!("cube uniform buffer done {pass:?}");
 
         let per_frame_set = PersistentDescriptorSet::new(
             &ctx.descriptor_set_allocator,
@@ -228,6 +233,8 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
             [],
         )?;
+
+        clog!("cube pds {pass:?}");
 
         let descriptor = match pass {
             BlockRenderPass::Opaque => self.solid_descriptor.clone(),
@@ -241,6 +248,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             vec![descriptor, per_frame_set],
         )?;
 
+        clog!("cube pipeline bind done {pass:?}");
         Ok(())
     }
 }

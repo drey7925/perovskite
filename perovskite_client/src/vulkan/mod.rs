@@ -16,6 +16,7 @@
 
 pub(crate) mod block_renderer;
 pub(crate) mod entity_renderer;
+#[macro_use]
 pub mod game_renderer;
 pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
@@ -30,6 +31,7 @@ use image::GenericImageView;
 use log::warn;
 use smallvec::smallvec;
 
+use crate::clog;
 use texture_packer::Rect;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
@@ -406,6 +408,7 @@ impl VulkanWindow {
         size: PhysicalSize<u32>,
         supersampling: Supersampling,
     ) -> Result<()> {
+        clog!("Recreate_swapchain start");
         let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent: size.into(),
@@ -420,6 +423,7 @@ impl VulkanWindow {
         };
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images.clone();
+        clog!("recreated, images ready");
         self.framebuffers = get_framebuffers_with_depth(
             &new_images,
             self.memory_allocator.clone(),
@@ -428,6 +432,7 @@ impl VulkanWindow {
             self.depth_format,
             supersampling,
         )?;
+        clog!("get_framebuffers");
         Ok(())
     }
 
@@ -752,28 +757,32 @@ impl Texture2DHolder {
         ctx: &VulkanContext,
         image: &image::DynamicImage,
     ) -> Result<Texture2DHolder> {
+        log::info!("Tex2DHolder create");
         let img_rgba = image
             .as_rgba8()
             .with_context(|| "rgba8 buffer was empty")?
             .clone()
             .into_vec();
+        log::info!("Tex2DHolder rbga vec");
 
         let dimensions = image.dimensions();
+        let img_info = ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: Format::R8G8B8A8_SRGB,
+            view_formats: vec![Format::R8G8B8A8_SRGB],
+            extent: [image.width(), image.height(), 1],
+            usage: ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
+            ..Default::default()
+        };
         let image = Image::new(
             ctx.memory_allocator.clone(),
-            ImageCreateInfo {
-                image_type: ImageType::Dim2d,
-                format: Format::R8G8B8A8_SRGB,
-                view_formats: vec![Format::R8G8B8A8_SRGB],
-                extent: [image.width(), image.height(), 1],
-                usage: ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
-                ..Default::default()
-            },
+            dbg!(img_info),
             AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
         )?;
+        log::info!("Tex2D image created");
 
         let region = BufferImageCopy {
             buffer_offset: 0,
@@ -782,6 +791,7 @@ impl Texture2DHolder {
             ..Default::default()
         };
 
+        log::info!("Tex2D image created");
         let source = Buffer::from_iter(
             ctx.memory_allocator.clone(),
             BufferCreateInfo {
@@ -794,22 +804,30 @@ impl Texture2DHolder {
             },
             img_rgba.iter().cloned(),
         )?;
-
+        log::info!("source subbuffer");
         let mut copy_builder = AutoCommandBufferBuilder::primary(
             &ctx.command_buffer_allocator,
             ctx.transfer_queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-        )?;
-
-        copy_builder.copy_buffer_to_image(CopyBufferToImageInfo {
-            regions: smallvec![region],
-            ..CopyBufferToImageInfo::buffer_image(source, image.clone())
-        })?;
+        )
+        .unwrap();
 
         copy_builder
-            .build()?
-            .execute(ctx.graphics_queue.clone())?
-            .flush()?;
+            .copy_buffer_to_image(CopyBufferToImageInfo {
+                regions: smallvec![region],
+                ..CopyBufferToImageInfo::buffer_image(source, image.clone())
+            })
+            .unwrap();
+
+        let cmd = copy_builder.build().unwrap();
+
+        log::info!("tex copy cmd built");
+        cmd.execute(ctx.transfer_queue.clone())
+            .unwrap()
+            .flush()
+            .unwrap();
+
+        log::info!("tex copy cmd flushed");
 
         let sampler = Sampler::new(
             ctx.vk_device.clone(),
@@ -819,8 +837,10 @@ impl Texture2DHolder {
                 ..Default::default()
             },
         )?;
-        let image_view = ImageView::new_default(image)?;
 
+        log::info!("sampler nearest/linear");
+        let image_view = ImageView::new_default(image)?;
+        log::info!("imageview");
         Ok(Texture2DHolder {
             descriptor_set_allocator: ctx.descriptor_set_allocator.clone(),
             sampler,
@@ -835,6 +855,7 @@ impl Texture2DHolder {
         set: usize,
         binding: u32,
     ) -> Result<Arc<PersistentDescriptorSet>> {
+        log::info!("tex descriptor set");
         let layout = pipeline
             .layout()
             .set_layouts()
@@ -850,6 +871,8 @@ impl Texture2DHolder {
             )],
             [],
         )?;
+
+        log::info!("tex pds allocated");
         Ok(descriptor_set)
     }
 
