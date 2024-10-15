@@ -28,5 +28,6 @@ jobs:
     - name: Build      
       run: |
         sudo apt-get install protobuf-compiler libasound-dev
-        cargo build --verbose
-      # TODO add tests
+        rustup install 1.80
+        cargo +1.80 build --verbose
+      # TODO undo the pin once opaque-ke has a 2.x version that builds on 1.81+
