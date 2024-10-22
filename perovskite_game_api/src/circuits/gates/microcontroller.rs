@@ -70,6 +70,7 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
         let (core, selected_interrupt, pin_reg) =
             match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
                 if !id.equals_ignore_variant(self.ids.ok) {
+                    tracing::info!("failed variant check");
                     return Ok(None);
                 }
                 let extended_data = match ext.as_mut() {
@@ -84,16 +85,25 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
                     Some(x) => x,
                     None => return Ok(None),
                 };
-
+                tracing::info!("downcasted");
                 if state.microcontroller_config.program.is_empty() {
+                    tracing::info!("no program");
                     return Ok(None);
                 }
+                tracing::info!("found program {:?}", state.microcontroller_config);
 
                 let self_variant = id.variant();
                 let mut pin_reg = 0;
                 for (i, (port_mask, connectivity)) in
                     VAR_PORT.into_iter().zip(CONN_PORT).enumerate()
                 {
+                    tracing::info!(
+                        "{}, {}, {:?}, {:?}",
+                        port_mask,
+                        self_variant,
+                        from,
+                        connectivity.eval(coord, self_variant)
+                    );
                     let driven_state = (port_mask & self_variant) != 0;
                     if connectivity.eval(coord, self_variant) == Some(from) {
                         let effective_state = driven_state | (incoming_state == PinState::High);
@@ -104,6 +114,11 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
                         pin_reg |= state.microcontroller_config.external_pin_drives & (1 << i);
                     }
                 }
+                tracing::info!(
+                    "pin_reg　{}, epd: {}",
+                    pin_reg,
+                    state.microcontroller_config.external_pin_drives
+                );
                 let rising_interrupts = pin_reg
                     & !state.microcontroller_config.external_pin_drives
                     & state.microcontroller_config.rising_interrupt_mask;
@@ -112,12 +127,19 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
                     & state.microcontroller_config.falling_interrupt_mask;
                 state.microcontroller_config.pending_interrupts |= rising_interrupts;
                 state.microcontroller_config.pending_interrupts |= falling_interrupts;
+                dbg!((
+                    rising_interrupts,
+                    falling_interrupts,
+                    state.microcontroller_config.pending_interrupts
+                ));
                 let selected_interrupt =
                     max_set_bit(state.microcontroller_config.pending_interrupts);
+                state.microcontroller_config.external_pin_drives = pin_reg;
                 if selected_interrupt == 0 {
                     // No work to do
                     return Ok(None);
                 }
+                tracing::info!("irq {selected_interrupt}");
                 assert_ne!(
                     selected_interrupt & state.microcontroller_config.pending_interrupts,
                     0
@@ -125,18 +147,20 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
                 // The selected interrupt is no longer pending.
                 state.microcontroller_config.pending_interrupts &= !selected_interrupt;
 
-                state.microcontroller_config.external_pin_drives = pin_reg;
-
                 // the core has work in progress
                 let counter = ctx.startup_counter();
                 if state.lock == counter {
                     // pending interrupts is updated, when that core finishes work it'll detect
                     // this and do more work. No work to do until the core finishes work
+
+                    tracing::info!("core locked already");
                     Ok(None)
                 } else {
                     // Apply the lock
                     state.lock = counter;
                     let core = Arc::downgrade(&state.core_state);
+
+                    tracing::info!("got the core lock");
                     Ok(Some((core, selected_interrupt, pin_reg)))
                 }
             })? {
@@ -466,7 +490,7 @@ impl Default for MicrocontrollerConfig {
     fn default() -> Self {
         MicrocontrollerConfig {
             program: String::new(),
-            rising_interrupt_mask: 0,
+            rising_interrupt_mask: 0xf,
             falling_interrupt_mask: 0,
             pending_interrupts: 0,
             external_pin_drives: 0,
