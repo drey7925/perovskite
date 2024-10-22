@@ -10,7 +10,7 @@ categories = ["games"]
 maintenance = { status = "experimental" }
 
 [dependencies]
-argon2 = "0.4.1"
+argon2 = "0.5.3"
 anyhow = "1.0.71"
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
@@ -24,7 +24,7 @@ image = "0.25.1"
 line_drawing = "1.0.0"
 log = "0.4.17"
 microbench = "0.5.0"
-opaque-ke = { version = "2.0.0", features = ["argon2"] }
+opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
 parking_lot = "0.12.1"
 rand = "0.8.5"
 rustc-hash = "2.0.0"
@@ -60,6 +60,7 @@ smallvec = "1.13.1"
 circular-buffer = "0.1.6"
 flume = "0.11.0"
 sanitize-filename = "0.5.0"
+base64 = "0.22.1"
 
 [features]
 default = []

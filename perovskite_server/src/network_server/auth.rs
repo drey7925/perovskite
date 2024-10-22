@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use argon2::password_hash::rand_core::Error;
 
 use opaque_ke::{
     CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
@@ -46,6 +47,28 @@ pub(crate) struct AuthOutcome {
     pub max_protocol_version: u32,
 }
 
+
+struct FakeRng;
+impl rand::RngCore for FakeRng {
+    fn next_u32(&mut self) -> u32 {
+        0x55555555
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        0x5555555555555555
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        dest.fill(0x55)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
+        dest.fill(0x55);
+        Ok(())
+    }
+}
+impl rand::CryptoRng for FakeRng {}
+
 pub struct AuthService {
     db: Arc<dyn GameDatabase>,
     server_setup: ServerSetup<PerovskiteOpaqueAuth>,
@@ -55,8 +78,11 @@ impl AuthService {
         const DB_KEY: &[u8] = b"auth_opaque_serversetup";
         let db_key = &KeySpace::Metadata.make_key(DB_KEY);
         let server_setup = match db.get(db_key)? {
-            Some(x) => ServerSetup::<PerovskiteOpaqueAuth>::deserialize(&x)
-                .map_err(|e| anyhow::Error::msg(format!("OPAQUE ServerSetup error: {e:?}")))?,
+            Some(server_setup) => {
+                dbg!(base64::encode(&server_setup));
+                ServerSetup::<PerovskiteOpaqueAuth>::deserialize(&server_setup)
+                    .map_err(|e| anyhow::Error::msg(format!("OPAQUE ServerSetup error: {e:?}")))?
+            },
             None => {
                 let mut rng = OsRng;
                 let server_setup = ServerSetup::new(&mut rng);
@@ -71,6 +97,9 @@ impl AuthService {
     }
 
     fn start_registration(&self, username: &str, client_request: &[u8]) -> tonic::Result<Vec<u8>> {
+
+        dbg!(base64::encode(&username));
+        dbg!(base64::encode(&client_request));
         let server_registration_start_result = ServerRegistration::<PerovskiteOpaqueAuth>::start(
             &self.server_setup,
             RegistrationRequest::deserialize(client_request).map_err(|e| {
@@ -85,6 +114,7 @@ impl AuthService {
             log::error!("OPAQUE start_registration error: {e:?}");
             tonic::Status::unauthenticated("OPAQUE start_registration failed")
         })?;
+        dbg!(&server_registration_start_result.message);
         Ok(server_registration_start_result
             .message
             .serialize()
@@ -124,26 +154,32 @@ impl AuthService {
         username: &str,
         client_request: &[u8],
     ) -> tonic::Result<ServerLoginStartResult<PerovskiteOpaqueAuth>> {
+
+        dbg!(base64::encode(&username));
+        dbg!(base64::encode(&client_request));
         let pw_file = self.db.get(&db_key_from_username(username)).map_err(|e| {
             log::error!("Internal DB lookup error: {e:?}");
             tonic::Status::internal("Internal start_login error")
         })?;
         let pw_file = match pw_file {
-            Some(x) => x,
+            Some(pw_file) => {
+                dbg!(base64::encode(&pw_file));
+                pw_file
+            },
             None => {
                 return Err(tonic::Status::unauthenticated(
                     "No such user found; please register",
                 ));
             }
         };
-        let pw_file = ServerRegistration::deserialize(&pw_file).map_err(|e| {
+        let pw_file = dbg!(ServerRegistration::deserialize(&pw_file).map_err(|e| {
             log::error!("OPAQUE start_login parse error: {e:?}");
             tonic::Status::invalid_argument(
                 "OPAQUE start_login data corrupted; please contact server admin",
             )
-        })?;
+        })?);
 
-        let mut rng = OsRng;
+        let mut rng = FakeRng;
         ServerLogin::start(
             &mut rng,
             &self.server_setup,
@@ -166,6 +202,11 @@ impl AuthService {
         prior_phase: ServerLoginStartResult<PerovskiteOpaqueAuth>,
         client_login_credential: &[u8],
     ) -> tonic::Result<()> {
+
+
+        dbg!(&prior_phase.state);
+        dbg!(&prior_phase.message);
+        dbg!(base64::encode(&client_login_credential));
         let result = prior_phase.state.finish(
             CredentialFinalization::deserialize(client_login_credential).map_err(|e| {
                 log::error!("OPAQUE finish_login parse error: {e:?}");
@@ -269,12 +310,14 @@ impl AuthService {
         outbound: &mpsc::Sender<Result<StreamToClient, tonic::Status>>,
     ) -> tonic::Result<()> {
         log::info!("Starting login for {}", username);
+        dbg!("<<< from client", base64::encode(opaque_request));
         let login_state = self.start_login(username, opaque_request)?;
+        dbg!(">>> to client", base64::encode(login_state.message.serialize().to_vec()));
         outbound
             .send(Ok(StreamToClient {
                 tick: 0,
                 server_message: Some(ServerMessage::ServerLoginResponse(
-                    login_state.message.serialize().to_vec(),
+                    dbg!(&login_state).message.serialize().to_vec(),
                 )),
             }))
             .await

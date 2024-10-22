@@ -335,16 +335,41 @@ async fn do_register_handshake(
     }
 }
 
+struct FakeRng;
+impl rand::RngCore for FakeRng {
+    fn next_u32(&mut self) -> u32 {
+        0x55555555
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        0x5555555555555555
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        dest.fill(0x55)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), argon2::password_hash::rand_core::Error> {
+        dest.fill(0x55);
+        Ok(())
+    }
+}
+impl rand::CryptoRng for FakeRng {}
 async fn do_login_handshake(
     tx: &mpsc::Sender<StreamToServer>,
     rx: &mut Streaming<StreamToClient>,
     username: String,
     password: String,
 ) -> Result<AuthSuccess> {
-    let mut client_rng = OsRng;
+    let mut client_rng = FakeRng;
+    dbg!(&username, base64::encode(username.as_bytes()));
+    dbg!(&password, base64::encode(password.as_bytes()));
     let client_state =
         opaque_ke::ClientLogin::<PerovskiteOpaqueAuth>::start(&mut client_rng, password.as_bytes())
             .map_err(|e| Error::msg(format!("OPAQUE ClientLogin start failed: {e:?}")))?;
+    dbg!(&client_state.state);
+    dbg!(&client_state.message);
+    dbg!("To server >>>", base64::encode(client_state.message.serialize().to_vec()));
     tx.send(StreamToServer {
         sequence: 0,
         client_tick: 0,
@@ -357,28 +382,34 @@ async fn do_login_handshake(
         })),
     })
     .await?;
-    let registration_response = match rx.message().await? {
+    let login_response = match rx.message().await? {
         Some(StreamToClient {
-            server_message: Some(ServerMessage::ServerLoginResponse(resp)),
+            server_message: Some(ServerMessage::ServerLoginResponse(login_response_bytes)),
             ..
-        }) => CredentialResponse::deserialize(&resp).map_err(|e| {
-            Error::msg(format!(
-                "OPAQUE login CredentialResponse couldn't be decoded: {e:?}"
-            ))
-        })?,
+        }) => {
+            dbg!("From server <<<", base64::encode(&login_response_bytes));
+            CredentialResponse::deserialize(&login_response_bytes).map_err(|e| {
+                Error::msg(format!(
+                    "OPAQUE login CredentialResponse couldn't be decoded: {e:?}"
+                ))
+            })?
+        }
         Some(x) => {
             bail!("Server sent an unexpected message in response to the login request: {x:?}")
         }
         None => bail!("Server disconnected before finishing login"),
     };
+
+    dbg!(base64::encode(password.as_bytes()));
     let finish_login_result = client_state
         .state
         .finish(
             password.as_bytes(),
-            registration_response,
+            dbg!(login_response),
             ClientLoginFinishParameters::default(),
         )
         .map_err(|e| Error::msg(format!("OPAQUE ClientLogin finish failed: {e:?}")))?;
+    dbg!("to server >>>", base64::encode(finish_login_result.message.serialize().to_vec()));
     tx.send(StreamToServer {
         sequence: 0,
         client_tick: 0,

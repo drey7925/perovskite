@@ -297,6 +297,9 @@ impl ServerBuilder {
         for action in self.startup_actions {
             action(&game_state)?;
         }
+        tracing::info!("!!!!!!!!!!!!");
+        tracing::info!("TEST ONLY binary for debugging login issues, DO NOT USE REAL PASSWORDS");
+        tracing::info!("!!!!!!!!!!!!");
         Server::new(self.runtime, game_state, addr)
     }
 

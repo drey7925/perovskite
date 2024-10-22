@@ -118,7 +118,14 @@ impl MainMenu {
                     .strong(),
                 );
             }
-
+            ui.label(
+                RichText::new(
+                    "TEST ONLY binary for debugging login issues, DO NOT USE REAL PASSWORDS",
+                )
+                    .color(Color32::RED)
+                    .size(16.0)
+                    .strong(),
+            );
             ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                 let label = ui.label("Server address: ");
                 let editor = TextEdit::singleline(&mut self.host_field);

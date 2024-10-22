@@ -10,11 +10,11 @@ maintenance = { status = "experimental" }
 
 [dependencies]
 anyhow = "1.0.70"
-argon2 = "0.4.1"
+argon2 = "0.5.3"
 bitvec = "1.0.1"
 bytemuck = { version = "1.16.1", features = ["derive"] }
 cgmath = "0.18.0"
-opaque-ke = { version = "2.0.0", features = ["argon2"] }
+opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
 parking_lot = "0.12.1"
 prost = "0.13.1"
 prost-types = "0.13.1"
