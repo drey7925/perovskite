@@ -243,17 +243,6 @@ dependencies = [
 
 [[package]]
 name = "argon2"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db4ce4441f99dbd377ca8a8f57b698c44d0d6e712d8329b5040da5a64aa1ce73"
-dependencies = [
- "base64ct",
- "blake2",
- "password-hash 0.4.2",
-]
-
-[[package]]
-name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
@@ -261,7 +250,7 @@ dependencies = [
  "base64ct",
  "blake2",
  "cpufeatures",
- "password-hash 0.5.0",
+ "password-hash",
 ]
 
 [[package]]
@@ -3201,11 +3190,11 @@ checksum = "0ab1bc2a289d34bd04a330323ac98a1b4bc82c9d9fcb1e66b63caa84da26b575"
 
 [[package]]
 name = "opaque-ke"
-version = "3.0.0-pre.5"
+version = "2.1.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c31c28868a403f966e08c9e6f84c5068cf116df38f3b8690b15ae64a9108a582"
+checksum = "3752668208a325d8c887827fc3e7ee8f5b4030cc036fb63ddeb02c21921b700c"
 dependencies = [
- "argon2 0.5.3",
+ "argon2",
  "curve25519-dalek",
  "derive-where",
  "digest",
@@ -3291,17 +3280,6 @@ dependencies = [
 
 [[package]]
 name = "password-hash"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7676374caaee8a325c9e7a2ae557f216c5563a171d6997b0ef8a65af35147700"
-dependencies = [
- "base64ct",
- "rand_core",
- "subtle",
-]
-
-[[package]]
-name = "password-hash"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
@@ -3329,7 +3307,7 @@ version = "0.0.4"
 dependencies = [
  "anyhow",
  "arc-swap",
- "argon2 0.5.3",
+ "argon2",
  "bitvec",
  "cbloom",
  "cgmath",
@@ -3388,10 +3366,11 @@ name = "perovskite_core"
 version = "0.0.4"
 dependencies = [
  "anyhow",
- "argon2 0.5.3",
+ "argon2",
  "bitvec",
  "bytemuck",
  "cgmath",
+ "generic-array",
  "opaque-ke",
  "parking_lot",
  "prost 0.13.1",
@@ -3451,7 +3430,7 @@ name = "perovskite_server"
 version = "0.0.4"
 dependencies = [
  "anyhow",
- "argon2 0.4.1",
+ "argon2",
  "arrayvec",
  "bitvec",
  "bytemuck",
@@ -4739,9 +4718,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "subtle"
-version = "2.5.0"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "syn"
@@ -5637,9 +5616,9 @@ dependencies = [
 
 [[package]]
 name = "voprf"
-version = "0.5.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28f59c30c76e2fea54cdece6a054e2662feffa7ab19658a7887524265ee39470"
+checksum = "3e389827f1bd1fe2b69c03ee133aed75c49f03f2d021c40b88c2ff6ce5517846"
 dependencies = [
  "curve25519-dalek",
  "derive-where",
