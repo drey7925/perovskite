@@ -1,3 +1,4 @@
+use crate::game_state::settings::Supersampling;
 use crate::vulkan::shaders::{LiveRenderConfig, PipelineProvider, PipelineWrapper, SceneState};
 use crate::vulkan::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 use anyhow::{Context, Result};
@@ -8,6 +9,7 @@ use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::padded::Padded;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
 };
@@ -45,6 +47,8 @@ vulkano_shaders::shader! {
                     // Takes an NDC position and transforms it *back* to world space
                     mat4 inverse_vp_matrix;
                     vec3 sun_direction;
+                    // Used for dither
+                    float supersampling;
                 };
 
                 layout(location = 0) out vec4 global_coords_position;
@@ -66,6 +70,7 @@ vulkano_shaders::shader! {
                 // Takes an NDC position and transforms it *back* to world space
                 mat4 inverse_vp_matrix;
                 vec3 sun_direction;
+                float supersampling;
             };
             layout(location = 0) out vec4 f_color;
 
@@ -77,6 +82,13 @@ vulkano_shaders::shader! {
                 //f_color.xyz = (ngc / 2.0) + vec3(0.5, 0.5, 0.5);
                 vec3 rayleigh = vec3(5.8e-6, 13.5e-6, 33.1e-6);
                 float alignment = dot(ngc, sun_direction);
+
+                // TODO This dither has a very weak effect on banding. Implement a real dither.
+                vec2 pix = gl_FragCoord.xy / supersampling;
+                int ix = int(pix.x) % 2;
+                int iy = int(pix.y) % 2;
+                float pdither = (float(ix ^ iy) - 0.5) / 3.0;
+                alignment += pdither;
 
                 // Extinction effect strongest during sunset and after
                 float sun_height = max(-sun_direction.y, 0.0);
@@ -109,6 +121,7 @@ vulkano_shaders::shader! {
 
 pub(crate) struct SkyPipelineWrapper {
     pipeline: Arc<GraphicsPipeline>,
+    supersampling: Supersampling,
 }
 
 impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
@@ -133,7 +146,6 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
     ) -> anyhow::Result<()> {
         command_buf_builder.bind_pipeline_graphics(self.pipeline.clone())?;
         let layout = self.pipeline.layout().clone();
-
         let per_frame_data = SkyUniformData {
             inverse_vp_matrix: per_frame_config
                 .vp_matrix
@@ -143,11 +155,12 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
                 })?
                 .into(),
             sun_direction: per_frame_config.sun_direction.into(),
+            supersampling: self.supersampling.to_float(),
         };
         let per_frame_set_layout = layout
             .set_layouts()
             .get(0)
-            .with_context(|| "Sky lsayout missing set 0")?;
+            .with_context(|| "Sky layout missing set 0")?;
         let uniform_buffer = Buffer::from_data(
             ctx.memory_allocator.clone(),
             BufferCreateInfo {
@@ -264,7 +277,10 @@ impl PipelineProvider for SkyPipelineProvider {
             ..GraphicsPipelineCreateInfo::layout(layout.clone())
         };
         let pipeline = GraphicsPipeline::new(self.device.clone(), None, pipeline_info)?;
-        Ok(SkyPipelineWrapper { pipeline })
+        Ok(SkyPipelineWrapper {
+            pipeline,
+            supersampling: global_config.supersampling,
+        })
     }
 }
 
