@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use prost::Message;
 use rhai::packages::{Package, StandardPackage};
 use rhai::{def_package, OptimizationLevel, AST};
 use smallvec::SmallVec;
@@ -13,7 +14,9 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::BlockCoordinate;
-use perovskite_server::game_state::blocks::{BlockType, ExtendedData, FastBlockName};
+use perovskite_server::game_state::blocks::{
+    BlockType, ExtDataHandling, ExtendedData, FastBlockName,
+};
 use perovskite_server::game_state::client_ui::{Popup, PopupAction, UiElementContainer};
 use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::items::ItemStack;
@@ -70,7 +73,7 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
         let (core, selected_interrupt, pin_reg) =
             match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
                 if !id.equals_ignore_variant(self.ids.ok) {
-                    tracing::info!("failed variant check");
+                    tracing::info!("failed block id check");
                     return Ok(None);
                 }
                 let extended_data = match ext.as_mut() {
@@ -359,9 +362,9 @@ async fn interrupt_poll_loop(
             None => return Ok(()),
         };
         let mut variant = id.variant();
+        tracing::info!("old variant {}", variant);
         for (i, (port_mask, connectivity)) in VAR_PORT.into_iter().zip(CONN_PORT).enumerate() {
-            if (variant & port_mask == 0) ^ ((final_port & 1 << i) == 0) {
-                // falling edge
+            if (variant & port_mask == 0) ^ (final_port & (1 << i) == 0) {
                 let is_rising = (final_port & 1 << i) != 0;
                 if is_rising {
                     variant |= port_mask;
@@ -369,6 +372,7 @@ async fn interrupt_poll_loop(
                     variant &= !port_mask;
                 }
                 if let Some(target) = connectivity.eval(coord, variant) {
+                    log::info!("push edge {:?}, {:?}, {:?}", target, coord, is_rising);
                     edges.push((target, coord, is_rising.into()));
                 }
             }
@@ -445,7 +449,7 @@ fn program_microcontroller(
             }));
             let core = Arc::downgrade(&custom_data.core_state);
             extended_data.custom_data = Some(Box::new(custom_data));
-            *id = ids.ok;
+            *id = ids.ok.with_variant_of(*id);
             Ok(Some((core, id.variant())))
         })? {
             Some((c, v)) => (c, v),
@@ -495,6 +499,52 @@ impl Default for MicrocontrollerConfig {
             pending_interrupts: 0,
             external_pin_drives: 0,
             last_error: None,
+        }
+    }
+}
+
+#[derive(Message)]
+struct SerializedMicrocontrollerConfig {
+    #[prost(string, tag = "1")]
+    program: String,
+    #[prost(string, tag = "2")]
+    last_error: String,
+    #[prost(uint32, tag = "3")]
+    external_pin_drives: u32,
+    #[prost(uint32, tag = "4")]
+    pending_interrupts: u32,
+    #[prost(uint32, tag = "5")]
+    falling_interrupt_mask: u32,
+    #[prost(uint32, tag = "6")]
+    rising_interrupt_mask: u32,
+}
+impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> std::result::Result<MicrocontrollerConfig, Self::Error> {
+        Ok(MicrocontrollerConfig {
+            program: self.program,
+            last_error: if self.last_error.is_empty() {
+                None
+            } else {
+                Some(self.last_error)
+            },
+            external_pin_drives: self.external_pin_drives.try_into()?,
+            pending_interrupts: self.pending_interrupts.try_into()?,
+            falling_interrupt_mask: self.falling_interrupt_mask.try_into()?,
+            rising_interrupt_mask: self.rising_interrupt_mask.try_into()?,
+        })
+    }
+}
+impl Into<SerializedMicrocontrollerConfig> for &MicrocontrollerConfig {
+    fn into(self) -> SerializedMicrocontrollerConfig {
+        SerializedMicrocontrollerConfig {
+            program: self.program.clone(),
+            last_error: self.last_error.clone().unwrap_or_default(),
+            external_pin_drives: self.external_pin_drives.into(),
+            pending_interrupts: self.pending_interrupts.into(),
+            falling_interrupt_mask: self.falling_interrupt_mask.into(),
+            rising_interrupt_mask: self.rising_interrupt_mask.into(),
         }
     }
 }
@@ -594,7 +644,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
     );
 
     let block_modifier = |block: &mut BlockType| {
-        // TODO serialize/deserialize
+        block.extended_data_handling = ExtDataHandling::ServerSide;
         let name_ok = FastBlockName::new(UNBROKEN_NAME.0);
         let name_broken = FastBlockName::new(BROKEN_NAME.0);
         block.interact_key_handler = Some(Box::new(move |ctx, coord| {
@@ -603,7 +653,28 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
                 broken: ctx.block_types().resolve_name(&name_broken).unwrap(),
             };
             microcontroller_interaction(&ctx, coord, ids)
-        }))
+        }));
+        block.serialize_extended_data_handler = Some(Box::new(move |_ctx, data| {
+            let downcast = match data.downcast_ref::<MicrocontrollerExtendedData>() {
+                None => return Ok(None),
+                Some(x) => x,
+            };
+            let proto: SerializedMicrocontrollerConfig = (&downcast.microcontroller_config).into();
+            Ok(Some(Message::encode_to_vec(&proto)))
+        }));
+        block.deserialize_extended_data_handler = Some(Box::new(|_ctx, data| {
+            let proto = SerializedMicrocontrollerConfig::decode(data)?;
+            let program = proto.program.clone();
+            let data = MicrocontrollerExtendedData {
+                lock: 0,
+                microcontroller_config: proto.try_into()?,
+                core_state: Arc::new(tokio::sync::Mutex::new(CoreState {
+                    program,
+                    ..Default::default()
+                })),
+            };
+            Ok(Some(Box::new(data)))
+        }));
     };
 
     // Note no connectivity or circuit handlers; we want a custom block that keeps extended data so
