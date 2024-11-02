@@ -636,7 +636,7 @@ pub(crate) struct ClientState {
     pub(crate) hud: Arc<Mutex<GameHud>>,
     pub(crate) egui: Arc<Mutex<EguiUi>>,
 
-    pub(crate) pending_error: Mutex<Option<String>>,
+    pub(crate) pending_error: Mutex<Option<anyhow::Error>>,
     pub(crate) wants_exit_from_game: Mutex<bool>,
     // This is a leaf mutex - consider using some sort of atomic instead
     pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>,

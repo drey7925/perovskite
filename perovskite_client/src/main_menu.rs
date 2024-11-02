@@ -3,7 +3,7 @@ use std::ops::ControlFlow;
 use std::str::FromStr;
 use std::{ops::Deref, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
 use egui::{
     CollapsingHeader, Color32, FontId, InnerResponse, Layout, ProgressBar, RichText, TextEdit, Ui,
@@ -245,12 +245,30 @@ impl MainMenu {
                 );
             }
             GameState::ConnectError(e) => {
-                let message = e.clone();
+                let message = e.to_string();
+                let causes: Vec<_> = e.chain().map(|e| format!("> {e}")).collect();
+                let backtrace = e.backtrace().to_string();
                 egui::Window::new("Connection error")
                     .collapsible(false)
                     .show(&self.egui_gui.egui_ctx, |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
-                        ui.label(message);
+                        ui.label(&message);
+                        ui.collapsing("Details:", |ui| {
+                            let mut details = format!(
+                                "{}\n\nCause:\n{}\n\n Backtrace:\n{}",
+                                message,
+                                causes.join("\n"),
+                                backtrace
+                            );
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .show(ui, |ui| {
+                                    TextEdit::multiline(&mut details).show(ui);
+                                });
+                            if ui.button("Copy to clipboard").clicked() {
+                                ui.ctx().copy_text(details);
+                            }
+                        });
                         if ui.button("OK").clicked()
                             || ui.input(|i| i.key_pressed(egui::Key::Enter))
                         {
@@ -303,10 +321,10 @@ impl MainMenu {
                     self.show_register_popup = false;
                     if self.register_pass_field != self.confirm_pass_field {
                         *game_state =
-                            GameState::ConnectError("Passwords did not match".to_string());
+                            GameState::ConnectError(anyhow!("Passwords did not match".to_string()));
                     } else if self.register_pass_field.trim().is_empty() {
                         *game_state = GameState::ConnectError(
-                            "Please specify a non-empty password".to_string(),
+                            anyhow!("Please specify a non-empty password"),
                         );
                     } else {
                         self.settings.rcu(|x| {

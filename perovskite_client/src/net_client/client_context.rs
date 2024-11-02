@@ -12,7 +12,7 @@ use crate::{
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use futures::StreamExt;
 use log::warn;
@@ -349,14 +349,14 @@ impl InboundContext {
                     match message {
                         Err(e) => {
                             log::warn!("Server sent an error: {:?}", e);
-                            *self.shared_state.client_state.pending_error.lock() = Some(format!("{:?}", e));
+                            *self.shared_state.client_state.pending_error.lock() = Some(anyhow::Error::from(e.clone()));
                             return Err(e.into());
                         },
                         Ok(None) => {
                             log::info!("Server disconnected");
                             let mut pending_error = self.shared_state.client_state.pending_error.lock();
                             if pending_error.is_none() {
-                                *pending_error = Some("Server disconnected unexpectedly without sending a detailed error message".to_string());
+                                *pending_error = Some(anyhow!("Server disconnected unexpectedly without sending a detailed error message"));
                             }
 
                             self.shared_state.cancellation.cancel();
@@ -485,7 +485,8 @@ impl InboundContext {
                         .with_color_fixed32(message.color_argb),
                 ),
             Some(rpc::stream_to_client::ServerMessage::ShutdownMessage(msg)) => {
-                *self.shared_state.client_state.pending_error.lock() = Some(msg.clone());
+                *self.shared_state.client_state.pending_error.lock() =
+                    Some(anyhow!("Server shutdown message: {}", &msg));
             }
             Some(rpc::stream_to_client::ServerMessage::EntityUpdate(update)) => {
                 let estimated_send_time = self

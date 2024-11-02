@@ -17,7 +17,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use arc_swap::ArcSwap;
 use cgmath::{vec3, InnerSpace};
@@ -363,7 +363,7 @@ pub(crate) struct ConnectionState {
 pub(crate) enum GameState {
     MainMenu,
     Connecting(ConnectionState),
-    ConnectError(String),
+    ConnectError(anyhow::Error),
     Active(ActiveGame),
 }
 impl GameState {
@@ -387,7 +387,7 @@ impl GameState {
                     let mut game = match make_active_game(ctx, client_state) {
                         Ok(game) => game,
                         Err(e) => {
-                            *self = GameState::ConnectError(format!("{e:?}"));
+                            *self = GameState::ConnectError(e);
                             return;
                         }
                     };
@@ -398,14 +398,16 @@ impl GameState {
                             game.egui_adapter = Some(x);
                             *self = GameState::Active(game);
                         }
-                        Err(x) => *self = GameState::ConnectError(format!("{x:?}")),
+                        Err(x) => *self = GameState::ConnectError(x),
                     };
                 }
                 Ok(Err(e)) => {
-                    *self = GameState::ConnectError(format!("{e:?}"));
+                    *self = GameState::ConnectError(e);
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    *self = GameState::ConnectError("Connection thread crashed".to_string())
+                    *self = GameState::ConnectError(anyhow!(
+                        "Connection thread crashed without details".to_string()
+                    ))
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {
                     // pass
@@ -483,7 +485,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
 pub(crate) enum GameStateMutRef<'a> {
     MainMenu,
     Connecting(&'a mut ConnectionState),
-    ConnectError(&'a mut String),
+    ConnectError(&'a mut anyhow::Error),
     Active(&'a mut ActiveGame),
 }
 

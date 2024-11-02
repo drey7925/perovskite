@@ -9,7 +9,7 @@ repository = "https://github.com/drey7925/perovskite"
 maintenance = { status = "experimental" }
 
 [dependencies]
-anyhow = "1.0.70"
+anyhow = {  version = "1" , features = ["backtrace"]}
 argon2 = "0.5.3"
 bitvec = "1.0.1"
 bytemuck = { version = "1.16.1", features = ["derive"] }

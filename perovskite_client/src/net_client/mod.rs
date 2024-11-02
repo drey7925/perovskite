@@ -238,7 +238,7 @@ pub(crate) async fn connect_game(
             Ok(_) => log::info!("Inbound loop shut down normally"),
             Err(e) => {
                 log::error!("Inbound loop crashed: {e:?}");
-                *client_state_clone.pending_error.lock() = Some(e.to_string());
+                *client_state_clone.pending_error.lock() = Some(e);
             }
         }
     });

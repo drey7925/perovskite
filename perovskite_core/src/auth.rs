@@ -32,6 +32,6 @@ impl opaque_ke::ksf::Ksf for Argon2_4096_3_1 {
         &self,
         input: GenericArray<u8, L>,
     ) -> Result<GenericArray<u8, L>, InternalError> {
-        dbg!(self.inner.hash(input))
+        self.inner.hash(input)
     }
 }

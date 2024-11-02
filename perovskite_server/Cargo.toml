@@ -10,7 +10,7 @@ categories = ["game-engines"]
 maintenance = { status = "experimental" }
 
 [dependencies]
-anyhow = "1.0.70"
+anyhow = {  version = "1" , features = ["backtrace"]}
 argon2 = "0.5.3"
 bitvec = "1.0.1"
 cbloom = "0.1.3"
