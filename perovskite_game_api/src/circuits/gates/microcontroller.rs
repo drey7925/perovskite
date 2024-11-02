@@ -438,7 +438,7 @@ fn program_microcontroller(
             *id = ids.ok.with_variant_of(*id);
             Ok(Some(core))
         })? {
-            Some((c, v)) => (c, v),
+            Some(c) => c,
             None => {
                 ctx.initiator()
                     .send_chat_message(ChatMessage::new_server_message("Not a microcontroller"))?;
