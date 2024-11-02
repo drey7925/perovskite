@@ -24,6 +24,7 @@ pub(crate) mod util;
 use std::sync::atomic::AtomicBool;
 use std::{ops::Deref, sync::Arc};
 
+use anyhow::__private::kind::TraitKind;
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use image::GenericImageView;
@@ -418,9 +419,7 @@ impl VulkanWindow {
                 warn!("Ignoring swapchain creation error: {e}");
                 return Ok(());
             }
-            Err(Validated::ValidationError(e)) => {
-                return Err(e.context("Swapchain recreation failed"))
-            }
+            Err(Validated::ValidationError(e)) => return Err(anyhow::Error::from(e)),
         };
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images.clone();
