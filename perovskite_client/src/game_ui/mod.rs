@@ -153,14 +153,14 @@ async fn build_texture_atlas(
                 match handle.join() {
                     Ok(Ok(())) => {}
                     Ok(Err(x)) => {
-                        panic!("Mini render thread failed: {:?}", x);
+                        bail!("Mini render thread failed: {:?}", x);
                     }
                     Err(x) => {
-                        panic!("Mini render thread panic: {:?}", x);
+                        bail!("Mini render thread panic: {:?}", x);
                     }
                 };
             }
-            Ok::<(), Error>(())
+            Ok(())
         })
     })?;
 
