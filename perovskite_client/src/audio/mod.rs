@@ -5,12 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use cgmath::{InnerSpace, Vector3, Zero};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
-use egui::ahash::HashMap;
 use hound::WavReader;
 use parking_lot::Mutex;
 use perovskite_core::protocol::audio::{SampledSound, SoundSource};
@@ -18,8 +17,8 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_hash::FxHashMap;
 use seqlock::SeqLock;
-use tokio_util::sync::{CancellationToken, DropGuard};
-use tracy_client::{plot, span};
+use tokio_util::sync::DropGuard;
+use tracy_client::span;
 
 use crate::cache::CacheManager;
 use crate::game_state::entities::{ElapsedOrOverflow, EntityMove};
@@ -756,7 +755,7 @@ impl EngineState {
                 let distance = (player_pos - entity_pos).magnitude();
                 // distance in this sample if the player hadn't moved
                 let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
-                let distance_diff = (distance_unmoved_player - scratchpad.last_distance);
+                let distance_diff = distance_unmoved_player - scratchpad.last_distance;
 
                 scratchpad.last_distance = distance;
                 scratchpad.last_player_pos = player_pos;
@@ -1205,7 +1204,7 @@ impl ProceduralEntitySoundControlBlock {
         }
 
         let mut volume_estimate = 0.0;
-        volume_estimate += (self.turbulence.volume * (vague_speed_estimate / 70.0).powi(4));
+        volume_estimate += self.turbulence.volume * (vague_speed_estimate / 70.0).powi(4);
 
         if volume_estimate < 0.001 {
             distance_score /= 10;

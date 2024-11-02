@@ -69,9 +69,8 @@ use vulkano::{
     sync::GpuFuture,
     DeviceSize, Validated, Version,
 };
-use vulkano_win::VkSurfaceBuild;
 use winit::dpi::Size;
-use winit::window::{WindowAttributes, WindowBuilder};
+use winit::window::WindowBuilder;
 use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 
 pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
@@ -272,7 +271,11 @@ impl VulkanWindow {
                 .surface_capabilities(&surface, Default::default())
                 .expect("failed to get surface capabilities");
 
-            let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
+            let composite_alpha = caps
+                .supported_composite_alpha
+                .into_iter()
+                .next()
+                .context("No supported composite alpha")?;
             let formats = physical_device.surface_formats(&surface, Default::default())?;
             log::info!("Surface available color formats: {formats:?}");
             let (image_format, color_space) = find_best_format(formats)?;

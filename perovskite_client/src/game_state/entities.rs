@@ -619,7 +619,7 @@ impl EntityState {
         //    to the vertex format to include velocity, acceleration, and the necessary timing details.
         self.entities
             .iter()
-            .flat_map(|(id, entity)| {
+            .flat_map(|(_id, entity)| {
                 entity
                     .transforms_with_trailing_entities(player_position, time_tick)
                     .into_iter()

@@ -98,10 +98,10 @@ impl ActiveGame {
         window_size: PhysicalSize<u32>,
         ctx: &VulkanWindow,
         framebuffer: &FramebufferHolder,
-        mut command_buf_builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         input_capture: &mut InputCapture,
-    ) -> Arc<PrimaryAutoCommandBuffer> {
+    ) -> Result<Arc<PrimaryAutoCommandBuffer>> {
         let _span = span!("build renderer buffers");
+        let mut command_buf_builder = ctx.start_command_buffer()?;
         let FrameState {
             scene_state,
             mut player_position,
@@ -116,15 +116,11 @@ impl ActiveGame {
             &mut command_buf_builder,
             framebuffer.ssaa_framebuffer.clone(),
             scene_state.clear_color,
-        )
-        .unwrap();
+        )?;
 
         self.sky_pipeline
-            .bind(ctx, scene_state, &mut command_buf_builder, ())
-            .unwrap();
-        self.sky_pipeline
-            .draw(&mut command_buf_builder, (), ())
-            .unwrap();
+            .bind(ctx, scene_state, &mut command_buf_builder, ())?;
+        self.sky_pipeline.draw(&mut command_buf_builder, (), ())?;
 
         self.cube_draw_calls.clear();
         let start_tick = self.client_state.timekeeper.now();
@@ -163,8 +159,7 @@ impl ActiveGame {
             self.cube_draw_calls.push(
                 self.client_state
                     .block_renderer
-                    .make_pointee_cube(player_position, pointee)
-                    .unwrap(),
+                    .make_pointee_cube(player_position, pointee)?,
             );
         }
 
@@ -213,14 +208,14 @@ impl ActiveGame {
                     &mut command_buf_builder,
                     BlockRenderPass::Opaque,
                 )
-                .unwrap();
+                .context("Opaque pipeline bind failed")?;
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
                     &mut self.cube_draw_calls,
                     BlockRenderPass::Opaque,
                 )
-                .unwrap();
+                .context("Opaque pipeline draw failed")?;
             self.cube_pipeline
                 .bind(
                     ctx,
@@ -228,14 +223,14 @@ impl ActiveGame {
                     &mut command_buf_builder,
                     BlockRenderPass::Transparent,
                 )
-                .unwrap();
+                .context("Transparent pipeline bind failed")?;
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
                     &mut self.cube_draw_calls,
                     BlockRenderPass::Transparent,
                 )
-                .unwrap();
+                .context("Transparent pipeline draw failed")?;
             self.cube_pipeline
                 .bind(
                     ctx,
@@ -243,14 +238,14 @@ impl ActiveGame {
                     &mut command_buf_builder,
                     BlockRenderPass::Translucent,
                 )
-                .unwrap();
+                .context("Translucent bind failed")?;
             self.cube_pipeline
                 .draw(
                     &mut command_buf_builder,
                     &mut self.cube_draw_calls,
                     BlockRenderPass::Translucent,
                 )
-                .unwrap();
+                .context("Translucent pipeline draw failed")?;
         }
         let entity_draw_calls = {
             let lock = self.client_state.entities.lock();
@@ -262,14 +257,14 @@ impl ActiveGame {
         };
         self.entities_pipeline
             .bind(ctx, scene_state, &mut command_buf_builder, ())
-            .unwrap();
+            .context("Entities pipeline bind failed")?;
         self.entities_pipeline
             .draw(&mut command_buf_builder, entity_draw_calls, ())
-            .unwrap();
+            .context("Entities pipeline draw failed")?;
 
         self.flat_pipeline
             .bind(ctx, (), &mut command_buf_builder, ())
-            .unwrap();
+            .context("Flat pipeline bind failed")?;
         self.flat_pipeline
             .draw(
                 &mut command_buf_builder,
@@ -278,47 +273,42 @@ impl ActiveGame {
                     .hud
                     .lock()
                     .update_and_render(ctx, &self.client_state)
-                    .unwrap(),
+                    .context("HUD update-and-render failed")?,
                 (),
             )
-            .unwrap();
+            .context("Flat pipeline draw failed")?;
 
-        command_buf_builder
-            .end_render_pass(SubpassEndInfo {
-                ..Default::default()
-            })
-            .unwrap();
+        command_buf_builder.end_render_pass(SubpassEndInfo {
+            ..Default::default()
+        })?;
         // With the render pass done, blit to the final framebuffer
         framebuffer
             .blit_supersampling(&mut command_buf_builder)
-            .unwrap();
+            .context("Supersampling blit failed")?;
         ctx.start_post_blit_render_pass(
             &mut command_buf_builder,
             framebuffer.post_blit_framebuffer.clone(),
         )
-        .unwrap();
+        .context("Start post-blit render pass failed")?;
 
         // Then draw the UI
         self.egui_adapter
             .as_mut()
-            .unwrap()
+            .context("Internal error: egui adapter missing")?
             .draw(
                 ctx,
                 &mut command_buf_builder,
                 &self.client_state,
                 input_capture,
             )
-            .unwrap();
+            .context("Egui draw failed")?;
 
-        command_buf_builder
-            .end_render_pass(SubpassEndInfo {
-                ..Default::default()
-            })
-            .unwrap();
+        command_buf_builder.end_render_pass(SubpassEndInfo {
+            ..Default::default()
+        })?;
         command_buf_builder
             .build()
             .with_context(|| "Command buffer build failed")
-            .unwrap()
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
@@ -350,7 +340,10 @@ impl ActiveGame {
             )?
         };
         self.sky_pipeline = self.sky_provider.make_pipeline(ctx, (), &global_config)?;
-        self.egui_adapter.as_mut().unwrap().notify_resize(ctx)?;
+        self.egui_adapter
+            .as_mut()
+            .context("Missing egui adapter")?
+            .notify_resize(ctx)?;
         Ok(())
     }
 }
@@ -363,7 +356,7 @@ pub(crate) struct ConnectionState {
 pub(crate) enum GameState {
     MainMenu,
     Connecting(ConnectionState),
-    ConnectError(anyhow::Error),
+    Error(anyhow::Error),
     Active(ActiveGame),
 }
 impl GameState {
@@ -372,7 +365,7 @@ impl GameState {
             GameState::MainMenu => GameStateMutRef::MainMenu,
             GameState::Connecting(x) => GameStateMutRef::Connecting(x),
             GameState::Active(x) => GameStateMutRef::Active(x),
-            GameState::ConnectError(x) => GameStateMutRef::ConnectError(x),
+            GameState::Error(x) => GameStateMutRef::ConnectError(x),
         }
     }
     fn update_if_connected(
@@ -383,11 +376,11 @@ impl GameState {
     ) {
         if let GameState::Connecting(state) = self {
             match state.result.try_recv() {
-                Ok(Ok(mut client_state)) => {
+                Ok(Ok(client_state)) => {
                     let mut game = match make_active_game(ctx, client_state) {
                         Ok(game) => game,
                         Err(e) => {
-                            *self = GameState::ConnectError(e);
+                            *self = GameState::Error(e);
                             return;
                         }
                     };
@@ -398,14 +391,14 @@ impl GameState {
                             game.egui_adapter = Some(x);
                             *self = GameState::Active(game);
                         }
-                        Err(x) => *self = GameState::ConnectError(x),
+                        Err(x) => *self = GameState::Error(x),
                     };
                 }
                 Ok(Err(e)) => {
-                    *self = GameState::ConnectError(e);
+                    *self = GameState::Error(e);
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    *self = GameState::ConnectError(anyhow!(
+                    *self = GameState::Error(anyhow!(
                         "Connection thread crashed without details".to_string()
                     ))
                 }
@@ -416,7 +409,7 @@ impl GameState {
         } else if let GameState::Active(game) = self {
             let pending_error = game.client_state.pending_error.lock().take();
             if let Some(err) = pending_error {
-                *self = GameState::ConnectError(err)
+                *self = GameState::Error(err)
             } else if game.client_state.cancel_requested() {
                 if *game.client_state.wants_exit_from_game.lock() {
                     *control_flow = ControlFlow::ExitWithCode(0);
@@ -668,7 +661,9 @@ impl GameRenderer {
                         self.ctx.recreate_swapchain(size, self.settings.load().render.supersampling).unwrap();
                         self.ctx.viewport.extent = size.into();
                         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                            game.handle_resize(&mut self.ctx).unwrap();
+                            if let Err(e) = game.handle_resize(&mut self.ctx) {
+                                *game_lock = GameState::Error(e)
+                            };
                         }
                     }
 
@@ -711,23 +706,30 @@ impl GameRenderer {
                     let window_size = self.ctx.window.inner_size();
 
                     let fb_holder = &self.ctx.framebuffers[image_i as usize];
-                    // From https://vulkano.rs/compute_pipeline/descriptor_sets.html:
-                    // Once you have created a descriptor set, you may also use it with other pipelines,
-                    // as long as the bindings' types match those the pipelines' shaders expect.
-                    // But Vulkan requires that you provide a pipeline whenever you create a descriptor set;
-                    // you cannot create one independently of any particular pipeline.
-                    let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
 
-                    let command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut()
+                    let game_command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut()
                     {
-                        game.build_command_buffers(
+                        match game.build_command_buffers(
                             window_size,
                             &self.ctx,
                             fb_holder,
-                            command_buf_builder,
                             &mut input_capture,
-                        )
+                        ) {
+                            Ok(x) => {Some(x)}
+                            Err(e) => {
+                                *game_lock = GameState::Error(e);
+                                None
+                            }
+                        }
                     } else {
+                        None
+                    };
+                    let command_buffers = if let Some(command_buffers) = game_command_buffers {
+                        command_buffers
+                    } else {
+                        // either we're in the main menu or we got an error building the real
+                        // game buffers
+                        let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
                         // we're not in the active game, allow the IME
                         self.ctx.window.set_ime_allowed(true);
                         self.ctx

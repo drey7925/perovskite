@@ -169,7 +169,7 @@ impl EntityPipelineProvider {
 
     pub(crate) fn build_pipeline(
         &self,
-        ctx: &VulkanContext,
+        _ctx: &VulkanContext,
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,
@@ -205,7 +205,6 @@ impl EntityPipelineProvider {
                 front_face: FrontFace::CounterClockwise,
                 ..Default::default()
             }),
-            // TODO multisample state later when we have MSAA
             multisample_state: Some(MultisampleState::default()),
             viewport_state: Some(ViewportState {
                 viewports: smallvec![Viewport {

@@ -146,8 +146,6 @@ impl EguiUi {
         input_capture: &mut InputCapture,
         vk_ctx: &VulkanWindow,
     ) {
-        let mut want_recreate = false;
-
         self.scale = ctx.input(|i| i.pixels_per_point);
         // TODO have more things controlled by the scale. e.g. font sizes?
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::PlusEquals)) {

@@ -244,7 +244,7 @@ impl MainMenu {
                     },
                 );
             }
-            GameState::ConnectError(e) => {
+            GameState::Error(e) => {
                 let message = e.to_string();
                 let causes: Vec<_> = e.chain().map(|e| format!("> {e}")).collect();
                 let backtrace = e.backtrace().to_string();
@@ -321,9 +321,9 @@ impl MainMenu {
                     self.show_register_popup = false;
                     if self.register_pass_field != self.confirm_pass_field {
                         *game_state =
-                            GameState::ConnectError(anyhow!("Passwords did not match".to_string()));
+                            GameState::Error(anyhow!("Passwords did not match".to_string()));
                     } else if self.register_pass_field.trim().is_empty() {
-                        *game_state = GameState::ConnectError(
+                        *game_state = GameState::Error(
                             anyhow!("Please specify a non-empty password"),
                         );
                     } else {
