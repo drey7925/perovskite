@@ -17,7 +17,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rocksdb::{Options, ReadOptions, DB};
+use rocksdb::{ReadOptions, DB};
 use tracy_client::span;
 
 use super::database_engine::GameDatabase;

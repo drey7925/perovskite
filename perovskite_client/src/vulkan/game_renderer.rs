@@ -25,25 +25,17 @@ use log::info;
 
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
-use tracy_client::GpuContextType::Vulkan;
 use tracy_client::{plot, span, Client};
-use vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers;
-use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, BlitImageInfo, RenderPassBeginInfo, SubpassBeginInfo,
-    SubpassContents, SubpassEndInfo,
-};
-use vulkano::image::sampler::Filter;
+use vulkano::command_buffer::SubpassEndInfo;
 use vulkano::render_pass::Subpass;
 use vulkano::{
     command_buffer::PrimaryAutoCommandBuffer,
-    render_pass::Framebuffer,
     swapchain::{self, SwapchainPresentInfo},
     sync::{future::FenceSignalFuture, GpuFuture},
     Validated, VulkanError,
 };
 
 use winit::event::ElementState;
-use winit::window::{ImePurpose, WindowId};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
@@ -63,10 +55,10 @@ use crate::{
 use super::{
     shaders::{
         cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
-        egui_adapter::{self, EguiAdapter},
+        egui_adapter::EguiAdapter,
         entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
     },
-    CommandBufferBuilder, FramebufferHolder, VulkanContext, VulkanWindow,
+    FramebufferHolder, VulkanContext, VulkanWindow,
 };
 
 pub(crate) struct ActiveGame {
@@ -680,7 +672,7 @@ impl GameRenderer {
                                 }
                                 return;
                             }
-                            Err(e) => panic!("failed to acquire next image: {e}"),
+                            Err(e) => panic!("failed to acquire next image: {:?}", e),
                         };
                     Client::running()
                         .expect("tracy client must be running")

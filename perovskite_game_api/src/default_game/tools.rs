@@ -17,7 +17,6 @@ use crate::default_game::basic_blocks::ores::{DIAMOND_PIECE, GOLD_INGOT, IRON_IN
 use crate::default_game::foliage::STICK_ITEM;
 use crate::default_game::recipes::RecipeSlot;
 use crate::default_game::{item_groups, DefaultGameBuilder};
-use crate::game_builder::StaticItemName;
 use crate::{game_builder::StaticTextureName, include_texture_bytes};
 
 use super::block_groups::BRITTLE;

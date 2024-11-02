@@ -14,10 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use perovskite_core::protocol::audio::SampledSound;
 use sha2::Digest;
-use std::io::Cursor;
 use std::{
     collections::HashMap,
     fs::File,

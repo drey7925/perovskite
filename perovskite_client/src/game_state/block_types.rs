@@ -4,9 +4,7 @@ use perovskite_core::block_id::BlockId;
 use bitvec::prelude as bv;
 use perovskite_core::constants::blocks::AIR;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
-use perovskite_core::protocol::blocks::{
-    self as blocks_proto, BlockTypeDef, CubeRenderInfo, CubeRenderMode,
-};
+use perovskite_core::protocol::blocks::{BlockTypeDef, CubeRenderInfo, CubeRenderMode};
 use rustc_hash::FxHashMap;
 
 use super::make_fallback_blockdef;

@@ -24,7 +24,6 @@ use opaque_ke::{
     ClientLoginFinishParameters, ClientRegistrationFinishParameters, CredentialResponse,
     RegistrationResponse,
 };
-use parking_lot::Mutex;
 use perovskite_core::protocol::game_rpc::GetAudioDefsRequest;
 use perovskite_core::{
     auth::PerovskiteOpaqueAuth,
@@ -38,7 +37,7 @@ use perovskite_core::{
 use rand::rngs::OsRng;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Certificate, ClientTlsConfig};
+use tonic::transport::ClientTlsConfig;
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
@@ -50,7 +49,7 @@ use crate::{
         block_types::ClientBlockTypeManager, items::ClientItemManager, settings::GameSettings,
         timekeeper::Timekeeper, ClientState,
     },
-    vulkan::{block_renderer::BlockRenderer, entity_renderer::EntityRenderer, VulkanWindow},
+    vulkan::{block_renderer::BlockRenderer, entity_renderer::EntityRenderer},
 };
 
 mod client_context;

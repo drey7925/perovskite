@@ -6,12 +6,9 @@ use crate::{
     include_texture_bytes,
 };
 
-use crate::circuits::events::CircuitHandlerContext;
 use anyhow::Result;
-use lazy_static::lazy_static;
-use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::{block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE};
-use perovskite_server::game_state::{blocks::FastBlockName, event::HandlerContext};
+use perovskite_server::game_state::event::HandlerContext;
 use smallvec::SmallVec;
 
 use super::{

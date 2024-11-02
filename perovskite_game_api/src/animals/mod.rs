@@ -4,7 +4,6 @@ use crate::include_texture_bytes;
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::chat::{ChatMessage, SERVER_ERROR_COLOR};
-use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol;
 use perovskite_core::protocol::items::item_def::QuantityType;
@@ -23,9 +22,7 @@ use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 
 use anyhow::Result;
-use perovskite_core::constants::block_groups::{
-    DEFAULT_LIQUID, DEFAULT_SOLID, INSTANT_DIG, NOT_DIGGABLE, TOOL_REQUIRED,
-};
+use perovskite_core::constants::block_groups::DEFAULT_LIQUID;
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::{Empty, InteractionRule};
 
@@ -45,10 +42,10 @@ impl EntityCoroutine for DuckCoroutine {
     fn plan_move(
         mut self: Pin<&mut Self>,
         services: &EntityCoroutineServices<'_>,
-        current_position: Vector3<f64>,
-        whence: Vector3<f64>,
-        when: f32,
-        queue_space: usize,
+        _current_position: Vector3<f64>,
+        _whence: Vector3<f64>,
+        _when: f32,
+        _queue_space: usize,
     ) -> CoroutineResult {
         let rng = &mut rand::thread_rng();
         // Stop and wait in one place, probability 0.5
@@ -100,7 +97,7 @@ impl EntityCoroutine for DuckCoroutine {
                 },
             ));
         }
-        let mut dist = WeightedIndex::new(weights).unwrap();
+        let dist = WeightedIndex::new(weights).unwrap();
         let chosen = outcomes[dist.sample(rng)];
         let last_coord_f64 = Vector3::new(
             self.last_coord.x as f64,

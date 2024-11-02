@@ -40,7 +40,7 @@ use vulkano::{
     pipeline::{
         graphics::{
             color_blend::ColorBlendState,
-            depth_stencil::{CompareOp, DepthState, DepthStencilState},
+            depth_stencil::{DepthState, DepthStencilState},
             input_assembly::InputAssemblyState,
             rasterization::RasterizationState,
             vertex_input::Vertex,

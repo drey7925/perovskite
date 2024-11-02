@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, Result};
 
 use itertools::Itertools;
 use perovskite_core::{
@@ -448,7 +447,9 @@ struct DbFailureInjectionChatHandler;
 #[cfg(feature = "db_failure_injection")]
 #[async_trait]
 impl ChatCommandHandler for DbFailureInjectionChatHandler {
-    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+    async fn handle(&self, message: &str, _context: &HandlerContext<'_>) -> Result<()> {
+        use anyhow::ensure;
+        use std::sync::atomic::Ordering;
         let params = message.split_whitespace().collect::<Vec<_>>();
 
         if params.len() != 3 {
@@ -464,7 +465,7 @@ impl ChatCommandHandler for DbFailureInjectionChatHandler {
         Ok(())
     }
 
-    fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {
+    fn should_show_in_help_menu(&self, _context: &HandlerContext<'_>) -> bool {
         true
     }
 }

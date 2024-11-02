@@ -14,11 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::convert::Infallible;
 use std::fmt::Debug;
-use std::io::Error;
-use std::pin::Pin;
-use std::task::Poll;
 use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -261,18 +257,12 @@ impl ServerBuilder {
     }
 
     #[cfg(not(feature = "db_failure_injection"))]
-    fn make_rocksdb_backend(
-        mut db_dir: PathBuf,
-        mut options: Options,
-    ) -> Result<Arc<dyn GameDatabase>> {
+    fn make_rocksdb_backend(db_dir: PathBuf, options: Options) -> Result<Arc<dyn GameDatabase>> {
         Ok(Arc::new(RocksDbBackend::new(db_dir, options)?))
     }
 
     #[cfg(feature = "db_failure_injection")]
-    fn make_rocksdb_backend(
-        mut db_dir: PathBuf,
-        mut options: Options,
-    ) -> Result<Arc<dyn GameDatabase>> {
+    fn make_rocksdb_backend(db_dir: PathBuf, options: Options) -> Result<Arc<dyn GameDatabase>> {
         use crate::database::failure_injection::FailureInjectedDbWrapper;
         tracing::warn!("This server is running with DB failure injection on. This is DANGEROUS and meant only for development.");
         Ok(Arc::new(FailureInjectedDbWrapper::new(
@@ -397,7 +387,7 @@ impl ServerBuilder {
     }
 
     fn build_tls_config(data_dir: PathBuf) -> Result<LoadedTlsConfig> {
-        let mut tls_config_file = data_dir.join("tls.ron");
+        let tls_config_file = data_dir.join("tls.ron");
 
         if !tls_config_file.exists() {
             log::info!(

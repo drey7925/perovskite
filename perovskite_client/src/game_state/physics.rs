@@ -21,10 +21,7 @@ use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3, Zero};
 use perovskite_core::{
     constants::permissions,
     coordinates::BlockCoordinate,
-    protocol::blocks::{
-        block_type_def::{self, PhysicsInfo},
-        BlockTypeDef,
-    },
+    protocol::blocks::{block_type_def::PhysicsInfo, BlockTypeDef},
 };
 
 use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};

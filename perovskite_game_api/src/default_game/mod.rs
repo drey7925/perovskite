@@ -17,7 +17,6 @@ use std::sync::Arc;
 use crate::game_builder::{GameBuilder, GameBuilderExtension, StaticTextureName};
 
 use anyhow::Result;
-use cgmath::vec3;
 use perovskite_core::protocol;
 
 use crate::include_texture_bytes;

@@ -14,14 +14,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::PI;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Deg, ElementWise, InnerSpace, Vector3, Zero};
+use cgmath::{vec3, Deg, InnerSpace, Vector3, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
@@ -45,7 +45,7 @@ use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
 use crate::vulkan::entity_renderer::EntityRenderer;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
-use crate::vulkan::{VkAllocator, VulkanContext};
+use crate::vulkan::VulkanContext;
 
 use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;

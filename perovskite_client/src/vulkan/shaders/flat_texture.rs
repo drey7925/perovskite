@@ -29,7 +29,7 @@ use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
 use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
-use vulkano::pipeline::graphics::vertex_input::{VertexDefinition, VertexInputState};
+use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
 use vulkano::pipeline::graphics::viewport::{Scissor, Viewport};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;

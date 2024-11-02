@@ -76,7 +76,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         main_inventory_key: InventoryKey,
     ) -> Result<Popup> {
         let has_creative = permissions.iter().any(|x| x == CREATIVE);
-        let mut items = game_state
+        let items = game_state
             .item_manager()
             .registered_items()
             .filter(|item| !item.proto.groups.iter().any(|x| x == HIDDEN_FROM_CREATIVE))

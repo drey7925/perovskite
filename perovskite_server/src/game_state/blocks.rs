@@ -95,7 +95,6 @@ impl AddAssign for BlockInteractionResult {
     }
 }
 
-use crate::media::SoundKey;
 pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.

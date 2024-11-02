@@ -12,7 +12,7 @@ use crate::{
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Result};
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use futures::StreamExt;
 use log::warn;

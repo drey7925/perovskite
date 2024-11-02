@@ -31,7 +31,7 @@ use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
 use vulkano::pipeline::graphics::viewport::Scissor;
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
-use vulkano::pipeline::{PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
@@ -58,7 +58,6 @@ use crate::vulkan::{
     CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
 };
 
-use crate::vulkan::shaders::flat_texture::FlatTextureVertex;
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
     LiveRenderConfig, PipelineProvider, PipelineWrapper,

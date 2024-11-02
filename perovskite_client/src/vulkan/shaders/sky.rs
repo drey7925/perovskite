@@ -5,11 +5,10 @@ use anyhow::{Context, Result};
 use cgmath::SquareMatrix;
 use smallvec::smallvec;
 use std::sync::Arc;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::padded::Padded;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
 };
@@ -18,7 +17,7 @@ use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, RasterizationState};
 use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
-use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexInputState};
+use vulkano::pipeline::graphics::vertex_input::VertexInputState;
 use vulkano::pipeline::graphics::viewport::{Scissor, Viewport, ViewportState};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
@@ -130,8 +129,8 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
     fn draw<L>(
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
-        draw_calls: (),
-        pass: Self::PassIdentifier,
+        _draw_calls: (),
+        _pass: Self::PassIdentifier,
     ) -> anyhow::Result<()> {
         builder.draw(6, 1, 0, 0)?;
         Ok(())
@@ -142,7 +141,7 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
         ctx: &VulkanContext,
         per_frame_config: SceneState,
         command_buf_builder: &mut CommandBufferBuilder<L>,
-        pass: Self::PassIdentifier,
+        _pass: Self::PassIdentifier,
     ) -> anyhow::Result<()> {
         command_buf_builder.bind_pipeline_graphics(self.pipeline.clone())?;
         let layout = self.pipeline.layout().clone();

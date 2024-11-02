@@ -3,10 +3,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use lazy_static::lazy_static;
-use parking_lot::Mutex;
 use prost::Message;
 use rhai::packages::{Package, StandardPackage};
-use rhai::{def_package, OptimizationLevel, AST};
+use rhai::{def_package, OptimizationLevel};
 use smallvec::SmallVec;
 use tokio::time::Instant;
 
@@ -19,11 +18,10 @@ use perovskite_server::game_state::blocks::{
 };
 use perovskite_server::game_state::client_ui::{Popup, PopupAction, UiElementContainer};
 use perovskite_server::game_state::event::HandlerContext;
-use perovskite_server::game_state::items::ItemStack;
 
 use crate::blocks::{AaBoxProperties, BlockBuilder, RotationMode};
 use crate::circuits::events::{make_root_context, transmit_edge, CircuitHandlerContext};
-use crate::circuits::gates::{get_side_tex, make_chip_shape, BROKEN_GATE};
+use crate::circuits::gates::{get_side_tex, make_chip_shape};
 use crate::circuits::{
     get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitBlockProperties, CircuitGameBuilder, PinState,
@@ -349,18 +347,6 @@ async fn interrupt_poll_loop(
         if !id.equals_ignore_variant(ids.ok) {
             return Ok(());
         }
-        let extended_data = match ext.as_mut() {
-            Some(x) => x,
-            None => return Ok(()),
-        };
-        let state: &mut MicrocontrollerExtendedData = match extended_data
-            .custom_data
-            .as_mut()
-            .and_then(|x| x.downcast_mut())
-        {
-            Some(x) => x,
-            None => return Ok(()),
-        };
         let mut variant = id.variant();
         tracing::info!("old variant {}", variant);
         for (i, (port_mask, connectivity)) in VAR_PORT.into_iter().zip(CONN_PORT).enumerate() {
@@ -429,7 +415,7 @@ fn program_microcontroller(
     program: String,
 ) -> Result<()> {
     tokio::task::block_in_place(|| {
-        let (core, variant) = match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
+        let core = match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
             if !ids.is_microcontroller(*id) {
                 return Ok(None);
             }
@@ -450,7 +436,7 @@ fn program_microcontroller(
             let core = Arc::downgrade(&custom_data.core_state);
             extended_data.custom_data = Some(Box::new(custom_data));
             *id = ids.ok.with_variant_of(*id);
-            Ok(Some((core, id.variant())))
+            Ok(Some(core))
         })? {
             Some((c, v)) => (c, v),
             None => {
@@ -768,7 +754,7 @@ fn microcontroller_interaction(
             return Ok(None);
         }
     };
-    let mut popup = ctx
+    let popup = ctx
         .new_popup()
         .title("Microcontroller")
         .text_field("program", "Program:", data.program, true, true)

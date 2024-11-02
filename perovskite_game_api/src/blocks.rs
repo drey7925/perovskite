@@ -21,7 +21,7 @@ use itertools::Itertools;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
-        block_groups::{self, DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID, TRIVIALLY_REPLACEABLE},
+        block_groups::{DEFAULT_GAS, DEFAULT_LIQUID, DEFAULT_SOLID, TRIVIALLY_REPLACEABLE},
         items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },

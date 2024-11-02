@@ -5,7 +5,7 @@ use egui::TextureId;
 use egui_winit_vulkano::{Gui, GuiConfig};
 use parking_lot::Mutex;
 use vulkano::{
-    command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo, SubpassContents},
+    command_buffer::{AutoCommandBufferBuilder, CommandBufferInheritanceInfo},
     image::SampleCount,
     render_pass::Subpass,
 };
@@ -21,9 +21,7 @@ use crate::game_state::settings::Supersampling;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};
-use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::image::sampler::{Filter, SamplerCreateInfo};
-use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoopWindowTarget;
 
 use super::{

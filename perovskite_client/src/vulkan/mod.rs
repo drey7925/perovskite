@@ -34,7 +34,7 @@ use texture_packer::Rect;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
 use vulkano::command_buffer::{
-    BlitImageInfo, BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo, SubpassEndInfo,
+    BlitImageInfo, BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo,
 };
 use vulkano::format::NumericFormat;
 use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
@@ -59,7 +59,7 @@ use vulkano::{
         physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue,
         QueueCreateInfo,
     },
-    format::{ClearValue, Format, FormatFeatures, NumericType},
+    format::{ClearValue, Format, FormatFeatures},
     image::{view::ImageView, ImageUsage},
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{BuddyAllocator, GenericMemoryAllocator},
@@ -307,8 +307,7 @@ impl VulkanWindow {
 
         let ssaa_render_pass =
             make_ssaa_render_pass(vk_device.clone(), color_format, depth_format)?;
-        let post_blit_render_pass =
-            make_post_blit_render_pass(vk_device.clone(), color_format, depth_format)?;
+        let post_blit_render_pass = make_post_blit_render_pass(vk_device.clone(), color_format)?;
 
         // Copied from vulkano source - they implement it only for the freelist allocator, but we
         // need it for the buddy allocator
@@ -419,7 +418,9 @@ impl VulkanWindow {
                 warn!("Ignoring swapchain creation error: {e}");
                 return Ok(());
             }
-            Err(e) => panic!("failed to recreate swapchain: {e}"),
+            Err(Validated::ValidationError(e)) => {
+                return Err(e.context("Swapchain recreation failed"))
+            }
         };
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images.clone();
@@ -556,7 +557,6 @@ pub(crate) fn make_ssaa_render_pass(
 fn make_post_blit_render_pass(
     vk_device: Arc<Device>,
     output_format: Format,
-    depth_format: Format,
 ) -> Result<Arc<RenderPass>> {
     vulkano::ordered_passes_renderpass!(
         vk_device,

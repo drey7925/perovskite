@@ -1,7 +1,6 @@
-use std::arch::x86_64::_mm_cvtss_f32;
 use std::io::Cursor;
 use std::ops::{Add, DerefMut, Range};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -486,7 +485,7 @@ impl EngineState {
                     ((control_block.start_tick.saturating_sub(buffer_start_tick) as f64)
                         / self.nanos_per_sample) as usize;
 
-                    let remaining_samples = (samples.saturating_sub(start_offset_samples)) as u64;
+                    // let remaining_samples = (samples.saturating_sub(start_offset_samples)) as u64;
                     // TODO: If a sound is truly short (fitting entirely into this buffer), we don't
                     // handle it quite right in the current prototype.
 
@@ -571,7 +570,7 @@ impl EngineState {
             1 => self.downmix_mono(data, player_state.entity_filter_extra_gain),
             2 => self.downmix_stereo(data, player_state.entity_filter_extra_gain),
             // TODO handle the messed-up sample rate here
-            x => self.downmix_mono(data, player_state.entity_filter_extra_gain),
+            _ => self.downmix_mono(data, player_state.entity_filter_extra_gain),
         }
     }
 
@@ -798,7 +797,7 @@ impl EngineState {
                     ApproachState::Passing(
                         travel_since,
                         captured_entity_location,
-                        captured_e2p,
+                        _captured_e2p,
                         captured_velocity,
                     ) => {
                         let additional_travel = (current_velocity.magnitude() as f64)

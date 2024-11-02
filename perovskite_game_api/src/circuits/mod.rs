@@ -10,7 +10,6 @@ use perovskite_server::game_state::{
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
-use std::pin::Pin;
 
 use self::events::CircuitHandlerContext;
 

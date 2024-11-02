@@ -1,6 +1,4 @@
-use std::fmt::Display;
 use std::ops::ControlFlow;
-use std::str::FromStr;
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::{anyhow, Context};
@@ -9,10 +7,7 @@ use egui::{
     CollapsingHeader, Color32, FontId, InnerResponse, Layout, ProgressBar, RichText, TextEdit, Ui,
 };
 use tokio::sync::{oneshot, watch};
-use vulkano::command_buffer::SubpassContents::SecondaryCommandBuffers;
-use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::{image::SampleCount, render_pass::Subpass};
-use winit::event::ElementState;
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
 use crate::game_state::input::{BoundAction, Keybind, KeybindSettings};
