@@ -260,6 +260,7 @@ async fn interrupt_poll_loop(
         scope.push("port", lock.port_register as rhai::INT);
         scope.push("pin", pin_reg as rhai::INT);
         scope.push("isrc", next_interrupt as rhai::INT);
+        scope.push("debug_msg", rhai::ImmutableString::new());
         let eval_result = tokio::task::block_in_place(|| {
             engine.eval_ast_with_scope::<()>(&mut scope, lock.ast.as_ref().unwrap())
         });
@@ -279,7 +280,15 @@ async fn interrupt_poll_loop(
             }
             Some(x) => x as u8,
         };
-        tracing::info!("new port: {}", lock.port_register);
+        let debug_string = match scope.get_value::<rhai::Dynamic>("debug_msg") {
+            None => "Debug string corrupted".to_string(),
+            Some(x) => truncate_at_boundary(dbg!(x.to_string()), 128),
+        };
+        tracing::info!(
+            "new port: {}, debug string {}",
+            lock.port_register,
+            &debug_string
+        );
         match ctx.game_map().try_mutate_block_atomically(
             coord,
             |id, ext| {
@@ -306,6 +315,7 @@ async fn interrupt_poll_loop(
                     return Ok(LoopOutcome::Bail("Arc mismatch"));
                 }
                 tracing::info!("Core matches");
+                state.microcontroller_config.debug_string = debug_string;
 
                 let selected_interrupt =
                     max_set_bit(state.microcontroller_config.pending_interrupts);
@@ -377,6 +387,19 @@ async fn interrupt_poll_loop(
     Ok(())
 }
 
+fn truncate_at_boundary(mut s: String, len: usize) -> String {
+    if s.len() > len {
+        let new_len = s
+            .char_indices()
+            .map(|(off, _)| off)
+            .filter(|&offset| offset < len)
+            .last()
+            .unwrap_or(0);
+        s.truncate(new_len);
+    }
+    s
+}
+
 enum LoopOutcome {
     Finish(u8),
     Continue(u8, u8),
@@ -428,7 +451,7 @@ fn program_microcontroller(
                 .custom_data
                 .take()
                 // If we have the wrong extended data here, we destroy it. But we're already convinced
-                // that this should be a microcontroller based on block ID, and are about to break it
+                // that this should be a microcontroller based on block ID, and are about to program it
                 .and_then(|x| x.downcast().ok());
             let mut custom_data = downcasted.map(|x| *x).unwrap_or_default();
             custom_data.microcontroller_config.program = program.clone();
@@ -478,6 +501,7 @@ fn program_microcontroller(
 struct MicrocontrollerConfig {
     program: String,
     last_error: Option<String>,
+    debug_string: String,
     external_pin_drives: u8,
     pending_interrupts: u8,
     falling_interrupt_mask: u8,
@@ -492,6 +516,7 @@ impl Default for MicrocontrollerConfig {
             pending_interrupts: 0,
             external_pin_drives: 0,
             last_error: None,
+            debug_string: String::new(),
         }
     }
 }
@@ -510,6 +535,9 @@ struct SerializedMicrocontrollerConfig {
     falling_interrupt_mask: u32,
     #[prost(uint32, tag = "6")]
     rising_interrupt_mask: u32,
+
+    #[prost(string, tag = "7")]
+    debug_string: String,
 }
 impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
     type Error = anyhow::Error;
@@ -522,6 +550,7 @@ impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
             } else {
                 Some(self.last_error)
             },
+            debug_string: self.debug_string,
             external_pin_drives: self.external_pin_drives.try_into()?,
             pending_interrupts: self.pending_interrupts.try_into()?,
             falling_interrupt_mask: self.falling_interrupt_mask.try_into()?,
@@ -538,6 +567,7 @@ impl Into<SerializedMicrocontrollerConfig> for &MicrocontrollerConfig {
             pending_interrupts: self.pending_interrupts.into(),
             falling_interrupt_mask: self.falling_interrupt_mask.into(),
             rising_interrupt_mask: self.rising_interrupt_mask.into(),
+            debug_string: self.debug_string.clone(),
         }
     }
 }
@@ -604,7 +634,7 @@ fn build_rhai_engine() -> rhai::Engine {
     engine.set_max_functions(8);
     engine.set_max_modules(0);
     engine.set_max_call_levels(8);
-    engine.set_max_expr_depths(64, 64);
+    engine.set_max_expr_depths(64, 32);
     engine.disable_symbol("print");
     engine.disable_symbol("debug");
     engine.disable_symbol("eval");
@@ -776,10 +806,11 @@ fn microcontroller_interaction(
         .text_field(
             "rising_mask",
             "Rising edge interrupt mask:",
-            data.falling_interrupt_mask.to_string(),
+            data.rising_interrupt_mask.to_string(),
             true,
             false,
         )
+        .button("upload", "Upload", true, true)
         .text_field(
             "error_msg",
             "Last error:",
@@ -787,7 +818,13 @@ fn microcontroller_interaction(
             false,
             false,
         )
-        .button("upload", "Upload", true, true)
+        .text_field(
+            "debug_msg",
+            "Last debug message:",
+            data.debug_string.clone(),
+            false,
+            false,
+        )
         .set_button_callback(move |resp| {
             match resp.user_action {
                 PopupAction::PopupClosed => {
