@@ -546,10 +546,10 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                                 "[ERROR]",
                                 "Failed to parse popup response: ".to_string()
                                     + e.to_string().as_str(),
-                            ))
-                            .unwrap();
+                            ))?;
                     }
                 }
+                Ok(())
             })),
     ))
 }

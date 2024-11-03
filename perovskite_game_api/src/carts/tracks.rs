@@ -1083,21 +1083,20 @@ pub(crate) fn register_tracks(
                                         .ctx
                                         .extension::<CartsGameBuilderExtension>()
                                         .as_ref()
-                                        .unwrap(),
+                                        .context("CartsGameBuilderExtension missing")?,
                                 ) {
                                     Ok(_) => {}
                                     Err(e) => {
-                                        response
-                                            .ctx
-                                            .initiator()
-                                            .send_chat_message(ChatMessage::new(
+                                        response.ctx.initiator().send_chat_message(
+                                            ChatMessage::new(
                                                 "[ERROR]",
                                                 "Failed to parse popup response: ".to_string()
                                                     + e.to_string().as_str(),
-                                            ))
-                                            .unwrap();
+                                            ),
+                                        )?;
                                     }
                                 }
+                                Ok(())
                             })),
                     ))
                 }));
@@ -1306,23 +1305,25 @@ fn register_rail_slope(
                                 .button("scan", "Scan", true, false)
                                 .button("multiscan", "Multi-Scan", true, false)
                                 .set_button_callback(Box::new(
-                                    move |response: PopupResponse<'_>| match handle_popup_response(
-                                        &response,
-                                        coord,
-                                        response.ctx.extension().as_ref().unwrap(),
-                                    ) {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            response
-                                                .ctx
-                                                .initiator()
-                                                .send_chat_message(ChatMessage::new(
-                                                    "[ERROR]",
-                                                    "Failed to parse popup response: ".to_string()
-                                                        + e.to_string().as_str(),
-                                                ))
-                                                .unwrap();
+                                    move |response: PopupResponse<'_>| {
+                                        match handle_popup_response(
+                                            &response,
+                                            coord,
+                                            response.ctx.extension().as_ref().unwrap(),
+                                        ) {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                response.ctx.initiator().send_chat_message(
+                                                    ChatMessage::new(
+                                                        "[ERROR]",
+                                                        "Failed to parse popup response: "
+                                                            .to_string()
+                                                            + e.to_string().as_str(),
+                                                    ),
+                                                )?;
+                                            }
                                         }
+                                        Ok(())
                                     },
                                 )),
                         ))

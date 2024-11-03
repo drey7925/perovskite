@@ -101,9 +101,9 @@ pub struct PopupResponse<'a> {
     pub ctx: HandlerContext<'a>,
 }
 
-type InventoryUpdateCallback = Box<dyn Fn(&Popup) + Send + Sync>;
+type InventoryUpdateCallback = Box<dyn Fn(&Popup) -> Result<()> + Send + Sync>;
 
-type ButtonCallback = Box<dyn Fn(PopupResponse) + Send + Sync>;
+type ButtonCallback = Box<dyn Fn(PopupResponse) -> Result<()> + Send + Sync>;
 
 /// A server-side representation of a custom UI drawn on the client's screen.
 /// The client and server network code will serialize popups and display them on
@@ -155,10 +155,11 @@ impl Popup {
         self
     }
 
-    pub(crate) fn invoke_inventory_action_callback(&self) {
+    pub(crate) fn invoke_inventory_action_callback(&self) -> Result<()> {
         if let Some(callback) = &self.inventory_update_callback {
-            callback(self);
+            callback(self)?;
         }
+        Ok(())
     }
 
     pub(crate) fn handle_response(
@@ -172,7 +173,7 @@ impl Popup {
             }
         }
         if let Some(callback) = &self.button_callback {
-            callback(response)
+            callback(response)?
         }
         Ok(())
     }
@@ -497,7 +498,7 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
     /// This replaces any previously set function
     fn set_inventory_action_callback<F>(mut self, callback: F) -> Self
     where
-        F: Fn(&Popup) + Send + Sync + 'static,
+        F: Fn(&Popup) -> Result<()> + Send + Sync + 'static,
     {
         self.deref_to_popup().inventory_update_callback = Some(Box::new(callback));
         self
@@ -510,7 +511,7 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
     /// This replaces any previously set function
     fn set_button_callback<F>(mut self, callback: F) -> Self
     where
-        F: Fn(PopupResponse) + Send + Sync + 'static,
+        F: Fn(PopupResponse) -> Result<()> + Send + Sync + 'static,
     {
         self.deref_to_popup().button_callback = Some(Box::new(callback));
         self

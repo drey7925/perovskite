@@ -172,127 +172,111 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
             put: Box::new(|_, _, _| Ok(None)),
         };
 
-        let button_callback = {
-            move |response: PopupResponse| {
-                if let PopupAction::ButtonClicked(x) = &response.user_action {
-                    match x.as_str() {
-                        "update_btn" => {
-                            if let Some(count) = response
+        let button_callback = move |response: PopupResponse| {
+            if let PopupAction::ButtonClicked(x) = &response.user_action {
+                match x.as_str() {
+                    "update_btn" => {
+                        if let Some(count) = response
+                            .textfield_values
+                            .get("count")
+                            .and_then(|x| x.parse::<u32>().ok())
+                        {
+                            let mut lock = creative_state_for_update.write();
+
+                            let query = response
                                 .textfield_values
-                                .get("count")
-                                .and_then(|x| x.parse::<u32>().ok())
-                            {
-                                let mut lock = creative_state_for_update.write();
+                                .get("search")
+                                .cloned()
+                                .unwrap_or_default()
+                                .trim()
+                                .to_string();
+                            if lock.last_search != query {
+                                lock.last_search = query.to_string();
 
-                                let query = response
-                                    .textfield_values
-                                    .get("search")
+                                let re = match regex::RegexBuilder::new(&query)
+                                    .case_insensitive(true)
+                                    .build()
+                                {
+                                    Ok(x) => x,
+                                    Err(regex::Error::Syntax(s)) => {
+                                        response.ctx.initiator().send_chat_message(
+                                            ChatMessage::new_server_message(format!(
+                                                "Invalid search query syntax: {}",
+                                                s
+                                            ))
+                                            .with_color(SERVER_ERROR_COLOR),
+                                        )?;
+                                        regex::RegexBuilder::new(".*").build().unwrap()
+                                    }
+                                    Err(regex::Error::CompiledTooBig(_)) => {
+                                        response
+                                            .ctx
+                                            .initiator()
+                                            .send_chat_message(
+                                                ChatMessage::new_server_message(
+                                                    "Search query too large/complex".to_string(),
+                                                )
+                                                .with_color(SERVER_ERROR_COLOR),
+                                            )
+                                            .unwrap();
+                                        regex::RegexBuilder::new(".*").build().unwrap()
+                                    }
+                                    Err(_) => {
+                                        response.ctx.initiator().send_chat_message(
+                                            ChatMessage::new_server_message(
+                                                "Unknown error parsing search query".to_string(),
+                                            )
+                                            .with_color(SERVER_ERROR_COLOR),
+                                        )?;
+                                        regex::RegexBuilder::new(".*").build().unwrap()
+                                    }
+                                };
+                                lock.items = lock
+                                    .all_items
+                                    .iter()
+                                    .filter(|x| {
+                                        re.is_match(&x.proto.item_name)
+                                            || response
+                                                .ctx
+                                                .item_manager()
+                                                .get_item(x.proto.item_name.as_str())
+                                                .map_or(false, |x| {
+                                                    x.proto.groups.iter().any(|x| re.is_match(x))
+                                                        || re.is_match(&x.proto.display_name)
+                                                        || re.is_match(&x.proto.short_name)
+                                                })
+                                    })
                                     .cloned()
-                                    .unwrap_or_default()
-                                    .trim()
-                                    .to_string();
-                                if lock.last_search != query {
-                                    lock.last_search = query.to_string();
+                                    .collect();
+                                lock.offset = 0;
+                            }
 
-                                    let re = match regex::RegexBuilder::new(&query)
-                                        .case_insensitive(true)
-                                        .build()
-                                    {
-                                        Ok(x) => x,
-                                        Err(regex::Error::Syntax(s)) => {
-                                            response
-                                                .ctx
-                                                .initiator()
-                                                .send_chat_message(
-                                                    ChatMessage::new_server_message(format!(
-                                                        "Invalid search query syntax: {}",
-                                                        s
-                                                    ))
-                                                    .with_color(SERVER_ERROR_COLOR),
-                                                )
-                                                .unwrap();
-                                            regex::RegexBuilder::new(".*").build().unwrap()
-                                        }
-                                        Err(regex::Error::CompiledTooBig(_)) => {
-                                            response
-                                                .ctx
-                                                .initiator()
-                                                .send_chat_message(
-                                                    ChatMessage::new_server_message(
-                                                        "Search query too large/complex"
-                                                            .to_string(),
-                                                    )
-                                                    .with_color(SERVER_ERROR_COLOR),
-                                                )
-                                                .unwrap();
-                                            regex::RegexBuilder::new(".*").build().unwrap()
-                                        }
-                                        Err(_) => {
-                                            response
-                                                .ctx
-                                                .initiator()
-                                                .send_chat_message(
-                                                    ChatMessage::new_server_message(
-                                                        "Unknown error parsing search query"
-                                                            .to_string(),
-                                                    )
-                                                    .with_color(SERVER_ERROR_COLOR),
-                                                )
-                                                .unwrap();
-                                            regex::RegexBuilder::new(".*").build().unwrap()
-                                        }
-                                    };
-                                    lock.items = lock
-                                        .all_items
-                                        .iter()
-                                        .filter(|x| {
-                                            re.is_match(&x.proto.item_name)
-                                                || response
-                                                    .ctx
-                                                    .item_manager()
-                                                    .get_item(x.proto.item_name.as_str())
-                                                    .map_or(false, |x| {
-                                                        x.proto
-                                                            .groups
-                                                            .iter()
-                                                            .any(|x| re.is_match(x))
-                                                            || re.is_match(&x.proto.display_name)
-                                                            || re.is_match(&x.proto.short_name)
-                                                    })
-                                        })
-                                        .cloned()
-                                        .collect();
-                                    lock.offset = 0;
-                                }
-
-                                if count >= 1 {
-                                    for item in lock.items.iter_mut() {
-                                        item.proto.quantity = match item.proto.quantity_type {
-                                            Some(item_stack::QuantityType::Stack(x)) => {
-                                                count.min(x)
-                                            }
-                                            _ => 1,
-                                        }
+                            if count >= 1 {
+                                for item in lock.items.iter_mut() {
+                                    item.proto.quantity = match item.proto.quantity_type {
+                                        Some(item_stack::QuantityType::Stack(x)) => count.min(x),
+                                        _ => 1,
                                     }
                                 }
                             }
                         }
-                        "left" => {
-                            let mut lock = creative_state_for_update.write();
-                            lock.offset = lock.offset.saturating_sub(32);
+                    }
+                    "left" => {
+                        let mut lock = creative_state_for_update.write();
+                        lock.offset = lock.offset.saturating_sub(32);
+                    }
+                    "right" => {
+                        let mut lock = creative_state_for_update.write();
+                        if (lock.offset + 32) < lock.items.len() {
+                            lock.offset += 32;
                         }
-                        "right" => {
-                            let mut lock = creative_state_for_update.write();
-                            if (lock.offset + 32) < lock.items.len() {
-                                lock.offset += 32;
-                            }
-                        }
-                        _ => {
-                            tracing::warn!("Unknown button: {:?}", x);
-                        }
+                    }
+                    _ => {
+                        tracing::warn!("Unknown button: {:?}", x);
                     }
                 }
             }
+            Ok(())
         };
         if has_creative {
             Ok(Popup::new(game_state)

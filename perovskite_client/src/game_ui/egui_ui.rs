@@ -1,5 +1,7 @@
 use anyhow::Result;
-use egui::{vec2, Button, Color32, Context, Id, Sense, Stroke, TextEdit, TextStyle, TextureId};
+use egui::{
+    vec2, Button, Color32, Context, Id, ScrollArea, Sense, Stroke, TextEdit, TextStyle, TextureId,
+};
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
 use perovskite_core::protocol::items::ItemStack;
@@ -273,16 +275,18 @@ impl EguiUi {
                     .entry((popup.popup_id, text_field.key.clone()))
                     .or_insert(text_field.initial.clone());
                 // todo support multiline, other styling
-                let editor = if text_field.multiline {
-                    TextEdit::multiline(value)
+                if text_field.multiline {
+                    ScrollArea::both()
+                        .max_width(320.0)
+                        .max_height(240.0)
+                        .show(ui, |ui| TextEdit::multiline(value).show(ui));
                 } else {
-                    TextEdit::singleline(value)
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        let label = ui.label(text_field.label.clone());
+                        ui.add_enabled(text_field.enabled, TextEdit::singleline(value))
+                            .labelled_by(label.id);
+                    });
                 };
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                    let label = ui.label(text_field.label.clone());
-                    ui.add_enabled(text_field.enabled, editor)
-                        .labelled_by(label.id);
-                });
             }
             Some(proto::ui_element::Element::Checkbox(checkbox)) => {
                 let value = self

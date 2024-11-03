@@ -4,7 +4,7 @@ use std::{
 };
 
 // This is a temporary implementation used while developing the entity system
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
@@ -319,27 +319,27 @@ fn place_cart(
         .button("spawn", "Spawn", true, true)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
             match response.user_action {
-                PopupAction::PopupClosed => return,
+                PopupAction::PopupClosed => return Ok(()),
                 PopupAction::ButtonClicked(b) => {
                     if b != "spawn" {
-                        return;
+                        return Ok(());
                     }
                 }
             }
             let cart_name = response
                 .textfield_values
                 .get("cart_name")
-                .expect("missing cart_name");
+                .context("missing cart_name")?;
             let cart_length = response
                 .textfield_values
                 .get("cart_length")
                 .expect("missing cart_length")
                 .parse::<u32>()
-                .expect("bad cart_length");
+                .context("bad cart_length")?;
             let board_cart = response
                 .checkbox_values
                 .get("board")
-                .expect("Missing board");
+                .context("Missing board")?;
 
             if let Err(e) = actually_spawn_cart(
                 config.clone(),
@@ -350,15 +350,11 @@ fn place_cart(
                 variant,
                 *board_cart,
             ) {
-                response
-                    .ctx
-                    .initiator()
-                    .send_chat_message(
-                        ChatMessage::new_server_message(e.to_string())
-                            .with_color(SERVER_ERROR_COLOR),
-                    )
-                    .unwrap();
+                response.ctx.initiator().send_chat_message(
+                    ChatMessage::new_server_message(e.to_string()).with_color(SERVER_ERROR_COLOR),
+                )?;
             }
+            Ok(())
         }));
 
     match ctx.initiator() {

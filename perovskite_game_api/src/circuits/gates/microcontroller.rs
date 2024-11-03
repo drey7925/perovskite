@@ -1,7 +1,9 @@
+use std::num::ParseIntError;
+use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use lazy_static::lazy_static;
 use prost::Message;
 use rhai::packages::{Package, StandardPackage};
@@ -413,6 +415,8 @@ fn program_microcontroller(
     coord: BlockCoordinate,
     ids: MicrocontrollerIds,
     program: String,
+    falling_mask: u8,
+    rising_mask: u8,
 ) -> Result<()> {
     tokio::task::block_in_place(|| {
         let core = match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
@@ -428,6 +432,9 @@ fn program_microcontroller(
                 .and_then(|x| x.downcast().ok());
             let mut custom_data = downcasted.map(|x| *x).unwrap_or_default();
             custom_data.microcontroller_config.program = program.clone();
+            custom_data.microcontroller_config.falling_interrupt_mask = falling_mask;
+            custom_data.microcontroller_config.rising_interrupt_mask = rising_mask;
+            custom_data.microcontroller_config.last_error = None;
             custom_data.lock = ctx.startup_counter();
             custom_data.core_state = Arc::new(tokio::sync::Mutex::new(CoreState {
                 program,
@@ -601,6 +608,7 @@ fn build_rhai_engine() -> rhai::Engine {
     engine.disable_symbol("print");
     engine.disable_symbol("debug");
     engine.disable_symbol("eval");
+    engine.disable_symbol("sleep");
     engine.set_optimization_level(OptimizationLevel::Simple);
 
     engine
@@ -759,6 +767,20 @@ fn microcontroller_interaction(
         .title("Microcontroller")
         .text_field("program", "Program:", data.program, true, true)
         .text_field(
+            "falling_mask",
+            "Falling edge interrupt mask:",
+            data.falling_interrupt_mask.to_string(),
+            true,
+            false,
+        )
+        .text_field(
+            "rising_mask",
+            "Rising edge interrupt mask:",
+            data.falling_interrupt_mask.to_string(),
+            true,
+            false,
+        )
+        .text_field(
             "error_msg",
             "Last error:",
             data.last_error.as_deref().unwrap_or("-"),
@@ -769,25 +791,64 @@ fn microcontroller_interaction(
         .set_button_callback(move |resp| {
             match resp.user_action {
                 PopupAction::PopupClosed => {
-                    return;
+                    return Ok(());
                 }
                 PopupAction::ButtonClicked(btn) => {
                     if btn != "upload" {
-                        return;
+                        return Ok(());
                     }
                 }
             }
-            program_microcontroller(
-                &resp.ctx,
-                coord,
-                ids,
+            let program = resp
+                .textfield_values
+                .get("program")
+                .context("Missing program field")?
+                .clone();
+            let falling_mask = match parse_u8(
                 resp.textfield_values
-                    .get("program")
-                    .expect("Program field")
-                    .clone(),
-            )
-            .unwrap();
+                    .get("falling_mask")
+                    .context("Missing falling mask field")?,
+            ) {
+                Ok(x) => x,
+                Err(e) => {
+                    return break_microcontroller(
+                        &resp.ctx,
+                        coord,
+                        ids,
+                        "Invalid falling interrupt mask".to_string(),
+                    )
+                }
+            };
+            let rising_mask = match parse_u8(
+                resp.textfield_values
+                    .get("rising_mask")
+                    .context("Missing rising mask field")?,
+            ) {
+                Ok(x) => x,
+                Err(e) => {
+                    return break_microcontroller(
+                        &resp.ctx,
+                        coord,
+                        ids,
+                        "Invalid rising interrupt mask".to_string(),
+                    )
+                }
+            };
+
+            program_microcontroller(&resp.ctx, coord, ids, program, falling_mask, rising_mask)
         });
 
     Ok(Some(popup))
+}
+
+fn parse_u8(s: &str) -> std::result::Result<u8, std::num::ParseIntError> {
+    if let Some(s) = s.strip_prefix("0x") {
+        u8::from_str_radix(s, 16)
+    } else if let Some(s) = s.strip_prefix("0o") {
+        u8::from_str_radix(s, 8)
+    } else if let Some(s) = s.strip_prefix("0b") {
+        u8::from_str_radix(s, 2)
+    } else {
+        u8::from_str_radix(s, 10)
+    }
 }

@@ -488,7 +488,7 @@ impl PlayerState {
                 .values()
                 .any(|x| x.id.0 == action.source_view || x.id.0 == action.destination_view)
             {
-                popup.invoke_inventory_action_callback();
+                popup.invoke_inventory_action_callback()?
             }
         }
         Ok(())

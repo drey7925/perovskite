@@ -148,25 +148,25 @@ fn track_build_popup(
         })?;
     }
     let cloned_config = config.clone();
-    popup = popup.set_button_callback(move |resp| match resp.user_action {
-        perovskite_server::game_state::client_ui::PopupAction::PopupClosed => {}
-        perovskite_server::game_state::client_ui::PopupAction::ButtonClicked(btn) => {
-            if let Err(e) = build_track(
-                &resp.ctx,
-                &cloned_config,
-                initial_coord,
-                face_dir_as_variant,
-                &btn,
-            ) {
-                resp.ctx
-                    .initiator()
-                    .send_chat_message(
+    popup = popup.set_button_callback(move |resp| {
+        match resp.user_action {
+            perovskite_server::game_state::client_ui::PopupAction::PopupClosed => {}
+            perovskite_server::game_state::client_ui::PopupAction::ButtonClicked(btn) => {
+                if let Err(e) = build_track(
+                    &resp.ctx,
+                    &cloned_config,
+                    initial_coord,
+                    face_dir_as_variant,
+                    &btn,
+                ) {
+                    resp.ctx.initiator().send_chat_message(
                         ChatMessage::new_server_message(e.to_string())
                             .with_color(SERVER_ERROR_COLOR),
-                    )
-                    .unwrap();
+                    )?;
+                }
             }
         }
+        Ok(())
     });
     Ok(popup)
 }
