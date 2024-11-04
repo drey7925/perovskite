@@ -3,11 +3,11 @@ use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use lazy_static::lazy_static;
 use prost::Message;
 use rhai::packages::{Package, StandardPackage};
-use rhai::{def_package, OptimizationLevel};
+use rhai::{def_package, ImmutableString, OptimizationLevel};
 use smallvec::SmallVec;
 use tokio::time::Instant;
 
@@ -23,6 +23,7 @@ use perovskite_server::game_state::event::HandlerContext;
 
 use crate::blocks::{AaBoxProperties, BlockBuilder, RotationMode};
 use crate::circuits::events::{make_root_context, transmit_edge, CircuitHandlerContext};
+use crate::circuits::gates::microcontroller::rhai_types::MicrocontrollerMemory;
 use crate::circuits::gates::{get_side_tex, make_chip_shape};
 use crate::circuits::{
     get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
@@ -261,6 +262,9 @@ async fn interrupt_poll_loop(
         scope.push("pin", pin_reg as rhai::INT);
         scope.push("isrc", next_interrupt as rhai::INT);
         scope.push("debug_msg", rhai::ImmutableString::new());
+        scope.push("mem_str", lock.mem_strings.clone());
+        scope.push("mem_int", lock.mem_ints.clone());
+
         let eval_result = tokio::task::block_in_place(|| {
             engine.eval_ast_with_scope::<()>(&mut scope, lock.ast.as_ref().unwrap())
         });
@@ -280,6 +284,19 @@ async fn interrupt_poll_loop(
             }
             Some(x) => x as u8,
         };
+        lock.mem_ints = match scope.get_value("mem_int") {
+            None => {
+                return break_microcontroller(&ctx, coord, ids, "mem_int corrupted".to_string());
+            }
+            Some(x) => x,
+        };
+        lock.mem_strings = match scope.get_value("mem_str") {
+            None => {
+                return break_microcontroller(&ctx, coord, ids, "mem_str corrupted".to_string());
+            }
+            Some(x) => x,
+        };
+
         let debug_string = match scope.get_value::<rhai::Dynamic>("debug_msg") {
             None => "Debug string corrupted".to_string(),
             Some(x) => truncate_at_boundary(dbg!(x.to_string()), 128),
@@ -289,6 +306,7 @@ async fn interrupt_poll_loop(
             lock.port_register,
             &debug_string
         );
+
         match ctx.game_map().try_mutate_block_atomically(
             coord,
             |id, ext| {
@@ -316,6 +334,8 @@ async fn interrupt_poll_loop(
                 }
                 tracing::info!("Core matches");
                 state.microcontroller_config.debug_string = debug_string;
+                state.microcontroller_config.mem_strings = lock.mem_strings.contents.clone();
+                state.microcontroller_config.mem_ints = lock.mem_ints.contents;
 
                 let selected_interrupt =
                     max_set_bit(state.microcontroller_config.pending_interrupts);
@@ -461,6 +481,12 @@ fn program_microcontroller(
             custom_data.lock = ctx.startup_counter();
             custom_data.core_state = Arc::new(tokio::sync::Mutex::new(CoreState {
                 program,
+                mem_strings: MicrocontrollerMemory {
+                    contents: custom_data.microcontroller_config.mem_strings.clone(),
+                },
+                mem_ints: MicrocontrollerMemory {
+                    contents: custom_data.microcontroller_config.mem_ints.clone(),
+                },
                 ..Default::default()
             }));
             let core = Arc::downgrade(&custom_data.core_state);
@@ -506,6 +532,9 @@ struct MicrocontrollerConfig {
     pending_interrupts: u8,
     falling_interrupt_mask: u8,
     rising_interrupt_mask: u8,
+    port_register: u8,
+    mem_strings: [ImmutableString; 8],
+    mem_ints: [u64; 64],
 }
 impl Default for MicrocontrollerConfig {
     fn default() -> Self {
@@ -517,6 +546,9 @@ impl Default for MicrocontrollerConfig {
             external_pin_drives: 0,
             last_error: None,
             debug_string: String::new(),
+            port_register: 0,
+            mem_strings: std::array::from_fn(|_| ImmutableString::new()),
+            mem_ints: [0; 64],
         }
     }
 }
@@ -538,11 +570,29 @@ struct SerializedMicrocontrollerConfig {
 
     #[prost(string, tag = "7")]
     debug_string: String,
+    #[prost(string, repeated, tag = "8")]
+    mem_strings: Vec<String>,
+
+    #[prost(uint64, repeated, tag = "9")]
+    mem_ints: Vec<u64>,
+    #[prost(uint32, tag = "10")]
+    port_register: u32,
 }
 impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
     type Error = anyhow::Error;
 
     fn try_into(self) -> std::result::Result<MicrocontrollerConfig, Self::Error> {
+        let mut mem_strings: Vec<_> = self
+            .mem_strings
+            .into_iter()
+            .map(|x| ImmutableString::from(x))
+            .collect();
+        ensure!(mem_strings.len() <= 8);
+        mem_strings.resize(8, ImmutableString::new());
+        let mut mem_ints = self.mem_ints;
+        ensure!(mem_ints.len() <= 64);
+        mem_ints.resize(64, 0);
+
         Ok(MicrocontrollerConfig {
             program: self.program,
             last_error: if self.last_error.is_empty() {
@@ -555,11 +605,22 @@ impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
             pending_interrupts: self.pending_interrupts.try_into()?,
             falling_interrupt_mask: self.falling_interrupt_mask.try_into()?,
             rising_interrupt_mask: self.rising_interrupt_mask.try_into()?,
+            port_register: self.port_register.try_into()?,
+            mem_strings: mem_strings
+                .try_into()
+                .map_err(|_| anyhow!("mem_strings size mismatch"))?,
+            mem_ints: mem_ints
+                .try_into()
+                .map_err(|_| anyhow!("mem_ints size mismatch"))?,
         })
     }
 }
 impl Into<SerializedMicrocontrollerConfig> for &MicrocontrollerConfig {
     fn into(self) -> SerializedMicrocontrollerConfig {
+        let mut mem_strings = self.mem_strings.iter().map(|x| x.to_string()).collect();
+        let mut mem_ints = self.mem_ints.to_vec();
+        trim_defaults(&mut mem_strings);
+        trim_defaults(&mut mem_ints);
         SerializedMicrocontrollerConfig {
             program: self.program.clone(),
             last_error: self.last_error.clone().unwrap_or_default(),
@@ -568,7 +629,23 @@ impl Into<SerializedMicrocontrollerConfig> for &MicrocontrollerConfig {
             falling_interrupt_mask: self.falling_interrupt_mask.into(),
             rising_interrupt_mask: self.rising_interrupt_mask.into(),
             debug_string: self.debug_string.clone(),
+            mem_strings,
+            mem_ints,
+            port_register: self.port_register.into(),
         }
+    }
+}
+
+fn trim_defaults<T: Default + PartialEq>(v: &mut Vec<T>) {
+    match v
+        .iter()
+        .enumerate()
+        .filter(|&(_i, x)| *x != Default::default())
+        .map(|(i, _x)| i)
+        .last()
+    {
+        Some(i) => v.truncate(i + 1),
+        None => v.truncate(0),
     }
 }
 
@@ -590,6 +667,98 @@ impl Default for MicrocontrollerExtendedData {
     }
 }
 
+mod rhai_types {
+    use rhai::{CustomType, EvalAltResult, ImmutableString, Position, TypeBuilder};
+    use std::fmt::Debug;
+
+    #[derive(Debug, Clone, Eq, PartialEq)]
+    pub(super) struct MicrocontrollerMemory<T: MicrocontrollerMemContents, const L: usize> {
+        pub(super) contents: [T; L],
+    }
+    impl<T: MicrocontrollerMemContents, const L: usize> IntoIterator for MicrocontrollerMemory<T, L> {
+        type Item = T;
+        type IntoIter = std::array::IntoIter<T, L>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.contents.into_iter()
+        }
+    }
+    impl<T: MicrocontrollerMemContents, const L: usize> Default for MicrocontrollerMemory<T, L> {
+        fn default() -> Self {
+            Self {
+                contents: std::array::from_fn(|_| Default::default()),
+            }
+        }
+    }
+
+    impl<T: MicrocontrollerMemContents, const L: usize> CustomType for MicrocontrollerMemory<T, L> {
+        fn build(mut builder: TypeBuilder<Self>) {
+            builder
+                .with_name(T::array_type_name())
+                .is_iterable()
+                .with_indexer_get_set(
+                    |vec: &mut Self, idx: i64| -> Result<T, Box<EvalAltResult>> {
+                        match idx {
+                            i @ 0..=7 => Ok(vec.contents[i as usize].clone()),
+                            _ => Err(
+                                EvalAltResult::ErrorIndexNotFound(idx.into(), Position::NONE)
+                                    .into(),
+                            ),
+                        }
+                    },
+                    |vec: &mut Self, idx: i64, value: T| -> Result<(), Box<EvalAltResult>> {
+                        match idx {
+                            i @ 0..=7 => {
+                                value.check_value()?;
+                                vec.contents[i as usize] = value;
+                                Ok(())
+                            }
+                            _ => Err(
+                                EvalAltResult::ErrorIndexNotFound(idx.into(), Position::NONE)
+                                    .into(),
+                            ),
+                        }
+                    },
+                );
+        }
+    }
+
+    const MAX_MEM_STRING_LEN: usize = 64;
+
+    pub(super) trait MicrocontrollerMemContents:
+        Debug + Clone + PartialEq + Eq + Send + Sync + Default + 'static
+    {
+        fn array_type_name() -> &'static str;
+        fn check_value(&self) -> Result<(), Box<EvalAltResult>>;
+    }
+
+    impl MicrocontrollerMemContents for ImmutableString {
+        fn array_type_name() -> &'static str {
+            "MemStrings"
+        }
+
+        fn check_value(&self) -> Result<(), Box<EvalAltResult>> {
+            if self.len() > MAX_MEM_STRING_LEN {
+                Err(EvalAltResult::ErrorDataTooLarge("MemString".into(), Position::NONE).into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+    impl MicrocontrollerMemContents for u64 {
+        fn array_type_name() -> &'static str {
+            "MemInts"
+        }
+
+        fn check_value(&self) -> Result<(), Box<EvalAltResult>> {
+            Ok(())
+        }
+    }
+}
+
+type StringMem = MicrocontrollerMemory<ImmutableString, 8>;
+type IntMem = MicrocontrollerMemory<u64, 64>;
+
 /// The actual state of the microcontroller, run on the event handler thread (or possibly on a
 /// separate tokio task)
 struct CoreState {
@@ -599,7 +768,8 @@ struct CoreState {
     last_run_times: circular_buffer::CircularBuffer<16, Instant>,
     // The core updates this; the peripherals observe it
     port_register: u8,
-    // todo: microcontroller memory
+    mem_strings: StringMem,
+    mem_ints: IntMem,
 }
 impl Default for CoreState {
     fn default() -> Self {
@@ -608,6 +778,8 @@ impl Default for CoreState {
             ast: None,
             last_run_times: circular_buffer::CircularBuffer::new(),
             port_register: 0,
+            mem_strings: MicrocontrollerMemory::default(),
+            mem_ints: MicrocontrollerMemory::default(),
         }
     }
 }
@@ -640,6 +812,9 @@ fn build_rhai_engine() -> rhai::Engine {
     engine.disable_symbol("eval");
     engine.disable_symbol("sleep");
     engine.set_optimization_level(OptimizationLevel::Simple);
+
+    engine.build_type::<IntMem>();
+    engine.build_type::<StringMem>();
 
     engine
 }
@@ -688,14 +863,21 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
         }));
         block.deserialize_extended_data_handler = Some(Box::new(|_ctx, data| {
             let proto = SerializedMicrocontrollerConfig::decode(data)?;
-            let program = proto.program.clone();
+            let microcontroller_config: MicrocontrollerConfig = proto.try_into()?;
             let data = MicrocontrollerExtendedData {
                 lock: 0,
-                microcontroller_config: proto.try_into()?,
                 core_state: Arc::new(tokio::sync::Mutex::new(CoreState {
-                    program,
+                    program: microcontroller_config.program.clone(),
+                    mem_strings: MicrocontrollerMemory {
+                        contents: microcontroller_config.mem_strings.clone(),
+                    },
+                    mem_ints: MicrocontrollerMemory {
+                        contents: microcontroller_config.mem_ints.clone(),
+                    },
                     ..Default::default()
                 })),
+
+                microcontroller_config,
             };
             Ok(Some(Box::new(data)))
         }));
@@ -816,14 +998,14 @@ fn microcontroller_interaction(
             "Last error:",
             data.last_error.as_deref().unwrap_or("-"),
             false,
-            false,
+            true,
         )
         .text_field(
             "debug_msg",
             "Last debug message:",
             data.debug_string.clone(),
             false,
-            false,
+            true,
         )
         .set_button_callback(move |resp| {
             match resp.user_action {

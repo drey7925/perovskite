@@ -277,9 +277,14 @@ impl EguiUi {
                 // todo support multiline, other styling
                 if text_field.multiline {
                     ScrollArea::both()
+                        .id_source("scroll_".to_string() + text_field.key.as_str())
                         .max_width(320.0)
                         .max_height(240.0)
-                        .show(ui, |ui| TextEdit::multiline(value).show(ui));
+                        .show(ui, |ui| {
+                            let label = ui.label(text_field.label.clone());
+                            ui.add_enabled(text_field.enabled, TextEdit::multiline(value))
+                                .labelled_by(label.id);
+                        });
                 } else {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         let label = ui.label(text_field.label.clone());
@@ -364,7 +369,7 @@ impl EguiUi {
         egui::Window::new(popup.title.clone())
             .id(Id::new(popup.popup_id))
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .show(ctx, |ui| {
                 ui.set_enabled(enabled);
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
