@@ -67,7 +67,6 @@ pub(crate) fn register_switches(
             )
             .set_allow_light_propagation(true)
             .set_display_name("Switch")
-            .register_circuit_callbacks()
             .add_modifier(Box::new(|block| {
                 block.interact_key_handler = Some(Box::new(move |ctx, coord| {
                     let switch_off = ctx
@@ -99,7 +98,8 @@ pub(crate) fn register_switches(
                     }
                     Ok(None)
                 }))
-            })),
+            }))
+            .register_circuit_callbacks(),
     )?;
 
     let switch_off_name = builder.inner.blocks().make_block_name(SWITCH_OFF.0);

@@ -785,6 +785,7 @@ fn make_unknown_block_serverside(
             light_emission: 0,
             allow_light_propagation: false,
             footstep_sound: 0,
+            tool_custom_hitbox: None,
         },
         extended_data_handling: ExtDataHandling::ServerSide,
         deserialize_extended_data_handler: Some(Box::new(
@@ -823,6 +824,7 @@ fn make_air_block() -> BlockType {
             light_emission: 0,
             allow_light_propagation: true,
             footstep_sound: 0,
+            tool_custom_hitbox: None,
         },
         ..Default::default()
     }

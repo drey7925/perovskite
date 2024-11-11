@@ -59,10 +59,31 @@ const WIRE_CONNECTIVITY_RULES: [BlockConnectivity; 12] = [
 ];
 
 fn build_wire_aabox(texture: StaticTextureName) -> AxisAlignedBoxesAppearanceBuilder {
-    let prototype = AaBoxProperties::new_single_tex(
+    let prototype = AaBoxProperties::new_custom_usage(
+        texture,
+        texture,
+        texture,
+        texture,
+        texture,
         texture,
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::None,
+        true,
+        false,
+        false,
+    );
+    let tool_hitbox_protoype = AaBoxProperties::new_custom_usage(
+        texture,
+        texture,
+        texture,
+        texture,
+        texture,
+        texture,
+        crate::blocks::TextureCropping::AutoCrop,
+        crate::blocks::RotationMode::None,
+        false,
+        false,
+        true,
     );
     AxisAlignedBoxesAppearanceBuilder::new()
         .add_box(prototype.clone(), (-0.1, 0.1), (-0.5, -0.4), (-0.1, 0.1))
@@ -122,6 +143,7 @@ fn build_wire_aabox(texture: StaticTextureName) -> AxisAlignedBoxesAppearanceBui
             (-0.5, -0.4),
             VARIANT_ZMINUS_ABOVE,
         )
+        .add_box(tool_hitbox_protoype, (-0.5, 0.5), (-0.5, -0.4), (-0.5, 0.5))
 }
 
 pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {

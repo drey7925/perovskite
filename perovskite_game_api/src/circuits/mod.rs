@@ -528,20 +528,20 @@ pub trait CircuitBlockBuilder {
 impl CircuitBlockBuilder for BlockBuilder {
     fn register_circuit_callbacks(self) -> BlockBuilder {
         self.add_modifier(Box::new(move |bt| {
-            let old_full_handler: Option<&'static FullHandler> =
-                match bt.dig_handler_full.take().map(Box::leak) {
-                    Some(x) => Some(x),
-                    None => None,
-                };
+            let old_full_handler: Option<Box<FullHandler>> = match bt.dig_handler_full.take() {
+                Some(x) => Some(x),
+                None => None,
+            };
             let block_name = FastBlockName::new(bt.client_info.short_name.clone());
             bt.dig_handler_full = Some(Box::new(move |ctx, coord, tool_stack| {
                 // Run the initial handler first, so that the map is updated before the circuit
                 // callbacks are invoked
                 // However, we need the old ID to figure out which nearby blocks need updates
-                let old_result = match &old_full_handler {
+                let old_result = match old_full_handler.as_deref() {
                     Some(old_handler) => old_handler(ctx, coord, tool_stack),
                     None => Ok(BlockInteractionResult::default()),
                 };
+                // TODO: Investigate why this doesn't work for switch + wire
                 if let Err(e) = dispatch::dig(
                     ctx.block_types()
                         .resolve_name(&block_name)
@@ -561,7 +561,7 @@ impl CircuitBlockBuilder for BlockBuilder {
         .add_item_modifier(Box::new(|item| {
             let old_handler = item.place_handler.take();
             item.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
-                let result = match &old_handler {
+                let result = match old_handler.as_deref() {
                     Some(old_handler) => old_handler(ctx, coord, anchor, tool_stack),
                     None => Ok(None),
                 };

@@ -255,6 +255,7 @@ impl BlockBuilder {
                     render_mode: CubeRenderMode::SolidOpaque.into(),
                     variant_effect: CubeVariantEffect::None.into(),
                 })),
+                tool_custom_hitbox: None,
                 physics_info: Some(PhysicsInfo::Solid(Empty {})),
             },
             variant_effect: VariantEffect::None,
@@ -398,7 +399,7 @@ impl BlockBuilder {
         appearance: AxisAlignedBoxesAppearanceBuilder,
     ) -> Self {
         self.variant_effect = if appearance
-            .proto
+            .display_proto
             .boxes
             .iter()
             .any(|b| b.rotation() == AxisAlignedBoxRotation::Nesw)
@@ -407,9 +408,13 @@ impl BlockBuilder {
         } else {
             VariantEffect::None
         };
-        self.client_info.render_info = Some(RenderInfo::AxisAlignedBoxes(appearance.proto.clone()));
-        self.client_info.physics_info =
-            Some(PhysicsInfo::SolidCustomCollisionboxes(appearance.proto));
+        self.client_info.render_info = Some(RenderInfo::AxisAlignedBoxes(
+            appearance.display_proto.clone(),
+        ));
+        self.client_info.physics_info = Some(PhysicsInfo::SolidCustomCollisionboxes(
+            appearance.collision_proto,
+        ));
+        self.client_info.tool_custom_hitbox = Some(appearance.tool_proto);
         self
     }
 
@@ -942,7 +947,7 @@ pub enum TextureCropping {
     NoCrop,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 /// How axis-aligned boxes rotate
 pub enum RotationMode {
     /// No rotation, the box always faces the same direction
@@ -963,6 +968,9 @@ pub struct AaBoxProperties {
     back: TextureReference,
     crop_mode: TextureCropping,
     rotation_mode: RotationMode,
+    is_visible: bool,
+    is_colliding: bool,
+    is_tool_hitbox: bool,
 }
 impl AaBoxProperties {
     pub fn new(
@@ -984,9 +992,38 @@ impl AaBoxProperties {
             back: back.into(),
             crop_mode,
             rotation_mode,
+            is_visible: true,
+            is_colliding: true,
+            is_tool_hitbox: true,
         }
     }
-
+    pub fn new_custom_usage(
+        left: impl Into<TextureReference>,
+        right: impl Into<TextureReference>,
+        top: impl Into<TextureReference>,
+        bottom: impl Into<TextureReference>,
+        front: impl Into<TextureReference>,
+        back: impl Into<TextureReference>,
+        crop_mode: TextureCropping,
+        rotation_mode: RotationMode,
+        is_visible: bool,
+        is_colliding: bool,
+        is_tool_hitbox: bool,
+    ) -> Self {
+        Self {
+            left: left.into(),
+            right: right.into(),
+            top: top.into(),
+            bottom: bottom.into(),
+            front: front.into(),
+            back: back.into(),
+            crop_mode,
+            rotation_mode,
+            is_visible,
+            is_colliding,
+            is_tool_hitbox,
+        }
+    }
     pub fn new_single_tex(
         texture: impl Into<TextureReference>,
         crop_mode: TextureCropping,
@@ -1002,18 +1039,25 @@ impl AaBoxProperties {
             back: tex,
             crop_mode,
             rotation_mode,
+            is_visible: true,
+            is_colliding: true,
+            is_tool_hitbox: true,
         }
     }
 }
 
 /// Block appearance builder for blocks that have custom axis-aligned box geometry
 pub struct AxisAlignedBoxesAppearanceBuilder {
-    proto: AxisAlignedBoxes,
+    display_proto: AxisAlignedBoxes,
+    collision_proto: AxisAlignedBoxes,
+    tool_proto: AxisAlignedBoxes,
 }
 impl AxisAlignedBoxesAppearanceBuilder {
     pub fn new() -> Self {
         Self {
-            proto: AxisAlignedBoxes::default(),
+            display_proto: AxisAlignedBoxes::default(),
+            collision_proto: AxisAlignedBoxes::default(),
+            tool_proto: AxisAlignedBoxes::default(),
         }
     }
 
@@ -1072,7 +1116,7 @@ impl AxisAlignedBoxesAppearanceBuilder {
     ) -> Self {
         // TODO: When slope is nonzero and the crop mode is set to autocrop, we need
         // to adjust the corners of the texture to account for the slope.
-        self.proto.boxes.push(AxisAlignedBox {
+        let the_box = AxisAlignedBox {
             x_min: x.0,
             x_max: x.1,
             y_min: y.0,
@@ -1124,7 +1168,16 @@ impl AxisAlignedBoxesAppearanceBuilder {
             top_slope_z,
             bottom_slope_x,
             bottom_slope_z,
-        });
+        };
+        if box_properties.is_visible {
+            self.display_proto.boxes.push(the_box.clone());
+        }
+        if box_properties.is_colliding {
+            self.collision_proto.boxes.push(the_box.clone());
+        }
+        if box_properties.is_tool_hitbox {
+            self.tool_proto.boxes.push(the_box);
+        }
         self
     }
 

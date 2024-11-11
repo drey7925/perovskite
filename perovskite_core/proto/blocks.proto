@@ -48,6 +48,9 @@ message BlockTypeDef {
   bool allow_light_propagation = 7;
   // The sampled sound ID when the block is stepped on, or 0 for none
   uint32 footstep_sound = 8;
+  // Custom axis-aligned boxes for the pointing raycast, if non-empty
+  // Any texture/rendering related info is ignored; rotation and variant_mask are used
+  AxisAlignedBoxes tool_custom_hitbox = 9;
 
   // How the client should render the block
   oneof render_info {

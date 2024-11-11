@@ -343,34 +343,37 @@ fn check_intersection(
     delta_inv: cgmath::Vector3<f64>,
     variant: u16,
 ) -> bool {
-    match &block_def.physics_info {
-        Some(PhysicsInfo::SolidCustomCollisionboxes(boxes)) => boxes.boxes.iter().any(|aa_box| {
-            if aa_box.variant_mask != 0 && aa_box.variant_mask & variant as u32 == 0 {
-                return false;
-            }
+    match &block_def.tool_custom_hitbox {
+        Some(boxes) => {
+            boxes.boxes.is_empty()
+                || boxes.boxes.iter().any(|aa_box| {
+                    if aa_box.variant_mask != 0 && aa_box.variant_mask & variant as u32 == 0 {
+                        return false;
+                    }
 
-            let (min, max) = apply_aabox_transformation(aa_box, block_coord, variant);
+                    let (min, max) = apply_aabox_transformation(aa_box, block_coord, variant);
 
-            let tx1 = (min.x - pos.x) * delta_inv.x;
-            let tx2 = (max.x - pos.x) * delta_inv.x;
+                    let tx1 = (min.x - pos.x) * delta_inv.x;
+                    let tx2 = (max.x - pos.x) * delta_inv.x;
 
-            let t_min = tx1.min(tx2);
-            let t_max = tx1.max(tx2);
+                    let t_min = tx1.min(tx2);
+                    let t_max = tx1.max(tx2);
 
-            let ty1 = (min.y - pos.y) * delta_inv.y;
-            let ty2 = (max.y - pos.y) * delta_inv.y;
+                    let ty1 = (min.y - pos.y) * delta_inv.y;
+                    let ty2 = (max.y - pos.y) * delta_inv.y;
 
-            let t_min = t_min.max(ty1.min(ty2));
-            let t_max = t_max.min(ty1.max(ty2));
+                    let t_min = t_min.max(ty1.min(ty2));
+                    let t_max = t_max.min(ty1.max(ty2));
 
-            let tz1 = (min.z - pos.z) * delta_inv.z;
-            let tz2 = (max.z - pos.z) * delta_inv.z;
+                    let tz1 = (min.z - pos.z) * delta_inv.z;
+                    let tz2 = (max.z - pos.z) * delta_inv.z;
 
-            let t_min = t_min.max(tz1.min(tz2));
-            let t_max = t_max.min(tz1.max(tz2));
+                    let t_min = t_min.max(tz1.min(tz2));
+                    let t_max = t_max.min(tz1.max(tz2));
 
-            t_max >= t_min && t_max >= 0.
-        }),
+                    t_max >= t_min && t_max >= 0.
+                })
+        }
         _ => true,
     }
 }
