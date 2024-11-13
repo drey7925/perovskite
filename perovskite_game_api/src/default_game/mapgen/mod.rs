@@ -617,8 +617,10 @@ impl DefaultMapgen {
         y: i32,
         z: i32,
     ) {
+        // saturating_add used here since overflow is fine, the chunk checks will all fail from
+        // wraparound
         for h in 1..=4 {
-            let coord = BlockCoordinate::new(x, y + h, z);
+            let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
             if coord.chunk() == chunk_coord {
                 chunk.set_block(coord.offset(), self.maple_tree, None);
             }
@@ -629,7 +631,11 @@ impl DefaultMapgen {
                     if i == 0 && j == 0 && h <= 4 {
                         continue;
                     }
-                    let coord = BlockCoordinate::new(x + i, y + h, z + j);
+                    let coord = BlockCoordinate::new(
+                        x.wrapping_add(i),
+                        y.wrapping_add(h),
+                        z.wrapping_add(j),
+                    );
                     if coord.chunk() == chunk_coord {
                         chunk.set_block(coord.offset(), self.maple_leaves, None);
                     }
@@ -649,7 +655,7 @@ impl DefaultMapgen {
         height: i32,
     ) {
         for h in 1..=height {
-            let coord = BlockCoordinate::new(x, y + h, z);
+            let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
             if coord.chunk() == chunk_coord {
                 chunk.set_block(coord.offset(), self.cactus, None);
             }
