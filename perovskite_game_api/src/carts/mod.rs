@@ -159,13 +159,6 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     let cart_uv_tex = StaticTextureName("carts:minecart_uv");
     include_texture_bytes!(game_builder, cart_uv_tex, "textures/cart_uv.png")?;
 
-    let _rail = game_builder.add_block(
-        BlockBuilder::new(StaticBlockName("carts:rail")).set_cube_appearance(
-            CubeAppearanceBuilder::new()
-                .set_single_texture(rail_tex)
-                .set_rotate_laterally(),
-        ),
-    )?;
     // TODO update the speedposts
     let speedpost1 = game_builder.add_block(
         BlockBuilder::new(StaticBlockName("carts:speedpost1"))
