@@ -1749,7 +1749,7 @@ impl EntityCoreArray {
                 last_move_ending_tick = tick;
             }
 
-            let estimated_t = (last_move_ending_tick - tick) as f32 / 1_000_000_000.0;
+            let estimated_t = (last_move_ending_tick as i64 - tick as i64) as f32 / 1_000_000_000.0;
 
             tracing::debug!(
                 "After applying queued moves: Estimated position {}, {}, {} @ {} ({})",
@@ -2242,7 +2242,9 @@ impl EntityShardWorker {
                 tracing::debug!("At tick {}", self.game_state.tick());
                 drop(lock);
 
-                let diff = update_awakening_tick.min(coro_awakening_tick) - start_tick;
+                let diff = update_awakening_tick
+                    .min(coro_awakening_tick)
+                    .saturating_sub(start_tick);
                 awakening_times.push(diff);
                 if awakening_times.len() > 256 {
                     tracing::info!(
