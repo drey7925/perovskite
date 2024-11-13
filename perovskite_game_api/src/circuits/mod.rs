@@ -2,14 +2,16 @@ use crate::{
     blocks::{BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, GameBuilderExtension},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
+use perovskite_server::game_state::blocks::{InlineContext, InlineHandler};
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, FastBlockName, FullHandler},
     event::HandlerContext,
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
+use std::ops::Deref;
 
 use self::events::CircuitHandlerContext;
 
@@ -528,30 +530,49 @@ pub trait CircuitBlockBuilder {
 impl CircuitBlockBuilder for BlockBuilder {
     fn register_circuit_callbacks(self) -> BlockBuilder {
         self.add_modifier(Box::new(move |bt| {
-            let old_full_handler: Option<Box<FullHandler>> = match bt.dig_handler_full.take() {
-                Some(x) => Some(x),
-                None => None,
-            };
+            let old_inline_handler: Option<Box<InlineHandler>> = bt.dig_handler_inline.take();
+            let old_full_handler: Option<Box<FullHandler>> = bt.dig_handler_full.take();
             let block_name = FastBlockName::new(bt.client_info.short_name.clone());
+
+            let checked_inline_handler: Box<InlineHandler> = match old_inline_handler {
+                None => Box::new(move |_, _, _, _| Ok(BlockInteractionResult::default())),
+                Some(x) => Box::new(move |ctx, block_type: &mut BlockId, ext_data, stack| {
+                    let expected_id = ctx
+                        .block_types()
+                        .resolve_name(&block_name)
+                        .context("We're in a handler, but the block type isn't registered?")?;
+                    if block_type.equals_ignore_variant(expected_id) {
+                        x(ctx, block_type, ext_data, stack)
+                    } else {
+                        Ok(BlockInteractionResult::default())
+                    }
+                }),
+            };
             bt.dig_handler_full = Some(Box::new(move |ctx, coord, tool_stack| {
                 // Run the initial handler first, so that the map is updated before the circuit
                 // callbacks are invoked
                 // However, we need the old ID to figure out which nearby blocks need updates
-                let old_result = match old_full_handler.as_deref() {
-                    Some(old_handler) => old_handler(ctx, coord, tool_stack),
-                    None => Ok(BlockInteractionResult::default()),
+                let block_id = ctx.game_map().get_block(coord)?;
+
+                let mut result = ctx.game_map().mutate_block_atomically(coord, |id, ext| {
+                    let ictx = ctx.game_map().make_inline_context(
+                        coord,
+                        ctx.initiator(),
+                        ctx.deref(),
+                        ctx.tick(),
+                    );
+                    checked_inline_handler(ictx, id, ext, tool_stack)
+                })?;
+
+                result += match old_full_handler.as_deref() {
+                    Some(old_handler) => old_handler(ctx, coord, tool_stack)?,
+                    None => BlockInteractionResult::default(),
                 };
-                // TODO: Investigate why this doesn't work for switch + wire
-                if let Err(e) = dispatch::dig(
-                    ctx.block_types()
-                        .resolve_name(&block_name)
-                        .expect("block name not found, yet we're in its handler"),
-                    coord,
-                    &events::make_root_context(ctx),
-                ) {
+
+                if let Err(e) = dispatch::dig(block_id, coord, &events::make_root_context(ctx)) {
                     tracing::error!("Error in circuits dig handler: {}", e);
                 }
-                old_result
+                Ok(result)
             }));
 
             bt.client_info

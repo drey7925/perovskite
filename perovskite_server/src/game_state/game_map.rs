@@ -1466,6 +1466,22 @@ impl ServerGameMap {
         Ok(result)
     }
 
+    pub fn make_inline_context<'a>(
+        &'a self,
+        coord: BlockCoordinate,
+        initiator: &EventInitiator<'a>,
+        game_state: &'a GameState,
+        tick: u64,
+    ) -> InlineContext<'a> {
+        InlineContext {
+            tick,
+            initiator: initiator.clone(),
+            location: coord,
+            block_types: self.block_type_manager(),
+            items: game_state.item_manager(),
+        }
+    }
+
     pub(crate) fn block_type_manager(&self) -> &BlockTypeManager {
         &self.block_type_manager
     }

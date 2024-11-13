@@ -105,7 +105,7 @@ pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStac
 /// mutable reference to the extended data holder, item stack used to dig), returns dropped item stacks.
 pub type InlineHandler = dyn Fn(
         InlineContext,
-        &mut BlockTypeHandle,
+        &mut BlockId,
         &mut ExtendedDataHolder,
         Option<&ItemStack>,
     ) -> Result<BlockInteractionResult>

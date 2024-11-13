@@ -2013,7 +2013,7 @@ impl EntityCoreArray {
                 let move_time = if self.recalc_at[i] == u64::MAX {
                     f32::MAX
                 } else {
-                    let diff = (self.recalc_at[i] - update_tick) as f32;
+                    let diff = self.recalc_at[i].saturating_sub(update_tick) as f32;
                     diff.max(0.0) / 1_000_000_000.0
                 };
 
