@@ -17,9 +17,9 @@ use crate::{
 };
 
 use super::{
-    events::send_device_overheat, get_live_connectivities, BlockConnectivity, CircuitBlockBuilder,
-    CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilerPrivate, CircuitHandlerContext,
-    PinState,
+    events::send_device_overheat, get_live_connectivities, BlockConnectivity, BusMessage,
+    CircuitBlockBuilder, CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilerPrivate,
+    CircuitHandlerContext, PinState,
 };
 
 pub const WIRE_BLOCK_OFF: StaticBlockName = StaticBlockName("circuits:wire_off");
@@ -237,6 +237,7 @@ pub(crate) fn recalculate_wire(
     // The coordinate of the block that signalled us
     who_signalled: BlockCoordinate,
     _new_state: PinState,
+    bus_message: Option<&BusMessage>,
 ) -> Result<()> {
     // TODO: use the edge type as an optimization hint
     // Essentially, do a breadth-first search of the wire, starting at first_wire. Signal all
@@ -247,6 +248,10 @@ pub(crate) fn recalculate_wire(
 
     // Visited blocks that we need to signal: (dest, from) -> callback to signal
     let mut need_transition_signals: FxHashMap<
+        (BlockCoordinate, BlockCoordinate),
+        &Box<dyn CircuitBlockCallbacks>,
+    > = FxHashMap::default();
+    let mut need_bus_message_signals: FxHashMap<
         (BlockCoordinate, BlockCoordinate),
         &Box<dyn CircuitBlockCallbacks>,
     > = FxHashMap::default();
@@ -304,6 +309,7 @@ pub(crate) fn recalculate_wire(
 
             // todo optimize based on the actual transition
             need_transition_signals.insert((coord, prev), callbacks);
+            need_bus_message_signals.insert((coord, prev), callbacks);
         }
     }
     for coord in visited_wires {
@@ -326,6 +332,13 @@ pub(crate) fn recalculate_wire(
 
     for ((coord, prev), callbacks) in need_transition_signals {
         callbacks.on_incoming_edge(ctx, coord, prev, pin_state)?;
+    }
+    if let Some(bus_message) = bus_message {
+        for ((coord, prev), callbacks) in need_bus_message_signals {
+            callbacks
+                .on_bus_message(ctx, coord, prev, bus_message)
+                .unwrap()
+        }
     }
 
     Ok(())

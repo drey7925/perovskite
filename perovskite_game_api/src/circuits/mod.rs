@@ -161,6 +161,8 @@ impl From<bool> for PinState {
     }
 }
 
+pub type BusMessage = ();
+
 pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     /// Called when another block is placed or removed in the vicinity, and may affect
     /// the connections made by *this* block.
@@ -192,6 +194,16 @@ pub trait CircuitBlockCallbacks: Send + Sync + 'static {
         _coordinate: BlockCoordinate,
         _from: BlockCoordinate,
         _state: PinState,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn on_bus_message(
+        &self,
+        _ctx: &CircuitHandlerContext<'_>,
+        _coordinate: BlockCoordinate,
+        _from: BlockCoordinate,
+        _message: &BusMessage,
     ) -> Result<()> {
         Ok(())
     }
@@ -724,12 +736,13 @@ mod dispatch {
 pub mod events {
     use std::ops::Deref;
 
-    use anyhow::Result;
+    use anyhow::{Error, Result};
+    use env_logger::builder;
 
     use perovskite_core::coordinates::BlockCoordinate;
     use perovskite_server::game_state::event::HandlerContext;
 
-    use super::{wire, CircuitGameStateExtension, PinState};
+    use super::{wire, BusMessage, CircuitGameStateExtension, PinState};
 
     /// A context to be used for circuits related callbacks.
     pub struct CircuitHandlerContext<'a> {
@@ -805,6 +818,26 @@ pub mod events {
         from_coord: BlockCoordinate,
         new_state: PinState,
     ) -> Result<()> {
+        transmit_edge_inner(ctx, dest_coord, from_coord, new_state, None)
+    }
+
+    pub fn transmit_bus_message(
+        ctx: &CircuitHandlerContext<'_>,
+        dest_coord: BlockCoordinate,
+        from_coord: BlockCoordinate,
+        pin_state: PinState,
+        message: BusMessage,
+    ) -> Result<()> {
+        transmit_edge_inner(ctx, dest_coord, from_coord, pin_state, Some(message))
+    }
+
+    fn transmit_edge_inner(
+        ctx: &CircuitHandlerContext,
+        dest_coord: BlockCoordinate,
+        from_coord: BlockCoordinate,
+        new_state: PinState,
+        bus_message: Option<BusMessage>,
+    ) -> Result<(), Error> {
         let next_ctx = match ctx.consume_ttl() {
             Some(x) => x,
             None => {
@@ -822,7 +855,13 @@ pub mod events {
         if dest.base_id() == circuits_ext.basic_wire_off.0
             || dest.base_id() == circuits_ext.basic_wire_on.0
         {
-            if let Err(e) = wire::recalculate_wire(&next_ctx, dest_coord, from_coord, new_state) {
+            if let Err(e) = wire::recalculate_wire(
+                &next_ctx,
+                dest_coord,
+                from_coord,
+                new_state,
+                bus_message.as_ref(),
+            ) {
                 tracing::error!("failed to recalculate wire: {}", e);
             }
             return Ok(());
@@ -837,6 +876,9 @@ pub mod events {
             }
         };
         dest_callbacks.on_incoming_edge(&next_ctx, dest_coord, from_coord, new_state)?;
+        if let Some(message) = bus_message.as_ref() {
+            dest_callbacks.on_bus_message(&next_ctx, dest_coord, from_coord, message)?;
+        }
 
         Ok(())
     }
