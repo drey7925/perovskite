@@ -93,7 +93,7 @@ impl NeighborPropagator {
             //   network thread is holding chunks and waiting for queue to unlock
             //
             // At the moment, the deadlocks are removed, but this still seems brittle.
-            let pos = self.client_state.last_position().position;
+            let pos = self.client_state.weakly_ordered_last_position().position;
             let mut lock = self.queue.lock();
             if lock.is_empty() {
                 plot!("nprop_queue_length", 0.);

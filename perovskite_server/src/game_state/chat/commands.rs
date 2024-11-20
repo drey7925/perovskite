@@ -115,7 +115,7 @@ impl CommandManager {
             context
                 .initiator
                 .send_chat_message_async(
-                    ChatMessage::new_server_message(format!("Command failed: {:?}", e))
+                    ChatMessage::new_server_message(format!("Command failed: {}", e))
                         .with_color((255, 0, 0)),
                 )
                 .await?;

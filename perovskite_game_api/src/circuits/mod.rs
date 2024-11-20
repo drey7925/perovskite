@@ -11,6 +11,7 @@ use perovskite_server::game_state::{
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
+use std::collections::HashMap;
 use std::ops::Deref;
 
 use self::events::CircuitHandlerContext;
@@ -161,7 +162,11 @@ impl From<bool> for PinState {
     }
 }
 
-pub type BusMessage = ();
+#[derive(Clone, Debug)]
+pub struct BusMessage {
+    sender: BlockCoordinate,
+    data: HashMap<String, String>,
+}
 
 pub trait CircuitBlockCallbacks: Send + Sync + 'static {
     /// Called when another block is placed or removed in the vicinity, and may affect

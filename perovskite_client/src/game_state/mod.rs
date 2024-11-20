@@ -34,6 +34,7 @@ use perovskite_core::protocol;
 use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch, SetClientState};
 use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
+use seqlock::SeqLock;
 use tokio::sync::mpsc;
 use tracy_client::span;
 use winit::event::Event;
@@ -638,8 +639,7 @@ pub(crate) struct ClientState {
 
     pub(crate) pending_error: Mutex<Option<anyhow::Error>>,
     pub(crate) wants_exit_from_game: Mutex<bool>,
-    // This is a leaf mutex - consider using some sort of atomic instead
-    pub(crate) last_position_weak: Mutex<PlayerPositionUpdate>,
+    pub(crate) last_position_weak: SeqLock<PlayerPositionUpdate>,
 
     pub(crate) timekeeper: Arc<Timekeeper>,
 
@@ -683,7 +683,7 @@ impl ClientState {
             egui: Arc::new(Mutex::new(egui)),
             pending_error: Mutex::new(None),
             wants_exit_from_game: Mutex::new(false),
-            last_position_weak: Mutex::new(PlayerPositionUpdate {
+            last_position_weak: SeqLock::new(PlayerPositionUpdate {
                 position: Vector3::zero(),
                 velocity: Vector3::zero(),
                 face_direction: (0.0, 0.0),
@@ -710,7 +710,7 @@ impl ClientState {
     /// Returns the player's last position without requiring the physics lock (which could cause a lock order violation)
     /// This may be a frame behind
     pub(crate) fn weakly_ordered_last_position(&self) -> PlayerPositionUpdate {
-        *self.last_position_weak.lock()
+        self.last_position_weak.read()
     }
 
     pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
@@ -778,7 +778,7 @@ impl ClientState {
             }
         }
 
-        *self.last_position_weak.lock() = PlayerPositionUpdate {
+        *self.last_position_weak.lock_write() = PlayerPositionUpdate {
             position: player_position,
             velocity: Vector3::zero(),
             face_direction: (az, el),
