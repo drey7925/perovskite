@@ -73,6 +73,7 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
         from: BlockCoordinate,
         incoming_state: PinState,
     ) -> Result<()> {
+        tracing::info!("incoming edge coord {coord:?}, from {from:?}, is {incoming_state:?}");
         let (core, selected_interrupt, pin_reg) =
             match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
                 if !id.equals_ignore_variant(self.ids.ok) {
@@ -193,9 +194,13 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
         &self,
         ctx: &CircuitHandlerContext<'_>,
         coord: BlockCoordinate,
-        from: BlockCoordinate,
+        _from: BlockCoordinate,
         message: &BusMessage,
     ) -> Result<()> {
+        if message.sender == coord {
+            // Got our own message back, suppress it
+            return Ok(());
+        }
         let (core, front_message, pin_reg) =
             match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
                 if !id.equals_ignore_variant(self.ids.ok) {
@@ -649,7 +654,7 @@ struct MicrocontrollerConfig {
     rising_interrupt_mask: Interrupt,
     port_register: u8,
     mem_strings: [ImmutableString; 8],
-    mem_ints: [u64; 64],
+    mem_ints: [i64; 64],
     pending_bus_messages: CircularBuffer<MAX_PENDING_BUS_MESSAGES, ProtoBusMessage>,
 }
 impl Default for MicrocontrollerConfig {
@@ -696,8 +701,8 @@ struct SerializedMicrocontrollerConfig {
     #[prost(string, repeated, tag = "8")]
     mem_strings: Vec<String>,
 
-    #[prost(uint64, repeated, tag = "9")]
-    mem_ints: Vec<u64>,
+    #[prost(int64, repeated, tag = "9")]
+    mem_ints: Vec<i64>,
     #[prost(uint32, tag = "10")]
     port_register: u32,
     #[prost(message, repeated, tag = "11")]
@@ -875,7 +880,7 @@ mod rhai_types {
             }
         }
     }
-    impl MicrocontrollerMemContents for u64 {
+    impl MicrocontrollerMemContents for i64 {
         fn array_type_name() -> &'static str {
             "MemInts"
         }
@@ -887,7 +892,7 @@ mod rhai_types {
 }
 
 type StringMem = MicrocontrollerMemory<ImmutableString, 8>;
-type IntMem = MicrocontrollerMemory<u64, 64>;
+type IntMem = MicrocontrollerMemory<i64, 64>;
 
 /// The actual state of the microcontroller, run on the event handler thread (or possibly on a
 /// separate tokio task)

@@ -843,6 +843,8 @@ pub mod events {
         new_state: PinState,
         bus_message: Option<BusMessage>,
     ) -> Result<(), Error> {
+        // TODO: Detect when new_state doesn't match what we get from sampling
+        // this would cause a mismatch depending on whether there is an intervening wire or not
         let next_ctx = match ctx.consume_ttl() {
             Some(x) => x,
             None => {

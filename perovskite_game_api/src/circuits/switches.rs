@@ -94,7 +94,7 @@ pub(crate) fn register_switches(
 
                     let cctx = make_root_context(&ctx);
                     for (dest_coord, src_coord) in transitions {
-                        transmit_edge(&cctx, dest_coord, src_coord, PinState::Low)?;
+                        transmit_edge(&cctx, dest_coord, src_coord, PinState::High)?;
                     }
                     Ok(None)
                 }))
@@ -259,7 +259,7 @@ pub(crate) fn register_switches(
 
                     let cctx = make_root_context(&ctx);
                     for (dest_coord, src_coord) in transitions {
-                        transmit_edge(&cctx, dest_coord, src_coord, PinState::Low)?;
+                        transmit_edge(&cctx, dest_coord, src_coord, PinState::High)?;
                     }
                     ctx.run_deferred_delayed(Duration::from_millis(250), move |ctx| {
                         let mut transitions: smallvec::SmallVec<[_; 2]> = smallvec::SmallVec::new();
