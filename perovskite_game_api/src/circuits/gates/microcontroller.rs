@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::num::ParseIntError;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
+use circular_buffer::CircularBuffer;
 use lazy_static::lazy_static;
 use prost::Message;
 use rhai::packages::{Package, StandardPackage};
@@ -26,8 +28,8 @@ use crate::circuits::events::{make_root_context, transmit_edge, CircuitHandlerCo
 use crate::circuits::gates::microcontroller::rhai_types::MicrocontrollerMemory;
 use crate::circuits::gates::{get_side_tex, make_chip_shape};
 use crate::circuits::{
-    get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
-    CircuitBlockProperties, CircuitGameBuilder, PinState,
+    get_incoming_pin_states, BlockConnectivity, BusMessage, CircuitBlockBuilder,
+    CircuitBlockCallbacks, CircuitBlockProperties, CircuitGameBuilder, PinState,
 };
 use crate::game_builder::{GameBuilder, StaticBlockName, StaticTextureName};
 use crate::include_texture_bytes;
@@ -136,9 +138,9 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
                     falling_interrupts,
                     state.microcontroller_config.pending_interrupts
                 ));
+                state.microcontroller_config.external_pin_drives = pin_reg;
                 let selected_interrupt =
                     max_set_bit(state.microcontroller_config.pending_interrupts);
-                state.microcontroller_config.external_pin_drives = pin_reg;
                 if selected_interrupt == 0 {
                     // No work to do
                     return Ok(None);
@@ -175,11 +177,99 @@ impl CircuitBlockCallbacks for MicrocontrollerCircuitCallbacks {
         // The core itself is responsible for running the code, and then updating the game map
         // (under the advisory lock)
         ctx.run_deferred_async(|ctx2| {
-            interrupt_poll_loop(ctx2, coord, core, selected_interrupt, pin_reg, self.ids)
+            interrupt_poll_loop(
+                ctx2,
+                coord,
+                core,
+                selected_interrupt,
+                pin_reg,
+                self.ids,
+                None,
+            )
         });
         Ok(())
     }
+    fn on_bus_message(
+        &self,
+        ctx: &CircuitHandlerContext<'_>,
+        coord: BlockCoordinate,
+        from: BlockCoordinate,
+        message: &BusMessage,
+    ) -> Result<()> {
+        let (core, front_message, pin_reg) =
+            match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
+                if !id.equals_ignore_variant(self.ids.ok) {
+                    tracing::info!("failed block id check");
+                    return Ok(None);
+                }
+                let extended_data = match ext.as_mut() {
+                    Some(x) => x,
+                    None => return Ok(None),
+                };
+                let state: &mut MicrocontrollerExtendedData = match extended_data
+                    .custom_data
+                    .as_mut()
+                    .and_then(|x| x.downcast_mut())
+                {
+                    Some(x) => x,
+                    None => return Ok(None),
+                };
+                tracing::info!("downcasted");
+                if state.microcontroller_config.program.is_empty() {
+                    tracing::info!("no program");
+                    return Ok(None);
+                }
+                tracing::info!("found program {:?}", state.microcontroller_config);
 
+                tracing::info!("bus message irq {message:?}");
+                // TODO: Allow configuring whether to drop-earliest, drop-latest, or crash the
+                // microcontroller
+                state
+                    .microcontroller_config
+                    .pending_bus_messages
+                    .push_back(ProtoBusMessage {
+                        data: message.data.clone(),
+                    });
+                // the core has work in progress
+                let counter = ctx.startup_counter();
+                if state.lock == counter {
+                    // pending interrupts is updated, when that core finishes work it'll detect
+                    // this and do more work. No work to do until the core finishes work
+
+                    tracing::info!("core locked already");
+                    Ok(None)
+                } else {
+                    // Apply the lock
+                    state.lock = counter;
+                    let core = Arc::downgrade(&state.core_state);
+                    let pin_reg = state.microcontroller_config.external_pin_drives;
+                    let message = state
+                        .microcontroller_config
+                        .pending_bus_messages
+                        .pop_front();
+                    tracing::info!("got the core lock");
+                    Ok(Some((core, message, pin_reg)))
+                }
+            })? {
+                Some((core, message, pin_reg)) => (core, message, pin_reg),
+                None => return Ok(()),
+            };
+
+        // The core itself is responsible for running the code, and then updating the game map
+        // (under the advisory lock)
+        ctx.run_deferred_async(|ctx2| {
+            interrupt_poll_loop(
+                ctx2,
+                coord,
+                core,
+                IRQ_BUS_MESSAGE,
+                pin_reg,
+                self.ids,
+                front_message,
+            )
+        });
+        Ok(())
+    }
     fn sample_pin(
         &self,
         ctx: &CircuitHandlerContext<'_>,
@@ -216,9 +306,10 @@ async fn interrupt_poll_loop(
     ctx: HandlerContext<'static>,
     coord: BlockCoordinate,
     core: Weak<tokio::sync::Mutex<CoreState>>,
-    mut next_interrupt: u8,
+    mut next_interrupt: Interrupt,
     mut pin_reg: u8,
     ids: MicrocontrollerIds,
+    mut bus_message: Option<ProtoBusMessage>,
 ) -> Result<()> {
     tracing::info!("IPL starting");
     let engine = build_rhai_engine();
@@ -244,7 +335,7 @@ async fn interrupt_poll_loop(
                 &ctx,
                 coord,
                 ids,
-                "Over 16 events in a second".to_string(),
+                "Over 16 events in 1 second".to_string(),
             );
         }
 
@@ -264,6 +355,9 @@ async fn interrupt_poll_loop(
         scope.push("debug_msg", rhai::ImmutableString::new());
         scope.push("mem_str", lock.mem_strings.clone());
         scope.push("mem_int", lock.mem_ints.clone());
+        if let Some(bus_message) = bus_message {
+            scope.push("bus_message", bus_message.data);
+        }
 
         let eval_result = tokio::task::block_in_place(|| {
             engine.eval_ast_with_scope::<()>(&mut scope, lock.ast.as_ref().unwrap())
@@ -337,8 +431,19 @@ async fn interrupt_poll_loop(
                 state.microcontroller_config.mem_strings = lock.mem_strings.contents.clone();
                 state.microcontroller_config.mem_ints = lock.mem_ints.contents;
 
-                let selected_interrupt =
-                    max_set_bit(state.microcontroller_config.pending_interrupts);
+                let queued_msg = state
+                    .microcontroller_config
+                    .pending_bus_messages
+                    .pop_front();
+
+                let (selected_interrupt, bus_message) = if let Some(msg) = queued_msg {
+                    (IRQ_BUS_MESSAGE, Some(msg))
+                } else {
+                    (
+                        max_set_bit(state.microcontroller_config.pending_interrupts),
+                        None,
+                    )
+                };
                 if selected_interrupt == 0 {
                     state.lock = 0;
                     return Ok(LoopOutcome::Finish(lock.port_register));
@@ -354,14 +459,16 @@ async fn interrupt_poll_loop(
                 Ok(LoopOutcome::Continue(
                     next_interrupt,
                     state.microcontroller_config.external_pin_drives,
+                    bus_message,
                 ))
             },
             true,
         )? {
-            Some(LoopOutcome::Continue(int, pin)) => {
-                tracing::info!("continue IPL int {} pin {}", int, pin);
+            Some(LoopOutcome::Continue(int, pin, msg)) => {
+                tracing::info!("continue IPL int {} pin {} msg {:?}", int, pin, msg);
                 next_interrupt = int;
                 pin_reg = pin;
+                bus_message = msg;
             }
             Some(LoopOutcome::Finish(port)) => break port,
             Some(LoopOutcome::Bail(reason)) => {
@@ -422,7 +529,7 @@ fn truncate_at_boundary(mut s: String, len: usize) -> String {
 
 enum LoopOutcome {
     Finish(u8),
-    Continue(u8, u8),
+    Continue(Interrupt, u8, Option<ProtoBusMessage>),
     Bail(&'static str),
 }
 
@@ -458,8 +565,8 @@ fn program_microcontroller(
     coord: BlockCoordinate,
     ids: MicrocontrollerIds,
     program: String,
-    falling_mask: u8,
-    rising_mask: u8,
+    falling_mask: Interrupt,
+    rising_mask: Interrupt,
 ) -> Result<()> {
     tokio::task::block_in_place(|| {
         let core = match ctx.game_map().mutate_block_atomically(coord, |id, ext| {
@@ -511,30 +618,39 @@ fn program_microcontroller(
             }
         }
 
-        ctx.run_deferred_async(|ctx2| interrupt_poll_loop(ctx2, coord, core, 8, pin_reg, ids));
+        ctx.run_deferred_async(|ctx2| {
+            interrupt_poll_loop(ctx2, coord, core, 8, pin_reg, ids, None)
+        });
         Ok(())
     })
 }
 
 // For future use: 8, 16, 32, 64
 // Initial program run
-// Message packets
+// BusMessage
 // Timer interrupts
 // Watchdog
 // Note that we can widen u8 -> u16 freely; this doesn't need to go into block ID variants
+
+type Interrupt = u8;
+const IRQ_PIN_MASK: Interrupt = 0xf;
+const IRQ_BUS_MESSAGE: Interrupt = 0x10;
+
+const MAX_PENDING_BUS_MESSAGES: usize = 8;
 
 #[derive(Clone, Debug)]
 struct MicrocontrollerConfig {
     program: String,
     last_error: Option<String>,
     debug_string: String,
-    external_pin_drives: u8,
-    pending_interrupts: u8,
-    falling_interrupt_mask: u8,
-    rising_interrupt_mask: u8,
+    external_pin_drives: Interrupt,
+    pending_interrupts: Interrupt,
+    falling_interrupt_mask: Interrupt,
+    rising_interrupt_mask: Interrupt,
     port_register: u8,
     mem_strings: [ImmutableString; 8],
     mem_ints: [u64; 64],
+    pending_bus_messages: CircularBuffer<MAX_PENDING_BUS_MESSAGES, ProtoBusMessage>,
 }
 impl Default for MicrocontrollerConfig {
     fn default() -> Self {
@@ -549,8 +665,15 @@ impl Default for MicrocontrollerConfig {
             port_register: 0,
             mem_strings: std::array::from_fn(|_| ImmutableString::new()),
             mem_ints: [0; 64],
+            pending_bus_messages: CircularBuffer::new(),
         }
     }
+}
+
+#[derive(Message, Clone)]
+struct ProtoBusMessage {
+    #[prost(map = "string, string", tag = "1")]
+    data: HashMap<String, String>,
 }
 
 #[derive(Message)]
@@ -577,21 +700,26 @@ struct SerializedMicrocontrollerConfig {
     mem_ints: Vec<u64>,
     #[prost(uint32, tag = "10")]
     port_register: u32,
+    #[prost(message, repeated, tag = "11")]
+    pending_bus_messages: Vec<ProtoBusMessage>,
 }
 impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
     type Error = anyhow::Error;
 
     fn try_into(self) -> std::result::Result<MicrocontrollerConfig, Self::Error> {
+        ensure!(self.mem_strings.len() <= 8);
         let mut mem_strings: Vec<_> = self
             .mem_strings
             .into_iter()
             .map(|x| ImmutableString::from(x))
             .collect();
-        ensure!(mem_strings.len() <= 8);
         mem_strings.resize(8, ImmutableString::new());
         let mut mem_ints = self.mem_ints;
         ensure!(mem_ints.len() <= 64);
         mem_ints.resize(64, 0);
+
+        let pending_bus_messages = self.pending_bus_messages;
+        ensure!(pending_bus_messages.len() < MAX_PENDING_BUS_MESSAGES);
 
         Ok(MicrocontrollerConfig {
             program: self.program,
@@ -612,6 +740,7 @@ impl TryInto<MicrocontrollerConfig> for SerializedMicrocontrollerConfig {
             mem_ints: mem_ints
                 .try_into()
                 .map_err(|_| anyhow!("mem_ints size mismatch"))?,
+            pending_bus_messages: CircularBuffer::from_iter(pending_bus_messages.into_iter()),
         })
     }
 }
@@ -632,6 +761,7 @@ impl Into<SerializedMicrocontrollerConfig> for &MicrocontrollerConfig {
             mem_strings,
             mem_ints,
             port_register: self.port_register.into(),
+            pending_bus_messages: self.pending_bus_messages.to_vec(),
         }
     }
 }
@@ -931,7 +1061,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
     Ok(())
 }
 
-fn max_set_bit(n: u8) -> u8 {
+fn max_set_bit(n: Interrupt) -> Interrupt {
     match n.leading_zeros() {
         8 => 0,
         x @ 0..=7 => {
