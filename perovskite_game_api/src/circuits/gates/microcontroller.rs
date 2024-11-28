@@ -479,10 +479,6 @@ async fn interrupt_poll_loop(
                     return Ok(LoopOutcome::Finish(lock.port_register));
                 }
 
-                assert_ne!(
-                    selected_interrupt & state.microcontroller_config.pending_interrupts,
-                    0
-                );
                 // The selected interrupt is no longer pending.
                 state.microcontroller_config.pending_interrupts &= !selected_interrupt;
 
