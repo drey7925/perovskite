@@ -3416,6 +3416,7 @@ dependencies = [
  "serde",
  "serenity",
  "smallvec",
+ "smartstring",
  "splines",
  "tokio",
  "tracing",

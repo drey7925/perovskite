@@ -4,13 +4,14 @@ use std::str::FromStr;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use circular_buffer::CircularBuffer;
 use lazy_static::lazy_static;
 use prost::Message;
 use rhai::packages::{Package, StandardPackage};
-use rhai::{def_package, ImmutableString, OptimizationLevel};
+use rhai::{def_package, Dynamic, ImmutableString, OptimizationLevel, Scope};
 use smallvec::SmallVec;
+use smartstring::SmartString;
 use tokio::time::Instant;
 
 use perovskite_core::block_id::BlockId;
@@ -24,7 +25,9 @@ use perovskite_server::game_state::client_ui::{Popup, PopupAction, UiElementCont
 use perovskite_server::game_state::event::HandlerContext;
 
 use crate::blocks::{AaBoxProperties, BlockBuilder, RotationMode};
-use crate::circuits::events::{make_root_context, transmit_edge, CircuitHandlerContext};
+use crate::circuits::events::{
+    make_root_context, transmit_bus_message, transmit_edge, CircuitHandlerContext,
+};
 use crate::circuits::gates::microcontroller::rhai_types::MicrocontrollerMemory;
 use crate::circuits::gates::{get_side_tex, make_chip_shape};
 use crate::circuits::{
@@ -318,6 +321,7 @@ async fn interrupt_poll_loop(
 ) -> Result<()> {
     tracing::info!("IPL starting");
     let engine = build_rhai_engine();
+    let mut outbound_bus_messages: SmallVec<[_; 8]> = SmallVec::new();
     let final_port = loop {
         let upgraded = match core.upgrade() {
             // Core disappeared, e.g. block was unloaded or replaced in the map
@@ -360,8 +364,11 @@ async fn interrupt_poll_loop(
         scope.push("debug_msg", rhai::ImmutableString::new());
         scope.push("mem_str", lock.mem_strings.clone());
         scope.push("mem_int", lock.mem_ints.clone());
+        scope.push("bus_message_port", 0 as rhai::INT);
         if let Some(bus_message) = bus_message {
-            scope.push("bus_message", bus_message.data);
+            scope.push("bus_message", bus_message.to_rhai());
+        } else {
+            scope.push("bus_message", rhai::Map::new());
         }
 
         let eval_result = tokio::task::block_in_place(|| {
@@ -405,6 +412,23 @@ async fn interrupt_poll_loop(
             lock.port_register,
             &debug_string
         );
+
+        let user_bus_message = match parse_user_bus_message(&scope, coord) {
+            Ok(x) => x,
+            Err(x) => return break_microcontroller(&ctx, coord, ids, x.to_string()),
+        };
+        if let Some((message, ports)) = user_bus_message {
+            if outbound_bus_messages.len() >= 8 {
+                return break_microcontroller(
+                    &ctx,
+                    coord,
+                    ids,
+                    "Too many pending bus messages".to_string(),
+                );
+            } else {
+                outbound_bus_messages.push((message, ports));
+            }
+        }
 
         match ctx.game_map().try_mutate_block_atomically(
             coord,
@@ -516,7 +540,46 @@ async fn interrupt_poll_loop(
     for (dst, src, edge) in edges {
         transmit_edge(&cctx, dst, src, edge)?;
     }
+    for (message, ports) in outbound_bus_messages {
+        for port in CONN_PORT.into_iter() {
+            if port.id as u8 & ports != 0 {
+                //0 is ok since microcontrollers never rotate
+                if let Some(target) = port.eval(coord, 0) {
+                    transmit_bus_message(
+                        &cctx,
+                        target,
+                        coord,
+                        (port.id & (final_port as u32) != 0).into(),
+                        message.clone(),
+                    )?;
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+fn parse_user_bus_message(
+    scope: &Scope,
+    coord: BlockCoordinate,
+) -> Result<Option<(BusMessage, u8)>> {
+    let bus_message_port = match scope.get_value::<i64>("bus_message_port") {
+        None => {
+            bail!("bus_message_port corrupted")
+        }
+        Some(x) => x,
+    };
+    if bus_message_port == 0 {
+        Ok(None)
+    } else {
+        let mut map = HashMap::new();
+        map.insert("foo".to_string(), "bar".to_string());
+        let msg = BusMessage {
+            sender: coord,
+            data: map,
+        };
+        Ok(Some((msg, bus_message_port as u8)))
+    }
 }
 
 fn truncate_at_boundary(mut s: String, len: usize) -> String {
@@ -679,6 +742,15 @@ impl Default for MicrocontrollerConfig {
 struct ProtoBusMessage {
     #[prost(map = "string, string", tag = "1")]
     data: HashMap<String, String>,
+}
+
+impl ProtoBusMessage {
+    pub(crate) fn to_rhai(&self) -> rhai::Map {
+        self.data
+            .iter()
+            .map(|(k, v)| (SmartString::from(k.as_str()), Dynamic::from(v.clone())))
+            .collect()
+    }
 }
 
 #[derive(Message)]
