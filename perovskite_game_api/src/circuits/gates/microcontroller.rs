@@ -365,6 +365,7 @@ async fn interrupt_poll_loop(
         scope.push("mem_str", lock.mem_strings.clone());
         scope.push("mem_int", lock.mem_ints.clone());
         scope.push("bus_message_port", 0 as rhai::INT);
+        scope.push("outbound_bus_message", rhai::Map::new());
         if let Some(bus_message) = bus_message {
             scope.push("bus_message", bus_message.to_rhai());
         } else {
@@ -569,16 +570,28 @@ fn parse_user_bus_message(
         }
         Some(x) => x,
     };
+    let bus_message = match scope.get_value::<rhai::Map>("outbound_bus_message") {
+        None => {
+            bail!("outbound_bus_message corrupted")
+        }
+        Some(x) => x,
+    };
     if bus_message_port == 0 {
         Ok(None)
     } else {
-        let mut map = HashMap::new();
-        map.insert("foo".to_string(), "bar".to_string());
-        let msg = BusMessage {
-            sender: coord,
-            data: map,
-        };
-        Ok(Some((msg, bus_message_port as u8)))
+        if bus_message.is_empty() {
+            Ok(None)
+        } else {
+            let data = bus_message
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let msg = BusMessage {
+                sender: coord,
+                data,
+            };
+            Ok(Some((msg, bus_message_port as u8)))
+        }
     }
 }
 
