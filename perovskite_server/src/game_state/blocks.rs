@@ -259,6 +259,8 @@ pub struct BlockType {
     ///
     /// If this returns Err, a message will be logged and the user that dug the block will get an error message in some
     /// TBD way (for now, just a log message on the client, but eventually a popup or similar)
+    ///
+    /// NOT YET IMPLEMENTED, Signature subject to change
     pub place_upon_handler: Option<
         Box<dyn Fn(HandlerContext, BlockCoordinate, Option<Item>) -> Result<()> + Send + Sync>,
     >,
@@ -379,9 +381,6 @@ impl<'a> InlineContext<'a> {
     }
 }
 
-// Each BlockTypeManager has a unique ID, which
-static BLOCK_TYPE_MANAGER_ID: AtomicUsize = AtomicUsize::new(1);
-
 /// Manages all of the different block types defined in this game world.
 ///
 /// This struct owns all of the [`BlockType`]s that are registered with it;
@@ -399,10 +398,10 @@ static BLOCK_TYPE_MANAGER_ID: AtomicUsize = AtomicUsize::new(1);
 pub struct BlockTypeManager {
     block_types: Vec<BlockType>,
     name_to_base_id_map: FxHashMap<String, u32>,
+    init_complete: bool,
 
     // Separate copy of BlockType.client_info.allow_light_propagation, packed densely in order
     // to be more cache friendly
-    init_complete: bool,
     light_propagation: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
     cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
@@ -595,7 +594,7 @@ impl BlockTypeManager {
     }
 
     /// Creates a BlockTypeName that refers to the indicated block. See the doc for
-    /// [`BlockTypeManager`] and [`BlockTypeName`] for an example of where this should be used.
+    /// [`BlockTypeManager`] and [`FastBlockName`] for an example of where this should be used.
     pub fn make_block_name(&self, name: impl Into<String>) -> FastBlockName {
         FastBlockName {
             name: name.into(),
@@ -621,7 +620,10 @@ impl BlockTypeManager {
         }
     }
 
-    /// Tries to get a block by name. Equivalent to calling make_block_name and then resolve_name back to back.
+    /// Tries to get a block by name.
+    ///
+    /// Equivalent to calling make_block_name and then resolve_name back to back, but without the
+    /// caching benefits of FastBlockName
     pub fn get_by_name(&self, block_name: &str) -> Option<BlockTypeHandle> {
         if let Some(&id) = self.name_to_base_id_map.get(block_name) {
             Some(id.into())
@@ -637,6 +639,7 @@ impl BlockTypeManager {
     /// situation (e.g. tight loop), using [`has_block_group`] will avoid multiple hashtable
     /// lookups and vector scans in the normal block ID -> block def -> group list process.
     pub fn register_fast_block_group(&mut self, block_group: &str) {
+        // Pre-populate an empty bitvec, which we'll fill during startup
         self.fast_block_groups
             .insert(block_group.to_string(), bitvec::vec::BitVec::new());
     }
@@ -646,8 +649,7 @@ impl BlockTypeManager {
     /// The block group must have been registered using [`register_block_group`]. Simply
     /// being defined in a block type is not enough.
     ///
-    /// Panics:
-    /// This function will panic if called before the game starts up.
+    /// This function will return an empty, nonsensical object if called before the game starts up.
     pub fn fast_block_group(&self, block_group: &str) -> Option<FastBlockGroup> {
         self.fast_block_groups
             .get(block_group)
