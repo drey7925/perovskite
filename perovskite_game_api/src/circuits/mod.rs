@@ -103,7 +103,7 @@ pub struct CircuitBlockProperties {
     /// Neighboring coordinates to which this block can connect
     /// A connection is only made if the block at that coordinate itself has
     /// the current block's location in *its* connectivity list
-    connectivity: Vec<BlockConnectivity>,
+    pub connectivity: Vec<BlockConnectivity>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -164,8 +164,8 @@ impl From<bool> for PinState {
 
 #[derive(Clone, Debug)]
 pub struct BusMessage {
-    sender: BlockCoordinate,
-    data: HashMap<String, String>,
+    pub sender: BlockCoordinate,
+    pub data: HashMap<String, String>,
 }
 
 pub trait CircuitBlockCallbacks: Send + Sync + 'static {

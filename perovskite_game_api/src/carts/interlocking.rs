@@ -2,11 +2,13 @@ use anyhow::Result;
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::event::HandlerContext;
 use rand::Rng;
+use std::collections::HashMap;
 
 use crate::carts::signals::{
     self, starting_signal_acquire_back, starting_signal_depart_forward,
-    starting_signal_preacquire_front,
+    starting_signal_preacquire_front, SIGNAL_BLOCK_CONNECTIVITY,
 };
+use crate::circuits::{BusMessage, PinState};
 
 use super::{
     signals::{
@@ -110,11 +112,13 @@ pub(super) async fn interlock_cart(
     handler_context: HandlerContext<'_>,
     initial_state: ScanState,
     cart_name: &str,
+    cart_id: u32,
     max_scan_distance: usize,
     cart_config: CartsGameBuilderExtension,
     resume: Option<InterlockingResumeState>,
     last_speed_post: f32,
     should_delay_after_clearing: bool,
+    signal_coord: BlockCoordinate,
 ) -> Result<Option<InterlockingRoute>> {
     if !handler_context.is_shutting_down() {
         let resolution = single_pathfind_attempt(
@@ -137,6 +141,13 @@ pub(super) async fn interlock_cart(
                 tracing::info!("Sleeping for {} seconds", delay_time);
                 tokio::time::sleep(std::time::Duration::from_secs_f64(delay_time)).await;
             }
+            send_signal_bus_message(
+                &handler_context,
+                signal_coord,
+                cart_name,
+                cart_id,
+                "success",
+            )?;
             return Ok(Some(resolution));
         } else {
             tracing::debug!("No path found, trying again");
@@ -147,10 +158,46 @@ pub(super) async fn interlock_cart(
             // but that makes extended data error handling more tricky.
             let backoff = rand::thread_rng().gen_range(500..1000);
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+
+            send_signal_bus_message(&handler_context, signal_coord, cart_name, cart_id, "failed")?;
             return Ok(None);
         }
     }
     Ok(None)
+}
+
+fn send_signal_bus_message(
+    ctx: &HandlerContext,
+    signal_coord: BlockCoordinate,
+    cart_name: &str,
+    cart_id: u32,
+    outcome: &str,
+) -> Result<()> {
+    let mut data = HashMap::new();
+    data.insert("signal_coord".to_string(), signal_coord.to_string());
+    data.insert("cart_name".to_string(), cart_name.to_string());
+    data.insert("cart_id".to_string(), cart_id.to_string());
+    data.insert("outcome".to_string(), outcome.to_string());
+    let bus_message = BusMessage {
+        sender: signal_coord,
+        data,
+    };
+    let (block, nickname) = ctx
+        .game_map()
+        .get_block_with_extended_data(signal_coord, |ext| Ok(Some(())))?;
+    let cctx = crate::circuits::events::make_root_context(ctx);
+    for connectivity in SIGNAL_BLOCK_CONNECTIVITY {
+        if let Some(target) = connectivity.eval(signal_coord, block.variant()) {
+            crate::circuits::events::transmit_bus_message(
+                &cctx,
+                target,
+                signal_coord,
+                PinState::Low,
+                bus_message.clone(),
+            )?
+        }
+    }
+    Ok(())
 }
 
 fn single_pathfind_attempt(

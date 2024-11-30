@@ -14,13 +14,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::str::FromStr;
 use std::{
     fmt::Debug,
     hash::{Hash, Hasher},
     ops::RangeInclusive,
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use cgmath::{Angle, Deg};
 use rustc_hash::FxHasher;
 
@@ -37,7 +38,7 @@ pub struct BlockCoordinate {
 
 impl Debug for BlockCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("({}, {}, {})", self.x, self.y, self.z))
+        f.write_fmt(format_args!("[{}, {}, {}]", self.x, self.y, self.z))
     }
 }
 impl BlockCoordinate {
@@ -68,6 +69,34 @@ impl BlockCoordinate {
         let z = self.z.checked_add(z)?;
 
         Some(BlockCoordinate { x, y, z })
+    }
+}
+impl ToString for BlockCoordinate {
+    fn to_string(&self) -> String {
+        // TODO: Can this be optimized further?
+        let mut result = String::new();
+        result += self.x.to_string().as_str();
+        result += ",";
+        result += self.y.to_string().as_str();
+        result += ",";
+        result += self.z.to_string().as_str();
+        result
+    }
+}
+impl FromStr for BlockCoordinate {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        // Likewise, this probably merits optimization if it becomes hot
+        let pieces: Vec<_> = s.split(',').collect();
+        if pieces.len() != 3 {
+            bail!("Wrong number of components");
+        };
+        Ok(BlockCoordinate::new(
+            pieces[0].parse()?,
+            pieces[1].parse()?,
+            pieces[2].parse()?,
+        ))
     }
 }
 
@@ -176,7 +205,7 @@ impl ChunkOffset {
 }
 impl Debug for ChunkOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("({}, {}, {})", self.x, self.y, self.z))
+        f.write_fmt(format_args!("Δ({}, {}, {})", self.x, self.y, self.z))
     }
 }
 
@@ -263,7 +292,7 @@ impl ChunkCoordinate {
 }
 impl Debug for ChunkCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("({}, {}, {})", self.x, self.y, self.z))
+        f.write_fmt(format_args!("chunk[{}, {}, {}]", self.x, self.y, self.z))
     }
 }
 

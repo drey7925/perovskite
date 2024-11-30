@@ -847,6 +847,7 @@ impl CartCoroutine {
             // This is a fudge factor to avoid path optimizer thrashing as carts come up to speed, run into
             // red signals ahead, and then come to a stop then start again cyclically
             let should_delay = self.last_segment_exit_speed() <= 0.001;
+            let cart_id = self.id;
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
@@ -858,11 +859,13 @@ impl CartCoroutine {
                     ctx,
                     state,
                     &cart_name_clone,
+                    cart_id,
                     1024,
                     config_clone,
                     resume,
                     last_speed_post,
                     should_delay,
+                    signal_coord,
                 )
                 .await;
                 trace_buffer.log("Interlocking signal done");

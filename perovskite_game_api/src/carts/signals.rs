@@ -132,12 +132,18 @@ use perovskite_server::game_state::{
 };
 use prost::Message;
 
+use crate::circuits::events::CircuitHandlerContext;
+use crate::circuits::{
+    BlockConnectivity, BusMessage, CircuitBlockBuilder, CircuitBlockCallbacks,
+    CircuitBlockProperties, CircuitGameBuilder,
+};
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
+use perovskite_server::game_state::client_ui::TextFieldBuilder;
 
 pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal");
 pub(crate) const INTERLOCKING_SIGNAL_BLOCK: StaticBlockName =
@@ -195,12 +201,14 @@ pub(crate) fn register_signal_blocks(
         SIGNAL_BLOCK,
         SIGNAL_BLOCK_TEX_OFF,
         "Automatic Signal",
+        Box::new(AutomaticSignalCircuitCallbacks),
     )?;
     let interlocking_signal = register_single_signal(
         game_builder,
         INTERLOCKING_SIGNAL_BLOCK,
         SIGNAL_BLOCK_TEX_OFF_ENHANCED,
         "Interlocking Signal",
+        Box::new(InterlockingSignalCircuitCallbacks),
     )?;
 
     let starting_signal = register_starting_signal(game_builder)?;
@@ -230,6 +238,27 @@ pub(crate) fn register_signal_blocks(
         interlocking_signal.id,
         starting_signal.id,
     ))
+}
+
+struct AutomaticSignalCircuitCallbacks;
+impl CircuitBlockCallbacks for AutomaticSignalCircuitCallbacks {
+    // All default impls
+}
+struct InterlockingSignalCircuitCallbacks;
+impl CircuitBlockCallbacks for InterlockingSignalCircuitCallbacks {
+    // All default impls for now, with one placeholder
+    fn on_bus_message(
+        &self,
+        _ctx: &CircuitHandlerContext<'_>,
+        coordinate: BlockCoordinate,
+        from: BlockCoordinate,
+        message: &BusMessage,
+    ) -> Result<()> {
+        if from != coordinate {
+            tracing::info!("TODO: Handle bus message {message:?} at {coordinate:?}");
+        }
+        Ok(())
+    }
 }
 
 fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock> {
@@ -367,11 +396,17 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
     Ok(block)
 }
 
+pub(super) const SIGNAL_BLOCK_CONNECTIVITY: [BlockConnectivity; 2] = [
+    BlockConnectivity::rotated_nesw_with_variant(0, 0, 1, 1),
+    BlockConnectivity::rotated_nesw_with_variant(0, 1, 1, 2),
+];
+
 fn register_single_signal(
     game_builder: &mut GameBuilder,
     block_name: StaticBlockName,
     face_texture: StaticTextureName,
     display_name: &str,
+    circuit_callbacks: Box<dyn CircuitBlockCallbacks>,
 ) -> Result<BuiltBlock> {
     let signal_off_box = AaBoxProperties::new(
         SIGNAL_SIDE_TOP_TEX,
@@ -465,8 +500,13 @@ fn register_single_signal(
                     Ok(result)
                 }))
             }))
-            .set_display_name(display_name),
+            .set_display_name(display_name)
+            .register_circuit_callbacks(),
     )?;
+    let circuit_properties = CircuitBlockProperties {
+        connectivity: SIGNAL_BLOCK_CONNECTIVITY.to_vec(),
+    };
+    game_builder.define_circuit_callbacks(block.id, circuit_callbacks, circuit_properties)?;
     Ok(block)
 }
 
@@ -488,7 +528,8 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
 
     let left_routes = ext.left_routes.join("\n");
     let right_routes = ext.right_routes.join("\n");
-
+    const PATTERN_HOVER_TEXT: &str =
+        "Patterns that match cart names, one per line. Supports * and ? as wildcards";
     Ok(Some(
         ctx.new_popup()
             .title("Mrs. Yellow")
@@ -532,8 +573,27 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             )
             .checkbox("left", "Left", (variant & VARIANT_LEFT) != 0, true)
             .checkbox("right", "Right", (variant & VARIANT_RIGHT) != 0, true)
-            .text_field("left_routes", "Left Routes", left_routes, true, true)
-            .text_field("right_routes", "Right Routes", right_routes, true, true)
+            .text_field_from_builder(
+                TextFieldBuilder::new("left_routes")
+                    .label("Left routes")
+                    .initial(left_routes)
+                    .multiline(true)
+                    .hover_text(PATTERN_HOVER_TEXT),
+            )
+            .text_field_from_builder(
+                TextFieldBuilder::new("right_routes")
+                    .label("Right routes")
+                    .initial(right_routes)
+                    .multiline(true)
+                    .hover_text(PATTERN_HOVER_TEXT),
+            )
+            .text_field_from_builder(
+                TextFieldBuilder::new("signal_nickname")
+                    .label("Signal nickname")
+                    .initial(ext.signal_nickname.as_str())
+                    .multiline(false)
+                    .hover_text("Used for digital messages sent over wires to/from the signal"),
+            )
             .button("apply", "Apply", true, true)
             .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
                 match handle_popup_response(&response, coord) {
@@ -556,96 +616,125 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
 
 fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Result<()> {
     match &response.user_action {
-        PopupAction::ButtonClicked(x) => match x.as_str() {
-            "apply" => {
-                let rotation = response
-                    .textfield_values
-                    .get("rotation")
-                    .context("missing rotation")?
-                    .parse::<u16>()?;
-                let restrictive = *response
-                    .checkbox_values
-                    .get("restrictive")
-                    .context("missing restrictive")?;
-                let restrictive_external = *response
-                    .checkbox_values
-                    .get("restrictive_external")
-                    .context("missing restrictive_external")?;
-                let restrictive_traffic = *response
-                    .checkbox_values
-                    .get("restrictive_traffic")
-                    .context("missing restrictive_traffic")?;
-                let permissive = *response
-                    .checkbox_values
-                    .get("permissive")
-                    .context("missing permissive")?;
-                let left = *response
-                    .checkbox_values
-                    .get("left")
-                    .context("missing left")?;
-                let right = *response
-                    .checkbox_values
-                    .get("right")
-                    .context("missing right")?;
-                let starting_held = *response
-                    .checkbox_values
-                    .get("starting_held")
-                    .context("missing starting_held")?;
-                let left_routes = response
-                    .textfield_values
-                    .get("left_routes")
-                    .context("missing left_routes")?;
-                let right_routes = response
-                    .textfield_values
-                    .get("right_routes")
-                    .context("missing right_routes")?;
-                let mut variant = rotation & 3;
-                if restrictive {
-                    variant |= VARIANT_RESTRICTIVE;
-                }
-                if restrictive_external {
-                    variant |= VARIANT_RESTRICTIVE_EXTERNAL;
-                }
-                if restrictive_traffic {
-                    variant |= VARIANT_RESTRICTIVE_TRAFFIC;
-                }
-                if permissive {
-                    variant |= VARIANT_PERMISSIVE;
-                }
-                if left {
-                    variant |= VARIANT_LEFT;
-                }
-                if right {
-                    variant |= VARIANT_RIGHT;
-                }
-                if starting_held {
-                    variant |= VARIANT_STARTING_HELD;
-                }
+        PopupAction::ButtonClicked(x) => {
+            match x.as_str() {
+                "apply" => {
+                    let rotation = response
+                        .textfield_values
+                        .get("rotation")
+                        .context("missing rotation")?
+                        .parse::<u16>()?;
+                    let restrictive = *response
+                        .checkbox_values
+                        .get("restrictive")
+                        .context("missing restrictive")?;
+                    let restrictive_external = *response
+                        .checkbox_values
+                        .get("restrictive_external")
+                        .context("missing restrictive_external")?;
+                    let restrictive_traffic = *response
+                        .checkbox_values
+                        .get("restrictive_traffic")
+                        .context("missing restrictive_traffic")?;
+                    let permissive = *response
+                        .checkbox_values
+                        .get("permissive")
+                        .context("missing permissive")?;
+                    let left = *response
+                        .checkbox_values
+                        .get("left")
+                        .context("missing left")?;
+                    let right = *response
+                        .checkbox_values
+                        .get("right")
+                        .context("missing right")?;
+                    let starting_held = *response
+                        .checkbox_values
+                        .get("starting_held")
+                        .context("missing starting_held")?;
+                    let left_routes = response
+                        .textfield_values
+                        .get("left_routes")
+                        .context("missing left_routes")?;
+                    if left_routes.len() > 1024 {
+                        response.ctx.initiator().send_chat_message(
+                            ChatMessage::new_server_message("left_routes too long"),
+                        )?;
+                        return Ok(());
+                    }
+                    let right_routes = response
+                        .textfield_values
+                        .get("right_routes")
+                        .context("missing right_routes")?;
 
-                response
-                    .ctx
-                    .game_map()
-                    .mutate_block_atomically(coord, |b, ext| {
-                        *b = b.with_variant_unchecked(variant);
-                        let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
-                        let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
-                            left_routes: left_routes
-                                .split('\n')
-                                .map(|s| s.trim().to_string())
-                                .collect(),
-                            right_routes: right_routes
-                                .split('\n')
-                                .map(|s| s.trim().to_string())
-                                .collect(),
-                        }));
-                        ext.set_dirty();
-                        Ok(())
-                    })?;
+                    if right_routes.len() > 1024 {
+                        response.ctx.initiator().send_chat_message(
+                            ChatMessage::new_server_message("right_routes too long"),
+                        )?;
+                        return Ok(());
+                    }
+                    let signal_nickname = response
+                        .textfield_values
+                        .get("signal_nickname")
+                        .context("missing signal_nickname")?
+                        .clone();
+                    if signal_nickname.len() > 32 {
+                        response.ctx.initiator().send_chat_message(
+                            ChatMessage::new_server_message("signal_nickname too long"),
+                        )?;
+                        return Ok(());
+                    }
+                    let mut variant = rotation & 3;
+                    if restrictive {
+                        variant |= VARIANT_RESTRICTIVE;
+                    }
+                    if restrictive_external {
+                        variant |= VARIANT_RESTRICTIVE_EXTERNAL;
+                    }
+                    if restrictive_traffic {
+                        variant |= VARIANT_RESTRICTIVE_TRAFFIC;
+                    }
+                    if permissive {
+                        variant |= VARIANT_PERMISSIVE;
+                    }
+                    if left {
+                        variant |= VARIANT_LEFT;
+                    }
+                    if right {
+                        variant |= VARIANT_RIGHT;
+                    }
+                    if starting_held {
+                        variant |= VARIANT_STARTING_HELD;
+                    }
+
+                    response
+                        .ctx
+                        .game_map()
+                        .mutate_block_atomically(coord, |b, ext| {
+                            *b = b.with_variant_unchecked(variant);
+                            let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+                            let _ = ext_inner.custom_data.insert(Box::new(SignalConfig {
+                                left_routes: left_routes
+                                    .split('\n')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
+                                right_routes: right_routes
+                                    .split('\n')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
+                                signal_nickname,
+                            }));
+                            ext.set_dirty();
+                            Ok(())
+                        })?;
+                }
+                _ => {
+                    return Err(anyhow::anyhow!("unknown button {}", x));
+                }
             }
-            _ => {
-                return Err(anyhow::anyhow!("unknown button {}", x));
-            }
-        },
+        }
         PopupAction::PopupClosed => {}
     }
     Ok(())
@@ -671,6 +760,9 @@ pub(crate) struct SignalConfig {
     /// The list of routes that will diverge right
     #[prost(string, repeated, tag = "2")]
     pub(crate) right_routes: Vec<String>,
+    /// A nickname for the signal, used in circuit messages
+    #[prost(string, tag = "3")]
+    pub(crate) signal_nickname: String,
 }
 
 /// The outcome of trying to acquire most signals.
@@ -952,8 +1044,12 @@ pub(crate) enum SignalParseOutcome {
     DivergingLeft,
     /// The signal indicates that the next switch (capable of being set diverging right, i.e. switch tile with flip_x = false) is to be set diverging
     DivergingRight,
+    /// Not yet supported, may be removed in favor of microcontroller resolutions
+    #[deprecated]
     Fork,
+    /// The signal does snot permit travel.
     Deny,
+    /// This is not a signal (it might be a speedpost or similar)
     NoIndication,
     /// This is an automatic signal, so we're done with the interlocking
     AutomaticSignal,

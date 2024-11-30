@@ -29,6 +29,8 @@ message TextField {
   bool enabled = 4;
   // Whether the textfield is multiline
   bool multiline = 5;
+  // A tooltip to show on hover
+  string hover_text = 6;
   // todo other styling
 }
 

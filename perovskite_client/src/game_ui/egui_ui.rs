@@ -282,14 +282,22 @@ impl EguiUi {
                         .max_height(240.0)
                         .show(ui, |ui| {
                             let label = ui.label(text_field.label.clone());
-                            ui.add_enabled(text_field.enabled, TextEdit::multiline(value))
+                            let resp = ui
+                                .add_enabled(text_field.enabled, TextEdit::multiline(value))
                                 .labelled_by(label.id);
+                            if !text_field.hover_text.is_empty() {
+                                resp.on_hover_text(text_field.hover_text.as_str());
+                            }
                         });
                 } else {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         let label = ui.label(text_field.label.clone());
-                        ui.add_enabled(text_field.enabled, TextEdit::singleline(value))
+                        let resp = ui
+                            .add_enabled(text_field.enabled, TextEdit::singleline(value))
                             .labelled_by(label.id);
+                        if !text_field.hover_text.is_empty() {
+                            resp.on_hover_text(text_field.hover_text.as_str());
+                        }
                     });
                 };
             }

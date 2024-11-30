@@ -593,49 +593,61 @@ impl MapChunkHolder {
 
     /// Get the chunk, blocking until it's loaded
     fn wait_and_get_for_read(&self) -> Result<MapChunkInnerReadGuard<'_>> {
-        let mut guard = self.chunk.read();
-        let _span = span!("wait_and_get");
-        loop {
-            match &*guard {
-                HolderState::Empty => self.condition.wait_reader(&mut guard),
-                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => return Ok(MapChunkInnerReadGuard { guard }),
+        tokio::task::block_in_place(|| {
+            let mut guard = self.chunk.read();
+            let _span = span!("wait_and_get");
+            loop {
+                match &*guard {
+                    HolderState::Empty => self.condition.wait_reader(&mut guard),
+                    HolderState::Err(e) => {
+                        return Err(Error::msg(format!("Chunk load failed: {e:?}")))
+                    }
+                    HolderState::Ok(_) => return Ok(MapChunkInnerReadGuard { guard }),
+                }
             }
-        }
+        })
     }
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
     fn try_get_read(&self) -> Result<Option<MapChunkInnerReadGuard<'_>>> {
-        let guard = self.chunk.read();
-        match &*guard {
-            HolderState::Empty => Ok(None),
-            HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-            HolderState::Ok(_) => Ok(Some(MapChunkInnerReadGuard { guard })),
-        }
+        tokio::task::block_in_place(|| {
+            let guard = self.chunk.read();
+            match &*guard {
+                HolderState::Empty => Ok(None),
+                HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+                HolderState::Ok(_) => Ok(Some(MapChunkInnerReadGuard { guard })),
+            }
+        })
     }
 
     /// Get the chunk, blocking until it's loaded
     fn wait_and_get_for_write(&self) -> Result<MapChunkInnerWriteGuard<'_>> {
-        let mut guard = self.chunk.write();
-        let _span = span!("wait_and_get");
-        loop {
-            match &*guard {
-                HolderState::Empty => self.condition.wait_writer(&mut guard),
-                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => return Ok(MapChunkInnerWriteGuard { guard }),
+        tokio::task::block_in_place(|| {
+            let mut guard = self.chunk.write();
+            let _span = span!("wait_and_get");
+            loop {
+                match &*guard {
+                    HolderState::Empty => self.condition.wait_writer(&mut guard),
+                    HolderState::Err(e) => {
+                        return Err(Error::msg(format!("Chunk load failed: {e:?}")))
+                    }
+                    HolderState::Ok(_) => return Ok(MapChunkInnerWriteGuard { guard }),
+                }
             }
-        }
+        })
     }
 
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
     fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_>>> {
-        let guard = self.chunk.write();
-        match &*guard {
-            HolderState::Empty => Ok(None),
-            HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-            HolderState::Ok(_) => Ok(Some(MapChunkInnerWriteGuard { guard })),
-        }
+        tokio::task::block_in_place(|| {
+            let guard = self.chunk.write();
+            match &*guard {
+                HolderState::Empty => Ok(None),
+                HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+                HolderState::Ok(_) => Ok(Some(MapChunkInnerWriteGuard { guard })),
+            }
+        })
     }
 
     /// Set the chunk, and notify any threads waiting in wait_and_get
@@ -1489,90 +1501,99 @@ impl ServerGameMap {
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
     fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard> {
-        log_trace("get_chunk starting");
-        let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
-        log_trace("get_chunk acquired writeback permit");
-        let shard = shard_id(coord);
-        let mut load_chunk_tries = 0;
-        let result = loop {
-            let read_guard = {
-                let _span = span!("acquire game_map read lock");
-                self.live_chunks[shard].read()
-            };
-            log_trace("get_chunk acquired read lock");
-            // All good. The chunk is loaded.
-            if read_guard.chunks.contains_key(&coord) {
-                log_trace("get_chunk chunk loaded");
-                return Ok(MapChunkOuterGuard {
-                    read_guard,
-                    coord,
-                    writeback_permit: Some(writeback_permit),
-                    force_writeback: false,
-                });
-            }
-
-            load_chunk_tries += 1;
-            drop(read_guard);
-            log_trace("get_chunk read lock released");
-            // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
-            // under a read lock
-            // This can't be done with an upgradable lock due to a deadlock risk.
-            let mut write_guard = {
-                let _span = span!("acquire game_map write lock");
-                self.live_chunks[shard].write()
-            };
-            log_trace("get_chunk acquired write lock");
-            if write_guard.chunks.contains_key(&coord) {
-                // Someone raced with us. Try looping again.
-                info!("Race while upgrading in get_chunk; retrying two-phase lock");
-                log_trace("get_chunk race detected");
-                drop(write_guard);
-                continue;
-            }
-
-            // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
-            // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
-            write_guard
-                .chunks
-                .insert(coord, MapChunkHolder::new_empty());
-            write_guard
-                .light_columns
-                .entry((coord.x, coord.z))
-                .or_insert_with(ChunkColumn::empty)
-                .insert_empty(coord.y);
-
-            // Now we downgrade the write lock.
-            // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
-            // they'll get an empty chunk holder and will wait for the condition variable to be signalled
-            // (when that thread waits on the condition variable, it atomically releases the inner lock)
-            let read_guard = RwLockWriteGuard::downgrade(write_guard);
-            log_trace("get_chunk downgraded write lock");
-            // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
-            let chunk_holder = read_guard.chunks.get(&coord).unwrap();
-            match self.load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone()) {
-                Ok((chunk, force_writeback)) => {
-                    log_trace("get_chunk chunk loaded, filling");
-                    chunk_holder.fill(chunk, &read_guard.light_columns, self.block_type_manager());
-                    log_trace("get_chunk chunk filled");
-                    let outer_guard = MapChunkOuterGuard {
+        tokio::task::block_in_place(|| {
+            log_trace("get_chunk starting");
+            let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
+            log_trace("get_chunk acquired writeback permit");
+            let shard = shard_id(coord);
+            let mut load_chunk_tries = 0;
+            let result = loop {
+                let read_guard = {
+                    let _span = span!("acquire game_map read lock");
+                    self.live_chunks[shard].read()
+                };
+                log_trace("get_chunk acquired read lock");
+                // All good. The chunk is loaded.
+                if read_guard.chunks.contains_key(&coord) {
+                    log_trace("get_chunk chunk loaded");
+                    return Ok(MapChunkOuterGuard {
                         read_guard,
                         coord,
                         writeback_permit: Some(writeback_permit),
-                        force_writeback,
-                    };
-                    break Ok(outer_guard);
+                        force_writeback: false,
+                    });
                 }
-                Err(e) => {
-                    chunk_holder.set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
-                    // Unfortunate duplication, anyhow::Error is not Clone
-                    break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
+
+                load_chunk_tries += 1;
+                drop(read_guard);
+                log_trace("get_chunk read lock released");
+                // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
+                // under a read lock
+                // This can't be done with an upgradable lock due to a deadlock risk.
+                let mut write_guard = {
+                    let _span = span!("acquire game_map write lock");
+                    self.live_chunks[shard].write()
+                };
+                log_trace("get_chunk acquired write lock");
+                if write_guard.chunks.contains_key(&coord) {
+                    // Someone raced with us. Try looping again.
+                    info!("Race while upgrading in get_chunk; retrying two-phase lock");
+                    log_trace("get_chunk race detected");
+                    drop(write_guard);
+                    continue;
                 }
+
+                // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
+                // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
+                write_guard
+                    .chunks
+                    .insert(coord, MapChunkHolder::new_empty());
+                write_guard
+                    .light_columns
+                    .entry((coord.x, coord.z))
+                    .or_insert_with(ChunkColumn::empty)
+                    .insert_empty(coord.y);
+
+                // Now we downgrade the write lock.
+                // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
+                // they'll get an empty chunk holder and will wait for the condition variable to be signalled
+                // (when that thread waits on the condition variable, it atomically releases the inner lock)
+                let read_guard = RwLockWriteGuard::downgrade(write_guard);
+                log_trace("get_chunk downgraded write lock");
+                // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
+                let chunk_holder = read_guard.chunks.get(&coord).unwrap();
+                match self
+                    .load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone())
+                {
+                    Ok((chunk, force_writeback)) => {
+                        log_trace("get_chunk chunk loaded, filling");
+                        chunk_holder.fill(
+                            chunk,
+                            &read_guard.light_columns,
+                            self.block_type_manager(),
+                        );
+                        log_trace("get_chunk chunk filled");
+                        let outer_guard = MapChunkOuterGuard {
+                            read_guard,
+                            coord,
+                            writeback_permit: Some(writeback_permit),
+                            force_writeback,
+                        };
+                        break Ok(outer_guard);
+                    }
+                    Err(e) => {
+                        chunk_holder
+                            .set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
+                        // Unfortunate duplication, anyhow::Error is not Clone
+                        break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
+                    }
+                }
+            };
+            if load_chunk_tries > 1 {
+                warn!("Took {load_chunk_tries} tries to load {coord:?}");
             }
-        };
-        if load_chunk_tries > 1 {
-            warn!("Took {load_chunk_tries} tries to load {coord:?}");
-        }
-        result
+            result
+        })
     }
 
     #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]

@@ -235,6 +235,48 @@ impl UiElementContainerPrivate for SideBySideLayoutBuilder<'_> {
 }
 impl UiElementContainer for SideBySideLayoutBuilder<'_> {}
 
+pub struct TextFieldBuilder {
+    field: TextField,
+}
+impl TextFieldBuilder {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self {
+            field: TextField {
+                key: key.into(),
+                label: "".to_string(),
+                initial: "".to_string(),
+                enabled: true,
+                multiline: false,
+                hover_text: "".to_string(),
+            },
+        }
+    }
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.field.label = label.into();
+        self
+    }
+
+    pub fn initial(mut self, initial: impl Into<String>) -> Self {
+        self.field.initial = initial.into();
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.field.enabled = enabled;
+        self
+    }
+
+    pub fn multiline(mut self, multiline: bool) -> Self {
+        self.field.multiline = multiline;
+        self
+    }
+
+    pub fn hover_text(mut self, text: impl Into<String>) -> Self {
+        self.field.hover_text = text.into();
+        self
+    }
+}
+
 // blanket impls for adding elements, assuming that we're adding to something that can store
 // elements
 pub trait UiElementContainer: UiElementContainerPrivate + Sized {
@@ -244,6 +286,7 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         self
     }
     /// Adds a new text field to this popup. At the moment, the layout is still TBD.
+    #[deprecated]
     fn text_field(
         mut self,
         key: impl Into<String>,
@@ -258,9 +301,16 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
             initial: initial.into(),
             enabled,
             multiline,
+            hover_text: "".to_string(),
         }));
         self
     }
+
+    fn text_field_from_builder(mut self, builder: TextFieldBuilder) -> Self {
+        self.push_widget(UiElement::TextField(builder.field));
+        self
+    }
+
     /// Adds a new button to this popup.
     fn button(
         mut self,
