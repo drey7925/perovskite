@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use crate::carts::signals::{
     self, starting_signal_acquire_back, starting_signal_depart_forward,
-    starting_signal_preacquire_front, SIGNAL_BLOCK_CONNECTIVITY,
+    starting_signal_preacquire_front, InterlockingSignalRoute, SignalConfig,
+    SIGNAL_BLOCK_CONNECTIVITY,
 };
 use crate::circuits::{BusMessage, PinState};
 
@@ -124,6 +125,7 @@ pub(super) async fn interlock_cart(
         let resolution = single_pathfind_attempt(
             &handler_context,
             cart_name,
+            (handler_context.startup_counter(), cart_id),
             initial_state.clone(),
             max_scan_distance,
             &cart_config,
@@ -174,7 +176,22 @@ fn send_signal_bus_message(
     outcome: &str,
 ) -> Result<()> {
     let mut data = HashMap::new();
+
+    let (block, nickname) = ctx
+        .game_map()
+        .get_block_with_extended_data(signal_coord, |ext| match ext.custom_data {
+            Some(ref custom_data) => match custom_data.downcast_ref::<SignalConfig>() {
+                Some(config) => Ok(Some(config.signal_nickname.clone())),
+                _ => {
+                    tracing::warn!("expected SignalConfig, got a different type");
+                    Ok(None)
+                }
+            },
+            None => Ok(None),
+        })?;
+
     data.insert("signal_coord".to_string(), signal_coord.to_string());
+    data.insert("signal_nickname".to_string(), nickname.unwrap_or_default());
     data.insert("cart_name".to_string(), cart_name.to_string());
     data.insert("cart_id".to_string(), cart_id.to_string());
     data.insert("outcome".to_string(), outcome.to_string());
@@ -182,9 +199,6 @@ fn send_signal_bus_message(
         sender: signal_coord,
         data,
     };
-    let (block, nickname) = ctx
-        .game_map()
-        .get_block_with_extended_data(signal_coord, |ext| Ok(Some(())))?;
     let cctx = crate::circuits::events::make_root_context(ctx);
     for connectivity in SIGNAL_BLOCK_CONNECTIVITY {
         if let Some(target) = connectivity.eval(signal_coord, block.variant()) {
@@ -203,6 +217,7 @@ fn send_signal_bus_message(
 fn single_pathfind_attempt(
     handler_context: &HandlerContext<'_>,
     cart_name: &str,
+    cart_id: (u64, u32),
     initial_state: ScanState,
     max_scan_distance: usize,
     cart_config: &CartsGameBuilderExtension,
@@ -264,7 +279,7 @@ fn single_pathfind_attempt(
                             signals::SignalLockOutcome::Acquired => {
                                 // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
                                 let query_result =
-                                    query_interlocking_signal(ext.as_ref(), cart_name)?;
+                                    query_interlocking_signal(ext.as_ref(), cart_name, cart_id)?;
                                 if let Some(variant) = query_result.adjust_variant(block.variant())
                                 {
                                     // The signal's parsing outcome led to a new variant.
@@ -297,7 +312,7 @@ fn single_pathfind_attempt(
                                 // We didn't conflict with anyone else for the signal, and we now hold the lock for it.
                                 // We use the interlocking signal query here since we know we're allowed to pass it now
                                 let query_result =
-                                    query_interlocking_signal(ext.as_ref(), cart_name)?;
+                                    query_interlocking_signal(ext.as_ref(), cart_name, cart_id)?;
                                 if let Some(variant) = query_result.adjust_variant(block.variant())
                                 {
                                     // The signal's parsing outcome led to a new variant.
@@ -334,6 +349,7 @@ fn single_pathfind_attempt(
                                     block.variant(),
                                     ext.as_ref(),
                                     cart_name,
+                                    cart_id,
                                 )?;
                                 if let Some(variant) = query_result.adjust_variant(block.variant())
                                 {

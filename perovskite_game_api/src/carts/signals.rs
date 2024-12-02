@@ -130,7 +130,8 @@ use perovskite_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
-use prost::Message;
+use prost::{DecodeError, Message};
+use std::num::ParseIntError;
 
 use crate::circuits::events::CircuitHandlerContext;
 use crate::circuits::{
@@ -142,7 +143,7 @@ use crate::{
     game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use perovskite_server::game_state::client_ui::TextFieldBuilder;
 
 pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal");
@@ -249,15 +250,59 @@ impl CircuitBlockCallbacks for InterlockingSignalCircuitCallbacks {
     // All default impls for now, with one placeholder
     fn on_bus_message(
         &self,
-        _ctx: &CircuitHandlerContext<'_>,
+        ctx: &CircuitHandlerContext<'_>,
         coordinate: BlockCoordinate,
         from: BlockCoordinate,
         message: &BusMessage,
     ) -> Result<()> {
-        if from != coordinate {
-            tracing::info!("TODO: Handle bus message {message:?} at {coordinate:?}");
+        if from == coordinate {
+            return Ok(());
         }
-        Ok(())
+
+        let cart_id = match message.data.get("cart_id") {
+            None => return Ok(()),
+            Some(x) => match x.parse::<u32>() {
+                Ok(i) => i,
+                Err(_) => return Ok(()),
+            },
+        };
+        let signal_nickname = match message.data.get("cart_id") {
+            None => return Ok(()),
+            Some(x) => x,
+        };
+        let decision = match message.data.get("cart_id") {
+            None => return Ok(()),
+            Some(x) => match x.to_ascii_lowercase().as_str() {
+                "straight" => InterlockingSignalRoute::Straight,
+                "left" => InterlockingSignalRoute::DivergingLeft,
+                "right" => InterlockingSignalRoute::DivergingRight,
+                // Later, add "hold" when we add automation for starting signals
+                _ => return Ok(()),
+            },
+        };
+        ctx.game_map()
+            .mutate_block_atomically(coordinate, |_block, ext| {
+                let ext_inner = ext.get_or_insert_with(|| ExtendedData::default());
+
+                match ext_inner.custom_data.as_mut() {
+                    Some(custom_data) => match custom_data.downcast_mut::<SignalConfig>() {
+                        Some(config) => {
+                            if config.signal_nickname.as_str() == signal_nickname.as_str() {
+                                config.pending_manual_route = Some(PendingManualRoute {
+                                    startup_counter: ctx.startup_counter(),
+                                    cart_id,
+                                    decision: decision.into(),
+                                })
+                            }
+                        }
+                        _ => {
+                            tracing::warn!("expected SignalConfig, got a different type");
+                        }
+                    },
+                    None => {}
+                }
+                Ok(())
+            })
     }
 }
 
@@ -673,6 +718,17 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                         )?;
                         return Ok(());
                     }
+                    let manual_routes = response
+                        .textfield_values
+                        .get("manual_routes")
+                        .context("missing manual_routes")?;
+
+                    if manual_routes.len() > 1024 {
+                        response.ctx.initiator().send_chat_message(
+                            ChatMessage::new_server_message("manual_routes too long"),
+                        )?;
+                        return Ok(());
+                    }
                     let signal_nickname = response
                         .textfield_values
                         .get("signal_nickname")
@@ -724,7 +780,13 @@ fn handle_popup_response(response: &PopupResponse, coord: BlockCoordinate) -> Re
                                     .map(|s| s.trim().to_string())
                                     .filter(|s| !s.is_empty())
                                     .collect(),
+                                manual_routes: manual_routes
+                                    .split('\n')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
                                 signal_nickname,
+                                pending_manual_route: None,
                             }));
                             ext.set_dirty();
                             Ok(())
@@ -751,18 +813,36 @@ fn signal_config_serialize(_ctx: InlineContext, state: &CustomData) -> Result<Op
     Ok(Some(signal_config.encode_to_vec()))
 }
 
-/// Extended data for a furnace. One tick is 0.25 seconds.
 #[derive(Clone, Message)]
 pub(crate) struct SignalConfig {
-    /// The list of routes that will diverge left
+    /// The list of cart names that will diverge left
     #[prost(string, repeated, tag = "1")]
     pub(crate) left_routes: Vec<String>,
-    /// The list of routes that will diverge right
+    /// The list of cart names that will diverge right
     #[prost(string, repeated, tag = "2")]
     pub(crate) right_routes: Vec<String>,
+    /// The list of cart names that will hold at the signal until a circuits BusMessage is sent
+    #[prost(string, repeated, tag = "4")]
+    pub(crate) manual_routes: Vec<String>,
     /// A nickname for the signal, used in circuit messages
     #[prost(string, tag = "3")]
     pub(crate) signal_nickname: String,
+    /// A nickname for the signal, used in circuit messages
+    #[prost(message, tag = "5")]
+    pub(crate) pending_manual_route: Option<PendingManualRoute>,
+}
+
+#[derive(Clone, Message)]
+pub(crate) struct PendingManualRoute {
+    /// The startup counter value for which this route is valid
+    #[prost(uint64, tag = "1")]
+    pub(crate) startup_counter: u64,
+    /// The cart ID for which this route is valid
+    #[prost(uint32, tag = "2")]
+    pub(crate) cart_id: u32,
+    #[prost(enumeration = "InterlockingSignalRoute", tag = "3")]
+    /// The direction where this cart will be sent
+    pub(crate) decision: i32,
 }
 
 /// The outcome of trying to acquire most signals.
@@ -1059,13 +1139,18 @@ pub(crate) enum SignalParseOutcome {
     StartingSignalApproachThenStop,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
 pub(crate) enum InterlockingSignalRoute {
-    Straight,
-    DivergingLeft,
-    DivergingRight,
-    Fork,
-    StartingSignalApproachThenStop,
+    Straight = 0,
+    DivergingLeft = 1,
+    DivergingRight = 2,
+    /// Not yet supported, may be removed in favor of microcontroller resolutions
+    #[deprecated]
+    Fork = 3,
+    StartingSignalApproachThenStop = 4,
+    /// Turns into a deny
+    ManuallySignalledNoDecision = 5,
 }
 impl InterlockingSignalRoute {
     pub(crate) fn adjust_variant(&self, variant: u16) -> Option<u16> {
@@ -1089,6 +1174,7 @@ impl InterlockingSignalRoute {
                         | VARIANT_STARTING_HELD,
                 )
             }
+            InterlockingSignalRoute::ManuallySignalledNoDecision => None,
         }
     }
 
@@ -1101,6 +1187,7 @@ impl InterlockingSignalRoute {
             InterlockingSignalRoute::StartingSignalApproachThenStop => {
                 SignalParseOutcome::StartingSignalApproachThenStop
             }
+            InterlockingSignalRoute::ManuallySignalledNoDecision => SignalParseOutcome::Deny,
         }
     }
 }
@@ -1108,6 +1195,7 @@ impl InterlockingSignalRoute {
 pub(crate) fn query_interlocking_signal(
     ext: Option<&ExtendedData>,
     cart_route_name: &str,
+    cart_id: (u64, u32),
 ) -> Result<InterlockingSignalRoute> {
     if ext.is_none() {
         return Ok(InterlockingSignalRoute::Straight);
@@ -1126,6 +1214,14 @@ pub(crate) fn query_interlocking_signal(
 
     if let Some(config) = signal_config {
         if config
+            .manual_routes
+            .iter()
+            .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
+        {
+            return query_manual_interlocking_signal(config, cart_id);
+        }
+
+        if config
             .left_routes
             .iter()
             .any(|x| wildmatch::WildMatch::new(x).matches(cart_route_name))
@@ -1143,14 +1239,35 @@ pub(crate) fn query_interlocking_signal(
     Ok(InterlockingSignalRoute::Straight)
 }
 
+fn query_manual_interlocking_signal(
+    signal_config: &SignalConfig,
+    cart_id: (u64, u32),
+) -> Result<InterlockingSignalRoute> {
+    if let Some(pending) = signal_config.pending_manual_route.as_ref() {
+        if cart_id == (pending.startup_counter, pending.cart_id) {
+            match InterlockingSignalRoute::try_from(pending.decision)? {
+                InterlockingSignalRoute::Fork => {
+                    bail!("Invalid fork decision for manual signal");
+                }
+                InterlockingSignalRoute::StartingSignalApproachThenStop => {
+                    bail!("StartingSignalApproachThenStop but not at a starting signal");
+                }
+                x => return Ok(x),
+            }
+        }
+    }
+    Ok(InterlockingSignalRoute::ManuallySignalledNoDecision)
+}
+
 pub(crate) fn query_starting_signal(
     variant: u16,
     ext: Option<&ExtendedData>,
     cart_route_name: &str,
+    cart_id: (u64, u32),
 ) -> Result<InterlockingSignalRoute> {
     if variant & VARIANT_RESTRICTIVE_EXTERNAL != 0 {
         return Ok(InterlockingSignalRoute::StartingSignalApproachThenStop);
     }
     // TODO allow settings in the extension to also hold the cart at the signal until cleared
-    query_interlocking_signal(ext, cart_route_name)
+    query_interlocking_signal(ext, cart_route_name, cart_id)
 }
