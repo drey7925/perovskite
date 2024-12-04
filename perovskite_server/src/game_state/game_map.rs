@@ -1336,7 +1336,9 @@ impl ServerGameMap {
         let mut new_id = old_id;
         let closure_result = mutator(&mut new_id, &mut data_holder);
 
-        let extended_data_dirty = data_holder.dirty();
+        // This would have been a nice optimization, but I can't even consistently be sure to set
+        // the dirty bit in my own code. Do this for now, until there's a better design.
+        let extended_data_dirty = true; //data_holder.dirty();
         if let Some(new_data) = extended_data {
             chunk
                 .extended_data

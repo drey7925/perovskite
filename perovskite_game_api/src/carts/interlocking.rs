@@ -294,6 +294,8 @@ fn single_pathfind_attempt(
                                         commit_block,
                                     );
                                     acquired_signal = commit_block;
+                                } else {
+                                    *block = rollback_block;
                                 }
                                 Ok(query_result.to_parse_outcome())
                             }

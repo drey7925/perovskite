@@ -131,6 +131,7 @@ use perovskite_server::game_state::{
     event::HandlerContext,
 };
 use prost::{DecodeError, Message};
+use std::fmt::Display;
 use std::num::ParseIntError;
 
 use crate::circuits::events::CircuitHandlerContext;
@@ -258,6 +259,7 @@ impl CircuitBlockCallbacks for InterlockingSignalCircuitCallbacks {
         if from == coordinate {
             return Ok(());
         }
+        dbg!(message);
 
         let cart_id = match message.data.get("cart_id") {
             None => return Ok(()),
@@ -266,11 +268,11 @@ impl CircuitBlockCallbacks for InterlockingSignalCircuitCallbacks {
                 Err(_) => return Ok(()),
             },
         };
-        let signal_nickname = match message.data.get("cart_id") {
+        let signal_nickname = match message.data.get("signal_nickname") {
             None => return Ok(()),
             Some(x) => x,
         };
-        let decision = match message.data.get("cart_id") {
+        let decision = match message.data.get("decision") {
             None => return Ok(()),
             Some(x) => match x.to_ascii_lowercase().as_str() {
                 "straight" => InterlockingSignalRoute::Straight,
@@ -573,8 +575,11 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
 
     let left_routes = ext.left_routes.join("\n");
     let right_routes = ext.right_routes.join("\n");
+    let manual_routes = ext.manual_routes.join("\n");
     const PATTERN_HOVER_TEXT: &str =
         "Patterns that match cart names, one per line. Supports * and ? as wildcards";
+    const MANUAL_ROUTES_HOVER_TEXT: &str =
+        "Matching carts will be held until directed by a bus-message signal over a digital wire. Patterns match cart names, one per line. Supports * and ? as wildcards";
     Ok(Some(
         ctx.new_popup()
             .title("Mrs. Yellow")
@@ -633,11 +638,28 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
                     .hover_text(PATTERN_HOVER_TEXT),
             )
             .text_field_from_builder(
+                TextFieldBuilder::new("manual_routes")
+                    .label("Manual routes")
+                    .initial(manual_routes)
+                    .multiline(true)
+                    .hover_text(MANUAL_ROUTES_HOVER_TEXT),
+            )
+            .text_field_from_builder(
                 TextFieldBuilder::new("signal_nickname")
                     .label("Signal nickname")
                     .initial(ext.signal_nickname.as_str())
                     .multiline(false)
                     .hover_text("Used for digital messages sent over wires to/from the signal"),
+            )
+            .text_field_from_builder(
+                TextFieldBuilder::new("pending_route_display")
+                    .label("Pending manual route")
+                    .enabled(false)
+                    .initial(
+                        ext.pending_manual_route
+                            .map(|x| x.to_string())
+                            .unwrap_or(String::new()),
+                    ),
             )
             .button("apply", "Apply", true, true)
             .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
@@ -843,6 +865,39 @@ pub(crate) struct PendingManualRoute {
     #[prost(enumeration = "InterlockingSignalRoute", tag = "3")]
     /// The direction where this cart will be sent
     pub(crate) decision: i32,
+}
+impl Display for PendingManualRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = format!(
+            "id: {}, decision: {:?}",
+            self.cart_id,
+            match InterlockingSignalRoute::try_from(self.decision) {
+                Ok(InterlockingSignalRoute::DivergingLeft) => {
+                    "left"
+                }
+
+                Ok(InterlockingSignalRoute::Straight) => {
+                    "straight"
+                }
+                Ok(InterlockingSignalRoute::DivergingRight) => {
+                    "right"
+                }
+                Ok(InterlockingSignalRoute::Fork) => {
+                    "fork???"
+                }
+                Ok(InterlockingSignalRoute::StartingSignalApproachThenStop) => {
+                    "stop"
+                }
+                Ok(InterlockingSignalRoute::ManuallySignalledNoDecision) => {
+                    "no decision???"
+                }
+                Err(_) => {
+                    "invalid???"
+                }
+            }
+        );
+        write!(f, "{}", str)
+    }
 }
 
 /// The outcome of trying to acquire most signals.
