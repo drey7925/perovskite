@@ -162,15 +162,22 @@ pub struct ChunkOffset {
     pub z: u8,
 }
 impl ChunkOffset {
-    pub fn new(x: u8, y: u8, z: u8) -> Self {
+    pub const fn new(x: u8, y: u8, z: u8) -> Self {
         Self { x, y, z }
     }
+
+    #[cfg(debug_assertions)]
     #[inline(always)]
     fn debug_check(&self) {
         debug_assert!(self.x < 16);
         debug_assert!(self.y < 16);
         debug_assert!(self.z < 16);
     }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn debug_check(&self) {}
+
     #[inline]
     pub fn as_index(&self) -> usize {
         self.debug_check();

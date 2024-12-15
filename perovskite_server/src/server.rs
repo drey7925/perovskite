@@ -270,6 +270,7 @@ impl ServerBuilder {
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
         let mut options = RocksdbOptions::default();
+        options.create_if_missing(true);
         options.optimize_for_point_lookup(args.rocksdb_point_lookup_cache_mib);
         let rocksdb_fds = set_rlimit_for_rocksdb(args.rocksdb_num_fds)?;
         tracing::info!(
@@ -442,6 +443,7 @@ impl ServerBuilder {
                 "{} not present; using defaults (no TLS)",
                 tls_config_file.display()
             );
+            return Ok(LoadedTlsConfig::NoTls);
         }
         log::info!("Loading TLS settings from {}", tls_config_file.display());
         let config = ron::from_str::<TlsSettings>(&std::fs::read_to_string(&tls_config_file)?)?;

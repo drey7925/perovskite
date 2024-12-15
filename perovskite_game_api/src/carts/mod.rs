@@ -127,6 +127,7 @@ lazy_static::lazy_static! {
 }
 
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
+    crate::circuits::register_circuits(game_builder)?;
     let rail_tex = StaticTextureName("carts:rail");
     let speedpost1_tex = StaticTextureName("carts:speedpost1");
     let speedpost2_tex = StaticTextureName("carts:speedpost2");

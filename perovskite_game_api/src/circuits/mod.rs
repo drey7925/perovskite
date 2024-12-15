@@ -1,3 +1,4 @@
+use crate::default_game::DefaultGameBuilder;
 use crate::{
     blocks::{BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, GameBuilderExtension},
@@ -389,11 +390,6 @@ struct CircuitGameStateExtension {
 impl GameStateExtension for CircuitGameStateExtension {}
 
 pub trait CircuitGameBuilder {
-    /// Initialize the circuits content of the plugin:
-    /// - makes basic circuits available to players
-    /// - makes other functions in this trait available to plugins that need them
-    fn initialize_circuits(&mut self) -> Result<()>;
-
     /// Register a block with the circuits plugin. This must be done in addition to actually
     /// injecting circuits related callbacks into the block itself.
     fn define_circuit_callbacks(
@@ -414,26 +410,6 @@ trait CircuitGameBuilerPrivate {
 }
 
 impl CircuitGameBuilder for GameBuilder {
-    fn initialize_circuits(&mut self) -> Result<()> {
-        if self
-            .builder_extension::<CircuitGameBuilderExt>()
-            .initialized
-        {
-            return Ok(());
-        }
-        self.builder_extension::<CircuitGameBuilderExt>()
-            .initialized = true;
-
-        self.inner
-            .blocks_mut()
-            .register_fast_block_group(constants::CIRCUITS_GROUP);
-
-        wire::register_wire(self)?;
-        simple_blocks::register_simple_blocks(self)?;
-        gates::register_base_gates(self)?;
-        switches::register_switches(self)?;
-        Ok(())
-    }
     fn define_circuit_callbacks(
         &mut self,
         block_id: BlockId,
@@ -463,6 +439,32 @@ impl CircuitGameBuilder for GameBuilder {
         state.callbacks.insert(block_id.base_id(), callbacks);
         Ok(())
     }
+}
+
+/// Initialize the circuits plugin's content:
+/// - makes basic circuits available to players
+/// - makes other functions in this trait available to plugins that need them
+pub fn register_circuits(builder: &mut GameBuilder) -> Result<()> {
+    if builder
+        .builder_extension::<CircuitGameBuilderExt>()
+        .initialized
+    {
+        return Ok(());
+    }
+    builder
+        .builder_extension::<CircuitGameBuilderExt>()
+        .initialized = true;
+
+    builder
+        .inner
+        .blocks_mut()
+        .register_fast_block_group(constants::CIRCUITS_GROUP);
+
+    wire::register_wire(builder)?;
+    simple_blocks::register_simple_blocks(builder)?;
+    gates::register_base_gates(builder)?;
+    switches::register_switches(builder)?;
+    Ok(())
 }
 
 impl CircuitGameBuilerPrivate for GameBuilder {
