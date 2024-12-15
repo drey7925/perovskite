@@ -309,6 +309,8 @@ fn div_euclid_16_i32(i: i32) -> i32 {
     i >> 4
 }
 
+// Too slow in debug mode
+#[cfg(not(debug_assertions))]
 #[test]
 pub fn test_rem_euclid() {
     for i in i32::MIN..=i32::MAX {
@@ -316,6 +318,8 @@ pub fn test_rem_euclid() {
     }
 }
 
+// Too slow in debug mode
+#[cfg(not(debug_assertions))]
 #[test]
 pub fn test_div_euclid() {
     for i in i32::MIN..=i32::MAX {

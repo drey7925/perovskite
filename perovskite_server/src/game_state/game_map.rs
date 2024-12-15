@@ -222,22 +222,17 @@ impl MapChunk {
         ext_data: &ExtendedData,
         game_state: &GameState,
     ) -> Result<Option<mapchunk_proto::ExtendedData>> {
-        // We're in MapChunk so we have at least a read-level mutex, meaning we can use a relaxed load
+        // We're in MapChunk, so we have at least a read-level mutex, meaning we can use a relaxed load
         let id = self.block_ids[block_index].load(Ordering::Relaxed);
         let (block_type, _) = game_state
             .game_map()
             .block_type_manager()
             .get_block_by_id(id.into())?;
-        if block_type.extended_data_handling == ExtDataHandling::NoExtData
-            && ext_data.custom_data.is_some()
-        {
-            error!(
-            "Found extended data, but block {} doesn't support extended data, while serializing {:?}, ",
-            block_type.client_info.short_name, block_coord,
-        );
-        }
 
-        if ext_data.custom_data.is_some() || !ext_data.inventories.is_empty() {
+        if ext_data.custom_data.is_some()
+            || !ext_data.simple_data.is_empty()
+            || !ext_data.inventories.is_empty()
+        {
             let serialized_custom_data = match ext_data.custom_data.as_ref() {
                 Some(x) => match &block_type.serialize_extended_data_handler {
                     Some(serializer) => {
@@ -426,14 +421,6 @@ fn parse_v1(
             .game_map()
             .block_type_manager()
             .get_block_by_id(block_id.into())?;
-        if block_def.extended_data_handling == ExtDataHandling::NoExtData {
-            error!(
-                "Block at {:?}, type {} cannot handle extended data, but serialized chunk contained extended data",
-                block_coord,
-                block_def.client_info.short_name
-            );
-            continue;
-        }
         let handler_context = InlineContext {
             tick: game_state.tick(),
             initiator: EventInitiator::Engine,
@@ -455,7 +442,7 @@ fn parse_v1(
             );
         } else {
             if !serialized_data.is_empty() {
-                warn!(
+                error!(
                     "Block at {:?}, type {} has extended data, but had no deserialize handler",
                     block_coord, block_def.client_info.short_name
                 );
@@ -1837,12 +1824,18 @@ impl ServerGameMap {
                 tracing::error!("Timed out waiting for async map workers to shut down");
             }
         }
-        self.flush();
+        self.purge_and_flush();
 
         Ok(())
     }
 
-    pub(crate) fn flush(&self) {
+    /// Flushes the database. This is *very* costly, effectively locking all shards and unloading
+    /// all chunks. Player coroutine chunk trackers may take a substantial amount of time to recover
+    /// as well.
+    ///
+    /// It should *only* be used in tests; if you need better durability semantics, please file an
+    /// FR instead of using this function.
+    pub fn purge_and_flush(&self) {
         for shard in 0..NUM_CHUNK_SHARDS {
             let mut lock = self.live_chunks[shard].write();
             let coords: Vec<_> = lock.chunks.keys().copied().collect();
@@ -1887,7 +1880,7 @@ impl ServerGameMap {
 }
 impl Drop for ServerGameMap {
     fn drop(&mut self) {
-        self.flush();
+        self.purge_and_flush();
         tracing::info!("ServerGameMap shut down");
     }
 }
@@ -3176,6 +3169,9 @@ pub mod fuzz {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use log::Level::Debug;
+
+    const ZERO_COORD: BlockCoordinate = BlockCoordinate::new(0, 0, 0);
 
     #[test]
     fn test_roundtrip() {
@@ -3187,5 +3183,53 @@ mod tests {
         let bytes = bc.as_bytes();
         let bc2 = BlockCoordinate::from_bytes(&bytes).unwrap();
         assert_eq!(bc, bc2);
+    }
+
+    #[test]
+    fn test_mba_store_blockid() {
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                gs.game_map()
+                    .mutate_block_atomically(ZERO_COORD, |block, _ext| {
+                        *block = BlockId(1);
+                        Ok(())
+                    })?;
+
+                gs.game_map().purge_and_flush();
+
+                assert_eq!(gs.game_map().get_block(ZERO_COORD).unwrap(), BlockId(1));
+
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_mba_store_ext() {
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                gs.game_map()
+                    .mutate_block_atomically(ZERO_COORD, |_block, ext| {
+                        ext.get_or_insert_with(Default::default)
+                            .simple_data
+                            .insert("foo".to_string(), "bar".to_string());
+                        Ok(())
+                    })?;
+
+                gs.game_map().purge_and_flush();
+
+                let (block, ext) = gs
+                    .game_map()
+                    .get_block_with_extended_data(ZERO_COORD, |ext| {
+                        Ok(ext.simple_data.get("foo").cloned())
+                    })
+                    .unwrap();
+                assert_eq!(ext, Some(String::from("bar")));
+
+                Ok(())
+            })
+            .unwrap();
     }
 }

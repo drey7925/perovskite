@@ -42,11 +42,11 @@ impl Debug for BlockCoordinate {
     }
 }
 impl BlockCoordinate {
-    pub fn new(x: i32, y: i32, z: i32) -> Self {
+    pub const fn new(x: i32, y: i32, z: i32) -> Self {
         Self { x, y, z }
     }
     #[inline]
-    pub fn offset(&self) -> ChunkOffset {
+    pub const fn offset(&self) -> ChunkOffset {
         // rem_euclid(16) result should always fit into u8.
         ChunkOffset {
             x: self.x.rem_euclid(16) as u8,
@@ -55,7 +55,7 @@ impl BlockCoordinate {
         }
     }
     #[inline]
-    pub fn chunk(&self) -> ChunkCoordinate {
+    pub const fn chunk(&self) -> ChunkCoordinate {
         ChunkCoordinate {
             x: self.x.div_euclid(16),
             y: self.y.div_euclid(16),

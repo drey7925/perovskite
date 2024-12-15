@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::env::temp_dir;
 use std::fmt::Debug;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -24,6 +25,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use perovskite_core::coordinates::ChunkCoordinate;
 use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
     util::set_trace_rate_denominator,
@@ -31,8 +33,11 @@ use perovskite_core::{
 use rocksdb::Options;
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Identity, ServerTlsConfig};
+use type_map::concurrent::TypeMap;
 
+use crate::database::database_engine::InMemGameDabase;
 use crate::database::rocksdb::RocksdbOptions;
+use crate::game_state::game_map::MapChunk;
 use crate::{
     database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
     game_state::{
@@ -174,6 +179,39 @@ impl Server {
     }
 }
 
+/// A simple server, with nothing registered, for unit tests and doctests
+pub fn testonly_in_memory() -> Result<Server> {
+    let db = Arc::new(InMemGameDabase::new());
+    let mut blocks = BlockTypeManager::create_or_load(db.as_ref())?;
+    let mut entities = EntityTypeManager::create_or_load(db.as_ref())?;
+    blocks.pre_build()?;
+    let blocks = Arc::new(blocks);
+    blocks.save_to(db.as_ref())?;
+    entities.pre_build()?;
+    entities.save_to(db.as_ref())?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let _rt_guard = runtime.enter();
+
+    let game_behaviors = GameBehaviors::dummy_game_behaviors();
+
+    let gs = GameState::new(
+        temp_dir().join("perovskite_inmem_dummy"),
+        db,
+        blocks,
+        entities,
+        ItemManager::new()?,
+        MediaManager::new(),
+        Box::new(|_, _| Arc::new(DummyMapgen)),
+        game_behaviors,
+        CommandManager::new(),
+        TypeMap::new(),
+    )?;
+    let bind_address = SocketAddr::new(IpAddr::from_str("::").unwrap(), 0);
+    Server::new(runtime, gs, bind_address, LoadedTlsConfig::NoTls)
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         tracing::info!("Server dropped, starting shutdown");
@@ -204,10 +242,20 @@ pub struct ServerBuilder {
     extensions: type_map::concurrent::TypeMap,
     startup_actions: Vec<Box<dyn FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static>>,
 }
+
+struct DummyMapgen;
+
+impl MapgenInterface for DummyMapgen {
+    fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk) {
+        // pass
+    }
+}
+
 impl ServerBuilder {
     pub fn from_cmdline() -> Result<ServerBuilder> {
         Self::from_args(&ServerArgs::parse())
     }
+
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
         if !Path::exists(&args.data_dir) {
             std::fs::create_dir(&args.data_dir)?;

@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
 use crate::game_state::entities::EntityClassId;
 use anyhow::Result;
-use cgmath::{vec3, Vector3};
+use cgmath::{vec3, Vector3, Zero};
 use itertools::Itertools;
 use perovskite_core::{
     chat::ChatMessage,
@@ -84,6 +84,42 @@ impl GameBehaviors {
             ])
         }
         permissions
+    }
+
+    pub(crate) fn dummy_game_behaviors() -> GameBehaviors {
+        struct DummyPopupProvider;
+        impl InventoryPopupProvider for DummyPopupProvider {
+            fn make_inventory_popup(
+                &self,
+                game_state: Arc<GameState>,
+                _: String,
+                _: Vec<String>,
+                _: InventoryKey,
+            ) -> Result<Popup> {
+                Ok(Popup::new(game_state))
+            }
+        }
+
+        struct DummyAsyncHandler;
+        #[async_trait]
+        impl GenericAsyncHandler<Player, ()> for DummyAsyncHandler {
+            async fn handle(&self, req: &Player, context: HandlerContext<'_>) -> Result<()> {
+                Ok(())
+            }
+        }
+        GameBehaviors {
+            make_inventory_popup: Box::new(DummyPopupProvider),
+            day_length: Duration::from_secs(1200),
+            defined_permissions: HashSet::new(),
+            default_permissions: HashSet::new(),
+            ambient_permissions: HashSet::new(),
+            super_users: HashSet::new(),
+            on_player_join: Box::new(DummyAsyncHandler),
+            on_player_leave: Box::new(DummyAsyncHandler),
+            on_player_err: Box::new(DummyAsyncHandler),
+            spawn_location: Box::new(|_| Vector3::zero()),
+            player_entity_class: Box::new(|_| EntityClassId::new(0)),
+        }
     }
 }
 impl Default for GameBehaviors {

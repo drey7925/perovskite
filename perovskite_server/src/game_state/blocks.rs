@@ -114,34 +114,34 @@ pub type InlineHandler = dyn Fn(
 
 pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; 4096]) + Send + Sync + 'static;
 
-// How extended data for this block type ought to be handled.
+/// How extended data for this block type ought to be handled.
+///
+/// For now, this enum has only one option; in the future, additional variants will
 #[derive(PartialEq, Eq)]
 pub enum ExtDataHandling {
-    /// The block will never have extended data.
-    NoExtData,
     /// When storing/loading this block type, it has extended data that is
     /// needed by the block type's plugins/handlers code on the server.
     /// Note that this loading may still be done lazily - they may only be loaded when
     /// an event handler actually tries to read/write them.
     ServerSide,
-    /// This block type has extended data that affects the client's behavior.
-    /// The xattrs will be loaded and parsed every time the block is sent to a client,
-    /// but the result may be cached for use with multiple clients/users.
-    /// This may be expensive - a block-specific handler will be called every time
-    /// the block is loaded and needs to be sent to a client.
-    ///
-    /// NOT YET IMPLEMENTED
-    ClientSideShared,
-    /// Same as ClientSideShared, except the result must not be cached across
-    /// clients/users. That is, if the same block is being sent to ten players
-    /// in a space, the event handler will need to be run ten times, making this even
-    /// more expensive than ClientSideShared.
-    ///
-    /// Clients may still cache the resulting extended data until it is invalidated
-    /// and re-sent, or that part of the map is otherwise dropped from the cache.
-    ///
-    /// NOT YET IMPLEMENTED
-    ClientSideUnshared,
+    // /// This block type has extended data that affects the client's behavior.
+    // /// The xattrs will be loaded and parsed every time the block is sent to a client,
+    // /// but the result may be cached for use with multiple clients/users.
+    // /// This may be expensive - a block-specific handler will be called every time
+    // /// the block is loaded and needs to be sent to a client.
+    // ///
+    // /// NOT YET IMPLEMENTED
+    // ClientSideShared,
+    // /// Same as ClientSideShared, except the result must not be cached across
+    // /// clients/users. That is, if the same block is being sent to ten players
+    // /// in a space, the event handler will need to be run ten times, making this even
+    // /// more expensive than ClientSideShared.
+    // ///
+    // /// Clients may still cache the resulting extended data until it is invalidated
+    // /// and re-sent, or that part of the map is otherwise dropped from the cache.
+    // ///
+    // /// NOT YET IMPLEMENTED
+    // ClientSideUnshared,
 }
 
 /// In-memory representation of the different types of blocks that can exist in the world.
@@ -195,26 +195,27 @@ pub struct BlockType {
     /// other changes to a map chunk to be lost.
     pub serialize_extended_data_handler:
         Option<Box<dyn Fn(InlineContext, &CustomData) -> Result<Option<Vec<u8>>> + Send + Sync>>,
-    /// If extended_data_handling is one of the client-side options, called whenever the block
-    /// needs to be sent to a client (subject to the caching policy, see doc for `ExtDataHandling`)
-    ///
-    /// The function is called with the extended data obtained from deserialize_extended_data_handler
-    /// as well as any inventories.
-    ///
-    /// If the response is Some(...), all fields other than id and short_name override the defaults
-    /// for this block.
-    ///
-    /// Should be as fast as possible.
-    ///
-    /// If this returns an Err, the game will crash since this represents data loss due to corrupt data
-    /// in a chunk.
-    pub extended_data_to_client_side: Option<
-        Box<
-            dyn Fn(InlineContext, &ExtendedData) -> Option<blocks_proto::BlockTypeDef>
-                + Send
-                + Sync,
-        >,
-    >,
+    // NOT YET IMPLEMENTED
+    // /// If extended_data_handling is one of the client-side options, called whenever the block
+    // /// needs to be sent to a client (subject to the caching policy, see doc for `ExtDataHandling`)
+    // ///
+    // /// The function is called with the extended data obtained from deserialize_extended_data_handler
+    // /// as well as any inventories.
+    // ///
+    // /// If the response is Some(...), all fields other than id and short_name override the defaults
+    // /// for this block.
+    // ///
+    // /// Should be as fast as possible.
+    // ///
+    // /// If this returns an Err, the game will crash since this represents data loss due to corrupt data
+    // /// in a chunk.
+    //  pub extended_data_to_client_side: Option<
+    //     Box<
+    //         dyn Fn(InlineContext, &ExtendedData) -> Option<blocks_proto::BlockTypeDef>
+    //             + Send
+    //             + Sync,
+    //     >,
+    // >,
     /// Called when the block is dug. This function (or dig_handler_inline) should explicitly remove the block (i.e. replace it with air)
     /// if it should be removed from the map when dug.
     ///
@@ -289,10 +290,9 @@ impl Default for BlockType {
     fn default() -> Self {
         Self {
             client_info: Default::default(),
-            extended_data_handling: ExtDataHandling::NoExtData,
+            extended_data_handling: ExtDataHandling::ServerSide,
             deserialize_extended_data_handler: None,
             serialize_extended_data_handler: None,
-            extended_data_to_client_side: None,
             dig_handler_full: None,
             dig_handler_inline: None,
             tap_handler_full: None,
@@ -306,7 +306,39 @@ impl Default for BlockType {
 
 /// Represents extended data for a block on the map.
 ///
-/// **Data loss warning:** [ExtendedDataHolder::set_dirty()] *must* be called after making meaningful changes to the extended data
+/// # Data loss warning:
+/// The dirty bit *must* be set after making meaningful changes to the extended data to avoid
+/// data loss (by the game map not writing anything back)
+///
+/// This is done automatically when accessing the given extended data using a mutable reference,
+/// since [`std::ops::DerefMut`] will mark the dirty bit - this includes constructions like:
+/// ```rust
+/// # use perovskite_core::coordinates::BlockCoordinate;
+/// let server = perovskite_server::server::testonly_in_memory().unwrap();
+/// # server.run_task_in_server(|gs| {
+/// # let coord = BlockCoordinate::new(0, 0, 0);
+/// gs.game_map().mutate_block_atomically(coord, |block, ext| {
+///     // `ExtendedDataHolder` will DerefMut to `Option<ExtendedData>`, and DerefMut sets the
+///     // dirty bit.
+///     let ext_inner = ext.get_or_insert_with(Default::default);
+///     ext_inner.simple_data.insert("foo".to_string(), "bar".to_string());
+///     Ok(())
+/// });
+/// #    Ok(())
+/// # });
+/// ```
+///
+/// However, there is a risk of data loss if:
+/// 1. The extended data contains some sort of interior mutability (e.g. Mutex, RwLock, atomics,
+///    lock-free data structures, etc), whether behind an Arc or otherwise
+/// 2. That data (behind that interior mutability) should be written back to the game database (i.e.
+///    the block's extended data serializer reads it)
+/// 3. The only way the extended data is accessed is via an immutable deref (e.g. `ext.map()`,
+///    `ext.and_then()`, `ext.deref()`)
+/// 4. And `ExtendedDataHolder::set_dirty` is not called manually.
+///
+/// In this case, if the chunk is unloaded without any other changes, the changes will be lost since
+/// the chunk won't be written back to disk by the game map.
 pub struct ExtendedDataHolder<'a> {
     extended_data: &'a mut Option<ExtendedData>,
     dirty: bool,
@@ -330,7 +362,9 @@ impl<'a> ExtendedDataHolder<'a> {
         *self.extended_data = None;
     }
     /// Marks the extended data as needing to be written back to disk.
-    /// **Data loss warning:** If this is not set, changes to the extended data may be lost.
+    ///
+    /// Note that in most cases, this is not needed. See the docstring for [ExtendedDataHolder] for
+    /// more details.
     pub fn set_dirty(&mut self) {
         self.dirty = true;
     }
@@ -344,6 +378,7 @@ impl<'a> Deref for ExtendedDataHolder<'a> {
 }
 impl<'a> DerefMut for ExtendedDataHolder<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
         self.extended_data
     }
 }
@@ -794,7 +829,6 @@ fn make_unknown_block_serverside(
             unknown_block_deserialize_data_passthrough,
         )),
         serialize_extended_data_handler: Some(Box::new(unknown_block_serialize_data_passthrough)),
-        extended_data_to_client_side: None,
         dig_handler_full: None,
         dig_handler_inline: Some(Box::new(move |ctx, block, _, _| {
             *block = ctx
@@ -897,5 +931,19 @@ impl FastBlockName {
             name: name.into(),
             base_id: AtomicU32::new(u32::MAX),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extended_data_autosets_dirty() {
+        let mut ext = None;
+        let mut edh = ExtendedDataHolder::new(&mut ext);
+        assert!(!edh.dirty);
+        let _ = edh.get_or_insert_with(Default::default);
+        assert!(edh.dirty);
     }
 }

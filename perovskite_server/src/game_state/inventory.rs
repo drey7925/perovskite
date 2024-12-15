@@ -923,7 +923,6 @@ impl<T> InventoryView<T> {
                 .game_state
                 .game_map()
                 .mutate_block_atomically(*coord, |_, ext_data| {
-                    ext_data.set_dirty();
                     Ok(ext_data
                         .as_mut()
                         .and_then(|x| x.inventories.get_mut(key))
