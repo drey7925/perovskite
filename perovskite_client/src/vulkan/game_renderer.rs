@@ -16,6 +16,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 
@@ -649,6 +650,21 @@ impl GameRenderer {
                     if recreate_swapchain {
                         let _span = span!("Recreate swapchain");
                         let size = self.ctx.window.inner_size();
+
+                        if size.height == 0 || size.width == 0 {
+                            if let GameStateMutRef::Active(game) = game_lock.as_mut()
+                            {
+                                game.advance_without_rendering();
+                                // Hacky, otherwise we spin really fast here, while also messing
+                                // with physics state thanks to tiny updates.
+                                //
+                                // This has to hold together long enough until vulkano releases the
+                                // taskgraph and this whole module is rewritten anyway.
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
+                            return;
+                        }
+
                         recreate_swapchain = false;
                         self.ctx.recreate_swapchain(size, self.settings.load().render.supersampling).unwrap();
                         self.ctx.viewport.extent = size.into();

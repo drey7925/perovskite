@@ -1458,7 +1458,7 @@ impl std::fmt::Debug for ScanOutcome {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ScanState {
     pub(crate) block_coord: BlockCoordinate,
     pub(crate) is_reversed: bool,

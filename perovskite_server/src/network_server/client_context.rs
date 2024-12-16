@@ -663,7 +663,8 @@ impl MapChunkSender {
             // We load chunks as long as they're close enough and the map system
             // isn't overloaded. If the map system is overloaded, we'll only load
             // chunks that are close enough to the player to really matter.
-            let should_load = distance <= LOAD_EAGER_DISTANCE
+            let should_load = (distance <= LOAD_EAGER_DISTANCE
+                && dy.abs() <= VERTICAL_DISTANCE_CAP)
                 && (distance <= FORCE_LOAD_DISTANCE
                     || !self.context.game_state.game_map().in_pushback());
 
@@ -2153,7 +2154,7 @@ impl EntityEventSender {
 // TODO tune these and make them adjustable via settings
 // Units of chunks
 // Chunks within this distance will be loaded into memory if not yet loaded
-const LOAD_EAGER_DISTANCE: i32 = 20;
+const LOAD_EAGER_DISTANCE: i32 = 25;
 // Chunks within this distance will be sent if they are already loaded into memory
 // TODO: This has to equal LOAD_EAGER_DISTANCE to avoid an issue where a chunk is lazily processed,
 // and then never eagerly re-processed as it gets closer
@@ -2166,6 +2167,7 @@ const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 128;
 const MAX_CHUNKS_PER_UPDATE: usize = 4096;
+const VERTICAL_DISTANCE_CAP: i32 = 10;
 
 lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {

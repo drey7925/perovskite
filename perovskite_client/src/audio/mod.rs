@@ -810,21 +810,31 @@ impl EngineState {
                         }
 
                         *travel_since = new_travel;
-                        let current_displacement = player_pos - *captured_entity_location;
+                        let player_displacement = player_pos - *captured_entity_location;
+                        let ent_displacement = entity_pos - *captured_entity_location;
                         let captured_velocity = captured_velocity.cast().unwrap();
-                        let parallel = current_displacement.project_on(captured_velocity);
-                        let perpendicular = current_displacement - parallel;
+                        let parallel = player_displacement.project_on(captured_velocity);
+                        let perpendicular = player_displacement - parallel;
 
                         // How far the player has moved *along* with the entity
-                        let parallel_displacement = current_displacement.dot(captured_velocity);
-                        (
-                            perpendicular,
-                            *travel_since
-                                > (control_block.entity_len as f64 + parallel_displacement),
-                        )
+                        let parallel_displacement = player_displacement.dot(captured_velocity);
+                        let parallel_met = *travel_since
+                            > (control_block.entity_len as f64 + parallel_displacement);
+
+                        // Heuristic/hacky solution
+                        let entity_own_parallel = ent_displacement.project_on(captured_velocity);
+                        let entity_own_perpendicular = ent_displacement - entity_own_parallel;
+                        let perpendicular_met =
+                            entity_own_perpendicular.magnitude() > control_block.entity_len as f64;
+
+                        (perpendicular, parallel_met | perpendicular_met)
                     }
                 };
-                let effective_distance = effective_displacement.magnitude();
+                // max is a hacky fix for spurious sounds; TODO fix it properly or rewrite this mess
+                let effective_distance = effective_displacement
+                    .magnitude()
+                    .max(distance - control_block.entity_len as f64);
+
                 let clamped_distance = effective_distance.max(MIN_ENTITY_DISTANCE) as f32;
                 // multiplier affects amplitude, not power
                 let distance_falloff_multiplier = 1.0 / (clamped_distance);

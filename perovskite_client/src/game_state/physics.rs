@@ -17,7 +17,7 @@
 use std::{ops::RangeInclusive, sync::Arc, time::Duration};
 
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Angle, Deg, InnerSpace, Matrix3, Vector3, Zero};
+use cgmath::{vec3, Angle, Deg, ElementWise, InnerSpace, Matrix3, Vector3, Zero};
 use perovskite_core::{
     constants::permissions,
     coordinates::BlockCoordinate,
@@ -257,7 +257,9 @@ impl PhysicsState {
         // If we hit a floor or ceiling
         if (new_pos.y - target.y) > COLLISION_EPS {
             self.last_land_height = new_pos.y;
-            self.walk_sound_odometer += (new_pos - self.pos).magnitude();
+            self.walk_sound_odometer += (new_pos - self.pos)
+                .mul_element_wise(Vector3::new(1.0, 0.0, 1.0))
+                .magnitude();
             if self.walk_sound_odometer > 1.0 || !self.landed_last_frame {
                 let footstep_coord = surrounding_coord.try_delta(0, -1, 0);
                 self.animation_state.footstep_coord = footstep_coord;

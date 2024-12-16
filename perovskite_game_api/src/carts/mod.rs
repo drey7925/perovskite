@@ -773,12 +773,15 @@ impl CartCoroutine {
         signal_coord: BlockCoordinate,
         signal_block: BlockId,
         trace_buffer: &TraceBuffer,
+        new_state: ScanState,
     ) -> ReenterableResult<SignalResult> {
         if let Some(speed) = self.config.parse_speedpost(signal_block) {
             return SignalResult::SpeedRestriction(speed).into();
         } else if signal_block.equals_ignore_variant(self.config.automatic_signal) {
             let rotation = signal_block.variant() & 0b11;
-            if !self.scan_state.signal_rotation_ok(rotation) {
+            // Use the new state since we want to check whether we are allowed to enter the block
+            // (based on the face direction of that proposed state)
+            if !new_state.signal_rotation_ok(rotation) {
                 return SignalResult::Stop.into();
             }
 
@@ -832,6 +835,7 @@ impl CartCoroutine {
         } else if signal_block.equals_ignore_variant(self.config.interlocking_signal)
             || signal_block.equals_ignore_variant(self.config.starting_signal)
         {
+            // This uses the old state, since the interlocking code will itself validate entry
             let state_clone = self.scan_state.clone();
             let config_clone = self.config.clone();
 
@@ -993,15 +997,20 @@ impl CartCoroutine {
                     }
                 };
 
-                let signal_result =
-                    match self.parse_signal(services, signal_coord, signal_block, &trace_buffer) {
-                        ReenterableResult::AvailableNow(x) => x,
-                        ReenterableResult::Deferred(d) => {
-                            tracing::debug!("signal parse deferral");
+                let signal_result = match self.parse_signal(
+                    services,
+                    signal_coord,
+                    signal_block,
+                    &trace_buffer,
+                    new_state,
+                ) {
+                    ReenterableResult::AvailableNow(x) => x,
+                    ReenterableResult::Deferred(d) => {
+                        tracing::debug!("signal parse deferral");
 
-                            return Some(d.defer_and_reinvoke(CONTINUATION_TAG_SIGNAL));
-                        }
-                    };
+                        return Some(d.defer_and_reinvoke(CONTINUATION_TAG_SIGNAL));
+                    }
+                };
                 match signal_result {
                     SignalResult::Stop => {
                         tracing::debug!("Stop signal at {:?}", new_state.block_coord);
@@ -1790,7 +1799,7 @@ impl CartCoroutine {
                 tracing::debug!("action {:?} at {}", action.action, action.odometer);
 
                 let odometer_time = segment.event_time(action.odometer);
-                let action_time = (returned_moves_time + when as f64).max(0.0) + odometer_time;
+                let action_time = (returned_moves_time + when as f64 + odometer_time).max(0.0);
                 match action.action {
                     PendingAction::SignalEnterBlock(enter_signal_coord, enter_signal_block) => {
                         services.spawn_delayed(
