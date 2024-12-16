@@ -679,8 +679,6 @@ impl EngineState {
             };
 
             for chan in 0..channels {
-                // let sample_value =
-                //     (2.0 * std::f64::consts::PI * effective_time_delta * (control.id as f64)).sin();
                 let sample_value = if chan == 0 { l } else { r };
                 let amplitude = if channels == 2 && control.flags & SOUND_DIRECTIONAL != 0 {
                     if chan == 0 {
@@ -772,17 +770,23 @@ impl EngineState {
                     ApproachState::DecreaseDetected(acc) => {
                         let new_acc = (acc + distance_diff).max(0.0);
                         if new_acc > 0.1 {
-                            let _span = span!("start passing");
                             scratchpad.edge_cycle = 0.0;
                             // This is a local minimum
-                            ApproachState::Passing(
-                                0.0,
-                                entity_pos,
-                                player_pos - entity_pos,
-                                entity_move
-                                    .instantaneous_velocity(entity_move_elapsed)
-                                    .normalize(),
-                            )
+                            // Is it close enough?
+                            if distance < (2.0 * control_block.entity_len as f64) {
+                                ApproachState::Passing(
+                                    0.0,
+                                    entity_pos,
+                                    player_pos - entity_pos,
+                                    entity_move
+                                        .instantaneous_velocity(entity_move_elapsed)
+                                        .normalize(),
+                                )
+                            } else {
+                                // Nope, we're probably getting some artifact far away, and we might
+                                // end up stuck in Passing for a while until it actually passes by
+                                ApproachState::Initial(0.0)
+                            }
                         } else {
                             ApproachState::DecreaseDetected(new_acc)
                         }
