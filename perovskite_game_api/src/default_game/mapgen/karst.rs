@@ -137,6 +137,21 @@ impl KarstGenerator {
         (height, valley, cave_ceiling)
     }
 
+    pub(crate) fn profile(&self, xg: i32, zg: i32) -> f64 {
+        self.karst_profile_noise.get([
+            xg as f64 * PROFILE_INPUT_SCALE,
+            zg as f64 * PROFILE_INPUT_SCALE,
+        ]) * 30.0
+            + 60.0
+    }
+
+    pub(crate) fn floor(&self, xg: i32, zg: i32) -> f64 {
+        self.karst_valley_noise.get([
+            xg as f64 * VALLEY_INPUT_SCALE,
+            zg as f64 * VALLEY_INPUT_SCALE,
+        ]) * 20.0
+    }
+
     pub(crate) fn generate(
         &self,
         chunk_coord: ChunkCoordinate,

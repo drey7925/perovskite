@@ -1,3 +1,4 @@
+use std::ops::RangeInclusive;
 use std::{ops::BitXor, sync::Arc};
 
 use noise::{MultiFractal, NoiseFn};
@@ -408,6 +409,31 @@ impl MapgenInterface for DefaultMapgen {
                 }
             }
         }
+    }
+
+    fn terrain_range_hint(&self, chunk_x: i32, chunk_z: i32) -> Option<RangeInclusive<i32>> {
+        let xg0 = chunk_x * 16;
+        let zg0 = chunk_z * 16;
+        let mut max_h = f64::MIN;
+        let mut min_h = f64::MAX;
+        for (dx, dz) in [(0, 0), (0, 15), (15, 0), (15, 15)] {
+            let xg = xg0 + dx;
+            let zg = zg0 + dz;
+            let (macrobiome, rh_blend, karst_blend) = self.macrobiome_single(xg, zg);
+            let mut height = 0.0;
+            if rh_blend > 0.0 {
+                height += rh_blend * self.elevation_noise.get(xg, zg);
+            }
+            if karst_blend > 0.0 {
+                height += karst_blend * self.karst_noise.profile(xg, zg);
+                min_h = min_h.min(self.karst_noise.floor(xg, zg));
+            }
+            max_h = max_h.max(height);
+            min_h = min_h.min(height);
+        }
+        let min_c = ((min_h - 16.0) as i32).max(-64).div_euclid(16);
+        let max_c = ((max_h + 16.0) as i32).clamp(15, 4096).div_euclid(16);
+        Some(min_c..=max_c)
     }
 }
 

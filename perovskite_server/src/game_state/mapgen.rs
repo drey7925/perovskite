@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use perovskite_core::coordinates::ChunkCoordinate;
+use std::ops::RangeInclusive;
 
 use super::game_map::MapChunk;
 
@@ -37,4 +38,12 @@ pub trait MapgenInterface: Send + Sync {
     /// (noting that it will likely be called only once, barring crashes that cause unsaved
     /// changes to the map).
     fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk);
+
+    /// Provide an estimate of chunk coordinate Y values (one value -> 16 blocks) where terrain
+    /// is most likely to be seen at the given (X,Z) chunk coordinate, or None for no hint
+    ///
+    /// This is used for speeding up chunk loading. Favor speed over exact precision.
+    fn terrain_range_hint(&self, chunk_x: i32, chunk_z: i32) -> Option<RangeInclusive<i32>> {
+        None
+    }
 }

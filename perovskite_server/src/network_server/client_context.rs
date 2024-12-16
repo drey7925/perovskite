@@ -608,24 +608,63 @@ impl MapChunkSender {
         // Chunks are expensive to load and send, so we keep track of
         let mut sent_chunks = 0;
 
-        let moved_distance = player_chunk.manhattan_distance(self.skip_if_near);
-        let skip = if moved_distance == 0 {
-            self.processed_elements
-        } else {
-            self.skip_if_near = player_chunk;
-            // Find the highest distance we know we processed
-            let finished_distance = MAX_INDEX_FOR_DISTANCE
-                .partition_point(|&x| x < self.processed_elements)
-                .saturating_sub(2);
-            let new_distance = finished_distance
-                .saturating_sub(moved_distance as usize)
-                .max(0);
-            self.processed_elements
-                .min(MIN_INDEX_FOR_DISTANCE[new_distance])
-        };
+        // let moved_distance = player_chunk.manhattan_distance(self.skip_if_near);
+        // let skip = if moved_distance == 0 {
+        //     self.processed_elements
+        // } else {
+        //     self.skip_if_near = player_chunk;
+        //     // Find the highest distance we know we processed
+        //     let finished_distance = MAX_INDEX_FOR_DISTANCE
+        //         .partition_point(|&x| x < self.processed_elements)
+        //         .saturating_sub(2);
+        //     let new_distance = finished_distance
+        //         .saturating_sub(moved_distance as usize)
+        //         .max(0);
+        //     self.processed_elements
+        //         .min(MIN_INDEX_FOR_DISTANCE[new_distance])
+        // };
+
+        let mut hinted_chunks = Vec::new();
+        for &(dx, dz) in LOAD_TERRAIN_SORTED_COORDS.iter() {
+            let cx = player_chunk.x.saturating_add(dx);
+            let cz = player_chunk.z.saturating_add(dz);
+            if !ChunkCoordinate::new(cx, 0, cz).is_in_bounds() {
+                continue;
+            }
+            if let Some(hint) = self.context.game_state.mapgen().terrain_range_hint(cx, cz) {
+                if dx.abs().max(dz.abs()) <= FORCE_LOAD_DISTANCE {
+                    for y in -FORCE_LOAD_DISTANCE..=FORCE_LOAD_DISTANCE {
+                        hinted_chunks.push((dx, y, dz, true))
+                    }
+                }
+
+                for y in hint {
+                    if (player_chunk.y - y).abs() <= LOAD_TERRAIN_DISTANCE {
+                        hinted_chunks.push((dx, y - player_chunk.y, dz, true))
+                    }
+                }
+            }
+        }
+
+        let llsc_slice = &LOAD_LAZY_SORTED_COORDS;
+        let (llsc_before, llsc_after) =
+            llsc_slice.split_at(MIN_INDEX_FOR_DISTANCE[FORCE_LOAD_DISTANCE as usize]);
 
         let start_time = Instant::now();
-        for (i, &(dx, dy, dz)) in LOAD_LAZY_SORTED_COORDS.iter().enumerate() {
+
+        // TODO: Actually dedupe the generated lists
+        let mut dupes = FxHashSet::default();
+
+        for (i, (dx, dy, dz, force)) in llsc_before
+            .iter()
+            .map(|&(x, y, z)| (x, y, z, false))
+            .chain(hinted_chunks.into_iter())
+            .chain(llsc_after.iter().map(|&(x, y, z)| (x, y, z, false)))
+            .enumerate()
+        {
+            if !dupes.insert((dx, dy, dz)) {
+                continue;
+            }
             let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
@@ -651,11 +690,11 @@ impl MapChunkSender {
                 // chunk wasn't in the map, so we need to reload it
                 chunk_needs_reload = true;
             }
-            // We do need to bump chunk access times, even in the skip range :(
-            // Otherwise nearby chunks get unloaded and timers never fire
-            if i < skip {
-                continue;
-            }
+            // // We do need to bump chunk access times, even in the skip range :(
+            // // Otherwise nearby chunks get unloaded and timers never fire
+            // if i < skip {
+            //     continue;
+            // }
 
             if self.chunk_tracker.is_loaded(coord) && !chunk_needs_reload {
                 continue;
@@ -663,8 +702,8 @@ impl MapChunkSender {
             // We load chunks as long as they're close enough and the map system
             // isn't overloaded. If the map system is overloaded, we'll only load
             // chunks that are close enough to the player to really matter.
-            let should_load = (distance <= LOAD_EAGER_DISTANCE
-                && dy.abs() <= VERTICAL_DISTANCE_CAP)
+            let should_load = (force
+                || (distance <= LOAD_EAGER_DISTANCE && dy.abs() <= VERTICAL_DISTANCE_CAP))
                 && (distance <= FORCE_LOAD_DISTANCE
                     || !self.context.game_state.game_map().in_pushback());
 
@@ -2158,10 +2197,12 @@ const LOAD_EAGER_DISTANCE: i32 = 25;
 // Chunks within this distance will be sent if they are already loaded into memory
 // TODO: This has to equal LOAD_EAGER_DISTANCE to avoid an issue where a chunk is lazily processed,
 // and then never eagerly re-processed as it gets closer
-const LOAD_LAZY_DISTANCE: i32 = LOAD_EAGER_DISTANCE;
-const UNLOAD_DISTANCE: i32 = 50;
+const LOAD_LAZY_DISTANCE: i32 = 25;
+// How wide of a range we'll look at with mapgen assist only at terrain level
+const LOAD_TERRAIN_DISTANCE: i32 = 50;
+const UNLOAD_DISTANCE: i32 = 55;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
-const FORCE_LOAD_DISTANCE: i32 = 3;
+const FORCE_LOAD_DISTANCE: i32 = 4;
 
 const MAX_UPDATE_BATCH_SIZE: usize = 256;
 
@@ -2173,6 +2214,14 @@ lazy_static::lazy_static! {
     static ref LOAD_LAZY_ZIGZAG_VEC: Vec<i32> = {
         let mut v = vec![0];
         for i in 1..=LOAD_LAZY_DISTANCE {
+            v.push(i);
+            v.push(-i);
+        }
+        v
+    };
+    static ref LOAD_TERRAIN_VEC_2D: Vec<i32> = {
+        let mut v = vec![0];
+        for i in 1..=LOAD_TERRAIN_DISTANCE {
             v.push(i);
             v.push(-i);
         }
@@ -2190,6 +2239,15 @@ lazy_static::lazy_static! {
         v.retain(|x| (x.0.abs() + x.1.abs() + x.2.abs()) <= LOAD_LAZY_DISTANCE);
         v
     };
+    static ref LOAD_TERRAIN_SORTED_COORDS: Vec<(i32, i32)> = {
+        let mut v = vec![];
+        for (&x, &z) in iproduct!(LOAD_TERRAIN_VEC_2D.iter(), LOAD_TERRAIN_VEC_2D.iter()) {
+            v.push((x, z));
+        }
+        v.sort_by_key(|(x, z)| x.abs() + z.abs());
+        v.retain(|x| (x.0.abs() + x.1.abs()) <= LOAD_TERRAIN_DISTANCE);
+        v
+    };
     // chunk distance -> min index where we would encounter it
     static ref MIN_INDEX_FOR_DISTANCE: Vec<usize> = {
         let mut v = vec![];
@@ -2199,7 +2257,7 @@ lazy_static::lazy_static! {
             v[distance] = v[distance].min(i);
         }
         for x in &v {
-            assert!(*x != usize::MAX);
+            assert_ne!(*x, usize::MAX);
         }
         v
     };
