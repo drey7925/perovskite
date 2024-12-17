@@ -152,7 +152,7 @@ impl SnappyDecodeHelper {
         }
     }
 }
-pub(crate) const TARGET_BATCH_OCCUPANCY: usize = 32;
+pub(crate) const TARGET_BATCH_OCCUPANCY: usize = 128;
 
 struct ChunkMesh {
     solo_cpu: Option<VkChunkVertexDataCpu>,
@@ -607,6 +607,16 @@ pub(crate) struct MeshBatch {
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
     base_position: Vector3<f64>,
 }
+
+impl MeshBatch {
+    pub(crate) fn solid_occupancy(&self) -> (usize, usize) {
+        (
+            self.solid_vtx.as_ref().map(Subbuffer::len).unwrap_or(0) as usize,
+            self.solid_idx.as_ref().map(Subbuffer::len).unwrap_or(0) as usize,
+        )
+    }
+}
+
 impl MeshBatch {
     pub(crate) fn coords(&self) -> &[ChunkCoordinate] {
         &self.chunks

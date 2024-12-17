@@ -466,6 +466,23 @@ impl ChunkManager {
         Ok(())
     }
 
+    pub(crate) fn average_solid_batch_occupancy(&self) -> (usize, usize) {
+        let mut vertices = 0;
+        let mut indices = 0;
+
+        let batches = self.mesh_batches.lock();
+        if batches.0.is_empty() {
+            return (0, 0);
+        }
+
+        for (_id, batch) in batches.0.iter() {
+            let (v, i) = batch.solid_occupancy();
+            vertices += v;
+            indices += i;
+        }
+        (vertices / batches.0.len(), indices / batches.0.len())
+    }
+
     pub(crate) fn make_batched_draw_calls(
         &self,
         player_position: Vector3<f64>,
@@ -763,8 +780,8 @@ impl ClientState {
         let projection = cgmath::perspective(
             Deg(self.settings.load().render.fov_degrees),
             aspect_ratio,
-            0.01,
-            1000.,
+            0.05,
+            10000.,
         );
         let view_proj_matrix = (projection * coordinate_correction * rotation)
             .cast()

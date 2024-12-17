@@ -913,6 +913,15 @@ impl EguiUi {
                             );
                         }
                     }
+
+                    let (av, ai) = state.chunks.average_solid_batch_occupancy();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Average solid mesh batch: {av} vertices, {ai} indices"
+                        ))
+                        .font(egui::FontId::monospace(16.0))
+                        .color(Color32::WHITE),
+                    );
                 }
             });
     }

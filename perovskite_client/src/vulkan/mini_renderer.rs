@@ -255,7 +255,6 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
 
 lazy_static::lazy_static! {
     static ref SCENE_STATE: SceneState = {
-        let _projection = cgmath::perspective(Deg(45.0), 1.0, 0.01, 1000.);
         let projection = cgmath::ortho(-1., 1., -1., 1., -2., 2.);
         let rotation = Matrix4::from_angle_x(Deg(-30.0)) * Matrix4::from_angle_y(Deg(135.0));
         let coord_system_conversion = Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0);
