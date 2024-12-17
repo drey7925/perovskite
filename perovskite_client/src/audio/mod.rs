@@ -880,6 +880,8 @@ impl EngineState {
                 if balance_left.is_nan() {
                     balance_left = 0.0;
                 }
+                let edge_strength = MIN_ENTITY_DISTANCE as f32 / clamped_distance;
+                let edge_multiplier = (edge_multiplier * edge_strength) + (1.0 - edge_strength);
                 (distance_falloff_multiplier, edge_multiplier, balance_left)
             } else {
                 (1.0, 1.0, 0.0)
@@ -1493,6 +1495,7 @@ struct EntityScratchpad {
     trailing_edge_blend_source_direction: Vector3<f64>,
     // Used to provide an extra burst of sound at edges
     edge_cycle: f32,
+    edge_strength: f32,
 }
 impl Default for EntityScratchpad {
     fn default() -> Self {
@@ -1507,6 +1510,7 @@ impl Default for EntityScratchpad {
             trailing_edge_blend_factor: 0.0,
             trailing_edge_blend_source_direction: Vector3::zero(),
             edge_cycle: -1.0,
+            edge_strength: 0.0,
         }
     }
 }
