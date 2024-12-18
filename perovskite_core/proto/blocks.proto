@@ -71,6 +71,11 @@ message BlockTypeDef {
     AxisAlignedBoxes solid_custom_collisionboxes = 23;
   }
 
+  // Zero for no sound, otherwise indicates a sound ID from a SampledSound
+  uint32 sound_id = 30;
+  // Only applicable for nonzero sound_id
+  float sound_volume = 31;
+
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans (-0.5, 0.5) on

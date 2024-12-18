@@ -257,6 +257,8 @@ impl BlockBuilder {
                 })),
                 tool_custom_hitbox: None,
                 physics_info: Some(PhysicsInfo::Solid(Empty {})),
+                sound_id: 0,
+                sound_volume: 0.0,
             },
             variant_effect: VariantEffect::None,
             liquid_flow_period: None,

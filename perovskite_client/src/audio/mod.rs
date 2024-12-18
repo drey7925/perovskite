@@ -216,9 +216,7 @@ pub(crate) async fn start_engine(
             .load_media_by_name(&sound.media_filename)
             .await?;
         let wav = WavReader::new(Cursor::new(bytes))?;
-        let samples = wav.duration() as f64;
-        let rate = wav.spec().sample_rate as f64;
-        let length_nanos = (1_000_000_000.0 * samples / rate) as u64;
+        let length_nanos = wav_len_nanos(&wav);
 
         if wavs.insert(sound.sound_id, wav).is_some() {
             log::warn!(
@@ -299,6 +297,13 @@ pub(crate) async fn start_engine(
         allocator_state: Mutex::new(AllocatorState::new()),
         simple_sound_lengths: wav_lengths,
     })
+}
+
+fn wav_len_nanos<R: std::io::Read>(wav: &WavReader<R>) -> u64 {
+    let samples = wav.duration() as f64;
+    let rate = wav.spec().sample_rate as f64;
+    let length_nanos = (1_000_000_000.0 * samples / rate) as u64;
+    length_nanos
 }
 
 fn select_output_device(host: &Host, prefix: &str) -> Result<cpal::Device> {
@@ -642,21 +647,27 @@ impl EngineState {
                 .last_distance
                 .update((position - control.position).magnitude(), 0.001);
             let travel_time = if control.flags & SOUND_MOVESPEED_ENABLED != 0 {
-                distance / SPEED_OF_SOUND_METER_PER_SECOND
+                ((distance / SPEED_OF_SOUND_METER_PER_SECOND) * 1_000_000_000.0) as i64
             } else {
-                0.0
+                0
             };
-            let effective_time_delta = (tick_delta as f64 / 1_000_000_000.0) - travel_time;
-            if effective_time_delta < 0.0 {
+            // Design note: We're pretty lax with possible i64 overflows. This is fine, since this
+            // happens at around 292 years of uptime. If we wanted to get the full 584 years of u64,
+            // we could do i128 math, at the slight expense of performance for all other reasonable
+            // uses
+            let effective_time_delta = tick_delta as i64 - travel_time;
+            if effective_time_delta < 0 {
                 // Sound not yet started
                 continue;
             }
-            if effective_time_delta
-                > (control.end_tick - control.start_tick) as f64 / 1_000_000_000.0
-            {
+            if effective_time_delta > (control.end_tick - control.start_tick) as i64 {
                 // Sound finished
                 break;
             }
+            let effective_time_delta = effective_time_delta as u64 % sampler.len_nanos;
+
+            let effective_time_delta = effective_time_delta as f64 / 1_000_000_000.0;
+
             let amplitude = if control.flags & SOUND_SQUARELAW_ENABLED != 0 {
                 let clamped_distance = distance.max(MIN_DISTANCE) as f32;
                 // this affects amplitude, not power, so it should be non-squared
@@ -1072,7 +1083,7 @@ pub(crate) struct SimpleSoundControlBlock {
     /// the length of the sound, it will loop. u64::MAX is treated as effectively infinite.
     ///
     /// Skew policy: If the tick clock and codec sample clock go out of skew, the sound will stop
-    /// based on
+    /// based on TBD
     pub end_tick: u64,
     /// The source to attribute the sound to
     pub source: SoundSource,
@@ -1336,10 +1347,12 @@ pub const SPEED_OF_SOUND_METER_PER_SECOND: f64 = 343.0;
 const OVERSAMPLE_FACTOR: u32 = 1;
 
 struct PrerecordedSampler {
+    len_nanos: u64,
     data: Vec<(f32, f32)>,
 }
 impl PrerecordedSampler {
     fn from_wav<R: std::io::Read>(wav: WavReader<R>, target_sample_rate: u32) -> Result<Self> {
+        let len_nanos = wav_len_nanos(&wav);
         let source_rate = wav.spec().sample_rate;
         let source_channels = wav.spec().channels as usize;
         let internal_target_rate = target_sample_rate * OVERSAMPLE_FACTOR;
@@ -1418,7 +1431,7 @@ impl PrerecordedSampler {
             .zip(right_output.into_iter())
             .map(|(l, r)| (l, r))
             .collect();
-        Ok(Self { data })
+        Ok(Self { len_nanos, data })
     }
 
     #[inline]
@@ -1448,6 +1461,9 @@ impl PrerecordedSampler {
             (1.0 - fpart) * preceding_sample.0 + fpart * following_sample.0,
             (1.0 - fpart) * preceding_sample.1 + fpart * following_sample.1,
         )
+    }
+    pub fn len_nanos(&self) -> u64 {
+        self.len_nanos
     }
 }
 

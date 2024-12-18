@@ -12,9 +12,7 @@ use super::{
     },
     GameState,
 };
-use crate::game_state::inventory::{
-    InventoryViewWithContext, TypeErasedInventoryView, VirtualInputCallbacks,
-};
+use crate::game_state::inventory::{InventoryViewWithContext, VirtualInputCallbacks};
 use anyhow::{bail, Result};
 use perovskite_core::{coordinates::BlockCoordinate, protocol::ui as proto};
 

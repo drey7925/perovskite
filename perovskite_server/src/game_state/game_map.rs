@@ -44,8 +44,7 @@ use super::blocks::BlockInteractionResult;
 use super::event::log_trace;
 use super::{
     blocks::{
-        self, BlockTypeManager, ExtDataHandling, ExtendedData, ExtendedDataHolder, InlineContext,
-        TryAsHandle,
+        self, BlockTypeManager, ExtendedData, ExtendedDataHolder, InlineContext, TryAsHandle,
     },
     event::{EventInitiator, HandlerContext},
     items::ItemStack,

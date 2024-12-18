@@ -419,7 +419,7 @@ impl MapgenInterface for DefaultMapgen {
         for (dx, dz) in [(0, 0), (0, 15), (15, 0), (15, 15)] {
             let xg = xg0 + dx;
             let zg = zg0 + dz;
-            let (macrobiome, rh_blend, karst_blend) = self.macrobiome_single(xg, zg);
+            let (_, rh_blend, karst_blend) = self.macrobiome_single(xg, zg);
             let mut height = 0.0;
             if rh_blend > 0.0 {
                 height += rh_blend * self.elevation_noise.get(xg, zg);

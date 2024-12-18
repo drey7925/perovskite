@@ -32,7 +32,7 @@ pub enum ResourceError {
     ResourceAlreadyExists(String),
 }
 
-/// An token identifying a sampled sound
+/// A token identifying a sampled sound. The contained integer is non-zero for registered sounds
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SoundKey(pub u32);
 

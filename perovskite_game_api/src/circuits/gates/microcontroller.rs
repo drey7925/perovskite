@@ -1245,7 +1245,7 @@ fn microcontroller_interaction(
                     .context("Missing falling mask field")?,
             ) {
                 Ok(x) => x,
-                Err(e) => {
+                Err(_) => {
                     return break_microcontroller(
                         &resp.ctx,
                         coord,
@@ -1260,7 +1260,7 @@ fn microcontroller_interaction(
                     .context("Missing rising mask field")?,
             ) {
                 Ok(x) => x,
-                Err(e) => {
+                Err(_) => {
                     return break_microcontroller(
                         &resp.ctx,
                         coord,
