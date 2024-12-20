@@ -61,6 +61,9 @@ pub const STONE: StaticBlockName = StaticBlockName("default:stone");
 
 /// Beach sand.
 pub const SAND: StaticBlockName = StaticBlockName("default:sand");
+pub const SILT_DRY: StaticBlockName = StaticBlockName("default:silt_dry");
+pub const SILT_DAMP: StaticBlockName = StaticBlockName("default:silt_damp");
+pub const CLAY: StaticBlockName = StaticBlockName("default:clay");
 
 /// Desert materials.
 pub const DESERT_STONE: StaticBlockName = StaticBlockName("default:desert_stone");
@@ -93,6 +96,9 @@ const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:di
 const GRASS_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:grass_top");
 const STONE_TEXTURE: StaticTextureName = StaticTextureName("default:stone");
 const SAND_TEXTURE: StaticTextureName = StaticTextureName("default:sand");
+const SILT_DRY_TEXTURE: StaticTextureName = StaticTextureName("default:silt_dry");
+const SILT_DAMP_TEXTURE: StaticTextureName = StaticTextureName("default:silt_damp");
+const CLAY_TEXTURE: StaticTextureName = StaticTextureName("default:clay");
 const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:desert_stone");
 const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
 const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
@@ -516,6 +522,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, GRASS_TOP_TEXTURE, "textures/grass_top.png")?;
     include_texture_bytes!(game_builder, STONE_TEXTURE, "textures/stone.png")?;
     include_texture_bytes!(game_builder, SAND_TEXTURE, "textures/sand.png")?;
+    include_texture_bytes!(game_builder, SILT_DRY_TEXTURE, "textures/silt_dry.png")?;
+    include_texture_bytes!(game_builder, SILT_DAMP_TEXTURE, "textures/silt_damp.png")?;
+    include_texture_bytes!(game_builder, CLAY_TEXTURE, "textures/clay.png")?;
+
     include_texture_bytes!(
         game_builder,
         DESERT_STONE_TEXTURE,
@@ -628,6 +638,41 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_single_texture(SAND_TEXTURE)
             .set_display_name("Sand")
             .set_falls_down(true),
+    )?;
+
+    let _silt_dry = game_builder.add_block(
+        BlockBuilder::new(SILT_DRY)
+            .add_block_group(GRANULAR)
+            .set_cube_single_texture(SILT_DRY_TEXTURE)
+            .set_display_name("Silt (dry)"),
+    )?;
+    // TODO: damp silt should dry out when far from water, on a stochastic timer
+    let _silt_damp = game_builder.add_block(
+        BlockBuilder::new(SILT_DAMP)
+            .add_block_group(GRANULAR)
+            .set_cube_single_texture(SILT_DAMP_TEXTURE)
+            .set_display_name("Silt (damp)")
+            .set_dropped_item(SILT_DRY.0, 1)
+            .add_modifier(Box::new(|bt| {
+                // TODO tune these
+                bt.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
+                    horizontal_speed: 0.75,
+                    vertical_speed: -0.1,
+                    jump_speed: 0.2,
+                    sink_speed: -0.1,
+                    surface_thickness: 0.2,
+                    surf_horizontal_speed: 2.,
+                    surf_vertical_speed: -0.1,
+                    surf_jump_speed: 0.1,
+                    surf_sink_speed: -0.1,
+                }))
+            })),
+    )?;
+    let clay = game_builder.add_block(
+        BlockBuilder::new(CLAY)
+            .add_block_group(GRANULAR)
+            .set_cube_single_texture(CLAY_TEXTURE)
+            .set_display_name("Clay block"),
     )?;
 
     let desert_stone = game_builder.add_block(

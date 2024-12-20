@@ -31,6 +31,12 @@ pub const MAPLE_PLANKS_TEX: StaticTextureName = StaticTextureName("default:maple
 pub const TALL_GRASS: StaticBlockName = StaticBlockName("default:tall_grass");
 pub const TALL_GRASS_TEX: StaticTextureName = StaticTextureName("default:tall_grass");
 
+pub const MARSH_GRASS: StaticBlockName = StaticBlockName("default:marsh_grass");
+pub const MARSH_GRASS_TEX: StaticTextureName = StaticTextureName("default:marsh_grass_tex");
+
+pub const TALL_REED: StaticBlockName = StaticBlockName("default:tall_reed");
+pub const TALL_REED_TEX: StaticTextureName = StaticTextureName("default:tall_reed");
+
 pub const CACTUS: StaticBlockName = StaticBlockName("default:cactus");
 pub const CACTUS_TOP_TEX: StaticTextureName = StaticTextureName("default:cactus_top");
 pub const CACTUS_SIDE_TEX: StaticTextureName = StaticTextureName("default:cactus_side");
@@ -44,6 +50,8 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(builder, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
     include_texture_bytes!(builder, MAPLE_PLANKS_TEX, "textures/maple_planks.png")?;
     include_texture_bytes!(builder, TALL_GRASS_TEX, "textures/tall_grass.png")?;
+    include_texture_bytes!(builder, MARSH_GRASS_TEX, "textures/marsh_grass.png")?;
+    include_texture_bytes!(builder, TALL_REED_TEX, "textures/tall_reed.png")?;
     include_texture_bytes!(builder, CACTUS_TOP_TEX, "textures/cactus_top.png")?;
     include_texture_bytes!(builder, CACTUS_SIDE_TEX, "textures/cactus_side.png")?;
     include_texture_bytes!(builder, STICK_TEX, "textures/stick.png")?;
@@ -71,6 +79,30 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             )
             .set_display_name("Tall grass")
             .set_inventory_texture(TALL_GRASS_TEX)
+            .set_allow_light_propagation(true)
+            .set_no_drops(),
+    )?;
+    builder.add_block(
+        BlockBuilder::new(MARSH_GRASS)
+            .set_plant_like_appearance(
+                PlantLikeAppearanceBuilder::new().set_texture(MARSH_GRASS_TEX),
+            )
+            .set_display_name("Marsh grass")
+            .set_inventory_texture(MARSH_GRASS_TEX)
+            .set_allow_light_propagation(true)
+            .set_no_drops(),
+    )?;
+
+    builder.add_block(
+        BlockBuilder::new(TALL_REED)
+            .set_plant_like_appearance(
+                PlantLikeAppearanceBuilder::new()
+                    .set_texture(TALL_REED_TEX)
+                    .set_wave_effect_scale(0.0)
+                    .set_is_solid(true),
+            )
+            .set_display_name("Marsh grass")
+            .set_inventory_texture(TALL_REED_TEX)
             .set_allow_light_propagation(true)
             .set_no_drops(),
     )?;

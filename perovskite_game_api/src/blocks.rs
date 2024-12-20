@@ -424,7 +424,10 @@ impl BlockBuilder {
     pub fn set_plant_like_appearance(mut self, appearance: PlantLikeAppearanceBuilder) -> Self {
         self.client_info.render_info = Some(RenderInfo::PlantLike(appearance.render_info));
         // TODO: this should be separated out into its own control. For now, this is a reasonable default
-        self.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
+        if !appearance.is_solid {
+            self.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
+        }
+        self.client_info.allow_light_propagation = true;
         self
     }
 
@@ -681,6 +684,7 @@ impl Default for CubeAppearanceBuilder {
 
 pub struct PlantLikeAppearanceBuilder {
     render_info: PlantLikeRenderInfo,
+    is_solid: bool,
 }
 impl PlantLikeAppearanceBuilder {
     /// Constructs a new plant-like appearance builder, with a dummy texture and reasonable defaults.
@@ -690,6 +694,7 @@ impl PlantLikeAppearanceBuilder {
                 tex: make_texture_ref(FALLBACK_UNKNOWN_TEXTURE.to_string()),
                 wave_effect_scale: 0.1,
             },
+            is_solid: false,
         }
     }
     /// Sets the block's texture.
@@ -704,6 +709,12 @@ impl PlantLikeAppearanceBuilder {
     /// Sets the magnitude of the waving animation effect on the top of the block.
     pub fn set_wave_effect_scale(mut self, scale: f32) -> Self {
         self.render_info.wave_effect_scale = scale;
+        self
+    }
+
+    /// Sets whether the block is a physics obstacle or can be walked through
+    pub fn set_is_solid(mut self, is_solid: bool) -> Self {
+        self.is_solid = is_solid;
         self
     }
 }

@@ -15,8 +15,8 @@ use crate::default_game::basic_blocks::{
 
 const PROFILE_INPUT_SCALE: f64 = 1.0 / 160.0;
 const VALLEY_INPUT_SCALE: f64 = 1.0 / 800.0;
-const SLOW_MODULATOR_INPUT_SCALE: f64 = 1.0 / 320.0;
-const MODULATING_INPUT_SCALE: f64 = 1.0 / 80.0;
+const SLOW_MODULATOR_INPUT_SCALE: f64 = 1.0 / 640.0;
+const MODULATING_INPUT_SCALE: f64 = 1.0 / 160.0;
 const MODULATION_SLOPE_INPUT_SCALE: f64 = 1.0 / 80.0;
 const LIMESTONE_NOISE_SCALE: Vector3<f64> = Vector3::new(0.5, 0.03, 0.5);
 const LIMESTONE_SLOW_NOISE_SCALE: f64 = 1.0 / 40.0;

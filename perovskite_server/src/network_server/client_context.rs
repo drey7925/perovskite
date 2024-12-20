@@ -2200,7 +2200,7 @@ const LOAD_EAGER_DISTANCE: i32 = 25;
 const LOAD_LAZY_DISTANCE: i32 = 25;
 // How wide of a range we'll look at with mapgen assist only at terrain level
 const LOAD_TERRAIN_DISTANCE: i32 = 50;
-const UNLOAD_DISTANCE: i32 = 100;
+const UNLOAD_DISTANCE: i32 = 200;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
 const FORCE_LOAD_DISTANCE: i32 = 4;
 

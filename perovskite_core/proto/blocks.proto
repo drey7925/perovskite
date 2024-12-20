@@ -188,14 +188,14 @@ message FluidPhysicsInfo {
 
   // How deep surface effects extend for, in blocks.
   double surface_thickness = 5;
-  // Speed of movement when in the fluid, blocks/sec
+  // Speed of movement when in the fluid and within surface effects, blocks/sec
   double surf_horizontal_speed = 6;
-  // Speed when not pressing jump or lower keys, blocks/sec. Positive means
+  // Speed when not pressing jump or lower keys, blocks/sec and within surface effects. Positive means
   // upward
   double surf_vertical_speed = 7;
-  // Speed when pressing jump. Positive means upward
+  // Speed when pressing jump when in the surface. Positive means upward
   double surf_jump_speed = 8;
-  // Speed when pressing the lower key. Positive means upward.
+  // Speed when pressing the lower key when in the surface. Positive means upward.
   double surf_sink_speed = 9;
 }
 
