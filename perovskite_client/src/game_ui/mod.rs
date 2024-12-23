@@ -11,6 +11,7 @@ use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
 use anyhow::{bail, Error, Result};
 use arc_swap::ArcSwap;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 
 use crate::game_state::settings::GameSettings;
 use crate::{
@@ -110,12 +111,8 @@ async fn build_texture_atlas(
                     }
                 }
                 handles.push(s.spawn(|| -> Result<()> {
-                    let mut renderer = MiniBlockRenderer::new(
-                        ctx,
-                        [64, 64],
-                        block_renderer.atlas(),
-                        block_renderer.block_types().air_block(),
-                    )?;
+                    let mut renderer =
+                        MiniBlockRenderer::new(ctx, [64, 64], block_renderer.atlas())?;
                     for name in tasks {
                         let block_id = match block_renderer.block_types().get_block_by_name(name) {
                             Some(id) => id,

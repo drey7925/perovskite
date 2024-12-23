@@ -14,6 +14,7 @@
 
 use std::{sync::atomic::AtomicU32, time::Duration};
 
+use crate::default_game::chest::register_chest;
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -71,10 +72,6 @@ pub const DESERT_SAND: StaticBlockName = StaticBlockName("default:desert_sand");
 
 /// Transparent glass.
 pub const GLASS: StaticBlockName = StaticBlockName("default:glass");
-/// Unlocked chest.
-pub const CHEST: StaticBlockName = StaticBlockName("default:chest");
-/// Locked chest.
-pub const LOCKED_CHEST: StaticBlockName = StaticBlockName("default:locked_chest");
 
 /// Torch
 pub const TORCH: StaticBlockName = StaticBlockName("default:torch");
@@ -103,12 +100,6 @@ const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:deser
 const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
 const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
 const WATER_TEXTURE: StaticTextureName = StaticTextureName("default:water");
-
-const CHEST_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:chest_side");
-const CHEST_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:chest_top");
-const CHEST_FRONT_TEXTURE: StaticTextureName = StaticTextureName("default:chest_front");
-const LOCKED_CHEST_FRONT_TEXTURE: StaticTextureName =
-    StaticTextureName("default:chest_front_locked");
 
 const TORCH_TEXTURE: StaticTextureName = StaticTextureName("default:torch");
 const TNT_TEXTURE: StaticTextureName = StaticTextureName("default:tnt");
@@ -540,18 +531,6 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
-    include_texture_bytes!(game_builder, CHEST_SIDE_TEXTURE, "textures/chest_side.png")?;
-    include_texture_bytes!(game_builder, CHEST_TOP_TEXTURE, "textures/chest_top.png")?;
-    include_texture_bytes!(
-        game_builder,
-        CHEST_FRONT_TEXTURE,
-        "textures/chest_front.png"
-    )?;
-    include_texture_bytes!(
-        game_builder,
-        LOCKED_CHEST_FRONT_TEXTURE,
-        "textures/chest_front_locked.png"
-    )?;
 
     include_texture_bytes!(game_builder, TORCH_TEXTURE, "textures/torch.png")?;
 
@@ -780,183 +759,36 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     make_slab(game_builder, &limestone_dark, true)?;
     make_slab(game_builder, &limestone_light, true)?;
 
+    register_test_audio_block(game_builder)?;
+
     Ok(())
 }
 
-fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
-    game_builder.add_block(
-        BlockBuilder::new(CHEST)
-            .set_cube_appearance(
-                CubeAppearanceBuilder::new()
-                    .set_individual_textures(
-                        CHEST_SIDE_TEXTURE,
-                        CHEST_SIDE_TEXTURE,
-                        CHEST_TOP_TEXTURE,
-                        CHEST_TOP_TEXTURE,
-                        CHEST_FRONT_TEXTURE,
-                        CHEST_SIDE_TEXTURE,
-                    )
-                    .set_rotate_laterally(),
-            )
-            .set_display_name("Unlocked chest")
-            .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
-                    perovskite_server::game_state::event::EventInitiator::Player(p) => {
-                        Ok(Some(make_chest_popup(&ctx, coord, p)?))
-                    }
-                    _ => Ok(None),
-                }))
-            })),
+fn register_test_audio_block(game_builder: &mut GameBuilder) -> Result<()> {
+    game_builder
+        .inner
+        .media_mut()
+        .register_from_memory("default:test_audio", include_bytes!("test_audio.wav"))?;
+    let audio_id = game_builder
+        .inner
+        .media_mut()
+        .register_file_for_sampled_audio("default:test_audio")?;
+    const TEST_AUDIO_SOURCE: StaticBlockName = StaticBlockName("default:test_audio_source");
+    const TEST_AUDIO_TEX: StaticTextureName = StaticTextureName("default:test_audio_source");
+    include_texture_bytes!(
+        game_builder,
+        TEST_AUDIO_TEX,
+        "textures/test_audio_source.png"
     )?;
 
-    const LOCKED_CHEST_OWNER: &str = "default:locked_chest:owner";
+    BlockBuilder::new(TEST_AUDIO_SOURCE)
+        .set_display_name("Test audio source")
+        .set_cube_single_texture(TEST_AUDIO_TEX)
+        .add_modifier(Box::new(move |bt| {
+            bt.client_info.sound_id = audio_id.0;
+            bt.client_info.sound_volume = 0.25;
+        }))
+        .build_and_deploy_into(game_builder)?;
 
-    game_builder.add_block(
-        BlockBuilder::new(LOCKED_CHEST)
-            .set_cube_appearance(
-                CubeAppearanceBuilder::new()
-                    .set_individual_textures(
-                        CHEST_SIDE_TEXTURE,
-                        CHEST_SIDE_TEXTURE,
-                        CHEST_TOP_TEXTURE,
-                        CHEST_TOP_TEXTURE,
-                        LOCKED_CHEST_FRONT_TEXTURE,
-                        CHEST_SIDE_TEXTURE,
-                    )
-                    .set_rotate_laterally(),
-            )
-            .set_display_name("Locked chest")
-            .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
-                    perovskite_server::game_state::event::EventInitiator::Player(p) => {
-                        let (_, owner) =
-                            ctx.game_map().get_block_with_extended_data(coord, |data| {
-                                Ok(data.simple_data.get(LOCKED_CHEST_OWNER).cloned())
-                            })?;
-
-                        let owner_matches = if let Some(owner) = &owner {
-                            owner == p.player.name()
-                        } else {
-                            true
-                        };
-
-                        if owner_matches
-                            || p.player
-                                .has_permission(permissions::BYPASS_INVENTORY_CHECKS)
-                        {
-                            Ok(Some(make_chest_popup(&ctx, coord, p)?))
-                        } else {
-                            // unwrap is safe - if owner were none, we would have given access to the chest
-                            p.player.send_chat_message(
-                                ChatMessage::new_server_message(format!(
-                                    "Only {} can open this chest",
-                                    owner.unwrap()
-                                ))
-                                .with_color(SERVER_ERROR_COLOR),
-                            )?;
-                            Ok(None)
-                        }
-                    }
-                    _ => Ok(None),
-                }))
-            }))
-            .add_item_modifier(Box::new(|it| {
-                let old_place_handler = it.place_handler.take().unwrap();
-                it.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
-                    let result = old_place_handler(ctx, coord, anchor, tool_stack)?;
-                    if let Some(player) = ctx.initiator().player_name() {
-                        ctx.game_map()
-                            .mutate_block_atomically(coord, |_, extended_data| {
-                                let data = extended_data.get_or_insert_with(ExtendedData::default);
-                                data.simple_data
-                                    .insert(LOCKED_CHEST_OWNER.to_string(), player.to_string());
-                                Ok(())
-                            })?;
-                    }
-                    Ok(result)
-                }));
-            })),
-    )?;
-    game_builder
-        .builder_extension::<DefaultGameBuilderExtension>()
-        .crafting_recipes
-        .register_recipe(super::recipes::RecipeImpl {
-            slots: [
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Empty,
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-            ],
-            result: ItemStack {
-                proto: protocol::items::ItemStack {
-                    item_name: CHEST.0.to_string(),
-                    quantity: 1,
-                    current_wear: 0,
-                    quantity_type: Some(QuantityType::Stack(256)),
-                },
-            },
-            shapeless: false,
-            metadata: (),
-        });
-    game_builder
-        .builder_extension::<DefaultGameBuilderExtension>()
-        .crafting_recipes
-        .register_recipe(super::recipes::RecipeImpl {
-            slots: [
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Exact(IRON_INGOT.0.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-                RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()),
-            ],
-            result: ItemStack {
-                proto: protocol::items::ItemStack {
-                    item_name: LOCKED_CHEST.0.to_string(),
-                    quantity: 1,
-                    current_wear: 0,
-                    quantity_type: Some(QuantityType::Stack(256)),
-                },
-            },
-            shapeless: false,
-            metadata: (),
-        });
     Ok(())
-}
-
-fn make_chest_popup(
-    ctx: &perovskite_server::game_state::event::HandlerContext<'_>,
-    coord: perovskite_core::coordinates::BlockCoordinate,
-    p: &perovskite_server::game_state::event::PlayerInitiator<'_>,
-) -> Result<perovskite_server::game_state::client_ui::Popup, anyhow::Error> {
-    Ok(ctx
-        .new_popup()
-        .title("Chest")
-        .inventory_view_block(
-            "chest_inv",
-            "Chest contents:",
-            (4, 8),
-            coord,
-            "chest_inv".to_string(),
-            true,
-            true,
-            false,
-        )?
-        .inventory_view_stored(
-            "player_inv",
-            "Player inventory:",
-            p.player.main_inventory(),
-            true,
-            true,
-        )?)
 }

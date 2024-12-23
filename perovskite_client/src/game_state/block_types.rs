@@ -2,6 +2,7 @@ use anyhow::{ensure, Context, Result};
 use perovskite_core::block_id::BlockId;
 
 use bitvec::prelude as bv;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::constants::blocks::AIR;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{BlockTypeDef, CubeRenderInfo, CubeRenderMode};
@@ -12,13 +13,13 @@ use super::make_fallback_blockdef;
 pub(crate) struct ClientBlockTypeManager {
     block_defs: Vec<Option<BlockTypeDef>>,
     fallback_block_def: BlockTypeDef,
-    air_block: BlockId,
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
     solid_opaque_blocks: bv::BitVec,
     transparent_render_blocks: bv::BitVec,
     translucent_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
+    audio_emitters: Vec<(u32, f32)>,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(server_defs: Vec<BlockTypeDef>) -> Result<ClientBlockTypeManager> {
@@ -45,17 +46,15 @@ impl ClientBlockTypeManager {
 
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
+        let mut audio_emitters = Vec::new();
+        audio_emitters.resize(BlockId(max_id).index() + 1, (0, 0.0));
 
         let mut name_to_id = FxHashMap::default();
 
-        let mut air_block = BlockId::from(u32::MAX);
         for def in server_defs {
             let id = BlockId(def.id);
             ensure!(id.variant() == 0);
             ensure!(block_defs[id.index()].is_none());
-            if def.short_name == AIR {
-                air_block = id;
-            }
             name_to_id.insert(def.short_name.clone(), id);
             if def.allow_light_propagation {
                 light_propagators.set(id.index(), true);
@@ -102,23 +101,24 @@ impl ClientBlockTypeManager {
                 translucent_render_blocks.set(id.index(), true);
             }
 
+            if def.sound_id != 0 {
+                audio_emitters[id.index()] = (def.sound_id, def.sound_volume);
+            }
+
             light_emitters[id.index()] = light_emission;
             block_defs[id.index()] = Some(def);
-        }
-        if air_block.0 == u32::MAX {
-            log::warn!("Server didn't send an air block definition");
         }
 
         Ok(ClientBlockTypeManager {
             block_defs,
             fallback_block_def: make_fallback_blockdef(),
-            air_block,
             light_propagators,
             light_emitters,
             solid_opaque_blocks,
             transparent_render_blocks,
             translucent_render_blocks,
             name_to_id,
+            audio_emitters,
         })
     }
 
@@ -142,10 +142,6 @@ impl ClientBlockTypeManager {
 
     pub(crate) fn get_block_by_name(&self, name: &str) -> Option<BlockId> {
         self.name_to_id.get(name).copied()
-    }
-
-    pub(crate) fn air_block(&self) -> BlockId {
-        self.air_block
     }
 
     /// Determines whether this block propagates light

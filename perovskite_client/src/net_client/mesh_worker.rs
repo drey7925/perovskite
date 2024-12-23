@@ -356,9 +356,8 @@ pub(crate) fn propagate_neighbor_data(
         {
             let _span = span!("chunk precheck");
             // Fast-pass checks
-            let air = block_manager.air_block();
-            if current_chunk.block_ids().iter().all(|&x| x == air) {
-                current_chunk.set_state(crate::game_state::chunk::BlockIdState::NoRender);
+            if current_chunk.is_empty_optimization_hint() {
+                current_chunk.set_state(crate::game_state::chunk::ChunkRenderState::NoRender);
                 return Ok(true);
             }
         }
@@ -402,7 +401,7 @@ pub(crate) fn propagate_neighbor_data(
                 .iter()
                 .all(|&x| block_manager.is_solid_opaque(x))
             {
-                current_chunk.set_state(crate::game_state::chunk::BlockIdState::NoRender);
+                current_chunk.set_state(crate::game_state::chunk::ChunkRenderState::NoRender);
                 return Ok(true);
             }
         }
@@ -596,7 +595,7 @@ pub(crate) fn propagate_neighbor_data(
             }
         }
 
-        current_chunk.set_state(crate::game_state::chunk::BlockIdState::ReadyToRender);
+        current_chunk.set_state(crate::game_state::chunk::ChunkRenderState::ReadyToRender);
 
         Ok(true)
     } else {

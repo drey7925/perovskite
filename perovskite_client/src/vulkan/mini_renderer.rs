@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 use image::{DynamicImage, RgbaImage};
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
@@ -59,7 +60,6 @@ impl MiniBlockRenderer {
         ctx: Arc<VulkanContext>,
         surface_size: [u32; 2],
         atlas_texture: &Texture2DHolder,
-        air_block: BlockId,
     ) -> Result<Self> {
         // All compliant GPUs should be able to render to R8G8B8A8_SRGB
         let render_pass = make_ssaa_render_pass(
@@ -151,7 +151,7 @@ impl MiniBlockRenderer {
             cube_provider,
             cube_pipeline,
             download_buffer,
-            fake_chunk: Box::new([air_block; 18 * 18 * 18]),
+            fake_chunk: Box::new([AIR_ID; 18 * 18 * 18]),
         })
     }
 
@@ -244,6 +244,10 @@ struct FakeChunkDataView<'a> {
     block_ids: &'a [BlockId; 18 * 18 * 18],
 }
 impl<'a> ChunkDataView for FakeChunkDataView<'a> {
+    fn is_empty_optimization_hint(&self) -> bool {
+        false
+    }
+
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
         self.block_ids
     }

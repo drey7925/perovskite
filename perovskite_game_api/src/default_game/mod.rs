@@ -34,6 +34,7 @@ use self::{
 
 /// Blocks defined in the default game.
 pub mod basic_blocks;
+pub mod chest;
 /// Trees, plants, etc
 pub mod foliage;
 /// Basic server behaviors not covered in other modules

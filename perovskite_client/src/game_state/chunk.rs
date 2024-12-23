@@ -49,6 +49,7 @@ use vulkano::DeviceSize;
 use super::block_types::ClientBlockTypeManager;
 
 pub(crate) trait ChunkDataView {
+    fn is_empty_optimization_hint(&self) -> bool;
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18];
     fn lightmap(&self) -> &[u8; 18 * 18 * 18];
     fn get_block(&self, offset: ChunkOffset) -> BlockId {
@@ -58,17 +59,32 @@ pub(crate) trait ChunkDataView {
 
 pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 impl ChunkDataView for LockedChunkDataView<'_> {
+    fn is_empty_optimization_hint(&self) -> bool {
+        !self
+            .0
+            .block_ids
+            .as_ref()
+            .is_some_and(|x| x.iter().any(|&v| v != BlockId(0)))
+    }
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
 
     fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
-        &self.0.lightmap
+        self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
 }
 
 pub(crate) struct ChunkDataViewMut<'a>(RwLockWriteGuard<'a, ChunkData>);
 impl ChunkDataViewMut<'_> {
+    pub(crate) fn is_empty_optimization_hint(&self) -> bool {
+        !self
+            .0
+            .block_ids
+            .as_ref()
+            .is_some_and(|x| x.iter().any(|&v| v != BlockId(0)))
+    }
+
     pub(crate) fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
@@ -76,10 +92,13 @@ impl ChunkDataViewMut<'_> {
         self.0.block_ids.as_deref_mut()
     }
     pub(crate) fn lightmap_mut(&mut self) -> &mut [u8; 18 * 18 * 18] {
-        &mut self.0.lightmap
+        self.0.lightmap.get_or_insert_with(|| {
+            log::warn!("Filling nonexisting lightmap in mutator; likely a bug");
+            Box::new([0; 18 * 18 * 18])
+        })
     }
-    pub(crate) fn set_state(&mut self, state: BlockIdState) {
-        self.0.data_state = state;
+    pub(crate) fn set_state(&mut self, state: ChunkRenderState) {
+        self.0.render_state = state;
     }
 
     pub(crate) fn get_block(&self, offset: ChunkOffset) -> BlockId {
@@ -92,8 +111,9 @@ impl ChunkDataViewMut<'_> {
 }
 
 const ZERO_CHUNK: [BlockId; 18 * 18 * 18] = [BlockId(0); 18 * 18 * 18];
+const ZERO_LIGHTMAP: [u8; 18 * 18 * 18] = [0; 18 * 18 * 18];
 
-pub(crate) enum BlockIdState {
+pub(crate) enum ChunkRenderState {
     /// We don't have this chunk's neighbors yet. It's not ready to render.
     NeedProcessing,
     /// We processed the chunk's neighbors, but we don't have anything to render.
@@ -121,9 +141,9 @@ pub(crate) struct ChunkData {
     /// players, entities, etc.
     ///
     /// This can't be optimized with None since we need to propagate light through the chunk
-    pub(crate) lightmap: Box<[u8; 18 * 18 * 18]>,
+    pub(crate) lightmap: Option<Box<[u8; 18 * 18 * 18]>>,
 
-    data_state: BlockIdState,
+    render_state: ChunkRenderState,
 }
 
 pub(crate) struct SnappyDecodeHelper {
@@ -262,13 +282,19 @@ impl ClientChunk {
             }
         };
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
+        let block_ids = Self::expand_ids(block_ids);
+        let lightmap = if block_ids.is_some() {
+            Some(Box::new([0; 18 * 18 * 18]))
+        } else {
+            None
+        };
         Ok((
             ClientChunk {
                 coord,
                 chunk_data: RwLock::new(ChunkData {
-                    block_ids: Self::expand_ids(block_ids),
-                    data_state: BlockIdState::NeedProcessing,
-                    lightmap: Box::new([0; 18 * 18 * 18]),
+                    block_ids,
+                    render_state: ChunkRenderState::NeedProcessing,
+                    lightmap,
                 }),
                 chunk_mesh: Mutex::new(ChunkMesh {
                     solo_cpu: None,
@@ -289,11 +315,11 @@ impl ClientChunk {
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<MeshResult> {
         let data = self.chunk_data();
 
-        let vertex_data = match data.0.data_state {
-            BlockIdState::NeedProcessing => Some(renderer.mesh_chunk(&data)?),
-            BlockIdState::NoRender => None,
-            BlockIdState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
-            BlockIdState::AuditNoRender => {
+        let vertex_data = match data.0.render_state {
+            ChunkRenderState::NeedProcessing => Some(renderer.mesh_chunk(&data)?),
+            ChunkRenderState::NoRender => None,
+            ChunkRenderState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
+            ChunkRenderState::AuditNoRender => {
                 let result = renderer.mesh_chunk(&data)?;
                 if result.solid_opaque.is_some()
                     || result.transparent.is_some()
@@ -401,7 +427,7 @@ impl ClientChunk {
         // unwrap is safe: we verified the length
         let mut data_guard = self.chunk_data.write();
         data_guard.block_ids = Self::expand_ids(block_ids);
-        data_guard.data_state = BlockIdState::NeedProcessing;
+        data_guard.render_state = ChunkRenderState::NeedProcessing;
         Ok(occlusion)
     }
 
@@ -423,7 +449,7 @@ impl ClientChunk {
         // TODO future optimization: check whether a change in variant actually requires
         // a redraw
         if old_id != new_id {
-            chunk_data.data_state = BlockIdState::NeedProcessing;
+            chunk_data.render_state = ChunkRenderState::NeedProcessing;
             chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()] =
                 new_id;
         }

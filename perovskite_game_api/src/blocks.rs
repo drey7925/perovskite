@@ -167,6 +167,7 @@ enum VariantEffect {
 }
 
 /// Represents a block built by [GameBuilder::add_block]
+#[derive(Debug, Clone)]
 pub struct BuiltBlock {
     /// The ID of the block
     pub id: BlockId,
@@ -391,7 +392,7 @@ impl BlockBuilder {
     }
     /// Convenience method that sets this block to a simple appearance as a cube with the same texture on all faces,
     /// no transparency/translucency, no light propagation or emission, and no additional appearance settings
-    /// (which may be added in the future)
+    /// (which may be added in the future and will be accessible via the full [CubeAppearanceBuilder])
     pub fn set_cube_single_texture(self, texture: impl Into<TextureReference>) -> Self {
         self.set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(texture))
     }
