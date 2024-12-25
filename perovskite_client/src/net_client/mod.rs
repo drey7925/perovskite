@@ -192,13 +192,15 @@ pub(crate) async fn connect_game(
         .await?
         .into_inner();
 
-    let audio = audio::start_engine(
-        settings.clone(),
-        timekeeper.clone(),
-        &audio_defs.sampled_sounds,
-        &mut cache_manager,
-    )
-    .await?;
+    let audio = Arc::new(
+        audio::start_engine(
+            settings.clone(),
+            timekeeper.clone(),
+            &audio_defs.sampled_sounds,
+            &mut cache_manager,
+        )
+        .await?,
+    );
 
     let (action_sender, action_receiver) = mpsc::channel(4);
 

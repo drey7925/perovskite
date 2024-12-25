@@ -146,32 +146,6 @@ pub(crate) struct ChunkData {
     render_state: ChunkRenderState,
 }
 
-pub(crate) struct SnappyDecodeHelper {
-    snappy_decoder: snap::raw::Decoder,
-    snappy_output_buffer: Vec<u8>,
-}
-impl SnappyDecodeHelper {
-    fn decode<T>(&mut self, data: &[u8]) -> Result<T>
-    where
-        T: Message + Default,
-    {
-        let decode_len = snap::raw::decompress_len(data)?;
-        if self.snappy_output_buffer.len() < decode_len {
-            self.snappy_output_buffer.resize(decode_len, 0);
-        }
-        let decompressed_len = self
-            .snappy_decoder
-            .decompress(data, &mut self.snappy_output_buffer)?;
-        Ok(T::decode(&self.snappy_output_buffer[0..decompressed_len])?)
-    }
-
-    pub(crate) fn new() -> SnappyDecodeHelper {
-        SnappyDecodeHelper {
-            snappy_decoder: snap::raw::Decoder::new(),
-            snappy_output_buffer: Vec::new(),
-        }
-    }
-}
 pub(crate) const TARGET_BATCH_OCCUPANCY: usize = 128;
 
 struct ChunkMesh {
@@ -263,24 +237,10 @@ lazy_static::lazy_static! {
 
 impl ClientChunk {
     pub(crate) fn from_proto(
-        proto: rpc_proto::MapChunk,
-        snappy_helper: &mut SnappyDecodeHelper,
+        coord: ChunkCoordinate,
+        block_ids: &[u32; 4096],
         block_types: &ClientBlockTypeManager,
     ) -> Result<(ClientChunk, Lightfield)> {
-        let coord = proto
-            .chunk_coord
-            .with_context(|| "Missing chunk_coord")?
-            .into();
-        let data = snappy_helper
-            .decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
-            .chunk_data
-            .with_context(|| "inner chunk_data missing")?;
-        let block_ids: &[u32; 4096] = match &data {
-            perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
-                ensure!(v1_data.block_ids.len() == 4096);
-                v1_data.block_ids.deref().try_into().unwrap()
-            }
-        };
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
         let block_ids = Self::expand_ids(block_ids);
         let lightmap = if block_ids.is_some() {
@@ -404,25 +364,11 @@ impl ClientChunk {
 
     pub(crate) fn update_from(
         &self,
-        proto: rpc_proto::MapChunk,
-        snappy_helper: &mut SnappyDecodeHelper,
+        coord: ChunkCoordinate,
+        block_ids: &[u32; 4096],
         block_types: &ClientBlockTypeManager,
     ) -> Result<Lightfield> {
-        let coord: ChunkCoordinate = proto
-            .chunk_coord
-            .with_context(|| "Missing chunk_coord")?
-            .into();
         ensure!(coord == self.coord);
-        let data = snappy_helper
-            .decode::<StoredChunk>(&proto.snappy_encoded_bytes)?
-            .chunk_data
-            .with_context(|| "inner chunk_data missing")?;
-        let block_ids: &[u32; 4096] = match &data {
-            perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
-                ensure!(v1_data.block_ids.len() == 4096);
-                v1_data.block_ids.deref().try_into().unwrap()
-            }
-        };
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
         // unwrap is safe: we verified the length
         let mut data_guard = self.chunk_data.write();

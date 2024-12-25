@@ -1,5 +1,6 @@
 use anyhow::{ensure, Context, Result};
 use perovskite_core::block_id::BlockId;
+use std::num::NonZeroU32;
 
 use bitvec::prelude as bv;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
@@ -19,7 +20,7 @@ pub(crate) struct ClientBlockTypeManager {
     transparent_render_blocks: bv::BitVec,
     translucent_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
-    audio_emitters: Vec<(u32, f32)>,
+    audio_emitters: Vec<Option<(NonZeroU32, f32)>>,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(server_defs: Vec<BlockTypeDef>) -> Result<ClientBlockTypeManager> {
@@ -47,7 +48,7 @@ impl ClientBlockTypeManager {
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
         let mut audio_emitters = Vec::new();
-        audio_emitters.resize(BlockId(max_id).index() + 1, (0, 0.0));
+        audio_emitters.resize(BlockId(max_id).index() + 1, None);
 
         let mut name_to_id = FxHashMap::default();
 
@@ -101,8 +102,8 @@ impl ClientBlockTypeManager {
                 translucent_render_blocks.set(id.index(), true);
             }
 
-            if def.sound_id != 0 {
-                audio_emitters[id.index()] = (def.sound_id, def.sound_volume);
+            if let Some(sound_id) = NonZeroU32::new(def.sound_id) {
+                audio_emitters[id.index()] = Some((sound_id, def.sound_volume));
             }
 
             light_emitters[id.index()] = light_emission;
@@ -200,6 +201,15 @@ impl ClientBlockTypeManager {
         } else {
             // unknown blocks are solid opaque
             false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn block_sound(&self, id: BlockId) -> Option<(NonZeroU32, f32)> {
+        if id.index() < self.audio_emitters.len() {
+            self.audio_emitters[id.index()]
+        } else {
+            None
         }
     }
 

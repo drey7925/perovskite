@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cmp::Ordering;
 use std::str::FromStr;
 use std::{
     fmt::Debug,
@@ -213,6 +214,20 @@ impl ChunkOffset {
 impl Debug for ChunkOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("Δ({}, {}, {})", self.x, self.y, self.z))
+    }
+}
+impl PartialOrd<Self> for ChunkOffset {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ChunkOffset {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.x
+            .cmp(&other.x)
+            .then(self.z.cmp(&other.z))
+            .then(self.y.cmp(&other.y))
     }
 }
 

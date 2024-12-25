@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+use std::ops::Deref;
 use std::{
     backtrace,
     collections::{hash_map::Entry, HashMap},
@@ -7,12 +9,11 @@ use std::{
 
 use crate::{
     game_state::{
-        chunk::SnappyDecodeHelper, entities::GameEntity, items::ClientInventory, ClientState,
-        FastChunkNeighbors, GameAction,
+        entities::GameEntity, items::ClientInventory, ClientState, FastChunkNeighbors, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
 };
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use futures::StreamExt;
 use log::warn;
@@ -23,10 +24,16 @@ use perovskite_core::{
     protocol::entities as entities_proto,
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
+use prost::Message;
 
 use crate::audio::{
-    SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT, SOUND_SQUARELAW_ENABLED,
+    EvictedAudioHealer, MapSoundState, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED,
+    SOUND_PRESENT, SOUND_SQUARELAW_ENABLED,
 };
+use crate::game_state::block_types::ClientBlockTypeManager;
+use perovskite_core::block_id::BlockId;
+use perovskite_core::coordinates::ChunkOffset;
+use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
@@ -45,6 +52,7 @@ struct SharedState {
     ack_map: Mutex<HashMap<u64, Instant>>,
     mesh_workers: Vec<Arc<MeshWorker>>,
     neighbor_propagators: Vec<Arc<NeighborPropagator>>,
+    audio_healer: Arc<EvictedAudioHealer>,
 
     batcher: Arc<MeshBatcher>,
     initial_state_notification: Arc<tokio::sync::Notify>,
@@ -100,6 +108,8 @@ pub(crate) async fn make_contexts(
 
     let (batcher, batcher_handle) = MeshBatcher::new(client_state.clone());
 
+    let (audio_healer, audio_healer_handle) = EvictedAudioHealer::new(client_state.clone());
+
     let shared_state = Arc::new(SharedState {
         protocol_version,
         outbound_tx: tx_send,
@@ -109,6 +119,7 @@ pub(crate) async fn make_contexts(
         neighbor_propagators,
         batcher,
         initial_state_notification,
+        audio_healer,
         cancellation,
     });
 
@@ -122,6 +133,7 @@ pub(crate) async fn make_contexts(
         snappy_helper: SnappyDecodeHelper::new(),
         inline_nprop_scratchpad: NeighborPropagationScratchpad::default(),
         inline_fcn_scratchpad: FastChunkNeighbors::default(),
+        audio_healer_handle,
     };
 
     let outbound = OutboundContext {
@@ -340,6 +352,8 @@ pub(crate) struct InboundContext {
     snappy_helper: SnappyDecodeHelper,
     inline_nprop_scratchpad: NeighborPropagationScratchpad,
     inline_fcn_scratchpad: FastChunkNeighbors,
+
+    audio_healer_handle: tokio::task::JoinHandle<Result<()>>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
@@ -420,6 +434,19 @@ impl InboundContext {
                         },
                         Err(e) => {
                             log::error!("Error awaiting mesh batcher: {e:?}");
+                        }
+                    }
+                },
+                result = &mut self.audio_healer_handle => {
+                    match &result {
+                        Ok(Err(e)) => {
+                            log::error!("Audio healer crashed: {e:?}");
+                        },
+                        Ok(Ok(_)) => {
+                            log::info!("Audio healer exiting");
+                        },
+                        Err(e) => {
+                            log::error!("Error awaiting audio healer: {e:?}");
                         }
                     }
                 }
@@ -534,14 +561,18 @@ impl InboundContext {
                             .unwrap_or(0),
                     source: sound.source(),
                 };
-                self.shared_state.client_state.audio.alloc_simple_sound(
-                    tick_now,
-                    self.shared_state
-                        .client_state
-                        .weakly_ordered_last_position()
-                        .position,
-                    control_block,
-                );
+                self.shared_state
+                    .client_state
+                    .audio
+                    .insert_or_update_simple_sound(
+                        tick_now,
+                        self.shared_state
+                            .client_state
+                            .weakly_ordered_last_position()
+                            .position,
+                        control_block,
+                        None,
+                    );
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);
@@ -555,6 +586,29 @@ impl InboundContext {
             [coord.hash_u64() as usize % self.shared_state.neighbor_propagators.len()]
         .enqueue(coord);
     }
+    fn handle_mapchunk_audio(&self, coord: ChunkCoordinate, block_ids: &[u32; 4096]) {
+        let tick = self.shared_state.client_state.timekeeper.now();
+        let pos = self
+            .shared_state
+            .client_state
+            .weakly_ordered_last_position();
+        let block_types = self.shared_state.client_state.block_types.deref();
+        let mut map_sound = self.shared_state.client_state.world_audio.lock();
+
+        for (i, block) in block_ids.iter().enumerate() {
+            // This loop should ideally be tighter, optimize if profiling shows it's hot
+            if let Some((id, volume)) = block_types.block_sound(BlockId::from(*block)) {
+                map_sound.insert_or_update(
+                    tick,
+                    pos.position,
+                    coord.with_offset(ChunkOffset::from_index(i)),
+                    id.get(),
+                    volume,
+                )
+            }
+        }
+    }
+
     fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
         self.shared_state.mesh_workers
             [coord.hash_u64() as usize % self.shared_state.mesh_workers.len()]
@@ -567,10 +621,22 @@ impl InboundContext {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
+
+                    let data = self
+                        .snappy_helper
+                        .decode::<StoredChunk>(&chunk.snappy_encoded_bytes)?
+                        .chunk_data
+                        .with_context(|| "inner chunk_data missing")?;
+                    let block_ids: &[u32; 4096] = match &data {
+                        perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
+                            ensure!(v1_data.block_ids.len() == 4096);
+                            v1_data.block_ids.deref().try_into().unwrap()
+                        }
+                    };
+                    self.handle_mapchunk_audio(coord, block_ids);
                     let extra_chunks = self.shared_state.client_state.chunks.insert_or_update(
                         coord,
-                        chunk.clone(),
-                        &mut self.snappy_helper,
+                        block_ids,
                         &self.shared_state.client_state.block_types,
                     )?;
 
@@ -616,8 +682,15 @@ impl InboundContext {
         // TODO hold more old chunks (possibly LRU) to provide a higher render distance
         let mut bad_coords = vec![];
         for coord in unsub.chunk_coord.iter() {
-            match self.shared_state.client_state.chunks.remove(&coord.into()) {
-                Some(_x) => {}
+            let coord = coord.into();
+            match self.shared_state.client_state.chunks.remove(&coord) {
+                Some(_x) => {
+                    self.shared_state
+                        .client_state
+                        .world_audio
+                        .lock()
+                        .remove_chunk(coord);
+                }
                 None => {
                     bad_coords.push(coord.clone());
                 }
@@ -651,10 +724,38 @@ impl InboundContext {
         Ok(())
     }
 
+    fn apply_map_audio_delta_batch(&self, batch: &rpc::MapDeltaUpdateBatch) {
+        let tick = self.shared_state.client_state.timekeeper.now();
+        let pos = self
+            .shared_state
+            .client_state
+            .weakly_ordered_last_position();
+        let block_types = self.shared_state.client_state.block_types.deref();
+        let mut map_sound = self.shared_state.client_state.world_audio.lock();
+
+        for entry in &batch.updates {
+            let coord: BlockCoordinate = match entry.block_coord {
+                None => {
+                    // The 3d rendering map will complain again, we can be silent here
+                    continue;
+                }
+                Some(c) => c.into(),
+            };
+            match block_types.block_sound(BlockId::from(entry.new_id)) {
+                None => map_sound.remove(coord),
+                Some((id, vol)) => {
+                    map_sound.insert_or_update(tick, pos.position, coord, id.get(), vol)
+                }
+            }
+        }
+    }
+
     fn map_delta_update_sync(
         &mut self,
         batch: &rpc::MapDeltaUpdateBatch,
     ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
+        self.apply_map_audio_delta_batch(batch);
+
         let (needs_remesh, unknown_coords, missing_coord) =
             self.shared_state
                 .client_state
@@ -803,5 +904,32 @@ impl InboundContext {
         }
 
         Ok(())
+    }
+}
+
+pub(crate) struct SnappyDecodeHelper {
+    snappy_decoder: snap::raw::Decoder,
+    snappy_output_buffer: Vec<u8>,
+}
+impl SnappyDecodeHelper {
+    fn decode<T>(&mut self, data: &[u8]) -> Result<T>
+    where
+        T: Message + Default,
+    {
+        let decode_len = snap::raw::decompress_len(data)?;
+        if self.snappy_output_buffer.len() < decode_len {
+            self.snappy_output_buffer.resize(decode_len, 0);
+        }
+        let decompressed_len = self
+            .snappy_decoder
+            .decompress(data, &mut self.snappy_output_buffer)?;
+        Ok(T::decode(&self.snappy_output_buffer[0..decompressed_len])?)
+    }
+
+    pub(crate) fn new() -> SnappyDecodeHelper {
+        SnappyDecodeHelper {
+            snappy_decoder: snap::raw::Decoder::new(),
+            snappy_output_buffer: Vec::new(),
+        }
     }
 }

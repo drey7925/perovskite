@@ -1,6 +1,8 @@
+use std::collections::hash_map::Entry;
 use std::io::Cursor;
-use std::ops::{Add, DerefMut, Range};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::num::{NonZero, NonZeroU64};
+use std::ops::{Add, Deref, DerefMut, Range};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,19 +12,23 @@ use cgmath::{InnerSpace, Vector3, Zero};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
 use hound::WavReader;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
+use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 use perovskite_core::protocol::audio::{SampledSound, SoundSource};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rustc_hash::FxHashMap;
+use rubato::Resampler;
+use rustc_hash::{FxHashMap, FxHashSet};
 use seqlock::SeqLock;
-use tokio_util::sync::DropGuard;
-use tracy_client::span;
+use smallvec::SmallVec;
+use tokio_util::sync::{CancellationToken, DropGuard};
+use tracy_client::{plot, span};
 
 use crate::cache::CacheManager;
 use crate::game_state::entities::{ElapsedOrOverflow, EntityMove};
 use crate::game_state::settings::GameSettings;
 use crate::game_state::timekeeper::Timekeeper;
+use crate::game_state::ClientState;
 
 // Public for testing
 pub struct EngineHandle {
@@ -39,9 +45,9 @@ pub struct EngineHandle {
 /// ord-based datastructures (e.g. BTreeMap). No semantic meaning should
 /// be ascribed to the result of these comparisons.
 #[derive(PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Clone, Copy)]
-pub struct SimpleSoundToken(u64);
+pub struct SimpleSoundToken(NonZeroU64);
 #[derive(PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Clone, Copy)]
-pub struct ProceduralEntityToken(u64);
+pub struct ProceduralEntityToken(NonZeroU64);
 
 struct AllocatorState {
     simple_sound_tokens: [u64; NUM_SIMPLE_SOUND_SLOTS],
@@ -64,26 +70,43 @@ impl AllocatorState {
 }
 
 impl EngineHandle {
-    pub(crate) fn alloc_simple_sound(
+    pub(crate) fn is_token_evicted(&self, token: SimpleSoundToken) -> bool {
+        let index = token.0.get() % (NUM_SIMPLE_SOUND_SLOTS as u64);
+        let mut alloc_lock = self.allocator_state.lock();
+        alloc_lock.simple_sound_tokens[index as usize] != token.0.get()
+    }
+
+    pub(crate) fn insert_or_update_simple_sound(
         &self,
         tick_now: u64,
         player_position: Vector3<f64>,
         sound: SimpleSoundControlBlock,
+        previous_token: Option<SimpleSoundToken>,
     ) -> Option<SimpleSoundToken> {
         assert_ne!(sound.flags & SOUND_PRESENT, 0);
         let mut alloc_lock = self.allocator_state.lock();
 
         let seqnum = alloc_lock.simple_sounds_next_sequence;
+
+        if let Some(token) = previous_token {
+            let index = token.0.get() % (NUM_SIMPLE_SOUND_SLOTS as u64);
+            // If the entity hasn't been evicted, put it back in the same slot
+            if alloc_lock.entity_slot_tokens[index as usize] == token.0.get() {
+                let mut lock = self.control.simple_sounds[index as usize].lock_write();
+                *lock = sound;
+                return Some(token);
+            }
+        }
         alloc_lock.simple_sounds_next_sequence += NUM_SIMPLE_SOUND_SLOTS as u64;
 
-        if let Some(index) = alloc_lock.simple_sound_tokens.iter().position(|x| *x == 0) {
+        return if let Some(index) = alloc_lock.simple_sound_tokens.iter().position(|x| *x == 0) {
             let token = seqnum + (index as u64);
             alloc_lock.simple_sound_tokens[index] = token;
             {
                 let mut lock = self.control.simple_sounds[index].lock_write();
                 *lock = sound;
             }
-            return Some(SimpleSoundToken(token));
+            Some(SimpleSoundToken(NonZeroU64::new(token).unwrap()))
         } else {
             let candidate_score = sound.compute_score(tick_now, player_position);
             let mut scores = [0; NUM_SIMPLE_SOUND_SLOTS];
@@ -104,9 +127,23 @@ impl EngineHandle {
                     let mut lock = self.control.simple_sounds[min_index].lock_write();
                     *lock = sound;
                 }
-                return Some(SimpleSoundToken(token));
+                return Some(SimpleSoundToken(NonZeroU64::new(token).unwrap()));
             }
-            return None;
+            None
+        };
+    }
+
+    pub(crate) fn remove_simple_sound(&self, token: SimpleSoundToken) -> bool {
+        let mut alloc_lock = self.allocator_state.lock();
+
+        let index = token.0.get() % (NUM_SIMPLE_SOUND_SLOTS as u64);
+        if alloc_lock.simple_sound_tokens[index as usize] == token.0.get() {
+            alloc_lock.simple_sound_tokens[index as usize] = 0;
+            let mut lock = self.control.simple_sounds[index as usize].lock_write();
+            *lock = SimpleSoundControlBlock::const_default();
+            true
+        } else {
+            false
         }
     }
 
@@ -121,9 +158,9 @@ impl EngineHandle {
         let mut alloc_lock = self.allocator_state.lock();
 
         if let Some(token) = previous_token {
-            let index = token.0 % (NUM_PROCEDURAL_ENTITY_SLOTS as u64);
+            let index = token.0.get() % (NUM_PROCEDURAL_ENTITY_SLOTS as u64);
             // If the entity hasn't been evicted, put it back in the same slot
-            if alloc_lock.entity_slot_tokens[index as usize] == token.0 {
+            if alloc_lock.entity_slot_tokens[index as usize] == token.0.get() {
                 let mut lock = self.control.entity_slots[index as usize].lock_write();
                 *lock = sound;
                 return Some(token);
@@ -140,7 +177,7 @@ impl EngineHandle {
                 let mut lock = self.control.entity_slots[index].lock_write();
                 *lock = sound;
             }
-            return Some(ProceduralEntityToken(token));
+            return Some(ProceduralEntityToken(NonZeroU64::new(token).unwrap()));
         } else {
             let candidate_score = sound.compute_score(tick_now, player_position);
             let mut scores = [0; NUM_PROCEDURAL_ENTITY_SLOTS];
@@ -161,7 +198,7 @@ impl EngineHandle {
                     let mut lock = self.control.entity_slots[min_index].lock_write();
                     *lock = sound;
                 }
-                return Some(ProceduralEntityToken(token));
+                return Some(ProceduralEntityToken(NonZeroU64::new(token).unwrap()));
             }
             return None;
         }
@@ -660,7 +697,7 @@ impl EngineState {
                 // Sound not yet started
                 continue;
             }
-            if effective_time_delta > (control.end_tick - control.start_tick) as i64 {
+            if effective_time_delta as u64 > control.end_tick - control.start_tick {
                 // Sound finished
                 break;
             }
@@ -671,12 +708,15 @@ impl EngineState {
             let amplitude = if control.flags & SOUND_SQUARELAW_ENABLED != 0 {
                 let clamped_distance = distance.max(MIN_DISTANCE) as f32;
                 // this affects amplitude, not power, so it should be non-squared
-                volume_multiplier * control.volume / clamped_distance
+                // However, using something like 1.5th power sounds better in-game (although is
+                // nonphysical)
+                // Worth seeing if sqrt and float mul is indeed faster than powf
+                volume_multiplier * control.volume / (clamped_distance * clamped_distance.sqrt())
             } else {
                 volume_multiplier * control.volume
             };
 
-            let balance_left = left_ear_vec.dot(position - control.position);
+            let balance_left = left_ear_vec.dot((position - control.position).normalize());
             let balance_left = state.last_balance.update(balance_left, 0.001);
             let l_amplitude = amplitude * (1.0 + 0.8 * balance_left as f32);
 
@@ -1004,7 +1044,7 @@ impl PlayerState {
     }
 }
 
-pub const NUM_SIMPLE_SOUND_SLOTS: usize = 64;
+pub const NUM_SIMPLE_SOUND_SLOTS: usize = 256;
 pub const NUM_PROCEDURAL_ENTITY_SLOTS: usize = 64;
 
 /// The private control state, used internally by the audio engine to track the state of
@@ -1029,7 +1069,7 @@ pub(crate) struct SharedControl {
     enabled: AtomicBool,
     player_state: SeqLock<PlayerState>,
     simple_sounds: Box<[SeqLock<SimpleSoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
-    entity_slots: Box<[SeqLock<ProceduralEntitySoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
+    entity_slots: Box<[SeqLock<ProceduralEntitySoundControlBlock>; NUM_PROCEDURAL_ENTITY_SLOTS]>,
     settings: Arc<ArcSwap<GameSettings>>,
 }
 impl SharedControl {
@@ -1072,12 +1112,11 @@ pub(crate) struct SimpleSoundControlBlock {
     /// The position of the sound in 3D space. The sound is assumed to be stationary,
     /// but the player's motion may be considered for Doppler effect.
     pub position: Vector3<f64>,
-    /// The volume of the sound. If this is set to 0.0, the sound is silenced but continues to be
-    /// active.
+    /// The volume of the sound. If this is set to 0.0, the sound is silenced.
     pub volume: f32,
     /// The starting tick of the sound
     pub start_tick: u64,
-    /// The sound ID
+    /// The sound ID (per the media manager)
     pub id: u32,
     /// The ending tick of the sound. If the span from start_tick to end_tick is greater than
     /// the length of the sound, it will loop. u64::MAX is treated as effectively infinite.
@@ -1385,6 +1424,7 @@ impl PrerecordedSampler {
             CHUNK_SIZE,
             2,
         )?;
+        let output_delay = resampler.output_delay();
         let mut left_output = Vec::new();
         let mut right_output = Vec::new();
 
@@ -1429,6 +1469,7 @@ impl PrerecordedSampler {
         let data = left_output
             .into_iter()
             .zip(right_output.into_iter())
+            .skip(output_delay)
             .map(|(l, r)| (l, r))
             .collect();
         Ok(Self { len_nanos, data })
@@ -1649,5 +1690,189 @@ impl<const N: usize> Default for IirLpfCascade<N> {
             gains: [1.0; N],
             states: [0.0; N],
         }
+    }
+}
+
+struct MapSoundEmitter {
+    token: Option<SimpleSoundToken>,
+    sound_id: u32,
+    volume: f32,
+}
+
+pub(crate) struct MapSoundState {
+    emitters: FxHashMap<BlockCoordinate, MapSoundEmitter>,
+    engine: Arc<EngineHandle>,
+}
+impl MapSoundState {
+    pub(crate) fn new(engine: Arc<EngineHandle>) -> Self {
+        Self {
+            emitters: FxHashMap::default(),
+            engine,
+        }
+    }
+
+    fn split_borrow(
+        &mut self,
+    ) -> (
+        &mut FxHashMap<BlockCoordinate, MapSoundEmitter>,
+        &EngineHandle,
+    ) {
+        (&mut self.emitters, &self.engine)
+    }
+
+    fn make_control_block(
+        coord: BlockCoordinate,
+        tick_now: u64,
+        sound_id: u32,
+        volume: f32,
+    ) -> SimpleSoundControlBlock {
+        SimpleSoundControlBlock {
+            flags: SOUND_PRESENT
+                | SOUND_MOVESPEED_ENABLED
+                | SOUND_SQUARELAW_ENABLED
+                | SOUND_DIRECTIONAL,
+            position: coord.into(),
+            volume,
+            start_tick: tick_now,
+            id: sound_id,
+            end_tick: u64::MAX,
+            source: SoundSource::SoundsourceWorld,
+        }
+    }
+
+    pub(crate) fn insert_or_update(
+        &mut self,
+        tick_now: u64,
+        player_pos: Vector3<f64>,
+        coord: BlockCoordinate,
+        sound_id: u32,
+        volume: f32,
+    ) {
+        let control_block = Self::make_control_block(coord, tick_now, sound_id, volume);
+        let mut entry = self.emitters.entry(coord);
+        match entry {
+            Entry::Occupied(e) => {
+                let v = e.into_mut();
+                {
+                    v.token = self.engine.insert_or_update_simple_sound(
+                        tick_now,
+                        player_pos,
+                        control_block,
+                        v.token,
+                    );
+                    v.sound_id = sound_id;
+                    v.volume = volume;
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(MapSoundEmitter {
+                    token: self.engine.insert_or_update_simple_sound(
+                        tick_now,
+                        player_pos,
+                        control_block,
+                        None,
+                    ),
+                    sound_id,
+                    volume,
+                });
+            }
+        };
+    }
+
+    pub(crate) fn remove(&mut self, coord: BlockCoordinate) {
+        if let Some(v) = self.emitters.remove(&coord) {
+            if let Some(tok) = v.token {
+                self.engine.remove_simple_sound(tok);
+            }
+        }
+    }
+
+    pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoordinate) {
+        let mut to_remove: SmallVec<[BlockCoordinate; 16]> = smallvec::SmallVec::new();
+        for k in self.emitters.keys() {
+            if k.chunk() == chunk {
+                to_remove.push(*k);
+            }
+        }
+        for k in to_remove {
+            self.remove(k)
+        }
+    }
+
+    fn heal(
+        engine: &EngineHandle,
+        tick_now: u64,
+        player_pos: Vector3<f64>,
+        k: BlockCoordinate,
+        v: &mut MapSoundEmitter,
+    ) -> HealResult {
+        if let Some(tok) = v.token {
+            if !engine.is_token_evicted(tok) {
+                return HealResult::NoAction;
+            }
+        }
+        let control = Self::make_control_block(k, tick_now, v.sound_id, v.volume);
+        v.token = engine.insert_or_update_simple_sound(tick_now, player_pos, control, v.token);
+        if v.token.is_some() {
+            HealResult::Healed
+        } else {
+            HealResult::Unhealed
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum HealResult {
+    NoAction,
+    Healed,
+    Unhealed,
+}
+
+pub(crate) struct EvictedAudioHealer {
+    client_state: Arc<ClientState>,
+    shutdown: CancellationToken,
+}
+impl EvictedAudioHealer {
+    pub(crate) fn new(
+        client_state: Arc<ClientState>,
+    ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+        let worker = Arc::new(Self {
+            client_state,
+            shutdown: CancellationToken::new(),
+        });
+        let handle = {
+            let worker_clone = worker.clone();
+            tokio::task::spawn_blocking(move || worker_clone.run_healing_loop())
+        };
+        (worker, handle)
+    }
+
+    pub(crate) fn run_healing_loop(self: Arc<Self>) -> Result<()> {
+        tracy_client::set_thread_name!("world_audio_healer");
+        while !self.shutdown.is_cancelled() {
+            std::thread::sleep(Duration::from_secs(1));
+            // Consider pre-allocating if malloc becomes a pain
+            let mut heal_vec = vec![];
+            let pos = self.client_state.weakly_ordered_last_position().position;
+            let tick_now = self.client_state.timekeeper.now();
+            {
+                let mut lock = self.client_state.world_audio.lock();
+
+                let (emitters, engine) = lock.split_borrow();
+
+                heal_vec.extend(emitters.iter_mut());
+                heal_vec
+                    .sort_by_key(|(k, _)| (Vector3::<f64>::from(**k) - pos).magnitude2() as u64);
+                for (&k, v) in heal_vec.into_iter() {
+                    match MapSoundState::heal(engine, tick_now, pos, k, v) {
+                        HealResult::NoAction => continue,
+                        HealResult::Healed => continue,
+                        HealResult::Unhealed => break,
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }

@@ -50,10 +50,7 @@ use crate::vulkan::VulkanContext;
 
 use self::block_types::ClientBlockTypeManager;
 use self::chat::ChatState;
-use self::chunk::{
-    ChunkDataView, MeshBatch, MeshBatchBuilder, MeshResult, SnappyDecodeHelper,
-    TARGET_BATCH_OCCUPANCY,
-};
+use self::chunk::{ChunkDataView, MeshBatch, MeshBatchBuilder, MeshResult, TARGET_BATCH_OCCUPANCY};
 use self::entities::EntityState;
 use self::input::{BoundAction, InputState};
 use self::items::{ClientItemManager, InventoryViewManager};
@@ -145,8 +142,8 @@ impl ChunkManager {
     }
 
     /// Clones the chunk manager and returns a clone with the following properties:
-    /// * The clone does not hold any locks on the data in this chunk manager (i.e. insertions and deletions)
-    ///   are possible while the cloned view is live.
+    /// * The clone does not hold any locks on the data in this chunk manager (i.e. insertions and deletions
+    ///   are possible while the cloned view is live).
     /// * The clone does not track any insertions/deletions of this chunk manager.
     ///    * it will not show chunks inserted after cloned_view returned
     ///    * if chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
@@ -190,8 +187,7 @@ impl ChunkManager {
     pub(crate) fn insert_or_update(
         &self,
         coord: ChunkCoordinate,
-        proto: protocol::game_rpc::MapChunk,
-        snappy_helper: &mut SnappyDecodeHelper,
+        block_ids: &[u32; 4096],
         block_types: &ClientBlockTypeManager,
     ) -> Result<usize> {
         // Lock order: chunks -> [renderable_chunks] -> light_columns
@@ -209,10 +205,9 @@ impl ChunkManager {
         let occlusion = match chunks_lock.entry(coord) {
             std::collections::hash_map::Entry::Occupied(chunk_entry) => chunk_entry
                 .get()
-                .update_from(proto, snappy_helper, block_types)?,
+                .update_from(coord, block_ids, block_types)?,
             std::collections::hash_map::Entry::Vacant(x) => {
-                let (chunk, occlusion) =
-                    ClientChunk::from_proto(proto, snappy_helper, block_types)?;
+                let (chunk, occlusion) = ClientChunk::from_proto(coord, block_ids, block_types)?;
                 light_column.insert_empty(coord.y);
                 x.insert(Arc::new(chunk));
                 occlusion
@@ -660,7 +655,8 @@ pub(crate) struct ClientState {
 
     pub(crate) timekeeper: Arc<Timekeeper>,
 
-    pub(crate) audio: audio::EngineHandle,
+    pub(crate) audio: Arc<audio::EngineHandle>,
+    pub(crate) world_audio: Mutex<audio::MapSoundState>,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -673,8 +669,9 @@ impl ClientState {
         block_renderer: BlockRenderer,
         entity_renderer: EntityRenderer,
         timekeeper: Arc<Timekeeper>,
-        audio: audio::EngineHandle,
+        audio: Arc<audio::EngineHandle>,
     ) -> Result<ClientState> {
+        let audio_clone = audio.clone();
         Ok(ClientState {
             settings: settings.clone(),
             input: Mutex::new(InputState::new(settings.clone())),
@@ -707,6 +704,7 @@ impl ClientState {
             }),
             timekeeper,
             audio,
+            world_audio: Mutex::new(MapSoundState::new(audio_clone)),
         })
     }
 
@@ -883,6 +881,7 @@ pub(crate) struct FrameState {
 }
 
 use crate::audio;
+use crate::audio::MapSoundState;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {

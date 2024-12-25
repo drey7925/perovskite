@@ -267,7 +267,7 @@ impl PhysicsState {
                     if let Some(block) = get_block(coord, &chunks, block_types) {
                         if block.0.footstep_sound != 0 {
                             let tick = client_state.timekeeper.now();
-                            let _ = client_state.audio.alloc_simple_sound(
+                            let _ = client_state.audio.insert_or_update_simple_sound(
                                 tick,
                                 new_pos,
                                 SimpleSoundControlBlock {
@@ -283,6 +283,7 @@ impl PhysicsState {
                                             .unwrap_or(0),
                                     source: SoundSource::SoundsourceSelf,
                                 },
+                                None,
                             );
                         }
                     }

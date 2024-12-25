@@ -62,17 +62,17 @@ pub struct BlockId(pub u32);
 impl BlockId {
     // Impl note: most calls into this are cross-crate. When LTO is off, we need to actively
     // request inlining; see https://github.com/rust-lang/hashbrown/pull/119#issuecomment-537539046
-    // for rationale. Most of these are tiny functions with
+    // for rationale. Most of these are tiny functions with pure results
 
-    #[inline]
+    #[inline(always)]
     pub fn base_id(&self) -> u32 {
         self.0 & !BLOCK_VARIANT_MASK
     }
-    #[inline]
+    #[inline(always)]
     pub fn index(&self) -> usize {
         (self.0 & !BLOCK_VARIANT_MASK) as usize >> 12
     }
-    #[inline]
+    #[inline(always)]
     pub fn variant(&self) -> u16 {
         (self.0 & BLOCK_VARIANT_MASK) as u16
     }
@@ -87,15 +87,15 @@ impl BlockId {
         Ok(BlockId(self.base_id() | (variant as u32)))
     }
     /// Like [with_variant], but silently truncates excess bits
-    #[inline]
+    #[inline(always)]
     pub fn with_variant_unchecked(self, variant: u16) -> BlockId {
         BlockId(self.base_id() | (variant as u32 & BLOCK_VARIANT_MASK))
     }
-    #[inline]
+    #[inline(always)]
     pub fn with_variant_of(self, other: BlockId) -> BlockId {
         BlockId(self.base_id() | (other.0 & BLOCK_VARIANT_MASK))
     }
-    #[inline]
+    #[inline(always)]
     pub fn new(base: u32, variant: u16) -> Result<BlockId> {
         ensure!(
             base & BLOCK_VARIANT_MASK == 0,
@@ -107,13 +107,9 @@ impl BlockId {
         );
         Ok(BlockId(base | (variant as u32)))
     }
-    #[inline]
+    #[inline(always)]
     pub fn equals_ignore_variant(&self, other: BlockId) -> bool {
         self.base_id() == other.base_id()
-    }
-    #[deprecated]
-    pub fn id(&self) -> BlockId {
-        *self
     }
 }
 
