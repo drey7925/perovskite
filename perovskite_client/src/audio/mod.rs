@@ -1837,41 +1837,53 @@ impl EvictedAudioHealer {
         client_state: Arc<ClientState>,
     ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
         let worker = Arc::new(Self {
+            shutdown: client_state.shutdown.clone(),
             client_state,
-            shutdown: CancellationToken::new(),
         });
         let handle = {
             let worker_clone = worker.clone();
-            tokio::task::spawn_blocking(move || worker_clone.run_healing_loop())
+            tokio::task::spawn(worker_clone.run_healing_loop())
         };
         (worker, handle)
     }
 
-    pub(crate) fn run_healing_loop(self: Arc<Self>) -> Result<()> {
+    pub(crate) async fn run_healing_loop(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("world_audio_healer");
         while !self.shutdown.is_cancelled() {
-            std::thread::sleep(Duration::from_secs(1));
-            // Consider pre-allocating if malloc becomes a pain
-            let mut heal_vec = vec![];
-            let pos = self.client_state.weakly_ordered_last_position().position;
-            let tick_now = self.client_state.timekeeper.now();
-            {
-                let mut lock = self.client_state.world_audio.lock();
+            let sleep_deadline = std::time::Instant::now() + Duration::from_secs(1);
+            tokio::select! {
+                _ = tokio::time::sleep_until(tokio::time::Instant::from(sleep_deadline)) => {
+                    // pass
+                },
+                _ = self.shutdown.cancelled() => {
+                    break;
+                }
+            };
+            tokio::task::block_in_place(|| {
+                // Consider pre-allocating if malloc becomes a pain
+                let mut heal_vec = vec![];
+                let pos = self.client_state.weakly_ordered_last_position().position;
+                let tick_now = self.client_state.timekeeper.now();
+                {
+                    let mut lock = self.client_state.world_audio.lock();
 
-                let (emitters, engine) = lock.split_borrow();
+                    let (emitters, engine) = lock.split_borrow();
 
-                heal_vec.extend(emitters.iter_mut());
-                heal_vec
-                    .sort_by_key(|(k, _)| (Vector3::<f64>::from(**k) - pos).magnitude2() as u64);
-                for (&k, v) in heal_vec.into_iter() {
-                    match MapSoundState::heal(engine, tick_now, pos, k, v) {
-                        HealResult::NoAction => continue,
-                        HealResult::Healed => continue,
-                        HealResult::Unhealed => break,
+                    heal_vec.extend(emitters.iter_mut());
+                    heal_vec.sort_by_key(|(k, _)| {
+                        (Vector3::<f64>::from(**k) - pos).magnitude2() as u64
+                    });
+                    for (&k, v) in heal_vec.into_iter() {
+                        match MapSoundState::heal(engine, tick_now, pos, k, v) {
+                            HealResult::NoAction => continue,
+                            HealResult::Healed => continue,
+                            HealResult::Unhealed => break,
+                        }
                     }
                 }
-            }
+            });
         }
+        log::info!("Spatial audio heal loop exiting");
 
         Ok(())
     }

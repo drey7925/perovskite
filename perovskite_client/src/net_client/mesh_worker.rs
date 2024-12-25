@@ -36,11 +36,11 @@ impl NeighborPropagator {
         mesh_workers: Vec<Arc<MeshWorker>>,
     ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
         let worker = Arc::new(Self {
+            shutdown: client_state.shutdown.clone(),
             client_state,
             queue: Mutex::new(FxHashSet::default()),
             queue_len: AtomicUsize::new(0),
             cond: Condvar::new(),
-            shutdown: CancellationToken::new(),
             mesh_workers,
         });
         let handle = {
@@ -163,11 +163,11 @@ impl MeshWorker {
         client_state: Arc<ClientState>,
     ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
         let worker = Arc::new(Self {
+            shutdown: client_state.shutdown.clone(),
             client_state,
             queue: Mutex::new(FxHashSet::default()),
             queue_len: AtomicUsize::new(0),
             cond: Condvar::new(),
-            shutdown: CancellationToken::new(),
         });
         let handle = {
             let worker_clone = worker.clone();
@@ -278,10 +278,12 @@ impl MeshBatcher {
         Ok(())
     }
 
-    pub(crate) fn new(clone: Arc<ClientState>) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
+    pub(crate) fn new(
+        client_state: Arc<ClientState>,
+    ) -> (Arc<Self>, tokio::task::JoinHandle<Result<()>>) {
         let worker = Arc::new(Self {
-            client_state: clone,
-            shutdown: CancellationToken::new(),
+            shutdown: client_state.shutdown.clone(),
+            client_state,
         });
         let handle = {
             let worker_clone = worker.clone();
