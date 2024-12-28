@@ -17,7 +17,7 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset
 use perovskite_core::protocol::audio::{SampledSound, SoundSource};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rubato::Resampler;
+use rubato::{FftFixedInOut, Resampler};
 use rustc_hash::{FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use smallvec::SmallVec;
@@ -623,11 +623,16 @@ impl EngineState {
         sampled_sounds: FxHashMap<u32, WavReader<Cursor<Vec<u8>>>>,
     ) -> Result<EngineState> {
         let mut samplers = FxHashMap::default();
+        let mut resampler_cache = FxHashMap::default();
         for (k, v) in sampled_sounds {
             println!("{}", k);
             samplers.insert(
                 k,
-                PrerecordedSampler::from_wav(v, stream_config.sample_rate().0)?,
+                PrerecordedSampler::from_wav(
+                    v,
+                    stream_config.sample_rate().0,
+                    &mut resampler_cache,
+                )?,
             );
         }
 
@@ -1390,7 +1395,11 @@ struct PrerecordedSampler {
     data: Vec<(f32, f32)>,
 }
 impl PrerecordedSampler {
-    fn from_wav<R: std::io::Read>(wav: WavReader<R>, target_sample_rate: u32) -> Result<Self> {
+    fn from_wav<R: std::io::Read>(
+        wav: WavReader<R>,
+        target_sample_rate: u32,
+        resampler_cache: &mut FxHashMap<(u32, u32), FftFixedInOut<f32>>,
+    ) -> Result<Self> {
         let len_nanos = wav_len_nanos(&wav);
         let source_rate = wav.spec().sample_rate;
         let source_channels = wav.spec().channels as usize;
@@ -1418,12 +1427,18 @@ impl PrerecordedSampler {
 
         const CHUNK_SIZE: usize = 4096;
 
-        let mut resampler = rubato::FftFixedInOut::new(
-            source_rate as usize,
-            internal_target_rate as usize,
-            CHUNK_SIZE,
-            2,
-        )?;
+        let mut resampler = match resampler_cache.entry((source_rate, internal_target_rate)) {
+            Entry::Occupied(mut v) => {
+                v.get_mut().reset();
+                v.into_mut()
+            }
+            Entry::Vacant(v) => v.insert(rubato::FftFixedInOut::new(
+                source_rate as usize,
+                internal_target_rate as usize,
+                CHUNK_SIZE,
+                2,
+            )?),
+        };
         let output_delay = resampler.output_delay();
         let mut left_output = Vec::new();
         let mut right_output = Vec::new();
