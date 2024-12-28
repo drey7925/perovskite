@@ -628,7 +628,7 @@ impl MapChunkSender {
         for &(dx, dz) in LOAD_TERRAIN_SORTED_COORDS.iter() {
             let cx = player_chunk.x.saturating_add(dx);
             let cz = player_chunk.z.saturating_add(dz);
-            if !ChunkCoordinate::new(cx, 0, cz).is_in_bounds() {
+            if !ChunkCoordinate::bounds_check(cx, 0, cz) {
                 continue;
             }
             if let Some(hint) = self.context.game_state.mapgen().terrain_range_hint(cx, cz) {

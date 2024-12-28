@@ -245,8 +245,22 @@ pub struct ChunkCoordinate {
 impl ChunkCoordinate {
     pub fn new(x: i32, y: i32, z: i32) -> Self {
         let result = Self { x, y, z };
-        assert!(result.is_in_bounds());
+        debug_assert!(result.is_in_bounds());
         result
+    }
+
+    pub fn try_new(x: i32, y: i32, z: i32) -> Option<Self> {
+        let result = Self { x, y, z };
+        if result.is_in_bounds() {
+            Some(result)
+        } else {
+            None
+        }
+    }
+
+    pub fn bounds_check(x: i32, y: i32, z: i32) -> bool {
+        let result = Self { x, y, z };
+        result.is_in_bounds()
     }
 
     /// Returns a new block coordinate with the given offset within this chunk.
