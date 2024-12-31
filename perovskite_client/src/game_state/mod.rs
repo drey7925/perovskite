@@ -349,10 +349,7 @@ impl ChunkManager {
         if let Some(chunk) = src.get(&coord) {
             match chunk.mesh_with(renderer)? {
                 MeshResult::SameMesh => {
-                    // todo we shouldn't need to spill here, but if we do, we get artifacts with
-                    // double-rendered water. Why?
-                    // Is this a bug here, or does the spill here just mask a bug elsewhere?
-                    //self.spill(chunk, &src, "samemesh");
+                    // Don't spill or anything
                 }
                 MeshResult::NewMesh(batch) => {
                     // We take the lock after mesh_with to keep the lock scope as short as possible

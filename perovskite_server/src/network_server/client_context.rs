@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::ops::RangeInclusive;
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -74,7 +75,7 @@ use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
 use perovskite_core::protocol::game_rpc::StreamToClient;
-use perovskite_core::util::TraceBuffer;
+use perovskite_core::util::{LogInspect, TraceBuffer};
 use prost::Message;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -258,9 +259,13 @@ pub(crate) async fn make_client_contexts(
         player_position: pos_recv,
         skip_if_near: ChunkCoordinate { x: 0, y: 0, z: 0 },
         processed_elements: 0,
-        snappy_encoder: snap::raw::Encoder::new(),
-        snappy_input_buffer: vec![],
-        snappy_output_buffer: vec![],
+        snappy: SnappyEncoder {
+            snappy_encoder: snap::raw::Encoder::new(),
+            snappy_input_buffer: vec![],
+            snappy_output_buffer: vec![],
+        },
+        range_hint_lookaside: Default::default(),
+        hinted_chunks: vec![],
     };
     let block_event_sender = BlockEventSender {
         context: context.clone(),
@@ -467,6 +472,32 @@ impl ChunkTracker {
     }
 }
 
+struct SnappyEncoder {
+    snappy_encoder: snap::raw::Encoder,
+    snappy_input_buffer: Vec<u8>,
+    snappy_output_buffer: Vec<u8>,
+}
+impl SnappyEncoder {
+    fn snappy_encode<T>(&mut self, msg: &T) -> Result<Vec<u8>>
+    where
+        T: Message,
+    {
+        self.snappy_input_buffer.clear();
+        msg.encode(&mut self.snappy_input_buffer)?;
+        let compressed_len_bound = snap::raw::max_compress_len(self.snappy_input_buffer.len());
+        if compressed_len_bound == 0 {
+            bail!("Input is too long to compress");
+        }
+        if self.snappy_output_buffer.len() < compressed_len_bound {
+            self.snappy_output_buffer.resize(compressed_len_bound, 0);
+        }
+        let actual_compressed_len = self
+            .snappy_encoder
+            .compress(&self.snappy_input_buffer, &mut self.snappy_output_buffer)?;
+        Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
+    }
+}
+
 // Loads and unloads player chunks
 pub(crate) struct MapChunkSender {
     context: Arc<SharedContext>,
@@ -478,9 +509,10 @@ pub(crate) struct MapChunkSender {
     skip_if_near: ChunkCoordinate,
     processed_elements: usize,
 
-    snappy_encoder: snap::raw::Encoder,
-    snappy_input_buffer: Vec<u8>,
-    snappy_output_buffer: Vec<u8>,
+    snappy: SnappyEncoder,
+
+    range_hint_lookaside: FxHashMap<(i32, i32), Option<RangeInclusive<i32>>>,
+    hinted_chunks: Vec<(i32, i32, i32, bool)>,
 }
 const ACCESS_TIME_BUMP_SHARDS: u32 = 32;
 impl MapChunkSender {
@@ -515,25 +547,6 @@ impl MapChunkSender {
         Ok(())
     }
 
-    fn snappy_encode<T>(&mut self, msg: &T) -> Result<Vec<u8>>
-    where
-        T: Message,
-    {
-        self.snappy_input_buffer.clear();
-        msg.encode(&mut self.snappy_input_buffer)?;
-        let compressed_len_bound = snap::raw::max_compress_len(self.snappy_input_buffer.len());
-        if compressed_len_bound == 0 {
-            bail!("Input is too long to compress");
-        }
-        if self.snappy_output_buffer.len() < compressed_len_bound {
-            self.snappy_output_buffer.resize(compressed_len_bound, 0);
-        }
-        let actual_compressed_len = self
-            .snappy_encoder
-            .compress(&self.snappy_input_buffer, &mut self.snappy_output_buffer)?;
-        Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
-    }
-
     #[tracing::instrument(
         name = "HandlePositionUpdate",
         level = "trace",
@@ -547,12 +560,13 @@ impl MapChunkSender {
         update: PositionAndPacing,
         bump_index: u32,
     ) -> Result<()> {
+        let trace = TraceBuffer::new(false);
+        trace.log("starting hpu");
         let mut position = update.position;
 
         if let Some(position_override) = self.get_position_override() {
             position.position = position_override;
         }
-
         // TODO anticheat/safety checks
         // TODO consider caching more in the player's movement direction as a form of prefetch???
         let player_block_coord: BlockCoordinate = match position.position.try_into() {
@@ -580,15 +594,19 @@ impl MapChunkSender {
         let player_chunk = player_block_coord.chunk();
         tracing::Span::current().record("player_chunk", format!("{:?}", player_chunk));
 
+        trace.log("player position resolved");
+
         // Phase 1: Unload chunks that are too far away
         let chunks_to_unsubscribe: Vec<_> = self
             .chunk_tracker
             .loaded_chunks
             .read()
+            .trace_point(&trace, "chunk tracker read acquired")
             .iter()
             .filter(|&x| self.should_unload(player_chunk, *x))
             .cloned()
             .collect();
+        trace.log("unsub chunks ready");
         let message = StreamToClient {
             tick: self.context.game_state.tick(),
             server_message: Some(ServerMessage::MapChunkUnsubscribe(
@@ -597,12 +615,15 @@ impl MapChunkSender {
                 },
             )),
         };
+
+        trace.log("unsub chunks msg ready");
         self.outbound_tx
             .send(Ok(message))
             .await
             .map_err(|_| Error::msg("Could not send outbound message (mapchunk unsubscribe)"))?;
         self.chunk_tracker
             .mark_chunks_unloaded(chunks_to_unsubscribe.into_iter());
+        trace.log("unsub chunks sent");
 
         // Phase 2: Load chunks that are close enough.
         // Chunks are expensive to load and send, so we keep track of
@@ -624,28 +645,41 @@ impl MapChunkSender {
         //         .min(MIN_INDEX_FOR_DISTANCE[new_distance])
         // };
 
-        let mut hinted_chunks = Vec::new();
+        self.hinted_chunks.clear();
+        trace.log("clean hints");
+        self.range_hint_lookaside.retain(|&(cx_, cz_), _| {
+            (cx_ - player_chunk.x).abs() + (cz_ - player_chunk.z).abs()
+                < (LOAD_TERRAIN_DISTANCE * 2)
+        });
+        trace.log("start LTSC");
         for &(dx, dz) in LOAD_TERRAIN_SORTED_COORDS.iter() {
             let cx = player_chunk.x.saturating_add(dx);
             let cz = player_chunk.z.saturating_add(dz);
             if !ChunkCoordinate::bounds_check(cx, 0, cz) {
                 continue;
             }
-            if let Some(hint) = self.context.game_state.mapgen().terrain_range_hint(cx, cz) {
+
+            // Tricky: Need a clone since otherwise iterating will exhaust the range
+            let hint = self
+                .range_hint_lookaside
+                .entry((cx, cz))
+                .or_insert_with(|| self.context.game_state.mapgen().terrain_range_hint(cx, cz))
+                .clone();
+            if let Some(hint) = hint {
                 if dx.abs().max(dz.abs()) <= FORCE_LOAD_DISTANCE {
                     for y in -FORCE_LOAD_DISTANCE..=FORCE_LOAD_DISTANCE {
-                        hinted_chunks.push((dx, y, dz, true))
+                        self.hinted_chunks.push((dx, y, dz, true))
                     }
                 }
 
                 for y in hint {
                     if (player_chunk.y - y).abs() <= LOAD_TERRAIN_DISTANCE {
-                        hinted_chunks.push((dx, y - player_chunk.y, dz, true))
+                        self.hinted_chunks.push((dx, y - player_chunk.y, dz, true))
                     }
                 }
             }
         }
-
+        trace.log("LTSC hints ready");
         let llsc_slice = &LOAD_LAZY_SORTED_COORDS;
         let (llsc_before, llsc_after) =
             llsc_slice.split_at(MIN_INDEX_FOR_DISTANCE[FORCE_LOAD_DISTANCE as usize]);
@@ -658,7 +692,7 @@ impl MapChunkSender {
         for (i, (dx, dy, dz, force)) in llsc_before
             .iter()
             .map(|&(x, y, z)| (x, y, z, false))
-            .chain(hinted_chunks.into_iter())
+            .chain(self.hinted_chunks.drain(..))
             .chain(llsc_after.iter().map(|&(x, y, z)| (x, y, z, false)))
             .enumerate()
         {
@@ -676,6 +710,7 @@ impl MapChunkSender {
             let distance = dx.abs() + dy.abs() + dz.abs();
             if self.player_position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE
             {
+                trace.log("player pos changed, past FLD");
                 // If we already have a new position update, restart the process with the new position
                 tracing::event!(
                     tracing::Level::TRACE,
@@ -713,8 +748,11 @@ impl MapChunkSender {
             }
             // avoid starving other tasks
             if i % 100 == 0 {
+                trace.log("Yielding");
                 tokio::task::yield_now().await;
             }
+
+            trace.log("serialize_for_client start");
             let chunk_data = block_in_place(|| {
                 self.context
                     .game_state
@@ -724,7 +762,8 @@ impl MapChunkSender {
                     })
             })?;
             if let Some(chunk_data) = chunk_data {
-                let chunk_bytes = self.snappy_encode(&chunk_data)?;
+                trace.log("snappy_encode start");
+                let chunk_bytes = self.snappy.snappy_encode(&chunk_data)?;
                 let message = StreamToClient {
                     tick: self.context.game_state.tick(),
                     server_message: Some(ServerMessage::MapChunk(proto::MapChunk {
@@ -732,10 +771,13 @@ impl MapChunkSender {
                         snappy_encoded_bytes: chunk_bytes,
                     })),
                 };
+                trace.log("message ready done");
                 self.outbound_tx.send(Ok(message)).await.map_err(|_| {
                     self.context.cancellation.cancel();
                     Error::msg("Could not send outbound message (full mapchunk)")
                 })?;
+
+                trace.log("message sent");
                 sent_chunks += 1;
                 if sent_chunks > update.chunks_to_send {
                     break;

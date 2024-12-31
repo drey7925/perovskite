@@ -58,7 +58,7 @@ impl TraceBuffer {
         }
     }
     fn new_filled() -> TraceBuffer {
-        let (tx, rx) = std::sync::mpsc::sync_channel(256);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let inner = TraceBufferInner {
             created: Instant::now(),
             buf: tx,
@@ -88,3 +88,11 @@ impl Drop for TraceBufferInner {
 pub trait TraceLog {
     fn log(&self, msg: &'static str);
 }
+
+pub trait LogInspect: Sized {
+    fn trace_point(self, tracer: &TraceBuffer, message: &'static str) -> Self {
+        tracer.log(message);
+        self
+    }
+}
+impl<T> LogInspect for T {}
