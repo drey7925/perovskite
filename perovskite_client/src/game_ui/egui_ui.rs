@@ -709,6 +709,11 @@ impl EguiUi {
                         Ok(_) => {}
                         Err(e) => {
                             log::error!("Failure loading audio devices: {}", e);
+                            self.prospective_settings.audio.output_devices.clear();
+                            self.prospective_settings
+                                .audio
+                                .output_devices
+                                .push("[No devices]".to_string());
                         }
                     };
                     self.settings_menu_open = true;

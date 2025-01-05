@@ -92,6 +92,7 @@ impl AudioVolumes {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub(crate) struct AudioSettings {
+    pub(crate) enable_audio: bool,
     pub(crate) volumes: AudioVolumes,
     pub(crate) preferred_output_device: String,
     // The detected audio devices
@@ -128,6 +129,7 @@ impl Default for AudioVolumes {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
+            enable_audio: true,
             volumes: AudioVolumes::default(),
             preferred_output_device: String::from(""),
             output_devices: vec![],

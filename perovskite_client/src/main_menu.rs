@@ -702,6 +702,12 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
         .spacing([40.0, 4.0])
         .striped(true)
         .show(ui, |ui| {
+            ui.label("Enable audio");
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.audio.enable_audio,
+                "Enabled",
+            ));
+            ui.end_row();
             ui.label("Global volume")
                 .on_hover_text("The overall volume of the game.");
             ui.add(egui::Slider::new(

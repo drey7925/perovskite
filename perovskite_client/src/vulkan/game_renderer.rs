@@ -594,13 +594,22 @@ impl GameRenderer {
                             && game.client_state.input.lock().is_mouse_captured()
                         {
                             let size = self.ctx.window.inner_size();
-                            self.ctx
+                            match self.ctx
                                 .window
                                 .set_cursor_position(PhysicalPosition::new(
                                     size.width / 2,
                                     size.height / 2,
-                                ))
-                                .unwrap();
+                                )) {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    if !self.warned_about_capture_issue {
+                                        self.warned_about_capture_issue = true;
+                                        log::warn!(
+                                            "Failed to move cursor position to center of window. This message will only display once per session. {:?}", e
+                                        )
+                                    }
+                                }
+                            }
                             let mode = if cfg!(target_os = "macos") {
                                 winit::window::CursorGrabMode::Locked
                             } else {
@@ -612,11 +621,11 @@ impl GameRenderer {
                                 .set_cursor_grab(mode)
                             {
                                 Ok(_) => (),
-                                Err(_) => {
+                                Err(e) => {
                                     if !self.warned_about_capture_issue {
                                         self.warned_about_capture_issue = true;
                                         log::warn!(
-                                            "Failed to grab cursor, falling back to non-confined. This message will only display once per session."
+                                            "Failed to grab cursor, falling back to non-confined. This message will only display once per session. {:?}", e
                                         )
                                     }
                                 }

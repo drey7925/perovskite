@@ -266,67 +266,74 @@ pub(crate) async fn start_engine(
     }
 
     let control = Arc::new(SharedControl::new(settings.clone(), Vector3::zero()));
-    let control_clone = control.clone();
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
     let cancellation_token = tokio_util::sync::CancellationToken::new();
-    let token_clone = cancellation_token.clone();
-    tokio::task::block_in_place(move || {
-        let host = cpal::default_host();
-        // TODO use a selected device from the settings
-        let output_device =
-            select_output_device(&host, &settings.load().audio.preferred_output_device)?;
-        let mut device_configs: Vec<_> = output_device.supported_output_configs()?.collect();
-        device_configs.sort_by(cpal::SupportedStreamConfigRange::cmp_default_heuristics);
-        log::info!("Available device configs: {:?}", device_configs);
-        // TODO use a selected config from the settings
-        let selected_config_range = device_configs.last().context("no supported config")?;
-        let selected_config = selected_config_range.with_max_sample_rate();
-        log::info!("Using config: {:?}", selected_config);
+    if settings.load().audio.enable_audio {
+        let control_clone = control.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
+        let token_clone = cancellation_token.clone();
+        tokio::task::block_in_place(move || {
+            let host = cpal::default_host();
+            // TODO use a selected device from the settings
+            let output_device =
+                select_output_device(&host, &settings.load().audio.preferred_output_device)?;
+            let mut device_configs: Vec<_> = output_device.supported_output_configs()?.collect();
+            device_configs.sort_by(cpal::SupportedStreamConfigRange::cmp_default_heuristics);
+            log::info!("Available device configs: {:?}", device_configs);
+            // TODO use a selected config from the settings
+            let selected_config_range = device_configs.last().context("no supported config")?;
+            let selected_config = selected_config_range.with_max_sample_rate();
+            log::info!("Using config: {:?}", selected_config);
 
-        let handle = tokio::runtime::Handle::current();
-        let mut engine_state =
-            EngineState::new(control_clone, selected_config.clone(), timekeeper, wavs)?;
+            let handle = tokio::runtime::Handle::current();
+            let mut engine_state =
+                EngineState::new(control_clone, selected_config.clone(), timekeeper, wavs)?;
 
-        let _ = std::thread::spawn(move || {
-            let startup_work = move || {
-                let stream = output_device
-                    .build_output_stream(
-                        &selected_config.into(),
-                        move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                            engine_state.callback(data, info);
-                        },
-                        move |err| {
-                            log::error!("Output stream error: {}", err);
-                        },
-                        None,
-                    )
-                    .context("error creating output stream")?;
+            let _ = std::thread::spawn(move || {
+                let startup_work = move || {
+                    let stream = output_device
+                        .build_output_stream(
+                            &selected_config.into(),
+                            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                                engine_state.callback(data, info);
+                            },
+                            move |err| {
+                                log::error!("Output stream error: {}", err);
+                            },
+                            None,
+                        )
+                        .context("error creating output stream")?;
 
-                stream.play().context("error playing stream")?;
-                Ok(stream)
-            };
-            // We need to not drop the stream until after the cancellation token is cancelled
-            let stream = match startup_work() {
-                Ok(stream) => {
-                    tx.send(Ok(()))
-                        .expect("Audio startup notification: Listener dropped");
-                    stream
+                    stream.play().context("error playing stream")?;
+                    Ok(stream)
+                };
+                // We need to not drop the stream until after the cancellation token is cancelled
+                let stream = match startup_work() {
+                    Ok(stream) => {
+                        tx.send(Ok(()))
+                            .expect("Audio startup notification: Listener dropped");
+                        stream
+                    }
+                    Err(e) => {
+                        log::error!("Failed to start audio: {}", e);
+                        tx.send(Err(e)).unwrap();
+                        return;
+                    }
+                };
+                handle.block_on(token_clone.cancelled());
+                if let Err(e) = stream.pause() {
+                    log::warn!("Failure pausing audio stream: {:?}", e)
                 }
-                Err(e) => {
-                    log::error!("Failed to start audio: {}", e);
-                    tx.send(Err(e)).unwrap();
-                    return;
-                }
-            };
-            handle.block_on(token_clone.cancelled());
-            stream.pause().unwrap();
-            drop(stream);
-        });
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    rx.await??;
-    log::info!("Audio engine started successfully");
+                drop(stream);
+            });
+            Ok::<(), anyhow::Error>(())
+        })?;
+        rx.await
+            .context("Waiting for audio engine startup failed")?
+            .context("Audio engine startup")?;
+        log::info!("Audio engine started successfully");
+    } else {
+        log::info!("Returning an empty audio engine because audio was disabled");
+    }
 
     Ok(EngineHandle {
         control,
