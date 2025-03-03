@@ -116,7 +116,7 @@ pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; 4096]) + Send + Sync + 's
 
 /// How extended data for this block type ought to be handled.
 ///
-/// For now, this enum has only one option; in the future, additional variants will
+/// For now, this enum has only one option; in the future, additional variants will be added
 #[derive(PartialEq, Eq)]
 pub enum ExtDataHandling {
     /// When storing/loading this block type, it has extended data that is
@@ -332,7 +332,7 @@ impl Default for BlockType {
 /// 1. The extended data contains some sort of interior mutability (e.g. Mutex, RwLock, atomics,
 ///    lock-free data structures, etc), whether behind an Arc or otherwise
 /// 2. That data (behind that interior mutability) should be written back to the game database (i.e.
-///    the block's extended data serializer reads it)
+///    the block's extended data serializer reads it, and it's not just some in-memory cache)
 /// 3. The only way the extended data is accessed is via an immutable deref (e.g. `ext.map()`,
 ///    `ext.and_then()`, `ext.deref()`)
 /// 4. And `ExtendedDataHolder::set_dirty` is not called manually.

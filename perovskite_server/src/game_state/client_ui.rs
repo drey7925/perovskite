@@ -284,6 +284,11 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         self
     }
     /// Adds a new text field to this popup. At the moment, the layout is still TBD.
+    ///
+    /// Deprecated: Use text_field_from_builder for all functionalities; this method has too many
+    /// parameters that would get more and more unwieldy as features are added; hence it's limited
+    /// to the current set of parameters, and will not be expanded as textfields increase in
+    /// functionality
     #[deprecated]
     fn text_field(
         mut self,

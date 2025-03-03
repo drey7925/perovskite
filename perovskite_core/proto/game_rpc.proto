@@ -187,11 +187,14 @@ message StreamToClient {
 message Nop {}
 
 message DigTapAction {
-  // The block coordinate which was dug/tapped
-  perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
+  // The block coordinate which was dug/tapped.
+  oneof target {
+    perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
+    uint64 entity_id = 11;
+  }
   // The block coordinate on the face that was dug into/tapped (i.e. in
-  // raycasting just before we hit the target block)
-  perovskite.protocol.coordinates.BlockCoordinate prev_coord = 2;
+  // raycasting just before we hit the target block). Absent when target is block_coord (for now)
+  perovskite.protocol.coordinates.WireBlockCoordinate prev_coord = 2;
   // zero-indexed slot for the tool in the player's hotbar/primary inventory
   uint32 item_slot = 3;
   // the position of the player when the action was performed
@@ -200,11 +203,11 @@ message DigTapAction {
 
 message PlaceAction {
   // The block coordinate where the block is being placed
-  perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
+  perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
 
   // The block coordinate onto which the placement is happening (i.e. the block
   // just *after* block_coord in raycasting order)
-  perovskite.protocol.coordinates.BlockCoordinate anchor = 2;
+  perovskite.protocol.coordinates.WireBlockCoordinate anchor = 2;
 
   // zero-indexed slot for the item in the player's hotbar/primary inventory
   uint32 item_slot = 3;
@@ -215,10 +218,13 @@ message PlaceAction {
 
 message InteractKeyAction {
   // The block coordinate that was interacted with
-  perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
+  oneof interaction_target {
+    perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
+    uint64 entity_id = 11;
+  }
   // the position of the player when the action was performed
   PlayerPosition position = 2;
-
+  uint32 item_slot = 3;
   // More fields may be added in the future to support multiple interactions per
   // block
 }
@@ -241,18 +247,18 @@ message InventoryAction {
 message MapDeltaUpdateBatch { repeated MapDeltaUpdate updates = 1; }
 
 message MapDeltaUpdate {
-  perovskite.protocol.coordinates.BlockCoordinate block_coord = 1;
+  perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
   uint32 new_id = 2;
 }
 
 message MapChunk {
   // x/y/z are chunk coordinates
-  perovskite.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
+  perovskite.protocol.coordinates.WireChunkCoordinate chunk_coord = 1;
   bytes snappy_encoded_bytes = 2;
 }
 
 message MapChunkUnsubscribe {
-  repeated perovskite.protocol.coordinates.ChunkCoordinate chunk_coord = 1;
+  repeated perovskite.protocol.coordinates.WireChunkCoordinate chunk_coord = 1;
 }
 
 message ClientBugCheck {
@@ -275,7 +281,7 @@ message ClientUpdate {
   uint32 hotbar_slot = 3;
   // todo animation state
   // If set, player had a footstep.
-  perovskite.protocol.coordinates.BlockCoordinate footstep_coordinate = 4;
+  perovskite.protocol.coordinates.WireBlockCoordinate footstep_coordinate = 4;
 }
 
 message PlayerPosition {

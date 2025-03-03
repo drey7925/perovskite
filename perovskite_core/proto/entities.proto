@@ -43,7 +43,7 @@ message EntityMove {
 }
 
 message EntityUpdate {
-  // The unique ID of the entity.
+  // The unique ID of the entity. Nonzero.
   uint64 id = 1;
   // The moves that are queued for this move, and have not yet been delivered to
   // this client

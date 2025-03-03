@@ -40,8 +40,8 @@ pub(crate) struct ClientEventContext {
 
 #[derive(Clone)]
 pub struct WeakPlayerRef {
-    player: Weak<Player>,
-    name: String,
+    pub(crate) player: Weak<Player>,
+    pub(crate) name: String,
     pub position: PlayerPositionUpdate,
 }
 impl WeakPlayerRef {
@@ -56,13 +56,9 @@ impl WeakPlayerRef {
 impl Debug for WeakPlayerRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WeakPlayerRef")
-            .field(
-                "player",
-                &self
-                    .try_to_run(|p| p.name().to_string())
-                    .unwrap_or("None".to_string()),
-            )
+            .field("player", &self.name)
             .field("position", &self.position)
+            .field("strong_count", &Weak::strong_count(&self.player))
             .finish()
     }
 }

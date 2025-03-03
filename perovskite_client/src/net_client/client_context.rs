@@ -33,6 +33,8 @@ use crate::audio::{
 use crate::game_state::block_types::ClientBlockTypeManager;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::coordinates::ChunkOffset;
+use perovskite_core::protocol::game_rpc::dig_tap_action::Target;
+use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -241,7 +243,7 @@ impl OutboundContext {
             GameAction::Dig(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Dig(
                     rpc::DigTapAction {
-                        block_coord: Some(action.target.into()),
+                        target: Some(Target::BlockCoord(action.target.into())),
                         prev_coord: action.prev.map(|x| x.into()),
                         item_slot: action.item_slot,
                         position: Some(action.player_pos.to_proto()?),
@@ -252,7 +254,7 @@ impl OutboundContext {
             GameAction::Tap(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Tap(
                     rpc::DigTapAction {
-                        block_coord: Some(action.target.into()),
+                        target: Some(Target::BlockCoord(action.target.into())),
                         prev_coord: action.prev.map(|x| x.into()),
                         item_slot: action.item_slot,
                         position: Some(action.player_pos.to_proto()?),
@@ -293,8 +295,11 @@ impl OutboundContext {
             GameAction::InteractKey(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::InteractKey(
                     InteractKeyAction {
-                        block_coord: Some(action.target.into()),
+                        interaction_target: Some(InteractionTarget::BlockCoord(
+                            action.target.into(),
+                        )),
                         position: Some(action.player_pos.to_proto()?),
+                        item_slot: action.item_slot,
                     },
                 ))
                 .await?;

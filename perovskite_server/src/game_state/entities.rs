@@ -118,6 +118,9 @@ pub struct EntityManager {
     types: EntityTypeManager,
 }
 
+/// Stores the entities of a game world, as well as owning the processes that perform entity updates
+///
+/// Guarantees: entity IDs are nonzero
 impl EntityManager {
     pub(crate) fn predictive_position(&self, entity_id: u64, tick: u64) -> Option<Vector3<f64>> {
         let shard = self.get_shard(entity_id);
@@ -272,6 +275,24 @@ impl EntityManager {
             .context("Entity receiver disappeared")
             .unwrap();
         id
+    }
+
+    pub(crate) async fn player_action(&self, entity_id: u64, action: PlayerActionDetails) {
+        let shard = self.get_shard(entity_id);
+        shard
+            .pending_actions_tx
+            .send(EntityAction::PlayerAction(action))
+            .await
+            .context("Entity receiver disappeared")
+            .unwrap();
+    }
+    pub(crate) fn player_action_blocking(&self, entity_id: u64, action: PlayerActionDetails) {
+        let shard = self.get_shard(entity_id);
+        shard
+            .pending_actions_tx
+            .blocking_send(EntityAction::PlayerAction(action))
+            .context("Entity receiver disappeared")
+            .unwrap();
     }
 
     pub(crate) fn shards(&self) -> &[CachelineAligned<EntityShard>] {
@@ -2120,6 +2141,21 @@ enum EntityAction {
     ),
     Remove(u64),
     SetKinematics(u64, Vector3<f64>, Movement, InitialMoveQueue),
+    PlayerAction(PlayerActionDetails),
+}
+
+#[derive(Debug)]
+pub(crate) struct PlayerActionDetails {
+    pub(crate) action: PlayerEntityAction,
+    pub(crate) tick: u64,
+    pub(crate) initiator: EventInitiator<'static>,
+    pub(crate) item_slot: u32,
+}
+
+#[derive(Debug)]
+pub(crate) enum PlayerEntityAction {
+    Dig,
+    Tap,
 }
 
 /// The entities stored in a shard of the game map.
@@ -2363,6 +2399,9 @@ impl EntityShardWorker {
                             tracing::error!("Failed to set kinematics for entity {}: {:?}", id, e);
                         }
                     }
+                }
+                EntityAction::PlayerAction(details) => {
+                    todo!("{:?}", details);
                 }
             }
         }

@@ -22,6 +22,7 @@ use std::{
     ops::RangeInclusive,
 };
 
+use crate::protocol::coordinates::{WireBlockCoordinate, WireChunkCoordinate};
 use anyhow::{bail, ensure, Context, Result};
 use cgmath::{Angle, Deg};
 use rustc_hash::FxHasher;
@@ -107,17 +108,17 @@ impl From<BlockCoordinate> for cgmath::Vector3<f64> {
     }
 }
 
-impl From<BlockCoordinate> for crate::protocol::coordinates::BlockCoordinate {
+impl From<BlockCoordinate> for WireBlockCoordinate {
     fn from(value: BlockCoordinate) -> Self {
-        crate::protocol::coordinates::BlockCoordinate {
+        WireBlockCoordinate {
             x: value.x,
             y: value.y,
             z: value.z,
         }
     }
 }
-impl From<&crate::protocol::coordinates::BlockCoordinate> for BlockCoordinate {
-    fn from(value: &crate::protocol::coordinates::BlockCoordinate) -> Self {
+impl From<&WireBlockCoordinate> for BlockCoordinate {
+    fn from(value: &WireBlockCoordinate) -> Self {
         BlockCoordinate {
             x: value.x,
             y: value.y,
@@ -125,8 +126,8 @@ impl From<&crate::protocol::coordinates::BlockCoordinate> for BlockCoordinate {
         }
     }
 }
-impl From<crate::protocol::coordinates::BlockCoordinate> for BlockCoordinate {
-    fn from(value: crate::protocol::coordinates::BlockCoordinate) -> Self {
+impl From<WireBlockCoordinate> for BlockCoordinate {
+    fn from(value: WireBlockCoordinate) -> Self {
         (&value).into()
     }
 }
@@ -332,17 +333,17 @@ impl Debug for ChunkCoordinate {
     }
 }
 
-impl From<ChunkCoordinate> for crate::protocol::coordinates::ChunkCoordinate {
+impl From<ChunkCoordinate> for WireChunkCoordinate {
     fn from(value: ChunkCoordinate) -> Self {
-        crate::protocol::coordinates::ChunkCoordinate {
+        WireChunkCoordinate {
             x: value.x,
             y: value.y,
             z: value.z,
         }
     }
 }
-impl From<&crate::protocol::coordinates::ChunkCoordinate> for ChunkCoordinate {
-    fn from(value: &crate::protocol::coordinates::ChunkCoordinate) -> Self {
+impl From<&WireChunkCoordinate> for ChunkCoordinate {
+    fn from(value: &WireChunkCoordinate) -> Self {
         ChunkCoordinate {
             x: value.x,
             y: value.y,
@@ -350,8 +351,8 @@ impl From<&crate::protocol::coordinates::ChunkCoordinate> for ChunkCoordinate {
         }
     }
 }
-impl From<crate::protocol::coordinates::ChunkCoordinate> for ChunkCoordinate {
-    fn from(value: crate::protocol::coordinates::ChunkCoordinate) -> Self {
+impl From<WireChunkCoordinate> for ChunkCoordinate {
+    fn from(value: WireChunkCoordinate) -> Self {
         (&value).into()
     }
 }

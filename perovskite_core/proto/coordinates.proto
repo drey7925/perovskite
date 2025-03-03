@@ -18,13 +18,13 @@ syntax = "proto3";
 
 package perovskite.protocol.coordinates;
 
-message BlockCoordinate {
+message WireBlockCoordinate {
     sint32 x = 1;
     sint32 y = 2;
     sint32 z = 3;
 }
 
-message ChunkCoordinate {
+message WireChunkCoordinate {
     sint32 x = 1;
     sint32 y = 2;
     sint32 z = 3;

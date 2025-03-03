@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use cgmath::{vec3, Deg, InnerSpace, Vector3, Zero};
+use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
@@ -100,7 +100,6 @@ pub(crate) struct InventoryAction {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InteractKeyAction {
     pub(crate) target: BlockCoordinate,
-    #[allow(unused)]
     pub(crate) item_slot: u32,
     pub(crate) player_pos: PlayerPositionUpdate,
 }
@@ -478,33 +477,36 @@ impl ChunkManager {
     pub(crate) fn make_batched_draw_calls(
         &self,
         player_position: Vector3<f64>,
+        vp_matrix: Matrix4<f32>,
     ) -> (Vec<CubeGeometryDrawCall>, FxHashSet<ChunkCoordinate>) {
         let mut calls = vec![];
         let mut handled = FxHashSet::default();
         let batches = self.mesh_batches.lock();
         for (_id, batch) in batches.0.iter() {
-            calls.push(batch.make_draw_call(player_position));
-            for coord in batch.coords() {
-                if !handled.insert(*coord) {
-                    //log::warn!("Already handled chunk {:?}", coord);
+            if let Some(call) = batch.make_draw_call(player_position, vp_matrix) {
+                calls.push(call);
+                for coord in batch.coords() {
+                    if !handled.insert(*coord) {
+                        //log::warn!("Already handled chunk {:?}", coord);
+                    }
+                    // It's tempting to verify that chunk_batch == Some(*id) here, but that's not always true
+                    // Due to the concurrency of the chunk manager, there is a race condition - we could have removed
+                    // the batch assignment of this chunk but not yet gotten far enough through spilling. (note that we don't have the chunk lock,
+                    // only the subordinate render-only chunk lock).
+                    //
+                    // This is also why we return a hashset - it's the only authoritative data on what chunks we *actually* rendered from batches. Since
+                    // batches themselves are immutable, if we encounter a batch here, we know that we at least have a consistent view of it.
+                    //
+                    // The following snippet can be used for debugging to see the rate of this race condition.
+                    //
+                    // let (chunk_batch, reason) = chunks.get(coord).unwrap().get_batch_debug();
+                    // if chunk_batch != Some(*id) {
+                    //     println!(
+                    //         "Chunk {:?} should be in batch {:?}, was in {:?}, reason {:?}",
+                    //         coord, chunk_batch, id, reason
+                    //     );
+                    // }
                 }
-                // It's tempting to verify that chunk_batch == Some(*id) here, but that's not always true
-                // Due to the concurrency of the chunk manager, there is a race condition - we could have removed
-                // the batch assignment of this chunk but not yet gotten far enough through spilling. (note that we don't have the chunk lock,
-                // only the subordinate render-only chunk lock).
-                //
-                // This is also why we return a hashset - it's the only authoritative data on what chunks we *actually* rendered from batches. Since
-                // batches themselves are immutable, if we encounter a batch here, we know that we at least have a consistent view of it.
-                //
-                // The following snippet can be used for debugging to see the rate of this race condition.
-                //
-                // let (chunk_batch, reason) = chunks.get(coord).unwrap().get_batch_debug();
-                // if chunk_batch != Some(*id) {
-                //     println!(
-                //         "Chunk {:?} should be in batch {:?}, was in {:?}, reason {:?}",
-                //         coord, chunk_batch, id, reason
-                //     );
-                // }
             }
         }
         (calls, handled)

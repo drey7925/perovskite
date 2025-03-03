@@ -166,7 +166,7 @@ impl ActiveGame {
         let (batched_calls, batched_handled) = self
             .client_state
             .chunks
-            .make_batched_draw_calls(player_position);
+            .make_batched_draw_calls(player_position, scene_state.vp_matrix);
 
         self.cube_draw_calls.extend(batched_calls);
 

@@ -24,12 +24,12 @@ use std::time::Instant;
 
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
-use crate::game_state::entities::IterEntity;
 use crate::game_state::entities::Movement;
-use crate::game_state::event::log_trace;
+use crate::game_state::entities::{IterEntity, PlayerActionDetails, PlayerEntityAction};
 use crate::game_state::event::run_traced;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
+use crate::game_state::event::{log_trace, WeakPlayerRef};
 
 use crate::game_state::event::PlayerInitiator;
 use crate::game_state::game_map::BlockUpdate;
@@ -71,6 +71,8 @@ use perovskite_core::protocol::coordinates as coords_proto;
 use perovskite_core::protocol::coordinates::Vec3D;
 use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::game_rpc as proto;
+use perovskite_core::protocol::game_rpc::dig_tap_action::Target;
+use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
@@ -1267,49 +1269,72 @@ impl InboundWorker {
             }
             Some(proto::stream_to_server::ClientMessage::Dig(dig_message)) => {
                 self.check_player_permission(permissions::DIG_PLACE)?;
-                // TODO check whether the current item can dig this block, and whether
-                // it's been long enough since the last dig
-                let coord: BlockCoordinate = dig_message
-                    .block_coord
+                let position = dig_message
+                    .position
                     .as_ref()
-                    .map(|x| x.into())
-                    .context("Missing block_coord")?;
-                self.run_map_handlers(
-                    coord,
-                    dig_message.item_slot,
-                    |item| {
-                        item.and_then(|x| x.dig_handler.as_deref())
-                            .unwrap_or(&items::default_dig_handler)
-                    },
-                    dig_message
-                        .position
-                        .as_ref()
-                        .context("Missing player position")?
-                        .try_into()?,
-                )
-                .await?;
+                    .context("Missing player position")?
+                    .try_into()?;
+                match dig_message.target.as_ref().context("missing target")? {
+                    Target::BlockCoord(coord) => {
+                        // TODO check whether the current item can dig this block, and whether
+                        // it's been long enough since the last dig
+                        self.run_map_handlers(
+                            coord.into(),
+                            dig_message.item_slot,
+                            |item| {
+                                item.and_then(|x| x.dig_handler.as_deref())
+                                    .unwrap_or(&items::default_dig_handler)
+                            },
+                            position,
+                        )
+                        .await?;
+                    }
+                    Target::EntityId(id) => {
+                        self.context
+                            .game_state
+                            .entities()
+                            .player_action(
+                                *id,
+                                PlayerActionDetails {
+                                    action: PlayerEntityAction::Dig,
+                                    // TODO: Do we use the client tick at all?
+                                    // Or is it only for latency/jitter estimation but otherwise
+                                    // untrusted?
+                                    tick: self.context.game_state.tick(),
+                                    initiator: EventInitiator::WeakPlayerRef(WeakPlayerRef {
+                                        player: Arc::downgrade(&self.context.player_context.player),
+                                        name: self.context.player_context.name.clone(),
+                                        position,
+                                    }),
+                                    item_slot: dig_message.item_slot,
+                                },
+                            )
+                            .await;
+                    }
+                }
             }
             Some(proto::stream_to_server::ClientMessage::Tap(tap_message)) => {
                 self.check_player_permission(permissions::TAP_INTERACT)?;
-                let coord: BlockCoordinate = tap_message
-                    .block_coord
-                    .as_ref()
-                    .map(|x| x.into())
-                    .context("Missing block_coord")?;
-                self.run_map_handlers(
-                    coord,
-                    tap_message.item_slot,
-                    |item| {
-                        item.and_then(|x| x.tap_handler.as_deref())
-                            .unwrap_or(&items::default_tap_handler)
-                    },
-                    tap_message
-                        .position
-                        .as_ref()
-                        .context("Missing player position")?
-                        .try_into()?,
-                )
-                .await?;
+
+                match tap_message.target.as_ref().context("missing target")? {
+                    Target::BlockCoord(coord) => {
+                        self.run_map_handlers(
+                            coord.into(),
+                            tap_message.item_slot,
+                            |item| {
+                                item.and_then(|x| x.tap_handler.as_deref())
+                                    .unwrap_or(&items::default_tap_handler)
+                            },
+                            tap_message
+                                .position
+                                .as_ref()
+                                .context("Missing player position")?
+                                .try_into()?,
+                        )
+                        .await?;
+                    }
+                    Target::EntityId(_) => {}
+                }
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
                 self.handle_pos_update(message.client_tick, pos_update)
@@ -1901,63 +1926,91 @@ impl InboundWorker {
         &mut self,
         interact_message: &proto::InteractKeyAction,
     ) -> Result<Vec<StreamToClient>> {
-        let coord: BlockCoordinate = interact_message
-            .block_coord
+        match interact_message
+            .interaction_target
             .as_ref()
-            .map(|x| x.into())
-            .with_context(|| "Missing block_coord")?;
-        let initiator = EventInitiator::Player(PlayerInitiator {
-            player: &self.context.player_context,
-            weak: Arc::downgrade(&self.context.player_context.player),
-            position: interact_message
-                .position
-                .as_ref()
-                .context("Missing position")?
-                .try_into()?,
-        });
-        let ctx = HandlerContext {
-            tick: self.context.game_state.tick(),
-            initiator: initiator.clone(),
-            game_state: self.context.game_state.clone(),
-        };
-        let block = self.context.game_state.game_map().get_block(coord)?;
-        let mut messages = vec![];
-        if let Some(handler) = &self
-            .context
-            .game_state
-            .game_map()
-            .block_type_manager()
-            .get_block(&block)
-            .unwrap()
-            .0
-            .interact_key_handler
+            .context("missing target")?
         {
-            if let Some(popup) =
-                run_handler!(|| (handler)(ctx, coord), "interact_key", &initiator,)?
-            {
-                messages.push(StreamToClient {
-                    tick: self.context.game_state.tick(),
-                    server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
+            InteractionTarget::BlockCoord(coord) => {
+                let coord = coord.into();
+                let initiator = EventInitiator::Player(PlayerInitiator {
+                    player: &self.context.player_context,
+                    weak: Arc::downgrade(&self.context.player_context.player),
+                    position: interact_message
+                        .position
+                        .as_ref()
+                        .context("Missing position")?
+                        .try_into()?,
                 });
-                for view in popup.inventory_views().values() {
-                    messages.push(make_inventory_update(
-                        &self.context.game_state,
-                        &InventoryViewWithContext {
-                            view,
-                            context: &popup,
-                        },
-                    )?)
+                let ctx = HandlerContext {
+                    tick: self.context.game_state.tick(),
+                    initiator: initiator.clone(),
+                    game_state: self.context.game_state.clone(),
+                };
+                let block = self.context.game_state.game_map().get_block(coord)?;
+                let mut messages = vec![];
+                if let Some(handler) = &self
+                    .context
+                    .game_state
+                    .game_map()
+                    .block_type_manager()
+                    .get_block(&block)
+                    .unwrap()
+                    .0
+                    .interact_key_handler
+                {
+                    if let Some(popup) =
+                        run_handler!(|| (handler)(ctx, coord), "interact_key", &initiator,)?
+                    {
+                        messages.push(StreamToClient {
+                            tick: self.context.game_state.tick(),
+                            server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
+                        });
+                        for view in popup.inventory_views().values() {
+                            messages.push(make_inventory_update(
+                                &self.context.game_state,
+                                &InventoryViewWithContext {
+                                    view,
+                                    context: &popup,
+                                },
+                            )?)
+                        }
+                        self.context
+                            .player_context
+                            .player
+                            .state
+                            .lock()
+                            .active_popups
+                            .push(popup);
+                    }
                 }
-                self.context
-                    .player_context
-                    .player
-                    .state
-                    .lock()
-                    .active_popups
-                    .push(popup);
+                Ok(messages)
+            }
+            InteractionTarget::EntityId(entity_id) => {
+                let position = interact_message
+                    .position
+                    .as_ref()
+                    .context("Missing player position")?
+                    .try_into()?;
+                self.context.game_state.entities().player_action_blocking(
+                    *entity_id,
+                    PlayerActionDetails {
+                        action: PlayerEntityAction::Dig,
+                        // TODO: Do we use the client tick at all?
+                        // Or is it only for latency/jitter estimation but otherwise
+                        // untrusted?
+                        tick: self.context.game_state.tick(),
+                        initiator: EventInitiator::WeakPlayerRef(WeakPlayerRef {
+                            player: Arc::downgrade(&self.context.player_context.player),
+                            name: self.context.player_context.name.clone(),
+                            position,
+                        }),
+                        item_slot: interact_message.item_slot,
+                    },
+                );
+                Ok(vec![])
             }
         }
-        Ok(messages)
     }
 }
 impl Drop for InboundWorker {
