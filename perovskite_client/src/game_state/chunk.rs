@@ -39,7 +39,6 @@ use crate::vulkan::block_renderer::{
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{VkAllocator, VulkanContext};
 use prost::Message;
-use tokio::net::windows::named_pipe::PipeEnd::Client;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
     PrimaryCommandBufferAbstract,
