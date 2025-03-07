@@ -14,7 +14,7 @@ use perovskite_server::game_state::entities::{
     EntityMoveDecision, EntityTypeId, MoveQueueType, Movement,
 };
 use perovskite_server::game_state::event::HandlerContext;
-use perovskite_server::game_state::items::ItemStack;
+use perovskite_server::game_state::items::{Item, ItemStack};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::Rng;
 use smallvec::SmallVec;
@@ -141,7 +141,10 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
         .inner
         .items_mut()
         .register_item(game_state::items::Item {
-            proto: protocol::items::ItemDef {
+            place_on_block_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
+                place_duck(ctx, anchor, stack, id)
+            })),
+            ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "animals:duck".to_string(),
                 display_name: "Duck".to_string(),
                 inventory_texture: Some(DUCK_INV_TEX.into()),
@@ -154,12 +157,7 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
                 }],
                 quantity_type: Some(QuantityType::Stack(256)),
                 sort_key: "animals:duck".to_string(),
-            },
-            dig_handler: None,
-            tap_handler: None,
-            place_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
-                place_duck(ctx, anchor, stack, id)
-            })),
+            })
         })?;
     Ok(())
 }

@@ -40,7 +40,10 @@ pub(crate) fn register_track_tool(
 
     let config_clone = config.clone();
     let item = Item {
-        proto: items_proto::ItemDef {
+        place_on_block_handler: Some(Box::new(move |ctx, place_coord, anchor_coord, stack| {
+            track_tool_interaction(ctx, place_coord, anchor_coord, stack, &config_clone)
+        })),
+        ..Item::default_with_proto(items_proto::ItemDef {
             short_name: "carts:track_tool".to_string(),
             display_name: "Track placement tool".to_string(),
             inventory_texture: Some(TRACK_TOOL_TEXTURE.into()),
@@ -49,12 +52,7 @@ pub(crate) fn register_track_tool(
             interaction_rules: default_item_interaction_rules(),
             quantity_type: None,
             sort_key: "carts:track_tool".to_string(),
-        },
-        dig_handler: None,
-        place_handler: Some(Box::new(move |ctx, place_coord, anchor_coord, stack| {
-            track_tool_interaction(ctx, place_coord, anchor_coord, stack, &config_clone)
-        })),
-        tap_handler: None,
+        })
     };
     game_builder.inner.items_mut().register_item(item)?;
 

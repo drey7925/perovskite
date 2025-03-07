@@ -66,13 +66,15 @@ use log::info;
 use log::warn;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::audio::{SampledSoundPlayback, SoundSource};
 use perovskite_core::protocol::coordinates as coords_proto;
 use perovskite_core::protocol::coordinates::Vec3D;
 use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::game_rpc as proto;
-use perovskite_core::protocol::game_rpc::dig_tap_action::Target;
+use perovskite_core::protocol::game_rpc::dig_tap_action::ActionTarget;
 use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
+use perovskite_core::protocol::game_rpc::place_action::PlaceAnchor;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
@@ -1274,8 +1276,12 @@ impl InboundWorker {
                     .as_ref()
                     .context("Missing player position")?
                     .try_into()?;
-                match dig_message.target.as_ref().context("missing target")? {
-                    Target::BlockCoord(coord) => {
+                match dig_message
+                    .action_target
+                    .as_ref()
+                    .context("missing target")?
+                {
+                    ActionTarget::BlockCoord(coord) => {
                         // TODO check whether the current item can dig this block, and whether
                         // it's been long enough since the last dig
                         self.run_map_handlers(
@@ -1289,35 +1295,33 @@ impl InboundWorker {
                         )
                         .await?;
                     }
-                    Target::EntityId(id) => {
-                        self.context
-                            .game_state
-                            .entities()
-                            .player_action(
-                                *id,
-                                PlayerActionDetails {
-                                    action: PlayerEntityAction::Dig,
-                                    // TODO: Do we use the client tick at all?
-                                    // Or is it only for latency/jitter estimation but otherwise
-                                    // untrusted?
-                                    tick: self.context.game_state.tick(),
-                                    initiator: EventInitiator::WeakPlayerRef(WeakPlayerRef {
-                                        player: Arc::downgrade(&self.context.player_context.player),
-                                        name: self.context.player_context.name.clone(),
-                                        position,
-                                    }),
-                                    item_slot: dig_message.item_slot,
-                                },
-                            )
-                            .await;
+                    ActionTarget::EntityTarget(id) => {
+                        self.run_map_handlers(
+                            *id,
+                            dig_message.item_slot,
+                            |item| {
+                                item.and_then(|x| x.dig_entity_handler.as_deref())
+                                    .unwrap_or(&items::default_entity_dig_handler)
+                            },
+                            position,
+                        )
+                        .await?
                     }
                 }
             }
             Some(proto::stream_to_server::ClientMessage::Tap(tap_message)) => {
                 self.check_player_permission(permissions::TAP_INTERACT)?;
-
-                match tap_message.target.as_ref().context("missing target")? {
-                    Target::BlockCoord(coord) => {
+                let position = tap_message
+                    .position
+                    .as_ref()
+                    .context("Missing player position")?
+                    .try_into()?;
+                match tap_message
+                    .action_target
+                    .as_ref()
+                    .context("missing target")?
+                {
+                    ActionTarget::BlockCoord(coord) => {
                         self.run_map_handlers(
                             coord.into(),
                             tap_message.item_slot,
@@ -1325,15 +1329,22 @@ impl InboundWorker {
                                 item.and_then(|x| x.tap_handler.as_deref())
                                     .unwrap_or(&items::default_tap_handler)
                             },
-                            tap_message
-                                .position
-                                .as_ref()
-                                .context("Missing player position")?
-                                .try_into()?,
+                            position,
                         )
-                        .await?;
+                        .await?
                     }
-                    Target::EntityId(_) => {}
+                    ActionTarget::EntityTarget(id) => {
+                        self.run_map_handlers(
+                            *id,
+                            tap_message.item_slot,
+                            |item| {
+                                item.and_then(|x| x.dig_entity_handler.as_deref())
+                                    .unwrap_or(&items::default_entity_dig_handler)
+                            },
+                            position,
+                        )
+                        .await?
+                    }
                 }
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
@@ -1401,30 +1412,30 @@ impl InboundWorker {
             player_name = %self.context.player_context.name(),
         ),
     )]
-    async fn run_map_handlers<F>(
+    async fn run_map_handlers<F, T>(
         &mut self,
-        coord: BlockCoordinate,
+        coord: T,
         selected_inv_slot: u32,
         get_item_handler: F,
         player_position: PlayerPositionUpdate,
     ) -> Result<()>
     where
-        F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
+        F: FnOnce(Option<&Item>) -> &items::GenericInteractionHandler<T>,
     {
         block_in_place(|| {
             self.map_handler_sync(selected_inv_slot, get_item_handler, coord, player_position)
         })
     }
 
-    fn map_handler_sync<F>(
+    fn map_handler_sync<F, T>(
         &mut self,
         selected_inv_slot: u32,
         get_item_handler: F,
-        coord: BlockCoordinate,
+        coord: T,
         player_position: PlayerPositionUpdate,
     ) -> std::result::Result<(), Error>
     where
-        F: FnOnce(Option<&Item>) -> &items::BlockInteractionHandler,
+        F: FnOnce(Option<&Item>) -> &items::GenericInteractionHandler<T>,
     {
         log_trace("Running map handlers");
         let game_state = &self.context.game_state;
@@ -1637,43 +1648,76 @@ impl InboundWorker {
                                 .context("Missing position")?
                                 .try_into()?,
                         });
-
-                        let handler = self
-                            .context
-                            .game_state
-                            .item_manager()
-                            .from_stack(stack.as_ref())
-                            .and_then(|x| x.place_handler.as_deref());
-                        if let Some(handler) = handler {
-                            let ctx = HandlerContext {
-                                tick: self.context.game_state.tick(),
-                                initiator: initiator.clone(),
-                                game_state: self.context.game_state.clone(),
-                            };
-                            let new_stack = run_handler!(
-                                || {
-                                    handler(
-                                        &ctx,
-                                        place_message
-                                            .block_coord
-                                            .clone()
-                                            .with_context(|| {
-                                                "Missing block_coord in place message"
-                                            })?
-                                            .into(),
-                                        place_message
-                                            .anchor
-                                            .clone()
-                                            .with_context(|| "Missing anchor in place message")?
-                                            .into(),
-                                        stack.as_ref().unwrap(),
-                                    )
-                                },
-                                "item_place",
-                                &initiator,
-                            )?;
-                            *stack = new_stack;
+                        let anchor: ToolTarget = place_message
+                            .place_anchor
+                            .with_context(|| "Missing anchor in place message")?
+                            .into();
+                        match anchor {
+                            ToolTarget::Block(anchor) => {
+                                let handler = self
+                                    .context
+                                    .game_state
+                                    .item_manager()
+                                    .from_stack(stack.as_ref())
+                                    .and_then(|x| x.place_on_block_handler.as_deref());
+                                if let Some(handler) = handler {
+                                    let ctx = HandlerContext {
+                                        tick: self.context.game_state.tick(),
+                                        initiator: initiator.clone(),
+                                        game_state: self.context.game_state.clone(),
+                                    };
+                                    let new_stack = run_handler!(
+                                        || {
+                                            handler(
+                                                &ctx,
+                                                place_message
+                                                    .block_coord
+                                                    .with_context(|| {
+                                                        "Missing block_coord in place message"
+                                                    })?
+                                                    .into(),
+                                                anchor,
+                                                stack.as_ref().unwrap(),
+                                            )
+                                        },
+                                        "item_place",
+                                        &initiator,
+                                    )?;
+                                    *stack = new_stack;
+                                } else {
+                                    // TODO: consider running a block-specific place handler, for
+                                    // blocks that intend to have stuff placed into them (e.g.
+                                    // hoppers/item intakes)?
+                                    //
+                                    // Requires more thought - typically we'd want this to be higher
+                                    // precedence since it's a special case???
+                                }
+                            }
+                            ToolTarget::Entity(target) => {
+                                let handler = self
+                                    .context
+                                    .game_state
+                                    .item_manager()
+                                    .from_stack(stack.as_ref())
+                                    .and_then(|x| x.place_on_entity_handler.as_deref());
+                                if let Some(handler) = handler {
+                                    let ctx = HandlerContext {
+                                        tick: self.context.game_state.tick(),
+                                        initiator: initiator.clone(),
+                                        game_state: self.context.game_state.clone(),
+                                    };
+                                    let new_stack = run_handler!(
+                                        || { handler(&ctx, target, stack.as_ref().unwrap(),) },
+                                        "item_place",
+                                        &initiator,
+                                    )?;
+                                    *stack = new_stack;
+                                } else {
+                                    todo!("Run the entity's on-place handler instead")
+                                }
+                            }
                         }
+
                         log_trace("Done running place handlers");
                         Ok(())
                     },
@@ -1986,14 +2030,15 @@ impl InboundWorker {
                 }
                 Ok(messages)
             }
-            InteractionTarget::EntityId(entity_id) => {
+            InteractionTarget::EntityTarget(entity_target) => {
                 let position = interact_message
                     .position
                     .as_ref()
                     .context("Missing player position")?
                     .try_into()?;
                 self.context.game_state.entities().player_action_blocking(
-                    *entity_id,
+                    entity_target.entity_id,
+                    entity_target.trailing_entity_index,
                     PlayerActionDetails {
                         action: PlayerEntityAction::Dig,
                         // TODO: Do we use the client tick at all?

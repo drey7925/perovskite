@@ -424,8 +424,10 @@ pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()
 }
 
 fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
-    builder.inner.items_mut().register_item(Item {
-        proto: protocol::items::ItemDef {
+    builder
+        .inner
+        .items_mut()
+        .register_item(Item::default_with_proto(protocol::items::ItemDef {
             short_name: "default:tnt_actor_tool".to_string(),
             display_name: "TNT actor tool (you should not see this)".to_string(),
             inventory_texture: Some(TNT_TEXTURE.into()),
@@ -442,11 +444,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
             quantity_type: None,
             block_apperance: "".to_string(),
             sort_key: "default:internal:tnt_actor_tool".to_string(),
-        },
-        dig_handler: None,
-        tap_handler: None,
-        place_handler: None,
-    })?;
+        }))?;
 
     let tnt_tool_stack = Some(ItemStack {
         proto: protocol::items::ItemStack {

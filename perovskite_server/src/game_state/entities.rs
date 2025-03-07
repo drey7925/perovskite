@@ -277,7 +277,12 @@ impl EntityManager {
         id
     }
 
-    pub(crate) async fn player_action(&self, entity_id: u64, action: PlayerActionDetails) {
+    pub(crate) async fn player_action(
+        &self,
+        entity_id: u64,
+        trailing_index: u32,
+        action: PlayerActionDetails,
+    ) {
         let shard = self.get_shard(entity_id);
         shard
             .pending_actions_tx
@@ -286,7 +291,12 @@ impl EntityManager {
             .context("Entity receiver disappeared")
             .unwrap();
     }
-    pub(crate) fn player_action_blocking(&self, entity_id: u64, action: PlayerActionDetails) {
+    pub(crate) fn player_action_blocking(
+        &self,
+        entity_id: u64,
+        trailing_index: u32,
+        action: PlayerActionDetails,
+    ) {
         let shard = self.get_shard(entity_id);
         shard
             .pending_actions_tx

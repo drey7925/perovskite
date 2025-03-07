@@ -17,6 +17,7 @@ use perovskite_core::{
     util::{TraceBuffer, TraceLog},
 };
 use perovskite_server::game_state::entities::{EntityMoveDecision, TrailingEntity};
+use perovskite_server::game_state::items::Item;
 use perovskite_server::game_state::{
     self,
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
@@ -250,7 +251,10 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         .inner
         .items_mut()
         .register_item(game_state::items::Item {
-            proto: protocol::items::ItemDef {
+            place_on_block_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
+                place_cart(ctx, anchor, stack, ext_clone.clone())
+            })),
+            ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "carts:cart_temp".to_string(),
                 display_name: "High-speed minecart".to_string(),
                 inventory_texture: Some(cart_tex.into()),
@@ -259,12 +263,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
                 sort_key: "carts:cart".to_string(),
-            },
-            dig_handler: None,
-            tap_handler: None,
-            place_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
-                place_cart(ctx, anchor, stack, ext_clone.clone())
-            })),
+            })
         })?;
     Ok(())
 }

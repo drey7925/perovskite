@@ -29,6 +29,7 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosit
 use log::warn;
 use parking_lot::{Mutex, RwLockReadGuard};
 use perovskite_core::block_id::BlockId;
+use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use perovskite_core::protocol;
 use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch, SetClientState};
@@ -73,7 +74,7 @@ pub(crate) mod tool_controller;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DigTapAction {
-    pub(crate) target: BlockCoordinate,
+    pub(crate) target: ToolTarget,
     pub(crate) prev: Option<BlockCoordinate>,
     pub(crate) item_slot: u32,
     pub(crate) player_pos: PlayerPositionUpdate,
@@ -81,8 +82,8 @@ pub(crate) struct DigTapAction {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlaceAction {
-    pub(crate) target: BlockCoordinate,
-    pub(crate) anchor: Option<BlockCoordinate>,
+    pub(crate) target: Option<BlockCoordinate>,
+    pub(crate) anchor: ToolTarget,
     pub(crate) item_slot: u32,
     pub(crate) player_pos: PlayerPositionUpdate,
 }
@@ -99,7 +100,7 @@ pub(crate) struct InventoryAction {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InteractKeyAction {
-    pub(crate) target: BlockCoordinate,
+    pub(crate) target: ToolTarget,
     pub(crate) item_slot: u32,
     pub(crate) player_pos: PlayerPositionUpdate,
 }
@@ -881,6 +882,7 @@ pub(crate) struct FrameState {
 
 use crate::audio;
 use crate::audio::MapSoundState;
+use crate::game_state::tool_controller::ToolTargetWithId;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {

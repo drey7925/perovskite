@@ -23,6 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .file_descriptor_set_path(descriptor_path)
+        .type_attribute(
+            "perovskite.protocol.game_rpc.EntityTarget",
+            "#[derive(Eq, Hash)]",
+        )
         .compile(
             &[
                 "proto/coordinates.proto",

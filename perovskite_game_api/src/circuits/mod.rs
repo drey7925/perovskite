@@ -599,8 +599,8 @@ impl CircuitBlockBuilder for BlockBuilder {
                 .push(constants::CIRCUITS_GROUP.to_string());
         }))
         .add_item_modifier(Box::new(|item| {
-            let old_handler = item.place_handler.take();
-            item.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
+            let old_handler = item.place_on_block_handler.take();
+            item.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
                 let result = match old_handler.as_deref() {
                     Some(old_handler) => old_handler(ctx, coord, anchor, tool_stack),
                     None => Ok(None),

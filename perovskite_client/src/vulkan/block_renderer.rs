@@ -37,6 +37,7 @@ use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 
+use perovskite_core::game_actions::ToolTarget;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
@@ -1035,7 +1036,7 @@ impl BlockRenderer {
     pub(crate) fn make_pointee_cube(
         &self,
         player_position: Vector3<f64>,
-        pointee: perovskite_core::coordinates::BlockCoordinate,
+        pointee: ToolTarget,
     ) -> Result<CubeGeometryDrawCall> {
         let mut vtx = vec![];
         let mut idx = vec![];
@@ -1077,10 +1078,21 @@ impl BlockRenderer {
             },
             idx.into_iter(),
         )?;
-        let offset = (vec3(pointee.x as f64, pointee.y as f64, pointee.z as f64) - player_position)
-            .mul_element_wise(Vector3::new(1., -1., 1.));
+
+        let transform = match pointee {
+            ToolTarget::Block(pointee) => {
+                (vec3(pointee.x as f64, pointee.y as f64, pointee.z as f64) - player_position)
+                    .mul_element_wise(Vector3::new(1., -1., 1.))
+            }
+            ToolTarget::Entity(_) => {
+                // This will require more refactoring, since we only have the entity ID, not its
+                // coords, here. We'll probably need to pass in a ref to the client state or entity
+                // manager
+                todo!()
+            }
+        };
         Ok(CubeGeometryDrawCall {
-            model_matrix: Matrix4::from_translation(offset.cast().unwrap()),
+            model_matrix: Matrix4::from_translation(transform.cast().unwrap()),
             models: VkChunkVertexDataGpu {
                 solid_opaque: None,
                 transparent: Some(VkCgvBufferGpu { vtx, idx }),

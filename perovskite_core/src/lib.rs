@@ -57,6 +57,7 @@ pub mod block_id;
 pub mod chat;
 pub mod constants;
 pub mod coordinates;
+pub mod game_actions;
 pub mod items;
 pub mod lighting;
 pub mod time;

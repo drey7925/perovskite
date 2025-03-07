@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use itertools::Itertools;
+use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
@@ -212,7 +213,10 @@ impl BlockBuilder {
     pub fn new(name: impl Into<BlockName>) -> BlockBuilder {
         let name = name.into().0;
         let item = Item {
-            proto: ItemDef {
+            place_on_block_handler: Some(Box::new(|_, _, _, _| {
+                panic!("Incomplete place_handler; item registration was not completed properly");
+            })),
+            ..Item::default_with_proto(ItemDef {
                 short_name: name.clone(),
                 display_name: name.clone(),
                 inventory_texture: None,
@@ -221,12 +225,7 @@ impl BlockBuilder {
                 quantity_type: Some(QuantityType::Stack(256)),
                 block_apperance: name.clone(),
                 sort_key: "".to_string(),
-            },
-            dig_handler: None,
-            tap_handler: None,
-            place_handler: Some(Box::new(|_, _, _, _| {
-                panic!("Incomplete place_handler; item registration was not completed properly");
-            })),
+            })
         };
 
         BlockBuilder {
@@ -507,7 +506,7 @@ impl BlockBuilder {
         let item_name = ItemName(item.proto.short_name.clone());
         let extended_data_initializer = self.extended_data_initializer.take();
         // todo factor out a default place handler and export it to users of the API
-        item.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
+        item.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
             if stack.proto().quantity == 0 {
                 return Ok(None);
             }

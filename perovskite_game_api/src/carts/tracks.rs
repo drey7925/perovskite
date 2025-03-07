@@ -1147,19 +1147,7 @@ pub(crate) fn register_tracks(
     let rail_tile_id = rail_tile.id;
     let mut rail_slopes_8 = [BlockId::from(0); 8];
     game_builder.inner.items_mut().register_item(Item {
-        proto: protocol::items::ItemDef {
-            short_name: "carts:rail_curve".to_string(),
-            display_name: "Curved rail".to_string(),
-            inventory_texture: Some(CURVED_RAIL_ITEM_TEX.into()),
-            groups: vec![],
-            block_apperance: String::new(),
-            interaction_rules: default_item_interaction_rules(),
-            quantity_type: Some(QuantityType::Stack(256)),
-            sort_key: "carts:rail_curve".to_string(),
-        },
-        dig_handler: None,
-        tap_handler: None,
-        place_handler: Some(Box::new(move |ctx, coord, _anchor, stack| {
+        place_on_block_handler: Some(Box::new(move |ctx, coord, _anchor, stack| {
             if stack.proto().quantity == 0 {
                 return Ok(None);
             }
@@ -1194,6 +1182,16 @@ pub(crate) fn register_tracks(
                 CasOutcome::Mismatch => Ok(Some(stack.clone())),
             }
         })),
+        ..Item::default_with_proto(protocol::items::ItemDef {
+            short_name: "carts:rail_curve".to_string(),
+            display_name: "Curved rail".to_string(),
+            inventory_texture: Some(CURVED_RAIL_ITEM_TEX.into()),
+            groups: vec![],
+            block_apperance: String::new(),
+            interaction_rules: default_item_interaction_rules(),
+            quantity_type: Some(QuantityType::Stack(256)),
+            sort_key: "carts:rail_curve".to_string(),
+        })
     })?;
 
     for i in 0..8 {

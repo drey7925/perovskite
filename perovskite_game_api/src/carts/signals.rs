@@ -428,8 +428,8 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
                 bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
             }))
             .add_item_modifier(Box::new(|it| {
-                let old_place_handler = it.place_handler.take().unwrap();
-                it.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
+                let old_place_handler = it.place_on_block_handler.take().unwrap();
+                it.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
                     let result = old_place_handler(ctx, coord, anchor, stack)?;
                     ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
                         *b = b.with_variant_unchecked(b.variant() | VARIANT_RESTRICTIVE);
@@ -537,8 +537,8 @@ fn register_single_signal(
                 bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
             }))
             .add_item_modifier(Box::new(|it| {
-                let old_place_handler = it.place_handler.take().unwrap();
-                it.place_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
+                let old_place_handler = it.place_on_block_handler.take().unwrap();
+                it.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
                     let result = old_place_handler(ctx, coord, anchor, stack)?;
                     ctx.game_map().mutate_block_atomically(coord, |b, _ext| {
                         *b = b.with_variant_unchecked(b.variant() | VARIANT_RESTRICTIVE);

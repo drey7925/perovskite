@@ -186,11 +186,16 @@ message StreamToClient {
 // Empty message, for keepalive/timeout detection
 message Nop {}
 
+message EntityTarget {
+  uint64 entity_id = 1;
+  uint32 trailing_entity_index = 2;
+}
+
 message DigTapAction {
-  // The block coordinate which was dug/tapped.
-  oneof target {
+  // The block coordinate or entity which was dug/tapped.
+  oneof action_target {
     perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
-    uint64 entity_id = 11;
+    EntityTarget entity_target = 11;
   }
   // The block coordinate on the face that was dug into/tapped (i.e. in
   // raycasting just before we hit the target block). Absent when target is block_coord (for now)
@@ -207,7 +212,11 @@ message PlaceAction {
 
   // The block coordinate onto which the placement is happening (i.e. the block
   // just *after* block_coord in raycasting order)
-  perovskite.protocol.coordinates.WireBlockCoordinate anchor = 2;
+  oneof place_anchor {
+    perovskite.protocol.coordinates.WireBlockCoordinate anchor_block = 2;
+    EntityTarget anchor_entity = 11;
+  }
+
 
   // zero-indexed slot for the item in the player's hotbar/primary inventory
   uint32 item_slot = 3;
@@ -220,7 +229,7 @@ message InteractKeyAction {
   // The block coordinate that was interacted with
   oneof interaction_target {
     perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
-    uint64 entity_id = 11;
+    EntityTarget entity_target = 11;
   }
   // the position of the player when the action was performed
   PlayerPosition position = 2;

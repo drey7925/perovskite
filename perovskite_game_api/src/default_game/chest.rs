@@ -116,20 +116,22 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
                 }))
             }))
             .add_item_modifier(Box::new(|it| {
-                let old_place_handler = it.place_handler.take().unwrap();
-                it.place_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
-                    let result = old_place_handler(ctx, coord, anchor, tool_stack)?;
-                    if let Some(player) = ctx.initiator().player_name() {
-                        ctx.game_map()
-                            .mutate_block_atomically(coord, |_, extended_data| {
-                                let data = extended_data.get_or_insert_with(ExtendedData::default);
-                                data.simple_data
-                                    .insert(LOCKED_CHEST_OWNER.to_string(), player.to_string());
-                                Ok(())
-                            })?;
-                    }
-                    Ok(result)
-                }));
+                let old_place_handler = it.place_on_block_handler.take().unwrap();
+                it.place_on_block_handler =
+                    Some(Box::new(move |ctx, coord, anchor, tool_stack| {
+                        let result = old_place_handler(ctx, coord, anchor, tool_stack)?;
+                        if let Some(player) = ctx.initiator().player_name() {
+                            ctx.game_map()
+                                .mutate_block_atomically(coord, |_, extended_data| {
+                                    let data =
+                                        extended_data.get_or_insert_with(ExtendedData::default);
+                                    data.simple_data
+                                        .insert(LOCKED_CHEST_OWNER.to_string(), player.to_string());
+                                    Ok(())
+                                })?;
+                        }
+                        Ok(result)
+                    }));
             })),
     )?;
     game_builder

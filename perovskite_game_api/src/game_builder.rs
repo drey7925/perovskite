@@ -334,8 +334,9 @@ impl GameBuilder {
         groups: Vec<String>,
         sort_key: impl Into<String>,
     ) -> Result<()> {
-        self.inner.items_mut().register_item(Item {
-            proto: ItemDef {
+        self.inner
+            .items_mut()
+            .register_item(Item::default_with_proto(ItemDef {
                 short_name: short_name.into().0.to_string(),
                 display_name: display_name.into(),
                 inventory_texture: Some(texture.into()),
@@ -346,11 +347,7 @@ impl GameBuilder {
                 ),
                 block_apperance: "".to_string(),
                 sort_key: sort_key.into(),
-            },
-            dig_handler: None,
-            tap_handler: None,
-            place_handler: None,
-        })
+            }))
     }
 
     maybe_export!(

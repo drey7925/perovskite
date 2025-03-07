@@ -27,6 +27,9 @@ use super::blocks::BlockType;
 use super::event::HandlerContext;
 
 use perovskite_core::coordinates::BlockCoordinate;
+use perovskite_core::game_actions::ToolTarget;
+use perovskite_core::protocol::game_rpc::place_action::PlaceAnchor;
+use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::items as proto;
 
 /// Result of the dig_handler of an Item.
@@ -38,15 +41,21 @@ pub struct ItemInteractionResult {
     /// Items that were obtained from digging and ought to be added to the player's inventory
     pub obtained_items: Vec<ItemStack>,
 }
+
+pub type GenericInteractionHandler<T> =
+    dyn Fn(&HandlerContext, T, &ItemStack) -> Result<ItemInteractionResult> + Send + Sync;
+
 /// (handler context, coordinate of the block, the item stack in use)
-pub type BlockInteractionHandler = dyn Fn(&HandlerContext, BlockCoordinate, &ItemStack) -> Result<ItemInteractionResult>
-    + Send
-    + Sync;
+pub type BlockInteractionHandler = GenericInteractionHandler<BlockCoordinate>;
+pub type EntityInteractionHandler = GenericInteractionHandler<EntityTarget>;
 /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
 /// The anchor block is the existing block that the player was pointing to when they clicked the place button.
 pub type PlaceHandler = dyn Fn(&HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>>
     + Send
     + Sync;
+
+pub type EntityPlaceHandler =
+    dyn Fn(&HandlerContext, EntityTarget, &ItemStack) -> Result<Option<ItemStack>> + Send + Sync;
 
 pub struct Item {
     pub proto: perovskite_core::protocol::items::ItemDef,
@@ -61,22 +70,40 @@ pub struct Item {
     ///
     /// Note - if a plugin calls game_map().dig_block directly, then this handler will not be called.
     ///
-    /// If None, the current item stack will not be updated, and the block's dig handler will be run.
+    /// If None, the current item stack will not be updated, and the block's/entity's dig handler will be run.
     pub dig_handler: Option<Box<BlockInteractionHandler>>,
+    pub dig_entity_handler: Option<Box<EntityInteractionHandler>>,
     /// Same as dig_handler, but called when the block is briefly tapped with the left mouse button without
     /// digging it fully.
     pub tap_handler: Option<Box<BlockInteractionHandler>>,
-    /// Called when the itemstack is placed (typicall with rightclick).
+    pub tap_entity_handler: Option<Box<EntityInteractionHandler>>,
+    /// Called when the itemstack is placed on a block (typically with rightclick).
+    ///
     /// If this handler is None, nothing happens.
     /// If this handler is Some, it should call a suitable function of ctx.game_map() if it
     /// wishes to place a block, and then return an updated ItemStack (or None to delete the itemstack)
     ///
     /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
     /// The anchor block is the existing block that the player was pointing to when they clicked the place button.
-    pub place_handler: Option<Box<PlaceHandler>>,
+    pub place_on_block_handler: Option<Box<PlaceHandler>>,
+    /// Called when the itemstack is placed on an entity (typically with rightclick).
+    /// If None, the entity itself handles the placement (if an applicable handler exists)
+    pub place_on_entity_handler: Option<Box<EntityPlaceHandler>>,
 }
 
 impl Item {
+    pub fn default_with_proto(proto: perovskite_core::protocol::items::ItemDef) -> Item {
+        Item {
+            proto,
+            dig_handler: None,
+            dig_entity_handler: None,
+            tap_handler: None,
+            tap_entity_handler: None,
+            place_on_block_handler: None,
+            place_on_entity_handler: None,
+        }
+    }
+
     /// Creates an ItemStack of the given item
     pub fn make_stack(&self, quantity_or_wear: u32) -> ItemStack {
         match self.proto.quantity_type {
@@ -434,8 +461,11 @@ impl ItemManager {
                 ..Default::default()
             },
             dig_handler: None,
+            dig_entity_handler: None,
             tap_handler: None,
-            place_handler: None,
+            tap_entity_handler: None,
+            place_on_block_handler: None,
+            place_on_entity_handler: None,
         })?;
         Ok(())
     }
@@ -509,6 +539,14 @@ pub(crate) fn default_dig_handler(
         },
         obtained_items: dig_result.item_stacks,
     })
+}
+
+pub(crate) fn default_entity_dig_handler(
+    ctx: &HandlerContext,
+    target: EntityTarget,
+    stack: &ItemStack,
+) -> Result<ItemInteractionResult> {
+    todo!();
 }
 
 pub trait HasInteractionRules {

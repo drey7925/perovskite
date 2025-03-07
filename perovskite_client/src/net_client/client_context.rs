@@ -33,7 +33,6 @@ use crate::audio::{
 use crate::game_state::block_types::ClientBlockTypeManager;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::coordinates::ChunkOffset;
-use perovskite_core::protocol::game_rpc::dig_tap_action::Target;
 use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
@@ -192,7 +191,8 @@ impl OutboundContext {
                 log::warn!("Waiting {delay:?} for a position update");
             }
             plot!("pos_update_wait", delay.as_secs_f64());
-            // todo send an update but signal that we don't want chunks
+            // todo send an update but signal that we don't want chunks as far as AIMD/pacing on
+            // the server
             return Ok(());
         } else {
             plot!("pos_update_wait", 0.);
@@ -243,7 +243,7 @@ impl OutboundContext {
             GameAction::Dig(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Dig(
                     rpc::DigTapAction {
-                        target: Some(Target::BlockCoord(action.target.into())),
+                        action_target: Some(action.target.into()),
                         prev_coord: action.prev.map(|x| x.into()),
                         item_slot: action.item_slot,
                         position: Some(action.player_pos.to_proto()?),
@@ -254,7 +254,7 @@ impl OutboundContext {
             GameAction::Tap(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Tap(
                     rpc::DigTapAction {
-                        target: Some(Target::BlockCoord(action.target.into())),
+                        action_target: Some(action.target.into()),
                         prev_coord: action.prev.map(|x| x.into()),
                         item_slot: action.item_slot,
                         position: Some(action.player_pos.to_proto()?),
@@ -265,8 +265,8 @@ impl OutboundContext {
             GameAction::Place(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::Place(
                     rpc::PlaceAction {
-                        block_coord: Some(action.target.into()),
-                        anchor: action.anchor.map(|x| x.into()),
+                        block_coord: action.target.map(Into::into),
+                        place_anchor: Some(action.anchor.into()),
                         item_slot: action.item_slot,
                         position: Some(action.player_pos.to_proto()?),
                     },
@@ -295,9 +295,7 @@ impl OutboundContext {
             GameAction::InteractKey(action) => {
                 self.send_sequenced_message(rpc::stream_to_server::ClientMessage::InteractKey(
                     InteractKeyAction {
-                        interaction_target: Some(InteractionTarget::BlockCoord(
-                            action.target.into(),
-                        )),
+                        interaction_target: Some(action.target.into()),
                         position: Some(action.player_pos.to_proto()?),
                         item_slot: action.item_slot,
                     },
@@ -833,7 +831,7 @@ impl InboundContext {
                 .client_state
                 .tool_controller
                 .lock()
-                .update_item(
+                .change_held_item(
                     &self.shared_state.client_state,
                     slot,
                     inv.contents()[slot as usize]

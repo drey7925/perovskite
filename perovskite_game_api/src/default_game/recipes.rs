@@ -225,7 +225,7 @@ mod test {
             },
             dig_handler: None,
             tap_handler: None,
-            place_handler: None,
+            place_on_block_handler: None,
         };
         let item_2 = Item {
             proto: protocol::items::ItemDef {
@@ -235,7 +235,7 @@ mod test {
             },
             dig_handler: None,
             tap_handler: None,
-            place_handler: None,
+            place_on_block_handler: None,
         };
 
         let recipe = RecipeImpl {

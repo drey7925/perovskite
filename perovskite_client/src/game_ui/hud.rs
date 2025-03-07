@@ -266,7 +266,7 @@ impl GameHud {
         client_state
             .tool_controller
             .lock()
-            .update_item(client_state, slot, item);
+            .change_held_item(client_state, slot, item);
         self.hotbar_draw_call = None;
     }
 

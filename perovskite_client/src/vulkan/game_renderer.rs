@@ -152,7 +152,7 @@ impl ActiveGame {
             self.cube_draw_calls.push(
                 self.client_state
                     .block_renderer
-                    .make_pointee_cube(player_position, pointee)?,
+                    .make_pointee_cube(player_position, pointee.target())?,
             );
         }
 
