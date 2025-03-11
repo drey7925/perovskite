@@ -16,7 +16,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use self::client_context::*;
+use self::client_workers::*;
 use anyhow::{bail, Error, Result};
 
 use arc_swap::ArcSwap;
@@ -52,7 +52,7 @@ use crate::{
     vulkan::{block_renderer::BlockRenderer, entity_renderer::EntityRenderer},
 };
 
-mod client_context;
+mod client_workers;
 pub(crate) mod mesh_worker;
 
 const MIN_PROTOCOL_VERSION: u32 = 5;
