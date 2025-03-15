@@ -1,18 +1,18 @@
 use std::{collections::VecDeque, time::Instant};
 
 use anyhow::{Context, Result};
-use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Zero};
+use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
 use perovskite_core::protocol::audio::SoundSource;
 use rustc_hash::FxHashMap;
 
 use crate::audio::{EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT};
-use perovskite_core::protocol::entities as entities_proto;
-
+use crate::game_state::tool_controller::check_intersection_core;
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
     entity_renderer::EntityRenderer,
     shaders::entity_geometry::EntityGeometryDrawCall,
 };
+use perovskite_core::protocol::entities as entities_proto;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct EntityMove {
@@ -197,14 +197,23 @@ impl GameEntity {
 }
 
 impl GameEntity {
-    pub(crate) fn transforms_with_trailing_entities(
+    pub(crate) fn transforms_with_trailing_entities<const INVERSE: bool>(
         &self,
         base_position: Vector3<f64>,
         tick: u64,
     ) -> Vec<(Matrix4<f32>, u32)> {
         // This would be really nice as a generator expression...
         let mut result = vec![];
-        result.push((self.as_transform(base_position, tick), self.class));
+        result.push((
+            self.as_transform::<INVERSE>(base_position, tick),
+            self.class,
+        ));
+
+        let transform_builder = if INVERSE {
+            build_inverse_transform
+        } else {
+            build_transform
+        };
 
         // fast path
         if self.trailing_entities.is_empty() {
@@ -220,7 +229,7 @@ impl GameEntity {
                         let move_progress_distance = (cm_distance - bb_distance) as f64;
                         let position = current_move.position_along_length(move_progress_distance);
                         result.push((
-                            build_transform(
+                            transform_builder(
                                 base_position,
                                 position,
                                 Rad(current_move.face_direction),
@@ -256,7 +265,7 @@ impl GameEntity {
                     let move_progress_distance = (acc_distance - bb_distance) as f64;
                     let position = m.position_along_length(move_progress_distance);
                     result.push((
-                        build_transform(
+                        transform_builder(
                             base_position,
                             position,
                             Rad(m.face_direction),
@@ -393,10 +402,17 @@ impl GameEntity {
         Ok(())
     }
 
-    pub(crate) fn as_transform(&self, base_position: Vector3<f64>, time_tick: u64) -> Matrix4<f32> {
+    pub(crate) fn as_transform<const INVERSE: bool>(
+        &self,
+        base_position: Vector3<f64>,
+        time_tick: u64,
+    ) -> Matrix4<f32> {
         let (pos, face_dir, pitch) = self.position(time_tick);
-
-        build_transform(base_position, pos, face_dir, pitch)
+        if INVERSE {
+            build_inverse_transform(base_position, pos, face_dir, pitch)
+        } else {
+            build_transform(base_position, pos, face_dir, pitch)
+        }
     }
 
     pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>, Rad<f32>) {
@@ -540,6 +556,21 @@ fn build_transform(
     translation * Matrix4::from_angle_y(face_dir) * Matrix4::from_angle_x(pitch)
 }
 
+fn build_inverse_transform(
+    base_position: Vector3<f64>,
+    pos: Vector3<f64>,
+    face_dir: Rad<f32>,
+    pitch: Rad<f32>,
+) -> Matrix4<f32> {
+    let translation = Matrix4::from_translation(
+        (base_position - pos).mul_element_wise(Vector3::new(1., -1., 1.)),
+    )
+    .cast()
+    .unwrap();
+
+    Matrix4::from_angle_x(-pitch) * Matrix4::from_angle_y(-face_dir) * translation
+}
+
 // Minimal stub implementation of the entity manager
 // Quite barebones, and will need extensive optimization in the future.
 pub(crate) struct EntityState {
@@ -617,7 +648,7 @@ impl EntityState {
             .iter()
             .flat_map(|(_id, entity)| {
                 entity
-                    .transforms_with_trailing_entities(player_position, time_tick)
+                    .transforms_with_trailing_entities::<false>(player_position, time_tick)
                     .into_iter()
                     .map(|(model_matrix, class)| {
                         EntityGeometryDrawCall {
@@ -634,5 +665,59 @@ impl EntityState {
                     })
             })
             .collect()
+    }
+
+    pub(crate) fn raycast(
+        &self,
+        player_position: Vector3<f64>,
+        pointing_vector: Vector3<f64>,
+        time_tick: u64,
+        entity_renderer: &EntityRenderer,
+        max_distance: f32,
+    ) -> Option<(u64, u32, f32)> {
+        // Convert position and pointing vector to homogeneous coordinates
+        let player_pos4 =
+            Vector4::new(player_position.x, player_position.y, player_position.z, 1.0);
+        let pointing_vector = pointing_vector.normalize().cast().unwrap();
+        let pointing_vector =
+            Vector4::new(pointing_vector.x, pointing_vector.y, pointing_vector.z, 1.0);
+
+        let mut hit = None;
+        let mut best_dist = max_distance;
+        for (&id, entity) in &self.entities {
+            for (trailing_index, (inverse_matrix, class)) in entity
+                .transforms_with_trailing_entities::<true>(player_position, time_tick)
+                .into_iter()
+                .enumerate()
+            {
+                let (min, max) = match entity_renderer.mesh_aabb(class) {
+                    None => {
+                        continue;
+                    }
+                    Some((min, max)) => (min, max),
+                };
+                // these transforms incorporate the translation of the entity from model space to
+                // player-centered world space (i.e. translated to be around the player, but without
+                // the player's rotation)
+                //
+                // By inverting it, we have a transform that takes us from player-centered world
+                // space to model space. We want to raycast the [zero -> pointing_vector] ray
+                // segment against the bounding box of the entity which we know in model space.
+                let raycast_start = inverse_matrix * Vector4::new(0.0, 0.0, 0.0, 1.0);
+                let raycast_end = inverse_matrix * pointing_vector;
+
+                let raycast_start = raycast_start.truncate();
+                let raycast_end = raycast_end.truncate();
+                let delta = raycast_end - raycast_start;
+                let delta_inv = Vector3::new(1.0 / delta.x, -1.0 / delta.y, 1.0 / delta.z);
+
+                let (this_hit, t) = check_intersection_core(raycast_start, delta_inv, min, max);
+                if this_hit && t < best_dist {
+                    hit = Some((id, trailing_index as u32, t));
+                    best_dist = t;
+                }
+            }
+        }
+        hit
     }
 }

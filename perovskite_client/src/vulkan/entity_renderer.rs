@@ -134,6 +134,8 @@ impl EntityRenderer {
         }
         let mut vertices = Vec::with_capacity(vertex_count);
         let mut indices = Vec::with_capacity(meshes.iter().map(|x| x.indices.len()).sum());
+        let mut aabb_min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut aabb_max = Vector3::new(-f32::INFINITY, -f32::INFINITY, -f32::INFINITY);
         for mesh in meshes {
             let tex_rectangle: RectF32 = mesh
                 .texture
@@ -161,6 +163,13 @@ impl EntityRenderer {
                     global_brightness_contribution: 0.0,
                     wave_horizontal: 0.0,
                 });
+                aabb_min.x = aabb_min.x.min(mesh.x[i]);
+                aabb_min.y = aabb_min.y.min(mesh.y[i]);
+                aabb_min.z = aabb_min.z.min(mesh.z[i]);
+
+                aabb_max.x = aabb_max.x.max(mesh.x[i]);
+                aabb_max.y = aabb_max.y.max(mesh.y[i]);
+                aabb_max.z = aabb_max.z.max(mesh.z[i]);
             }
             ensure!(mesh.indices.len() % 3 == 0);
             ensure!(mesh.indices.iter().all(|x| *x < vertices_len as u32));
@@ -177,6 +186,7 @@ impl EntityRenderer {
                 None => Vector3::zero(),
             },
             attach_in_model_space: appearance.attachment_offset_in_model_space,
+            aabb: (aabb_min, aabb_max),
         })
     }
 
@@ -205,6 +215,10 @@ impl EntityRenderer {
     pub(crate) fn get_singleton(&self, class: u32) -> Option<VkCgvBufferGpu> {
         self.singleton_gpu_buffers.get(&class).cloned().flatten()
     }
+
+    pub(crate) fn mesh_aabb(&self, class: u32) -> Option<(Vector3<f32>, Vector3<f32>)> {
+        self.mesh_definitions.get(&class).map(|x| x.aabb)
+    }
 }
 
 pub(crate) struct EntityMesh {
@@ -214,6 +228,9 @@ pub(crate) struct EntityMesh {
     pub(crate) idx: Vec<u32>,
     pub(crate) attach_offset: Vector3<f64>,
     pub(crate) attach_in_model_space: bool,
+    // Vulkan-coordinate (Y down) bounding box. Subtlety: vertices in the mesh vertex buffer, but
+    // with no indices referencing them, contribute to the bounding box.
+    pub(crate) aabb: (Vector3<f32>, Vector3<f32>),
 }
 
 const TESTONLY_ENTITY: &str = "builtin:temporary_player_entity";

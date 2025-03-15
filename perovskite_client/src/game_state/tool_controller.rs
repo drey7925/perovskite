@@ -16,7 +16,8 @@
 
 use std::time::{Duration, Instant};
 
-use cgmath::vec3;
+use cgmath::num_traits::Float;
+use cgmath::{vec3, Vector3};
 use lazy_static::lazy_static;
 use perovskite_core::constants::permissions;
 use perovskite_core::protocol::blocks::block_type_def::PhysicsInfo;
@@ -415,29 +416,41 @@ fn check_intersection(
 
                     let (min, max) = apply_aabox_transformation(aa_box, block_coord, variant);
 
-                    let tx1 = (min.x - pos.x) * delta_inv.x;
-                    let tx2 = (max.x - pos.x) * delta_inv.x;
-
-                    let t_min = tx1.min(tx2);
-                    let t_max = tx1.max(tx2);
-
-                    let ty1 = (min.y - pos.y) * delta_inv.y;
-                    let ty2 = (max.y - pos.y) * delta_inv.y;
-
-                    let t_min = t_min.max(ty1.min(ty2));
-                    let t_max = t_max.min(ty1.max(ty2));
-
-                    let tz1 = (min.z - pos.z) * delta_inv.z;
-                    let tz2 = (max.z - pos.z) * delta_inv.z;
-
-                    let t_min = t_min.max(tz1.min(tz2));
-                    let t_max = t_max.min(tz1.max(tz2));
-
-                    t_max >= t_min && t_max >= 0.
+                    // Disregard T itself, just check whether it's a hit
+                    check_intersection_core(pos, delta_inv, min, max).0
                 })
         }
         _ => true,
     }
+}
+
+#[inline]
+pub(crate) fn check_intersection_core<F: Float>(
+    pos: Vector3<F>,
+    delta_inv: Vector3<F>,
+    min: Vector3<F>,
+    max: Vector3<F>,
+) -> (bool, F) {
+    let tx1 = (min.x - pos.x) * delta_inv.x;
+    let tx2 = (max.x - pos.x) * delta_inv.x;
+
+    let t_min = tx1.min(tx2);
+    let t_max = tx1.max(tx2);
+
+    let ty1 = (min.y - pos.y) * delta_inv.y;
+    let ty2 = (max.y - pos.y) * delta_inv.y;
+
+    let t_min = t_min.max(ty1.min(ty2));
+    let t_max = t_max.min(ty1.max(ty2));
+
+    let tz1 = (min.z - pos.z) * delta_inv.z;
+    let tz2 = (max.z - pos.z) * delta_inv.z;
+
+    let t_min = t_min.max(tz1.min(tz2));
+    let t_max = t_max.min(tz1.max(tz2));
+
+    let hit = t_max >= t_min && t_max >= F::zero();
+    (hit, t_min)
 }
 
 fn get_dig_interacting_groups(item: &ItemDef) -> Vec<Vec<String>> {

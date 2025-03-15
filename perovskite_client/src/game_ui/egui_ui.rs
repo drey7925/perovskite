@@ -918,6 +918,18 @@ impl EguiUi {
                             );
                         }
                     }
+                    let ent_cast = entity_lock.raycast(
+                        pos.position,
+                        pos.face_unit_vector(),
+                        state.timekeeper.now(),
+                        &state.entity_renderer,
+                        10.0,
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("Raycast: {:?}", ent_cast))
+                            .font(egui::FontId::monospace(16.0))
+                            .color(Color32::WHITE),
+                    );
 
                     let (av, ai) = state.chunks.average_solid_batch_occupancy();
                     ui.label(

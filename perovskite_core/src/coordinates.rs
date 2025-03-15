@@ -457,6 +457,7 @@ impl PlayerPositionUpdate {
             }),
         })
     }
+    /// The direction the player is facing, Y-up
     pub fn face_unit_vector(&self) -> cgmath::Vector3<f64> {
         let (sin_az, cos_az) = Deg(self.face_direction.0).sin_cos();
         let (sin_el, cos_el) = Deg(self.face_direction.1).sin_cos();
