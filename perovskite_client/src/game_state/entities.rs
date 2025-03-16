@@ -41,11 +41,11 @@ impl EntityMove {
     pub(crate) fn elapsed_or_overflow(&self, tick: u64) -> ElapsedOrOverflow {
         let time = (tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0;
         if time < 0.0 {
-            return ElapsedOrOverflow::ElapsedThisMove(0.0);
+            ElapsedOrOverflow::ElapsedThisMove(0.0)
         } else if time <= self.total_time_seconds {
-            return ElapsedOrOverflow::ElapsedThisMove(time);
+            ElapsedOrOverflow::ElapsedThisMove(time)
         } else {
-            return ElapsedOrOverflow::OverflowIntoNext(time - self.total_time_seconds);
+            ElapsedOrOverflow::OverflowIntoNext(time - self.total_time_seconds)
         }
     }
 

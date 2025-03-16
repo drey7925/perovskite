@@ -190,10 +190,15 @@ impl ToolController {
     }
 
     // Compute a new selected block.
-    pub(crate) fn update(&mut self, client_state: &ClientState, delta: Duration) -> ToolState {
-        let player_pos = client_state.last_position();
+    pub(crate) fn update(
+        &mut self,
+        client_state: &ClientState,
+        player_pos: PlayerPositionUpdate,
+        delta_nanos: u64,
+        tick: u64,
+    ) -> ToolState {
         let (dist, pointee, neighbor, target_properties) =
-            match self.compute_pointee(client_state, &player_pos) {
+            match self.compute_pointee(client_state, &player_pos, tick) {
                 Some(x) => x,
                 None => {
                     // Ensure that we don't leave pending input events that fire when we finally do get a pointee
@@ -256,10 +261,11 @@ impl ToolController {
                         0.
                     }
                     Some(DigBehavior::ConstantTime(dig_seconds)) => {
-                        delta.as_secs_f64() / dig_seconds
+                        (delta_nanos as f64 / 1_000_000_000.0) / dig_seconds
                     }
                     Some(DigBehavior::ScaledTime(scale)) => {
-                        delta.as_secs_f64() / (scale * dig_progress.base_durability)
+                        (delta_nanos as f64 / 1_000_000_000.0)
+                            / (scale * dig_progress.base_durability)
                     }
                     Some(DigBehavior::Undiggable(_)) => 0.,
                 };
@@ -353,6 +359,7 @@ impl ToolController {
         &'a self,
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
+        tick: u64,
     ) -> Option<(
         f64,
         ToolTargetWithId,
@@ -360,7 +367,7 @@ impl ToolController {
         TargetProperties<'a>,
     )> {
         let block_pointee = self.compute_block_pointee(client_state, last_pos);
-        let entity_pointee = self.compute_entity_pointee(client_state, last_pos);
+        let entity_pointee = self.compute_entity_pointee(client_state, last_pos, tick);
         if let Some(blk) = block_pointee {
             if let Some(ent) = entity_pointee {
                 if blk.0 > ent.0 {
@@ -455,6 +462,7 @@ impl ToolController {
         &'a self,
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
+        tick: u64,
     ) -> Option<(
         f64,
         ToolTargetWithId,
@@ -469,7 +477,7 @@ impl ToolController {
             .raycast(
                 pos,
                 face,
-                client_state.timekeeper.now(),
+                tick,
                 &client_state.entity_renderer,
                 POINTEE_DISTANCE as f32,
             )

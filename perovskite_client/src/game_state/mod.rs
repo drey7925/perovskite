@@ -630,7 +630,7 @@ pub(crate) struct ClientState {
 
     pub(crate) block_types: Arc<ClientBlockTypeManager>,
     pub(crate) items: Arc<ClientItemManager>,
-    pub(crate) last_update: Mutex<Instant>,
+    pub(crate) last_update: Mutex<u64>,
     pub(crate) physics_state: Mutex<physics::PhysicsState>,
     pub(crate) chunks: ChunkManager,
     pub(crate) inventories: Mutex<InventoryViewManager>,
@@ -677,7 +677,7 @@ impl ClientState {
             input: Mutex::new(InputState::new(settings.clone())),
             block_types,
             items,
-            last_update: Mutex::new(Instant::now()),
+            last_update: Mutex::new(timekeeper.now()),
             physics_state: Mutex::new(physics::PhysicsState::new(settings)),
             chunks: ChunkManager::new(),
             inventories: Mutex::new(InventoryViewManager::new()),
@@ -728,7 +728,7 @@ impl ClientState {
         self.last_position_weak.read()
     }
 
-    pub(crate) fn next_frame(&self, aspect_ratio: f64) -> FrameState {
+    pub(crate) fn next_frame(&self, aspect_ratio: f64, tick: u64) -> FrameState {
         let mut egui_wants_events = false;
         {
             self.timekeeper.update_frame();
@@ -751,19 +751,30 @@ impl ClientState {
 
         let delta = {
             let mut lock = self.last_update.lock();
-            let now = Instant::now();
-            let delta = now - *lock;
-            *lock = now;
+            let delta = tick - *lock;
+            *lock = tick;
             delta
         };
 
-        let (player_position, player_velocity, (az, el)) = self
+        let (mut player_position, player_velocity, (az, el)) = self
             .physics_state
             .lock()
-            .update_and_get(self, aspect_ratio, delta);
-
+            .update_and_get(self, aspect_ratio, Duration::from_nanos(delta), tick);
+        {
+            let mut entity_lock = self.entities.lock();
+            if let Some(entity_id) = entity_lock.attached_to_entity {
+                if let Some(entity) = entity_lock.entities.get(&entity_id) {
+                    player_position = entity.attach_position(tick, &self.entity_renderer);
+                }
+            }
+        }
+        let ppu = PlayerPositionUpdate {
+            position: player_position,
+            velocity: player_velocity,
+            face_direction: (az, el),
+        };
         self.audio.update_position(
-            self.timekeeper.now(),
+            tick,
             player_position,
             player_velocity.cast().unwrap(),
             az * PI / 180.,
@@ -785,7 +796,7 @@ impl ClientState {
             .cast()
             .unwrap();
 
-        let mut tool_state = self.tool_controller.lock().update(self, delta);
+        let mut tool_state = self.tool_controller.lock().update(self, ppu, delta, tick);
         if let Some(action) = tool_state.action.take() {
             match self.actions.try_send(action) {
                 Ok(_) => {}
@@ -793,11 +804,7 @@ impl ClientState {
             }
         }
 
-        *self.last_position_weak.lock_write() = PlayerPositionUpdate {
-            position: player_position,
-            velocity: Vector3::zero(),
-            face_direction: (az, el),
-        };
+        *self.last_position_weak.lock_write() = ppu;
 
         let (sky, lighting, sun_direction) = self.light_cycle.lock().get_colors();
         FrameState {

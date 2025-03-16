@@ -169,6 +169,7 @@ impl PhysicsState {
         client_state: &ClientState,
         _aspect_ratio: f64,
         delta: Duration,
+        tick: u64,
     ) -> (Vector3<f64>, Vector3<f64>, (f64, f64)) {
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
@@ -188,7 +189,7 @@ impl PhysicsState {
 
         self.update_smooth_angles(delta);
         match self.physics_mode {
-            PhysicsMode::Standard => self.update_standard(&mut input, delta, client_state),
+            PhysicsMode::Standard => self.update_standard(&mut input, delta, client_state, tick),
             PhysicsMode::FlyingCollisions => {
                 self.update_flying(&mut input, delta, true, client_state)
             }
@@ -204,6 +205,7 @@ impl PhysicsState {
         // todo handle long deltas without falling through the ground
         delta: Duration,
         client_state: &ClientState,
+        tick: u64,
     ) {
         let _span = span!("physics_standard");
 
@@ -266,7 +268,6 @@ impl PhysicsState {
                 if let Some(coord) = footstep_coord {
                     if let Some(block) = get_block(coord, &chunks, block_types) {
                         if block.0.footstep_sound != 0 {
-                            let tick = client_state.timekeeper.now();
                             let _ = client_state.audio.insert_or_update_simple_sound(
                                 tick,
                                 new_pos,

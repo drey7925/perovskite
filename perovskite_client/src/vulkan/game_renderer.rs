@@ -84,7 +84,9 @@ pub(crate) struct ActiveGame {
 
 impl ActiveGame {
     fn advance_without_rendering(&mut self) {
-        let _ = self.client_state.next_frame(1.0);
+        let _ = self
+            .client_state
+            .next_frame(1.0, self.client_state.timekeeper.now());
     }
     fn build_command_buffers(
         &mut self,
@@ -95,14 +97,26 @@ impl ActiveGame {
     ) -> Result<Arc<PrimaryAutoCommandBuffer>> {
         let _span = span!("build renderer buffers");
         let mut command_buf_builder = ctx.start_command_buffer()?;
+        let start_tick = self.client_state.timekeeper.now();
+        {
+            let mut lock = self.client_state.entities.lock();
+
+            lock.advance_all_states(
+                start_tick,
+                &self.client_state.audio,
+                // This position is only needed for audio
+                self.client_state.weakly_ordered_last_position().position,
+            );
+        }
         let FrameState {
             scene_state,
             mut player_position,
             tool_state,
             ime_enabled,
-        } = self
-            .client_state
-            .next_frame((window_size.width as f64) / (window_size.height as f64));
+        } = self.client_state.next_frame(
+            (window_size.width as f64) / (window_size.height as f64),
+            start_tick,
+        );
         ctx.window.set_ime_allowed(ime_enabled);
 
         ctx.start_ssaa_render_pass(
@@ -116,11 +130,9 @@ impl ActiveGame {
         self.sky_pipeline.draw(&mut command_buf_builder, (), ())?;
 
         self.cube_draw_calls.clear();
-        let start_tick = self.client_state.timekeeper.now();
 
         {
             let mut entity_lock = self.client_state.entities.lock();
-            entity_lock.advance_all_states(start_tick, &self.client_state.audio, player_position);
             if let Some(entity_id) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_id) {
                     player_position =
