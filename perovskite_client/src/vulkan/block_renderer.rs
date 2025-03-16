@@ -37,19 +37,20 @@ use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 
-use perovskite_core::game_actions::ToolTarget;
-use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-
 use crate::cache::CacheManager;
 use crate::game_state::block_types::ClientBlockTypeManager;
 use crate::game_state::chunk::{
     ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, SOLID_RECLAIMER,
     TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
 };
+use crate::game_state::ClientState;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
+use perovskite_core::game_actions::ToolTarget;
+use perovskite_core::protocol::game_rpc::EntityTarget;
+use tracy_client::span;
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use super::{RectF32, VkAllocator};
 
@@ -1037,7 +1038,9 @@ impl BlockRenderer {
         &self,
         player_position: Vector3<f64>,
         pointee: ToolTarget,
-    ) -> Result<CubeGeometryDrawCall> {
+        state: &ClientState,
+        tick: u64,
+    ) -> Result<Option<CubeGeometryDrawCall>> {
         let mut vtx = vec![];
         let mut idx = vec![];
         let frame = self.selection_box_tex_coord;
@@ -1079,26 +1082,51 @@ impl BlockRenderer {
             idx.into_iter(),
         )?;
 
-        let transform = match pointee {
+        let model_matrix = match pointee {
             ToolTarget::Block(pointee) => {
-                (vec3(pointee.x as f64, pointee.y as f64, pointee.z as f64) - player_position)
-                    .mul_element_wise(Vector3::new(1., -1., 1.))
+                let translation = (vec3(pointee.x as f64, pointee.y as f64, pointee.z as f64)
+                    - player_position)
+                    .mul_element_wise(Vector3::new(1., -1., 1.));
+                Matrix4::from_translation(translation.cast().unwrap())
             }
-            ToolTarget::Entity(_) => {
-                // This will require more refactoring, since we only have the entity ID, not its
-                // coords, here. We'll probably need to pass in a ref to the client state or entity
-                // manager
-                todo!()
+            ToolTarget::Entity(EntityTarget {
+                entity_id,
+                trailing_entity_index,
+            }) => {
+                let task = || -> Option<Matrix4<f32>> {
+                    let (transformation, class) = state
+                        .entities
+                        .lock()
+                        .transforms_for_entity(
+                            player_position,
+                            tick,
+                            &state.entity_renderer,
+                            entity_id,
+                        )
+                        .map(|x| x.skip(trailing_entity_index as usize).next())
+                        .flatten()?;
+                    let (min, max) = state.entity_renderer.mesh_aabb(class)?;
+                    let range = max - min;
+                    let center = (min + max) / 2.0;
+                    let translation = vec3(center.x, center.y, center.z);
+                    let prescale = Matrix4::from_nonuniform_scale(range.x, range.y, range.z);
+                    Some(transformation * Matrix4::from_translation(translation) * prescale)
+                };
+
+                match task() {
+                    Some(x) => x,
+                    None => return Ok(None),
+                }
             }
         };
-        Ok(CubeGeometryDrawCall {
-            model_matrix: Matrix4::from_translation(transform.cast().unwrap()),
+        Ok(Some(CubeGeometryDrawCall {
+            model_matrix,
             models: VkChunkVertexDataGpu {
                 solid_opaque: None,
                 transparent: Some(VkCgvBufferGpu { vtx, idx }),
                 translucent: None,
             },
-        })
+        }))
     }
 
     // TODO stop relying on the block renderer to render entities, or clean up

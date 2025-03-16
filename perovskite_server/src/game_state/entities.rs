@@ -1,3 +1,7 @@
+use anyhow::{ensure, Context, Error, Result};
+use cgmath::{vec3, Vector3, Zero};
+use circular_buffer::CircularBuffer;
+use std::io::Read;
 use std::ops::DerefMut;
 /// This implementation is EXTREMELY unstable while it is under active development.
 /// Do not assume any functionality or performance guarantees while different techniques
@@ -5,6 +9,7 @@ use std::ops::DerefMut;
 use std::{
     any::Any,
     fmt::Debug,
+    iter,
     ops::Range,
     pin::Pin,
     sync::{
@@ -13,10 +18,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use anyhow::{ensure, Context, Error, Result};
-use cgmath::{vec3, Vector3, Zero};
-use circular_buffer::CircularBuffer;
 
 use futures::Future;
 use lazy_static::lazy_static;
@@ -371,20 +372,11 @@ impl EntityManager {
 }
 
 lazy_static! {
-    pub(crate) static ref UNDEFINED_ENTITY: EntityDef = EntityDef {
-        move_queue_type: MoveQueueType::SingleMove,
-        class_name: "builtin:undefined".to_string(),
-        client_info: EntityAppearance {
-            // TODO generate from the OBJ file
-            custom_mesh: vec![],
-            attachment_offset: Some(vec3(0.0, 0.0, 0.0).try_into().unwrap()),
-        attachment_offset_in_model_space: false
-        },
-    };
+    pub(crate) static ref UNDEFINED_ENTITY: EntityDef = make_unknown_entity_appearance();
 }
 
 // Note that if an entity has neither CONTROL_AUTONOMOUS nor CONTROL_SIMPLE_PHYSICS, it will
-// only move when programatically requested to do so by a caller
+// only move when programmatically requested to do so by a caller
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EntityMoveDecision {
@@ -2577,10 +2569,12 @@ impl EntityTypeManager {
         let assignments = ServerEntityTypeAssignments::decode(encoded)?;
 
         let mut types = match assignments.entity_type.iter().map(|x| x.entity_class).max() {
-            Some(max_type) => Vec::with_capacity(max_type as usize + 1),
+            Some(max_type) => {
+                Vec::from_iter(iter::repeat_with(|| None).take(max_type as usize + 1))
+            }
             None => vec![],
         };
-        types.push(make_unknown_entity_appearance());
+        types.push(Some(make_unknown_entity_appearance()));
         let mut by_name = FxHashMap::default();
 
         for def in assignments.entity_type.into_iter() {
@@ -2596,7 +2590,7 @@ impl EntityTypeManager {
 
     fn new_empty() -> Result<EntityTypeManager> {
         Ok(EntityTypeManager {
-            types: vec![make_unknown_entity_appearance()],
+            types: vec![Some(make_unknown_entity_appearance())],
             by_name: FxHashMap::from_iter([("builtin:unknown".to_string(), 0)]),
         })
     }
@@ -2604,12 +2598,11 @@ impl EntityTypeManager {
     pub(crate) fn to_server_proto(&self) -> ServerEntityTypeAssignments {
         ServerEntityTypeAssignments {
             entity_type: self
-                .types
+                .by_name
                 .iter()
-                .enumerate()
-                .map(|(class_id, def)| EntityTypeAssignment {
-                    short_name: def.as_ref().unwrap().class_name.clone(),
-                    entity_class: class_id as u32,
+                .map(|(class_name, class_id)| EntityTypeAssignment {
+                    short_name: class_name.clone(),
+                    entity_class: *class_id,
                 })
                 .collect(),
         }
@@ -2666,20 +2659,23 @@ impl EntityTypeManager {
     }
 }
 
-const UNKNOWN_ENTITITY_MESH: &[u8] = include_bytes!("media/unknown_entity.obj");
+const UNKNOWN_ENTITY_MESH: &[u8] = include_bytes!("media/unknown_entity.obj");
 
-fn make_unknown_entity_appearance() -> Option<EntityDef> {
-    Some(EntityDef {
+fn make_unknown_entity_appearance() -> EntityDef {
+    EntityDef {
         class_name: "builtin:unknown".to_string(),
         move_queue_type: MoveQueueType::SingleMove,
         client_info: EntityAppearance {
             custom_mesh: vec![formats::load_obj_mesh(
-                UNKNOWN_ENTITITY_MESH,
+                UNKNOWN_ENTITY_MESH,
                 FALLBACK_UNKNOWN_TEXTURE,
             )
             .unwrap()],
             attachment_offset: vec3(0.0, 0.0, 0.0).try_into().ok(),
             attachment_offset_in_model_space: false,
+            merge_trailing_entities_for_dig: false,
+            tool_interaction_groups: vec![],
+            base_dig_time: 1.0,
         },
-    })
+    }
 }

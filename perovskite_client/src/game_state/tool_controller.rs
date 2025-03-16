@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use cgmath::num_traits::Float;
 use cgmath::{vec3, Vector3};
+use futures::TryStreamExt;
 use lazy_static::lazy_static;
 use perovskite_core::constants::permissions;
 use perovskite_core::protocol::blocks::block_type_def::PhysicsInfo;
@@ -26,6 +27,8 @@ use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
+use super::physics::apply_aabox_transformation;
+use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
 use line_drawing::WalkVoxels;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::blocks::BlockTypeDef;
@@ -35,9 +38,7 @@ use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::{InteractionRule, ItemDef};
 use proto::interact_key_action::InteractionTarget;
 use rustc_hash::FxHashSet;
-
-use super::physics::apply_aabox_transformation;
-use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
+use sha2::digest::generic_array::functional::FunctionalSequence;
 
 /// The thing which is being dug/tapped or was dug/tapped
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -63,6 +64,13 @@ struct TargetProperties<'a> {
     target_groups: &'a [String],
     /// The base dig time; see blocks.proto
     base_dig_time: f64,
+    /// For entities, whether trailing entities should be merged into the main entity as far as
+    /// progress tracking. if true, only reset the progress if the pointee changes ignoring trailing
+    /// entity ID, otherwise reset the progress if the pointee changes even with the same main
+    /// entity
+    ///
+    /// For blocks, always false and irrelevant
+    merge_trailing_entities: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -74,24 +82,53 @@ struct DigState {
     item_dig_behavior: Option<DigBehavior>,
     // Current durability (of selected block) for scaled time
     base_durability: f64,
+    // If false, reset the progress if the pointee changes to a different trailing entity of the
+    // same main entity. If true, only reset the progress if the pointee changes ignoring trailing
+    // entity ID
+    merge_trailing_entities: bool,
+}
+impl DigState {
+    fn should_reset_for(&self, target: &ToolTargetWithId) -> bool {
+        if self.merge_trailing_entities {
+            if let ToolTargetWithId::Entity(target_id, _) = &self.target {
+                if let ToolTargetWithId::Entity(id, _) = target {
+                    return id.entity_id != target_id.entity_id;
+                }
+            }
+        }
+        self.target != *target
+    }
 }
 
 fn target_properties(state: &ClientState, target: ToolTargetWithId) -> TargetProperties {
     match target {
-        ToolTargetWithId::Block(coord, id) => state
+        ToolTargetWithId::Block(_coord, id) => state
             .block_types
             .get_blockdef(id)
             .map(|x| TargetProperties {
                 target_groups: &x.groups,
                 base_dig_time: x.base_dig_time,
+                merge_trailing_entities: false,
             })
             .unwrap_or(TargetProperties {
                 target_groups: &FALLBACK_GROUPS,
                 base_dig_time: 1.0,
+                merge_trailing_entities: false,
             }),
-        ToolTargetWithId::Entity(_target, _) => {
-            todo!()
-        }
+        ToolTargetWithId::Entity(_target, class) => state
+            .entity_renderer
+            .client_info(class)
+            .map(|x| TargetProperties {
+                target_groups: &x.tool_interaction_groups,
+                base_dig_time: x.base_dig_time,
+                merge_trailing_entities: x.merge_trailing_entities_for_dig,
+            })
+            .unwrap_or(TargetProperties {
+                // Undiggable - for now
+                target_groups: &[],
+                base_dig_time: 1.0,
+                merge_trailing_entities: false,
+            }),
     }
 }
 
@@ -155,7 +192,7 @@ impl ToolController {
     // Compute a new selected block.
     pub(crate) fn update(&mut self, client_state: &ClientState, delta: Duration) -> ToolState {
         let player_pos = client_state.last_position();
-        let (pointee, neighbor, target_properties) =
+        let (dist, pointee, neighbor, target_properties) =
             match self.compute_pointee(client_state, &player_pos) {
                 Some(x) => x,
                 None => {
@@ -181,7 +218,7 @@ impl ToolController {
             if self
                 .dig_progress
                 .as_ref()
-                .map_or(true, |x: &DigState| x.target != pointee)
+                .map_or(true, |x: &DigState| x.should_reset_for(&pointee))
             {
                 // The pointee changed
                 let behavior =
@@ -200,6 +237,7 @@ impl ToolController {
                     target: pointee,
                     item_dig_behavior: Some(behavior),
                     base_durability: target_properties.base_dig_time,
+                    merge_trailing_entities: target_properties.merge_trailing_entities,
                 });
             } else if let Some(dig_progress) = &mut self.dig_progress {
                 // The pointee is the same, update dig progress
@@ -298,16 +336,6 @@ impl ToolController {
         }
     }
 
-    pub(crate) fn pointee_block_id(&self) -> Option<BlockId> {
-        match self.dig_progress {
-            None => None,
-            Some(x) => match x.target {
-                ToolTargetWithId::Block(_, id) => Some(id),
-                ToolTargetWithId::Entity(_, _) => None, // TODO
-            },
-        }
-    }
-
     fn compute_dig_behavior(item: &ItemDef, target_groups: &[String]) -> Option<DigBehavior> {
         let block_groups = target_groups.iter().collect::<FxHashSet<_>>();
         for rule in item.interaction_rules.iter() {
@@ -326,19 +354,45 @@ impl ToolController {
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
     ) -> Option<(
+        f64,
         ToolTargetWithId,
         Option<BlockCoordinate>,
         TargetProperties<'a>,
     )> {
-        // TODO handle custom collision boxes
-        let pos = last_pos.position;
-        let end = pos + (POINTEE_DISTANCE * last_pos.face_unit_vector());
+        let block_pointee = self.compute_block_pointee(client_state, last_pos);
+        let entity_pointee = self.compute_entity_pointee(client_state, last_pos);
+        if let Some(blk) = block_pointee {
+            if let Some(ent) = entity_pointee {
+                if blk.0 > ent.0 {
+                    Some(ent)
+                } else {
+                    Some(blk)
+                }
+            } else {
+                Some(blk)
+            }
+        } else if let Some(x) = entity_pointee {
+            Some(x)
+        } else {
+            None
+        }
+    }
 
-        let delta_inv = vec3(
-            1.0 / (end.x - pos.x),
-            1.0 / (end.y - pos.y),
-            1.0 / (end.z - pos.z),
-        );
+    fn compute_block_pointee<'a>(
+        &'a self,
+        client_state: &'a ClientState,
+        last_pos: &PlayerPositionUpdate,
+    ) -> Option<(
+        f64,
+        ToolTargetWithId,
+        Option<BlockCoordinate>,
+        TargetProperties<'a>,
+    )> {
+        let pos = last_pos.position;
+        let face = last_pos.face_unit_vector();
+        let end = pos + (POINTEE_DISTANCE * face);
+
+        let delta_inv = vec3(1.0 / (face.x), 1.0 / (face.y), 1.0 / (face.z));
 
         let chunks = client_state.chunks.read_lock();
         let mut prev = None;
@@ -372,22 +426,21 @@ impl ToolController {
                     .block_types
                     .get_blockdef(id)
                     .unwrap_or(&self.fallback_blockdef);
-                if check_intersection(
+                if let Some(t) = check_intersection(
                     vec3(coord.x as f64, coord.y as f64, coord.z as f64),
                     block_def,
                     pos,
                     delta_inv,
                     id.variant(),
                 ) {
+                    let target = ToolTargetWithId::Block(coord, id);
                     for rule in self.current_item_interacting_groups.iter() {
                         if rule.iter().all(|x| block_def.groups.contains(x)) {
                             return Some((
-                                ToolTargetWithId::Block(coord, id),
+                                t,
+                                target,
                                 prev,
-                                TargetProperties {
-                                    target_groups: &block_def.groups,
-                                    base_dig_time: block_def.base_dig_time,
-                                },
+                                target_properties(client_state, target),
                             ));
                         }
                     }
@@ -397,6 +450,46 @@ impl ToolController {
         }
         None
     }
+
+    fn compute_entity_pointee<'a>(
+        &'a self,
+        client_state: &'a ClientState,
+        last_pos: &PlayerPositionUpdate,
+    ) -> Option<(
+        f64,
+        ToolTargetWithId,
+        Option<BlockCoordinate>,
+        TargetProperties<'a>,
+    )> {
+        let pos = last_pos.position;
+        let face = last_pos.face_unit_vector();
+        client_state
+            .entities
+            .lock()
+            .raycast(
+                pos,
+                face,
+                client_state.timekeeper.now(),
+                &client_state.entity_renderer,
+                POINTEE_DISTANCE as f32,
+            )
+            .map(|(entity_id, trail_index, class, distance)| {
+                let target = ToolTargetWithId::Entity(
+                    EntityTarget {
+                        entity_id,
+                        trailing_entity_index: trail_index,
+                    },
+                    class,
+                );
+
+                (
+                    distance as f64,
+                    target,
+                    None,
+                    target_properties(client_state, target),
+                )
+            })
+    }
 }
 
 fn check_intersection(
@@ -405,22 +498,58 @@ fn check_intersection(
     pos: cgmath::Vector3<f64>,
     delta_inv: cgmath::Vector3<f64>,
     variant: u16,
-) -> bool {
+) -> Option<f64> {
+    let bcv = vec3(
+        block_coord.x as f64,
+        block_coord.y as f64,
+        block_coord.z as f64,
+    );
     match &block_def.tool_custom_hitbox {
         Some(boxes) => {
-            boxes.boxes.is_empty()
-                || boxes.boxes.iter().any(|aa_box| {
+            if boxes.boxes.is_empty() || boxes.boxes.is_empty() {
+                check_intersection_core(
+                    pos,
+                    delta_inv,
+                    vec3(-0.5, -0.5, -0.5) + bcv,
+                    vec3(0.5, 0.5, 0.5) + bcv,
+                )
+            } else {
+                let mut best_t = None;
+                for aa_box in &boxes.boxes {
                     if aa_box.variant_mask != 0 && aa_box.variant_mask & variant as u32 == 0 {
-                        return false;
+                        continue;
                     }
 
                     let (min, max) = apply_aabox_transformation(aa_box, block_coord, variant);
 
                     // Disregard T itself, just check whether it's a hit
-                    check_intersection_core(pos, delta_inv, min, max).0
-                })
+                    if let Some(t) = check_intersection_core(pos, delta_inv, min, max) {
+                        if best_t.is_none() || t < best_t? {
+                            best_t = Some(t);
+                        }
+                    }
+                }
+                best_t
+            }
         }
-        _ => true,
+        _ => {
+            // We need to compute the hit distance. If we're already here, and the block has a
+            // normal hitbox, then we *have* to hit it. However, we don't have a better way then to
+            // run check_intersection_core anyway, so let's sanity check that it returns true.
+            //
+            // This will provide a consistency check that our two collision algorithms (WalkVoxels
+            // and check_intersection_core) are consistent.
+            let t = check_intersection_core(
+                pos,
+                delta_inv,
+                vec3(-0.5, -0.5, -0.5) + bcv,
+                vec3(0.5, 0.5, 0.5) + bcv,
+            );
+            if t.is_none() {
+                log::warn!("Expected to hit a block that takes up its full extent, but didn't");
+            }
+            t
+        }
     }
 }
 
@@ -430,7 +559,7 @@ pub(crate) fn check_intersection_core<F: Float>(
     delta_inv: Vector3<F>,
     min: Vector3<F>,
     max: Vector3<F>,
-) -> (bool, F) {
+) -> Option<F> {
     let tx1 = (min.x - pos.x) * delta_inv.x;
     let tx2 = (max.x - pos.x) * delta_inv.x;
 
@@ -450,7 +579,11 @@ pub(crate) fn check_intersection_core<F: Float>(
     let t_max = t_max.min(tz1.max(tz2));
 
     let hit = t_max >= t_min && t_max >= F::zero();
-    (hit, t_min)
+    if hit {
+        Some(t_min)
+    } else {
+        None
+    }
 }
 
 fn get_dig_interacting_groups(item: &ItemDef) -> Vec<Vec<String>> {
@@ -487,6 +620,23 @@ pub(crate) struct ToolState {
     pub(crate) neighbor: Option<BlockCoordinate>,
     // The action taken during this frame
     pub(crate) action: Option<GameAction>,
+}
+
+impl ToolState {
+    pub(crate) fn pointee_debug(&self, client_state: &ClientState) -> Option<String> {
+        match self.pointee.as_ref()? {
+            ToolTargetWithId::Block(_, id) => client_state
+                .block_types
+                .get_blockdef(*id)
+                .map(|x| format!("Block: {id:x?}: {}", x.short_name))
+                .or_else(|| Some(format!("Block: {id:x?}: ???"))),
+            ToolTargetWithId::Entity(_, class) => client_state
+                .entity_renderer
+                .class_name(*class)
+                .map(|x| format!("Entity: {class:x?}: {x}"))
+                .or_else(|| Some(format!("Entity: {class:x?}: ???"))),
+        }
+    }
 }
 
 const POINTEE_DISTANCE: f64 = 6.;

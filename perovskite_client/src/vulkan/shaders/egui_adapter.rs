@@ -17,17 +17,17 @@ use crate::{
     vulkan::{Texture2DHolder, VulkanWindow},
 };
 
+use super::{
+    flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
+    LiveRenderConfig, PipelineProvider, PipelineWrapper,
+};
 use crate::game_state::settings::Supersampling;
+use crate::game_state::tool_controller::ToolState;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};
 use vulkano::image::sampler::{Filter, SamplerCreateInfo};
 use winit::event_loop::EventLoopWindowTarget;
-
-use super::{
-    flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
-    LiveRenderConfig, PipelineProvider, PipelineWrapper,
-};
 
 // Main thread components of egui rendering (e.g. the Gui which contains a non-Send event loop)
 pub(crate) struct EguiAdapter {
@@ -111,6 +111,7 @@ impl EguiAdapter {
         builder: &mut crate::vulkan::CommandBufferBuilder<L>,
         client_state: &ClientState,
         input_capture: &mut InputCapture,
+        tool_state: &ToolState,
     ) -> Result<()> {
         let mut egui = self.egui_ui.lock();
         self.gui_adapter.begin_frame();
@@ -120,6 +121,7 @@ impl EguiAdapter {
             client_state,
             input_capture,
             ctx,
+            tool_state,
         );
         let cmdbuf = self
             .gui_adapter

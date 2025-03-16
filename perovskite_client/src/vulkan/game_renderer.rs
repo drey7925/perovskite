@@ -149,11 +149,15 @@ impl ActiveGame {
         }
 
         if let Some(pointee) = tool_state.pointee {
-            self.cube_draw_calls.push(
-                self.client_state
-                    .block_renderer
-                    .make_pointee_cube(player_position, pointee.target())?,
-            );
+            let pointee_cube = self.client_state.block_renderer.make_pointee_cube(
+                player_position,
+                pointee.target(),
+                &self.client_state,
+                start_tick,
+            )?;
+            if let Some(pointee_cube) = pointee_cube {
+                self.cube_draw_calls.push(pointee_cube);
+            }
         }
 
         let chunks = {
@@ -293,6 +297,7 @@ impl ActiveGame {
                 &mut command_buf_builder,
                 &self.client_state,
                 input_capture,
+                &tool_state,
             )
             .context("Egui draw failed")?;
 

@@ -1,9 +1,10 @@
-use std::{collections::VecDeque, time::Instant};
-
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
 use perovskite_core::protocol::audio::SoundSource;
 use rustc_hash::FxHashMap;
+use std::iter::Map;
+use std::vec::IntoIter;
+use std::{collections::VecDeque, time::Instant};
 
 use crate::audio::{EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT};
 use crate::game_state::tool_controller::check_intersection_core;
@@ -647,24 +648,46 @@ impl EntityState {
         self.entities
             .iter()
             .flat_map(|(_id, entity)| {
-                entity
-                    .transforms_with_trailing_entities::<false>(player_position, time_tick)
-                    .into_iter()
-                    .map(|(model_matrix, class)| {
-                        EntityGeometryDrawCall {
-                            model_matrix,
-                            model: entity_renderer
-                                .get_singleton(class)
-                                // class 0 is the fallback
-                                .unwrap_or(
-                                    entity_renderer
-                                        .get_singleton(0)
-                                        .unwrap_or(self.fallback_entity.clone()),
-                                ),
-                        }
-                    })
+                self.entity_transforms(player_position, time_tick, entity_renderer, entity)
+            })
+            .map(|(model_matrix, class)| {
+                EntityGeometryDrawCall {
+                    model_matrix,
+                    model: entity_renderer
+                        .get_singleton(class)
+                        // class 0 is the fallback
+                        .unwrap_or(
+                            entity_renderer
+                                .get_singleton(0)
+                                .unwrap_or(self.fallback_entity.clone()),
+                        ),
+                }
             })
             .collect()
+    }
+
+    pub(crate) fn transforms_for_entity(
+        &self,
+        player_position: Vector3<f64>,
+        time_tick: u64,
+        entity_renderer: &EntityRenderer,
+        id: u64,
+    ) -> Option<impl Iterator<Item = (Matrix4<f32>, u32)>> {
+        self.entities
+            .get(&id)
+            .map(|x| self.entity_transforms(player_position, time_tick, entity_renderer, x))
+    }
+
+    fn entity_transforms(
+        &self,
+        player_position: Vector3<f64>,
+        time_tick: u64,
+        entity_renderer: &EntityRenderer,
+        entity: &GameEntity,
+    ) -> impl Iterator<Item = (Matrix4<f32>, u32)> {
+        entity
+            .transforms_with_trailing_entities::<false>(player_position, time_tick)
+            .into_iter()
     }
 
     pub(crate) fn raycast(
@@ -674,7 +697,7 @@ impl EntityState {
         time_tick: u64,
         entity_renderer: &EntityRenderer,
         max_distance: f32,
-    ) -> Option<(u64, u32, f32)> {
+    ) -> Option<(u64, u32, u32, f32)> {
         // Convert position and pointing vector to homogeneous coordinates
         let player_pos4 =
             Vector4::new(player_position.x, player_position.y, player_position.z, 1.0);
@@ -711,10 +734,12 @@ impl EntityState {
                 let delta = raycast_end - raycast_start;
                 let delta_inv = Vector3::new(1.0 / delta.x, -1.0 / delta.y, 1.0 / delta.z);
 
-                let (this_hit, t) = check_intersection_core(raycast_start, delta_inv, min, max);
-                if this_hit && t < best_dist {
-                    hit = Some((id, trailing_index as u32, t));
-                    best_dist = t;
+                let t = check_intersection_core(raycast_start, delta_inv, min, max);
+                if let Some(t) = t {
+                    if t < best_dist {
+                        hit = Some((id, trailing_index as u32, class, t));
+                        best_dist = t;
+                    }
                 }
             }
         }

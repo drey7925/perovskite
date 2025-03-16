@@ -134,6 +134,9 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
             custom_mesh: vec![DUCK_MESH.clone()],
             attachment_offset: Some(vec3(0.0, 0.0, 0.0).try_into()?),
             attachment_offset_in_model_space: false,
+            merge_trailing_entities_for_dig: false,
+            tool_interaction_groups: vec![],
+            base_dig_time: 1.0,
         },
     })?;
 

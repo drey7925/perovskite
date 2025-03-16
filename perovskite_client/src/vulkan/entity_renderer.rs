@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::{cache::CacheManager, vulkan::RectF32};
@@ -98,9 +99,10 @@ impl EntityRenderer {
         for def in entity_defs {
             if let Some(appearance) = def.appearance {
                 let mesh = EntityRenderer::pre_render(
-                    &appearance,
+                    appearance,
                     &texture_coords,
                     texture_atlas.dimensions(),
+                    def.short_name,
                 )?;
                 let singleton_buffer =
                     VkCgvBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.clone_allocator())?;
@@ -123,9 +125,10 @@ impl EntityRenderer {
 
     /// Convert from the network mesh to a vulkan renderable mesh
     fn pre_render(
-        appearance: &proto::EntityAppearance,
+        appearance: proto::EntityAppearance,
         texture_coords: &FxHashMap<String, Rect>,
         atlas_dims: (u32, u32),
+        name: String,
     ) -> Result<EntityMesh> {
         let meshes = &appearance.custom_mesh;
         let vertex_count = meshes.iter().map(|x| x.x.len()).sum();
@@ -187,6 +190,8 @@ impl EntityRenderer {
             },
             attach_in_model_space: appearance.attachment_offset_in_model_space,
             aabb: (aabb_min, aabb_max),
+            def: appearance.clone(),
+            name,
         })
     }
 
@@ -216,6 +221,14 @@ impl EntityRenderer {
         self.singleton_gpu_buffers.get(&class).cloned().flatten()
     }
 
+    pub(crate) fn client_info(&self, class: u32) -> Option<&proto::EntityAppearance> {
+        self.mesh_definitions.get(&class).map(|x| &x.def)
+    }
+
+    pub(crate) fn class_name(&self, class: u32) -> Option<&str> {
+        self.mesh_definitions.get(&class).map(|x| x.name.deref())
+    }
+
     pub(crate) fn mesh_aabb(&self, class: u32) -> Option<(Vector3<f32>, Vector3<f32>)> {
         self.mesh_definitions.get(&class).map(|x| x.aabb)
     }
@@ -231,6 +244,10 @@ pub(crate) struct EntityMesh {
     // Vulkan-coordinate (Y down) bounding box. Subtlety: vertices in the mesh vertex buffer, but
     // with no indices referencing them, contribute to the bounding box.
     pub(crate) aabb: (Vector3<f32>, Vector3<f32>),
+    pub(crate) name: String,
+    // TODO: Is duplicating the mesh in here a waste of memory, or will it remain reasonably small
+    // under normal circumstances?
+    pub(crate) def: proto::EntityAppearance,
 }
 
 const TESTONLY_ENTITY: &str = "builtin:temporary_player_entity";

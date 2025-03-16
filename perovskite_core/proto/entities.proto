@@ -96,4 +96,15 @@ message EntityAppearance {
   // subject to the angle of the entity. If false, the attachment offset is given
   // in world space and undergoes no transformation
   bool attachment_offset_in_model_space = 3;
+  // If true, trailing entities count the same as the main entity for dig progress tracking. This applies to the
+  // entity on which digging begins; for consistency it's recommended to have the same setting for this for the entity
+  // classes of all trailing entities.
+  //
+  // Furthermore, this only works if trailing entities are geometrically contiguous with the main entity, at least in
+  // screen space. Otherwise, digging is interrupted by gaps between trailing entities.
+  bool merge_trailing_entities_for_dig = 4;
+  // Block groups, used for dig/tool interaction behavior
+  repeated string tool_interaction_groups = 5;
+  // The base dig time; see blocks.proto
+  double base_dig_time = 6;
 }

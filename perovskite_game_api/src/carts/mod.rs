@@ -11,6 +11,7 @@ use interlocking::{InterlockingResumeState, InterlockingRoute};
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
+    constants,
     constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
@@ -32,13 +33,13 @@ use perovskite_server::game_state::{
 };
 use rustc_hash::FxHashMap;
 
+use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
+use crate::default_game::block_groups::BRITTLE;
 use crate::{
     blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
     game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
-
-use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
 
 mod interlocking;
 mod signals;
@@ -221,6 +222,9 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             custom_mesh: vec![CART_MESH.clone()],
             attachment_offset: Some(vec3(0.0, 1.0, 0.0).try_into()?),
             attachment_offset_in_model_space: false,
+            merge_trailing_entities_for_dig: true,
+            tool_interaction_groups: vec![BRITTLE.to_string()],
+            base_dig_time: 1.0,
         },
     })?;
 

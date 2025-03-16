@@ -19,18 +19,18 @@ use crate::game_builder::{GameBuilder, GameBuilderExtension, StaticTextureName};
 use anyhow::Result;
 use perovskite_core::protocol;
 
+use self::{
+    game_settings::DefaultGameSettings,
+    mapgen::OreDefinition,
+    recipes::{RecipeBook, RecipeImpl, RecipeSlot},
+};
+use crate::default_game::block_groups::BRITTLE;
 use crate::include_texture_bytes;
 use perovskite_core::protocol::items as items_proto;
 use perovskite_core::protocol::render::CustomMesh;
 use perovskite_server::game_state;
 use perovskite_server::game_state::entities::{EntityClassId, EntityDef};
 use perovskite_server::game_state::items::ItemStack;
-
-use self::{
-    game_settings::DefaultGameSettings,
-    mapgen::OreDefinition,
-    recipes::{RecipeBook, RecipeImpl, RecipeSlot},
-};
 
 /// Blocks defined in the default game.
 pub mod basic_blocks;
@@ -279,6 +279,9 @@ fn register_player_entity(builder: &mut GameBuilder) -> Result<EntityClassId> {
             custom_mesh: vec![PLAYER_MESH.clone()],
             attachment_offset: None,
             attachment_offset_in_model_space: false,
+            merge_trailing_entities_for_dig: false,
+            tool_interaction_groups: vec![],
+            base_dig_time: 1.0,
         },
     })
 }

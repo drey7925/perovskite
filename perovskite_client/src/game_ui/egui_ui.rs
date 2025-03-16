@@ -15,8 +15,11 @@ use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::{collections::HashMap, sync::Arc, usize};
 
+use super::hud::render_number;
+use super::{get_texture, FRAME_UNSELECTED};
 use crate::game_state::items::InventoryViewManager;
 use crate::game_state::settings::GameSettings;
+use crate::game_state::tool_controller::ToolState;
 use crate::game_state::{GameAction, InventoryAction};
 use crate::main_menu::{draw_settings_menu, InputCapture};
 use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};
@@ -25,9 +28,6 @@ use crate::{
     game_state::{items::ClientItemManager, ClientState},
     vulkan::Texture2DHolder,
 };
-
-use super::hud::render_number;
-use super::{get_texture, FRAME_UNSELECTED};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InvClickType {
@@ -147,6 +147,7 @@ impl EguiUi {
         client_state: &ClientState,
         input_capture: &mut InputCapture,
         vk_ctx: &VulkanWindow,
+        tool_state: &ToolState,
     ) {
         self.scale = ctx.input(|i| i.pixels_per_point);
         // TODO have more things controlled by the scale. e.g. font sizes?
@@ -230,7 +231,7 @@ impl EguiUi {
         // these render a TopBottomPanel, so they need to be last
         self.render_chat_history(ctx, client_state);
         if self.debug_open {
-            self.render_debug(ctx, client_state);
+            self.render_debug(ctx, client_state, tool_state);
         }
     }
 
@@ -841,7 +842,7 @@ impl EguiUi {
             }
         }
     }
-    fn render_debug(&mut self, ctx: &Context, state: &ClientState) {
+    fn render_debug(&mut self, ctx: &Context, state: &ClientState, tool_state: &ToolState) {
         egui::TopBottomPanel::bottom("debug_panel")
             .max_height(240.0)
             .frame(egui::Frame {
@@ -868,19 +869,16 @@ impl EguiUi {
                     .font(egui::FontId::monospace(16.0))
                     .color(Color32::WHITE),
                 );
-                let block_id = state.tool_controller.lock().pointee_block_id();
-                let block_name = block_id
-                    .map(|x| state.block_types.get_blockdef(x))
-                    .flatten()
-                    .map(|x| x.short_name.clone());
+                let pointee = tool_state.pointee_debug(state);
+                let color = if pointee.is_some() {
+                    Color32::WHITE
+                } else {
+                    Color32::DARK_GRAY
+                };
                 ui.label(
-                    egui::RichText::new(format!("Block: {:x?}: {:?}", block_id, block_name))
+                    egui::RichText::new(pointee.as_deref().unwrap_or("No pointee"))
                         .font(egui::FontId::monospace(16.0))
-                        .color(if block_id.is_some() {
-                            Color32::WHITE
-                        } else {
-                            Color32::DARK_GRAY
-                        }),
+                        .color(color),
                 );
                 {
                     let entity_lock = state.entities.lock();
