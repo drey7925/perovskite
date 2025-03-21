@@ -14,18 +14,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use lazy_static::lazy_static;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use rustc_hash::FxHashSet;
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::time::Duration;
 
-use super::blocks::BlockType;
+use super::blocks::{BlockInteractionResult, BlockType};
 use super::event::HandlerContext;
 
+use crate::game_state::entities::{EntityHandlers, UNDEFINED_ENTITY};
+use crate::game_state::GameState;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::place_action::PlaceAnchor;
@@ -415,7 +418,7 @@ impl ItemManager {
     /// Gets the item corresponding to the given stack, if it is defined. Returns None if the stack was itself None,
     /// or if the item was not defined (e.g. if the stack was created and then the server restarted with the item removed,
     /// or if the stack contains a totally invalid item name)
-    pub fn from_stack(&self, stack: Option<&ItemStack>) -> Option<&Item> {
+    pub fn get_stack_item(&self, stack: Option<&ItemStack>) -> Option<&Item> {
         stack.and_then(|stack| self.get_item(&stack.proto.item_name))
     }
     pub fn get_item(&self, name: &str) -> Option<&Item> {
@@ -516,23 +519,19 @@ impl InteractionRuleExt for proto::InteractionRule {
     }
 }
 
-pub(crate) fn default_dig_handler(
+fn default_generic_handler(
     ctx: &HandlerContext,
     coord: BlockCoordinate,
     stack: &ItemStack,
+    op: impl FnOnce(&GameState) -> Result<BlockInteractionResult>,
 ) -> Result<ItemInteractionResult> {
-    let dig_result = ctx
-        .game_map()
-        .dig_block(coord, ctx.initiator(), Some(stack))?;
+    let dig_result = op(&ctx.game_state)?;
     let mut stack = stack.clone();
     if stack.has_wear() {
-        stack.proto.current_wear = stack
-            .proto
-            .current_wear
-            .saturating_sub(dig_result.tool_wear)
+        stack.proto.quantity = stack.proto.quantity.saturating_sub(dig_result.tool_wear)
     }
     Ok(ItemInteractionResult {
-        updated_tool: if stack.proto.current_wear > 0 {
+        updated_tool: if stack.proto.quantity > 0 {
             Some(stack.clone())
         } else {
             None
@@ -541,12 +540,85 @@ pub(crate) fn default_dig_handler(
     })
 }
 
+pub(crate) fn default_tap_handler(
+    ctx: &HandlerContext,
+    coord: BlockCoordinate,
+    stack: &ItemStack,
+) -> Result<ItemInteractionResult> {
+    default_generic_handler(ctx, coord, stack, |state| {
+        state
+            .game_map()
+            .tap_block(coord, ctx.initiator(), Some(stack))
+    })
+}
+
+pub(crate) fn default_dig_handler(
+    ctx: &HandlerContext,
+    coord: BlockCoordinate,
+    stack: &ItemStack,
+) -> Result<ItemInteractionResult> {
+    default_generic_handler(ctx, coord, stack, |state| {
+        state
+            .game_map()
+            .dig_block(coord, ctx.initiator(), Some(stack))
+    })
+}
 pub(crate) fn default_entity_dig_handler(
     ctx: &HandlerContext,
     target: EntityTarget,
-    stack: &ItemStack,
+    item_stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
-    todo!();
+    default_entity_generic_handler(ctx, target, |handlers| {
+        handlers.on_dig(ctx, target, Some(item_stack))
+    })
+}
+
+pub(crate) fn default_entity_tap_handler(
+    ctx: &HandlerContext,
+    target: EntityTarget,
+    item_stack: &ItemStack,
+) -> Result<ItemInteractionResult> {
+    default_entity_generic_handler(ctx, target, |handlers| {
+        handlers.on_tap(ctx, target, Some(item_stack))
+    })
+}
+
+pub(crate) fn default_place_on_entity_handler(
+    ctx: &HandlerContext,
+    target: EntityTarget,
+    item_stack: &ItemStack,
+) -> Result<Option<ItemStack>> {
+    default_entity_generic_handler(ctx, target, |handlers| {
+        handlers.on_place(ctx, target, Some(item_stack))
+    })
+}
+
+fn default_entity_generic_handler<T>(
+    ctx: &HandlerContext,
+    target: EntityTarget,
+    op: impl FnOnce(&dyn EntityHandlers) -> Result<T>,
+) -> Result<T> {
+    let mut class = None;
+    let tei = target.trailing_entity_index as usize;
+    ctx.entities()
+        .visit_entity_by_id(target.entity_id, |entity| {
+            if tei == 0 {
+                class = Some(entity.class)
+            } else {
+                class = entity
+                    .trailing_entities
+                    .and_then(|x| x.get(tei - 1))
+                    .map(|x| x.class_id);
+            }
+            Ok(())
+        })?;
+    let class = class.context("Entity not found")?;
+    let class_def = ctx
+        .entities
+        .types()
+        .get_type(class)
+        .with_context(|| format!("Class {} not found", class))?;
+    op(class_def.handlers.deref())
 }
 
 pub trait HasInteractionRules {
@@ -584,26 +656,4 @@ pub(crate) fn make_fake_item_for_no_tool() -> ItemStack {
 
 lazy_static! {
     pub(crate) static ref NO_TOOL_STACK: ItemStack = make_fake_item_for_no_tool();
-}
-
-pub(crate) fn default_tap_handler(
-    ctx: &HandlerContext,
-    coord: BlockCoordinate,
-    stack: &ItemStack,
-) -> Result<ItemInteractionResult> {
-    let dig_result = ctx
-        .game_map()
-        .tap_block(coord, ctx.initiator(), Some(stack))?;
-    let mut stack = stack.clone();
-    if stack.has_wear() {
-        stack.proto.quantity = stack.proto.quantity.saturating_sub(dig_result.tool_wear)
-    }
-    Ok(ItemInteractionResult {
-        updated_tool: if stack.proto.quantity > 0 {
-            Some(stack.clone())
-        } else {
-            None
-        },
-        obtained_items: dig_result.item_stacks,
-    })
 }

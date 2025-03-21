@@ -883,7 +883,9 @@ impl EguiUi {
                 {
                     let entity_lock = state.entities.lock();
                     if let Some(entity_id) = entity_lock.attached_to_entity {
-                        if let Some(entity) = entity_lock.entities.get(&entity_id) {
+                        let id = entity_id.entity_id;
+                        let tei = entity_id.trailing_entity_index;
+                        if let Some(entity) = entity_lock.entities.get(&entity_id.entity_id) {
                             let start_tick = state.timekeeper.now();
                             let debug_speed = entity.debug_speed(start_tick);
                             let estimated_buffer = entity.estimated_buffer(start_tick).max(0.0);
@@ -892,7 +894,7 @@ impl EguiUi {
                             let cme = entity.debug_cme(start_tick);
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Attached entity: {entity_id}, speed: {debug_speed:.2}, \
+                                    "Attached entity: {id}:{tei}, speed: {debug_speed:.2}, \
                                 estimated buffer: {estimated_buffer:.2}, \
                                 estimated buffer count: {estimated_buffer_count}, \
                                 current move sequence: {cms}, current move elapsed: {cme:.2}"
@@ -910,7 +912,7 @@ impl EguiUi {
                             }
                         } else {
                             ui.label(
-                                egui::RichText::new(format!("Attached entity: {entity_id}"))
+                                egui::RichText::new(format!("Attached entity: {id}:{tei}"))
                                     .font(egui::FontId::monospace(16.0))
                                     .color(Color32::DARK_GRAY),
                             );

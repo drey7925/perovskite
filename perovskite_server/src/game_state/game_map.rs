@@ -1213,7 +1213,14 @@ impl ServerGameMap {
     /// None, or to an extended data object that the new block type can handle.
     /// * If the mutator returns a non-Ok status, any changes it made will still be applied.
     ///
-    /// It is not safe to call other GameMap functions (e.g. get/set blocks) from the handler - they may deadlock.
+    /// It is not safe to call other GameMap functions (e.g. get/set blocks) from the handler, nor
+    /// inventory functions associated with the inventory manager - they may deadlock. However,
+    /// accessing the inventories in the extended data passed into your callback *is* safe.
+    ///
+    /// tl;dr your mutator isn't given a HandlerContext, nor a GameState; don't sneak one in.
+    ///
+    /// TODO: See https://play.rust-lang.org/?version=nightly&mode=debug&edition=2024&gist=d1809ad103fe25aa3d7e9e8284a71fac
+    /// Once auto traits and negative impls are stabilized, add a bound using this technique.
     ///
     /// Warning: If the mutator panics, the extended data may be lost.
     pub fn mutate_block_atomically<F, T>(&self, coord: BlockCoordinate, mutator: F) -> Result<T>
@@ -1613,12 +1620,12 @@ impl ServerGameMap {
                 holder.last_accessed.update_now_relaxed();
             }
         }
-        return Some(MapChunkOuterGuard {
+        Some(MapChunkOuterGuard {
             read_guard: guard,
             coord,
             writeback_permit: permit,
             force_writeback: false,
-        });
+        })
     }
 
     fn get_writeback_permit(&self, shard: usize) -> Result<mpsc::Permit<'_, WritebackReq>> {
@@ -3168,7 +3175,6 @@ pub mod fuzz {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use log::Level::Debug;
 
     const ZERO_COORD: BlockCoordinate = BlockCoordinate::new(0, 0, 0);
 

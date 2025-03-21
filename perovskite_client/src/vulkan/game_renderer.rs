@@ -133,29 +133,34 @@ impl ActiveGame {
 
         {
             let mut entity_lock = self.client_state.entities.lock();
-            if let Some(entity_id) = entity_lock.attached_to_entity {
-                if let Some(entity) = entity_lock.entities.get(&entity_id) {
-                    player_position =
-                        entity.attach_position(start_tick, &self.client_state.entity_renderer);
-                    let debug_speed = entity.debug_speed(start_tick);
-                    self.client_state
-                        .physics_state
-                        .lock()
-                        .set_position(player_position);
+            if let Some(entity_target) = entity_lock.attached_to_entity {
+                if let Some(entity) = entity_lock.entities.get(&entity_target.entity_id) {
+                    if let Some(position) = entity.attach_position(
+                        start_tick,
+                        &self.client_state.entity_renderer,
+                        entity_target.trailing_entity_index,
+                    ) {
+                        player_position = position;
+                        let debug_speed = entity.debug_speed(start_tick);
+                        self.client_state
+                            .physics_state
+                            .lock()
+                            .set_position(player_position);
 
-                    plot!(
-                        "entity_buffer",
-                        entity.estimated_buffer(start_tick).max(0.0) as f64
-                    );
-                    plot!(
-                        "entity_buffer_count",
-                        entity.estimated_buffer_count() as f64
-                    );
-                    // Most test tracks run in the Z direction, so this is an easy metric to debug with.
-                    plot!("entity_z_coord", player_position.z);
-                    plot!("entity_cms", entity.debug_cms() as f64);
-                    plot!("entity_cme", entity.debug_cme(start_tick) as f64);
-                    plot!("entity_speed", debug_speed as f64);
+                        plot!(
+                            "entity_buffer",
+                            entity.estimated_buffer(start_tick).max(0.0) as f64
+                        );
+                        plot!(
+                            "entity_buffer_count",
+                            entity.estimated_buffer_count() as f64
+                        );
+                        // Most test tracks run in the Z direction, so this is an easy metric to debug with.
+                        plot!("entity_z_coord", player_position.z);
+                        plot!("entity_cms", entity.debug_cms() as f64);
+                        plot!("entity_cme", entity.debug_cme(start_tick) as f64);
+                        plot!("entity_speed", debug_speed as f64);
+                    }
                 }
             }
         }

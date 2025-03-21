@@ -25,7 +25,7 @@ use std::time::Instant;
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::entities::Movement;
-use crate::game_state::entities::{IterEntity, PlayerActionDetails, PlayerEntityAction};
+use crate::game_state::entities::{IterEntity, PlayerEntityAction};
 use crate::game_state::event::run_traced;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
@@ -60,6 +60,7 @@ use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
 use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
+use either::Either;
 use itertools::iproduct;
 use log::error;
 use log::info;
@@ -1040,7 +1041,7 @@ fn make_client_state_update_message(
                     .iter()
                     .cloned()
                     .collect(),
-                attached_to_entity: player_state.attached_to_entity.unwrap_or(0),
+                attached_to_entity: player_state.attached_to_entity,
             })),
         }
     };
@@ -1339,7 +1340,7 @@ impl InboundWorker {
                             tap_message.item_slot,
                             |item| {
                                 item.and_then(|x| x.dig_entity_handler.as_deref())
-                                    .unwrap_or(&items::default_entity_dig_handler)
+                                    .unwrap_or(&items::default_entity_tap_handler)
                             },
                             position,
                         )
@@ -1456,7 +1457,7 @@ impl InboundWorker {
                 });
 
                 let item_handler =
-                    get_item_handler(game_state.item_manager().from_stack(stack.as_ref()));
+                    get_item_handler(game_state.item_manager().get_stack_item(stack.as_ref()));
 
                 let result = {
                     let ctx = HandlerContext {
@@ -1658,8 +1659,11 @@ impl InboundWorker {
                                     .context
                                     .game_state
                                     .item_manager()
-                                    .from_stack(stack.as_ref())
+                                    .get_stack_item(stack.as_ref())
                                     .and_then(|x| x.place_on_block_handler.as_deref());
+                                // TODO: check if block has a place-upon handler and invoke it here
+                                // Consider including a locked, mutate_block_atomically-eligible
+                                // place-upon handler
                                 if let Some(handler) = handler {
                                     let ctx = HandlerContext {
                                         tick: self.context.game_state.tick(),
@@ -1684,13 +1688,6 @@ impl InboundWorker {
                                         &initiator,
                                     )?;
                                     *stack = new_stack;
-                                } else {
-                                    // TODO: consider running a block-specific place handler, for
-                                    // blocks that intend to have stuff placed into them (e.g.
-                                    // hoppers/item intakes)?
-                                    //
-                                    // Requires more thought - typically we'd want this to be higher
-                                    // precedence since it's a special case???
                                 }
                             }
                             ToolTarget::Entity(target) => {
@@ -1698,7 +1695,7 @@ impl InboundWorker {
                                     .context
                                     .game_state
                                     .item_manager()
-                                    .from_stack(stack.as_ref())
+                                    .get_stack_item(stack.as_ref())
                                     .and_then(|x| x.place_on_entity_handler.as_deref());
                                 if let Some(handler) = handler {
                                     let ctx = HandlerContext {
@@ -1970,29 +1967,31 @@ impl InboundWorker {
         &mut self,
         interact_message: &proto::InteractKeyAction,
     ) -> Result<Vec<StreamToClient>> {
-        match interact_message
+        let initiator = EventInitiator::Player(PlayerInitiator {
+            player: &self.context.player_context,
+            weak: Arc::downgrade(&self.context.player_context.player),
+            position: interact_message
+                .position
+                .as_ref()
+                .context("Missing position")?
+                .try_into()?,
+        });
+        let ctx = HandlerContext {
+            tick: self.context.game_state.tick(),
+            initiator: initiator.clone(),
+            game_state: self.context.game_state.clone(),
+        };
+        let handler = match interact_message
             .interaction_target
             .as_ref()
             .context("missing target")?
         {
+            // Interact keys always bypass player inventory and fire on the target regardless of the
+            // held tool
             InteractionTarget::BlockCoord(coord) => {
                 let coord = coord.into();
-                let initiator = EventInitiator::Player(PlayerInitiator {
-                    player: &self.context.player_context,
-                    weak: Arc::downgrade(&self.context.player_context.player),
-                    position: interact_message
-                        .position
-                        .as_ref()
-                        .context("Missing position")?
-                        .try_into()?,
-                });
-                let ctx = HandlerContext {
-                    tick: self.context.game_state.tick(),
-                    initiator: initiator.clone(),
-                    game_state: self.context.game_state.clone(),
-                };
+
                 let block = self.context.game_state.game_map().get_block(coord)?;
-                let mut messages = vec![];
                 if let Some(handler) = &self
                     .context
                     .game_state
@@ -2003,59 +2002,72 @@ impl InboundWorker {
                     .0
                     .interact_key_handler
                 {
-                    if let Some(popup) =
-                        run_handler!(|| (handler)(ctx, coord), "interact_key", &initiator,)?
-                    {
-                        messages.push(StreamToClient {
-                            tick: self.context.game_state.tick(),
-                            server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
-                        });
-                        for view in popup.inventory_views().values() {
-                            messages.push(make_inventory_update(
-                                &self.context.game_state,
-                                &InventoryViewWithContext {
-                                    view,
-                                    context: &popup,
-                                },
-                            )?)
-                        }
-                        self.context
-                            .player_context
-                            .player
-                            .state
-                            .lock()
-                            .active_popups
-                            .push(popup);
-                    }
+                    Some(Either::Left(move || (handler)(ctx, coord)))
+                } else {
+                    None
                 }
-                Ok(messages)
             }
-            InteractionTarget::EntityTarget(entity_target) => {
-                let position = interact_message
-                    .position
-                    .as_ref()
-                    .context("Missing player position")?
-                    .try_into()?;
-                self.context.game_state.entities().player_action_blocking(
-                    entity_target.entity_id,
-                    entity_target.trailing_entity_index,
-                    PlayerActionDetails {
-                        action: PlayerEntityAction::Dig,
-                        // TODO: Do we use the client tick at all?
-                        // Or is it only for latency/jitter estimation but otherwise
-                        // untrusted?
-                        tick: self.context.game_state.tick(),
-                        initiator: EventInitiator::WeakPlayerRef(WeakPlayerRef {
-                            player: Arc::downgrade(&self.context.player_context.player),
-                            name: self.context.player_context.name.clone(),
-                            position,
-                        }),
-                        item_slot: interact_message.item_slot,
+            InteractionTarget::EntityTarget(target) => {
+                let mut class = None;
+                let tei = target.trailing_entity_index as usize;
+                self.context.game_state.entities().visit_entity_by_id(
+                    target.entity_id,
+                    |entity| {
+                        if tei == 0 {
+                            class = Some(entity.class)
+                        } else {
+                            class = entity
+                                .trailing_entities
+                                .and_then(|x| x.get(tei - 1))
+                                .map(|x| x.class_id);
+                        }
+                        Ok(())
                     },
-                );
-                Ok(vec![])
+                )?;
+                let class = class.context("Entity not found")?;
+                let class_def = self
+                    .context
+                    .game_state
+                    .entities()
+                    .types()
+                    .get_type(class)
+                    .with_context(|| format!("Class {} not found", class))?;
+                Some(Either::Right(move || {
+                    class_def.handlers.on_interact_key(&ctx, *target)
+                }))
             }
+        };
+        let handler = match handler {
+            None => return Ok(vec![]),
+            Some(x) => x,
+        };
+        let mut messages = vec![];
+        if let Some(popup) =
+            either::for_both!(handler, h => run_handler!(h, "interact_key", &initiator))?
+        {
+            for view in popup.inventory_views().values() {
+                messages.push(make_inventory_update(
+                    &self.context.game_state,
+                    &InventoryViewWithContext {
+                        view,
+                        context: &popup,
+                    },
+                )?)
+            }
+            messages.push(StreamToClient {
+                tick: self.context.game_state.tick(),
+                server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
+            });
+            self.context
+                .player_context
+                .player
+                .state
+                .lock()
+                .active_popups
+                .push(popup);
         }
+
+        Ok(messages)
     }
 }
 impl Drop for InboundWorker {

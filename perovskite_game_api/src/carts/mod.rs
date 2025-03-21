@@ -4,10 +4,18 @@ use std::{
 };
 
 // This is a temporary implementation used while developing the entity system
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
+use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
+use crate::default_game::block_groups::BRITTLE;
+use crate::{
+    blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
+    game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
+    include_texture_bytes,
+};
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
+use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
@@ -17,8 +25,11 @@ use perovskite_core::{
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
     util::{TraceBuffer, TraceLog},
 };
-use perovskite_server::game_state::entities::{EntityMoveDecision, TrailingEntity};
-use perovskite_server::game_state::items::Item;
+use perovskite_server::game_state::client_ui::Popup;
+use perovskite_server::game_state::entities::{EntityHandlers, EntityMoveDecision, TrailingEntity};
+use perovskite_server::game_state::event::EventInitiator;
+use perovskite_server::game_state::items::{Item, ItemInteractionResult};
+use perovskite_server::game_state::player::Player;
 use perovskite_server::game_state::{
     self,
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
@@ -32,14 +43,6 @@ use perovskite_server::game_state::{
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
-
-use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
-use crate::default_game::block_groups::BRITTLE;
-use crate::{
-    blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
-    game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
-    include_texture_bytes,
-};
 
 mod interlocking;
 mod signals;
@@ -126,6 +129,48 @@ lazy_static::lazy_static! {
     static ref CART_MESH: CustomMesh = {
         perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, "carts:minecart_uv").unwrap()
     };
+}
+
+struct CartHandlers;
+
+impl EntityHandlers for CartHandlers {
+    fn on_interact_key(&self, ctx: &HandlerContext, target: EntityTarget) -> Result<Option<Popup>> {
+        let work = |p: &Player| -> Result<()> {
+            // Race condition but oh well
+            let old_attachment = p.detach_from_entity_blocking()?;
+            if old_attachment != Some(target) {
+                p.attach_to_entity_blocking(target)?
+            }
+            Ok(())
+        };
+        match &ctx.initiator() {
+            EventInitiator::Player(p) => {
+                work(p.player)?;
+            }
+            EventInitiator::WeakPlayerRef(p) => {
+                p.try_to_run(work).context("WeakPlayerRef gone")??;
+            }
+            _ => bail!("Only players can interact board minecarts"),
+        }
+        Ok(None)
+    }
+
+    fn on_dig(
+        &self,
+        ctx: &HandlerContext,
+        target: EntityTarget,
+        tool: Option<&ItemStack>,
+    ) -> Result<ItemInteractionResult> {
+        ctx.entities().remove_blocking(target.entity_id);
+        Ok(ItemInteractionResult {
+            updated_tool: tool.cloned(),
+            obtained_items: vec![ctx
+                .item_manager()
+                .get_item("carts:minecart")
+                .context("missing item")?
+                .make_stack(1)],
+        })
+    }
 }
 
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
@@ -226,6 +271,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             tool_interaction_groups: vec![BRITTLE.to_string()],
             base_dig_time: 1.0,
         },
+        handlers: Box::new(CartHandlers),
     })?;
 
     let (automatic_signal, interlocking_signal, starting_signal) =
@@ -259,7 +305,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 place_cart(ctx, anchor, stack, ext_clone.clone())
             })),
             ..Item::default_with_proto(protocol::items::ItemDef {
-                short_name: "carts:cart_temp".to_string(),
+                short_name: "carts:minecart".to_string(),
                 display_name: "High-speed minecart".to_string(),
                 inventory_texture: Some(cart_tex.into()),
                 groups: vec![],
@@ -397,10 +443,10 @@ fn actually_spawn_cart(
     static ID_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     let mut trailing_entities = Vec::new();
-    for i in 0..cart_length - 1 {
+    for i in 1..cart_length {
         trailing_entities.push(TrailingEntity {
             class_id: config.cart_id.as_u32(),
-            trailing_distance: i as f32 + 1.0,
+            trailing_distance: i as f32,
         });
     }
 
@@ -438,12 +484,16 @@ fn actually_spawn_cart(
     )?;
 
     if board_cart {
+        let attach_target = EntityTarget {
+            entity_id: id,
+            trailing_entity_index: 0,
+        };
         match ctx.initiator() {
             game_state::event::EventInitiator::Player(p) => {
-                p.player.attach_to_entity_blocking(id)?
+                p.player.attach_to_entity_blocking(attach_target)?
             }
             game_state::event::EventInitiator::WeakPlayerRef(wp) => {
-                match wp.try_to_run(|p| p.attach_to_entity_blocking(id)) {
+                match wp.try_to_run(|p| p.attach_to_entity_blocking(attach_target)) {
                     Some(_) => {}
                     None => {
                         tracing::warn!("Weak player ref tried to board entity but failed");

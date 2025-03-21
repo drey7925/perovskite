@@ -3,6 +3,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use cgmath::Vector3;
+use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
     constants::permissions,
@@ -486,11 +487,28 @@ impl ChatCommandHandler for AttachEntityCommand {
     async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
         if let EventInitiator::Player(p) = context.initiator() {
             let parts = message.split(' ').collect::<Vec<_>>();
-            if parts.len() != 2 {
-                bail!("Incorrect usage: should be /attach entity_id");
-            }
-            let entity_id = parts[1].parse::<u64>()?;
-            p.player.attach_to_entity(entity_id).await?;
+
+            let (entity_id, trailing_entity_index) = match parts.len() {
+                2 => {
+                    let entity_id = parts[1].parse::<u64>()?;
+                    (entity_id, 0)
+                }
+                3 => {
+                    let entity_id = parts[1].parse::<u64>()?;
+                    let trailing_entity_id = parts[2].parse::<u32>()?;
+                    (entity_id, trailing_entity_id)
+                }
+                _ => {
+                    bail!("Incorrect usage: should be /attach entity_id [trailing_entity_id]");
+                }
+            };
+
+            p.player
+                .attach_to_entity(EntityTarget {
+                    entity_id,
+                    trailing_entity_index,
+                })
+                .await?;
             Ok(())
         } else {
             bail!("Only players can attach entities");

@@ -14,6 +14,7 @@ use crate::vulkan::{
     shaders::entity_geometry::EntityGeometryDrawCall,
 };
 use perovskite_core::protocol::entities as entities_proto;
+use perovskite_core::protocol::game_rpc::EntityTarget;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct EntityMove {
@@ -198,23 +199,14 @@ impl GameEntity {
 }
 
 impl GameEntity {
-    pub(crate) fn transforms_with_trailing_entities<const INVERSE: bool>(
+    pub(crate) fn visit_trailing_entities<T>(
         &self,
-        base_position: Vector3<f64>,
         tick: u64,
-    ) -> Vec<(Matrix4<f32>, u32)> {
+        builder: impl Fn(Vector3<f64>, Rad<f32>, Rad<f32>) -> T,
+    ) -> Vec<(T, u32)> {
         // This would be really nice as a generator expression...
         let mut result = vec![];
-        result.push((
-            self.as_transform::<INVERSE>(base_position, tick),
-            self.class,
-        ));
-
-        let transform_builder = if INVERSE {
-            build_inverse_transform
-        } else {
-            build_transform
-        };
+        result.push((self.as_transform(tick, &builder), self.class));
 
         // fast path
         if self.trailing_entities.is_empty() {
@@ -230,14 +222,13 @@ impl GameEntity {
                         let move_progress_distance = (cm_distance - bb_distance) as f64;
                         let position = current_move.position_along_length(move_progress_distance);
                         result.push((
-                            transform_builder(
-                                base_position,
+                            (&builder)(
                                 position,
                                 Rad(current_move.face_direction),
                                 Rad(current_move.pitch),
                             ),
                             class,
-                        ))
+                        ));
                     } else {
                         break;
                     }
@@ -266,12 +257,7 @@ impl GameEntity {
                     let move_progress_distance = (acc_distance - bb_distance) as f64;
                     let position = m.position_along_length(move_progress_distance);
                     result.push((
-                        transform_builder(
-                            base_position,
-                            position,
-                            Rad(m.face_direction),
-                            Rad(m.pitch),
-                        ),
+                        builder(position, Rad(m.face_direction), Rad(m.pitch)),
                         class,
                     ))
                 }
@@ -403,17 +389,13 @@ impl GameEntity {
         Ok(())
     }
 
-    pub(crate) fn as_transform<const INVERSE: bool>(
+    pub(crate) fn as_transform<T>(
         &self,
-        base_position: Vector3<f64>,
         time_tick: u64,
-    ) -> Matrix4<f32> {
+        builder: impl FnOnce(Vector3<f64>, Rad<f32>, Rad<f32>) -> T,
+    ) -> T {
         let (pos, face_dir, pitch) = self.position(time_tick);
-        if INVERSE {
-            build_inverse_transform(base_position, pos, face_dir, pitch)
-        } else {
-            build_transform(base_position, pos, face_dir, pitch)
-        }
+        builder(pos, face_dir, pitch)
     }
 
     pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>, Rad<f32>) {
@@ -449,9 +431,23 @@ impl GameEntity {
         &self,
         time_tick: u64,
         entity_manager: &EntityRenderer,
-    ) -> Vector3<f64> {
-        let (position, face_dir, pitch) = self.position(time_tick);
-        entity_manager.transform_position(self.class, position, face_dir, pitch)
+        trailing_entity_index: u32,
+    ) -> Option<Vector3<f64>> {
+        if trailing_entity_index == 0 {
+            let (position, face_dir, pitch) = self.position(time_tick);
+            Some(entity_manager.transform_position(self.class, position, face_dir, pitch))
+        } else {
+            let (trailing_pos, class) = self
+                .visit_trailing_entities(time_tick, |pos, face, pitch| (pos, face, pitch))
+                .get(trailing_entity_index as usize)
+                .copied()?;
+            Some(entity_manager.transform_position(
+                class,
+                trailing_pos.0,
+                trailing_pos.1,
+                trailing_pos.2,
+            ))
+        }
     }
 
     pub(crate) fn debug_speed(&self, time_tick: u64) -> f32 {
@@ -580,7 +576,7 @@ pub(crate) struct EntityState {
 
     pub(crate) fallback_entity: VkCgvBufferGpu,
 
-    pub(crate) attached_to_entity: Option<u64>,
+    pub(crate) attached_to_entity: Option<EntityTarget>,
 }
 impl EntityState {
     // TODO - this should not use the block renderer once we're properly using meshes from the server.
@@ -618,18 +614,11 @@ impl EntityState {
         player_position: Vector3<f64>,
     ) {
         for entity in self.entities.values_mut() {
-            let volume = if self.attached_to_entity == Some(entity.id) {
-                0.25
-            } else {
-                1.0
-            };
-            entity.advance_state(
-                tick_now,
-                audio_handle,
-                volume,
-                player_position,
-                Some(entity.id) == self.attached_to_entity,
-            );
+            let is_attached = self
+                .attached_to_entity
+                .is_some_and(|x| x.entity_id == entity.id);
+            let volume = if is_attached { 0.25 } else { 1.0 };
+            entity.advance_state(tick_now, audio_handle, volume, player_position, is_attached);
         }
     }
 
@@ -686,7 +675,9 @@ impl EntityState {
         entity: &GameEntity,
     ) -> impl Iterator<Item = (Matrix4<f32>, u32)> {
         entity
-            .transforms_with_trailing_entities::<false>(player_position, time_tick)
+            .visit_trailing_entities(time_tick, |pos, face, pitch| {
+                build_transform(player_position, pos, face, pitch)
+            })
             .into_iter()
     }
 
@@ -698,9 +689,7 @@ impl EntityState {
         entity_renderer: &EntityRenderer,
         max_distance: f32,
     ) -> Option<(u64, u32, u32, f32)> {
-        // Convert position and pointing vector to homogeneous coordinates
-        let player_pos4 =
-            Vector4::new(player_position.x, player_position.y, player_position.z, 1.0);
+        // Convert pointing vector to homogeneous coordinates
         let pointing_vector = pointing_vector.normalize().cast().unwrap();
         let pointing_vector =
             Vector4::new(pointing_vector.x, pointing_vector.y, pointing_vector.z, 1.0);
@@ -709,7 +698,9 @@ impl EntityState {
         let mut best_dist = max_distance;
         for (&id, entity) in &self.entities {
             for (trailing_index, (inverse_matrix, class)) in entity
-                .transforms_with_trailing_entities::<true>(player_position, time_tick)
+                .visit_trailing_entities(time_tick, |pos, face, pitch| {
+                    build_inverse_transform(player_position, pos, face, pitch)
+                })
                 .into_iter()
                 .enumerate()
             {

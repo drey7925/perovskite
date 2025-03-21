@@ -30,16 +30,16 @@ use perovskite_core::{
     protocol::{game_rpc::InventoryAction, players::StoredPlayer},
 };
 
-use log::warn;
-use parking_lot::{Mutex, MutexGuard, RwLock};
-use prost::Message;
-use tokio::{select, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
-
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,
 };
+use log::warn;
+use parking_lot::{Mutex, MutexGuard, RwLock};
+use perovskite_core::protocol::game_rpc::EntityTarget;
+use prost::Message;
+use tokio::{select, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 
 use super::{
     client_ui::Popup,
@@ -203,7 +203,7 @@ impl Player {
             position,
             None,
             EntityTypeId {
-                class: (game_state.game_behaviors.player_entity_class)(name),
+                class: (game_state.game_behaviors().player_entity_class)(name),
                 data: Some(name.as_bytes().into()),
             },
             None,
@@ -388,21 +388,21 @@ impl Player {
         tokio::runtime::Handle::current().block_on(self.set_position(position))
     }
 
-    pub async fn attach_to_entity(&self, entity_id: u64) -> Result<()> {
-        self.state.lock().attached_to_entity = Some(entity_id);
+    pub async fn attach_to_entity(&self, entity_target: EntityTarget) -> Result<()> {
+        self.state.lock().attached_to_entity = Some(entity_target);
         self.sender.reinit_player_state.send(true).await?;
         Ok(())
     }
 
-    pub fn attach_to_entity_blocking(&self, entity_id: u64) -> Result<()> {
-        tokio::runtime::Handle::current().block_on(self.attach_to_entity(entity_id))
+    pub fn attach_to_entity_blocking(&self, entity_target: EntityTarget) -> Result<()> {
+        tokio::runtime::Handle::current().block_on(self.attach_to_entity(entity_target))
     }
-    pub async fn detach_from_entity(&self) -> Result<()> {
-        self.state.lock().attached_to_entity = None;
+    pub async fn detach_from_entity(&self) -> Result<Option<EntityTarget>> {
+        let old_attachment = std::mem::replace(&mut self.state.lock().attached_to_entity, None);
         self.sender.reinit_player_state.send(true).await?;
-        Ok(())
+        Ok(old_attachment)
     }
-    pub fn detach_from_entity_blocking(&self) -> Result<()> {
+    pub fn detach_from_entity_blocking(&self) -> Result<Option<EntityTarget>> {
         tokio::runtime::Handle::current().block_on(self.detach_from_entity())
     }
 
@@ -438,7 +438,7 @@ pub(crate) struct PlayerState {
     /// They are sent to the client, but they are not stored in the database.
     pub(crate) temporary_permissions: HashSet<String>,
     /// The player's attached entity, if any
-    pub(crate) attached_to_entity: Option<u64>,
+    pub(crate) attached_to_entity: Option<EntityTarget>,
 }
 impl PlayerState {
     pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {

@@ -33,6 +33,7 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use prost::Message;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::broadcast;
+use tokio::task::LocalKey;
 use tracing::trace;
 use tracy_client::span;
 
@@ -213,6 +214,11 @@ pub struct InventoryManager {
     locked: Mutex<FxHashSet<InventoryKey>>,
     unlock_condvar: Condvar,
 }
+
+tokio::task_local! {
+    static DEADLOCK_DETECTOR: ();
+}
+
 impl InventoryManager {
     fn lock(&self, key: InventoryKey) -> InventoryLockGuard {
         let _span = span!("Inventory lock");
@@ -236,7 +242,13 @@ impl InventoryManager {
         Ok(inventory.key.unwrap())
     }
     /// Get a readonly copy of an inventory.
+    ///
+    /// Deadlock warning: Attempting to get the player inventory while in an item handler will cause
+    /// a deadlock. As a workaround, spawn a deferred task that can wait for the item handler to
+    /// finish, or file a feature request detailing your use-case.
+    #[track_caller]
     pub fn get(&self, key: &InventoryKey) -> Result<Option<Inventory>> {
+        Self::assert_no_reentrant_calls();
         let guard = self.lock(*key);
         guard.get()
     }
@@ -244,16 +256,38 @@ impl InventoryManager {
     /// Run the given mutator on the indicated inventory.
     /// The function may mutate the data, or leave it as-is, and it may return a value
     /// to the caller through its own return value.
+    ///
+    /// Deadlock warning: Attempting to access the player inventory while in an item handler will
+    /// cause a deadlock. As a workaround, spawn a deferred task that can wait for the item handler
+    /// ti finish, or file a feature request detailing your use-case.
+    ///
+    /// Deadlock warning: the mutator should not attempt to access inventories; if you need
+    /// multiple inventories, use [mutate_inventories_atomically] to acquire locks in the right
+    /// order
+    #[track_caller]
     pub fn mutate_inventory_atomically<F, T>(&self, key: &InventoryKey, mutator: F) -> Result<T>
     where
         F: FnOnce(&mut Inventory) -> Result<T>,
     {
         let lock = self.lock(*key);
         let mut inv = lock.get()?.context("Inventory ID not found")?;
-        let result = mutator(&mut inv);
+
+        Self::assert_no_reentrant_calls();
+
+        let result = DEADLOCK_DETECTOR.sync_scope((), || mutator(&mut inv));
         lock.put(inv)?;
         self.broadcast_update(*key);
         result
+    }
+
+    #[track_caller]
+    fn assert_no_reentrant_calls() {
+        match DEADLOCK_DETECTOR.try_with(|_| {}) {
+            Ok(_) => {
+                panic!("Recursive call detected in InventoryManager. Do not call inventory manager functions from item handlers or mutate_{{inventory, inventories}}_atomically");
+            }
+            Err(_access_error) => { /* ok */ }
+        }
     }
 
     /// Run the given mutator on the indicated vec of inventories.
@@ -264,6 +298,7 @@ impl InventoryManager {
     /// are forbidden.
     ///
     /// See mutate_inventory_atomically for warnings regarding deadlock safety
+    #[track_caller]
     pub fn mutate_inventories_atomically<F, T>(
         &self,
         keys: &[InventoryKey],
@@ -272,6 +307,7 @@ impl InventoryManager {
     where
         F: FnOnce(&mut [Option<Inventory>]) -> Result<T>,
     {
+        Self::assert_no_reentrant_calls();
         // Deadlock safety: This needs to acquire keys in a sorted order,
         // and must not contain duplicate keys.
         let mut locks = FxHashMap::default();
@@ -289,7 +325,7 @@ impl InventoryManager {
             .map(|key| locks.get(key).unwrap().get())
             .collect::<Result<Vec<_>>>()?;
 
-        let result = mutator(&mut inventories);
+        let result = DEADLOCK_DETECTOR.sync_scope((), || mutator(&mut inventories));
         for (key, new_inventory) in keys.iter().zip(inventories.into_iter()) {
             match new_inventory {
                 Some(new_inventory) => locks.get_mut(key).unwrap().put(new_inventory)?,

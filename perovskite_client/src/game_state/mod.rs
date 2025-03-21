@@ -755,16 +755,24 @@ impl ClientState {
             *lock = tick;
             delta
         };
-
+        let mut is_attached = false;
         let (mut player_position, player_velocity, (az, el)) = self
             .physics_state
             .lock()
             .update_and_get(self, aspect_ratio, Duration::from_nanos(delta), tick);
         {
             let mut entity_lock = self.entities.lock();
-            if let Some(entity_id) = entity_lock.attached_to_entity {
-                if let Some(entity) = entity_lock.entities.get(&entity_id) {
-                    player_position = entity.attach_position(tick, &self.entity_renderer);
+            if let Some(entity_target) = entity_lock.attached_to_entity {
+                if let Some(entity) = entity_lock.entities.get(&entity_target.entity_id) {
+                    is_attached = true;
+                    // We may not have a position if it's a trailing entity beyond the backbuffer
+                    if let Some(position) = entity.attach_position(
+                        tick,
+                        &self.entity_renderer,
+                        entity_target.trailing_entity_index,
+                    ) {
+                        player_position = position;
+                    }
                 }
             }
         }
@@ -778,7 +786,7 @@ impl ClientState {
             player_position,
             player_velocity.cast().unwrap(),
             az * PI / 180.,
-            self.entities.lock().attached_to_entity.is_some(),
+            is_attached,
         );
 
         let rotation = cgmath::Matrix4::from_angle_x(Deg(el))
@@ -871,10 +879,7 @@ impl ClientState {
 
         {
             let mut entities_lock = self.entities.lock();
-            entities_lock.attached_to_entity = match state_update.attached_to_entity {
-                0 => None,
-                id => Some(id),
-            }
+            entities_lock.attached_to_entity = state_update.attached_to_entity;
         }
         Ok(())
     }

@@ -1,6 +1,21 @@
-use anyhow::{ensure, Context, Error, Result};
-use cgmath::{vec3, Vector3, Zero};
+use anyhow::{bail, ensure, Context, Error, Result};
+use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use circular_buffer::CircularBuffer;
+use futures::Future;
+use lazy_static::lazy_static;
+use parking_lot::{Mutex, RwLock};
+use perovskite_core::{
+    block_id::BlockId,
+    constants::textures::FALLBACK_UNKNOWN_TEXTURE,
+    coordinates::BlockCoordinate,
+    protocol::{
+        self,
+        entities::{EntityAppearance, EntityTypeAssignment, ServerEntityTypeAssignments},
+    },
+    util::{TraceBuffer, TraceLog},
+};
+use prost::Message;
+use std::collections::VecDeque;
 use std::io::Read;
 use std::ops::DerefMut;
 /// This implementation is EXTREMELY unstable while it is under active development.
@@ -19,33 +34,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::Future;
-use lazy_static::lazy_static;
-use parking_lot::{Mutex, RwLock};
-use perovskite_core::{
-    block_id::BlockId,
-    constants::textures::FALLBACK_UNKNOWN_TEXTURE,
-    coordinates::BlockCoordinate,
-    protocol::{
-        self,
-        entities::{EntityAppearance, EntityTypeAssignment, ServerEntityTypeAssignments},
-    },
-    util::{TraceBuffer, TraceLog},
-};
-use prost::Message;
-
-use rustc_hash::FxHashMap;
-use thiserror::Error;
-use tokio_util::sync::CancellationToken;
-use tracy_client::span;
-
+use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
+use crate::game_state::blocks::BlockInteractionResult;
+use crate::game_state::client_ui::Popup;
 use crate::game_state::event::EventInitiator;
+use crate::game_state::items::{ItemInteractionResult, ItemStack};
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     formats, run_handler, CachelineAligned,
 };
-
-use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
+use perovskite_core::protocol::game_rpc::EntityTarget;
+use rustc_hash::FxHashMap;
+use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+use tracy_client::span;
 
 /// This entity is present and valid
 const CONTROL_PRESENT: u8 = 1;
@@ -123,11 +125,36 @@ pub struct EntityManager {
 ///
 /// Guarantees: entity IDs are nonzero
 impl EntityManager {
-    pub(crate) fn predictive_position(&self, entity_id: u64, tick: u64) -> Option<Vector3<f64>> {
+    pub(crate) fn predictive_position(
+        &self,
+        entity: EntityTarget,
+        tick: u64,
+    ) -> Option<Vector3<f64>> {
+        let entity_id = entity.entity_id;
+        let trailing_entity_index = entity.trailing_entity_index;
+        // TODO: support trailing entities properly. Currently, this is a bit of a hack by misusing
+        // speed.
         let shard = self.get_shard(entity_id);
         let core = shard.core.read();
         let index = core.id_lookup.get(&entity_id).copied()?;
 
+        let trailing_entity_distance = core.trailing_entities[index]
+            .as_ref()
+            .map(|trailing| {
+                trailing
+                    .get(trailing_entity_index as usize)
+                    .map(|x| x.trailing_distance)
+            })
+            .flatten()
+            .unwrap_or(0.0);
+
+        let fudge_factor_secs = trailing_entity_distance
+            / (vec3(core.xv[index], core.yv[index], core.zv[index])
+                .magnitude()
+                .max(1.0));
+        let fudge_factor_ticks = (fudge_factor_secs * 1_000_000_000.0) as u64;
+        // The trailing entity is now at the same place where the leading entity was before
+        let tick = tick.saturating_sub(fudge_factor_ticks);
         let elapsed_ticks = tick.saturating_sub(core.move_start_tick[index]);
         let elapsed = elapsed_ticks as f32 / 1_000_000_000.0;
         if elapsed < core.move_time[index] {
@@ -158,6 +185,9 @@ impl EntityManager {
                 core.move_time[index],
             ),
         );
+        // TODO: we need to backtrack through these if we have a trailing entity; however it's
+        // a bit awkward as we have to first do a forward pass using move time and then a backward
+        // pass using distance
         for movement in core.move_queue[index].as_slice() {
             let m = &movement.movement;
             if remaining < m.move_time {
@@ -277,35 +307,6 @@ impl EntityManager {
             .unwrap();
         id
     }
-
-    pub(crate) async fn player_action(
-        &self,
-        entity_id: u64,
-        trailing_index: u32,
-        action: PlayerActionDetails,
-    ) {
-        let shard = self.get_shard(entity_id);
-        shard
-            .pending_actions_tx
-            .send(EntityAction::PlayerAction(action))
-            .await
-            .context("Entity receiver disappeared")
-            .unwrap();
-    }
-    pub(crate) fn player_action_blocking(
-        &self,
-        entity_id: u64,
-        trailing_index: u32,
-        action: PlayerActionDetails,
-    ) {
-        let shard = self.get_shard(entity_id);
-        shard
-            .pending_actions_tx
-            .blocking_send(EntityAction::PlayerAction(action))
-            .context("Entity receiver disappeared")
-            .unwrap();
-    }
-
     pub(crate) fn shards(&self) -> &[CachelineAligned<EntityShard>] {
         &self.shards
     }
@@ -319,7 +320,7 @@ impl EntityManager {
             .context("Entity receiver disappeared")
             .unwrap();
     }
-    pub async fn remove_blocking(&self, entity_id: u64) {
+    pub fn remove_blocking(&self, entity_id: u64) {
         let shard = self.get_shard(entity_id);
         shard
             .pending_actions_tx
@@ -344,7 +345,7 @@ impl EntityManager {
             .unwrap();
     }
 
-    pub async fn set_kinematics_blocking(
+    pub fn set_kinematics_blocking(
         &self,
         id: u64,
         position: Vector3<f64>,
@@ -368,6 +369,15 @@ impl EntityManager {
 
     pub fn types(&self) -> &EntityTypeManager {
         &self.types
+    }
+
+    pub(crate) fn visit_entity_by_id(
+        &self,
+        id: u64,
+        f: impl FnMut(IterEntity) -> Result<()>,
+    ) -> Result<()> {
+        let shard = self.get_shard(id);
+        shard.visit_entity_by_id(id, f)
     }
 }
 
@@ -509,6 +519,22 @@ impl Movement {
     pub fn pos_after_move(&self, start: Vector3<f64>) -> Vector3<f64> {
         self.pos_after(start, self.move_time)
     }
+    pub fn to_backbuffer(&self, start: Vector3<f64>) -> BackBufferSegment {
+        let end = self.pos_after(start, self.move_time);
+        BackBufferSegment {
+            start,
+            end,
+            len: (end - start).magnitude() as f32,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct BackBufferSegment {
+    pub(crate) start: Vector3<f64>,
+    pub(crate) end: Vector3<f64>,
+    // Cached, invariant is that it is indeed the length of the segment between start and end
+    pub(crate) len: f32,
 }
 
 const LARGEST_POSSIBLE_QUEUE_SIZE: usize = 32;
@@ -1121,6 +1147,7 @@ struct EntityCoreArray {
     coroutine: Vec<Option<Pin<Box<dyn EntityCoroutine>>>>,
     // This is an annoying indirect pointer, but we probably won't use it for the hot path
     trailing_entities: Vec<Option<TrailingEntities>>,
+    trailing_entity_moves: Vec<Option<VecDeque<BackBufferSegment>>>,
 }
 impl EntityCoreArray {
     /// Checks some preconditions that we want to assume on the vectors to make
@@ -1148,6 +1175,7 @@ impl EntityCoreArray {
         assert_eq!(self.move_queue.len(), self.len);
         assert_eq!(self.coroutine.len(), self.len);
         assert_eq!(self.trailing_entities.len(), self.len);
+        assert_eq!(self.trailing_entity_moves.len(), self.len);
     }
 
     // Update the times for all entities
@@ -1223,6 +1251,12 @@ impl EntityCoreArray {
         self.theta_x[index] = initial_movement.pitch;
         self.move_time[index] = initial_movement.move_time;
         self.move_start_tick[index] = tick;
+        // TODO: Accept a back buffer from the reset function
+        self.trailing_entity_moves[index] = if self.trailing_entities[index].is_some() {
+            Some(VecDeque::new())
+        } else {
+            None
+        };
         self.recalc_at[index] = if !queued_movements.has_slack() {
             // todo test this logic
             u64::MAX
@@ -1312,6 +1346,7 @@ impl EntityCoreArray {
             move_queue: vec![],
             coroutine: vec![],
             trailing_entities: vec![],
+            trailing_entity_moves: vec![],
             base_time,
         }
     }
@@ -1371,6 +1406,11 @@ impl EntityCoreArray {
                 self.recalc_at[i] = tick;
                 self.move_queue[i] = queue;
                 self.coroutine[i] = coroutine;
+                self.trailing_entity_moves[i] = if trailing_entities.is_some() {
+                    Some(VecDeque::new())
+                } else {
+                    None
+                };
                 self.trailing_entities[i] = trailing_entities;
                 i
             }
@@ -1400,6 +1440,12 @@ impl EntityCoreArray {
                 self.recalc_at.push(tick);
                 self.move_queue.push(queue);
                 self.coroutine.push(coroutine);
+                self.trailing_entity_moves
+                    .push(if trailing_entities.is_some() {
+                        Some(VecDeque::new())
+                    } else {
+                        None
+                    });
                 self.trailing_entities.push(trailing_entities);
 
                 self.len - 1
@@ -1407,7 +1453,6 @@ impl EntityCoreArray {
         };
 
         if let Some(coroutine) = &mut self.coroutine[i] {
-            println!("insert");
             let handler_result = match run_handler!(
                 || Ok(coroutine.as_mut().plan_move(
                     services,
@@ -1592,6 +1637,7 @@ impl EntityCoreArray {
             self.move_queue.swap_remove(i);
             self.coroutine.swap_remove(i);
             self.trailing_entities.swap_remove(i);
+            self.trailing_entity_moves.swap_remove(i);
 
             // fix up the id lookup since we rearranged stuff
             if i != self.len {
@@ -1633,41 +1679,62 @@ impl EntityCoreArray {
         tick: u64,
     ) -> Result<()> {
         for i in 0..self.len {
-            if self.control[i] & CONTROL_PRESENT == 0 {
-                continue;
-            }
-            let lnm = self.last_nontrivial_modification[i];
-            if since.is_some_and(|x| x > lnm) {
-                continue;
-            }
-
-            let elapsed = self.move_elapsed(i, tick);
-            let entity = IterEntity {
-                id: self.id[i],
-                class: self.class[i],
-                starting_position: Vector3::new(self.x[i], self.y[i], self.z[i]),
-                instantaneous_position: Vector3::new(
-                    qproj(self.x[i], self.xv[i], self.xa[i], elapsed),
-                    qproj(self.y[i], self.yv[i], self.ya[i], elapsed),
-                    qproj(self.z[i], self.zv[i], self.za[i], elapsed),
-                ),
-                current_move: StoredMovement {
-                    movement: Movement {
-                        velocity: Vector3::new(self.xv[i], self.yv[i], self.zv[i]),
-                        acceleration: Vector3::new(self.xa[i], self.ya[i], self.za[i]),
-                        face_direction: self.theta_y[i],
-                        pitch: self.theta_x[i],
-                        move_time: self.move_time[i],
-                    },
-                    start_tick: self.move_start_tick[i],
-                    sequence: self.current_move_seq[i],
-                },
-                next_moves: self.move_queue[i].as_slice(),
-                last_nontrivial_modification: lnm,
-                trailing_entities: self.trailing_entities[i].as_deref(),
-            };
-            f(entity)?;
+            self.visit_entity(since, &mut f, tick, i)?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn visit_entity_by_id(
+        &self,
+        id: u64,
+        mut f: impl FnMut(IterEntity) -> Result<()>,
+    ) -> Result<()> {
+        let index = self.find_entity(id)?;
+        self.visit_entity(None, &mut f, 0, index)?;
+        Ok(())
+    }
+
+    fn visit_entity(
+        &self,
+        since: Option<u64>,
+        f: &mut impl FnMut(IterEntity) -> Result<()>,
+        tick: u64,
+        i: usize,
+    ) -> Result<()> {
+        if self.control[i] & CONTROL_PRESENT == 0 {
+            return Ok(());
+        }
+        let lnm = self.last_nontrivial_modification[i];
+        if since.is_some_and(|x| x > lnm) {
+            return Ok(());
+        }
+
+        let elapsed = self.move_elapsed(i, tick);
+        let entity = IterEntity {
+            id: self.id[i],
+            class: self.class[i],
+            starting_position: Vector3::new(self.x[i], self.y[i], self.z[i]),
+            instantaneous_position: Vector3::new(
+                qproj(self.x[i], self.xv[i], self.xa[i], elapsed),
+                qproj(self.y[i], self.yv[i], self.ya[i], elapsed),
+                qproj(self.z[i], self.zv[i], self.za[i], elapsed),
+            ),
+            current_move: StoredMovement {
+                movement: Movement {
+                    velocity: Vector3::new(self.xv[i], self.yv[i], self.zv[i]),
+                    acceleration: Vector3::new(self.xa[i], self.ya[i], self.za[i]),
+                    face_direction: self.theta_y[i],
+                    pitch: self.theta_x[i],
+                    move_time: self.move_time[i],
+                },
+                start_tick: self.move_start_tick[i],
+                sequence: self.current_move_seq[i],
+            },
+            next_moves: self.move_queue[i].as_slice(),
+            last_nontrivial_modification: lnm,
+            trailing_entities: self.trailing_entities[i].as_deref(),
+        };
+        f(entity)?;
         Ok(())
     }
 
@@ -2022,10 +2089,49 @@ impl EntityCoreArray {
             if self.control[i] & CONTROL_AUTONOMOUS != 0 {
                 self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
             }
+
+            let old_pos = vec3(self.x[i], self.y[i], self.z[i]);
             // Apply the effect of the current move we just finished
             self.x[i] = qproj(self.x[i], self.xv[i], self.xa[i], self.move_time[i]);
             self.y[i] = qproj(self.y[i], self.yv[i], self.ya[i], self.move_time[i]);
             self.z[i] = qproj(self.z[i], self.zv[i], self.za[i], self.move_time[i]);
+            let new_pos = vec3(self.x[i], self.y[i], self.z[i]);
+            let mag2 = (new_pos - old_pos).magnitude2();
+            if mag2 > 1.0e-6 {
+                if let Some(x) = &mut self.trailing_entity_moves[i] {
+                    x.push_back(BackBufferSegment {
+                        start: old_pos,
+                        end: new_pos,
+                        len: mag2.sqrt() as f32,
+                    });
+                    // Clean old trailing moves
+                    let max_trailing_distance = self.trailing_entities[i]
+                        .as_ref()
+                        .unwrap() // Safe because having trailing entity moves implies having trailing entities
+                        .iter()
+                        .map(|x| x.trailing_distance)
+                        .fold(0.0, f32::max);
+                    let mut idx = x.len() - 1;
+                    let mut distance_so_far = 0.0;
+                    let max_idx = loop {
+                        distance_so_far += x[idx].len;
+                        if distance_so_far >= max_trailing_distance {
+                            // we have enough distance
+                            break Some(idx);
+                        } else if idx == 0 {
+                            // we already checked the earliest move in the back buffer, and we didn't find
+                            // enough distance
+                            break None;
+                        }
+                        idx -= 1;
+                    };
+                    if let Some(idx) = max_idx {
+                        // then drain, non-inclusively. idx is the index of the last move in the back buffer that
+                        // ought to be kept
+                        x.drain(..idx);
+                    }
+                }
+            }
             // And move the next move into the current one
             let next_move = self.move_queue[i].pop().unwrap_or_else(|| {
                 tracing::debug!("buffer exhausted");
@@ -2143,15 +2249,6 @@ enum EntityAction {
     ),
     Remove(u64),
     SetKinematics(u64, Vector3<f64>, Movement, InitialMoveQueue),
-    PlayerAction(PlayerActionDetails),
-}
-
-#[derive(Debug)]
-pub(crate) struct PlayerActionDetails {
-    pub(crate) action: PlayerEntityAction,
-    pub(crate) tick: u64,
-    pub(crate) initiator: EventInitiator<'static>,
-    pub(crate) item_slot: u32,
 }
 
 #[derive(Debug)]
@@ -2201,6 +2298,14 @@ impl EntityShard {
         f: impl FnMut(IterEntity) -> Result<()>,
     ) -> Result<()> {
         self.core.read().for_each_entity(since, f, tick)
+    }
+
+    pub(crate) fn visit_entity_by_id(
+        &self,
+        id: u64,
+        f: impl FnMut(IterEntity) -> Result<()>,
+    ) -> Result<()> {
+        self.core.read().visit_entity_by_id(id, f)
     }
 }
 
@@ -2402,9 +2507,6 @@ impl EntityShardWorker {
                         }
                     }
                 }
-                EntityAction::PlayerAction(details) => {
-                    todo!("{:?}", details);
-                }
             }
         }
         indices.sort();
@@ -2498,12 +2600,104 @@ pub enum MoveQueueType {
     Buffer64,
 }
 
+pub trait EntityHandlers: Send + Sync {
+    /// Invoked on a network thread when the player digs the entity with a tool (if one is held)
+    ///
+    /// Args:
+    ///     ctx: Event context providing access to the game state
+    ///     target: The entity and trailing index being dug
+    ///     tool: The item held by the player
+    ///
+    /// Returns:
+    ///     Interaction result indicating how much to wear the tool and what items to drop to the
+    ///     player
+    ///
+    /// Default behavior:
+    ///     Returns an empty result (no tool wear, no items dropped), takes no action on the entity.
+    fn on_dig(
+        &self,
+        _ctx: &HandlerContext,
+        _target: EntityTarget,
+        tool: Option<&ItemStack>,
+    ) -> Result<ItemInteractionResult> {
+        Ok(ItemInteractionResult {
+            updated_tool: tool.cloned(),
+            obtained_items: vec![],
+        })
+    }
+    /// Invoked on a network thread when the player taps the entity with a tool (if one is held)
+    ///
+    /// Args:
+    ///     ctx: Event context providing access to the game state
+    ///     target: The entity and trailing index being dug
+    ///     tool: The item held by the player
+    ///
+    /// Returns:
+    ///     Interaction result indicating how much to wear the tool and what items to drop to the
+    ///     player
+    ///
+    /// Default behavior:
+    ///     Returns an empty result (no tool wear, no items dropped), takes no action on the entity.
+    fn on_tap(
+        &self,
+        _ctx: &HandlerContext,
+        _target: EntityTarget,
+        tool: Option<&ItemStack>,
+    ) -> Result<ItemInteractionResult> {
+        Ok(ItemInteractionResult {
+            updated_tool: tool.cloned(),
+            obtained_items: vec![],
+        })
+    }
+
+    /// Invoked on a network thread when the player places something onto the entity
+    ///
+    /// Args:
+    ///     ctx: Event context providing access to the game state
+    ///     target: The entity and trailing index being placed
+    ///     stack: The item being placed
+    ///
+    /// Returns:
+    ///     The new stack after placing, if any
+    ///
+    /// Default behavior:
+    ///     Returns the stack unchanged, takes no action on the entity.
+    fn on_place(
+        &self,
+        _ctx: &HandlerContext,
+        _target: EntityTarget,
+        stack: Option<&ItemStack>,
+    ) -> Result<Option<ItemStack>> {
+        Ok(stack.cloned())
+    }
+
+    /// Invoked on a network thread when the player interacts with the entity
+    ///
+    /// Args:
+    ///     ctx: Event context providing access to the game state
+    ///     target: The entity and trailing index being interacted with
+    ///
+    /// Returns:
+    ///     Any popup to display to the player
+    ///
+    /// Default behavior:
+    ///     No action, no popup
+    fn on_interact_key(
+        &self,
+        _ctx: &HandlerContext,
+        _target: EntityTarget,
+    ) -> Result<Option<Popup>> {
+        Ok(None)
+    }
+}
+
 // TODO own and manage these, similar to block types and item defs.
 /// Warning: ***API is extremely preliminary and subject to change***
 pub struct EntityDef {
     pub move_queue_type: MoveQueueType,
     pub class_name: String,
     pub client_info: EntityAppearance,
+    pub handlers: Box<dyn EntityHandlers>,
 }
 
 pub struct EntityClass {
@@ -2595,6 +2789,10 @@ impl EntityTypeManager {
         })
     }
 
+    pub fn get_type(&self, class_id: u32) -> Option<&EntityDef> {
+        self.types.get(class_id as usize)?.as_ref()
+    }
+
     pub(crate) fn to_server_proto(&self) -> ServerEntityTypeAssignments {
         ServerEntityTypeAssignments {
             entity_type: self
@@ -2659,6 +2857,9 @@ impl EntityTypeManager {
     }
 }
 
+pub struct NoOpEntityHandlers;
+impl EntityHandlers for NoOpEntityHandlers {}
+
 const UNKNOWN_ENTITY_MESH: &[u8] = include_bytes!("media/unknown_entity.obj");
 
 fn make_unknown_entity_appearance() -> EntityDef {
@@ -2677,5 +2878,6 @@ fn make_unknown_entity_appearance() -> EntityDef {
             tool_interaction_groups: vec![],
             base_dig_time: 1.0,
         },
+        handlers: Box::new(NoOpEntityHandlers),
     }
 }

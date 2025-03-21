@@ -367,7 +367,7 @@ fn furnace_dig_handler(
     let block_type = ctx.block_types().get_block(bt)?.0;
     let rule = ctx
         .items()
-        .from_stack(tool)
+        .get_stack_item(tool)
         .and_then(|item| item.get_interaction_rule(block_type).cloned());
     if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
         *bt = air;

@@ -77,7 +77,7 @@ impl DroppedItem {
             let block_type = ctx.block_types().get_block(target_block)?.0;
             let rule = ctx
                 .items()
-                .from_stack(stack)
+                .get_stack_item(stack)
                 .and_then(|item| item.get_interaction_rule(block_type).cloned());
             if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
                 *target_block = AIR_ID;

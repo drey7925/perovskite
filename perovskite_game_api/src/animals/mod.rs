@@ -11,7 +11,7 @@ use perovskite_core::protocol::render::CustomMesh;
 use perovskite_server::game_state;
 use perovskite_server::game_state::entities::{
     CoroutineResult, EntityClassId, EntityCoroutine, EntityCoroutineServices, EntityDef,
-    EntityMoveDecision, EntityTypeId, MoveQueueType, Movement,
+    EntityHandlers, EntityMoveDecision, EntityTypeId, MoveQueueType, Movement,
 };
 use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::items::{Item, ItemStack};
@@ -121,6 +121,11 @@ impl EntityCoroutine for DuckCoroutine {
     }
 }
 
+struct DuckHandlers;
+impl EntityHandlers for DuckHandlers {
+    // TODO...
+}
+
 pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
     const DUCK_UV: StaticTextureName = StaticTextureName("animals:duck_uv");
     const DUCK_INV_TEX: StaticTextureName = StaticTextureName("animals:duck_inv");
@@ -138,6 +143,7 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
             tool_interaction_groups: vec![],
             base_dig_time: 1.0,
         },
+        handlers: Box::new(DuckHandlers),
     })?;
 
     game_builder
