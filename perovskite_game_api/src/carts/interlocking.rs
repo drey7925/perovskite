@@ -118,7 +118,8 @@ pub(super) async fn interlock_cart(
     cart_config: CartsGameBuilderExtension,
     resume: Option<InterlockingResumeState>,
     last_speed_post: f32,
-    should_delay_after_clearing: bool,
+    starting_from_standstill: bool,
+    buffer_time_estimate: f32,
     signal_coord: BlockCoordinate,
 ) -> Result<Option<InterlockingRoute>> {
     if !handler_context.is_shutting_down() {
@@ -130,9 +131,18 @@ pub(super) async fn interlock_cart(
             max_scan_distance,
             &cart_config,
             resume.clone(),
+            buffer_time_estimate,
         )?;
         if let Some(resolution) = resolution {
-            if should_delay_after_clearing {
+            send_signal_bus_message(
+                &handler_context,
+                signal_coord,
+                cart_name,
+                cart_id,
+                "success",
+                buffer_time_estimate,
+            )?;
+            if starting_from_standstill {
                 let exit_speed = resolution
                     .steps
                     .iter()
@@ -140,16 +150,12 @@ pub(super) async fn interlock_cart(
                     .find_map(|step| step.speed_post)
                     .unwrap_or(last_speed_post);
                 let delay_time = 0.5 * exit_speed as f64 / super::MAX_ACCEL;
-                tracing::info!("Sleeping for {} seconds", delay_time);
+                tracing::info!(
+                    "Sleeping for {} seconds since starting from standstill",
+                    delay_time
+                );
                 tokio::time::sleep(std::time::Duration::from_secs_f64(delay_time)).await;
             }
-            send_signal_bus_message(
-                &handler_context,
-                signal_coord,
-                cart_name,
-                cart_id,
-                "success",
-            )?;
             return Ok(Some(resolution));
         } else {
             tracing::debug!("No path found, trying again");
@@ -161,7 +167,14 @@ pub(super) async fn interlock_cart(
             let backoff = rand::thread_rng().gen_range(500..1000);
             tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
 
-            send_signal_bus_message(&handler_context, signal_coord, cart_name, cart_id, "failed")?;
+            send_signal_bus_message(
+                &handler_context,
+                signal_coord,
+                cart_name,
+                cart_id,
+                "failed",
+                buffer_time_estimate,
+            )?;
             return Ok(None);
         }
     }
@@ -174,6 +187,7 @@ fn send_signal_bus_message(
     cart_name: &str,
     cart_id: u32,
     outcome: &str,
+    buffer_time_estimate: f32,
 ) -> Result<()> {
     let mut data = HashMap::new();
 
@@ -195,6 +209,10 @@ fn send_signal_bus_message(
     data.insert("cart_name".to_string(), cart_name.to_string());
     data.insert("cart_id".to_string(), cart_id.to_string());
     data.insert("outcome".to_string(), outcome.to_string());
+    data.insert(
+        "at_signal_now".to_string(),
+        (buffer_time_estimate < 0.01).to_string(),
+    );
     let bus_message = BusMessage {
         sender: signal_coord,
         data,
@@ -222,6 +240,7 @@ fn single_pathfind_attempt(
     max_scan_distance: usize,
     cart_config: &CartsGameBuilderExtension,
     resume: Option<InterlockingResumeState>,
+    buffer_time_estimate: f32,
 ) -> Result<Option<InterlockingRoute>> {
     let mut steps = vec![];
     let mut state = initial_state;

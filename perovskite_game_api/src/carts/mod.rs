@@ -703,7 +703,7 @@ impl EntityCoroutine for CartCoroutine {
         queue_space: usize,
     ) -> CoroutineResult {
         let trace_buffer = TraceBuffer::new(false);
-        dbg!(self.plan_move_impl(services, whence, when, queue_space, trace_buffer))
+        self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
     }
     fn continuation(
         mut self: std::pin::Pin<&mut Self>,
@@ -827,6 +827,7 @@ impl CartCoroutine {
         signal_block: BlockId,
         trace_buffer: &TraceBuffer,
         new_state: ScanState,
+        buffer_time_estimate: f32,
     ) -> ReenterableResult<SignalResult> {
         if let Some(speed) = self.config.parse_speedpost(signal_block) {
             SignalResult::SpeedRestriction(speed).into()
@@ -904,12 +905,13 @@ impl CartCoroutine {
             // If true, we want to add a bit of a delay before actually resuming out of the interlocking
             // This is a fudge factor to avoid path optimizer thrashing as carts come up to speed, run into
             // red signals ahead, and then come to a stop then start again cyclically
-            let should_delay = self.last_segment_exit_speed() <= 0.001;
+            let starting_from_standstill =
+                self.last_segment_exit_speed() <= 0.001 || buffer_time_estimate < 0.001;
             let cart_id = self.id;
             return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
-                if should_delay {
+                if starting_from_standstill {
                     tracing::debug!("Will delay once the interlocking clears");
                 }
 
@@ -922,7 +924,8 @@ impl CartCoroutine {
                     config_clone,
                     resume,
                     last_speed_post,
-                    should_delay,
+                    starting_from_standstill,
+                    buffer_time_estimate,
                     signal_coord,
                 )
                 .await;
@@ -965,9 +968,6 @@ impl CartCoroutine {
             .map(|seg| seg.move_time as f32)
             .sum::<f32>();
         let mut buffer_time_estimate = when + unplanned_buffer_estimate + scheduled_buffer_estimate;
-
-        // If true, and we stop at a signal, we're well and truly stopped at that signal.
-        let scheduling_at_zero = when < 0.01 && self.unplanned_segments.is_empty();
 
         // this should be an overestimate
         // todo: tighten this bound. If we start at a high max speed (even if unachievable) we'll end up with a high estimated max speed
@@ -1059,6 +1059,7 @@ impl CartCoroutine {
                     signal_block,
                     &trace_buffer,
                     new_state,
+                    buffer_time_estimate,
                 ) {
                     ReenterableResult::AvailableNow(x) => x,
                     ReenterableResult::Deferred(d) => {
