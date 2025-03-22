@@ -71,8 +71,6 @@ const CONTROL_DEQUEUE_WHEN_READY: u8 = 64;
 struct Completion<T: Send + Sync + 'static> {
     /// The entity ID we'll deliver the result to
     entity_id: u64,
-    /// The index in the entity array. If we don't find the given ID there, we'll drop the completion.
-    index: usize,
     /// The result we're delivering.
     result: T,
     /// The trace buffer (may be an empty one)
@@ -104,6 +102,12 @@ struct DeferredPrivate<T: Send + Sync + 'static> {
     deferred_call: Pin<Box<(dyn Future<Output = T> + Send + 'static)>>,
 
     trace_buffer: TraceBuffer,
+}
+impl<T: Send + Sync + 'static> Debug for DeferredPrivate<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("DeferredPrivate<{}>", std::any::type_name::<T>()))
+            .finish()
+    }
 }
 
 fn id_to_shard(id: u64) -> usize {
@@ -415,6 +419,7 @@ pub enum EntityMoveDecision {
     StopCoroutineControl,
 }
 
+#[derive(Debug)]
 #[must_use = "coroutine result does nothing unless returned to the entity scheduler"]
 pub enum CoroutineResult {
     /// The coroutine returned successfully
@@ -922,6 +927,7 @@ pub enum ContinuationResultValue {
 /// A heap-allocated result from a deferred call
 pub type HeapResult = Box<dyn Any + Send + Sync>;
 
+#[derive(Debug)]
 pub struct ContinuationResult {
     /// The tag that was passed when deferring the call
     pub tag: u32,
@@ -1139,7 +1145,7 @@ struct EntityCoreArray {
     // The time already finished in the current move
     move_start_tick: Vec<u64>,
     // When we next need to recalculate the current move
-    recalc_at: Vec<u64>,
+    coro_delay_until: Vec<u64>,
 
     move_queue: Vec<MoveQueue>,
 
@@ -1171,7 +1177,7 @@ impl EntityCoreArray {
         assert_eq!(self.theta_y.len(), self.len);
         assert_eq!(self.theta_x.len(), self.len);
         assert_eq!(self.move_start_tick.len(), self.len);
-        assert_eq!(self.recalc_at.len(), self.len);
+        assert_eq!(self.coro_delay_until.len(), self.len);
         assert_eq!(self.move_queue.len(), self.len);
         assert_eq!(self.coroutine.len(), self.len);
         assert_eq!(self.trailing_entities.len(), self.len);
@@ -1257,7 +1263,7 @@ impl EntityCoreArray {
         } else {
             None
         };
-        self.recalc_at[index] = if !queued_movements.has_slack() {
+        self.coro_delay_until[index] = if !queued_movements.has_slack() {
             // todo test this logic
             u64::MAX
         } else if self.control[index] & CONTROL_AUTONOMOUS == 0 {
@@ -1342,7 +1348,7 @@ impl EntityCoreArray {
             theta_x: vec![],
             move_time: vec![],
             move_start_tick: vec![],
-            recalc_at: vec![],
+            coro_delay_until: vec![],
             move_queue: vec![],
             coroutine: vec![],
             trailing_entities: vec![],
@@ -1403,7 +1409,7 @@ impl EntityCoreArray {
                 self.theta_x[i] = 0.0;
                 self.move_time[i] = 0.0;
                 self.move_start_tick[i] = 0;
-                self.recalc_at[i] = tick;
+                self.coro_delay_until[i] = tick;
                 self.move_queue[i] = queue;
                 self.coroutine[i] = coroutine;
                 self.trailing_entity_moves[i] = if trailing_entities.is_some() {
@@ -1437,7 +1443,7 @@ impl EntityCoreArray {
                 self.theta_x.push(0.0);
                 self.move_time.push(0.0);
                 self.move_start_tick.push(0);
-                self.recalc_at.push(tick);
+                self.coro_delay_until.push(tick);
                 self.move_queue.push(queue);
                 self.coroutine.push(coroutine);
                 self.trailing_entity_moves
@@ -1488,7 +1494,7 @@ impl EntityCoreArray {
 
                     // We only got one move. We need another.
                     self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
-                    self.recalc_at[i] = u64::MAX;
+                    self.coro_delay_until[i] = u64::MAX;
                     tracing::debug!("{}: queued movement (initial)", self.id[i]);
                 }
                 CoroutineResult::Successful(EntityMoveDecision::QueueUpMultiple(movements)) => {
@@ -1521,21 +1527,23 @@ impl EntityCoreArray {
                     if self.move_queue[i].remaining_capacity() > 0 {
                         // We need to recalc
                         self.control[i] |= CONTROL_AUTONOMOUS_NEEDS_CALC;
-                        self.recalc_at[i] = u64::MAX;
+                        self.coro_delay_until[i] = u64::MAX;
                     }
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
-                    self.recalc_at[i] = (delay.max(0.0) * 1_000_000_000.0) as u64;
+                    self.coro_delay_until[i] = (delay.max(0.0) * 1_000_000_000.0) as u64;
                     self.move_time[i] = delay;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    tracing::debug!("Insert AskAgainLater applying CDqWR");
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLaterFlexible(delay)) => {
                     // Flexible timings are an optimization, not a requirement
                     // Because initializing an entity is complex, simply treat this as a non-range ask-again.
-                    self.recalc_at[i] = (delay.start.max(0.0) * 1_000_000_000.0) as u64;
+                    self.coro_delay_until[i] = (delay.start.max(0.0) * 1_000_000_000.0) as u64;
                     self.move_time[i] = delay.start;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
+                    tracing::debug!("Insert AskAgainLaterFlexible applying CDqWR");
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::Successful(EntityMoveDecision::ImmediateDespawn) => {
@@ -1548,11 +1556,14 @@ impl EntityCoreArray {
                 }
                 CoroutineResult::Successful(EntityMoveDecision::StopCoroutineControl) => {
                     self.control[i] &= !(CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS);
+                    tracing::debug!("Insert StopCoroControl applying CDqWR");
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                 }
                 CoroutineResult::_DeferredMoveResult(deferral) => {
                     self.control[i] |= CONTROL_SUSPENDED;
+                    tracing::debug!("Insert _Deferred applying CDqWR");
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
+
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
@@ -1569,7 +1580,6 @@ impl EntityCoreArray {
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
-                                index: i,
                                 result: ContinuationResult {
                                     value: Ok(ContinuationResultValue::EntityDecision(result)),
                                     // The tag doesn't matter in this case
@@ -1582,6 +1592,7 @@ impl EntityCoreArray {
                     });
                 }
                 CoroutineResult::_DeferredReenterCoroutine(deferral) => {
+                    tracing::debug!("Insert _DeferredReenter applying CDqWR");
                     self.control[i] |= CONTROL_SUSPENDED;
                     self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
                     let tx_clone = completion_sender.clone();
@@ -1598,7 +1609,6 @@ impl EntityCoreArray {
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
-                                index: i,
                                 result,
                                 trace_buffer,
                             })
@@ -1633,7 +1643,7 @@ impl EntityCoreArray {
             self.theta_x.swap_remove(i);
             self.move_time.swap_remove(i);
             self.move_start_tick.swap_remove(i);
-            self.recalc_at.swap_remove(i);
+            self.coro_delay_until.swap_remove(i);
             self.move_queue.swap_remove(i);
             self.coroutine.swap_remove(i);
             self.trailing_entities.swap_remove(i);
@@ -1757,7 +1767,7 @@ impl EntityCoreArray {
         if self.control[i] & CONTROL_SUSPENDED != 0 {
             return u64::MAX;
         }
-        if self.recalc_at[i] <= tick
+        if self.coro_delay_until[i] <= tick
             && self.control[i] & (CONTROL_AUTONOMOUS | CONTROL_PRESENT)
                 == (CONTROL_AUTONOMOUS | CONTROL_PRESENT)
         {
@@ -1909,7 +1919,7 @@ impl EntityCoreArray {
                         self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     }
                     // We'll trigger a recalc when the movement gets advanced; no need to use recalc_in
-                    self.recalc_at[i] = u64::MAX;
+                    self.coro_delay_until[i] = u64::MAX;
                     tracing::debug!("{}: queued movement.", self.id[i]);
                     self.current_move_ending_tick(i)
                 }
@@ -1928,7 +1938,7 @@ impl EntityCoreArray {
                         });
                         last_move_ending_tick += (m.move_time * 1_000_000_000.0) as u64
                     }
-                    self.recalc_at[i] = u64::MAX;
+                    self.coro_delay_until[i] = u64::MAX;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
 
                     tracing::debug!(
@@ -1945,15 +1955,16 @@ impl EntityCoreArray {
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLater(delay)) => {
                     tracing::debug!("delay: {:?}", delay);
-                    self.recalc_at[i] = tick + (delay * 1_000_000_000.0) as u64;
+                    self.coro_delay_until[i] = tick + (delay * 1_000_000_000.0) as u64;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
-                    self.current_move_ending_tick(i).min(self.recalc_at[i])
+                    self.current_move_ending_tick(i)
+                        .min(self.coro_delay_until[i])
                 }
                 CoroutineResult::Successful(EntityMoveDecision::AskAgainLaterFlexible(delay)) => {
                     tracing::debug!("delay: {:?}", delay);
                     assert!(delay.end >= delay.start);
                     // Accept a recalc if it's more than at least recalc_in
-                    self.recalc_at[i] = tick + (delay.start * 1_000_000_000.0) as u64;
+                    self.coro_delay_until[i] = tick + (delay.start * 1_000_000_000.0) as u64;
                     self.control[i] &= !CONTROL_AUTONOMOUS_NEEDS_CALC;
                     // Schedule at the latest allowed time
                     self.current_move_ending_tick(i)
@@ -1976,6 +1987,7 @@ impl EntityCoreArray {
                 CoroutineResult::_DeferredMoveResult(deferral) => {
                     deferral.trace_buffer.log("_dmr early");
                     self.control[i] |= CONTROL_SUSPENDED;
+                    self.coro_delay_until[i] = u64::MAX;
                     let tx_clone = completion_sender.clone();
                     let id = self.id[i];
 
@@ -1991,7 +2003,6 @@ impl EntityCoreArray {
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
-                                index: i,
                                 result: ContinuationResult {
                                     value: Ok(ContinuationResultValue::EntityDecision(result)),
                                     // The tag doesn't matter in this case
@@ -2024,7 +2035,6 @@ impl EntityCoreArray {
                         tx_clone
                             .send(Completion {
                                 entity_id: id,
-                                index: i,
                                 result,
                                 trace_buffer,
                             })
@@ -2135,14 +2145,15 @@ impl EntityCoreArray {
             // And move the next move into the current one
             let next_move = self.move_queue[i].pop().unwrap_or_else(|| {
                 tracing::debug!("buffer exhausted");
+                tracing::debug!("UTS applying CDqWR for {} at {}", self.id[i], update_tick);
                 self.control[i] |= CONTROL_DEQUEUE_WHEN_READY;
 
                 let new_start_tick = self.move_start_tick[i] + self.move_time_in_ticks(i);
 
-                let move_time = if self.recalc_at[i] == u64::MAX {
+                let move_time = if self.coro_delay_until[i] == u64::MAX {
                     f32::MAX
                 } else {
-                    let diff = self.recalc_at[i].saturating_sub(update_tick) as f32;
+                    let diff = self.coro_delay_until[i].saturating_sub(update_tick) as f32;
                     diff.max(0.0) / 1_000_000_000.0
                 };
 
@@ -2165,12 +2176,15 @@ impl EntityCoreArray {
             self.move_start_tick[i] = next_move.start_tick;
             self.move_time[i] = next_move.movement.move_time;
 
-            self.recalc_at[i] = u64::MAX;
+            self.coro_delay_until[i] = u64::MAX;
         }
         // We now have updated the move (if necessary); here's how long is left in it.
         let kinematic_event_time = self.current_move_ending_tick(i);
-        if self.control[i] & (CONTROL_AUTONOMOUS_NEEDS_CALC) != 0 {
-            kinematic_event_time.min(self.recalc_at[i])
+        if self.control[i]
+            & (CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS | CONTROL_SUSPENDED)
+            == (CONTROL_AUTONOMOUS_NEEDS_CALC | CONTROL_AUTONOMOUS)
+        {
+            kinematic_event_time.min(self.coro_delay_until[i])
         } else {
             kinematic_event_time
         }
@@ -2228,7 +2242,7 @@ impl EntityCoreArray {
         );
         tracing::error!("move time {:?}", self.move_time[index]);
         tracing::error!("move start tick {:?}", self.move_start_tick[index]);
-        tracing::error!("recalc at {:?}", self.recalc_at[index]);
+        tracing::error!("recalc at {:?}", self.coro_delay_until[index]);
         tracing::error!("move queue: {:?}", self.move_queue[index]);
         self.control[index] &= !CONTROL_AUTONOMOUS;
     }
@@ -2361,7 +2375,7 @@ impl EntityShardWorker {
         let mut completions = Vec::with_capacity(COMPLETION_BATCH_SIZE);
 
         let mut awakening_times = Vec::with_capacity(256);
-
+        let mut ever_dumped_looping = false;
         'main_loop: while !self.cancellation.is_cancelled() {
             let mut next_awakening = tokio::task::block_in_place(|| {
                 let mut lock = self.entities.shards[self.shard_id].core.write();
@@ -2389,7 +2403,7 @@ impl EntityShardWorker {
                     .min(coro_awakening_tick)
                     .saturating_sub(start_tick);
                 awakening_times.push(diff);
-                if awakening_times.len() > 256 {
+                if awakening_times.len() >= 256 {
                     tracing::info!(
                         "Avg awakening time: {:?}, max: {:?}, min: {:?}, number < 10 msec: {}",
                         awakening_times.iter().sum::<u64>() / awakening_times.len() as u64,
@@ -2397,6 +2411,37 @@ impl EntityShardWorker {
                         awakening_times.iter().min().unwrap(),
                         awakening_times.iter().filter(|&&x| x < 10_000_000).count()
                     );
+
+                    if awakening_times.iter().filter(|&&x| x < 10_000_000).count() > 256
+                        && !ever_dumped_looping
+                    {
+                        let mut lock = self.entities.shards[self.shard_id].core.write();
+                        tracing::error!(
+                            "Entity shard seems to be busy-looping: {:?}\n tick now {}\n coro tick {}\n update tick {}\n",
+                            &lock,
+                            self.game_state.tick(),
+                            coro_awakening_tick,
+                            update_awakening_tick
+                        );
+                        tracing::error!("Dumping update times once (will not recur for this shard until server is restarted): ");
+                        for i in 0..lock.id.len() {
+                            let t = lock.update_time_single(i, self.game_state.tick());
+                            tracing::error!("last UTS loop: {}: @tick {}", i, t);
+                        }
+                        for i in 0..lock.id.len() {
+                            let t = lock.run_coro_single(
+                                i,
+                                &services,
+                                None,
+                                completion_tx,
+                                self.game_state.tick(),
+                            );
+                            tracing::error!("last CTS loop: {}: @tick {}", i, t);
+                        }
+
+                        ever_dumped_looping = true;
+                    }
+
                     awakening_times.clear();
                 }
 
@@ -2537,12 +2582,20 @@ impl EntityShardWorker {
             completion
                 .trace_buffer
                 .log("In handle_completions, about to resume");
-            let index = completion.index;
 
-            if index >= lock.len {
-                tracing::warn!("Tried to resume non-existent entity at index {}", index);
-                continue;
-            }
+            let index = match lock.id_lookup.get(&completion.entity_id) {
+                None => {
+                    tracing::warn!(
+                        "Tried to resume non-existent entity {}",
+                        completion.entity_id
+                    );
+                    completion
+                        .trace_buffer
+                        .log("WARN: Resuming non-existent entity");
+                    continue;
+                }
+                Some(x) => *x,
+            };
 
             if lock.control[index] & (CONTROL_PRESENT | CONTROL_AUTONOMOUS | CONTROL_SUSPENDED) == 0
             {
@@ -2776,10 +2829,7 @@ impl EntityTypeManager {
             by_name.insert(def.short_name, def.entity_class);
         }
 
-        Ok(EntityTypeManager {
-            types,
-            by_name: FxHashMap::default(),
-        })
+        Ok(EntityTypeManager { types, by_name })
     }
 
     fn new_empty() -> Result<EntityTypeManager> {

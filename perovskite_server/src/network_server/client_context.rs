@@ -62,9 +62,6 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosit
 use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
 use either::Either;
 use itertools::iproduct;
-use log::error;
-use log::info;
-use log::warn;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use perovskite_core::game_actions::ToolTarget;
@@ -87,6 +84,9 @@ use rustc_hash::FxHashSet;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 use tracy_client::plot;
 use tracy_client::span;
 
@@ -129,13 +129,18 @@ impl PlayerCoroutinePack {
             tokio::task::block_in_place(|| {
                 let result = context_clone.player_context.kick_player_blocking(reason);
                 context_clone.cancellation.cancel();
-                result.unwrap();
+                match result {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::warn!("Error kicking player: {:?}", e);
+                    }
+                }
             })
         };
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("inbound_worker_{}", username), async move {
             if let Err(e) = self.inbound_worker.inbound_worker_loop().await {
-                log::error!("Error running inbound loop: {:?}", e);
+                tracing::error!("Error running inbound loop: {:?}", e);
                 kick("Inbound loop crashed");
             }
         })?;
@@ -143,7 +148,7 @@ impl PlayerCoroutinePack {
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("chunk_sender_{}", username), async move {
             if let Err(e) = self.chunk_sender.chunk_sender_loop().await {
-                log::error!("Error running chunk sender: {:?}", e);
+                tracing::error!("Error running chunk sender: {:?}", e);
                 kick("Chunk sender loop crashed");
             }
         })?;
@@ -151,7 +156,7 @@ impl PlayerCoroutinePack {
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("block_event_sender_{}", username), async move {
             if let Err(e) = self.block_event_sender.block_sender_loop().await {
-                log::error!("Error running block event sender loop: {:?}", e);
+                tracing::error!("Error running block event sender loop: {:?}", e);
                 kick("Chunk sender loop crashed");
             }
         })?;
@@ -159,7 +164,7 @@ impl PlayerCoroutinePack {
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("inv_event_sender_{}", username), async move {
             if let Err(e) = self.inventory_event_sender.inv_sender_loop().await {
-                log::error!("Error running inventory event sender loop: {:?}", e);
+                tracing::error!("Error running inventory event sender loop: {:?}", e);
                 kick("inventory event loop crashed");
             }
         })?;
@@ -167,7 +172,7 @@ impl PlayerCoroutinePack {
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("misc_outbound_worker_{}", username), async move {
             if let Err(e) = self.misc_outbound_worker.misc_outbound_worker_loop().await {
-                log::error!("Error running misc outbound worker loop: {:?}", e);
+                tracing::error!("Error running misc outbound worker loop: {:?}", e);
                 // cancellations are handled in the misc outbound worker
                 kick("Misc outbound worker crashed");
             }
@@ -176,7 +181,7 @@ impl PlayerCoroutinePack {
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("entity_sender_{}", username), async move {
             if let Err(e) = self.entity_sender.entity_sender_loop().await {
-                log::error!("Error running entity sender worker loop: {:?}", e);
+                tracing::error!("Error running entity sender worker loop: {:?}", e);
                 kick("Entity sender crashed");
             }
         })?;
@@ -184,7 +189,7 @@ impl PlayerCoroutinePack {
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("audio_sender_{}", username), async move {
             if let Err(e) = self.audio_sender.audio_sender_loop().await {
-                log::error!("Error running audio sender worker loop: {:?}", e);
+                tracing::error!("Error running audio sender worker loop: {:?}", e);
                 kick("Audio sender crashed");
             }
         })?;
@@ -1088,7 +1093,7 @@ impl InventoryEventSender {
     ) -> Result<()> {
         let key = match update {
             Err(broadcast::error::RecvError::Lagged(x)) => {
-                log::error!("Client {} is lagged, {} pending", self.context.id, x);
+                tracing::error!("Client {} is lagged, {} pending", self.context.id, x);
                 // TODO resync in the future? Right now we just kick the client off
                 // A client that's desynced on inventory updates is struggling, so not sure
                 // what we can do
@@ -1732,7 +1737,7 @@ impl InboundWorker {
     )]
     async fn handle_inventory_action(&mut self, action: &proto::InventoryAction) -> Result<()> {
         if action.source_view == action.destination_view {
-            log::error!(
+            tracing::error!(
                 "Cannot handle an inventory action with the same source and destination view"
             );
             // todo send the user an error
@@ -1916,7 +1921,7 @@ impl InboundWorker {
 
                 handling_result?;
             } else {
-                log::error!(
+                tracing::error!(
                     "Got popup response for nonexistent popup {:?}",
                     action.popup_id
                 );

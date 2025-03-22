@@ -401,8 +401,8 @@ fn place_cart(
         }));
 
     match ctx.initiator() {
-        game_state::event::EventInitiator::Player(p) => p.player.show_popup_blocking(popup)?,
-        game_state::event::EventInitiator::WeakPlayerRef(wp) => {
+        EventInitiator::Player(p) => p.player.show_popup_blocking(popup)?,
+        EventInitiator::WeakPlayerRef(wp) => {
             match wp.try_to_run(|p| p.show_popup_blocking(popup)) {
                 Some(_) => {}
                 None => {
@@ -467,7 +467,7 @@ fn actually_spawn_cart(
             id: ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             precomputed_steps: None,
             pending_actions: BinaryHeap::new(),
-            cart_length: cart_length,
+            cart_length,
 
             interlocking_resume_state: None,
         })),
@@ -703,7 +703,7 @@ impl EntityCoroutine for CartCoroutine {
         queue_space: usize,
     ) -> CoroutineResult {
         let trace_buffer = TraceBuffer::new(false);
-        self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
+        dbg!(self.plan_move_impl(services, whence, when, queue_space, trace_buffer))
     }
     fn continuation(
         mut self: std::pin::Pin<&mut Self>,
@@ -829,7 +829,7 @@ impl CartCoroutine {
         new_state: ScanState,
     ) -> ReenterableResult<SignalResult> {
         if let Some(speed) = self.config.parse_speedpost(signal_block) {
-            return SignalResult::SpeedRestriction(speed).into();
+            SignalResult::SpeedRestriction(speed).into()
         } else if signal_block.equals_ignore_variant(self.config.automatic_signal) {
             let rotation = signal_block.variant() & 0b11;
             // Use the new state since we want to check whether we are allowed to enter the block
@@ -965,6 +965,9 @@ impl CartCoroutine {
             .map(|seg| seg.move_time as f32)
             .sum::<f32>();
         let mut buffer_time_estimate = when + unplanned_buffer_estimate + scheduled_buffer_estimate;
+
+        // If true, and we stop at a signal, we're well and truly stopped at that signal.
+        let scheduling_at_zero = when < 0.01 && self.unplanned_segments.is_empty();
 
         // this should be an overestimate
         // todo: tighten this bound. If we start at a high max speed (even if unachievable) we'll end up with a high estimated max speed
