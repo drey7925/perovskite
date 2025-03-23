@@ -237,6 +237,7 @@ impl AuthService {
                 server_message: Some(ServerMessage::ServerRegistrationResponse(
                     self.start_registration(username, opaque_request)?,
                 )),
+                performance_metrics: None,
             }))
             .await
             .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;
@@ -276,6 +277,7 @@ impl AuthService {
                 server_message: Some(ServerMessage::ServerLoginResponse(
                     login_state.message.serialize().to_vec(),
                 )),
+                performance_metrics: None,
             }))
             .await
             .map_err(|_| tonic::Status::unavailable("Error sending error to client"))?;

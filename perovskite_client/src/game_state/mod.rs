@@ -16,6 +16,7 @@
 
 use std::f64::consts::PI;
 use std::ops::Deref;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,7 +33,9 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
 use perovskite_core::protocol;
-use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch, SetClientState};
+use perovskite_core::protocol::game_rpc::{
+    MapDeltaUpdateBatch, ServerPerformanceMetrics, SetClientState,
+};
 use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use seqlock::SeqLock;
@@ -657,6 +660,9 @@ pub(crate) struct ClientState {
 
     pub(crate) audio: Arc<audio::EngineHandle>,
     pub(crate) world_audio: Mutex<audio::MapSoundState>,
+
+    pub(crate) server_perf: Mutex<Option<ServerPerformanceMetrics>>,
+    pub(crate) want_server_perf: AtomicBool,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -705,6 +711,8 @@ impl ClientState {
             timekeeper,
             audio,
             world_audio: Mutex::new(MapSoundState::new(audio_clone)),
+            server_perf: Mutex::new(None),
+            want_server_perf: AtomicBool::new(false),
         })
     }
 
@@ -744,8 +752,10 @@ impl ClientState {
                 self.egui.lock().open_chat();
             } else if input.take_just_pressed(BoundAction::ChatSlash) {
                 self.egui.lock().open_chat_slash();
-            } else if input.take_just_pressed(BoundAction::PhysicsDebug) {
+            } else if input.take_just_pressed(BoundAction::DebugPanel) {
                 self.egui.lock().toggle_debug();
+            } else if input.take_just_pressed(BoundAction::PerfPanel) {
+                self.egui.lock().toggle_perf();
             }
         }
 
@@ -882,6 +892,10 @@ impl ClientState {
             entities_lock.attached_to_entity = state_update.attached_to_entity;
         }
         Ok(())
+    }
+
+    pub(crate) fn server_perf(&self) -> Option<ServerPerformanceMetrics> {
+        self.server_perf.lock().clone()
     }
 }
 

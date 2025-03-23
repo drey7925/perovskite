@@ -52,6 +52,7 @@ pub(crate) struct EguiUi {
     scale_override: f32,
 
     debug_open: bool,
+    perf_open: bool,
 
     visible_popups: Vec<PopupDescription>,
 
@@ -88,6 +89,7 @@ impl EguiUi {
             chat_force_cursor_to_end: false,
             chat_force_scroll_to_end: false,
             debug_open: false,
+            perf_open: false,
             inventory_view: None,
             scale: 1.0,
             scale_override: 1.0,
@@ -139,6 +141,9 @@ impl EguiUi {
 
     pub(crate) fn toggle_debug(&mut self) {
         self.debug_open = !self.debug_open;
+    }
+    pub(crate) fn toggle_perf(&mut self) {
+        self.perf_open = !self.perf_open;
     }
     pub(crate) fn draw_all_uis(
         &mut self,
@@ -233,6 +238,16 @@ impl EguiUi {
         if self.debug_open {
             self.render_debug(ctx, client_state, tool_state);
         }
+        client_state
+            .want_server_perf
+            .store(self.perf_open, std::sync::atomic::Ordering::Relaxed);
+        if self.perf_open {
+            self.render_perf(ctx, client_state);
+        }
+    }
+
+    pub(crate) fn is_perf_panel_open(&self) -> bool {
+        self.perf_open
     }
 
     fn get_text_fields(&self, popup_id: u64) -> HashMap<String, String> {
@@ -928,6 +943,27 @@ impl EguiUi {
                         .color(Color32::WHITE),
                     );
                 }
+            });
+    }
+
+    fn render_perf(&mut self, ctx: &Context, state: &ClientState) {
+        egui::TopBottomPanel::bottom("perf_panel")
+            .max_height(240.0)
+            .frame(egui::Frame {
+                fill: Color32::from_black_alpha(192),
+                stroke: Stroke {
+                    width: 0.0,
+                    color: Color32::TRANSPARENT,
+                },
+                ..Default::default()
+            })
+            .show(ctx, |ui| {
+                let perf_proto = state.server_perf();
+                ui.label(
+                    egui::RichText::new(format!("{perf_proto:?}"))
+                        .font(egui::FontId::monospace(16.0))
+                        .color(Color32::WHITE),
+                );
             });
     }
 }

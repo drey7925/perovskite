@@ -134,6 +134,8 @@ pub mod permissions {
     /// which should check permissions on their own. (e.g. some slash commands may still be useful for players
     /// that are not permitted to chat yet)
     pub const CHAT: &str = "default:chat";
+    /// Allows the user to receive metrics regarding server performance.
+    pub const PERFORMANCE_METRICS: &str = "default:performance_metrics";
 
     /// The set of permissions that affect client behavior. Only these are sent to clients
     pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] =

@@ -23,7 +23,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -1407,7 +1407,7 @@ impl ServerGameMap {
     /// # Arguments
     ///
     /// * `coord` - The block coordinate to run the handler for
-    /// * `initiator` - The initiator of this event, for handler context  
+    /// * `initiator` - The initiator of this event, for handler context
     /// * `tool` - Optional tool item stack, if this is a tool interaction
     /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler
     /// * `get_block_full_handler` - Callback to retrieve the desired full handler
@@ -1877,11 +1877,19 @@ impl ServerGameMap {
             < (WRITEBACK_QUEUE_SIZE / 2)
     }
 
-    pub(crate) fn debug_shard_sizes(&self) -> Vec<usize> {
-        self.live_chunks
-            .iter()
-            .map(|x| x.read().chunks.len())
-            .collect()
+    pub(crate) fn debug_shard_sizes(&self) -> [usize; NUM_CHUNK_SHARDS] {
+        let mut result = [0; NUM_CHUNK_SHARDS];
+        for i in 0..NUM_CHUNK_SHARDS {
+            result[i] = self.live_chunks[i].read().chunks.len();
+        }
+        result
+    }
+    pub(crate) fn debug_writeback_pressures(&self) -> [usize; NUM_CHUNK_SHARDS] {
+        let mut result = [0; NUM_CHUNK_SHARDS];
+        for i in 0..NUM_CHUNK_SHARDS {
+            result[i] = WRITEBACK_QUEUE_SIZE - self.writeback_senders[i].capacity()
+        }
+        result
     }
 }
 impl Drop for ServerGameMap {

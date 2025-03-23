@@ -24,7 +24,8 @@ pub(crate) enum BoundAction {
     Menu,
     Chat,
     ChatSlash,
-    PhysicsDebug,
+    DebugPanel,
+    PerfPanel,
 }
 impl std::fmt::Display for BoundAction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -50,7 +51,8 @@ impl BoundAction {
             BoundAction::Menu => "Pause menu",
             BoundAction::Chat => "Chat",
             BoundAction::ChatSlash => "Chat slash command",
-            BoundAction::PhysicsDebug => "Physics debug",
+            BoundAction::DebugPanel => "Debug panel",
+            BoundAction::PerfPanel => "Performance panel",
         }
     }
 
@@ -74,7 +76,8 @@ impl BoundAction {
             BoundAction::Menu => "Pause the game and open the pause menu",
             BoundAction::Chat => "View chat and/or type a chat message",
             BoundAction::ChatSlash => "Open chat with / prefilled for a command - it's highly recommended to keep this bound to your slash key in your choice of keyboard layout",
-            BoundAction::PhysicsDebug => "Hold to see physics debug information (used during development, not always available)",
+            BoundAction::DebugPanel => "Open/close the debug panel",
+            BoundAction::PerfPanel => "Open/close the performance panel",
         }
     }
 
@@ -96,7 +99,7 @@ impl BoundAction {
             BoundAction::Menu,
             BoundAction::Chat,
             BoundAction::ChatSlash,
-            BoundAction::PhysicsDebug,
+            BoundAction::DebugPanel,
         ];
         ALL
     }
@@ -129,6 +132,7 @@ pub(crate) struct KeybindSettings {
     pub(crate) chat_slash: Keybind,
 
     pub(crate) physics_debug: Keybind,
+    pub(crate) performance_panel: Keybind,
 
     pub(crate) hotbar_slots: [Keybind; 8],
 }
@@ -151,7 +155,8 @@ impl KeybindSettings {
             BoundAction::Menu => self.menu,
             BoundAction::Chat => self.chat,
             BoundAction::ChatSlash => self.chat_slash,
-            BoundAction::PhysicsDebug => self.physics_debug,
+            BoundAction::DebugPanel => self.physics_debug,
+            BoundAction::PerfPanel => self.performance_panel,
         }
     }
 
@@ -173,7 +178,8 @@ impl KeybindSettings {
             BoundAction::Menu => self.menu = keybind,
             BoundAction::Chat => self.chat = keybind,
             BoundAction::ChatSlash => self.chat_slash = keybind,
-            BoundAction::PhysicsDebug => self.physics_debug = keybind,
+            BoundAction::DebugPanel => self.physics_debug = keybind,
+            BoundAction::PerfPanel => self.performance_panel = keybind,
         }
     }
 }
@@ -200,6 +206,7 @@ impl Default for KeybindSettings {
             chat: ScanCode(0x14),
             chat_slash: ScanCode(0x35),
             physics_debug: ScanCode(0x3b),
+            performance_panel: ScanCode(0x3c),
             hotbar_slots: [
                 ScanCode(2),
                 ScanCode(3),

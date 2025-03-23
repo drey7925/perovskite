@@ -1,12 +1,3 @@
-use std::num::NonZeroU32;
-use std::ops::Deref;
-use std::{
-    backtrace,
-    collections::{hash_map::Entry, HashMap},
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
 use crate::{
     game_state::{
         entities::GameEntity, items::ClientInventory, ClientState, FastChunkNeighbors, GameAction,
@@ -25,6 +16,15 @@ use perovskite_core::{
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
 use prost::Message;
+use std::num::NonZeroU32;
+use std::ops::Deref;
+use std::sync::atomic::Ordering;
+use std::{
+    backtrace,
+    collections::{hash_map::Entry, HashMap},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::audio::{
     EvictedAudioHealer, MapSoundState, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED,
@@ -75,6 +75,10 @@ impl SharedState {
                         max_protocol_version: MAX_PROTOCOL_VERSION,
                     },
                 )),
+                want_performance_metrics: self
+                    .client_state
+                    .want_server_perf
+                    .load(Ordering::Relaxed),
             })
             .await?;
         Ok(())
@@ -172,6 +176,11 @@ impl OutboundContext {
                 sequence: self.sequence,
                 client_tick: 0,
                 client_message: Some(message),
+                want_performance_metrics: self
+                    .shared_state
+                    .client_state
+                    .want_server_perf
+                    .load(Ordering::Relaxed),
             })
             .await?;
         let now = Instant::now();
@@ -475,6 +484,7 @@ impl InboundContext {
                 .timekeeper
                 .update_error(message.tick);
         }
+        *self.shared_state.client_state.server_perf.lock() = message.performance_metrics.clone();
         match &message.server_message {
             None => {
                 log::warn!("Got empty message from server");

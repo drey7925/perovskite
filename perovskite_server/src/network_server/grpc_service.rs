@@ -14,8 +14,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{pin::Pin, sync::Arc};
-
 use anyhow::{bail, ensure};
 use perovskite_core::protocol::game_rpc::perovskite_game_server::PerovskiteGame;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
@@ -23,14 +21,16 @@ use perovskite_core::protocol::game_rpc::stream_to_server::ClientMessage;
 use perovskite_core::protocol::game_rpc::{
     self as proto, AuthSuccess, StreamToClient, StreamToServer,
 };
+use std::sync::atomic::AtomicBool;
+use std::{pin::Pin, sync::Arc};
 
+use crate::game_state::GameState;
 use log::{error, info, warn};
+use perovskite_core::constants::permissions;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Result, Status, Streaming};
-
-use crate::game_state::GameState;
 
 use super::client_context::make_client_contexts;
 
@@ -223,6 +223,7 @@ async fn game_stream_impl(
             server_message: Some(ServerMessage::AuthSuccess(AuthSuccess {
                 effective_protocol_version: effective_max_protocol,
             })),
+            performance_metrics: None,
         }))
         .await?;
 
@@ -240,6 +241,7 @@ async fn game_stream_impl(
                     server_message: Some(ServerMessage::ShutdownMessage(format!(
                         "Failed to establish player context: {e:?}"
                     ))),
+                    performance_metrics: None,
                 }))
                 .await?;
             return Err(Status::internal("Failed to establish player context").into());

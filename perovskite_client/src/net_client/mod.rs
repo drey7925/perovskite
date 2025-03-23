@@ -221,6 +221,7 @@ pub(crate) async fn connect_game(
             sequence: 0,
             client_tick: 0,
             client_message: Some(ClientMessage::ClientInitialReady(rpc::Nop {})),
+            want_performance_metrics: false,
         })
         .await?;
     let initial_state_notification = Arc::new(tokio::sync::Notify::new());
@@ -309,6 +310,7 @@ async fn do_register_handshake(
             min_protocol_version: MIN_PROTOCOL_VERSION,
             max_protocol_version: MAX_PROTOCOL_VERSION,
         })),
+        want_performance_metrics: false,
     })
     .await?;
     let registration_response = match rx.message().await? {
@@ -340,12 +342,14 @@ async fn do_register_handshake(
         client_message: Some(ClientMessage::ClientRegistrationUpload(
             finish_registration_result.message.serialize().to_vec(),
         )),
+        want_performance_metrics: false,
     })
     .await?;
     match rx.message().await? {
         Some(StreamToClient {
             server_message: Some(ServerMessage::AuthSuccess(success)),
             tick,
+            ..
         }) => Ok(AuthSuccess {
             protocol_version: success.effective_protocol_version,
             tick,
@@ -377,6 +381,7 @@ async fn do_login_handshake(
             min_protocol_version: MIN_PROTOCOL_VERSION,
             max_protocol_version: MAX_PROTOCOL_VERSION,
         })),
+        want_performance_metrics: false,
     })
     .await?;
     let registration_response = match rx.message().await? {
@@ -407,6 +412,7 @@ async fn do_login_handshake(
         client_message: Some(ClientMessage::ClientLoginCredential(
             finish_login_result.message.serialize().to_vec(),
         )),
+        want_performance_metrics: false,
     })
     .await?;
 
@@ -414,6 +420,7 @@ async fn do_login_handshake(
         Some(StreamToClient {
             server_message: Some(ServerMessage::AuthSuccess(success)),
             tick,
+            ..
         }) => Ok(AuthSuccess {
             protocol_version: success.effective_protocol_version,
             tick,

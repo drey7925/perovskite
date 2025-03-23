@@ -1,18 +1,18 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc, time::Duration};
 
+use super::{
+    client_ui::Popup, event::HandlerContext, inventory::InventoryKey, player::Player, GameState,
+};
 use crate::game_state::entities::EntityClassId;
 use anyhow::Result;
 use cgmath::{vec3, Vector3, Zero};
 use itertools::Itertools;
+use perovskite_core::constants::permissions::PERFORMANCE_METRICS;
 use perovskite_core::{
     chat::ChatMessage,
     constants::permissions::{ELIGIBLE_PREFIX, FAST_MOVE, FLY, NOCLIP},
 };
 use tonic::async_trait;
-
-use super::{
-    client_ui::Popup, event::HandlerContext, inventory::InventoryKey, player::Player, GameState,
-};
 
 /// Creates a [Popup] that will be shown when the player presses the inventory key
 pub trait InventoryPopupProvider: Send + Sync + 'static {
@@ -81,6 +81,7 @@ impl GameBehaviors {
                 FLY.to_owned(),
                 FAST_MOVE.to_owned(),
                 NOCLIP.to_owned(),
+                PERFORMANCE_METRICS.to_owned(),
             ])
         }
         permissions

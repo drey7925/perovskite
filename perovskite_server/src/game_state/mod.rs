@@ -31,12 +31,14 @@ pub mod player;
 #[cfg(test)]
 pub mod tests;
 
+use crate::database::database_engine::{GameDatabase, KeySpace};
 use anyhow::{bail, Result};
 use integer_encoding::VarInt;
 use log::{info, warn};
 use parking_lot::Mutex;
 use perovskite_core::chat::{ChatMessage, SERVER_ERROR_COLOR};
 use perovskite_core::constants::permissions::{ELIGIBLE_PREFIX, GRANT};
+use perovskite_core::protocol::game_rpc::ServerPerformanceMetrics;
 use perovskite_core::time::TimeState;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -45,8 +47,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-
-use crate::database::database_engine::{GameDatabase, KeySpace};
 
 use crate::game_state::audio_crossbar::AudioCrossbarSender;
 use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
@@ -396,6 +396,23 @@ impl GameState {
         self.start_shutdown();
 
         // TODO get the stacktrace here
+    }
+
+    pub(crate) fn performance_metrics_proto(&self) -> ServerPerformanceMetrics {
+        ServerPerformanceMetrics {
+            mapshard_writeback_len: self
+                .game_map()
+                .debug_writeback_pressures()
+                .iter()
+                .map(|x| *x as u64)
+                .collect(),
+            mapshard_loaded_chunks: self
+                .game_map()
+                .debug_shard_sizes()
+                .iter()
+                .map(|x| *x as u64)
+                .collect(),
+        }
     }
 }
 

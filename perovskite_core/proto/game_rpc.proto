@@ -83,6 +83,7 @@ message ListMediaResponse { repeated ListMediaEntry media = 1; }
 message StreamToServer {
   uint64 sequence = 1;
   uint64 client_tick = 2;
+  bool want_performance_metrics = 3;
 
   oneof client_message {
     // Flow control messages
@@ -135,10 +136,20 @@ message StreamToServer {
   };
 }
 
+message ServerPerformanceMetrics {
+  // The length of the writeback queues
+  repeated uint64 mapshard_writeback_len = 1;
+  // The number of loaded chunks
+  repeated uint64 mapshard_loaded_chunks = 2;
+}
+
 message StreamToClient {
   // 64-bit nanoseconds since some implementation-defined epoch
   // Must be monotonic within any given stream.
   uint64 tick = 1;
+  // Only populated if want_performance_metrics is true and the player has
+  // permission to see performance metrics
+  ServerPerformanceMetrics performance_metrics = 2;
 
   oneof server_message {
     // We've finished handling a request from the server->client stream,

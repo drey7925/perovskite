@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::ops::RangeInclusive;
 
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -74,9 +74,9 @@ use perovskite_core::protocol::game_rpc::dig_tap_action::ActionTarget;
 use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
 use perovskite_core::protocol::game_rpc::place_action::PlaceAnchor;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
-use perovskite_core::protocol::game_rpc::MapDeltaUpdateBatch;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
 use perovskite_core::protocol::game_rpc::StreamToClient;
+use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch, ServerPerformanceMetrics};
 use perovskite_core::util::{LogInspect, TraceBuffer};
 use prost::Message;
 use rustc_hash::FxHashMap;
@@ -253,6 +253,7 @@ pub(crate) async fn make_client_contexts(
         cancellation,
         effective_protocol_version,
         chunk_aimd,
+        enable_performance_metrics: AtomicBool::new(false),
     });
 
     let inbound_worker = InboundWorker {
@@ -341,17 +342,15 @@ async fn initialize_protocol_state(
                 server_message: Some(ServerMessage::ShutdownMessage(
                     "You don't have permission to log in".to_string(),
                 )),
+                performance_metrics: context.maybe_get_performance_metrics(),
             }))
             .await?;
     }
     let (hotbar_update, inv_manipulation_update) = {
         let player_state = context.player_context.state.lock();
         (
-            make_inventory_update(&context.game_state, &&player_state.hotbar_inventory_view)?,
-            make_inventory_update(
-                &context.game_state,
-                &&player_state.inventory_manipulation_view,
-            )?,
+            make_inventory_update(&context, &&player_state.hotbar_inventory_view)?,
+            make_inventory_update(&context, &&player_state.inventory_manipulation_view)?,
         )
     };
 
@@ -391,7 +390,7 @@ async fn send_all_popups(
         {
             for view in popup.inventory_views().values() {
                 updates.push(make_inventory_update(
-                    &context.game_state,
+                    &context,
                     &InventoryViewWithContext {
                         view,
                         context: popup,
@@ -418,6 +417,16 @@ pub struct SharedContext {
     cancellation: CancellationToken,
     effective_protocol_version: u32,
     chunk_aimd: Arc<Mutex<Aimd>>,
+    enable_performance_metrics: AtomicBool,
+}
+impl SharedContext {
+    fn maybe_get_performance_metrics(&self) -> Option<ServerPerformanceMetrics> {
+        if self.enable_performance_metrics.load(Ordering::Relaxed) {
+            Some(self.game_state.performance_metrics_proto())
+        } else {
+            None
+        }
+    }
 }
 impl Drop for SharedContext {
     fn drop(&mut self) {
@@ -624,6 +633,7 @@ impl MapChunkSender {
                     chunk_coord: chunks_to_unsubscribe.iter().map(|&x| x.into()).collect(),
                 },
             )),
+            performance_metrics: self.context.maybe_get_performance_metrics(),
         };
 
         trace.log("unsub chunks msg ready");
@@ -780,6 +790,7 @@ impl MapChunkSender {
                         chunk_coord: Some(coord.into()),
                         snappy_encoded_bytes: chunk_bytes,
                     })),
+                    performance_metrics: self.context.maybe_get_performance_metrics(),
                 };
                 trace.log("message ready done");
                 self.outbound_tx.send(Ok(message)).await.map_err(|_| {
@@ -969,6 +980,7 @@ impl BlockEventSender {
                 server_message: Some(ServerMessage::MapDeltaUpdate(MapDeltaUpdateBatch {
                     updates: update_protos,
                 })),
+                performance_metrics: self.context.maybe_get_performance_metrics(),
             };
             self.outbound_tx
                 .send(Ok(message))
@@ -1048,6 +1060,7 @@ fn make_client_state_update_message(
                     .collect(),
                 attached_to_entity: player_state.attached_to_entity,
             })),
+            performance_metrics: ctx.maybe_get_performance_metrics(),
         }
     };
 
@@ -1134,7 +1147,7 @@ impl InventoryEventSender {
             for key in update_keys {
                 if player_state.hotbar_inventory_view.wants_update_for(&key) {
                     update_messages.push(make_inventory_update(
-                        &self.context.game_state,
+                        &self.context,
                         &&player_state.hotbar_inventory_view,
                     )?);
                 }
@@ -1147,7 +1160,7 @@ impl InventoryEventSender {
                     for view in popup.inventory_views().values() {
                         if view.wants_update_for(&key) {
                             update_messages.push(make_inventory_update(
-                                &self.context.game_state,
+                                &self.context,
                                 &InventoryViewWithContext {
                                     view,
                                     context: popup,
@@ -1266,6 +1279,15 @@ impl InboundWorker {
     }
 
     async fn handle_message(&mut self, message: &proto::StreamToServer) -> Result<()> {
+        let enable_perf_stats = message.want_performance_metrics
+            && self
+                .context
+                .player_context
+                .has_permission(permissions::PERFORMANCE_METRICS);
+        self.context
+            .enable_performance_metrics
+            .store(enable_perf_stats, Ordering::Relaxed);
+
         log_trace("Handling inbound message");
         // todo do something with the client tick once we define ticks
         match &message.client_message {
@@ -1506,6 +1528,7 @@ impl InboundWorker {
         let message = StreamToClient {
             tick: self.context.game_state.tick(),
             server_message: Some(ServerMessage::HandledSequence(sequence)),
+            performance_metrics: self.context.maybe_get_performance_metrics(),
         };
 
         self.outbound_tx.send(Ok(message)).await.map_err(|_| {
@@ -1774,13 +1797,13 @@ impl InboundWorker {
                     let mut updates = vec![];
                     for view in views_to_send {
                         updates.push(make_inventory_update(
-                            &self.context.game_state,
+                            &self.context,
                             player_state.find_inv_view(view)?.as_ref(),
                         )?);
                     }
 
                     updates.push(make_inventory_update(
-                        &self.context.game_state,
+                        &self.context,
                         &&player_state.inventory_manipulation_view,
                     )?);
                     log_trace("Done running inventory action");
@@ -1838,7 +1861,7 @@ impl InboundWorker {
                     .inventory_manipulation_view
                     .clear_if_transient(Some(self.context.player_context.main_inventory_key))?;
                 updates.push(make_inventory_update(
-                    &self.context.game_state,
+                    &self.context,
                     &&player_state.inventory_manipulation_view,
                 )?);
             }
@@ -1866,7 +1889,7 @@ impl InboundWorker {
                     })?;
                     for view in popup.inventory_views().values() {
                         updates.push(make_inventory_update(
-                            &self.context.game_state,
+                            &self.context,
                             &InventoryViewWithContext {
                                 view,
                                 context: &popup,
@@ -1902,7 +1925,7 @@ impl InboundWorker {
                     })?;
                     for view in inventory_popup.inventory_views().values() {
                         updates.push(make_inventory_update(
-                            &self.context.game_state,
+                            &self.context,
                             &InventoryViewWithContext {
                                 view,
                                 context: &inventory_popup,
@@ -2052,7 +2075,7 @@ impl InboundWorker {
         {
             for view in popup.inventory_views().values() {
                 messages.push(make_inventory_update(
-                    &self.context.game_state,
+                    &self.context,
                     &InventoryViewWithContext {
                         view,
                         context: &popup,
@@ -2062,6 +2085,7 @@ impl InboundWorker {
             messages.push(StreamToClient {
                 tick: self.context.game_state.tick(),
                 server_message: Some(ServerMessage::ShowPopup(popup.to_proto())),
+                performance_metrics: self.context.maybe_get_performance_metrics(),
             });
             self.context
                 .player_context
@@ -2111,6 +2135,7 @@ impl MiscOutboundWorker {
                             self.outbound_tx.send(Ok(StreamToClient {
                                 tick: self.context.game_state.tick(),
                                 server_message: Some(ServerMessage::ShutdownMessage(message)),
+                                performance_metrics: self.context.maybe_get_performance_metrics(),
                             })).await?;
                         },
                         None => {
@@ -2137,6 +2162,7 @@ impl MiscOutboundWorker {
                             self.outbound_tx.send(Ok(StreamToClient {
                                 tick: self.context.game_state.tick(),
                                 server_message: Some(ServerMessage::ShowPopup(popup_proto)),
+                                performance_metrics: self.context.maybe_get_performance_metrics(),
                             })).await?;
                         },
                         None => {
@@ -2182,6 +2208,7 @@ impl MiscOutboundWorker {
                     self.outbound_tx.send(Ok(StreamToClient {
                         tick: self.context.game_state.tick(),
                         server_message: Some(ServerMessage::ShutdownMessage("Game server is shutting down.".to_string())),
+                        performance_metrics: self.context.maybe_get_performance_metrics(),
                     })).await?;
                     // cancel the inbound context as well
                     self.context.cancellation.cancel();
@@ -2204,6 +2231,7 @@ impl MiscOutboundWorker {
                     color_argb: message.origin_color_fixed32(),
                     message: message.text().to_string(),
                 })),
+                performance_metrics: self.context.maybe_get_performance_metrics(),
             }))
             .await?;
         Ok(())
@@ -2339,6 +2367,7 @@ impl EntityEventSender {
                 .send(Ok(StreamToClient {
                     tick,
                     server_message: Some(ServerMessage::EntityUpdate(message)),
+                    performance_metrics: self.context.maybe_get_performance_metrics(),
                 }))
                 .await?;
         }
@@ -2460,13 +2489,15 @@ impl Aimd {
 }
 
 fn make_inventory_update(
-    game_state: &GameState,
+    context: &SharedContext,
     view: &dyn TypeErasedInventoryView,
 ) -> Result<StreamToClient> {
     block_in_place(|| {
         Ok(StreamToClient {
-            tick: game_state.tick(),
+            tick: context.game_state.tick(),
             server_message: Some(ServerMessage::InventoryUpdate(view.to_client_proto()?)),
+            // TODO: make them available here, although we'd need to refactor a lot of call sites
+            performance_metrics: context.maybe_get_performance_metrics(),
         })
     })
 }
@@ -2514,6 +2545,7 @@ impl AudioSender {
                     .send(Ok(StreamToClient {
                         tick: self.context.game_state.tick(),
                         server_message: Some(ServerMessage::PlaySampledSound(x)),
+                        performance_metrics: self.context.maybe_get_performance_metrics(),
                     }))
                     .await?
             }
