@@ -1,19 +1,13 @@
 use anyhow::Result;
 use egui::{
     vec2, Button, Color32, Context, Id, ScrollArea, Sense, Stroke, TextEdit, TextStyle, TextureId,
+    Vec2b,
 };
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
 use perovskite_core::protocol::items::ItemStack;
 use perovskite_core::protocol::ui::{self as proto, PopupResponse};
 use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescription};
-
-use arc_swap::ArcSwap;
-use egui::load::SizedTexture;
-use parking_lot::MutexGuard;
-use rustc_hash::FxHashMap;
-use std::ops::ControlFlow;
-use std::{collections::HashMap, sync::Arc, usize};
 
 use super::hud::render_number;
 use super::{get_texture, FRAME_UNSELECTED};
@@ -28,6 +22,14 @@ use crate::{
     game_state::{items::ClientItemManager, ClientState},
     vulkan::Texture2DHolder,
 };
+use arc_swap::ArcSwap;
+use egui::load::SizedTexture;
+use egui_plot::{BarChart, Orientation};
+use parking_lot::MutexGuard;
+use perovskite_core::protocol::game_rpc::ServerPerformanceMetrics;
+use rustc_hash::FxHashMap;
+use std::ops::ControlFlow;
+use std::{collections::HashMap, sync::Arc, usize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InvClickType {
@@ -69,6 +71,7 @@ pub(crate) struct EguiUi {
     chat_scroll_counter: usize,
 
     prospective_settings: GameSettings,
+    perf_records: ServerPerformanceMetrics,
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -106,6 +109,7 @@ impl EguiUi {
             chat_scroll_counter: 0,
 
             prospective_settings: (**settings.load()).clone(),
+            perf_records: ServerPerformanceMetrics::default(),
         }
     }
     pub(crate) fn wants_user_events(&self) -> bool {
@@ -946,7 +950,75 @@ impl EguiUi {
             });
     }
 
+    fn get_bars_and_update_records(
+        current_data: &Vec<u64>,
+        records: &mut Vec<u64>,
+    ) -> Vec<egui_plot::Bar> {
+        if records.len() < current_data.len() {
+            records.resize(current_data.len(), 0);
+        }
+        let mut result = vec![];
+        for (i, (data, record)) in current_data.iter().zip(records.iter_mut()).enumerate() {
+            *record = (*record).max(*data);
+            let diff = *record - *data;
+            result.push(egui_plot::Bar {
+                name: "".to_string(),
+                orientation: Orientation::Vertical,
+                argument: i as f64,
+                value: *data as f64,
+                base_offset: None,
+                bar_width: 1.0,
+                stroke: Stroke::NONE,
+                fill: Color32::RED,
+            });
+            result.push(egui_plot::Bar {
+                name: "".to_string(),
+                orientation: Orientation::Vertical,
+                argument: i as f64,
+                value: diff as f64,
+                base_offset: Some(*data as f64),
+                bar_width: 1.0,
+                stroke: Stroke::NONE,
+                fill: Color32::DARK_GRAY,
+            });
+        }
+        result
+    }
+
+    fn render_perf_chart(
+        ui: &mut egui::Ui,
+        title: &str,
+        data: &Vec<u64>,
+        records: &mut Vec<u64>,
+        plot_name: &str,
+    ) {
+        let mut bars = vec![];
+        bars.append(&mut Self::get_bars_and_update_records(data, records));
+        ui.label(
+            egui::RichText::new(format!(
+                "{} (chart max={})",
+                title,
+                records.iter().copied().max().unwrap_or(0)
+            ))
+            .color(Color32::WHITE),
+        );
+        egui_plot::Plot::new(plot_name)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .auto_bounds(Vec2b::TRUE)
+            .allow_boxed_zoom(false)
+            .show_x(false)
+            .show_y(false)
+            .show_grid(Vec2b::FALSE)
+            .width(data.len() as f32 * 8.0)
+            .height(48.0)
+            .show_axes(Vec2b::FALSE)
+            .show(ui, |ui| ui.bar_chart(BarChart::new(bars)));
+    }
+
     fn render_perf(&mut self, ctx: &Context, state: &ClientState) {
+        let perf = state.server_perf();
+
         egui::TopBottomPanel::bottom("perf_panel")
             .max_height(240.0)
             .frame(egui::Frame {
@@ -958,12 +1030,30 @@ impl EguiUi {
                 ..Default::default()
             })
             .show(ctx, |ui| {
-                let perf_proto = state.server_perf();
-                ui.label(
-                    egui::RichText::new(format!("{perf_proto:?}"))
-                        .font(egui::FontId::monospace(16.0))
-                        .color(Color32::WHITE),
-                );
+                if let Some(perf) = perf {
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            Self::render_perf_chart(
+                                ui,
+                                "Shard writeback queue",
+                                &perf.mapshard_writeback_len,
+                                &mut self.perf_records.mapshard_writeback_len,
+                                "writeback_plot",
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            Self::render_perf_chart(
+                                ui,
+                                "Shard occupancy",
+                                &perf.mapshard_loaded_chunks,
+                                &mut self.perf_records.mapshard_loaded_chunks,
+                                "occupancy_plot",
+                            );
+                        });
+                    });
+                } else {
+                    ui.label("No perf data");
+                }
             });
     }
 }

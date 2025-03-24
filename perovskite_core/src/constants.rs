@@ -141,7 +141,7 @@ pub mod permissions {
     pub const CLIENT_RELEVANT_PERMISSIONS: &[&str] =
         &[FLY, FAST_MOVE, NOCLIP, DIG_PLACE, TAP_INTERACT, INVENTORY];
 
-    pub const ALL_PERMISSIONS: [&str; 13] = [
+    pub const ALL_PERMISSIONS: [&str; 14] = [
         FLY,
         FAST_MOVE,
         NOCLIP,
@@ -155,6 +155,7 @@ pub mod permissions {
         WORLD_STATE,
         INVENTORY,
         CHAT,
+        PERFORMANCE_METRICS,
     ];
 
     /// Prefix for permissions that can be self-granted on request, used for
