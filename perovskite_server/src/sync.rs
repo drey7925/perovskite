@@ -1,4 +1,6 @@
 use parking_lot::{Condvar, Mutex, RwLockReadGuard, RwLockWriteGuard};
+use std::future::Future;
+use std::sync::atomic::Ordering;
 
 pub(crate) struct RwCondvar {
     c: Condvar,

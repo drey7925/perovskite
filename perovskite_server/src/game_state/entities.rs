@@ -46,6 +46,7 @@ use crate::{
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracy_client::span;
 
@@ -661,6 +662,7 @@ impl<'a> EntityCoroutineServices<'a> {
         &self,
         delay: Duration,
         task: impl FnOnce(&HandlerContext) + Send + 'static,
+        cancellation_token: Option<CancellationToken>,
     ) {
         let ctx = HandlerContext {
             tick: self.game_state.tick(),
@@ -668,17 +670,30 @@ impl<'a> EntityCoroutineServices<'a> {
             game_state: self.game_state.clone(),
         };
         tokio::task::spawn(async move {
-            tokio::time::sleep(delay).await;
+            if !delay.is_zero() {
+                let sleep_until = tokio::time::Instant::now() + delay;
+                if let Some(cancellation_token) = cancellation_token {
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(sleep_until) => {}
+                        _ = cancellation_token.cancelled() => {
+                            return;
+                        }
+                    }
+                } else {
+                    tokio::time::sleep_until(sleep_until).await;
+                }
+            }
             tokio::task::block_in_place(|| task(&ctx));
         });
     }
 
-    /// Spawns a future onto the entity coroutine's async executor.
+    /// Spawns a future onto the entity coroutine's async executor and reinvokes the coroutine when
+    /// it completes.
     ///
     /// For now, this is just spawned onto the tokio runtime, but this may change in the future.
     ///
     /// Warning: If the function hangs indefinitely, the game cannot exit.
-    pub fn spawn_async<T: Send + Sync + 'static, Fut>(
+    pub fn defer_async<T: Send + Sync + 'static, Fut>(
         &self,
         task: impl FnOnce(HandlerContext<'static>) -> Fut,
     ) -> Deferral<T>
@@ -697,6 +712,28 @@ impl<'a> EntityCoroutineServices<'a> {
                 (result, ())
             }),
         }
+    }
+
+    /// Spawns a future onto the entity coroutine's async executor and reinvokes the coroutine when
+    /// it completes.
+    ///
+    /// For now, this is just spawned onto the tokio runtime, but this may change in the future.
+    ///
+    /// Warning: If the function hangs indefinitely, the game cannot exit.
+    pub fn spawn_async<T: Send + Sync + 'static, Fut>(
+        &self,
+        task: impl FnOnce(HandlerContext<'static>) -> Fut,
+    ) -> JoinHandle<()>
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let ctx: HandlerContext<'static> = HandlerContext {
+            tick: self.game_state.tick(),
+            initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
+            game_state: self.game_state.clone(),
+        };
+        let fut = task(ctx);
+        tokio::task::spawn(fut)
     }
 }
 
@@ -941,6 +978,7 @@ pub trait EntityCoroutine: Send + Sync + Debug + 'static {
     /// Called when the entity's next move needs to be planned.
     ///
     /// Args:
+    ///   * services: Use this to access game state in a way appropriate for entity coroutines
     ///   * current_position: The current position of the entity
     ///   * whence: The position of the entity at the time when the current move finishes. The returned move will start from approximately that place.
     ///   * when: The time (seconds from now) when the current move finishes. The returned move will start at that time.
@@ -957,6 +995,19 @@ pub trait EntityCoroutine: Send + Sync + Debug + 'static {
         queue_space: usize,
     ) -> CoroutineResult;
 
+    /// Called when a deferred action wrapped in DeferAndReinvoke completes
+    ///
+    /// Args:
+    ///   * services: Use this to access game state in a way appropriate for entity coroutines
+    ///   * current_position: The current position of the entity
+    ///   * whence: The position of the entity at the time when the current move finishes. The returned move will start from approximately that place.
+    ///   * when: The time (seconds from now) when the current move finishes. The returned move will start at that time.
+    ///   * queue_space: The amount of space available in the move queue
+    ///   * continuation_result: The result being provided back to the coroutine
+    ///   * trace_buffer: Trace buffer, for lightweight logging/performance tracing.
+    ///
+    /// Returns:
+    ///     The next move for the entity
     fn continuation(
         self: Pin<&mut Self>,
         services: &EntityCoroutineServices<'_>,
@@ -971,6 +1022,9 @@ pub trait EntityCoroutine: Send + Sync + Debug + 'static {
         drop(continuation_result);
         self.plan_move(services, current_position, whence, when, queue_space)
     }
+
+    /// Called when an entity is being deleted
+    fn pre_delete(self: Pin<&mut Self>, _services: &EntityCoroutineServices<'_>) {}
 }
 
 const ID_MASK: u64 = (1 << 48) - 1;
@@ -1622,8 +1676,21 @@ impl EntityCoreArray {
         i
     }
 
-    fn remove(&mut self, id: u64) -> Result<(), EntityError> {
+    fn remove(&mut self, id: u64, services: &EntityCoroutineServices) -> Result<(), EntityError> {
         if let Some(i) = self.id_lookup.remove(&id) {
+            if let Some(coro) = self.coroutine[i].as_mut() {
+                if let Err(e) = run_handler!(
+                    || {
+                        coro.as_mut().pre_delete(services);
+                        Ok(())
+                    },
+                    "entity_coro",
+                    &EventInitiator::Engine,
+                ) {
+                    self.coro_panic_unwind(i, e);
+                }
+            }
+
             self.len -= 1;
             self.id.swap_remove(i);
             self.class.swap_remove(i);
@@ -2521,7 +2588,7 @@ impl EntityShardWorker {
                     );
                     indices.push(index);
                 }
-                EntityAction::Remove(id) => match lock.remove(id) {
+                EntityAction::Remove(id) => match lock.remove(id, &self.services()) {
                     Ok(_) => {}
                     Err(EntityError::NotFound) => {
                         tracing::warn!("Tried to remove non-existent entity {}", id);

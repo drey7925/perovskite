@@ -977,7 +977,7 @@ pub(crate) fn signal_enter_block(
     if variant & VARIANT_PERMISSIVE == 0 {
         // This signal is not actually clear
         tracing::warn!(
-            "Attempting to clear a signal that is already cleared at {:?}. Variant is {:x}",
+            "Attempting to enter a signal that is not already permissive at {:?}. Variant is {:x}",
             block_coord,
             variant
         );
@@ -1018,8 +1018,11 @@ pub(crate) fn signal_release(
             variant
         )
     }
-    variant &=
-        !(VARIANT_RESTRICTIVE_TRAFFIC | VARIANT_LEFT | VARIANT_RIGHT | VARIANT_STARTING_HELD);
+    variant &= !(VARIANT_RESTRICTIVE_TRAFFIC
+        | VARIANT_LEFT
+        | VARIANT_RIGHT
+        | VARIANT_STARTING_HELD
+        | VARIANT_PERMISSIVE);
     variant |= VARIANT_RESTRICTIVE;
     *id = id.with_variant_unchecked(variant);
 }

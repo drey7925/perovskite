@@ -253,7 +253,7 @@ fn single_pathfind_attempt(
     // 1. Reach the end of the track (which means that we can finish the path)
     // 2. Reach a correctly-facing automatic signal (which means that we're returning to simple non-interlocking tracks
     //      in the correct direction)
-    // 3. Reach a starting signal (TODO implement this)
+    // 3. Reach a starting signal
     // 4. Run out of steps (in which case we clean up and give up)
     // 5. Encounter an automatic signal facing the wrong way (in which case we clean up and give up)
     //      Note that interlocking signals facing the wrong way are OK

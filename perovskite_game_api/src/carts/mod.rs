@@ -1,12 +1,16 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use std::{
     collections::{BinaryHeap, VecDeque},
     time::Instant,
 };
-
 // This is a temporary implementation used while developing the entity system
 use anyhow::{bail, Context, Result};
 
 use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
+use crate::carts::util::AsyncRefcount;
 use crate::default_game::block_groups::BRITTLE;
 use crate::{
     blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
@@ -43,6 +47,7 @@ use perovskite_server::game_state::{
     GameStateExtension,
 };
 use rustc_hash::FxHashMap;
+use tokio_util::sync::CancellationToken;
 
 mod interlocking;
 mod signals;
@@ -470,6 +475,8 @@ fn actually_spawn_cart(
             cart_length,
 
             interlocking_resume_state: None,
+            cancellation: CancellationToken::new(),
+            spawned_task_count: AsyncRefcount::new(),
         })),
         EntityTypeId {
             class: dbg!(config.cart_id),
@@ -663,6 +670,65 @@ impl Ord for PendingActionEntry {
     }
 }
 
+mod util {
+    use std::future::Future;
+    use std::sync::atomic::Ordering;
+
+    struct AsyncRefcountInner {
+        count: std::sync::atomic::AtomicU32,
+        notification: tokio::sync::Notify,
+    }
+
+    pub(super) struct AsyncRefcountHandle {
+        inner: std::sync::Arc<AsyncRefcountInner>,
+    }
+    impl Drop for AsyncRefcountHandle {
+        fn drop(&mut self) {
+            if self.inner.count.fetch_sub(1, Ordering::Release) == 0 {
+                self.inner.notification.notify_waiters();
+            }
+        }
+    }
+
+    pub(super) struct AsyncRefcount {
+        inner: std::sync::Arc<AsyncRefcountInner>,
+        waiting: bool,
+    }
+    impl AsyncRefcount {
+        pub(super) fn new() -> AsyncRefcount {
+            AsyncRefcount {
+                inner: std::sync::Arc::new(AsyncRefcountInner {
+                    count: std::sync::atomic::AtomicU32::new(0),
+                    notification: tokio::sync::Notify::new(),
+                }),
+                waiting: false,
+            }
+        }
+
+        /// Attempts to increment the reference count, returning None if there's already a waiter
+        pub(super) fn acquire(&mut self) -> Option<AsyncRefcountHandle> {
+            if self.waiting {
+                None
+            } else {
+                self.inner.count.fetch_add(1, Ordering::SeqCst);
+                Some(AsyncRefcountHandle {
+                    inner: self.inner.clone(),
+                })
+            }
+        }
+
+        pub(super) fn wait(&mut self) -> impl Future<Output = ()> {
+            self.waiting = true;
+            let inner_clone = self.inner.clone();
+            async move {
+                while inner_clone.count.load(Ordering::Acquire) > 0 {
+                    inner_clone.notification.notified().await;
+                }
+            }
+        }
+    }
+}
+
 pub(crate) const MAX_ACCEL: f64 = 8.0;
 struct CartCoroutine {
     config: CartsGameBuilderExtension,
@@ -692,6 +758,8 @@ struct CartCoroutine {
     cart_length: u32,
 
     interlocking_resume_state: Option<InterlockingResumeState>,
+    cancellation: CancellationToken,
+    spawned_task_count: AsyncRefcount,
 }
 impl EntityCoroutine for CartCoroutine {
     fn plan_move(
@@ -771,6 +839,29 @@ impl EntityCoroutine for CartCoroutine {
             };
         }
         self.plan_move_impl(services, whence, when, queue_space, trace_buffer)
+    }
+
+    fn pre_delete(mut self: Pin<&mut Self>, services: &EntityCoroutineServices<'_>) {
+        let config = self.config.clone();
+        let mut work_items = vec![];
+        work_items.extend(self.pending_actions.drain().map(|x| x.action));
+        if let Some(signal) = self.held_signal {
+            work_items.push(PendingAction::SignalRelease(signal.0, signal.1));
+        }
+        let config_clone = self.config.clone();
+        let wait_for_tasks = self.spawned_task_count.wait();
+        self.cancellation.cancel();
+        let cart_id = self.id;
+        services.spawn_async::<(), _>(move |ctx| async move {
+            wait_for_tasks.await;
+
+            for work in work_items.into_iter() {
+                if let Err(e) = Self::handle_pending_action(&ctx, &config_clone, work) {
+                    tracing::error!("Failed to handle pending action in pre_delete: {e:?}")
+                }
+            }
+            tracing::info!("All held signals of cart {} cleaned up", cart_id);
+        });
     }
 }
 
@@ -908,7 +999,7 @@ impl CartCoroutine {
             let starting_from_standstill =
                 self.last_segment_exit_speed() <= 0.001 || buffer_time_estimate < 0.001;
             let cart_id = self.id;
-            return ReenterableResult::Deferred(services.spawn_async(move |ctx| async move {
+            return ReenterableResult::Deferred(services.defer_async(move |ctx| async move {
                 let state = state_clone;
                 trace_buffer.log("Interlocking signal deferred");
                 if starting_from_standstill {
@@ -1857,97 +1948,20 @@ impl CartCoroutine {
 
                 let odometer_time = segment.event_time(action.odometer);
                 let action_time = (returned_moves_time + when as f64 + odometer_time).max(0.0);
-                match action.action {
-                    PendingAction::SignalEnterBlock(enter_signal_coord, enter_signal_block) => {
-                        services.spawn_delayed(
-                            std::time::Duration::from_secs_f64(action_time),
-                            move |ctx| {
-                                ctx.game_map()
-                                    .mutate_block_atomically(enter_signal_coord, |b, _ext| {
-                                        tracing::debug!("entering block");
-                                        signals::signal_enter_block(
-                                            enter_signal_coord,
-                                            b,
-                                            enter_signal_block,
-                                        );
-                                        Ok(())
-                                    })
-                                    .unwrap();
-                            },
-                        );
-                    }
-                    PendingAction::StartingSignalEnterBlockReverse(
-                        enter_signal_coord,
-                        enter_signal_block,
-                    ) => {
-                        services.spawn_delayed(
-                            std::time::Duration::from_secs_f64(action_time),
-                            move |ctx| {
-                                ctx.game_map()
-                                    .mutate_block_atomically(enter_signal_coord, |b, _ext| {
-                                        tracing::debug!("entering block");
-                                        signals::starting_signal_reverse_enter_block(
-                                            enter_signal_coord,
-                                            b,
-                                            enter_signal_block,
-                                        );
-                                        Ok(())
-                                    })
-                                    .unwrap();
-                            },
-                        );
-                    }
-                    PendingAction::SignalRelease(exit_signal_coord, exit_signal_block) => {
-                        services.spawn_delayed(
-                            std::time::Duration::from_secs_f64(action_time),
-                            move |ctx| {
-                                ctx.game_map()
-                                    .mutate_block_atomically(exit_signal_coord, |b, _ext| {
-                                        signals::signal_release(
-                                            exit_signal_coord,
-                                            b,
-                                            exit_signal_block,
-                                        );
-                                        Ok(())
-                                    })
-                                    .unwrap();
-                            },
-                        );
-                    }
-                    PendingAction::SwitchRelease(pass_switch_coord, pass_switch_block) => {
-                        let switch_unset = self.config.switch_unset;
-                        services.spawn_delayed(
-                            std::time::Duration::from_secs_f64(action_time),
-                            move |ctx| match ctx
-                                .game_map()
-                                .compare_and_set_block(
-                                    pass_switch_coord,
-                                    pass_switch_block,
-                                    switch_unset,
-                                    None,
-                                    false,
-                                )
-                                .unwrap()
-                            {
-                                (game_state::game_map::CasOutcome::Match, _, _) => {
-                                    tracing::debug!(
-                                        "Pass switch match: got {:?} at {:?}",
-                                        pass_switch_block,
-                                        pass_switch_coord
-                                    );
-                                }
-                                (game_state::game_map::CasOutcome::Mismatch, id, _) => {
-                                    tracing::warn!(
-                                        "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
-                                        id,
-                                        pass_switch_block,
-                                        pass_switch_coord
-                                    );
-                                }
-                            },
-                        );
-                    }
-                };
+                let config_clone = self.config.clone();
+                let cancel_clone = self.cancellation.clone();
+                let ref_clone = self
+                    .spawned_task_count
+                    .acquire()
+                    .expect("self.spawned_task_count.acquire should succeed unless scheduling was invoked after pre_remove");
+                services.spawn_delayed(
+                    Duration::from_secs_f64(action_time),
+                    move |ctx| {
+                        Self::handle_pending_action(ctx, &config_clone, action.action).unwrap();
+                        drop(ref_clone);
+                    },
+                    Some(cancel_clone),
+                )
             }
 
             returned_moves_time += segment.move_time;
@@ -1963,6 +1977,69 @@ impl CartCoroutine {
         CoroutineResult::Successful(game_state::entities::EntityMoveDecision::QueueUpMultiple(
             returned_moves,
         ))
+    }
+
+    fn handle_pending_action(
+        ctx: &HandlerContext,
+        config: &CartsGameBuilderExtension,
+        action: PendingAction,
+    ) -> Result<()> {
+        match action {
+            PendingAction::SignalEnterBlock(enter_signal_coord, enter_signal_block) => ctx
+                .game_map()
+                .mutate_block_atomically(enter_signal_coord, |b, _ext| {
+                    tracing::debug!("entering block");
+                    signals::signal_enter_block(enter_signal_coord, b, enter_signal_block);
+                    Ok(())
+                }),
+            PendingAction::StartingSignalEnterBlockReverse(
+                enter_signal_coord,
+                enter_signal_block,
+            ) => ctx
+                .game_map()
+                .mutate_block_atomically(enter_signal_coord, |b, _ext| {
+                    tracing::debug!("entering block");
+                    signals::starting_signal_reverse_enter_block(
+                        enter_signal_coord,
+                        b,
+                        enter_signal_block,
+                    );
+                    Ok(())
+                }),
+            PendingAction::SignalRelease(exit_signal_coord, exit_signal_block) => ctx
+                .game_map()
+                .mutate_block_atomically(exit_signal_coord, |b, _ext| {
+                    signals::signal_release(exit_signal_coord, b, exit_signal_block);
+                    Ok(())
+                }),
+            PendingAction::SwitchRelease(pass_switch_coord, pass_switch_block) => {
+                let switch_unset = config.switch_unset;
+                match ctx.game_map().compare_and_set_block(
+                    pass_switch_coord,
+                    pass_switch_block,
+                    switch_unset,
+                    None,
+                    false,
+                )? {
+                    (game_state::game_map::CasOutcome::Match, _, _) => {
+                        tracing::debug!(
+                            "Pass switch match: got {:?} at {:?}",
+                            pass_switch_block,
+                            pass_switch_coord
+                        );
+                    }
+                    (game_state::game_map::CasOutcome::Mismatch, id, _) => {
+                        tracing::warn!(
+                            "Pass switch mismatch: got {:?} but expected {:?} at {:?}",
+                            id,
+                            pass_switch_block,
+                            pass_switch_coord
+                        );
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
     fn estimate_panic_max_index(&self) -> usize {
