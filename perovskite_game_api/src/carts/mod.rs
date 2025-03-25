@@ -684,7 +684,7 @@ mod util {
     }
     impl Drop for AsyncRefcountHandle {
         fn drop(&mut self) {
-            if self.inner.count.fetch_sub(1, Ordering::Release) == 0 {
+            if self.inner.count.fetch_sub(1, Ordering::Release) <= 1 {
                 self.inner.notification.notify_waiters();
             }
         }
@@ -710,7 +710,7 @@ mod util {
             if self.waiting {
                 None
             } else {
-                self.inner.count.fetch_add(1, Ordering::SeqCst);
+                self.inner.count.fetch_add(1, Ordering::Relaxed);
                 Some(AsyncRefcountHandle {
                     inner: self.inner.clone(),
                 })
