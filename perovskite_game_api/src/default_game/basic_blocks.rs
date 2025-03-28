@@ -581,7 +581,6 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
     let stone = game_builder.add_block(
         BlockBuilder::new(STONE)
-            // TODO: make not-diggable-by-hand after tools are implemented
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(STONE_TEXTURE)
