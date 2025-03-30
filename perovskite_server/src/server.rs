@@ -75,6 +75,9 @@ pub struct ServerArgs {
 
     #[arg(long, default_value_t = 512)]
     pub rocksdb_num_fds: std::os::raw::c_int,
+
+    #[arg(long, default_value_t = 8)]
+    pub num_map_prefetchers: usize,
 }
 
 pub struct Server {
@@ -196,8 +199,18 @@ pub fn testonly_in_memory() -> Result<Server> {
 
     let game_behaviors = GameBehaviors::dummy_game_behaviors();
 
+    let args = ServerArgs {
+        data_dir: temp_dir().join("perovskite_inmem_dummy"),
+        bind_addr: None,
+        port: 0,
+        trace_rate_denominator: 1024,
+        rocksdb_point_lookup_cache_mib: 32,
+        rocksdb_num_fds: 32,
+        num_map_prefetchers: 8,
+    };
+
     let gs = GameState::new(
-        temp_dir().join("perovskite_inmem_dummy"),
+        args,
         db,
         blocks,
         entities,
@@ -238,7 +251,6 @@ pub struct ServerBuilder {
     args: ServerArgs,
     game_behaviors: GameBehaviors,
     commands: CommandManager,
-    data_dir: PathBuf,
     extensions: type_map::concurrent::TypeMap,
     startup_actions: Vec<Box<dyn FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static>>,
 }
@@ -299,7 +311,6 @@ impl ServerBuilder {
             args: args.clone(),
             game_behaviors: Default::default(),
             commands: CommandManager::new(),
-            data_dir: args.data_dir.clone(),
             extensions: type_map::concurrent::TypeMap::new(),
             startup_actions: Vec::new(),
         })
@@ -387,7 +398,7 @@ impl ServerBuilder {
 
         let _rt_guard = self.runtime.enter();
         let game_state = GameState::new(
-            self.data_dir.clone(),
+            self.args.clone(),
             self.db,
             blocks,
             self.entities,
@@ -407,7 +418,7 @@ impl ServerBuilder {
             action(&game_state)?;
         }
 
-        let tls_config = Self::build_tls_config(self.data_dir.clone())?;
+        let tls_config = Self::build_tls_config(self.args.data_dir.clone())?;
         Server::new(self.runtime, game_state, addr, tls_config)
     }
 
@@ -416,7 +427,7 @@ impl ServerBuilder {
     }
 
     pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
+        &self.args.data_dir
     }
 
     /// Adds an extension to the server's game state.

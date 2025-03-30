@@ -48,11 +48,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::game_state::audio_crossbar::AudioCrossbarSender;
-use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
-use crate::media::MediaManager;
-use crate::network_server::auth::AuthService;
-
 use self::blocks::BlockTypeManager;
 use self::chat::commands::CommandManager;
 use self::chat::ChatState;
@@ -60,6 +55,11 @@ use self::game_behaviors::GameBehaviors;
 use self::inventory::InventoryManager;
 use self::items::ItemManager;
 use self::player::PlayerManager;
+use crate::game_state::audio_crossbar::AudioCrossbarSender;
+use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
+use crate::media::MediaManager;
+use crate::network_server::auth::AuthService;
+use crate::server::ServerArgs;
 
 /// The main struct representing a Perovskite server.
 ///
@@ -110,7 +110,7 @@ pub struct GameState {
 
 impl GameState {
     pub(crate) fn new(
-        data_dir: PathBuf,
+        args: ServerArgs,
         db: Arc<dyn GameDatabase>,
         blocks: Arc<BlockTypeManager>,
         entity_types: entities::EntityTypeManager,
@@ -129,8 +129,8 @@ impl GameState {
         let day_length = game_behaviors.day_length;
         let startup_counter = advance_startup_counter(db.as_ref())?;
         let result = Arc::new_cyclic(|weak| Self {
-            data_dir,
-            map: ServerGameMap::new(weak.clone(), db.clone(), blocks).unwrap(),
+            data_dir: args.data_dir.clone(),
+            map: ServerGameMap::new(weak.clone(), db.clone(), blocks, &args).unwrap(),
             mapgen,
             database: db.clone(),
             inventory_manager: InventoryManager::new(db.clone()),

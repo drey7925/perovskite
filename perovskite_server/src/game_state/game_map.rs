@@ -60,8 +60,11 @@ use prost::Message;
 
 use log::{error, info, warn};
 
+use crate::server::ServerArgs;
 use anyhow::{bail, ensure, Context, Result};
+use arc_swap::ArcSwapOption;
 use integer_encoding::{VarIntReader, VarIntWriter};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::{
     sync::{broadcast, mpsc},
     task::JoinHandle,
@@ -785,8 +788,6 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
 }
 
 const NUM_CHUNK_SHARDS: usize = 16;
-// todo scale up
-const NUM_ENTITY_SHARDS: usize = 1;
 
 fn shard_id(coord: ChunkCoordinate) -> usize {
     (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
@@ -819,9 +820,19 @@ pub struct ServerGameMap {
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<BlockUpdate>,
     writeback_senders: [mpsc::Sender<WritebackReq>; NUM_CHUNK_SHARDS],
+    // prefetchers
+    early_shutdown: CancellationToken,
+    // Writeback and cleanup
     shutdown: CancellationToken,
     writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
     cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
+
+    prefetch_dispatch_task: Mutex<Option<JoinHandle<Result<()>>>>,
+    // Sender used to introduce new slots to the prefetcher. Rather than have
+    // a separate tokio::sync::Notify to wake up the prefetcher when task lists are updated,
+    // we piggyback this notification by passing None here
+    prefetch_slot_sender: mpsc::Sender<Option<PrefetcherSlot>>,
+
     timer_controller: Mutex<Option<TimerController>>,
 }
 impl ServerGameMap {
@@ -829,6 +840,7 @@ impl ServerGameMap {
         game_state: Weak<GameState>,
         database: Arc<dyn GameDatabase>,
         block_type_manager: Arc<BlockTypeManager>,
+        args: &ServerArgs,
     ) -> Result<Arc<ServerGameMap>> {
         let (block_update_sender, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
         let mut writeback_senders = vec![];
@@ -839,7 +851,10 @@ impl ServerGameMap {
             writeback_receivers.push(receiver);
         }
 
+        let (prefetch_slot_sender, prefetch_slot_receiver) = mpsc::channel(4);
+
         let cancellation = CancellationToken::new();
+        let early_cancellation = CancellationToken::new();
 
         let result = Arc::new(ServerGameMap {
             game_state: game_state.clone(),
@@ -851,8 +866,11 @@ impl ServerGameMap {
             block_update_sender,
             writeback_senders: writeback_senders.try_into().unwrap(),
             shutdown: cancellation.clone(),
+            early_shutdown: early_cancellation.clone(),
             writeback_handles: std::array::from_fn(|_| Mutex::new(None)),
             cleanup_handles: std::array::from_fn(|_| Mutex::new(None)),
+            prefetch_dispatch_task: Mutex::new(None),
+            prefetch_slot_sender,
             timer_controller: None.into(),
         });
         for (i, receiver) in writeback_receivers.into_iter().enumerate() {
@@ -931,6 +949,20 @@ impl ServerGameMap {
             })?;
             *result.cleanup_handles[i].lock() = Some(cleanup_handle);
         }
+        let map_clone = result.clone();
+        let cancellation_clone = early_cancellation.clone();
+        let num_prefetchers = args.num_map_prefetchers;
+        *result.prefetch_dispatch_task.lock() =
+            Some(crate::spawn_async("map_prefetch", async move {
+                run_prefetch_dispatch(
+                    prefetch_slot_receiver,
+                    map_clone,
+                    num_prefetchers,
+                    cancellation_clone,
+                )
+                .await;
+                Ok(())
+            })?);
 
         let timer_controller = TimerController {
             map: result.clone(),
@@ -1048,6 +1080,33 @@ impl ServerGameMap {
         } else {
             None
         }
+    }
+
+    pub(crate) async fn alloc_prefetch_handle(&self) -> Result<PrefetcherHandle> {
+        let storage = Arc::new(ArcSwapOption::new(None));
+
+        let slot = PrefetcherSlot {
+            items: storage.clone(),
+            item_idx: 0,
+            generation: 0,
+        };
+        let mut handle = PrefetcherHandle {
+            items: storage,
+            generation: 0,
+        };
+        handle.publish_task_list(vec![]);
+        self.prefetch_slot_sender.send(Some(slot)).await?;
+        Ok(handle)
+    }
+
+    pub(crate) async fn push_prefetch_work_items(
+        &self,
+        handle: &mut PrefetcherHandle,
+        tasks: Vec<ChunkCoordinate>,
+    ) -> Result<()> {
+        handle.publish_task_list(tasks);
+        self.prefetch_slot_sender.send(None).await?;
+        Ok(())
     }
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
@@ -1806,16 +1865,42 @@ impl ServerGameMap {
                 tracing::warn!("Tried to shutdown timer controller but it was never brought up");
             }
         }
+        self.early_shutdown.cancel();
+        let await_task = async {
+            let prefetch_handle = self
+                .prefetch_dispatch_task
+                .lock()
+                .take()
+                .context("Missing prefetcher task handle")?;
+            prefetch_handle.await??;
+            Ok::<_, Error>(())
+        };
+        match tokio::time::timeout(Duration::from_secs(10), await_task).await {
+            Ok(Ok(())) => {
+                tracing::info!("Shut down prefetchers");
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Error shutting down prefetchers: {e:?}");
+            }
+            Err(_) => {
+                tracing::error!("Timed out waiting for prfetchers to shut down");
+            }
+        }
+
         // We need to stop the timers before we stop the writeback threads, since the timers might
         // try to write to the map, which requires a writeback thread to actually write back.
         self.shutdown.cancel();
         let await_task = async {
             for i in 0..NUM_CHUNK_SHARDS {
                 let writeback_handle = self.writeback_handles[i].lock().take();
-                writeback_handle.unwrap().await??;
+                writeback_handle
+                    .context("Missing writeback task handle")?
+                    .await??;
 
                 let cleanup_handle = self.cleanup_handles[i].lock().take();
-                cleanup_handle.unwrap().await??;
+                cleanup_handle
+                    .context("Missing cleanup task handle")?
+                    .await??;
             }
             Ok::<_, Error>(())
         };
@@ -2128,6 +2213,206 @@ impl Drop for GameMapWriteback {
     fn drop(&mut self) {
         self.cancellation.cancel()
     }
+}
+
+struct PrefetchTaskList {
+    items: Vec<ChunkCoordinate>,
+    generation: usize,
+}
+
+struct PrefetcherSlot {
+    /// Shared access to the work item list that the handle's owner wants
+    /// to prefetch. If None, the handle has been dropped.
+    items: Arc<ArcSwapOption<PrefetchTaskList>>,
+    item_idx: usize,
+    generation: usize,
+}
+
+enum PrefetchTask {
+    SlotGone,
+    NoItem,
+    Item(ChunkCoordinate),
+}
+impl PrefetcherSlot {
+    fn next_item(&mut self) -> PrefetchTask {
+        match self.items.load().deref() {
+            Some(items) => {
+                if items.generation != self.generation {
+                    self.generation = items.generation;
+                    self.item_idx = 0;
+                }
+                if self.item_idx < items.items.len() {
+                    let item = items.items[self.item_idx];
+                    self.item_idx += 1;
+                    PrefetchTask::Item(item)
+                } else {
+                    PrefetchTask::NoItem
+                }
+            }
+            None => PrefetchTask::SlotGone,
+        }
+    }
+}
+
+pub(crate) struct PrefetcherHandle {
+    items: Arc<ArcSwapOption<PrefetchTaskList>>,
+    generation: usize,
+}
+impl Drop for PrefetcherHandle {
+    fn drop(&mut self) {
+        self.items.store(None);
+    }
+}
+impl PrefetcherHandle {
+    fn publish_task_list(&mut self, work_items: Vec<ChunkCoordinate>) {
+        self.generation = self.generation + 1;
+        self.items.store(Some(Arc::new(PrefetchTaskList {
+            items: work_items,
+            generation: self.generation,
+        })));
+    }
+}
+
+async fn run_prefetch_dispatch(
+    mut slot_receiver: mpsc::Receiver<Option<PrefetcherSlot>>,
+    map: Arc<ServerGameMap>,
+    concurrency: usize,
+    cancellation: CancellationToken,
+) {
+    let mut already_present: usize = 0;
+    let mut prefetched: usize = 0;
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut slots: Vec<PrefetcherSlot> = vec![];
+    let mut rx_buffer = vec![];
+    'loopAndBlock: while !cancellation.is_cancelled() {
+        tokio::select! {
+
+            count = slot_receiver.recv_many(&mut rx_buffer, 4) => {
+                if count == 0 {
+                    tracing::warn!("Prefetcher control channel closed unexpected");
+                    break 'loopAndBlock;
+                }
+                for message in rx_buffer.drain(..) {
+                match message {
+                    Some(slot) => {
+                        tracing::info!("Adding a prefetch slot");
+                        slots.push(slot);
+                    },
+                    None => {
+                        // Do nothing, we're just being notified to wake up
+                    },
+                }}
+            },
+            _ = cancellation.cancelled() => {
+                break 'loopAndBlock;
+            }
+        }
+
+        if slots.is_empty() {
+            continue 'loopAndBlock;
+        }
+        tracing::info!("starting prefetcher work loop");
+        let mut current_slot: usize = 0;
+        'busyLoop: while !cancellation.is_cancelled() {
+            let mut break_once_out_of_slots = true;
+
+            let x = match slots[current_slot].next_item() {
+                PrefetchTask::SlotGone => {
+                    tracing::info!("Removing current prefetch slot");
+                    slots.swap_remove(current_slot);
+                }
+                PrefetchTask::NoItem => {
+                    // Nothing in this slot, leave break_once_out_of_slots alone
+                }
+                PrefetchTask::Item(coord) => {
+                    if map.try_get_chunk(coord, false).is_some() {
+                        already_present += 1;
+                        continue;
+                    } else {
+                        prefetched += 1;
+                    }
+                    let permit = sem.clone().acquire_owned().await.unwrap();
+                    let map_clone = map.clone();
+                    break_once_out_of_slots = false;
+                    tokio::task::spawn_blocking(move || {
+                        match map_clone.get_chunk(coord) {
+                            Ok(chunk) => {
+                                drop(chunk);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to prefetch chunk {:?}: {:?}", coord, e);
+                            }
+                        }
+                        drop(permit);
+                    });
+                }
+            };
+
+            let next_slot: usize = current_slot.wrapping_add(1);
+            current_slot = if next_slot >= slots.len() {
+                'drainLoop: loop {
+                    let result = slot_receiver.try_recv();
+                    match result {
+                        Ok(Some(slot)) => {
+                            tracing::info!("Adding a prefetch slot and restarting busy loop");
+                            slots.push(slot);
+                            current_slot = 0;
+                            continue 'busyLoop;
+                        }
+                        Ok(None) => {
+                            tracing::info!("Awoken at the end, restarting busy loop. So far: {} already present, {} prefetched",
+                                already_present,
+                                prefetched);
+                            // Do nothing, we're just being notified to wake up
+                            current_slot = 0;
+                            continue 'busyLoop;
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            tracing::warn!("Prefetcher dispatcher sender disconnected; exiting");
+                            return;
+                        }
+                        Err(TryRecvError::Empty) => {
+                            break 'drainLoop;
+                        }
+                    }
+                }
+                if break_once_out_of_slots {
+                    tracing::info!(
+                        "Prefetcher going idle. So far: {} already present, {} prefetched",
+                        already_present,
+                        prefetched
+                    );
+                    break 'busyLoop;
+                }
+                // check for new slots
+                match slot_receiver.try_recv() {
+                    Ok(Some(s)) => {
+                        slots.push(s);
+                    }
+                    Ok(None) => {
+                        break_once_out_of_slots = false;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        tracing::warn!("Prefetcher dispatcher sender disconnected; exiting");
+                        return;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        // Nothing received? Nothing of note.
+                    }
+                }
+                0
+            } else {
+                next_slot
+            };
+        }
+    }
+
+    tracing::info!("Prefetcher dispatcher exiting");
+    // Wait for all pending tasks to exit. We're the only
+    // process that acquires permits, so this essentially
+    // just waits for all permits to be released back to us.
+    let _ = sem.acquire_many(concurrency as u32).await.unwrap();
+    tracing::info!("All prefetch tasks complete");
 }
 
 pub struct TimerState {
