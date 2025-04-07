@@ -291,3 +291,7 @@ pub fn clone_trace_buffer() -> TraceBuffer {
 pub(crate) fn run_traced<F: Future>(buf: TraceBuffer, f: F) -> TaskLocalFuture<TraceBuffer, F> {
     TRACE_BUFFER.scope(buf, f)
 }
+
+pub(crate) fn run_traced_sync<T, F: FnOnce() -> T>(buf: TraceBuffer, f: F) -> T {
+    TRACE_BUFFER.sync_scope(buf, f)
+}

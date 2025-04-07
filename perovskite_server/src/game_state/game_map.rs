@@ -64,6 +64,7 @@ use crate::server::ServerArgs;
 use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwapOption;
 use integer_encoding::{VarIntReader, VarIntWriter};
+use perovskite_core::util::TraceBuffer;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -587,7 +588,10 @@ impl MapChunkHolder {
             let _span = span!("wait_and_get");
             loop {
                 match &*guard {
-                    HolderState::Empty => self.condition.wait_reader(&mut guard),
+                    HolderState::Empty => {
+                        log_trace("empty chunk waiting on condvar");
+                        self.condition.wait_reader(&mut guard);
+                    }
                     HolderState::Err(e) => {
                         return Err(Error::msg(format!("Chunk load failed: {e:?}")))
                     }
@@ -789,7 +793,8 @@ impl<'a> Deref for MapChunkOuterGuard<'a> {
 
 const NUM_CHUNK_SHARDS: usize = 16;
 
-fn shard_id(coord: ChunkCoordinate) -> usize {
+/// Shard ID for a chunk. Not guaranteed stable across process restarts, use only for locality
+pub(crate) fn shard_id(coord: ChunkCoordinate) -> usize {
     (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
 }
 
@@ -1718,6 +1723,7 @@ impl ServerGameMap {
             .database
             .get(&KeySpace::MapchunkData.make_key(&coord.as_bytes()))?;
         if let Some(data) = data {
+            log_trace("db read done");
             return Ok((
                 MapChunk::deserialize(coord, &data, self.game_state(), storage)?,
                 false,
@@ -1728,6 +1734,7 @@ impl ServerGameMap {
         chunk.dirty = true;
         {
             let _span = span!("mapgen running");
+
             run_handler!(
                 || {
                     self.game_state().mapgen().fill_chunk(coord, &mut chunk);
@@ -1736,6 +1743,8 @@ impl ServerGameMap {
                 "mapgen",
                 &EventInitiator::Engine
             )?;
+
+            log_trace("mapgen done");
         }
         Ok((chunk, true))
     }
@@ -1826,7 +1835,9 @@ impl ServerGameMap {
         if load_if_missing {
             (mark_action)();
             let chunk_guard = self.get_chunk(coord)?;
+
             let chunk = chunk_guard.wait_and_get_for_read()?;
+            log_trace("chunk loaded, serializing");
             Ok(Some(
                 chunk.serialize(ChunkUsage::Client, &self.game_state())?,
             ))
@@ -1834,7 +1845,10 @@ impl ServerGameMap {
             let chunk_guard = self.try_get_chunk(coord, false);
             if let Some(chunk) = chunk_guard {
                 (mark_action)();
+
+                log_trace("wait_and_get_for_read");
                 let chunk = chunk.wait_and_get_for_read()?;
+                log_trace("chunk loaded, serializing");
                 Ok(Some(
                     chunk.serialize(ChunkUsage::Client, &self.game_state())?,
                 ))

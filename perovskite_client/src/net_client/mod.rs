@@ -17,7 +17,7 @@
 use std::{sync::Arc, time::Duration};
 
 use self::client_workers::*;
-use anyhow::{bail, Error, Result};
+use anyhow::{anyhow, bail, Error, Result};
 
 use arc_swap::ArcSwap;
 use opaque_ke::{
@@ -234,15 +234,8 @@ pub(crate) async fn connect_game(
         initial_state_notification.clone(),
     )
     .await?;
-    let client_state_clone = client_state.clone();
-    tokio::spawn(async move {
-        match inbound.run_inbound_loop().await {
-            Ok(_) => log::info!("Inbound loop shut down normally"),
-            Err(e) => {
-                log::error!("Inbound loop crashed: {e:?}");
-                *client_state_clone.pending_error.lock() = Some(e);
-            }
-        }
+    spawn_and_monitor_loop("inbound", client_state.clone(), async move {
+        inbound.run_inbound_loop().await
     });
 
     progress.send((
@@ -250,17 +243,44 @@ pub(crate) async fn connect_game(
         "Waiting for initial game state...".to_string(),
     ))?;
     initial_state_notification.notified().await;
-    tokio::spawn(async move {
-        match outbound.run_outbound_loop().await {
-            Ok(_) => log::info!("Outbound loop shut down normally"),
-            Err(e) => log::error!("Outbound loop crashed: {e:?}"),
-        }
+    spawn_and_monitor_loop("outbound", client_state.clone(), async move {
+        outbound.run_outbound_loop().await
     });
 
     progress.send((12.0 / TOTAL_STEPS, "Connected!".to_string()))?;
     // Sleep for a moment so the user can see the connected message
     tokio::time::sleep(Duration::from_secs_f64(0.25)).await;
     Ok(client_state)
+}
+
+fn spawn_and_monitor_loop(
+    description: &'static str,
+    client_state: Arc<ClientState>,
+    future: impl std::future::Future<Output = Result<()>> + Send + 'static,
+) {
+    let client_state_clone = client_state.clone();
+    tokio::spawn(async move {
+        let handle = tokio::spawn(future);
+        match handle.await {
+            Ok(Ok(_)) => log::info!("{description} loop shut down normally"),
+            Ok(Err(e)) => {
+                log::error!("{description} loop crashed: {e:?}");
+                *client_state_clone.pending_error.lock() = Some(e);
+            }
+            Err(e) => {
+                if e.is_panic() {
+                    log::error!("{description} loop panicked: {e:?}");
+                    *client_state_clone.pending_error.lock() = Some(anyhow!(
+                        "{description} loop panicked; please check the log for further details"
+                    ));
+                } else {
+                    log::error!("{description} loop disconnected: {e:?}");
+                    *client_state_clone.pending_error.lock() =
+                        Some(anyhow!("{description} loop unexpectedly cancelled"));
+                }
+            }
+        }
+    });
 }
 
 // To avoid inconsistencies between operating systems and environments, attempt to normalize any

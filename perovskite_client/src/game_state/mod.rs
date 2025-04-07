@@ -177,14 +177,17 @@ impl ChunkManager {
             let _span = span!("Acquire global light column lock");
             self.light_columns.write()
         };
+        let chunk = chunks_lock.remove(coord);
         // The column should be present, so we unwrap.
-        let column = light_columns_lock.get_mut(&(coord.x, coord.z)).unwrap();
-        column.remove(coord.y);
-        if column.is_empty() {
-            light_columns_lock.remove(&(coord.x, coord.z));
+        if chunk.is_some() {
+            let column = light_columns_lock.get_mut(&(coord.x, coord.z)).unwrap();
+            column.remove(coord.y);
+            if column.is_empty() {
+                light_columns_lock.remove(&(coord.x, coord.z));
+            }
         }
         render_chunks_lock.remove(coord);
-        chunks_lock.remove(coord)
+        chunk
     }
     // Returns the number of additional chunks below the given chunk that need lighting updates.
     pub(crate) fn insert_or_update(

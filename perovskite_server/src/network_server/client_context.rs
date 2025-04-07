@@ -26,14 +26,14 @@ use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::entities::Movement;
 use crate::game_state::entities::{IterEntity, PlayerEntityAction};
-use crate::game_state::event::run_traced;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
 use crate::game_state::event::{log_trace, WeakPlayerRef};
+use crate::game_state::event::{run_traced, run_traced_sync};
 
 use crate::game_state::event::PlayerInitiator;
-use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::game_map::CACHE_CLEAN_MIN_AGE;
+use crate::game_state::game_map::{BlockUpdate, ServerGameMap};
 use crate::game_state::inventory::InventoryKey;
 use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
@@ -62,6 +62,7 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosit
 use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
 use either::Either;
 use itertools::iproduct;
+use parking_lot::lock_api::RwLockWriteGuard;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use perovskite_core::game_actions::ToolTarget;
@@ -96,7 +97,7 @@ static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 pub(crate) struct PlayerCoroutinePack {
     context: Arc<SharedContext>,
-    chunk_sender: MapChunkSender,
+    chunk_senders: [MapChunkSender; 2],
     block_event_sender: BlockEventSender,
     inventory_event_sender: InventoryEventSender,
     inbound_worker: InboundWorker,
@@ -145,13 +146,15 @@ impl PlayerCoroutinePack {
             }
         })?;
 
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("chunk_sender_{}", username), async move {
-            if let Err(e) = self.chunk_sender.chunk_sender_loop().await {
-                tracing::error!("Error running chunk sender: {:?}", e);
-                kick("Chunk sender loop crashed");
-            }
-        })?;
+        for (i, mut sender) in self.chunk_senders.into_iter().enumerate() {
+            let kick = kick_closure.clone();
+            crate::spawn_async(&format!("chunk_sender_{i}_{username}"), async move {
+                if let Err(e) = sender.chunk_sender_loop().await {
+                    tracing::error!("Error running chunk sender: {:?}", e);
+                    kick("Chunk sender loop crashed");
+                }
+            })?;
+        }
 
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("block_event_sender_{}", username), async move {
@@ -263,7 +266,23 @@ pub(crate) async fn make_client_contexts(
         outbound_tx: outbound_tx.clone(),
         next_pos_writeback: Instant::now(),
     };
-    let chunk_sender = MapChunkSender {
+    let chunk_sender_0 = MapChunkSender {
+        context: context.clone(),
+        outbound_tx: outbound_tx.clone(),
+        chunk_tracker: chunk_tracker.clone(),
+        player_position: pos_recv.clone(),
+        skip_if_near: ChunkCoordinate { x: 0, y: 0, z: 0 },
+        processed_elements: 0,
+        snappy: SnappyEncoder {
+            snappy_encoder: snap::raw::Encoder::new(),
+            snappy_input_buffer: vec![],
+            snappy_output_buffer: vec![],
+        },
+        range_hint_lookaside: Default::default(),
+        hinted_chunks: vec![],
+        shard_parity: 0,
+    };
+    let chunk_sender_1 = MapChunkSender {
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
         chunk_tracker: chunk_tracker.clone(),
@@ -277,6 +296,7 @@ pub(crate) async fn make_client_contexts(
         },
         range_hint_lookaside: Default::default(),
         hinted_chunks: vec![],
+        shard_parity: 1,
     };
     let block_event_sender = BlockEventSender {
         context: context.clone(),
@@ -313,7 +333,7 @@ pub(crate) async fn make_client_contexts(
 
     Ok(PlayerCoroutinePack {
         context,
-        chunk_sender,
+        chunk_senders: [chunk_sender_0, chunk_sender_1],
         block_event_sender,
         inventory_event_sender,
         inbound_worker,
@@ -464,22 +484,29 @@ impl ChunkTracker {
         if !self.loaded_chunks_bloom.maybe_contains(coord.hash_u64()) {
             return false;
         }
-        self.loaded_chunks.read().contains(&coord)
+        self.read().contains(&coord)
     }
     // Marks a chunk as loaded. This must be called before the chunk is actually loaded and sent to the client
     fn mark_chunk_loaded(&self, coord: ChunkCoordinate) {
         self.loaded_chunks_bloom.insert(coord.hash_u64());
-        self.loaded_chunks.write().insert(coord);
+        self.write().insert(coord);
     }
 
     // Marks a chunk as unloaded. This must be called after the chunk is actually unloaded and the corresponding message is sent
     // to the client
     fn mark_chunk_unloaded(&self, player_coord: ChunkCoordinate) {
-        self.loaded_chunks.write().remove(&player_coord);
+        self.write().remove(&player_coord);
+    }
+
+    fn write(&self) -> parking_lot::RwLockWriteGuard<FxHashSet<ChunkCoordinate>> {
+        tokio::task::block_in_place(|| self.loaded_chunks.write())
+    }
+    fn read(&self) -> parking_lot::RwLockReadGuard<FxHashSet<ChunkCoordinate>> {
+        tokio::task::block_in_place(|| self.loaded_chunks.read())
     }
 
     fn mark_chunks_unloaded(&self, chunks: impl Iterator<Item = ChunkCoordinate>) {
-        let mut write_lock = self.loaded_chunks.write();
+        let mut write_lock = self.write();
         for coord in chunks {
             write_lock.remove(&coord);
         }
@@ -487,7 +514,7 @@ impl ChunkTracker {
 
     fn clear(&self) {
         self.loaded_chunks_bloom.clear();
-        self.loaded_chunks.write().clear();
+        self.write().clear();
     }
 }
 
@@ -532,6 +559,7 @@ pub(crate) struct MapChunkSender {
 
     range_hint_lookaside: FxHashMap<(i32, i32), Option<RangeInclusive<i32>>>,
     hinted_chunks: Vec<(i32, i32, i32, bool)>,
+    shard_parity: usize,
 }
 const ACCESS_TIME_BUMP_SHARDS: u32 = 32;
 impl MapChunkSender {
@@ -583,8 +611,10 @@ impl MapChunkSender {
         trace.log("starting hpu");
         let mut position = update.position;
 
+        let mut load_deadline = Instant::now();
         if let Some(position_override) = self.get_position_override() {
             position.position = position_override;
+            load_deadline += Duration::from_millis(500);
         }
         // TODO anticheat/safety checks
         // TODO consider caching more in the player's movement direction as a form of prefetch???
@@ -616,89 +646,81 @@ impl MapChunkSender {
         trace.log("player position resolved");
 
         // Phase 1: Unload chunks that are too far away
-        let chunks_to_unsubscribe: Vec<_> = self
-            .chunk_tracker
-            .loaded_chunks
-            .read()
-            .trace_point(&trace, "chunk tracker read acquired")
-            .iter()
-            .filter(|&x| self.should_unload(player_chunk, *x))
-            .cloned()
-            .collect();
-        trace.log("unsub chunks ready");
-        let message = StreamToClient {
-            tick: self.context.game_state.tick(),
-            server_message: Some(ServerMessage::MapChunkUnsubscribe(
-                proto::MapChunkUnsubscribe {
-                    chunk_coord: chunks_to_unsubscribe.iter().map(|&x| x.into()).collect(),
-                },
-            )),
-            performance_metrics: self.context.maybe_get_performance_metrics(),
-        };
+        let unsub_message = tokio::task::block_in_place(|| {
+            let chunks_to_unsubscribe: Vec<_> = self
+                .chunk_tracker
+                .loaded_chunks
+                .read()
+                .trace_point(&trace, "chunk tracker read acquired")
+                .iter()
+                .filter(|&x| crate::game_state::game_map::shard_id(*x) % 2 == self.shard_parity)
+                .filter(|&x| self.should_unload(player_chunk, *x))
+                .cloned()
+                .collect();
 
-        trace.log("unsub chunks msg ready");
+            trace.log("unsub chunks msg ready");
+            let message = StreamToClient {
+                tick: self.context.game_state.tick(),
+                server_message: Some(ServerMessage::MapChunkUnsubscribe(
+                    proto::MapChunkUnsubscribe {
+                        chunk_coord: chunks_to_unsubscribe.iter().map(|&x| x.into()).collect(),
+                    },
+                )),
+                performance_metrics: self.context.maybe_get_performance_metrics(),
+            };
+
+            self.chunk_tracker
+                .mark_chunks_unloaded(chunks_to_unsubscribe.into_iter());
+            trace.log("unsub chunks sent");
+
+            message
+        });
         self.outbound_tx
-            .send(Ok(message))
+            .send(Ok(unsub_message))
             .await
             .map_err(|_| Error::msg("Could not send outbound message (mapchunk unsubscribe)"))?;
-        self.chunk_tracker
-            .mark_chunks_unloaded(chunks_to_unsubscribe.into_iter());
-        trace.log("unsub chunks sent");
 
         // Phase 2: Load chunks that are close enough.
-        // Chunks are expensive to load and send, so we keep track of
-        let mut sent_chunks = 0;
+        tokio::task::block_in_place(|| {
+            self.hinted_chunks.clear();
+            trace.log("clean hints");
+            self.range_hint_lookaside.retain(|&(cx_, cz_), _| {
+                (cx_ - player_chunk.x).abs() + (cz_ - player_chunk.z).abs()
+                    < (LOAD_TERRAIN_DISTANCE * 2)
+            });
+            trace.log("start LTSC");
+            for &(dx, dz) in LOAD_TERRAIN_SORTED_COORDS.iter() {
+                let cx = player_chunk.x.saturating_add(dx);
+                let cz = player_chunk.z.saturating_add(dz);
+                if !ChunkCoordinate::bounds_check(cx, 0, cz) {
+                    continue;
+                }
+                let coord = ChunkCoordinate { x: cx, y: 0, z: cz };
+                if crate::game_state::game_map::shard_id(coord) % 2 != self.shard_parity {
+                    continue;
+                }
 
-        // let moved_distance = player_chunk.manhattan_distance(self.skip_if_near);
-        // let skip = if moved_distance == 0 {
-        //     self.processed_elements
-        // } else {
-        //     self.skip_if_near = player_chunk;
-        //     // Find the highest distance we know we processed
-        //     let finished_distance = MAX_INDEX_FOR_DISTANCE
-        //         .partition_point(|&x| x < self.processed_elements)
-        //         .saturating_sub(2);
-        //     let new_distance = finished_distance
-        //         .saturating_sub(moved_distance as usize)
-        //         .max(0);
-        //     self.processed_elements
-        //         .min(MIN_INDEX_FOR_DISTANCE[new_distance])
-        // };
+                // Tricky: Need a clone since otherwise iterating will exhaust the range
+                let hint = self
+                    .range_hint_lookaside
+                    .entry((cx, cz))
+                    .or_insert_with(|| self.context.game_state.mapgen().terrain_range_hint(cx, cz))
+                    .clone();
+                if let Some(hint) = hint {
+                    if dx.abs().max(dz.abs()) <= FORCE_LOAD_DISTANCE {
+                        for y in -FORCE_LOAD_DISTANCE..=FORCE_LOAD_DISTANCE {
+                            self.hinted_chunks.push((dx, y, dz, true))
+                        }
+                    }
 
-        self.hinted_chunks.clear();
-        trace.log("clean hints");
-        self.range_hint_lookaside.retain(|&(cx_, cz_), _| {
-            (cx_ - player_chunk.x).abs() + (cz_ - player_chunk.z).abs()
-                < (LOAD_TERRAIN_DISTANCE * 2)
+                    for y in hint {
+                        if (player_chunk.y - y).abs() <= LOAD_TERRAIN_DISTANCE {
+                            self.hinted_chunks.push((dx, y - player_chunk.y, dz, true))
+                        }
+                    }
+                }
+            }
         });
-        trace.log("start LTSC");
-        for &(dx, dz) in LOAD_TERRAIN_SORTED_COORDS.iter() {
-            let cx = player_chunk.x.saturating_add(dx);
-            let cz = player_chunk.z.saturating_add(dz);
-            if !ChunkCoordinate::bounds_check(cx, 0, cz) {
-                continue;
-            }
-
-            // Tricky: Need a clone since otherwise iterating will exhaust the range
-            let hint = self
-                .range_hint_lookaside
-                .entry((cx, cz))
-                .or_insert_with(|| self.context.game_state.mapgen().terrain_range_hint(cx, cz))
-                .clone();
-            if let Some(hint) = hint {
-                if dx.abs().max(dz.abs()) <= FORCE_LOAD_DISTANCE {
-                    for y in -FORCE_LOAD_DISTANCE..=FORCE_LOAD_DISTANCE {
-                        self.hinted_chunks.push((dx, y, dz, true))
-                    }
-                }
-
-                for y in hint {
-                    if (player_chunk.y - y).abs() <= LOAD_TERRAIN_DISTANCE {
-                        self.hinted_chunks.push((dx, y - player_chunk.y, dz, true))
-                    }
-                }
-            }
-        }
         trace.log("LTSC hints ready");
         let llsc_slice = &LOAD_LAZY_SORTED_COORDS;
         let (llsc_before, llsc_after) =
@@ -709,6 +731,7 @@ impl MapChunkSender {
         // TODO: Actually dedupe the generated lists
         let mut dupes = FxHashSet::default();
 
+        let mut sent_chunks = 0;
         for (i, (dx, dy, dz, force)) in llsc_before
             .iter()
             .map(|&(x, y, z)| (x, y, z, false))
@@ -716,19 +739,25 @@ impl MapChunkSender {
             .chain(llsc_after.iter().map(|&(x, y, z)| (x, y, z, false)))
             .enumerate()
         {
-            if !dupes.insert((dx, dy, dz)) {
-                continue;
-            }
             let coord = ChunkCoordinate {
                 x: player_chunk.x.saturating_add(dx),
                 y: player_chunk.y.saturating_add(dy),
                 z: player_chunk.z.saturating_add(dz),
             };
+
             if !coord.is_in_bounds() {
                 continue;
             }
+            if crate::game_state::game_map::shard_id(coord) % 2 != self.shard_parity {
+                continue;
+            }
+            if !dupes.insert((dx, dy, dz)) {
+                continue;
+            }
             let distance = dx.abs() + dy.abs() + dz.abs();
-            if self.player_position.has_changed().unwrap_or(false) && distance > FORCE_LOAD_DISTANCE
+            if self.player_position.has_changed().unwrap_or(false)
+                && distance > FORCE_LOAD_DISTANCE
+                && Instant::now() > load_deadline
             {
                 trace.log("player pos changed, past FLD");
                 // If we already have a new position update, restart the process with the new position
@@ -773,26 +802,33 @@ impl MapChunkSender {
             }
 
             trace.log("serialize_for_client start");
-            let chunk_data = block_in_place(|| {
-                self.context
-                    .game_state
-                    .game_map()
-                    .serialize_for_client(coord, should_load, || {
-                        self.chunk_tracker.mark_chunk_loaded(coord)
-                    })
+            let chunk_message = block_in_place(|| -> anyhow::Result<Option<StreamToClient>> {
+                let chunk_data = run_traced_sync(trace.clone(), || {
+                    self.context.game_state.game_map().serialize_for_client(
+                        coord,
+                        should_load,
+                        || self.chunk_tracker.mark_chunk_loaded(coord),
+                    )
+                })?;
+
+                if let Some(chunk_data) = chunk_data {
+                    trace.log("snappy_encode start");
+                    let chunk_bytes = self.snappy.snappy_encode(&chunk_data)?;
+                    let message = StreamToClient {
+                        tick: self.context.game_state.tick(),
+                        server_message: Some(ServerMessage::MapChunk(proto::MapChunk {
+                            chunk_coord: Some(coord.into()),
+                            snappy_encoded_bytes: chunk_bytes,
+                        })),
+                        performance_metrics: self.context.maybe_get_performance_metrics(),
+                    };
+                    trace.log("message ready done");
+                    Ok(Some(message))
+                } else {
+                    Ok(None)
+                }
             })?;
-            if let Some(chunk_data) = chunk_data {
-                trace.log("snappy_encode start");
-                let chunk_bytes = self.snappy.snappy_encode(&chunk_data)?;
-                let message = StreamToClient {
-                    tick: self.context.game_state.tick(),
-                    server_message: Some(ServerMessage::MapChunk(proto::MapChunk {
-                        chunk_coord: Some(coord.into()),
-                        snappy_encoded_bytes: chunk_bytes,
-                    })),
-                    performance_metrics: self.context.maybe_get_performance_metrics(),
-                };
-                trace.log("message ready done");
+            if let Some(message) = chunk_message {
                 self.outbound_tx.send(Ok(message)).await.map_err(|_| {
                     self.context.cancellation.cancel();
                     Error::msg("Could not send outbound message (full mapchunk)")
@@ -847,18 +883,20 @@ impl MapChunkSender {
         player_chunk.manhattan_distance(chunk) > UNLOAD_DISTANCE as u32
     }
     fn get_position_override(&self) -> Option<Vector3<f64>> {
-        let entity_id = self
-            .context
-            .player_context
-            .state
-            .lock()
-            .attached_to_entity?;
-        // Add 2 seconds of predictive lookahead
-        let tick = self.context.game_state.tick().saturating_add(2_000_000_000);
-        self.context
-            .game_state
-            .entities()
-            .predictive_position(entity_id, tick)
+        tokio::task::block_in_place(|| {
+            let entity_id = self
+                .context
+                .player_context
+                .state
+                .lock()
+                .attached_to_entity?;
+            // Add 2 seconds of predictive lookahead
+            let tick = self.context.game_state.tick().saturating_add(2_000_000_000);
+            self.context
+                .game_state
+                .entities()
+                .predictive_position(entity_id, tick)
+        })
     }
 }
 
@@ -876,13 +914,13 @@ pub(crate) struct BlockEventSender {
 }
 impl BlockEventSender {
     #[tracing::instrument(
-        name = "BlockEventOutboundLoop",
-        level = "info",
-        skip(self),
-        fields(
+            name = "BlockEventOutboundLoop",
+            level = "info",
+            skip(self),
+            fields(
             player_name = %self.context.player_context.name(),
-        )
-    )]
+            )
+        )]
     pub(crate) async fn block_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -899,13 +937,13 @@ impl BlockEventSender {
     }
 
     #[tracing::instrument(
-        name = "HandleBlockUpdate",
-        level = "trace",
-        skip(self, update),
-        fields(
+            name = "HandleBlockUpdate",
+            level = "trace",
+            skip(self, update),
+            fields(
             player_name = %self.context.player_context.name(),
-        )
-    )]
+            )
+        )]
     async fn handle_block_update(
         &mut self,
         update: Result<BlockUpdate, broadcast::error::RecvError>,
@@ -1078,13 +1116,13 @@ pub(crate) struct InventoryEventSender {
 }
 impl InventoryEventSender {
     #[tracing::instrument(
-        name = "InventoryOutboundLoop",
-        level = "info",
-        skip(self),
-        fields(
+            name = "InventoryOutboundLoop",
+            level = "info",
+            skip(self),
+            fields(
             player_name = %self.context.player_context.name(),
-        )
-    )]
+            )
+        )]
     pub(crate) async fn inv_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -1433,13 +1471,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-        name = "map_handler",
-        level = "trace",
-        skip(self, coord, selected_inv_slot, get_item_handler),
-        fields(
+            name = "map_handler",
+            level = "trace",
+            skip(self, coord, selected_inv_slot, get_item_handler),
+            fields(
             player_name = %self.context.player_context.name(),
-        ),
-    )]
+            ),
+        )]
     async fn run_map_handlers<F, T>(
         &mut self,
         coord: T,
@@ -1645,13 +1683,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-        name = "place_action",
-        level = "trace",
-        skip(self),
-        fields(
+            name = "place_action",
+            level = "trace",
+            skip(self),
+            fields(
             player_name = %self.context.player_context.name(),
-        ),
-    )]
+            ),
+        )]
     async fn handle_place(&mut self, place_message: &proto::PlaceAction) -> Result<()> {
         block_in_place(|| {
             log_trace("Running place handlers");
@@ -1751,13 +1789,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-        name = "inventory_action",
-        level = "trace",
-        skip(self),
-        fields(
+            name = "inventory_action",
+            level = "trace",
+            skip(self),
+            fields(
             player_name = %self.context.player_context.name(),
-        ),
-    )]
+            ),
+        )]
     async fn handle_inventory_action(&mut self, action: &proto::InventoryAction) -> Result<()> {
         if action.source_view == action.destination_view {
             tracing::error!(
@@ -1822,16 +1860,16 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-        name = "popup_response",
-        level = "trace",
-        skip(self, action),
-        fields(
+            name = "popup_response",
+            level = "trace",
+            skip(self, action),
+            fields(
             player_name = %self.context.player_context.name(),
             id = %action.popup_id,
             was_closed = %action.closed,
             button = %action.clicked_button,
-        ),
-    )]
+            ),
+        )]
     async fn handle_popup_response(
         &mut self,
         action: &perovskite_core::protocol::ui::PopupResponse,
@@ -1969,13 +2007,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-        name = "interact_key",
-        level = "trace",
-        skip(self),
-        fields(
+            name = "interact_key",
+            level = "trace",
+            skip(self),
+            fields(
             player_name = %self.context.player_context.name(),
-        ),
-    )]
+            ),
+        )]
     async fn handle_interact_key(
         &mut self,
         interact_message: &proto::InteractKeyAction,
@@ -2286,65 +2324,70 @@ impl EntityEventSender {
             let mut still_valid = HashSet::new();
 
             let tick = self.context.game_state.tick();
-            for shard in entities.shards() {
-                shard.for_each_entity(None, tick, |entity: IterEntity| {
-                    still_valid.insert(entity.id);
-                    if entity.id == self.context.player_context.entity_id {
-                        return Ok(());
-                    }
-                    if entity.last_nontrivial_modification < self.last_update {
-                        return Ok(());
-                    }
-
-                    let last_sent_sequence = self.sent_entities.get(&entity.id).cloned();
-                    let last_available_sequence = entity
-                        .next_moves
-                        .last()
-                        .map(|m| m.sequence)
-                        .unwrap_or(entity.current_move.sequence);
-                    // This check is too lenient - we have various modifications that don't change
-                    // the last sent sequence, but are otherwise important (e.g. force-advancing out of
-                    // a wait-forever movement with DEQUEUE_WHEN_READY in the entity engine)
-                    self.sent_entities
-                        .insert(entity.id, last_available_sequence);
-
-                    let mut moves_to_send = Vec::with_capacity(8);
-                    let mut pos = entity.starting_position;
-                    for m in std::iter::once(&entity.current_move).chain(entity.next_moves.iter()) {
-                        if m.sequence > last_sent_sequence.unwrap_or(0) {
-                            moves_to_send.push(entities_proto::EntityMove {
-                                sequence: m.sequence,
-                                start_position: Some(pos.try_into()?),
-                                velocity: Some(m.movement.velocity.try_into()?),
-                                acceleration: Some(m.movement.acceleration.try_into()?),
-                                face_direction: m.movement.face_direction,
-                                pitch: m.movement.pitch,
-                                start_tick: m.start_tick,
-                                time_ticks: (m.movement.move_time * 1_000_000_000.0) as u64,
-                            });
+            tokio::task::block_in_place(|| -> anyhow::Result<()> {
+                for shard in entities.shards() {
+                    shard.for_each_entity(None, tick, |entity: IterEntity| {
+                        still_valid.insert(entity.id);
+                        if entity.id == self.context.player_context.entity_id {
+                            return Ok(());
+                        }
+                        if entity.last_nontrivial_modification < self.last_update {
+                            return Ok(());
                         }
 
-                        pos = m.movement.pos_after_move(pos);
-                    }
-                    let message = entities_proto::EntityUpdate {
-                        id: entity.id,
-                        entity_class: entity.class,
-                        planned_move: moves_to_send,
-                        remove: false,
-                        trailing_entity: entity
-                            .trailing_entities
-                            .unwrap_or(&[])
-                            .iter()
-                            .map(|e| entities_proto::TrailingEntity {
-                                class: e.class_id,
-                                distance: e.trailing_distance,
-                            })
-                            .collect(),
-                    };
-                    messages.push(message);
-                    Ok(())
-                })?;
-            }
+                        let last_sent_sequence = self.sent_entities.get(&entity.id).cloned();
+                        let last_available_sequence = entity
+                            .next_moves
+                            .last()
+                            .map(|m| m.sequence)
+                            .unwrap_or(entity.current_move.sequence);
+                        // This check is too lenient - we have various modifications that don't change
+                        // the last sent sequence, but are otherwise important (e.g. force-advancing out of
+                        // a wait-forever movement with DEQUEUE_WHEN_READY in the entity engine)
+                        self.sent_entities
+                            .insert(entity.id, last_available_sequence);
+
+                        let mut moves_to_send = Vec::with_capacity(8);
+                        let mut pos = entity.starting_position;
+                        for m in
+                            std::iter::once(&entity.current_move).chain(entity.next_moves.iter())
+                        {
+                            if m.sequence > last_sent_sequence.unwrap_or(0) {
+                                moves_to_send.push(entities_proto::EntityMove {
+                                    sequence: m.sequence,
+                                    start_position: Some(pos.try_into()?),
+                                    velocity: Some(m.movement.velocity.try_into()?),
+                                    acceleration: Some(m.movement.acceleration.try_into()?),
+                                    face_direction: m.movement.face_direction,
+                                    pitch: m.movement.pitch,
+                                    start_tick: m.start_tick,
+                                    time_ticks: (m.movement.move_time * 1_000_000_000.0) as u64,
+                                });
+                            }
+
+                            pos = m.movement.pos_after_move(pos);
+                        }
+                        let message = entities_proto::EntityUpdate {
+                            id: entity.id,
+                            entity_class: entity.class,
+                            planned_move: moves_to_send,
+                            remove: false,
+                            trailing_entity: entity
+                                .trailing_entities
+                                .unwrap_or(&[])
+                                .iter()
+                                .map(|e| entities_proto::TrailingEntity {
+                                    class: e.class_id,
+                                    distance: e.trailing_distance,
+                                })
+                                .collect(),
+                        };
+                        messages.push(message);
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            })?;
             let to_remove = known_to_us.difference(&still_valid).collect::<Vec<_>>();
 
             for &entity_id in to_remove.into_iter() {
@@ -2512,13 +2555,13 @@ pub(crate) struct AudioSender {
 }
 impl AudioSender {
     #[tracing::instrument(
-        name = "AudioSenderLoop",
-        level = "info",
-        skip(self),
-        fields(
+            name = "AudioSenderLoop",
+            level = "info",
+            skip(self),
+            fields(
             player_name=%self.context.player_context.name(),
-        )
-    )]
+            )
+        )]
     pub(crate) async fn audio_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
