@@ -1615,12 +1615,35 @@ impl ServerGameMap {
                 let read_guard = RwLockWriteGuard::downgrade(write_guard);
                 log_trace("get_chunk downgraded write lock");
                 // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
-                let chunk_holder = read_guard.chunks.get(&coord).unwrap();
-                match self
-                    .load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone())
-                {
+                let storage = read_guard
+                    .chunks
+                    .get(&coord)
+                    .unwrap()
+                    .atomic_storage
+                    .clone();
+                // We're now going to ditch the read guard to avoid blocking insertions. We've
+                // inserted an empty sentinel and are about to do the work to fill it. The sentinel
+                // is detected by contending threads that then wait on the condvar, and cleanup
+                // detects the sentinel and will skip unloading it, to avoid an A/B/A problem.
+                drop(read_guard);
+                match self.load_uncached_or_generate_chunk(coord, storage) {
                     Ok((chunk, force_writeback)) => {
+                        let read_guard = {
+                            let _span = span!("post-load reacquire game_map read lock");
+                            // This split lock was an optimization on a single lock held across
+                            // load_uncached_or_generate_chunk. While this does starve writers,
+                            // the previous behavior starved writers even more.
+                            self.live_chunks[shard].read_recursive()
+                        };
                         log_trace("get_chunk chunk loaded, filling");
+                        // If this panics, the chunk was removed - but it had an Empty state (since
+                        // we got the write lock, didn't race, and explicitly inserted that state);
+                        // unloading code promises not to remove a chunk with that state (as a
+                        // sentinel).
+                        let chunk_holder = read_guard
+                            .chunks
+                            .get(&coord)
+                            .expect("Empty chunk being filled unexpectedly removed");
                         chunk_holder.fill(
                             chunk,
                             &read_guard.light_columns,
@@ -1636,6 +1659,19 @@ impl ServerGameMap {
                         break Ok(outer_guard);
                     }
                     Err(e) => {
+                        let read_guard = {
+                            let _span = span!("post-load reacquire game_map read lock");
+                            self.live_chunks[shard].read_recursive()
+                        };
+                        log_trace("get_chunk chunk loaded, filling");
+                        // If this panics, the chunk was removed - but it had an Empty state (since
+                        // we got the write lock, didn't race, and explicitly inserted that state);
+                        // unloading code promises not to remove a chunk with that state (as a
+                        // sentinel).
+                        let chunk_holder = read_guard
+                            .chunks
+                            .get(&coord)
+                            .expect("Empty chunk being filled unexpectedly removed");
                         chunk_holder
                             .set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
                         // Unfortunate duplication, anyhow::Error is not Clone
@@ -1750,13 +1786,22 @@ impl ServerGameMap {
         coord: ChunkCoordinate,
     ) -> Result<()> {
         let _span = span!("unload single chunk");
-        let chunk = lock.chunks.remove(&coord);
-        if let Some(chunk) = chunk {
+        let holder = lock.chunks.remove(&coord);
+        if let Some(holder) = holder {
             // The read/write type doesn't matter here. We already have a write lock on the mapshard.
             // If this is contended, something else has already gone terribly wrong.
-            match chunk.chunk.into_inner() {
+            match holder.chunk.into_inner() {
                 HolderState::Empty => {
-                    panic!("chunk unload got a chunk with an empty holder. This should never happen - please file a bug");
+                    // This should only happen if we try to flush or unload a chunk that's still
+                    // being loaded, and there's nobody else holding the read lock waiting for a
+                    // fill.
+                    warn!("chunk unload got a chunk with an empty holder. This should happen very rarely - please file a bug if it happens often");
+                    // reconstitute the chunk
+                    let new_holder = MapChunkHolder {
+                        chunk: RwLock::new(HolderState::Empty),
+                        ..holder
+                    };
+                    lock.chunks.insert(coord, new_holder);
                 }
                 HolderState::Err(e) => {
                     warn!("chunk unload trying to unload a chunk with an error: {e:?}");

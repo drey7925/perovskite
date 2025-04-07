@@ -16,13 +16,42 @@ impl RwCondvar {
 
     pub(crate) fn wait_reader<T>(&self, g: &mut RwLockReadGuard<'_, T>) {
         let guard = self.m.lock();
+        // Move the guard in so it gets unlocked before we re-lock g
+        //
+        // It may seem like there's a lock ordering violation between self.m and g.
+        // However, there is not:
+        //
+        // g held |=============> RwLockReadGuard::unlocked       <====|
+        // happens-before      \                                /
+        // self.m held        |============> condvar wait <===|
+        //
+        // The two locks are held concurrently (g -> self.m) when we prepare to wait, but they
+        // are not held concurrently when we finish waiting: self.m is released before we try
+        // to acquire self.g.
         RwLockReadGuard::unlocked(g, || {
-            // Move the guard in so it gets unlocked before we re-lock g
             let mut guard = guard;
             self.c.wait(&mut guard);
         });
     }
-    pub(crate) fn wait_writer<T>(&self, g: &mut RwLockWriteGuard<'_, T>) {
+
+    pub(crate) fn wait_reader_reader<T, U>(
+        &self,
+        acquire_first: &mut RwLockReadGuard<T>,
+        acquire_second: &mut RwLockReadGuard<U>,
+    ) {
+        let guard = self.m.lock();
+        // acquire_second is released
+        RwLockReadGuard::unlocked(acquire_second, || {
+            // acquire_first is released
+            RwLockReadGuard::unlocked(acquire_first, || {
+                // See deadlock safety rationale in wait_reader
+                let mut guard = guard;
+                self.c.wait(&mut guard);
+            }) // acquire_first is reacquired
+        }) // acquire_second is reacquired
+    }
+
+    pub(crate) fn wait_writer<T>(&self, g: &mut RwLockWriteGuard<T>) {
         let guard = self.m.lock();
         RwLockWriteGuard::unlocked(g, || {
             // Move the guard in so it gets unlocked before we re-lock g
@@ -30,11 +59,30 @@ impl RwCondvar {
             self.c.wait(&mut guard);
         });
     }
-    pub(crate) fn notify_all(&self) {
-        self.c.notify_all();
+
+    pub(crate) fn wait_reader_writer<T, U>(
+        &self,
+        acquire_first: &mut RwLockReadGuard<T>,
+        acquire_second: &mut RwLockWriteGuard<U>,
+    ) {
+        let guard = self.m.lock();
+        // acquire_second is released
+        RwLockWriteGuard::unlocked(acquire_second, || {
+            // acquire_first is released
+            RwLockReadGuard::unlocked(acquire_first, || {
+                // See deadlock safety rationale in wait_reader
+                let mut guard = guard;
+                self.c.wait(&mut guard);
+            }) // acquire_first is reacquired
+        }) // acquire_second is reacquired
     }
+
     pub(crate) fn notify_one(&self) {
         self.c.notify_one();
+    }
+
+    pub(crate) fn notify_all(&self) {
+        self.c.notify_all();
     }
 }
 

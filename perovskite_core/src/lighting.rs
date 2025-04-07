@@ -252,9 +252,9 @@ impl<'a> ChunkColumnCursor<'a> {
             // This assertion has not tripped for any other reason yet. To be safe, we'll log it.
             //
             // assert!(self.current.valid);
-            if !self.current.valid {
-                eprintln!("WARNING: Lightfield has no valid lighting. This is normal under high contention and deferred loading, but may signal a bug in other cases.");
-            }
+            // if !self.current.valid {
+            //     eprintln!("WARNING: Lightfield has no valid lighting. This is normal under high contention and deferred loading, but may signal a bug in other cases.");
+            // }
 
             let old_outgoing = self.current.outgoing();
             self.current.incoming = prev_outgoing;

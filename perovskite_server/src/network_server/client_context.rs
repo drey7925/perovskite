@@ -806,6 +806,7 @@ impl MapChunkSender {
             // chunks that are close enough to the player to really matter.
 
             let forced_by_distance = distance <= LOAD_EAGER_DISTANCE;
+            // On odd iterations, only load prefetched chunks.
             let is_even_iter = (self.iters % 2) == 0;
             let should_load = forced_by_distance
                 || (is_even_iter
