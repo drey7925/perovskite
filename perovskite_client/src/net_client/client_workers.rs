@@ -1,5 +1,5 @@
 use crate::{
-    game_state::{
+    client_state::{
         entities::GameEntity, items::ClientInventory, ClientState, FastChunkNeighbors, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
@@ -30,7 +30,7 @@ use crate::audio::{
     EvictedAudioHealer, MapSoundState, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED,
     SOUND_PRESENT, SOUND_SQUARELAW_ENABLED,
 };
-use crate::game_state::block_types::ClientBlockTypeManager;
+use crate::client_state::block_types::ClientBlockTypeManager;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;

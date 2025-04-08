@@ -10,9 +10,9 @@ use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::game_actions::ToolTarget;
 use winit::event_loop::EventLoop;
 
-use crate::game_state::tool_controller::ToolTargetWithId;
+use crate::client_state::tool_controller::ToolTargetWithId;
 use crate::{
-    game_state::{settings::GameSettings, DigTapAction},
+    client_state::{settings::GameSettings, DigTapAction},
     net_client,
     vulkan::VulkanWindow,
 };
@@ -86,7 +86,7 @@ impl Loadtester {
                     pos
                 };
                 cs.actions
-                    .send(crate::game_state::GameAction::Dig(DigTapAction {
+                    .send(crate::client_state::GameAction::Dig(DigTapAction {
                         target: ToolTarget::Block(BlockCoordinate::new(
                             pos.x as i32,
                             pos.y as i32,

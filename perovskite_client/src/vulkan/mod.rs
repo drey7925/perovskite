@@ -76,7 +76,7 @@ use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 
 pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
-use crate::game_state::settings::{GameSettings, Supersampling};
+use crate::client_state::settings::{GameSettings, Supersampling};
 
 use self::util::select_physical_device;
 

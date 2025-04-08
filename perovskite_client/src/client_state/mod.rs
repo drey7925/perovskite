@@ -43,7 +43,7 @@ use tokio::sync::mpsc;
 use tracy_client::span;
 use winit::event::Event;
 
-use crate::game_state::chunk::ClientChunk;
+use crate::client_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
@@ -911,7 +911,7 @@ pub(crate) struct FrameState {
 
 use crate::audio;
 use crate::audio::MapSoundState;
-use crate::game_state::tool_controller::ToolTargetWithId;
+use crate::client_state::tool_controller::ToolTargetWithId;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {

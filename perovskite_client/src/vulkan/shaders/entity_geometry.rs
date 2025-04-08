@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::game_state::settings::Supersampling;
+use crate::client_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
 use smallvec::smallvec;

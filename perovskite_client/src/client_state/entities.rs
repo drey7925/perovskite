@@ -7,7 +7,7 @@ use std::vec::IntoIter;
 use std::{collections::VecDeque, time::Instant};
 
 use crate::audio::{EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT};
-use crate::game_state::tool_controller::check_intersection_core;
+use crate::client_state::tool_controller::check_intersection_core;
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
     entity_renderer::EntityRenderer,

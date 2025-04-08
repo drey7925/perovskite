@@ -12,7 +12,7 @@ use vulkano::{
 use winit::event::WindowEvent;
 
 use crate::{
-    game_state::ClientState,
+    client_state::ClientState,
     game_ui::egui_ui::EguiUi,
     vulkan::{Texture2DHolder, VulkanWindow},
 };
@@ -21,8 +21,8 @@ use super::{
     flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
     LiveRenderConfig, PipelineProvider, PipelineWrapper,
 };
-use crate::game_state::settings::Supersampling;
-use crate::game_state::tool_controller::ToolState;
+use crate::client_state::settings::Supersampling;
+use crate::client_state::tool_controller::ToolState;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};

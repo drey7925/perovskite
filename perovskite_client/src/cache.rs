@@ -16,7 +16,7 @@ use perovskite_core::protocol::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    game_state::settings::{clean_path, project_dirs},
+    client_state::settings::{clean_path, project_dirs},
     net_client::AsyncMediaLoader,
 };
 

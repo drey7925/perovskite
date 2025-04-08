@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use crate::game_state::settings::Supersampling;
+use crate::client_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use smallvec::smallvec;
 use texture_packer::Rect;

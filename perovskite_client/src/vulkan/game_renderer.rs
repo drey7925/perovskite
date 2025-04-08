@@ -43,12 +43,12 @@ use winit::{
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
 
-use crate::game_state::input::Keybind;
+use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::vulkan::shaders::{sky, LiveRenderConfig};
 use crate::{
-    game_state::{settings::GameSettings, ClientState, FrameState},
+    client_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
 };

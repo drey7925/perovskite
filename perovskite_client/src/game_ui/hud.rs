@@ -21,7 +21,7 @@ use perovskite_core::protocol::items::item_stack::QuantityType;
 use texture_packer::Rect;
 
 use crate::{
-    game_state::{items::ClientItemManager, ClientState},
+    client_state::{items::ClientItemManager, ClientState},
     vulkan::{
         shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall},
         Texture2DHolder, VulkanWindow,

@@ -16,7 +16,7 @@
 
 pub(crate) mod cache;
 pub mod client_main;
-pub mod game_state;
+pub mod client_state;
 pub(crate) mod game_ui;
 pub(crate) mod main_menu;
 pub(crate) mod net_client;

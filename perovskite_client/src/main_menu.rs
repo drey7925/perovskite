@@ -10,12 +10,12 @@ use tokio::sync::{oneshot, watch};
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::{event::WindowEvent, event_loop::EventLoop};
 
-use crate::game_state::input::{BoundAction, Keybind, KeybindSettings};
-use crate::game_state::settings::Supersampling;
+use crate::client_state::input::{BoundAction, Keybind, KeybindSettings};
+use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
 use crate::vulkan::VulkanContext;
 use crate::{
-    game_state::settings::GameSettings,
+    client_state::settings::GameSettings,
     vulkan::{
         game_renderer::{ConnectionSettings, ConnectionState, GameState},
         VulkanWindow,

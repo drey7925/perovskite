@@ -25,10 +25,10 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracy_client::{plot, span};
 
 use crate::cache::CacheManager;
-use crate::game_state::entities::{ElapsedOrOverflow, EntityMove};
-use crate::game_state::settings::GameSettings;
-use crate::game_state::timekeeper::Timekeeper;
-use crate::game_state::ClientState;
+use crate::client_state::entities::{ElapsedOrOverflow, EntityMove};
+use crate::client_state::settings::GameSettings;
+use crate::client_state::timekeeper::Timekeeper;
+use crate::client_state::ClientState;
 
 // Public for testing
 pub struct EngineHandle {
@@ -99,7 +99,7 @@ impl EngineHandle {
         }
         alloc_lock.simple_sounds_next_sequence += NUM_SIMPLE_SOUND_SLOTS as u64;
 
-        return if let Some(index) = alloc_lock.simple_sound_tokens.iter().position(|x| *x == 0) {
+        if let Some(index) = alloc_lock.simple_sound_tokens.iter().position(|x| *x == 0) {
             let token = seqnum + (index as u64);
             alloc_lock.simple_sound_tokens[index] = token;
             {
@@ -130,7 +130,7 @@ impl EngineHandle {
                 return Some(SimpleSoundToken(NonZeroU64::new(token).unwrap()));
             }
             None
-        };
+        }
     }
 
     pub(crate) fn remove_simple_sound(&self, token: SimpleSoundToken) -> bool {

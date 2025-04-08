@@ -26,9 +26,9 @@ use vulkano::{
     DeviceSize,
 };
 
-use crate::game_state::settings::Supersampling;
+use crate::client_state::settings::Supersampling;
 use crate::{
-    game_state::chunk::{ChunkDataView, ChunkOffsetExt},
+    client_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
 };
 

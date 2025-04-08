@@ -1,4 +1,4 @@
-use crate::game_state::settings::Supersampling;
+use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::{LiveRenderConfig, PipelineProvider, PipelineWrapper, SceneState};
 use crate::vulkan::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 use anyhow::{Context, Result};

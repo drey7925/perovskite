@@ -45,7 +45,7 @@ use crate::vulkan::VulkanContext;
 use crate::{
     audio,
     cache::CacheManager,
-    game_state::{
+    client_state::{
         block_types::ClientBlockTypeManager, items::ClientItemManager, settings::GameSettings,
         timekeeper::Timekeeper, ClientState,
     },

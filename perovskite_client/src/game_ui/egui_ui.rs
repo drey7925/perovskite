@@ -11,15 +11,15 @@ use perovskite_core::protocol::{items::item_def::QuantityType, ui::PopupDescript
 
 use super::hud::render_number;
 use super::{get_texture, FRAME_UNSELECTED};
-use crate::game_state::items::InventoryViewManager;
-use crate::game_state::settings::GameSettings;
-use crate::game_state::tool_controller::ToolState;
-use crate::game_state::{GameAction, InventoryAction};
+use crate::client_state::items::InventoryViewManager;
+use crate::client_state::settings::GameSettings;
+use crate::client_state::tool_controller::ToolState;
+use crate::client_state::{GameAction, InventoryAction};
 use crate::main_menu::{draw_settings_menu, InputCapture};
 use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};
 use crate::vulkan::{VulkanContext, VulkanWindow};
 use crate::{
-    game_state::{items::ClientItemManager, ClientState},
+    client_state::{items::ClientItemManager, ClientState},
     vulkan::Texture2DHolder,
 };
 use arc_swap::ArcSwap;

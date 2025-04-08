@@ -17,7 +17,7 @@ use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::game_state::{
+use crate::client_state::{
     block_types::ClientBlockTypeManager, chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors,
 };
 
@@ -359,7 +359,7 @@ pub(crate) fn propagate_neighbor_data(
             let _span = span!("chunk precheck");
             // Fast-pass checks
             if current_chunk.is_empty_optimization_hint() {
-                current_chunk.set_state(crate::game_state::chunk::ChunkRenderState::NoRender);
+                current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::NoRender);
                 return Ok(true);
             }
         }
@@ -403,7 +403,7 @@ pub(crate) fn propagate_neighbor_data(
                 .iter()
                 .all(|&x| block_manager.is_solid_opaque(x))
             {
-                current_chunk.set_state(crate::game_state::chunk::ChunkRenderState::NoRender);
+                current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::NoRender);
                 return Ok(true);
             }
         }
@@ -597,7 +597,7 @@ pub(crate) fn propagate_neighbor_data(
             }
         }
 
-        current_chunk.set_state(crate::game_state::chunk::ChunkRenderState::ReadyToRender);
+        current_chunk.set_state(crate::client_state::chunk::ChunkRenderState::ReadyToRender);
 
         Ok(true)
     } else {

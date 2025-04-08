@@ -38,12 +38,12 @@ use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 
 use crate::cache::CacheManager;
-use crate::game_state::block_types::ClientBlockTypeManager;
-use crate::game_state::chunk::{
+use crate::client_state::block_types::ClientBlockTypeManager;
+use crate::client_state::chunk::{
     ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, SOLID_RECLAIMER,
     TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
 };
-use crate::game_state::ClientState;
+use crate::client_state::ClientState;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
