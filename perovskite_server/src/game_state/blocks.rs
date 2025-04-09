@@ -72,6 +72,7 @@ impl Default for ExtendedData {
 }
 
 /// The result of interacting with (e.g. digging/tapping) a block.
+#[derive(Clone, Debug)]
 pub struct BlockInteractionResult {
     /// The item stacks obtained by the player
     pub item_stacks: Vec<ItemStack>,

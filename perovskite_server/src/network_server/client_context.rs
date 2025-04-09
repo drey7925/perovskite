@@ -42,9 +42,9 @@ use crate::game_state::items;
 
 use crate::game_state::items::Item;
 
-use crate::game_state::player::PlayerContext;
 use crate::game_state::player::PlayerEventReceiver;
 use crate::game_state::player::PlayerState;
+use crate::game_state::player::{PlayerContext, PlayerEvent};
 use crate::game_state::GameState;
 use crate::run_handler;
 
@@ -914,13 +914,13 @@ pub(crate) struct BlockEventSender {
 }
 impl BlockEventSender {
     #[tracing::instrument(
-            name = "BlockEventOutboundLoop",
-            level = "info",
-            skip(self),
-            fields(
+        name = "BlockEventOutboundLoop",
+        level = "info",
+        skip(self),
+        fields(
             player_name = %self.context.player_context.name(),
-            )
-        )]
+        )
+    )]
     pub(crate) async fn block_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -937,13 +937,13 @@ impl BlockEventSender {
     }
 
     #[tracing::instrument(
-            name = "HandleBlockUpdate",
-            level = "trace",
-            skip(self, update),
-            fields(
+        name = "HandleBlockUpdate",
+        level = "trace",
+        skip(self, update),
+        fields(
             player_name = %self.context.player_context.name(),
-            )
-        )]
+        )
+    )]
     async fn handle_block_update(
         &mut self,
         update: Result<BlockUpdate, broadcast::error::RecvError>,
@@ -1116,13 +1116,13 @@ pub(crate) struct InventoryEventSender {
 }
 impl InventoryEventSender {
     #[tracing::instrument(
-            name = "InventoryOutboundLoop",
-            level = "info",
-            skip(self),
-            fields(
+        name = "InventoryOutboundLoop",
+        level = "info",
+        skip(self),
+        fields(
             player_name = %self.context.player_context.name(),
-            )
-        )]
+        )
+    )]
     pub(crate) async fn inv_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -1471,13 +1471,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-            name = "map_handler",
-            level = "trace",
-            skip(self, coord, selected_inv_slot, get_item_handler),
-            fields(
+        name = "map_handler",
+        level = "trace",
+        skip(self, coord, selected_inv_slot, get_item_handler),
+        fields(
             player_name = %self.context.player_context.name(),
-            ),
-        )]
+        ),
+    )]
     async fn run_map_handlers<F, T>(
         &mut self,
         coord: T,
@@ -1656,7 +1656,7 @@ impl InboundWorker {
                         });
                     if let Some(sound_id) = footstep_sound_id {
                         self.context.game_state.audio().send_event(AudioEvent {
-                            context_id: self.context.id,
+                            initiating_context_id: self.context.id,
                             instruction: AudioInstruction::PlaySampledSound(SampledSoundPlayback {
                                 tick: 0,
                                 sound_id,
@@ -1683,13 +1683,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-            name = "place_action",
-            level = "trace",
-            skip(self),
-            fields(
+        name = "place_action",
+        level = "trace",
+        skip(self),
+        fields(
             player_name = %self.context.player_context.name(),
-            ),
-        )]
+        ),
+    )]
     async fn handle_place(&mut self, place_message: &proto::PlaceAction) -> Result<()> {
         block_in_place(|| {
             log_trace("Running place handlers");
@@ -1789,13 +1789,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-            name = "inventory_action",
-            level = "trace",
-            skip(self),
-            fields(
+        name = "inventory_action",
+        level = "trace",
+        skip(self),
+        fields(
             player_name = %self.context.player_context.name(),
-            ),
-        )]
+        ),
+    )]
     async fn handle_inventory_action(&mut self, action: &proto::InventoryAction) -> Result<()> {
         if action.source_view == action.destination_view {
             tracing::error!(
@@ -1860,16 +1860,16 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-            name = "popup_response",
-            level = "trace",
-            skip(self, action),
-            fields(
+        name = "popup_response",
+        level = "trace",
+        skip(self, action),
+        fields(
             player_name = %self.context.player_context.name(),
             id = %action.popup_id,
             was_closed = %action.closed,
             button = %action.clicked_button,
-            ),
-        )]
+        ),
+    )]
     async fn handle_popup_response(
         &mut self,
         action: &perovskite_core::protocol::ui::PopupResponse,
@@ -2007,13 +2007,13 @@ impl InboundWorker {
     }
 
     #[tracing::instrument(
-            name = "interact_key",
-            level = "trace",
-            skip(self),
-            fields(
+        name = "interact_key",
+        level = "trace",
+        skip(self),
+        fields(
             player_name = %self.context.player_context.name(),
-            ),
-        )]
+        ),
+    )]
     async fn handle_interact_key(
         &mut self,
         interact_message: &proto::InteractKeyAction,
@@ -2157,74 +2157,20 @@ impl MiscOutboundWorker {
             self.context.game_state.subscribe_player_state_resyncs();
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
-                message = self.player_event_receiver.chat_messages.recv() => {
-                    match message {
-                        Some(message) => {
-                        self.transmit_chat_message(message).await?;
+                event = self.player_event_receiver.rx.recv() => {
+                    match event {
+                        Some(event) => {
+                        self.handle_player_event(event).await?;
                         },
                         None => {
-                            tracing::warn!("Chat message sender disconnected")
+                            warn!("Player event sender disconnected")
                         }
                     }
-                },
-                message = self.player_event_receiver.disconnection_message.recv() => {
-                    match message {
-                        Some(message) => {
-                            self.outbound_tx.send(Ok(StreamToClient {
-                                tick: self.context.game_state.tick(),
-                                server_message: Some(ServerMessage::ShutdownMessage(message)),
-                                performance_metrics: self.context.maybe_get_performance_metrics(),
-                            })).await?;
-                        },
-                        None => {
-                            tracing::warn!("Disconnection message sender disconnected")
-                        }
-                    }
-                    // Even if the player is using a hacked client, we will disconnect
-                    // them on our end
-                    self.context.cancellation.cancel();
-                },
-                popup_id = self.player_event_receiver.updated_popups.recv() => {
-                    match popup_id {
-                        Some(popup_id) => {
-                            let popup_proto = {
-                                self.context.player_context.state.lock().active_popups.iter().find(|x| x.id() == popup_id).map(|x| x.to_proto())
-                            };
-                            let popup_proto = match popup_proto {
-                                Some(x) => x,
-                                None => {
-                                    tracing::warn!("Updated popup not found: {}", popup_id);
-                                    continue;
-                                }
-                            };
-                            self.outbound_tx.send(Ok(StreamToClient {
-                                tick: self.context.game_state.tick(),
-                                server_message: Some(ServerMessage::ShowPopup(popup_proto)),
-                                performance_metrics: self.context.maybe_get_performance_metrics(),
-                            })).await?;
-                        },
-                        None => {
-                            tracing::warn!("Updated popup sender disconnected")
-                        }
-                    }
-
                 }
                 _ = resync_player_state_global.changed() => {
                     let message = make_client_state_update_message(&self.context, self.context.player_context.player.state.lock(), false)?;
                     self.outbound_tx.send(Ok(message)).await?;
                 },
-                want_location_update = self.player_event_receiver.reinit_player_state.recv() => {
-                    match want_location_update {
-                        Some(want_location_update) => {
-                            let message = make_client_state_update_message(&self.context, self.context.player_context.player.state.lock(), want_location_update)?;
-                            self.outbound_tx.send(Ok(message)).await?;
-                        },
-                        None => {
-                            tracing::warn!("Reinit player state sender disconnected");
-                        }
-                    }
-
-                }
                 message = broadcast_messages.recv() => {
                     match message {
                         Ok(message) => {
@@ -2260,6 +2206,59 @@ impl MiscOutboundWorker {
 
         Ok(())
     }
+
+    async fn handle_player_event(&mut self, event: PlayerEvent) -> Result<()> {
+        match event {
+            PlayerEvent::ChatMessage(message) => {
+                self.transmit_chat_message(message).await?;
+            }
+            PlayerEvent::DisconnectionMessage(reason) => {
+                self.outbound_tx
+                    .send(Ok(StreamToClient {
+                        tick: self.context.game_state.tick(),
+                        server_message: Some(ServerMessage::ShutdownMessage(reason)),
+                        performance_metrics: self.context.maybe_get_performance_metrics(),
+                    }))
+                    .await?;
+            }
+            PlayerEvent::ReinitPlayerState(want_location_update) => {
+                let message = make_client_state_update_message(
+                    &self.context,
+                    self.context.player_context.player.state.lock(),
+                    want_location_update,
+                )?;
+                self.outbound_tx.send(Ok(message)).await?;
+            }
+            PlayerEvent::UpdatedPopup(popup_id) => {
+                let popup_proto = {
+                    self.context
+                        .player_context
+                        .state
+                        .lock()
+                        .active_popups
+                        .iter()
+                        .find(|x| x.id() == popup_id)
+                        .map(|x| x.to_proto())
+                };
+                match popup_proto {
+                    Some(x) => {
+                        self.outbound_tx
+                            .send(Ok(StreamToClient {
+                                tick: self.context.game_state.tick(),
+                                server_message: Some(ServerMessage::ShowPopup(x)),
+                                performance_metrics: self.context.maybe_get_performance_metrics(),
+                            }))
+                            .await?;
+                    }
+                    None => {
+                        warn!("Updated popup not found: {}", popup_id);
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+
     async fn transmit_chat_message(&mut self, message: ChatMessage) -> Result<()> {
         self.outbound_tx
             .send(Ok(StreamToClient {
@@ -2555,13 +2554,13 @@ pub(crate) struct AudioSender {
 }
 impl AudioSender {
     #[tracing::instrument(
-            name = "AudioSenderLoop",
-            level = "info",
-            skip(self),
-            fields(
+        name = "AudioSenderLoop",
+        level = "info",
+        skip(self),
+        fields(
             player_name=%self.context.player_context.name(),
-            )
-        )]
+        )
+    )]
     pub(crate) async fn audio_sender_loop(&mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
@@ -2578,7 +2577,7 @@ impl AudioSender {
     }
 
     pub(crate) async fn handle_event(&mut self, event: AudioEvent) -> Result<()> {
-        if event.context_id == self.context.id {
+        if event.initiating_context_id == self.context.id {
             // Don't send player-initiated events back to themselves
             return Ok(());
         }

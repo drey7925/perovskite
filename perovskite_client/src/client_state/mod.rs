@@ -25,10 +25,12 @@ use arc_swap::ArcSwap;
 use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
-use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
+use perovskite_core::coordinates::{
+    BlockCoordinate, ChunkCoordinate, ChunkOffset, PlayerPositionUpdate,
+};
 
 use log::warn;
-use parking_lot::{Mutex, RwLockReadGuard};
+use parking_lot::{Mutex, RawRwLock, RwLockReadGuard, RwLockWriteGuard};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
@@ -157,18 +159,28 @@ impl ChunkManager {
         }
     }
 
+    pub(crate) fn chunk_lock(&self) -> RwLockWriteGuard<ChunkMap> {
+        let _span = span!("Acquire global chunk lock");
+        self.chunks.write()
+    }
+
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
-        // Lock order: chunks -> renderable_chunks -> light_columns
-        let mut chunks_lock = {
-            let _span = span!("Acquire global chunk lock");
-            self.chunks.write()
-        };
+        let mut chunk_lock = self.chunk_lock();
+        self.remove_locked(coord, &mut chunk_lock)
+    }
+
+    pub(crate) fn remove_locked(
+        &self,
+        coord: &ChunkCoordinate,
+        chunks_lock: &mut RwLockWriteGuard<ChunkMap>,
+    ) -> Option<Arc<ClientChunk>> {
         if let Some(chunk) = chunks_lock.get(coord) {
             // todo this is racy
             if let Some(batch) = chunk.get_batch() {
                 self.spill(&chunks_lock, batch, "remove");
             }
         }
+        // Lock order: chunks -> renderable_chunks -> light_columns
         let mut render_chunks_lock = {
             let _span = span!("Acquire global renderable chunk lock");
             self.renderable_chunks.write()
@@ -189,9 +201,40 @@ impl ChunkManager {
         render_chunks_lock.remove(coord);
         chunk
     }
+    fn handle_mapchunk_audio(
+        &self,
+        client_state: &ClientState,
+        coord: ChunkCoordinate,
+        block_ids: &[u32; 4096],
+    ) {
+        let tick = client_state.timekeeper.now();
+        let pos = client_state.weakly_ordered_last_position();
+        let block_types = client_state.block_types.deref();
+
+        let mut sounds: smallvec::SmallVec<[_; 16]> = smallvec::SmallVec::new();
+        for (i, block) in block_ids.iter().enumerate() {
+            if let Some((id, volume)) = block_types.block_sound(BlockId::from(*block)) {
+                sounds.push((i, id, volume));
+            }
+        }
+        if !sounds.is_empty() {
+            let mut map_sound = client_state.world_audio.lock();
+            for (i, id, volume) in sounds.into_iter() {
+                map_sound.insert_or_update(
+                    tick,
+                    pos.position,
+                    coord.with_offset(ChunkOffset::from_index(i)),
+                    id.get(),
+                    volume,
+                )
+            }
+        }
+    }
+
     // Returns the number of additional chunks below the given chunk that need lighting updates.
     pub(crate) fn insert_or_update(
         &self,
+        client_state: &ClientState,
         coord: ChunkCoordinate,
         block_ids: &[u32; 4096],
         block_types: &ClientBlockTypeManager,
@@ -209,9 +252,12 @@ impl ChunkManager {
             .entry((coord.x, coord.z))
             .or_insert_with(ChunkColumn::empty);
         let occlusion = match chunks_lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(chunk_entry) => chunk_entry
-                .get()
-                .update_from(coord, block_ids, block_types)?,
+            std::collections::hash_map::Entry::Occupied(chunk_entry) => {
+                client_state.world_audio.lock().remove_chunk(coord);
+                chunk_entry
+                    .get()
+                    .update_from(coord, block_ids, block_types)?
+            }
             std::collections::hash_map::Entry::Vacant(x) => {
                 let (chunk, occlusion) = ClientChunk::from_proto(coord, block_ids, block_types)?;
                 light_column.insert_empty(coord.y);
@@ -219,6 +265,7 @@ impl ChunkManager {
                 occlusion
             }
         };
+        self.handle_mapchunk_audio(client_state, coord, block_ids);
 
         let mut light_cursor = light_column.cursor_into(coord.y);
         *light_cursor.current_occlusion_mut() = occlusion;
@@ -268,7 +315,6 @@ impl ChunkManager {
                     None
                 }
             };
-            // unwrap because we expect all errors to be internal.
             if let Some(extra_chunks) = extra_chunks {
                 let chunk = block_coord.chunk();
                 needs_remesh.insert(chunk);

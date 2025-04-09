@@ -20,7 +20,7 @@ pub struct AudioEvent {
     // It should be unset if e.g. game content plays a sound and everyone (including the player
     // that triggered game content) should hear it, e.g. a music block activated by a player pushing
     // a button
-    pub context_id: usize,
+    pub initiating_context_id: usize,
     pub instruction: AudioInstruction,
 }
 

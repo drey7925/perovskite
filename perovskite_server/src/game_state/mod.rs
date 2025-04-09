@@ -99,7 +99,7 @@ pub struct GameState {
     game_behaviors: GameBehaviors,
     auth: AuthService,
     time_state: Mutex<TimeState>,
-    player_state_resync: tokio::sync::watch::Sender<()>,
+    resync_all_player_states: tokio::sync::watch::Sender<()>,
     entities: Arc<entities::EntityManager>,
     server_start_time: Instant,
     extensions: type_map::concurrent::TypeMap,
@@ -143,7 +143,7 @@ impl GameState {
             game_behaviors,
             auth: AuthService::create(db.clone()).unwrap(),
             time_state: Mutex::new(TimeState::new(day_length, time_of_day)),
-            player_state_resync: tokio::sync::watch::channel(()).0,
+            resync_all_player_states: tokio::sync::watch::channel(()).0,
             entities: Arc::new(entities::EntityManager::new(
                 db.clone(),
                 entity_types,
@@ -287,14 +287,14 @@ impl GameState {
     /// Sets the time of day. 0 is midnight, 1 is the next midnight.
     pub fn set_time_of_day(&self, time_of_day: f64) {
         self.time_state.lock().set_time(time_of_day);
-        if self.player_state_resync.send(()).is_err() {
+        if self.resync_all_player_states.send(()).is_err() {
             tracing::info!("Player resync had no closures waiting for it.");
             // pass, nobody was listening.
         }
     }
 
     pub(crate) fn subscribe_player_state_resyncs(&self) -> tokio::sync::watch::Receiver<()> {
-        self.player_state_resync.subscribe()
+        self.resync_all_player_states.subscribe()
     }
 
     pub fn data_dir(&self) -> &PathBuf {

@@ -599,28 +599,6 @@ impl InboundContext {
             [coord.hash_u64() as usize % self.shared_state.neighbor_propagators.len()]
         .enqueue(coord);
     }
-    fn handle_mapchunk_audio(&self, coord: ChunkCoordinate, block_ids: &[u32; 4096]) {
-        let tick = self.shared_state.client_state.timekeeper.now();
-        let pos = self
-            .shared_state
-            .client_state
-            .weakly_ordered_last_position();
-        let block_types = self.shared_state.client_state.block_types.deref();
-        let mut map_sound = self.shared_state.client_state.world_audio.lock();
-
-        for (i, block) in block_ids.iter().enumerate() {
-            // This loop should ideally be tighter, optimize if profiling shows it's hot
-            if let Some((id, volume)) = block_types.block_sound(BlockId::from(*block)) {
-                map_sound.insert_or_update(
-                    tick,
-                    pos.position,
-                    coord.with_offset(ChunkOffset::from_index(i)),
-                    id.get(),
-                    volume,
-                )
-            }
-        }
-    }
 
     fn enqueue_for_meshing(&self, coord: ChunkCoordinate) {
         self.shared_state.mesh_workers
@@ -646,8 +624,8 @@ impl InboundContext {
                             v1_data.block_ids.deref().try_into().unwrap()
                         }
                     };
-                    self.handle_mapchunk_audio(coord, block_ids);
                     let extra_chunks = self.shared_state.client_state.chunks.insert_or_update(
+                        &self.shared_state.client_state,
                         coord,
                         block_ids,
                         &self.shared_state.client_state.block_types,
@@ -694,9 +672,15 @@ impl InboundContext {
     async fn handle_unsubscribe(&mut self, unsub: &rpc::MapChunkUnsubscribe) -> Result<()> {
         // TODO hold more old chunks (possibly LRU) to provide a higher render distance
         let mut bad_coords = vec![];
+        let mut chunk_lock = self.shared_state.client_state.chunks.chunk_lock();
         for coord in unsub.chunk_coord.iter() {
             let coord = coord.into();
-            match self.shared_state.client_state.chunks.remove(&coord) {
+            match self
+                .shared_state
+                .client_state
+                .chunks
+                .remove_locked(&coord, &mut chunk_lock)
+            {
                 Some(_x) => {
                     self.shared_state
                         .client_state

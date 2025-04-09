@@ -290,10 +290,26 @@ pub(crate) async fn start_engine(
 
             let _ = std::thread::spawn(move || {
                 let startup_work = move || {
+                    let mut first_callback = true;
                     let stream = output_device
                         .build_output_stream(
-                            &selected_config.into(),
+                            &selected_config.clone().into(),
                             move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                                if first_callback {
+                                    if let Err(e) =
+                                        audio_thread_priority::promote_current_thread_to_real_time(
+                                            (data.len() / selected_config.channels() as usize)
+                                                as u32,
+                                            selected_config.sample_rate().0,
+                                        )
+                                    {
+                                        log::error!(
+                                            "Failed to promote audio thread to real time: {:?}",
+                                            e
+                                        );
+                                    }
+                                    first_callback = false;
+                                }
                                 engine_state.callback(data, info);
                             },
                             move |err| {
@@ -815,7 +831,10 @@ impl EngineState {
                 let distance = (player_pos - entity_pos).magnitude();
                 // distance in this sample if the player hadn't moved
                 let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
-                let distance_diff = distance_unmoved_player - scratchpad.last_distance;
+                // avoid unusual jumps in the distance due to numerical error at edges of moves
+                // We need 100 then 10 samples (2.2 ms + 220 us at 44100 Hz) to actually trigger detection
+                let distance_diff =
+                    (distance_unmoved_player - scratchpad.last_distance).clamp(-0.1, 0.1);
 
                 scratchpad.last_distance = distance;
                 scratchpad.last_player_pos = player_pos;
@@ -832,7 +851,7 @@ impl EngineState {
                     }
                     ApproachState::DecreaseDetected(acc) => {
                         let new_acc = (acc + distance_diff).max(0.0);
-                        if new_acc > 0.1 {
+                        if new_acc > 1.0 {
                             scratchpad.edge_cycle = 0.0;
                             // This is a local minimum
                             // Is it close enough?

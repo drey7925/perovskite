@@ -30,6 +30,13 @@ use perovskite_core::{
     protocol::{game_rpc::InventoryAction, players::StoredPlayer},
 };
 
+use super::{
+    client_ui::Popup,
+    entities::EntityTypeId,
+    event::{EventInitiator, PlayerInitiator},
+    inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
+    GameState,
+};
 use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,
@@ -40,14 +47,6 @@ use perovskite_core::protocol::game_rpc::EntityTarget;
 use prost::Message;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-
-use super::{
-    client_ui::Popup,
-    entities::EntityTypeId,
-    event::{EventInitiator, PlayerInitiator},
-    inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
-    GameState,
-};
 
 pub struct Player {
     // Player's in-game name
@@ -131,7 +130,7 @@ impl Player {
             position,
             None,
             EntityTypeId {
-                class: (game_state.game_behaviors.player_entity_class)(&proto.name),
+                class: (&game_state.game_behaviors.player_entity_class)(&proto.name),
                 data: Some(proto.name.as_bytes().into()),
             },
             None,
@@ -258,27 +257,28 @@ impl Player {
     }
 
     pub async fn send_chat_message_async(&self, message: ChatMessage) -> Result<()> {
-        self.sender.chat_messages.send(message).await?;
+        self.sender
+            .tx
+            .send(PlayerEvent::ChatMessage(message))
+            .await?;
         Ok(())
     }
     pub fn send_chat_message(&self, message: ChatMessage) -> Result<()> {
-        self.sender.chat_messages.blocking_send(message)?;
-        Ok(())
+        tokio::runtime::Handle::current().block_on(self.send_chat_message_async(message))
     }
 
     pub async fn kick_player(&self, reason: &str) -> Result<()> {
         self.sender
-            .disconnection_message
-            .send(format!("Kicked: {reason}"))
+            .tx
+            .send(PlayerEvent::DisconnectionMessage(format!(
+                "Kicked: {reason}"
+            )))
             .await?;
         Ok(())
     }
 
     pub fn kick_player_blocking(&self, reason: &str) -> Result<()> {
-        self.sender
-            .disconnection_message
-            .blocking_send(format!("Kicked: {reason}"))?;
-        Ok(())
+        tokio::runtime::Handle::current().block_on(self.kick_player(reason))
     }
 
     pub fn grant_permission(&self, permission: &str) -> Result<()> {
@@ -311,10 +311,13 @@ impl Player {
                 self.main_inventory_key,
             )?
             .into();
+        // Avoid a deadlock: the thread that consumes from the channel may need the lock in order
+        // to make progress.
+        drop(lock);
         tokio::task::block_in_place(|| {
-            MutexGuard::unlocked(&mut lock, || {
-                self.sender.reinit_player_state.blocking_send(false)
-            })
+            self.sender
+                .tx
+                .blocking_send(PlayerEvent::ReinitPlayerState(false))
         })?;
         Ok(())
     }
@@ -380,7 +383,10 @@ impl Player {
 
     pub async fn set_position(&self, position: Vector3<f64>) -> Result<()> {
         self.state.lock().last_position.position = position;
-        self.sender.reinit_player_state.send(true).await?;
+        self.sender
+            .tx
+            .send(PlayerEvent::ReinitPlayerState(true))
+            .await?;
         Ok(())
     }
 
@@ -390,7 +396,10 @@ impl Player {
 
     pub async fn attach_to_entity(&self, entity_target: EntityTarget) -> Result<()> {
         self.state.lock().attached_to_entity = Some(entity_target);
-        self.sender.reinit_player_state.send(true).await?;
+        self.sender
+            .tx
+            .send(PlayerEvent::ReinitPlayerState(true))
+            .await?;
         Ok(())
     }
 
@@ -399,7 +408,10 @@ impl Player {
     }
     pub async fn detach_from_entity(&self) -> Result<Option<EntityTarget>> {
         let old_attachment = std::mem::replace(&mut self.state.lock().attached_to_entity, None);
-        self.sender.reinit_player_state.send(true).await?;
+        self.sender
+            .tx
+            .send(PlayerEvent::ReinitPlayerState(true))
+            .await?;
         Ok(old_attachment)
     }
     pub fn detach_from_entity_blocking(&self) -> Result<Option<EntityTarget>> {
@@ -408,7 +420,10 @@ impl Player {
 
     pub async fn show_popup(&self, popup: Popup) -> Result<()> {
         let mut lock = self.state.lock();
-        self.sender.updated_popups.send(popup.id()).await?;
+        self.sender
+            .tx
+            .send(PlayerEvent::UpdatedPopup(popup.id()))
+            .await?;
         lock.active_popups.push(popup);
         Ok(())
     }
@@ -622,38 +637,26 @@ impl Drop for PlayerContext {
 }
 
 struct PlayerEventSender {
-    chat_messages: tokio::sync::mpsc::Sender<ChatMessage>,
-    disconnection_message: tokio::sync::mpsc::Sender<String>,
-    reinit_player_state: tokio::sync::mpsc::Sender<bool>,
-    updated_popups: tokio::sync::mpsc::Sender<u64>,
+    tx: tokio::sync::mpsc::Sender<PlayerEvent>,
 }
 pub(crate) struct PlayerEventReceiver {
-    pub(crate) chat_messages: tokio::sync::mpsc::Receiver<ChatMessage>,
-    pub(crate) disconnection_message: tokio::sync::mpsc::Receiver<String>,
-    pub(crate) reinit_player_state: tokio::sync::mpsc::Receiver<bool>,
-    pub(crate) updated_popups: tokio::sync::mpsc::Receiver<u64>,
+    pub(crate) rx: tokio::sync::mpsc::Receiver<PlayerEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PlayerEvent {
+    ChatMessage(ChatMessage),
+    DisconnectionMessage(String),
+    /// Updates the player's general state of the world (i.e. [perovskite_core::protocol::game_rpc::SetClientState])
+    /// bool indicates whether the position should be updated (true if we're teleporting the player, false otherwise)
+    ReinitPlayerState(bool),
+    UpdatedPopup(u64),
 }
 
 fn make_event_channels() -> (PlayerEventSender, PlayerEventReceiver) {
     const CHAT_BUFFER_SIZE: usize = 128;
-    let (chat_sender, chat_receiver) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
-    let (disconnection_sender, disconnection_receiver) = tokio::sync::mpsc::channel(2);
-    let (reinit_sender, reinit_receiver) = tokio::sync::mpsc::channel(4);
-    let (popup_sender, popup_receiver) = tokio::sync::mpsc::channel(4);
-    (
-        PlayerEventSender {
-            chat_messages: chat_sender,
-            disconnection_message: disconnection_sender,
-            reinit_player_state: reinit_sender,
-            updated_popups: popup_sender,
-        },
-        PlayerEventReceiver {
-            chat_messages: chat_receiver,
-            disconnection_message: disconnection_receiver,
-            reinit_player_state: reinit_receiver,
-            updated_popups: popup_receiver,
-        },
-    )
+    let (tx, rx) = tokio::sync::mpsc::channel(CHAT_BUFFER_SIZE);
+    (PlayerEventSender { tx }, PlayerEventReceiver { rx })
 }
 
 /// Manages players and provides access to them and their data.

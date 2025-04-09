@@ -528,10 +528,15 @@ fn default_generic_handler(
     let dig_result = op(&ctx.game_state)?;
     let mut stack = stack.clone();
     if stack.has_wear() {
-        stack.proto.quantity = stack.proto.quantity.saturating_sub(dig_result.tool_wear)
+        stack.proto.current_wear = stack
+            .proto
+            .current_wear
+            .saturating_sub(dig_result.tool_wear);
     }
     Ok(ItemInteractionResult {
-        updated_tool: if stack.proto.quantity > 0 {
+        updated_tool: if stack.proto.quantity > 0
+            && (!stack.has_wear() || stack.proto.current_wear > 0)
+        {
             Some(stack.clone())
         } else {
             None
