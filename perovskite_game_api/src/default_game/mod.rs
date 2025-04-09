@@ -24,7 +24,6 @@ use self::{
     mapgen::OreDefinition,
     recipes::{RecipeBook, RecipeImpl, RecipeSlot},
 };
-use crate::default_game::block_groups::BRITTLE;
 use crate::include_texture_bytes;
 use perovskite_core::protocol::items as items_proto;
 use perovskite_core::protocol::render::CustomMesh;

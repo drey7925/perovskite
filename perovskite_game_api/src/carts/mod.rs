@@ -1,6 +1,4 @@
-use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{
     collections::{BinaryHeap, VecDeque},
@@ -23,7 +21,6 @@ use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
-    constants,
     constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
@@ -535,6 +532,7 @@ struct TrackSegment {
     starting_odometer: f64,
 }
 impl TrackSegment {
+    #[allow(unused)]
     fn manhattan_dist(&self) -> f64 {
         (self.from.x - self.to.x).abs()
             + (self.from.y - self.to.y).abs()
@@ -580,6 +578,8 @@ struct ScheduledSegment {
     speed: f64,
     acceleration: f64,
     move_time: f64,
+    // Used for debugging; only costs one pointer so worth keeping for ease of development
+    #[allow(unused)]
     created: &'static str,
 }
 impl ScheduledSegment {
@@ -842,7 +842,6 @@ impl EntityCoroutine for CartCoroutine {
     }
 
     fn pre_delete(mut self: Pin<&mut Self>, services: &EntityCoroutineServices<'_>) {
-        let config = self.config.clone();
         let mut work_items = vec![];
         work_items.extend(self.pending_actions.drain().map(|x| x.action));
         if let Some(signal) = self.held_signal {
@@ -2065,25 +2064,4 @@ enum SignalResult {
     SpeedRestriction(f32),
     /// No signal is present
     NoSignal,
-}
-impl SignalResult {
-    fn to_f64(self) -> f64 {
-        match self {
-            SignalResult::Stop => 0.0,
-            SignalResult::Permissive => f64::INFINITY,
-            SignalResult::SpeedRestriction(x) => x as f64,
-            SignalResult::NoSignal => f64::NAN,
-        }
-    }
-    fn from_f64(x: f64) -> Self {
-        if x == 0.0 {
-            Self::Stop
-        } else if x == f64::INFINITY {
-            Self::Permissive
-        } else if x.is_finite() && x > 0.0 {
-            Self::SpeedRestriction(x as f32)
-        } else {
-            panic!("Invalid signal result: {:?}, {:x}", x, x.to_bits());
-        }
-    }
 }

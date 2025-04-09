@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
 use perovskite_core::protocol::audio::SoundSource;
 use rustc_hash::FxHashMap;
-use std::iter::Map;
-use std::vec::IntoIter;
 use std::{collections::VecDeque, time::Instant};
 
 use crate::audio::{EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT};

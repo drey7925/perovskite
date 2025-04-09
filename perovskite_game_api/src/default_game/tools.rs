@@ -19,7 +19,7 @@ use crate::default_game::recipes::RecipeSlot;
 use crate::default_game::{item_groups, DefaultGameBuilder};
 use crate::{game_builder::StaticTextureName, include_texture_bytes};
 
-use super::block_groups::BRITTLE;
+use super::block_groups::{BRITTLE, GRANULAR};
 
 /// Registers a new pickaxe based on the given materials
 /// **This API is subject to change.**
@@ -34,6 +34,43 @@ pub(crate) fn register_pickaxe(
     craft_component: Option<RecipeSlot>,
 ) -> Result<()> {
     let name = name.into();
+    register_tool(
+        game_builder,
+        texture,
+        name,
+        display_name,
+        durability,
+        "default:tools:pickaxes:".to_string() + sort_key_component,
+        base_dig_time,
+        BRITTLE,
+        craft_component.map(|craft_component| {
+            [
+                craft_component.clone(),
+                craft_component.clone(),
+                craft_component,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+            ]
+        }),
+    )
+}
+
+pub(crate) fn register_tool(
+    game_builder: &mut super::GameBuilder,
+    texture: StaticTextureName,
+    name: impl Into<String>,
+    display_name: impl Into<String>,
+    durability: u32,
+    sort_key: String,
+    base_dig_time: f64,
+    strong_block_group: &str,
+    craft_recipe: Option<[RecipeSlot; 9]>,
+) -> Result<()> {
+    let name = name.into();
     // TODO: consider implementing this using an ItemBuilder
     let item = Item::default_with_proto(items_proto::ItemDef {
         short_name: name.clone(),
@@ -45,7 +82,7 @@ pub(crate) fn register_pickaxe(
         groups: vec![TOOL_WEAR.to_string()],
         interaction_rules: vec![
             InteractionRule {
-                block_group: vec![BRITTLE.to_string()],
+                block_group: vec![strong_block_group.to_string()],
                 tool_wear: 1,
                 dig_behavior: Some(DigBehavior::ScaledTime(base_dig_time)),
             },
@@ -62,23 +99,13 @@ pub(crate) fn register_pickaxe(
         ],
         quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
         block_apperance: "".to_string(),
-        sort_key: "default:tools:pickaxes:".to_string() + sort_key_component,
+        sort_key,
     });
     game_builder.inner.items_mut().register_item(item)?;
 
-    if let Some(craft_component) = craft_component {
+    if let Some(recipe) = craft_recipe {
         game_builder.register_crafting_recipe(
-            [
-                craft_component.clone(),
-                craft_component.clone(),
-                craft_component,
-                RecipeSlot::Empty,
-                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
-                RecipeSlot::Empty,
-                RecipeSlot::Empty,
-                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
-                RecipeSlot::Empty,
-            ],
+            recipe,
             name,
             durability,
             Some(QuantityType::Wear(durability)),
@@ -141,8 +168,40 @@ fn register_superuser_pickaxe(
 
 /// Registers a new pickaxe based on the given materials
 /// **This API is subject to change.**
-pub(crate) fn register_shovel() -> Result<()> {
-    todo!()
+pub(crate) fn register_shovel(
+    game_builder: &mut super::GameBuilder,
+    texture: StaticTextureName,
+    name: impl Into<String>,
+    display_name: impl Into<String>,
+    durability: u32,
+    base_dig_time: f64,
+    sort_key_component: &str,
+    craft_component: Option<RecipeSlot>,
+) -> Result<()> {
+    let name = name.into();
+    register_tool(
+        game_builder,
+        texture,
+        name,
+        display_name,
+        durability,
+        "default:tools:shovels:".to_string() + sort_key_component,
+        base_dig_time,
+        GRANULAR,
+        craft_component.map(|craft_component| {
+            [
+                RecipeSlot::Empty,
+                craft_component,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+            ]
+        }),
+    )
 }
 
 pub(crate) fn register_default_tools(game_builder: &mut super::GameBuilder) -> Result<()> {

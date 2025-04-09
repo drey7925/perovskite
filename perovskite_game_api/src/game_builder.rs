@@ -24,7 +24,7 @@ use perovskite_core::{
         block_groups::TRIVIALLY_REPLACEABLE, items::default_item_interaction_rules,
         textures::FALLBACK_UNKNOWN_TEXTURE,
     },
-    protocol::{blocks::Empty, items::ItemDef, render::TextureReference},
+    protocol::{items::ItemDef, render::TextureReference},
 };
 use perovskite_server::{
     game_state::{
@@ -306,7 +306,6 @@ impl GameBuilder {
             .media_mut()
             .register_file_for_sampled_audio(DEFAULT_FOOTSTEP_SOUND_NAME)?;
 
-        const EMPTY: Empty = Empty {};
         Ok(GameBuilder {
             inner,
             liquids_by_flow_time: HashMap::new(),

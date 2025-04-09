@@ -23,7 +23,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use smallvec::{smallvec, SmallVec};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{
     collections::HashSet,
     fmt::Debug,
@@ -64,7 +64,6 @@ use crate::server::ServerArgs;
 use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwapOption;
 use integer_encoding::{VarIntReader, VarIntWriter};
-use perovskite_core::util::TraceBuffer;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -3523,7 +3522,8 @@ mod tests {
         server
             .run_task_in_server(|gs| {
                 gs.game_map()
-                    .mutate_block_atomically(ZERO_COORD, |_block, ext| {
+                    .mutate_block_atomically(ZERO_COORD, |block, ext| {
+                        *block = BlockId(3);
                         ext.get_or_insert_with(Default::default)
                             .simple_data
                             .insert("foo".to_string(), "bar".to_string());
@@ -3539,6 +3539,7 @@ mod tests {
                     })
                     .unwrap();
                 assert_eq!(ext, Some(String::from("bar")));
+                assert_eq!(block, BlockId(3));
 
                 Ok(())
             })

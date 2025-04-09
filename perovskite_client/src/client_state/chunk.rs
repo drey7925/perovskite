@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ops::{Deref, RangeInclusive};
+use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,7 +23,6 @@ use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
 use perovskite_core::lighting::Lightfield;
 use perovskite_core::protocol::game_rpc as rpc_proto;
-use perovskite_core::protocol::map::StoredChunk;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};

@@ -1,4 +1,3 @@
-use crate::block_id::BlockId;
 use crate::coordinates::BlockCoordinate;
 use crate::protocol::game_rpc::dig_tap_action::ActionTarget;
 use crate::protocol::game_rpc::interact_key_action::InteractionTarget;

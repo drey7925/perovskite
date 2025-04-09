@@ -6,8 +6,7 @@ use std::collections::HashMap;
 
 use crate::carts::signals::{
     self, starting_signal_acquire_back, starting_signal_depart_forward,
-    starting_signal_preacquire_front, InterlockingSignalRoute, SignalConfig,
-    SIGNAL_BLOCK_CONNECTIVITY,
+    starting_signal_preacquire_front, SignalConfig, SIGNAL_BLOCK_CONNECTIVITY,
 };
 use crate::circuits::{BusMessage, PinState};
 
@@ -60,6 +59,8 @@ impl<'a> SignalTransaction<'a> {
         self.map_changes.push((coord, expected, rollback, commit));
     }
 
+    // Made available to show intention, not necessarily used in the current impl
+    #[allow(unused)]
     fn rollback(self) {
         drop(self);
     }

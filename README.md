@@ -9,40 +9,52 @@ It is written in Rust, with two goals:
 
 ***At this time, it is not a playable game.***
 
-As this is a learning project, I may spend time on silly things that may not be useful to players or improved gameplay, if I think I can learn something from doing so. Likewise, I may use design patterns inconsistently (or make other inconsistencies) to increase the breadth of my learning. If there is enough interest or need, I can refactor and clean up code later.
+As this is a learning project, I may spend time on silly things that may not be useful to players or improved gameplay,
+if I think I can learn something from doing so. Likewise, I may use design patterns inconsistently (or make other
+inconsistencies) to increase the breadth of my learning. If there is enough interest or need, I can refactor and clean
+up code later.
 
 ## Why the name?
 
-Naming Rust projects after oxide minerals is fun. Unfortunately, all the cool oxide minerals are already used for really cool rust projects, or could otherwise cause confusion.
+Naming Rust projects after oxide minerals is fun. Unfortunately, all the cool oxide minerals are already used for really
+cool rust projects, or could otherwise cause confusion.
 
-[Perovskite](https://en.wikipedia.org/wiki/Perovskite) is a cool mineral that inspired artificial structures with a bunch of cool [aspirational applications](https://en.wikipedia.org/wiki/Perovskite_(structure)#Aspirational_applications).
+[Perovskite](https://en.wikipedia.org/wiki/Perovskite) is a cool mineral that inspired artificial structures with a
+bunch of
+cool [aspirational applications](https://en.wikipedia.org/wiki/Perovskite_(structure)#Aspirational_applications).
 
 ## What's the current state?
 
-It is possible to define blocks and dig them. Inventory support is mostly present. There's a furnace and a crafting mechanism. Game content (i.e. all the blocks you'd expect) is not yet present.
+It is possible to define blocks and dig them. Inventory support is mostly present. There's a furnace and a crafting
+mechanism. Game content (i.e. all the blocks you'd expect) is not yet present.
 
 Entities are under active development, but are not yet stable. The entity system is currently focused on
 autonomous movement, and low-latency player control will be added in the future.
 
-I intend to wrap the engine-specific behaviors in a lightweight API that makes it easier to define game logic. That API is still not stable, but I intend to make that API more stable than the low-level engine API.
+I intend to wrap the engine-specific behaviors in a lightweight API that makes it easier to define game logic. That API
+is still not stable, but I intend to make that API more stable than the low-level engine API.
 
 At the moment, the network API is not yet stable - the client and server must be built from the same code.
-The intent is to stabilize the API to a reasonable extent later on, but having an unstable API allows for faster feature iteration.
+The intent is to stabilize the API to a reasonable extent later on, but having an unstable API allows for faster feature
+iteration.
 
 ## How is it different from similar voxel games?
 
 The limitations:
+
 * The implementation is a bit more incoherent since it's a learning project
 * The game lacks a lot of content
 * A lot of basic features, like a player model, are still missing
 * No scripting language yet - all game logic is written in Rust
     * And no dynamic content loading yet. It might be possible once crABI stabilizes.
 * TLS support is a WIP. At this time, you need to bring your own certificate.
-    * Let's Encrypt (certbot) works for this. One day, I'd like to implement automatic certificate provisioning using ACME + ALPN challenges. This ran into some problems on my first attempt.
+    * Let's Encrypt (certbot) works for this. One day, I'd like to implement automatic certificate provisioning using
+      ACME + ALPN challenges. This ran into some problems on my first attempt.
     * TLS-secured servers should use address format `https://domain:port`
     * Unsecured servers should use the existing format `grpc://domain:port`
 
 The benefits:
+
 * The engine is optimized for scalability and performance where possible
     * Note that not all of the components have been optimized yet
 * The minecarts can move at an unusually high speed, comparable to real-world HSR
@@ -51,6 +63,15 @@ The benefits:
 * Communication is secured with TLS
 
 ## How do I play it?
+
+### Prerequisites
+
+A Rust toolchain is required; on Windows I use the MSVC toolchain for testing.
+
+On Linux, you'll need a handful of packages; Ubuntu/Debian users should
+`apt install protobuf-compiler libasound-dev libdbus-1-dev pkg-config`
+
+On Windows, you'll also need `protoc` and `ninja` (e.g. use these exact package names with chocolatey `choco install`)
 
 ### Server
 
@@ -70,11 +91,13 @@ The following `--features` can be used to do performance debugging of the server
     * Depending on your system configuration, thread stacks and thread scheduling events may be visible.
       e.g. on Windows, this requires running the game server as an admin.
 * `dhat-heap` - Tracks heap allocations with dhat. Slow, and suspected to cause a rare deadlock.
-* `tokio-console` - Exports tokio stats to [Tokio console](https://github.com/tokio-rs/console). Requires `$RUSTFLAGS` to contain `--cfg tokio_unstable`.
+* `tokio-console` - Exports tokio stats to [Tokio console](https://github.com/tokio-rs/console). Requires `$RUSTFLAGS`
+  to contain `--cfg tokio_unstable`.
 
 `--release` is recommended.
 
-At the moment, the render distance is hardcoded at the server, using constants in `src/network_server/client_context.rs`.
+At the moment, the render distance is hardcoded at the server, using constants in
+`src/network_server/client_context.rs`.
 
 Use Ctrl+C to exit, and Ctrl+C a second time to force quit. At the moment, there are some deadlocks that cause
 graceful shutdown to hang.
@@ -117,7 +140,9 @@ and a very basic GPU.
 I'm not quite there yet, and it's possible that I'll drift further away from this goal as I add features.
 I tend to test with a fairly powerful laptop and a high-end GPU. I aim for the following performance goals:
 
-* 165 FPS (matching my monitor refresh rate) and no noticeable interaction latency when using my gaming machine - to ensure there are not bottlenecks at the high end of scaling
+* 165 FPS (matching my monitor refresh rate) and no noticeable interaction latency when using my gaming machine - to
+  ensure there are not bottlenecks at the high end of scaling at lower render distance
+* 60-90 FPS on max render distance
 * 30-50 FPS on Intel integrated graphics when the client and server are limited to a few E-cores.
     * This will require both optimizations and better control over load (e.g. settings, dynamic render distance, etc)
 
@@ -128,19 +153,19 @@ on my available time and mood.
 
 * Rendering and display:
     * TBD
+    * Maybe a raytraced system?
+    * Render distance limits
+    * Fog for distant chunks
 * Game map
-    * Support for falling blocks (e.g. sand)
     * Further optimized APIs
         * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
     * Out-of-line chunk loading (e.g. offloaded onto a dedicated executor)
     * Map bypass (i.e. stream chunks directly to the client for display)
 * Entities
-    * Entity appearance/model
     * Optimized (shader-assisted?) entity renderer
     * Simpler (tokio-driven) entity API (i.e. use a tokio task rather than the custom coroutine)
-    * Entity interaction
 * Net code
-    * Testing and optimization for slow WANs
+    * Testing and optimization for slow WANs, avoiding head-of-line blocking
     * Player action validation
     * Adaptive and adjustable chunk load distance
 * Content
@@ -148,22 +173,18 @@ on my available time and mood.
     * Mapgen
         * Trees - keep refining
         * Sand and other surface material variety
-        * Ores (+ resulting items)
-        * Slightly more interesting elevation profile
-    * Helpers for stairs and slabs
-    * Simple tools
-    * Locked chests
+        * Mapgen improvement
+    * More simple tools (textures needed)
     * Cobblestone, bricks, etc
     * Minecarts
-        * Interlockings/signals
-        * Route selection
-        * Map all switch/curve types
-        * Starting/stopping and entering/exiting carts
-        * Track placement tool
-        * Ensure stability at high speeds under server load
+        * Integration with circuits for station automation
+        * Freight minecarts (requires some work for persistence to avoid losing minecart contents during restart)
     * Pneumatic tubes
         * Tubes to send items between chests and furnaces, as a basis for some kind of machines later on
-* Audio
+    * Circuit
+        * In-inventory microcontroller (e.g. for handheld devices and smartcards)
+           * Depends on extended data for inventory items 
+* Further audio development
 * Bugfixes for known issues
     * Trees intersect each other
     * Only binds to IPv6 on Windows
@@ -172,7 +193,8 @@ on my available time and mood.
 
 None at the moment. I test with either the latest or almost-latest stable Rust version, on Windows x64.
 
-perovskite_server's API can change in breaking ways. perovskite_game_api (as well as anything it re-exports by default) should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
+perovskite_server's API can change in breaking ways. perovskite_game_api (as well as anything it re-exports by default)
+should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
 
 ## Code style
 
@@ -182,6 +204,7 @@ perovskite_server's API can change in breaking ways. perovskite_game_api (as wel
 
 ## Who is behind this?
 
-I work on low-level infrastructure at a major hyperscaler and produce this game in my free time. You can find me on discord as `drey7925`. 
+I work on low-level infrastructure at a major hyperscaler and produce this game in my free time. You can find me on
+discord as `drey7925`.
 
 Note that this project is not endorsed, sponsored, or supported by my employer or any affiliates.

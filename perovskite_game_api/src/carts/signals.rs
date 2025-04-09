@@ -130,9 +130,8 @@ use perovskite_server::game_state::{
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
-use prost::{DecodeError, Message};
+use prost::Message;
 use std::fmt::Display;
-use std::num::ParseIntError;
 
 use crate::circuits::events::CircuitHandlerContext;
 use crate::circuits::{
@@ -144,7 +143,7 @@ use crate::{
     game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{bail, Context, Result};
 use perovskite_server::game_state::client_ui::TextFieldBuilder;
 
 pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal");
@@ -909,19 +908,6 @@ pub(crate) enum SignalLockOutcome {
     Acquired,
     /// The signal was not acquired because another cart has already acquired it
     Contended,
-}
-
-/// The outcome of trying to acquire an approach signal *from the front*.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StartingSignalLockOutcome {
-    /// The signal is invalid (either not a signal, or it is not in the right state)
-    InvalidSignal,
-    /// The signal was acquired
-    Acquired,
-    /// The signal was not acquired because another cart has already acquired it
-    Contended,
-    /// The signal is set to stop, but the cart is permitted to approach it then stop.
-    ApproachThenStop,
 }
 
 /// Attempts to acquire an automatic signal.

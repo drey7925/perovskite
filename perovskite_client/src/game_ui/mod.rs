@@ -11,7 +11,6 @@ use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
 use anyhow::{bail, Error, Result};
 use arc_swap::ArcSwap;
-use perovskite_core::block_id::special_block_defs::AIR_ID;
 
 use crate::client_state::settings::GameSettings;
 use crate::{

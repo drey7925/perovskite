@@ -3,8 +3,6 @@ use perovskite_core::block_id::BlockId;
 use std::num::NonZeroU32;
 
 use bitvec::prelude as bv;
-use perovskite_core::block_id::special_block_defs::AIR_ID;
-use perovskite_core::constants::blocks::AIR;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{BlockTypeDef, CubeRenderInfo, CubeRenderMode};
 use rustc_hash::FxHashMap;

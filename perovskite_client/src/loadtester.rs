@@ -6,11 +6,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::game_actions::ToolTarget;
 use winit::event_loop::EventLoop;
 
-use crate::client_state::tool_controller::ToolTargetWithId;
 use crate::{
     client_state::{settings::GameSettings, DigTapAction},
     net_client,

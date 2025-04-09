@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use itertools::Itertools;
-use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{

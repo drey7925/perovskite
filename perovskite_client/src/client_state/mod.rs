@@ -18,7 +18,7 @@ use std::f64::consts::PI;
 use std::ops::Deref;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -30,7 +30,7 @@ use perovskite_core::coordinates::{
 };
 
 use log::warn;
-use parking_lot::{Mutex, RawRwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
@@ -820,7 +820,7 @@ impl ClientState {
             .lock()
             .update_and_get(self, aspect_ratio, Duration::from_nanos(delta), tick);
         {
-            let mut entity_lock = self.entities.lock();
+            let entity_lock = self.entities.lock();
             if let Some(entity_target) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_target.entity_id) {
                     is_attached = true;
@@ -957,7 +957,6 @@ pub(crate) struct FrameState {
 
 use crate::audio;
 use crate::audio::MapSoundState;
-use crate::client_state::tool_controller::ToolTargetWithId;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {

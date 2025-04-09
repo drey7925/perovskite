@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
-use perovskite_server::game_state::blocks::{InlineContext, InlineHandler};
+use perovskite_server::game_state::blocks::InlineHandler;
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, FastBlockName, FullHandler},
     event::HandlerContext,
@@ -744,7 +744,6 @@ pub mod events {
     use std::ops::Deref;
 
     use anyhow::{Error, Result};
-    use env_logger::builder;
 
     use perovskite_core::coordinates::BlockCoordinate;
     use perovskite_server::game_state::event::HandlerContext;

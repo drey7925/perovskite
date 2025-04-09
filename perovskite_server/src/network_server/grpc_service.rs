@@ -21,12 +21,10 @@ use perovskite_core::protocol::game_rpc::stream_to_server::ClientMessage;
 use perovskite_core::protocol::game_rpc::{
     self as proto, AuthSuccess, StreamToClient, StreamToServer,
 };
-use std::sync::atomic::AtomicBool;
 use std::{pin::Pin, sync::Arc};
 
 use crate::game_state::GameState;
 use log::{error, info, warn};
-use perovskite_core::constants::permissions;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::metadata::MetadataMap;

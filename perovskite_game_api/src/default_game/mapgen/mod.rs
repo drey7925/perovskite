@@ -183,8 +183,8 @@ impl ElevationNoise {
         let coarse_nr_height = self.coarse_nr.get(coarse_pos) * ELEVATION_COARSE_OUTPUT_SCALE;
 
         let extra_coarse_pos = [
-            x as f64 * ELEVATION_COARSE_INPUT_SCALE,
-            z as f64 * ELEVATION_COARSE_INPUT_SCALE,
+            x as f64 * ELEVATION_EXTRA_COARSE_INPUT_SCALE,
+            z as f64 * ELEVATION_EXTRA_COARSE_INPUT_SCALE,
         ];
         let coarse_blend = (self.ridge_strength.get(extra_coarse_pos) + 0.5).clamp(0.0, 1.0);
         let coarse_height =
@@ -646,7 +646,7 @@ impl DefaultMapgen {
 
                             let tall_grass_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(4));
-                            let tall_grass_cutoff = self.flower_density_noise.get([
+                            let tall_grass_cutoff = self.tall_grass_density_noise.get([
                                 (x as f64) * TALL_GRASS_DENSITY_INPUT_SCALE,
                                 (z as f64) * TALL_GRASS_DENSITY_INPUT_SCALE,
                             ]) * TALL_GRASS_DENSITY_OUTPUT_SCALE
@@ -954,9 +954,6 @@ impl DefaultMapgen {
         height_map: &[[f64; 16]; 16],
         chunk: &mut MapChunk,
     ) {
-        let xg = 16 * chunk_coord.x + (x as i32);
-        let zg = 16 * chunk_coord.z + (z as i32);
-
         let elevation = height_map[x as usize][z as usize];
         let biome = biome_map[x as usize][z as usize];
 

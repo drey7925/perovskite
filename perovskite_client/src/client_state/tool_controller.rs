@@ -21,7 +21,6 @@ use cgmath::{vec3, Vector3};
 use futures::TryStreamExt;
 use lazy_static::lazy_static;
 use perovskite_core::constants::permissions;
-use perovskite_core::protocol::blocks::block_type_def::PhysicsInfo;
 use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 
 use perovskite_core::constants::items::default_item_interaction_rules;
@@ -32,11 +31,9 @@ use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction}
 use line_drawing::WalkVoxels;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::blocks::BlockTypeDef;
-use perovskite_core::protocol::game_rpc as proto;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
-use perovskite_core::protocol::items::{InteractionRule, ItemDef};
-use proto::interact_key_action::InteractionTarget;
+use perovskite_core::protocol::items::ItemDef;
 use rustc_hash::FxHashSet;
 use sha2::digest::generic_array::functional::FunctionalSequence;
 
@@ -133,7 +130,7 @@ fn target_properties(state: &ClientState, target: ToolTargetWithId) -> TargetPro
 }
 
 lazy_static! {
-    static ref FALLBACK_GROUPS: Box<[String]> = { Box::new([String::new()]) };
+    static ref FALLBACK_GROUPS: Box<[String]> = Box::new([String::new()]);
 }
 
 // Computes the block that the player is pointing at, tracks the progress of digging, etc.

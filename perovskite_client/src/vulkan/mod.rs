@@ -24,7 +24,6 @@ pub(crate) mod util;
 use std::sync::atomic::AtomicBool;
 use std::{ops::Deref, sync::Arc};
 
-use anyhow::__private::kind::TraitKind;
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use image::GenericImageView;

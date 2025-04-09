@@ -16,7 +16,6 @@ use perovskite_core::{
     protocol::game_rpc::{self as rpc, InteractKeyAction, StreamToClient, StreamToServer},
 };
 use prost::Message;
-use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::sync::atomic::Ordering;
 use std::{
@@ -27,13 +26,10 @@ use std::{
 };
 
 use crate::audio::{
-    EvictedAudioHealer, MapSoundState, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED,
-    SOUND_PRESENT, SOUND_SQUARELAW_ENABLED,
+    EvictedAudioHealer, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT,
+    SOUND_SQUARELAW_ENABLED,
 };
-use crate::client_state::block_types::ClientBlockTypeManager;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::coordinates::ChunkOffset;
-use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

@@ -1,8 +1,8 @@
 use std::collections::hash_map::Entry;
 use std::io::Cursor;
-use std::num::{NonZero, NonZeroU64};
-use std::ops::{Add, Deref, DerefMut, Range};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::num::NonZeroU64;
+use std::ops::{Add, DerefMut, Range};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,17 +12,16 @@ use cgmath::{InnerSpace, Vector3, Zero};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
 use hound::WavReader;
-use parking_lot::{Condvar, Mutex};
-use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
+use parking_lot::Mutex;
+use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate};
 use perovskite_core::protocol::audio::{SampledSound, SoundSource};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rubato::{FftFixedInOut, Resampler};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use seqlock::SeqLock;
 use smallvec::SmallVec;
 use tokio_util::sync::{CancellationToken, DropGuard};
-use tracy_client::{plot, span};
 
 use crate::cache::CacheManager;
 use crate::client_state::entities::{ElapsedOrOverflow, EntityMove};
@@ -72,7 +71,7 @@ impl AllocatorState {
 impl EngineHandle {
     pub(crate) fn is_token_evicted(&self, token: SimpleSoundToken) -> bool {
         let index = token.0.get() % (NUM_SIMPLE_SOUND_SLOTS as u64);
-        let mut alloc_lock = self.allocator_state.lock();
+        let alloc_lock = self.allocator_state.lock();
         alloc_lock.simple_sound_tokens[index as usize] != token.0.get()
     }
 
@@ -1453,7 +1452,7 @@ impl PrerecordedSampler {
 
         const CHUNK_SIZE: usize = 4096;
 
-        let mut resampler = match resampler_cache.entry((source_rate, internal_target_rate)) {
+        let resampler = match resampler_cache.entry((source_rate, internal_target_rate)) {
             Entry::Occupied(mut v) => {
                 v.get_mut().reset();
                 v.into_mut()
@@ -1790,7 +1789,7 @@ impl MapSoundState {
         volume: f32,
     ) {
         let control_block = Self::make_control_block(coord, tick_now, sound_id, volume);
-        let mut entry = self.emitters.entry(coord);
+        let entry = self.emitters.entry(coord);
         match entry {
             Entry::Occupied(e) => {
                 let v = e.into_mut();

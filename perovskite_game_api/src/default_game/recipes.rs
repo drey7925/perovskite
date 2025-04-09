@@ -223,9 +223,7 @@ mod test {
                 groups: vec!["a".into()],
                 ..Default::default()
             },
-            dig_handler: None,
-            tap_handler: None,
-            place_on_block_handler: None,
+            ..Default::default()
         };
         let item_2 = Item {
             proto: protocol::items::ItemDef {
@@ -236,6 +234,7 @@ mod test {
             dig_handler: None,
             tap_handler: None,
             place_on_block_handler: None,
+            ..Default::default()
         };
 
         let recipe = RecipeImpl {

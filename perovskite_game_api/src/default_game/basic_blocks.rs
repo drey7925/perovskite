@@ -20,18 +20,15 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
         MatterType, PlantLikeAppearanceBuilder,
     },
-    default_game::{basic_blocks::ores::IRON_INGOT, item_groups},
     game_builder::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
     },
 };
 use anyhow::Result;
 use perovskite_core::{
-    chat::{ChatMessage, SERVER_ERROR_COLOR},
     constants::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
         item_groups::HIDDEN_FROM_CREATIVE,
-        permissions,
     },
     protocol::{
         self,
@@ -40,8 +37,7 @@ use perovskite_core::{
     },
 };
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, ExtDataHandling, ExtendedData},
-    client_ui::UiElementContainer,
+    blocks::BlockInteractionResult,
     items::{Item, ItemStack},
 };
 
@@ -644,7 +640,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 }))
             })),
     )?;
-    let clay = game_builder.add_block(
+    let _clay = game_builder.add_block(
         BlockBuilder::new(CLAY)
             .add_block_group(GRANULAR)
             .set_cube_single_texture(CLAY_TEXTURE)

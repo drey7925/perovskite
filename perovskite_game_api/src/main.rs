@@ -98,7 +98,6 @@ fn main() {
 
     #[cfg(feature = "circuits")]
     {
-        use perovskite_game_api::circuits::CircuitGameBuilder;
         circuits::register_circuits(&mut game).unwrap();
     }
     #[cfg(feature = "discord")]

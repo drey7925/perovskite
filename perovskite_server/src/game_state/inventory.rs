@@ -33,7 +33,6 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use prost::Message;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::broadcast;
-use tokio::task::LocalKey;
 use tracing::trace;
 use tracy_client::span;
 

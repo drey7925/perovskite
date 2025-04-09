@@ -19,7 +19,7 @@ use std::{
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap, HashSet},
     ops::{AddAssign, Deref, DerefMut},
-    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use anyhow::{bail, ensure, Context, Result};

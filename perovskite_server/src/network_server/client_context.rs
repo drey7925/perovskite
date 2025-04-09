@@ -24,16 +24,16 @@ use std::time::Instant;
 
 use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
+use crate::game_state::entities::IterEntity;
 use crate::game_state::entities::Movement;
-use crate::game_state::entities::{IterEntity, PlayerEntityAction};
+use crate::game_state::event::log_trace;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
-use crate::game_state::event::{log_trace, WeakPlayerRef};
 use crate::game_state::event::{run_traced, run_traced_sync};
 
 use crate::game_state::event::PlayerInitiator;
+use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::game_map::CACHE_CLEAN_MIN_AGE;
-use crate::game_state::game_map::{BlockUpdate, ServerGameMap};
 use crate::game_state::inventory::InventoryKey;
 use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
@@ -62,7 +62,6 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosit
 use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
 use either::Either;
 use itertools::iproduct;
-use parking_lot::lock_api::RwLockWriteGuard;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use perovskite_core::game_actions::ToolTarget;
@@ -73,7 +72,6 @@ use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::game_rpc as proto;
 use perovskite_core::protocol::game_rpc::dig_tap_action::ActionTarget;
 use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
-use perovskite_core::protocol::game_rpc::place_action::PlaceAnchor;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
 use perovskite_core::protocol::game_rpc::StreamToClient;

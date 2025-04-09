@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Error, Result};
+use anyhow::{ensure, Context, Error, Result};
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use circular_buffer::CircularBuffer;
 use futures::Future;
@@ -35,7 +35,6 @@ use std::{
 };
 
 use super::{blocks::ExtendedDataHolder, event::HandlerContext, GameState};
-use crate::game_state::blocks::BlockInteractionResult;
 use crate::game_state::client_ui::Popup;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::items::{ItemInteractionResult, ItemStack};

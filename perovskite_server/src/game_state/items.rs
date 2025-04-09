@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use lazy_static::lazy_static;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::protocol::items::item_def::QuantityType;
@@ -27,11 +27,9 @@ use std::time::Duration;
 use super::blocks::{BlockInteractionResult, BlockType};
 use super::event::HandlerContext;
 
-use crate::game_state::entities::{EntityHandlers, UNDEFINED_ENTITY};
+use crate::game_state::entities::EntityHandlers;
 use crate::game_state::GameState;
 use perovskite_core::coordinates::BlockCoordinate;
-use perovskite_core::game_actions::ToolTarget;
-use perovskite_core::protocol::game_rpc::place_action::PlaceAnchor;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::items as proto;
 

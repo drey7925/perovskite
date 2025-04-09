@@ -132,7 +132,7 @@ impl ActiveGame {
         self.cube_draw_calls.clear();
 
         {
-            let mut entity_lock = self.client_state.entities.lock();
+            let entity_lock = self.client_state.entities.lock();
             if let Some(entity_target) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_target.entity_id) {
                     if let Some(position) = entity.attach_position(

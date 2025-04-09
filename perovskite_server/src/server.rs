@@ -186,7 +186,7 @@ impl Server {
 pub fn testonly_in_memory() -> Result<Server> {
     let db = Arc::new(InMemGameDabase::new());
     let mut blocks = BlockTypeManager::create_or_load(db.as_ref())?;
-    let mut entities = EntityTypeManager::create_or_load(db.as_ref())?;
+    let entities = EntityTypeManager::create_or_load(db.as_ref())?;
     blocks.pre_build()?;
     let blocks = Arc::new(blocks);
     blocks.save_to(db.as_ref())?;
@@ -481,13 +481,13 @@ impl ServerBuilder {
     }
 }
 
-enum LoadedTlsConfig {
+pub enum LoadedTlsConfig {
     NoTls,
     Identity(tonic::transport::Identity),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-enum TlsMode {
+pub enum TlsMode {
     NoTls,
     CertificateFiles,
 }
