@@ -48,6 +48,7 @@ pub(crate) struct RenderSettings {
     pub(crate) scale_inventories_with_high_dpi: bool,
     pub(crate) fov_degrees: f64,
     pub(crate) supersampling: Supersampling,
+    pub(crate) render_distance: u32,
 }
 
 impl Default for RenderSettings {
@@ -62,6 +63,7 @@ impl Default for RenderSettings {
             scale_inventories_with_high_dpi: false,
             fov_degrees: 75.0,
             supersampling: Supersampling::X2,
+            render_distance: 50,
         }
     }
 }

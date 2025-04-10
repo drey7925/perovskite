@@ -16,7 +16,7 @@
 
 use std::f64::consts::PI;
 use std::ops::Deref;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -712,6 +712,7 @@ pub(crate) struct ClientState {
 
     pub(crate) server_perf: Mutex<Option<ServerPerformanceMetrics>>,
     pub(crate) want_server_perf: AtomicBool,
+    pub(crate) render_distance: AtomicU32,
 }
 impl ClientState {
     pub(crate) fn new(
@@ -733,7 +734,7 @@ impl ClientState {
             block_types,
             items,
             last_update: Mutex::new(timekeeper.now()),
-            physics_state: Mutex::new(physics::PhysicsState::new(settings)),
+            physics_state: Mutex::new(physics::PhysicsState::new(settings.clone())),
             chunks: ChunkManager::new(),
             inventories: Mutex::new(InventoryViewManager::new()),
             tool_controller: Mutex::new(ToolController::new()),
@@ -762,6 +763,7 @@ impl ClientState {
             world_audio: Mutex::new(MapSoundState::new(audio_clone)),
             server_perf: Mutex::new(None),
             want_server_perf: AtomicBool::new(false),
+            render_distance: AtomicU32::new(settings.load().render.render_distance),
         })
     }
 
@@ -805,6 +807,44 @@ impl ClientState {
                 self.egui.lock().toggle_debug();
             } else if input.take_just_pressed(BoundAction::PerfPanel) {
                 self.egui.lock().toggle_perf();
+            } else if input.take_just_pressed(BoundAction::ViewRangeUp) {
+                let incr = |x| {
+                    if x >= 10 {
+                        u32::min(x + 5, 150)
+                    } else {
+                        x + 1
+                    }
+                };
+                // We're the only thread updating it, other threads will read
+                // https://github.com/rust-lang/rust/issues/135894 makes this annoying
+                let old_distance = self
+                    .render_distance
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(incr(x)))
+                    .unwrap();
+                let new_distance = incr(old_distance);
+                self.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    format!("Asking server to send up to {new_distance} chunks view distance"),
+                );
+            } else if input.take_just_pressed(BoundAction::ViewRangeDown) {
+                let decr = |x| {
+                    if x > 10 {
+                        u32::min(x - 5, 150)
+                    } else {
+                        u32::max(x - 1, 4)
+                    }
+                };
+                // We're the only thread updating it, other threads will read
+                // https://github.com/rust-lang/rust/issues/135894 makes this annoying
+                let old_distance = self
+                    .render_distance
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(decr(x)))
+                    .unwrap();
+                let new_distance = decr(old_distance);
+                self.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    format!("Asking server to send up to {new_distance} chunks view distance"),
+                );
             }
         }
 

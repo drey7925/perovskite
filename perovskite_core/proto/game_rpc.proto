@@ -293,6 +293,7 @@ message ClientPacing {
   // How many chunks the client has not processed yet.
   // Affects whether the server sends chunks.
   uint32 pending_chunks = 1;
+  uint32 distance_limit = 2;
 }
 
 message ClientUpdate {

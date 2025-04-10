@@ -658,7 +658,16 @@ fn draw_render_settings(
                     .suffix("°"),
             );
             ui.end_row();
-
+            ui.label("Render distance")
+                .on_hover_text("How many chunks away to load and render.");
+            ui.add(
+                egui::Slider::new(
+                    &mut prospective_settings.render.render_distance,
+                    10..=150,
+                )
+                    .suffix(" chunks"),
+            );
+            ui.end_row();
             let ssaa_label = ui.label("Supersampling")
                 .on_hover_text("Smooths edges of geometry and textures, at the expense of performance.");
             egui::ComboBox::from_id_source(ssaa_label.id)

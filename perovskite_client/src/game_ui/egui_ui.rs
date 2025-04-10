@@ -29,6 +29,7 @@ use parking_lot::MutexGuard;
 use perovskite_core::protocol::game_rpc::ServerPerformanceMetrics;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc, usize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +73,8 @@ pub(crate) struct EguiUi {
 
     prospective_settings: GameSettings,
     perf_records: ServerPerformanceMetrics,
+
+    status_bar: Option<(Instant, String)>,
 }
 impl EguiUi {
     pub(crate) fn new(
@@ -110,6 +113,7 @@ impl EguiUi {
 
             prospective_settings: (**settings.load()).clone(),
             perf_records: ServerPerformanceMetrics::default(),
+            status_bar: None,
         }
     }
     pub(crate) fn wants_user_events(&self) -> bool {
@@ -239,6 +243,11 @@ impl EguiUi {
 
         // these render a TopBottomPanel, so they need to be last
         self.render_chat_history(ctx, client_state);
+        if let Some((timeout, message)) = &self.status_bar {
+            if *timeout > Instant::now() {
+                self.render_status_bar(ctx, &message)
+            }
+        }
         if self.debug_open {
             self.render_debug(ctx, client_state, tool_state);
         }
@@ -248,6 +257,10 @@ impl EguiUi {
         if self.perf_open {
             self.render_perf(ctx, client_state);
         }
+    }
+
+    pub(crate) fn push_status_bar(&mut self, duration: Duration, message: String) {
+        self.status_bar = Some((Instant::now() + duration, message))
     }
 
     pub(crate) fn is_perf_panel_open(&self) -> bool {
@@ -860,6 +873,26 @@ impl EguiUi {
                     });
             }
         }
+    }
+
+    fn render_status_bar(&self, ctx: &Context, message: &str) {
+        egui::TopBottomPanel::bottom("status_bar")
+            .max_height(60.0)
+            .frame(egui::Frame {
+                fill: Color32::from_black_alpha(192),
+                stroke: Stroke {
+                    width: 0.0,
+                    color: Color32::TRANSPARENT,
+                },
+                ..Default::default()
+            })
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(message)
+                        .font(egui::FontId::monospace(16.0))
+                        .color(Color32::WHITE),
+                );
+            });
     }
     fn render_debug(&mut self, ctx: &Context, state: &ClientState, tool_state: &ToolState) {
         egui::TopBottomPanel::bottom("debug_panel")

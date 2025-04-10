@@ -231,7 +231,14 @@ impl OutboundContext {
             .send_sequenced_message(rpc::stream_to_server::ClientMessage::PositionUpdate(
                 rpc::ClientUpdate {
                     position: Some(pos.to_proto()?),
-                    pacing: Some(rpc::ClientPacing { pending_chunks }),
+                    pacing: Some(rpc::ClientPacing {
+                        pending_chunks,
+                        distance_limit: self
+                            .shared_state
+                            .client_state
+                            .render_distance
+                            .load(Ordering::Relaxed),
+                    }),
                     hotbar_slot,
                     footstep_coordinate: animation_state.footstep_coord.map(|x| x.into()),
                 },

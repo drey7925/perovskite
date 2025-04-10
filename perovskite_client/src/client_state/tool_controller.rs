@@ -315,16 +315,16 @@ impl ToolController {
                 x.elapsed() > Duration::from_secs_f64(0.5)
             }) {
                 self.futile_dig_since = None;
-                client_state
-                    .chat
-                    .lock()
-                    .show_client_message("You don't have permission to dig".to_string());
+                client_state.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    "You don't have permission to dig".to_string(),
+                );
             }
             if input.peek_just_pressed(BoundAction::Place) {
-                client_state
-                    .chat
-                    .lock()
-                    .show_client_message("You don't have permission to place".to_string());
+                client_state.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    "You don't have permission to place".to_string(),
+                );
             }
         }
 

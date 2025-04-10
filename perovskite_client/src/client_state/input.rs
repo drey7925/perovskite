@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use super::settings::GameSettings;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use winit::event::{DeviceEvent, ElementState, MouseScrollDelta, WindowEvent};
-
-use super::settings::GameSettings;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub(crate) enum BoundAction {
@@ -26,6 +25,8 @@ pub(crate) enum BoundAction {
     ChatSlash,
     DebugPanel,
     PerfPanel,
+    ViewRangeUp,
+    ViewRangeDown,
 }
 impl std::fmt::Display for BoundAction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -53,6 +54,8 @@ impl BoundAction {
             BoundAction::ChatSlash => "Chat slash command",
             BoundAction::DebugPanel => "Debug panel",
             BoundAction::PerfPanel => "Performance panel",
+            BoundAction::ViewRangeUp => "Increase view range",
+            BoundAction::ViewRangeDown => "Decrease view range",
         }
     }
 
@@ -78,6 +81,8 @@ impl BoundAction {
             BoundAction::ChatSlash => "Open chat with / prefilled for a command - it's highly recommended to keep this bound to your slash key in your choice of keyboard layout",
             BoundAction::DebugPanel => "Open/close the debug panel",
             BoundAction::PerfPanel => "Open/close the performance panel",
+            BoundAction::ViewRangeUp => "Increase the max chunk view distance",
+            BoundAction::ViewRangeDown => "Decrease the max chunk view distance",
         }
     }
 
@@ -100,6 +105,9 @@ impl BoundAction {
             BoundAction::Chat,
             BoundAction::ChatSlash,
             BoundAction::DebugPanel,
+            BoundAction::PerfPanel,
+            BoundAction::ViewRangeUp,
+            BoundAction::ViewRangeDown,
         ];
         ALL
     }
@@ -134,6 +142,9 @@ pub(crate) struct KeybindSettings {
     pub(crate) physics_debug: Keybind,
     pub(crate) performance_panel: Keybind,
 
+    pub(crate) view_range_up: Keybind,
+    pub(crate) view_range_down: Keybind,
+
     pub(crate) hotbar_slots: [Keybind; 8],
 }
 impl KeybindSettings {
@@ -157,6 +168,8 @@ impl KeybindSettings {
             BoundAction::ChatSlash => self.chat_slash,
             BoundAction::DebugPanel => self.physics_debug,
             BoundAction::PerfPanel => self.performance_panel,
+            BoundAction::ViewRangeUp => self.view_range_up,
+            BoundAction::ViewRangeDown => self.view_range_down,
         }
     }
 
@@ -180,6 +193,8 @@ impl KeybindSettings {
             BoundAction::ChatSlash => self.chat_slash = keybind,
             BoundAction::DebugPanel => self.physics_debug = keybind,
             BoundAction::PerfPanel => self.performance_panel = keybind,
+            BoundAction::ViewRangeUp => self.view_range_up = keybind,
+            BoundAction::ViewRangeDown => self.view_range_down = keybind,
         }
     }
 }
@@ -207,6 +222,8 @@ impl Default for KeybindSettings {
             chat_slash: ScanCode(0x35),
             physics_debug: ScanCode(0x3b),
             performance_panel: ScanCode(0x3c),
+            view_range_up: ScanCode(0x1b),
+            view_range_down: ScanCode(0x1a),
             hotbar_slots: [
                 ScanCode(2),
                 ScanCode(3),

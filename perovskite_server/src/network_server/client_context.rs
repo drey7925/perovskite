@@ -227,6 +227,7 @@ pub(crate) async fn make_client_contexts(
     let (pos_send, pos_recv) = watch::channel(PositionAndPacing {
         position: initial_position,
         chunks_to_send: 16,
+        client_requested_render_distance: 20,
     });
     let pos_recv_clone = pos_recv.clone();
 
@@ -577,7 +578,7 @@ impl MapChunkSender {
                 _ = self.player_position.changed() => {
                     access_time_bump_idx = (access_time_bump_idx + 1) % ACCESS_TIME_BUMP_SHARDS;
                     let update = *self.player_position.borrow_and_update();
-                    self.handle_position_update(update, access_time_bump_idx).await?;
+                    self.send_chunks_for_position_update(update, access_time_bump_idx).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {
                     info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
@@ -600,7 +601,7 @@ impl MapChunkSender {
             player_name = %self.context.player_context.name()
         ),
     )]
-    async fn handle_position_update(
+    async fn send_chunks_for_position_update(
         &mut self,
         update: PositionAndPacing,
         bump_index: u32,
@@ -610,13 +611,10 @@ impl MapChunkSender {
         let mut position = update.position;
 
         let mut load_deadline = Instant::now();
-        if let Some(position_override) = self.get_position_override() {
-            position.position = position_override;
-            load_deadline += Duration::from_millis(500);
-        }
+
         // TODO anticheat/safety checks
         // TODO consider caching more in the player's movement direction as a form of prefetch???
-        let player_block_coord: BlockCoordinate = match position.position.try_into() {
+        let true_position: BlockCoordinate = match position.position.try_into() {
             Ok(x) => x,
             Err(e) => {
                 warn!(
@@ -638,8 +636,16 @@ impl MapChunkSender {
                 })
             }
         };
-        let player_chunk = player_block_coord.chunk();
-        tracing::Span::current().record("player_chunk", format!("{:?}", player_chunk));
+        let prefetch_position = if let Some(position_override) = self.get_position_override() {
+            load_deadline += Duration::from_millis(500);
+            position_override.try_into().unwrap_or(true_position)
+        } else {
+            true_position
+        };
+        let true_player_chunk = true_position.chunk();
+        let prefetch_player_chunk = prefetch_position.chunk();
+
+        tracing::Span::current().record("player_chunk", format!("{:?}", prefetch_player_chunk));
 
         trace.log("player position resolved");
 
@@ -652,7 +658,14 @@ impl MapChunkSender {
                 .trace_point(&trace, "chunk tracker read acquired")
                 .iter()
                 .filter(|&x| crate::game_state::game_map::shard_id(*x) % 2 == self.shard_parity)
-                .filter(|&x| self.should_unload(player_chunk, *x))
+                .filter(|&x| {
+                    Self::should_unload(
+                        prefetch_player_chunk,
+                        true_player_chunk,
+                        *x,
+                        update.client_requested_render_distance,
+                    )
+                })
                 .cloned()
                 .collect();
 
@@ -678,18 +691,24 @@ impl MapChunkSender {
             .await
             .map_err(|_| Error::msg("Could not send outbound message (mapchunk unsubscribe)"))?;
 
+        let effective_terrain_distance = LOAD_TERRAIN_DISTANCE
+            .clamp(FORCE_LOAD_DISTANCE, update.client_requested_render_distance);
+
         // Phase 2: Load chunks that are close enough.
         tokio::task::block_in_place(|| {
             self.hinted_chunks.clear();
             trace.log("clean hints");
             self.range_hint_lookaside.retain(|&(cx_, cz_), _| {
-                (cx_ - player_chunk.x).abs() + (cz_ - player_chunk.z).abs()
-                    < (LOAD_TERRAIN_DISTANCE * 2)
+                (cx_ - prefetch_player_chunk.x).abs() + (cz_ - prefetch_player_chunk.z).abs()
+                    < (effective_terrain_distance * 2)
             });
             trace.log("start LTSC");
             for &(dx, dz) in LOAD_TERRAIN_SORTED_COORDS.iter() {
-                let cx = player_chunk.x.saturating_add(dx);
-                let cz = player_chunk.z.saturating_add(dz);
+                if (dx.abs() + dz.abs()) > effective_terrain_distance {
+                    break;
+                }
+                let cx = prefetch_player_chunk.x.saturating_add(dx);
+                let cz = prefetch_player_chunk.z.saturating_add(dz);
                 if !ChunkCoordinate::bounds_check(cx, 0, cz) {
                     continue;
                 }
@@ -712,8 +731,9 @@ impl MapChunkSender {
                     }
 
                     for y in hint {
-                        if (player_chunk.y - y).abs() <= LOAD_TERRAIN_DISTANCE {
-                            self.hinted_chunks.push((dx, y - player_chunk.y, dz, true))
+                        if (prefetch_player_chunk.y - y).abs() <= effective_terrain_distance {
+                            self.hinted_chunks
+                                .push((dx, y - prefetch_player_chunk.y, dz, false))
                         }
                     }
                 }
@@ -729,6 +749,13 @@ impl MapChunkSender {
         // TODO: Actually dedupe the generated lists
         let mut dupes = FxHashSet::default();
 
+        let effective_eager_distance =
+            LOAD_EAGER_DISTANCE.clamp(FORCE_LOAD_DISTANCE, update.client_requested_render_distance);
+        let effective_lazy_distance =
+            LOAD_LAZY_DISTANCE.clamp(FORCE_LOAD_DISTANCE, update.client_requested_render_distance);
+        let effective_vertical_cap = VERTICAL_DISTANCE_CAP
+            .clamp(FORCE_LOAD_DISTANCE, update.client_requested_render_distance);
+
         let mut sent_chunks = 0;
         for (i, (dx, dy, dz, force)) in llsc_before
             .iter()
@@ -738,10 +765,18 @@ impl MapChunkSender {
             .enumerate()
         {
             let coord = ChunkCoordinate {
-                x: player_chunk.x.saturating_add(dx),
-                y: player_chunk.y.saturating_add(dy),
-                z: player_chunk.z.saturating_add(dz),
+                x: prefetch_player_chunk.x.saturating_add(dx),
+                y: prefetch_player_chunk.y.saturating_add(dy),
+                z: prefetch_player_chunk.z.saturating_add(dz),
             };
+            if Self::should_unload(
+                prefetch_player_chunk,
+                true_player_chunk,
+                coord,
+                update.client_requested_render_distance,
+            ) {
+                continue;
+            }
 
             if !coord.is_in_bounds() {
                 continue;
@@ -785,12 +820,14 @@ impl MapChunkSender {
             // isn't overloaded. If the map system is overloaded, we'll only load
             // chunks that are close enough to the player to really matter.
             let should_load = (force
-                || (distance <= LOAD_EAGER_DISTANCE && dy.abs() <= VERTICAL_DISTANCE_CAP))
-                && (distance <= FORCE_LOAD_DISTANCE
+                || (distance <= effective_eager_distance && dy.abs() <= effective_vertical_cap))
+                && (distance <= effective_lazy_distance
                     || !self.context.game_state.game_map().in_pushback());
 
             self.processed_elements = i;
-            if distance > LOAD_EAGER_DISTANCE && start_time.elapsed() > Duration::from_millis(250) {
+            if distance > effective_eager_distance
+                && start_time.elapsed() > Duration::from_millis(250)
+            {
                 break;
             }
             // avoid starving other tasks
@@ -877,8 +914,23 @@ impl MapChunkSender {
         Ok(new_position)
     }
 
-    fn should_unload(&self, player_chunk: ChunkCoordinate, chunk: ChunkCoordinate) -> bool {
-        player_chunk.manhattan_distance(chunk) > UNLOAD_DISTANCE as u32
+    fn should_unload(
+        prefetch_player_chunk: ChunkCoordinate,
+        true_player_chunk: ChunkCoordinate,
+        chunk: ChunkCoordinate,
+        client_distance_req: i32,
+    ) -> bool {
+        let distance =
+            UNLOAD_DISTANCE.clamp(FORCE_LOAD_DISTANCE * 3 / 2, client_distance_req * 3 / 2);
+        let x_min = prefetch_player_chunk.x.min(true_player_chunk.x) - distance;
+        let x_max = prefetch_player_chunk.y.max(true_player_chunk.x) + distance;
+        let z_min = prefetch_player_chunk.z.min(true_player_chunk.z) - distance;
+        let z_max = prefetch_player_chunk.z.max(true_player_chunk.z) + distance;
+        let y_min = prefetch_player_chunk.y.min(true_player_chunk.y) - distance;
+        let y_max = prefetch_player_chunk.y.max(true_player_chunk.y) + distance;
+        !((chunk.x >= x_min && chunk.x <= x_max)
+            && (chunk.z >= z_min && chunk.z <= z_max)
+            && (chunk.y >= y_min && chunk.y <= y_max))
     }
     fn get_position_override(&self) -> Option<Vector3<f64>> {
         tokio::task::block_in_place(|| {
@@ -1599,17 +1651,21 @@ impl InboundWorker {
                     face_direction: (az, el),
                 };
 
+                let mut max_distance = i32::MAX;
+
                 if let Some(pacing) = &update.pacing {
                     if pacing.pending_chunks < 256 {
                         self.context.chunk_aimd.lock().increase();
                     } else if pacing.pending_chunks > 1024 {
                         self.context.chunk_aimd.lock().decrease();
                     }
+                    max_distance = pacing.distance_limit as i32
                 }
 
                 self.own_positions.send_replace(PositionAndPacing {
                     position: pos,
                     chunks_to_send: self.context.chunk_aimd.lock().get(),
+                    client_requested_render_distance: max_distance,
                 });
                 self.context
                     .player_context
@@ -2502,6 +2558,7 @@ lazy_static::lazy_static! {
 struct PositionAndPacing {
     position: PlayerPositionUpdate,
     chunks_to_send: usize,
+    client_requested_render_distance: i32,
 }
 
 struct Aimd {

@@ -174,14 +174,17 @@ impl PhysicsState {
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
             self.physics_mode = self.physics_mode.next(self.can_fly, self.can_noclip);
-            client_state.chat.lock().show_client_message(format!(
-                "Physics mode changed to {}",
-                match self.physics_mode {
-                    PhysicsMode::Standard => "standard",
-                    PhysicsMode::FlyingCollisions => "flying",
-                    PhysicsMode::Noclip => "noclip",
-                }
-            ));
+            client_state.egui.lock().push_status_bar(
+                Duration::from_secs(5),
+                format!(
+                    "Physics mode changed to {}",
+                    match self.physics_mode {
+                        PhysicsMode::Standard => "standard",
+                        PhysicsMode::FlyingCollisions => "flying",
+                        PhysicsMode::Noclip => "noclip",
+                    }
+                ),
+            );
         }
         let (x, y) = input.take_mouse_delta();
         self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
@@ -505,14 +508,17 @@ impl PhysicsState {
             self.physics_mode
         };
         if new_physics_mode != self.physics_mode {
-            client_state.chat.lock().show_client_message(format!(
-                "Physics mode changed to {}",
-                match new_physics_mode {
-                    PhysicsMode::Standard => "standard",
-                    PhysicsMode::FlyingCollisions => "flying",
-                    PhysicsMode::Noclip => "noclip",
-                }
-            ));
+            client_state.egui.lock().push_status_bar(
+                Duration::from_secs(5),
+                format!(
+                    "Physics mode changed to {}",
+                    match self.physics_mode {
+                        PhysicsMode::Standard => "standard",
+                        PhysicsMode::FlyingCollisions => "flying",
+                        PhysicsMode::Noclip => "noclip",
+                    }
+                ),
+            );
         }
         self.physics_mode = new_physics_mode;
     }
