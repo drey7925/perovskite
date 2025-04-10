@@ -209,7 +209,7 @@ impl EngineHandle {
         pos: Vector3<f64>,
         velocity: Vector3<f32>,
         azimuth: f64,
-        testonly_entity_attached: bool,
+        entity_attachment: u64,
     ) {
         {
             let mut lock = self.control.player_state.lock_write();
@@ -217,7 +217,7 @@ impl EngineHandle {
             lock.velocity = velocity;
             lock.azimuth_radian = azimuth;
             lock.position_timebase_tick = tick;
-            lock.entity_filter_state = if testonly_entity_attached {
+            lock.entity_filter_state = if entity_attachment != 0 {
                 EntityFilterState {
                     cutoff_hz: 250,
                     degree: 2,
@@ -228,7 +228,7 @@ impl EngineHandle {
                     degree: 0,
                 }
             };
-            lock.entity_filter_extra_gain = if testonly_entity_attached { 5.0 } else { 1.0 };
+            lock.entity_filter_extra_gain = if entity_attachment != 0 { 3.0 } else { 1.0 };
         }
         self.control.enabled.store(true, Ordering::Release);
     }
@@ -819,10 +819,11 @@ impl EngineState {
             };
             let current_velocity = entity_move.instantaneous_velocity(entity_move_elapsed);
 
-            let (distance_falloff_multiplier, edge_multiplier, balance_left) = if control_block
-                .flags
-                & SOUND_ENTITY_SPATIAL
-                != 0
+            let is_spatial = control_block.flags & SOUND_ENTITY_SPATIAL != 0;
+            let is_attached_here = player_state.attached_entity == control_block.entity_id;
+
+            let (distance_falloff_multiplier, edge_multiplier, balance_left) = if is_spatial
+                && !is_attached_here
             {
                 let entity_pos = entity_move.qproj(entity_move_elapsed);
                 let player_pos = player_state.position;
@@ -971,7 +972,12 @@ impl EngineState {
             // Theoretically should be N^5 or N^6, but this is subjectively better
             let speed_multiplier = (current_velocity.magnitude() / 70.0).powi(4);
 
-            let turbulence_amplitude = control_block.turbulence.volume
+            let control_volume = if is_attached_here {
+                control_block.turbulence.volume_attached
+            } else {
+                control_block.turbulence.volume
+            };
+            let turbulence_amplitude = control_volume
                 * distance_falloff_multiplier
                 * edge_multiplier
                 * speed_multiplier
@@ -1049,6 +1055,7 @@ pub(crate) struct PlayerState {
     position_timebase_tick: u64,
     entity_filter_state: EntityFilterState,
     entity_filter_extra_gain: f32,
+    attached_entity: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1121,6 +1128,7 @@ impl SharedControl {
                     degree: 0,
                 },
                 entity_filter_extra_gain: 1.0,
+                attached_entity: 0,
             }),
             simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; NUM_SIMPLE_SOUND_SLOTS]),
             entity_slots: Box::new([PROCEDURAL_ENTITY_CONST_INIT; NUM_PROCEDURAL_ENTITY_SLOTS]),
@@ -1313,6 +1321,7 @@ impl ProceduralEntitySoundControlBlock {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TurbulenceSourceControlBlock {
     pub(crate) volume: f32,
+    pub(crate) volume_attached: f32,
     pub(crate) lpf_cutoff_hz: f32,
 }
 
@@ -1326,6 +1335,7 @@ impl ProceduralEntitySoundControlBlock {
             entity_len: 0.0,
             turbulence: TurbulenceSourceControlBlock {
                 volume: 0.0,
+                volume_attached: 0.0,
                 lpf_cutoff_hz: 1000.0,
             },
             sound_source: SoundSource::SoundsourceUnspecified,

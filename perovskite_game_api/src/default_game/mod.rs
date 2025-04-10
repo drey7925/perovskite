@@ -281,6 +281,7 @@ fn register_player_entity(builder: &mut GameBuilder) -> Result<EntityClassId> {
             merge_trailing_entities_for_dig: false,
             tool_interaction_groups: vec![],
             base_dig_time: 1.0,
+            turbulence_audio: None,
         },
         handlers: Box::new(game_state::entities::NoOpEntityHandlers),
     })

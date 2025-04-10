@@ -814,7 +814,7 @@ impl ClientState {
             *lock = tick;
             delta
         };
-        let mut is_attached = false;
+        let mut entity_attachment = 0;
         let (mut player_position, player_velocity, (az, el)) = self
             .physics_state
             .lock()
@@ -823,7 +823,7 @@ impl ClientState {
             let entity_lock = self.entities.lock();
             if let Some(entity_target) = entity_lock.attached_to_entity {
                 if let Some(entity) = entity_lock.entities.get(&entity_target.entity_id) {
-                    is_attached = true;
+                    entity_attachment = entity_target.entity_id;
                     // We may not have a position if it's a trailing entity beyond the backbuffer
                     if let Some(position) = entity.attach_position(
                         tick,
@@ -845,7 +845,7 @@ impl ClientState {
             player_position,
             player_velocity.cast().unwrap(),
             az * PI / 180.,
-            is_attached,
+            entity_attachment,
         );
 
         let rotation = cgmath::Matrix4::from_angle_x(Deg(el))

@@ -881,13 +881,15 @@ impl InboundContext {
             .entry(update.id)
         {
             Entry::Occupied(mut entry) => entry.get_mut().update(update, estimated_send_tick),
-            Entry::Vacant(entry) => match GameEntity::from_proto(update) {
-                Ok(x) => {
-                    entry.insert(x);
-                    Ok(())
+            Entry::Vacant(entry) => {
+                match GameEntity::from_proto(update, self.shared_state.client_state.deref()) {
+                    Ok(x) => {
+                        entry.insert(x);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
-            },
+            }
         };
 
         if let Err(e) = outcome {

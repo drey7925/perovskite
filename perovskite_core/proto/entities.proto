@@ -87,6 +87,15 @@ message EntityDef {
   EntityAppearance appearance = 3;
 }
 
+message TurbulenceAudioModel {
+  // The volume (given as amplitude 0.0-1.0) of movement-associated turbulence
+  float volume = 1;
+  // The volume (given as amplitude 0.0-1.0) when the player is attached to the entity
+  float volume_attached = 2;
+  // The cutoff frequency for the LPF that shapes the spectrum of the turbulence noise.
+  float lpf_cutoff_hz = 3;
+}
+
 message EntityAppearance {
   // The mesh to use for the entity. At least one must be specified.
   repeated perovskite.protocol.render.CustomMesh custom_mesh = 1;
@@ -107,4 +116,6 @@ message EntityAppearance {
   repeated string tool_interaction_groups = 5;
   // The base dig time; see blocks.proto
   double base_dig_time = 6;
+  // Turbulence sound, if present for this entity
+  TurbulenceAudioModel turbulence_audio = 7;
 }

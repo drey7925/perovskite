@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
 use perovskite_core::protocol::audio::SoundSource;
 use rustc_hash::FxHashMap;
@@ -6,12 +6,14 @@ use std::{collections::VecDeque, time::Instant};
 
 use crate::audio::{EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT};
 use crate::client_state::tool_controller::check_intersection_core;
+use crate::client_state::ClientState;
 use crate::vulkan::{
     block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
     entity_renderer::EntityRenderer,
     shaders::entity_geometry::EntityGeometryDrawCall,
 };
 use perovskite_core::protocol::entities as entities_proto;
+use perovskite_core::protocol::entities::TurbulenceAudioModel;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 
 #[derive(Copy, Clone, Debug)]
@@ -169,7 +171,7 @@ pub(crate) struct GameEntity {
     trailing_entities: Vec<(u32, f32)>,
 
     audio_token: Option<ProceduralEntityToken>,
-
+    turbulence_audio_model: Option<TurbulenceAudioModel>,
     // debug only
     created: Instant,
 }
@@ -287,25 +289,27 @@ impl GameEntity {
                     flags |= SOUND_ENTITY_SPATIAL;
                 }
 
-                // TODO get this from the entity
-                let control = crate::audio::ProceduralEntitySoundControlBlock {
-                    flags,
-                    entity_id: self.id,
-                    leading: *front,
-                    second: self.move_queue.get(1).copied(),
-                    entity_len: self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
-                    turbulence: crate::audio::TurbulenceSourceControlBlock {
-                        volume,
-                        lpf_cutoff_hz: 1000.0,
-                    },
-                    sound_source: SoundSource::SoundsourceWorld,
-                };
-                self.audio_token = audio_handle.update_entity_state(
-                    tick_now,
-                    player_position,
-                    control,
-                    self.audio_token,
-                );
+                if let Some(audio) = &self.turbulence_audio_model {
+                    let control = crate::audio::ProceduralEntitySoundControlBlock {
+                        flags,
+                        entity_id: self.id,
+                        leading: *front,
+                        second: self.move_queue.get(1).copied(),
+                        entity_len: self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
+                        turbulence: crate::audio::TurbulenceSourceControlBlock {
+                            volume: audio.volume,
+                            volume_attached: audio.volume_attached,
+                            lpf_cutoff_hz: audio.lpf_cutoff_hz,
+                        },
+                        sound_source: SoundSource::SoundsourceWorld,
+                    };
+                    self.audio_token = audio_handle.update_entity_state(
+                        tick_now,
+                        player_position,
+                        control,
+                        self.audio_token,
+                    );
+                }
             }
         }
     }
@@ -466,7 +470,10 @@ impl GameEntity {
             .unwrap_or(0.0)
     }
 
-    pub(crate) fn from_proto(update: &entities_proto::EntityUpdate) -> Result<GameEntity, &str> {
+    pub(crate) fn from_proto(
+        update: &entities_proto::EntityUpdate,
+        client_state: &ClientState,
+    ) -> Result<GameEntity, &'static str> {
         if update.planned_move.is_empty() {
             return Err("Empty move plan");
         }
@@ -485,6 +492,11 @@ impl GameEntity {
             .map(|te| (te.class, te.distance))
             .collect();
         trailing_entities.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        let turbulence_audio = client_state
+            .entity_renderer
+            .client_info(update.entity_class)
+            .and_then(|x| x.turbulence_audio);
 
         Ok(GameEntity {
             fallback_position: queue
@@ -505,6 +517,7 @@ impl GameEntity {
             class: update.entity_class,
             id: update.id,
             audio_token: None,
+            turbulence_audio_model: turbulence_audio,
         })
     }
     fn pop_backbuffer(&mut self) {
@@ -615,7 +628,7 @@ impl EntityState {
             let is_attached = self
                 .attached_to_entity
                 .is_some_and(|x| x.entity_id == entity.id);
-            let volume = if is_attached { 0.25 } else { 1.0 };
+            let volume = if is_attached { 0.125 } else { 1.0 };
             entity.advance_state(tick_now, audio_handle, volume, player_position, is_attached);
         }
     }

@@ -17,6 +17,7 @@ use crate::{
 };
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
+use perovskite_core::protocol::entities::TurbulenceAudioModel;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     block_id::BlockId,
@@ -272,6 +273,11 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             merge_trailing_entities_for_dig: true,
             tool_interaction_groups: vec![BRITTLE.to_string()],
             base_dig_time: 1.0,
+            turbulence_audio: Some(TurbulenceAudioModel {
+                volume: 0.125,
+                volume_attached: 0.01525,
+                lpf_cutoff_hz: 1000.0,
+            }),
         },
         handlers: Box::new(CartHandlers),
     })?;
