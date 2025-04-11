@@ -19,7 +19,7 @@ use crate::default_game::recipes::RecipeSlot;
 use crate::default_game::{item_groups, DefaultGameBuilder};
 use crate::{game_builder::StaticTextureName, include_texture_bytes};
 
-use super::block_groups::{BRITTLE, GRANULAR};
+use super::block_groups::{BRITTLE, FIBROUS, GRANULAR};
 
 /// Registers a new pickaxe based on the given materials
 /// **This API is subject to change.**
@@ -166,7 +166,7 @@ fn register_superuser_pickaxe(
     game_builder.inner.items_mut().register_item(item)
 }
 
-/// Registers a new pickaxe based on the given materials
+/// Registers a new shovel based on the given materials
 /// **This API is subject to change.**
 pub(crate) fn register_shovel(
     game_builder: &mut super::GameBuilder,
@@ -194,6 +194,44 @@ pub(crate) fn register_shovel(
                 craft_component,
                 RecipeSlot::Empty,
                 RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+            ]
+        }),
+    )
+}
+
+/// Registers a new axe based on the given materials
+/// **This API is subject to change.**
+pub(crate) fn register_axe(
+    game_builder: &mut super::GameBuilder,
+    texture: StaticTextureName,
+    name: impl Into<String>,
+    display_name: impl Into<String>,
+    durability: u32,
+    base_dig_time: f64,
+    sort_key_component: &str,
+    craft_component: Option<RecipeSlot>,
+) -> Result<()> {
+    let name = name.into();
+    register_tool(
+        game_builder,
+        texture,
+        name,
+        display_name,
+        durability,
+        "default:tools:axes:".to_string() + sort_key_component,
+        base_dig_time,
+        FIBROUS,
+        craft_component.map(|craft_component| {
+            [
+                craft_component.clone(),
+                craft_component.clone(),
+                RecipeSlot::Empty,
+                craft_component,
                 RecipeSlot::Exact(STICK_ITEM.0.to_string()),
                 RecipeSlot::Empty,
                 RecipeSlot::Empty,
