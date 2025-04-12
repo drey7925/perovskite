@@ -146,6 +146,20 @@ impl EngineHandle {
         }
     }
 
+    pub(crate) fn remove_entity_state(&self, token: ProceduralEntityToken) -> bool {
+        let mut alloc_lock = self.allocator_state.lock();
+
+        let index = token.0.get() % (NUM_PROCEDURAL_ENTITY_SLOTS as u64);
+        if alloc_lock.entity_slot_tokens[index as usize] == token.0.get() {
+            alloc_lock.entity_slot_tokens[index as usize] = 0;
+            let mut lock = self.control.entity_slots[index as usize].lock_write();
+            *lock = ProceduralEntitySoundControlBlock::const_default();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn update_entity_state(
         &self,
         tick_now: u64,

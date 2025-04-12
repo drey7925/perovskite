@@ -747,4 +747,14 @@ impl EntityState {
         }
         hit
     }
+
+    pub(crate) fn remove_entity(&mut self, id: u64, cs: &ClientState) -> Option<GameEntity> {
+        let entity = self.entities.remove(&id);
+        if let Some(entity) = entity.as_ref() {
+            if let Some(token) = entity.audio_token {
+                cs.audio.remove_entity_state(token);
+            }
+        }
+        entity
+    }
 }

@@ -875,8 +875,7 @@ impl InboundContext {
                 .client_state
                 .entities
                 .lock()
-                .entities
-                .remove(&update.id)
+                .remove_entity(update.id, &self.shared_state.client_state)
                 .is_none()
             {
                 self.shared_state
