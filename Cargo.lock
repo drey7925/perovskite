@@ -3354,7 +3354,7 @@ checksum = "9b2a4787296e9989611394c33f193f676704af1686e70b8f8033ab5ba9a35a94"
 
 [[package]]
 name = "perovskite_client"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3416,7 +3416,7 @@ dependencies = [
 
 [[package]]
 name = "perovskite_core"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "perovskite_game_api"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "perovskite_server"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
