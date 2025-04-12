@@ -2005,7 +2005,8 @@ enum WritebackReq {
 // TODO expose as flags or configs
 pub(crate) const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(10);
 const CACHE_CLEAN_INTERVAL: Duration = Duration::from_secs(3);
-const CACHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 128;
+// TODO: Consider removing this functionality
+const CACHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 0;
 const CACHE_CLEANUP_RELOCK_EVERY_N: usize = 32;
 
 struct MapCacheCleanup {
