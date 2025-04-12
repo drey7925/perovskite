@@ -19,7 +19,7 @@ use super::{
 
 const SIDE_TEX: StaticTextureName = StaticTextureName("circuits:gate_side");
 const SIDE_PIN_TEX: StaticTextureName = StaticTextureName("circuits:gate_side_pin");
-pub(super) const BOTTOM_TEX: StaticTextureName = StaticTextureName("circuits:gate_bottom");
+pub(super) const GATE_BOTTOM_TEX: StaticTextureName = StaticTextureName("circuits:gate_bottom");
 
 const BROKEN_GATE: StaticBlockName = StaticBlockName("circuits:broken_gate");
 const BROKEN_TOP_TEX: StaticTextureName = StaticTextureName("circuits:broken_gate_top");
@@ -218,7 +218,7 @@ fn register_gate(
         get_side_tex(gate.connects_left),
         get_side_tex(gate.connects_right),
         gate.off_texture,
-        BOTTOM_TEX,
+        GATE_BOTTOM_TEX,
         get_side_tex(true),
         get_side_tex(gate.connects_front),
         crate::blocks::TextureCropping::AutoCrop,
@@ -228,7 +228,7 @@ fn register_gate(
         get_side_tex(gate.connects_left),
         get_side_tex(gate.connects_right),
         gate.on_texture,
-        BOTTOM_TEX,
+        GATE_BOTTOM_TEX,
         get_side_tex(true),
         get_side_tex(gate.connects_front),
         crate::blocks::TextureCropping::AutoCrop,
@@ -271,13 +271,13 @@ pub(crate) fn register_base_gates(builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(builder, SIDE_TEX, "textures/gate_side.png")?;
     include_texture_bytes!(builder, SIDE_PIN_TEX, "textures/gate_side_pin.png")?;
     include_texture_bytes!(builder, BROKEN_TOP_TEX, "textures/broken_gate_top.png")?;
-    include_texture_bytes!(builder, BOTTOM_TEX, "textures/gate_bottom.png")?;
+    include_texture_bytes!(builder, GATE_BOTTOM_TEX, "textures/gate_bottom.png")?;
 
     let box_properties_broken = AaBoxProperties::new(
         get_side_tex(false),
         get_side_tex(false),
         BROKEN_TOP_TEX,
-        BOTTOM_TEX,
+        GATE_BOTTOM_TEX,
         get_side_tex(false),
         get_side_tex(false),
         crate::blocks::TextureCropping::AutoCrop,

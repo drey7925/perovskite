@@ -2329,7 +2329,7 @@ async fn run_prefetch_dispatch(
         'busyLoop: while !cancellation.is_cancelled() {
             let mut break_once_out_of_slots = true;
 
-            let x = match slots[current_slot].next_item() {
+            match slots[current_slot].next_item() {
                 PrefetchTask::SlotGone => {
                     tracing::info!("Removing current prefetch slot");
                     slots.swap_remove(current_slot);
@@ -2363,30 +2363,27 @@ async fn run_prefetch_dispatch(
 
             let next_slot: usize = current_slot.wrapping_add(1);
             current_slot = if next_slot >= slots.len() {
-                'drainLoop: loop {
-                    let result = slot_receiver.try_recv();
-                    match result {
-                        Ok(Some(slot)) => {
-                            tracing::info!("Adding a prefetch slot and restarting busy loop");
-                            slots.push(slot);
-                            current_slot = 0;
-                            continue 'busyLoop;
-                        }
-                        Ok(None) => {
-                            tracing::info!("Awoken at the end, restarting busy loop. So far: {} already present, {} prefetched",
-                                already_present,
-                                prefetched);
-                            // Do nothing, we're just being notified to wake up
-                            current_slot = 0;
-                            continue 'busyLoop;
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            tracing::warn!("Prefetcher dispatcher sender disconnected; exiting");
-                            return;
-                        }
-                        Err(TryRecvError::Empty) => {
-                            break 'drainLoop;
-                        }
+                match slot_receiver.try_recv() {
+                    Ok(Some(slot)) => {
+                        tracing::info!("Adding a prefetch slot and restarting busy loop");
+                        slots.push(slot);
+                        current_slot = 0;
+                        continue 'busyLoop;
+                    }
+                    Ok(None) => {
+                        tracing::info!("Awoken at the end, restarting busy loop. So far: {} already present, {} prefetched",
+                            already_present,
+                            prefetched);
+                        // Do nothing, we're just being notified to wake up
+                        current_slot = 0;
+                        continue 'busyLoop;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        tracing::warn!("Prefetcher dispatcher sender disconnected; exiting");
+                        return;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        // do nothing
                     }
                 }
                 if break_once_out_of_slots {

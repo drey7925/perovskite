@@ -110,6 +110,8 @@ impl<T: Send + Sync + 'static> Debug for DeferredPrivate<T> {
     }
 }
 
+// Currently one shard
+#[allow(clippy::modulo_one)]
 fn id_to_shard(id: u64) -> usize {
     // Put 256 consecutive entities in the same shard, rather than round-robining directly
     (id as usize / 256) % NUM_ENTITY_SHARDS

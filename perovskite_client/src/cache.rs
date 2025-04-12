@@ -232,6 +232,7 @@ impl CacheManager {
             self.hash_texture_reference(aa_box.tex_back.as_ref(), hasher)?;
             hasher.update(aa_box.top_slope_x.to_le_bytes());
             hasher.update(aa_box.top_slope_z.to_le_bytes());
+            self.hash_texture_reference(aa_box.plant_like_tex.as_ref(), hasher)?;
         }
         Some(())
     }

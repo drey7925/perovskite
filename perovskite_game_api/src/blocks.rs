@@ -950,7 +950,7 @@ impl LiquidPropagator {
 }
 
 /// How textures for an axis-aligned box should be cropped
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum TextureCropping {
     /// The texture is sized to span the entire 1x1x1 cube in world space. It is then cropped down to fit the axis-aligned box being drawn.
     /// This prevents visual artifacts (z-flickering) when two axis-aligned boxes overlap on a face, as long as both use the same texture.
@@ -972,19 +972,22 @@ pub enum RotationMode {
 /// The textures to apply to an axis-aligned box.
 #[derive(Clone, Debug)]
 pub struct AaBoxProperties {
-    left: TextureReference,
-    right: TextureReference,
-    top: TextureReference,
-    bottom: TextureReference,
-    front: TextureReference,
-    back: TextureReference,
+    left: Option<TextureReference>,
+    right: Option<TextureReference>,
+    top: Option<TextureReference>,
+    bottom: Option<TextureReference>,
+    front: Option<TextureReference>,
+    back: Option<TextureReference>,
     crop_mode: TextureCropping,
     rotation_mode: RotationMode,
     is_visible: bool,
     is_colliding: bool,
     is_tool_hitbox: bool,
+    plantlike: Option<TextureReference>,
 }
 impl AaBoxProperties {
+    /// Create an axis-aligned box with the given textures. See [Self::new_custom_usage] for greater
+    /// control, or [Self::new_single_tex] for a simpler single-texture box.
     pub fn new(
         left: impl Into<TextureReference>,
         right: impl Into<TextureReference>,
@@ -996,19 +999,33 @@ impl AaBoxProperties {
         rotation_mode: RotationMode,
     ) -> Self {
         Self {
-            left: left.into(),
-            right: right.into(),
-            top: top.into(),
-            bottom: bottom.into(),
-            front: front.into(),
-            back: back.into(),
+            left: Some(left.into()),
+            right: Some(right.into()),
+            top: Some(top.into()),
+            bottom: Some(bottom.into()),
+            front: Some(front.into()),
+            back: Some(back.into()),
             crop_mode,
             rotation_mode,
             is_visible: true,
             is_colliding: true,
             is_tool_hitbox: true,
+            plantlike: None,
         }
     }
+    ///     /// Create an axis-aligned box with the given textures, and custom usage flags.
+    ///
+    /// This is the same as [AaBoxProperties::new] but with additional parameters to control whether the box is visible,
+    /// whether it is used for collision, and whether it is used for tool hitboxes.
+    ///
+    /// This is useful for creating blocks that have a different appearance than their collision box, or for creating blocks
+    /// that have a different hitbox for tools than their collision box.
+    ///
+    /// If you don't need these features, use [AaBoxProperties::new] instead.
+    ///
+    /// If you set is_visible to false, the box will not be rendered.
+    /// If you set is_colliding to false, the box will not be used for collision detection.
+    /// If you set is_tool_hitbox to false, the box will not be used for tool hitboxes.
     pub fn new_custom_usage(
         left: impl Into<TextureReference>,
         right: impl Into<TextureReference>,
@@ -1023,19 +1040,27 @@ impl AaBoxProperties {
         is_tool_hitbox: bool,
     ) -> Self {
         Self {
-            left: left.into(),
-            right: right.into(),
-            top: top.into(),
-            bottom: bottom.into(),
-            front: front.into(),
-            back: back.into(),
+            left: Some(left.into()),
+            right: Some(right.into()),
+            top: Some(top.into()),
+            bottom: Some(bottom.into()),
+            front: Some(front.into()),
+            back: Some(back.into()),
             crop_mode,
             rotation_mode,
             is_visible,
             is_colliding,
             is_tool_hitbox,
+            plantlike: None,
         }
     }
+    /// Create an axis-aligned box with the same texture on all faces.
+    ///
+    /// This is the same as [AaBoxProperties::new] but with a single texture.
+    ///
+    /// If you need more control over the textures, use [AaBoxProperties::new] instead.
+    ///
+    /// If you need to set custom usage flags, use [AaBoxProperties::new_custom_usage] instead.
     pub fn new_single_tex(
         texture: impl Into<TextureReference>,
         crop_mode: TextureCropping,
@@ -1043,17 +1068,40 @@ impl AaBoxProperties {
     ) -> Self {
         let tex = texture.into();
         Self {
-            left: tex.clone(),
-            right: tex.clone(),
-            top: tex.clone(),
-            bottom: tex.clone(),
-            front: tex.clone(),
-            back: tex,
+            left: Some(tex.clone()),
+            right: Some(tex.clone()),
+            top: Some(tex.clone()),
+            bottom: Some(tex.clone()),
+            front: Some(tex.clone()),
+            back: Some(tex),
             crop_mode,
             rotation_mode,
             is_visible: true,
             is_colliding: true,
             is_tool_hitbox: true,
+            plantlike: None,
+        }
+    }
+
+    /// Create a box whose diagonals are rendered (like plants). This does not support texture
+    /// cropping.
+    pub fn new_plantlike(
+        texture: impl Into<TextureReference>,
+        rotation_mode: RotationMode,
+    ) -> Self {
+        Self {
+            left: None,
+            right: None,
+            top: None,
+            bottom: None,
+            front: None,
+            back: None,
+            crop_mode: TextureCropping::NoCrop,
+            rotation_mode,
+            is_visible: true,
+            is_colliding: true,
+            is_tool_hitbox: true,
+            plantlike: Some(texture.into()),
         }
     }
 }
@@ -1135,42 +1183,54 @@ impl AxisAlignedBoxesAppearanceBuilder {
             y_max: y.1,
             z_min: z.0,
             z_max: z.1,
-            tex_left: Some(Self::maybe_crop(
-                box_properties.left,
-                &box_properties.crop_mode,
-                (0.5 - z.1, 0.5 - z.0),
-                (0.5 - y.1, 0.5 - y.0),
-            )),
-            tex_right: Some(Self::maybe_crop(
-                box_properties.right,
-                &box_properties.crop_mode,
-                (z.0 + 0.5, z.1 + 0.5),
-                (0.5 - y.1, 0.5 - y.0),
-            )),
-            tex_top: Some(Self::maybe_crop(
-                box_properties.top,
-                &box_properties.crop_mode,
-                (0.5 - x.1, 0.5 - x.0),
-                (z.0 + 0.5, z.1 + 0.5),
-            )),
-            tex_bottom: Some(Self::maybe_crop(
-                box_properties.bottom,
-                &box_properties.crop_mode,
-                (x.0 + 0.5, x.1 + 0.5),
-                (z.0 + 0.5, z.1 + 0.5),
-            )),
-            tex_front: Some(Self::maybe_crop(
-                box_properties.front,
-                &box_properties.crop_mode,
-                (x.0 + 0.5, x.1 + 0.5),
-                (0.5 - y.1, 0.5 - y.0),
-            )),
-            tex_back: Some(Self::maybe_crop(
-                box_properties.back,
-                &box_properties.crop_mode,
-                (0.5 - x.1, 0.5 - x.0),
-                (0.5 - y.1, 0.5 - y.0),
-            )),
+            tex_left: box_properties.left.map(|left| {
+                Self::maybe_crop(
+                    left,
+                    box_properties.crop_mode,
+                    (0.5 - z.1, 0.5 - z.0),
+                    (0.5 - y.1, 0.5 - y.0),
+                )
+            }),
+            tex_right: box_properties.right.map(|right| {
+                Self::maybe_crop(
+                    right,
+                    box_properties.crop_mode,
+                    (z.0 + 0.5, z.1 + 0.5),
+                    (0.5 - y.1, 0.5 - y.0),
+                )
+            }),
+            tex_top: box_properties.top.map(|top| {
+                Self::maybe_crop(
+                    top,
+                    box_properties.crop_mode,
+                    (0.5 - x.1, 0.5 - x.0),
+                    (z.0 + 0.5, z.1 + 0.5),
+                )
+            }),
+            tex_bottom: box_properties.bottom.map(|bottom| {
+                Self::maybe_crop(
+                    bottom,
+                    box_properties.crop_mode,
+                    (x.0 + 0.5, x.1 + 0.5),
+                    (z.0 + 0.5, z.1 + 0.5),
+                )
+            }),
+            tex_front: box_properties.front.map(|front| {
+                Self::maybe_crop(
+                    front,
+                    box_properties.crop_mode,
+                    (x.0 + 0.5, x.1 + 0.5),
+                    (0.5 - y.1, 0.5 - y.0),
+                )
+            }),
+            tex_back: box_properties.back.map(|back| {
+                Self::maybe_crop(
+                    back,
+                    box_properties.crop_mode,
+                    (0.5 - x.1, 0.5 - x.0),
+                    (0.5 - y.1, 0.5 - y.0),
+                )
+            }),
             rotation: match box_properties.rotation_mode {
                 RotationMode::None => AxisAlignedBoxRotation::None.into(),
                 RotationMode::RotateHorizontally => AxisAlignedBoxRotation::Nesw.into(),
@@ -1180,6 +1240,9 @@ impl AxisAlignedBoxesAppearanceBuilder {
             top_slope_z,
             bottom_slope_x,
             bottom_slope_z,
+            plant_like_tex: box_properties.plantlike.map(|plantlike| {
+                Self::maybe_crop(plantlike, TextureCropping::NoCrop, (0.0, 1.0), (0.0, 1.0))
+            }),
         };
         if box_properties.is_visible {
             self.display_proto.boxes.push(the_box.clone());
@@ -1195,7 +1258,7 @@ impl AxisAlignedBoxesAppearanceBuilder {
 
     fn maybe_crop(
         tex: TextureReference,
-        crop_mode: &TextureCropping,
+        crop_mode: TextureCropping,
         extents_u: (f32, f32),
         extents_v: (f32, f32),
     ) -> TextureReference {

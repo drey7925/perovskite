@@ -296,13 +296,18 @@ message ClientPacing {
   uint32 distance_limit = 2;
 }
 
+message Footstep {
+  perovskite.protocol.coordinates.WireBlockCoordinate coord = 1;
+  uint64 tick = 2;
+}
+
 message ClientUpdate {
   PlayerPosition position = 1;
   ClientPacing pacing = 2;
   uint32 hotbar_slot = 3;
   // todo animation state
-  // If set, player had a footstep.
-  perovskite.protocol.coordinates.WireBlockCoordinate footstep_coordinate = 4;
+  // If set, player had footsteps since the last client update
+  repeated Footstep footstep_coordinate = 4;
 }
 
 message PlayerPosition {

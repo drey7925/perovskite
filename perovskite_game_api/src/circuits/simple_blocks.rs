@@ -9,6 +9,13 @@ use perovskite_server::game_state::{
     game_map::{BulkUpdateCallback, TimerCallback, TimerSettings},
 };
 
+use super::{
+    events::{make_root_context, transmit_edge},
+    get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
+    CircuitGameBuilder, PinState,
+};
+use crate::blocks::{RotationMode, TextureCropping};
+use crate::circuits::gates::GATE_BOTTOM_TEX;
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -16,12 +23,6 @@ use crate::{
     default_game::basic_blocks::DIRT,
     game_builder::{StaticBlockName, StaticTextureName},
     include_texture_bytes,
-};
-
-use super::{
-    events::{make_root_context, transmit_edge},
-    get_incoming_pin_states, BlockConnectivity, CircuitBlockBuilder, CircuitBlockCallbacks,
-    CircuitGameBuilder, PinState,
 };
 
 const CIRCUITS_SOURCE_BLOCK: StaticBlockName = StaticBlockName("circuits:source");
@@ -275,17 +276,33 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
     let base_off_image = image::load_from_memory(include_bytes!("textures/lamp_off_base.png"))?;
     let mask_image =
         image::load_from_memory(include_bytes!("textures/lamp_color_mask.png"))?.to_luma8();
+    let orb_on_image = image::load_from_memory(include_bytes!("textures/lamp_on_base_orb.png"))?;
+    let orb_off_image = image::load_from_memory(include_bytes!("textures/lamp_off_base_orb.png"))?;
+    let orb_mask =
+        image::load_from_memory(include_bytes!("textures/lamp_color_mask.png"))?.to_luma8();
+
     for color in crate::colors::ALL_COLORS {
         let colorized_on = color.colorize_to_png_with_mask(&base_on_image, &mask_image)?;
         let colorized_off = color.colorize_to_png_with_mask(&base_off_image, &mask_image)?;
 
+        let orb_colorized_on = color.colorize_to_png_with_mask(&orb_on_image, &orb_mask)?;
+        let orb_colorized_off = color.colorize_to_png_with_mask(&orb_off_image, &orb_mask)?;
+
         let on_texture = TextureName(format!("circuits:lamp_{}_on", color.as_string()));
         let off_texture = TextureName(format!("circuits:lamp_{}_off", color.as_string()));
+        let orb_on_texture = TextureName(format!("circuits:lamp_{}_orb_on", color.as_string()));
+        let orb_off_texture = TextureName(format!("circuits:lamp_{}_orb_off", color.as_string()));
+
         builder.register_texture_bytes(&on_texture, &colorized_on)?;
         builder.register_texture_bytes(&off_texture, &colorized_off)?;
+        builder.register_texture_bytes(&orb_on_texture, &orb_colorized_on)?;
+        builder.register_texture_bytes(&orb_off_texture, &orb_colorized_off)?;
 
         let on_block_name = BlockName(format!("circuits:lamp_{}_on", color.as_string()));
         let off_block_name = BlockName(format!("circuits:lamp_{}_off", color.as_string()));
+
+        let orb_on_block_name = BlockName(format!("circuits:lamp_{}_orb_on", color.as_string()));
+        let orb_off_block_name = BlockName(format!("circuits:lamp_{}_orb_off", color.as_string()));
 
         let off_block = builder.add_block(
             BlockBuilder::new(off_block_name.clone())
@@ -310,6 +327,56 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 Box::new(SimpleLampCallbacks {
                     lamp_off: off_block.id,
                     lamp_on: on_block.id,
+                }),
+                super::CircuitBlockProperties {
+                    connectivity: CIRCUITS_SOURCE_CONNECTIVITIES.to_vec(),
+                },
+            )?;
+        }
+
+        fn orb_aabb(tex: &TextureName) -> AxisAlignedBoxesAppearanceBuilder {
+            AxisAlignedBoxesAppearanceBuilder::new()
+                .add_box(
+                    AaBoxProperties::new_plantlike(tex, RotationMode::None),
+                    (-0.3, 0.3),
+                    (-0.4, 0.2),
+                    (-0.3, 0.3),
+                )
+                .add_box(
+                    AaBoxProperties::new_single_tex(
+                        GATE_BOTTOM_TEX,
+                        TextureCropping::AutoCrop,
+                        RotationMode::None,
+                    ),
+                    (-0.5, 0.5),
+                    (-0.5, -0.4),
+                    (-0.5, 0.5),
+                )
+        }
+
+        let orb_off_block = builder.add_block(
+            BlockBuilder::new(orb_off_block_name.clone())
+                .set_light_emission(0)
+                .set_display_name(format!("{} round lamp", color.as_display_string()))
+                .set_axis_aligned_boxes_appearance(orb_aabb(&orb_off_texture))
+                .set_item_sort_key(format!("circuits:round_lamp:{:03}", color.sort_key()))
+                .register_circuit_callbacks(),
+        )?;
+        let orb_on_block = builder.add_block(
+            BlockBuilder::new(orb_on_block_name.clone())
+                .set_light_emission(15)
+                .set_display_name(format!("{} round lamp (on)", color.as_display_string()))
+                .set_axis_aligned_boxes_appearance(orb_aabb(&orb_on_texture))
+                .add_item_group(HIDDEN_FROM_CREATIVE)
+                .set_dropped_item(&orb_off_block_name.0, 1)
+                .register_circuit_callbacks(),
+        )?;
+        for id in [orb_off_block.id, orb_on_block.id] {
+            builder.define_circuit_callbacks(
+                id,
+                Box::new(SimpleLampCallbacks {
+                    lamp_off: orb_off_block.id,
+                    lamp_on: orb_on_block.id,
                 }),
                 super::CircuitBlockProperties {
                     connectivity: CIRCUITS_SOURCE_CONNECTIVITIES.to_vec(),

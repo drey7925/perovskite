@@ -41,12 +41,12 @@ pub(crate) fn register_switches(
                 AxisAlignedBoxesAppearanceBuilder::new()
                     .add_box(
                         AaBoxProperties::new(
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             SWITCH_OFF_TEXTURE,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -56,7 +56,7 @@ pub(crate) fn register_switches(
                     )
                     .add_box(
                         AaBoxProperties::new_single_tex(
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -111,12 +111,12 @@ pub(crate) fn register_switches(
                 AxisAlignedBoxesAppearanceBuilder::new()
                     .add_box(
                         AaBoxProperties::new(
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             SWITCH_ON_TEXTURE,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -126,7 +126,7 @@ pub(crate) fn register_switches(
                     )
                     .add_box(
                         AaBoxProperties::new_single_tex(
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -200,12 +200,12 @@ pub(crate) fn register_switches(
                 AxisAlignedBoxesAppearanceBuilder::new()
                     .add_box(
                         AaBoxProperties::new(
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             SWITCH_OFF_TEXTURE,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -215,12 +215,12 @@ pub(crate) fn register_switches(
                     )
                     .add_box(
                         AaBoxProperties::new(
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             SWITCH_OFF_TEXTURE,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -298,12 +298,12 @@ pub(crate) fn register_switches(
                 AxisAlignedBoxesAppearanceBuilder::new()
                     .add_box(
                         AaBoxProperties::new(
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             SWITCH_ON_TEXTURE,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),
@@ -313,12 +313,12 @@ pub(crate) fn register_switches(
                     )
                     .add_box(
                         AaBoxProperties::new(
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             SWITCH_ON_TEXTURE,
-                            gates::BOTTOM_TEX,
+                            gates::GATE_BOTTOM_TEX,
                             TextureCropping::AutoCrop,
                             RotationMode::RotateHorizontally,
                         ),

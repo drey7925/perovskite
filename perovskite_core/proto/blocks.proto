@@ -106,6 +106,10 @@ message AxisAlignedBox {
   // Same, but for the bottom face
   float bottom_slope_x = 17;
   float bottom_slope_z = 18;
+
+  // If true, use a plant-like appearance spanning this bounding box with this texture, _and suppress_ the original box
+  // made of the six textures listed above
+  perovskite.protocol.render.TextureReference plant_like_tex = 19;
 }
 
 enum AxisAlignedBoxRotation {

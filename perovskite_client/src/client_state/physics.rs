@@ -136,7 +136,7 @@ pub(crate) struct PhysicsState {
 }
 
 pub(crate) struct AnimationState {
-    pub(crate) footstep_coord: Option<BlockCoordinate>,
+    pub(crate) footstep_coord: Vec<(u64, BlockCoordinate)>,
 }
 
 impl PhysicsState {
@@ -158,7 +158,7 @@ impl PhysicsState {
             can_fast: false,
             can_noclip: false,
             animation_state: AnimationState {
-                footstep_coord: None,
+                footstep_coord: vec![],
             },
         }
     }
@@ -267,7 +267,9 @@ impl PhysicsState {
                 .magnitude();
             if self.walk_sound_odometer > 1.0 || !self.landed_last_frame {
                 let footstep_coord = surrounding_coord.try_delta(0, -1, 0);
-                self.animation_state.footstep_coord = footstep_coord;
+                if let Some(coord) = footstep_coord {
+                    self.animation_state.footstep_coord.push((tick, coord));
+                }
                 if let Some(coord) = footstep_coord {
                     if let Some(block) = get_block(coord, &chunks, block_types) {
                         if block.0.footstep_sound != 0 {
@@ -538,7 +540,7 @@ impl PhysicsState {
 
     pub(crate) fn take_animation_state(&mut self) -> AnimationState {
         AnimationState {
-            footstep_coord: self.animation_state.footstep_coord.take(),
+            footstep_coord: std::mem::replace(&mut self.animation_state.footstep_coord, vec![]),
         }
     }
 }

@@ -608,7 +608,7 @@ impl MapChunkSender {
     ) -> Result<()> {
         let trace = TraceBuffer::new(false);
         trace.log("starting hpu");
-        let mut position = update.position;
+        let position = update.position;
 
         let mut load_deadline = Instant::now();
 
@@ -1691,12 +1691,14 @@ impl InboundWorker {
                     )
                     .await;
 
-                if let Some(coord) = update.footstep_coordinate {
+                // For now, just use the last coordinate
+                if let Some(footstep) = update.footstep_coordinate.last() {
+                    let coord = footstep.coord.context("Missing coord")?.into();
                     let footstep_sound_id = self
                         .context
                         .game_state
                         .game_map()
-                        .try_get_block(coord.into())
+                        .try_get_block(coord)
                         .and_then(|id| {
                             self.context
                                 .game_state
@@ -1708,6 +1710,10 @@ impl InboundWorker {
                             0 => None,
                             x => Some(x),
                         });
+                    // TODO: Wire up the stepped-on block handler here, _in addition_ to the coord
+                    // that the player is on based on their *current* position (they may not have
+                    // moved enough to add it to the footstep list, and may be standing on it
+                    // indefinitely without ever adding it)
                     if let Some(sound_id) = footstep_sound_id {
                         self.context.game_state.audio().send_event(AudioEvent {
                             initiating_context_id: self.context.id,

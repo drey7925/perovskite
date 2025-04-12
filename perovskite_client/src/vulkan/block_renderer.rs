@@ -508,52 +508,30 @@ impl BlockRenderer {
     ) -> Result<BlockRenderer> {
         let mut all_texture_names = HashSet::new();
         for def in block_defs.all_block_defs() {
+            let mut insert_if_present = |tex: &Option<TextureReference>| {
+                if let Some(tex) = tex {
+                    all_texture_names.insert(tex.texture_name.clone());
+                }
+            };
             match &def.render_info {
                 Some(RenderInfo::Cube(cube)) => {
-                    if let Some(tex) = &cube.tex_back {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
-                    if let Some(tex) = &cube.tex_front {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
-                    if let Some(tex) = &cube.tex_left {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
-                    if let Some(tex) = &cube.tex_right {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
-                    if let Some(tex) = &cube.tex_top {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
-                    if let Some(tex) = &cube.tex_bottom {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
+                    insert_if_present(&cube.tex_back);
+                    insert_if_present(&cube.tex_front);
+                    insert_if_present(&cube.tex_left);
+                    insert_if_present(&cube.tex_right);
+                    insert_if_present(&cube.tex_top);
+                    insert_if_present(&cube.tex_bottom);
                 }
-                Some(RenderInfo::PlantLike(plant_like)) => {
-                    if let Some(tex) = &plant_like.tex {
-                        all_texture_names.insert(tex.texture_name.clone());
-                    }
-                }
+                Some(RenderInfo::PlantLike(plant_like)) => insert_if_present(&plant_like.tex),
                 Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) => {
                     for aa_box in &aa_boxes.boxes {
-                        if let Some(tex) = &aa_box.tex_back {
-                            all_texture_names.insert(tex.texture_name.clone());
-                        }
-                        if let Some(tex) = &aa_box.tex_front {
-                            all_texture_names.insert(tex.texture_name.clone());
-                        }
-                        if let Some(tex) = &aa_box.tex_left {
-                            all_texture_names.insert(tex.texture_name.clone());
-                        }
-                        if let Some(tex) = &aa_box.tex_right {
-                            all_texture_names.insert(tex.texture_name.clone());
-                        }
-                        if let Some(tex) = &aa_box.tex_top {
-                            all_texture_names.insert(tex.texture_name.clone());
-                        }
-                        if let Some(tex) = &aa_box.tex_bottom {
-                            all_texture_names.insert(tex.texture_name.clone());
-                        }
+                        insert_if_present(&aa_box.tex_back);
+                        insert_if_present(&aa_box.tex_front);
+                        insert_if_present(&aa_box.tex_left);
+                        insert_if_present(&aa_box.tex_right);
+                        insert_if_present(&aa_box.tex_top);
+                        insert_if_present(&aa_box.tex_bottom);
+                        insert_if_present(&aa_box.plant_like_tex);
                     }
                 }
                 Some(RenderInfo::Empty(_)) => {}
@@ -1005,27 +983,47 @@ impl BlockRenderer {
                 AabbRotation::None => (),
                 AabbRotation::Nesw => e = e.rotate_y(id.variant() % 4),
             }
-            for i in 0..6 {
-                let (n_x, n_y, n_z) = e.normals[i];
-                let neighbor_index = (
-                    offset.x as i8 + n_x,
-                    offset.y as i8 + n_y,
-                    offset.z as i8 + n_z,
-                )
-                    .as_extended_index();
+            match aabb.textures {
+                CachedAabbTextures::Prism(textures) => {
+                    for i in 0..6 {
+                        let (n_x, n_y, n_z) = e.normals[i];
+                        let neighbor_index = (
+                            offset.x as i8 + n_x,
+                            offset.y as i8 + n_y,
+                            offset.z as i8 + n_z,
+                        )
+                            .as_extended_index();
 
-                emit_cube_face_vk(
-                    pos,
-                    aabb.textures[i].rect(id.variant()),
-                    CUBE_EXTENTS_FACE_ORDER[i],
-                    vtx,
-                    idx,
-                    e,
-                    chunk_data.lightmap()[neighbor_index],
-                    chunk_data.lightmap()[offset.as_extended_index()],
-                    0.0,
-                    CUBE_FACE_BRIGHTNESS_BIASES[i],
-                );
+                        emit_cube_face_vk(
+                            pos,
+                            textures[i].rect(id.variant()),
+                            CUBE_EXTENTS_FACE_ORDER[i],
+                            vtx,
+                            idx,
+                            e,
+                            chunk_data.lightmap()[neighbor_index],
+                            chunk_data.lightmap()[offset.as_extended_index()],
+                            0.0,
+                            CUBE_FACE_BRIGHTNESS_BIASES[i],
+                        );
+                    }
+                }
+                CachedAabbTextures::Plantlike(plantlike) => {
+                    for i in 0..4 {
+                        emit_cube_face_vk(
+                            pos,
+                            plantlike.rect(id.variant()),
+                            PLANTLIKE_FACE_ORDER[i],
+                            vtx,
+                            idx,
+                            e,
+                            chunk_data.lightmap()[offset.as_extended_index()],
+                            0x00,
+                            0.0,
+                            1.0,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1139,8 +1137,8 @@ impl BlockRenderer {
 fn build_axis_aligned_box_cache_entry(
     x: &BlockTypeDef,
     texture_coords: &FxHashMap<String, Rect>,
-    w: f32,
-    h: f32,
+    atlas_w: f32,
+    atlas_h: f32,
 ) -> Option<Box<[CachedAxisAlignedBox]>> {
     if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
         let mut result = Vec::new();
@@ -1153,14 +1151,25 @@ fn build_axis_aligned_box_cache_entry(
             // Negate to go from API coordinates to Vulkan coordinates
             extents.warp_top_inplace(-aa_box.top_slope_x, -aa_box.top_slope_z);
             extents.warp_bottom_inplace(-aa_box.bottom_slope_x, -aa_box.bottom_slope_z);
-            let textures = [
-                get_texture(texture_coords, aa_box.tex_right.as_ref(), w, h),
-                get_texture(texture_coords, aa_box.tex_left.as_ref(), w, h),
-                get_texture(texture_coords, aa_box.tex_top.as_ref(), w, h),
-                get_texture(texture_coords, aa_box.tex_bottom.as_ref(), w, h),
-                get_texture(texture_coords, aa_box.tex_back.as_ref(), w, h),
-                get_texture(texture_coords, aa_box.tex_front.as_ref(), w, h),
-            ];
+
+            // plantlike overrides box-like
+            let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
+                dbg!(CachedAabbTextures::Plantlike(get_texture(
+                    texture_coords,
+                    dbg!(Some(plantlike)),
+                    atlas_w,
+                    atlas_h,
+                )))
+            } else {
+                CachedAabbTextures::Prism([
+                    get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_left.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_top.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_bottom.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_back.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_front.as_ref(), atlas_w, atlas_h),
+                ])
+            };
             if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
                 log::warn!(
                     "Block {} box {} had bad variant mask: {:x}",
@@ -1335,9 +1344,15 @@ enum AabbRotation {
     Nesw,
 }
 
+#[derive(Clone, Debug)]
+enum CachedAabbTextures {
+    Prism([MaybeDynamicRect; 6]),
+    Plantlike(MaybeDynamicRect),
+}
+
 struct CachedAxisAlignedBox {
     extents: CubeExtents,
-    textures: [MaybeDynamicRect; 6],
+    textures: CachedAabbTextures,
     rotation: AabbRotation,
     mask: u16,
 }
@@ -1438,7 +1453,7 @@ pub(crate) fn emit_cube_face_vk(
     let normal = e.normals[face.index()];
     let normal = vec3(normal.0 as f32, -normal.1 as f32, normal.2 as f32).normalize();
     let mut vertices = match face {
-        CubeFace::ZMinus => vec![
+        CubeFace::ZMinus => [
             make_cgv(
                 coord + e.vertices[0],
                 normal,
@@ -1472,7 +1487,7 @@ pub(crate) fn emit_cube_face_vk(
                 0.0,
             ),
         ],
-        CubeFace::ZPlus => vec![
+        CubeFace::ZPlus => [
             make_cgv(
                 coord + e.vertices[5],
                 normal,
@@ -1506,7 +1521,7 @@ pub(crate) fn emit_cube_face_vk(
                 0.0,
             ),
         ],
-        CubeFace::XMinus => vec![
+        CubeFace::XMinus => [
             make_cgv(
                 coord + e.vertices[1],
                 normal,
@@ -1540,7 +1555,7 @@ pub(crate) fn emit_cube_face_vk(
                 0.0,
             ),
         ],
-        CubeFace::XPlus => vec![
+        CubeFace::XPlus => [
             make_cgv(
                 coord + e.vertices[4],
                 normal,
@@ -1574,9 +1589,9 @@ pub(crate) fn emit_cube_face_vk(
                 0.0,
             ),
         ],
-        // For Y+ and Y-, the top of the texturehe front of the cube (prior to any rotations)
+        // For Y+ and Y-, the top of the texture is front of the cube (prior to any rotations)
         // Y- is the bottom face (opposite Vulkat takes Y+ vulkan coordinates
-        CubeFace::YMinus => vec![
+        CubeFace::YMinus => [
             make_cgv(
                 coord + e.vertices[2],
                 normal,
@@ -1610,7 +1625,7 @@ pub(crate) fn emit_cube_face_vk(
                 0.0,
             ),
         ],
-        CubeFace::YPlus => vec![
+        CubeFace::YPlus => [
             make_cgv(
                 coord + e.vertices[4],
                 normal,
@@ -1644,7 +1659,7 @@ pub(crate) fn emit_cube_face_vk(
                 0.0,
             ),
         ],
-        CubeFace::PlantXMinusZMinus => vec![
+        CubeFace::PlantXMinusZMinus => [
             make_cgv(
                 coord + e.vertices[1],
                 normal,
@@ -1678,7 +1693,7 @@ pub(crate) fn emit_cube_face_vk(
                 horizontal_wave,
             ),
         ],
-        CubeFace::PlantXPlusZPlus => vec![
+        CubeFace::PlantXPlusZPlus => [
             make_cgv(
                 coord + e.vertices[4],
                 normal,
@@ -1712,7 +1727,7 @@ pub(crate) fn emit_cube_face_vk(
                 horizontal_wave,
             ),
         ],
-        CubeFace::PlantXMinusZPlus => vec![
+        CubeFace::PlantXMinusZPlus => [
             make_cgv(
                 coord + e.vertices[5],
                 normal,
@@ -1746,7 +1761,7 @@ pub(crate) fn emit_cube_face_vk(
                 horizontal_wave,
             ),
         ],
-        CubeFace::PlantXPlusZMinus => vec![
+        CubeFace::PlantXPlusZMinus => [
             make_cgv(
                 coord + e.vertices[0],
                 normal,
@@ -1785,9 +1800,8 @@ pub(crate) fn emit_cube_face_vk(
     if si > (u32::MAX - 8) {
         panic!("vertex buffer got too big");
     }
-    let mut indices = vec![si, si + 1, si + 2, si, si + 2, si + 3];
-    vert_buf.append(&mut vertices);
-    idx_buf.append(&mut indices);
+    vert_buf.extend_from_slice(&vertices);
+    idx_buf.extend_from_slice(&[si, si + 1, si + 2, si, si + 2, si + 3]);
 }
 
 #[inline]

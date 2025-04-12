@@ -25,21 +25,21 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::mesh_worker::{
+    propagate_neighbor_data, MeshBatcher, MeshWorker, NeighborPropagationScratchpad,
+    NeighborPropagator,
+};
 use crate::audio::{
     EvictedAudioHealer, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT,
     SOUND_SQUARELAW_ENABLED,
 };
 use perovskite_core::block_id::BlockId;
+use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
-
-use super::mesh_worker::{
-    propagate_neighbor_data, MeshBatcher, MeshWorker, NeighborPropagationScratchpad,
-    NeighborPropagator,
-};
 
 struct SharedState {
     protocol_version: u32,
@@ -240,7 +240,14 @@ impl OutboundContext {
                             .load(Ordering::Relaxed),
                     }),
                     hotbar_slot,
-                    footstep_coordinate: animation_state.footstep_coord.map(|x| x.into()),
+                    footstep_coordinate: animation_state
+                        .footstep_coord
+                        .into_iter()
+                        .map(|(tick, coord)| Footstep {
+                            coord: Some(coord.into()),
+                            tick,
+                        })
+                        .collect(),
                 },
             ))
             .await?;
