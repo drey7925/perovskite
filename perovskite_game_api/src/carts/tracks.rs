@@ -615,43 +615,49 @@ fn build_track_tiles() -> ([[Option<TrackTile>; 16]; 11], Vec<Template>) {
 }
 
 fn build_slope_templates(templates: &mut Vec<Template>) {
-    let mut template_tiles_8 = vec![];
-    for i in 1..=8 {
-        template_tiles_8.push(TemplateEntry {
-            tile_id: TileId::new_slope(i, 8, 0, false),
-            offset_x: 0,
-            offset_y: 0,
-            offset_z: (i - 1) as i32,
-            tracks_consumed: 1,
-        })
-    }
-    templates.push(Template {
-        category: "Slopes".to_string(),
-        sort_subkey: 8,
-        name: "8-block slope up".to_string(),
-        id: "slope_8".to_string(),
-        entries: template_tiles_8.into_boxed_slice(),
-        bifurcate: false,
-    });
+    for len in [1, 2, 4, 8] {
+        let mut template_tiles_8 = vec![];
+        for t in 0..len {
+            for i in 1..=8 {
+                template_tiles_8.push(TemplateEntry {
+                    tile_id: TileId::new_slope(i, 8, 0, false),
+                    offset_x: 0,
+                    offset_y: t,
+                    offset_z: (8 * t) + ((i - 1) as i32),
+                    tracks_consumed: 1,
+                })
+            }
+        }
+        templates.push(Template {
+            category: "Slopes".to_string(),
+            sort_subkey: 8,
+            name: format!("12.5% up {len}"),
+            id: format!("slope_8_{len}"),
+            entries: template_tiles_8.into_boxed_slice(),
+            bifurcate: false,
+        });
 
-    let mut template_tiles_8_down = vec![];
-    for i in 1..=8 {
-        template_tiles_8_down.push(TemplateEntry {
-            tile_id: TileId::new_slope(9 - i, 8, 2, false),
-            offset_x: 0,
-            offset_y: -1,
-            offset_z: i as i32,
-            tracks_consumed: 1,
+        let mut template_tiles_8_down = vec![];
+        for t in 0..len {
+            for i in 1..=8 {
+                template_tiles_8_down.push(TemplateEntry {
+                    tile_id: TileId::new_slope(9 - i, 8, 2, false),
+                    offset_x: 0,
+                    offset_y: -(t + 1),
+                    offset_z: (8 * t) + (i as i32),
+                    tracks_consumed: 1,
+                })
+            }
+        }
+        templates.push(Template {
+            category: "Slopes".to_string(),
+            sort_subkey: 9,
+            name: format!("12.5% down {len}"),
+            id: format!("8_slope_down_{len}"),
+            entries: template_tiles_8_down.into_boxed_slice(),
+            bifurcate: false,
         })
     }
-    templates.push(Template {
-        category: "Slopes".to_string(),
-        sort_subkey: 9,
-        name: "8-block slope down".to_string(),
-        id: "slope_8_down".to_string(),
-        entries: template_tiles_8_down.into_boxed_slice(),
-        bifurcate: false,
-    })
 }
 
 fn build_straight_track_template(len: u16) -> Template {

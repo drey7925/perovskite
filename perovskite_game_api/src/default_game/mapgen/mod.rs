@@ -488,6 +488,46 @@ impl MapgenInterface for DefaultMapgen {
                 }
             }
         }
+
+        if chunk_coord.y == 1 {
+            // Rails running along X axis, every half kilometer
+            if chunk_coord.z % 32 == 0 {
+                for x in 0..16 {
+                    for z in 6..10 {
+                        chunk.set_block(ChunkOffset { x, y: 3, z }, self.stone, None);
+                        if z == 7 || z == 8 {
+                            chunk.set_block(
+                                ChunkOffset { x, y: 4, z },
+                                self.rail_testonly.with_variant(1).unwrap(),
+                                None,
+                            );
+                        }
+                        chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
+                        chunk.set_block(
+                            ChunkOffset { x, y: 6, z },
+                            if x == 5 && chunk_coord.x % 4 == 0 {
+                                self.glass_testonly
+                            } else if x == 4 && chunk_coord.x % 4 == 0 && z == 8 {
+                                self.signal_testonly.with_variant(17).unwrap()
+                            } else if x == 6 && chunk_coord.x % 4 == 0 && z == 7 {
+                                self.signal_testonly.with_variant(19).unwrap()
+                            } else {
+                                self.air
+                            },
+                            None,
+                        );
+                    }
+                }
+                if chunk_coord.x % 4 == 0 {
+                    for z in [6, 9] {
+                        // Gantries
+                        chunk.set_block(ChunkOffset { x: 5, y: 4, z }, self.glass_testonly, None);
+                        chunk.set_block(ChunkOffset { x: 5, y: 5, z }, self.glass_testonly, None);
+                        chunk.set_block(ChunkOffset { x: 5, y: 6, z }, self.glass_testonly, None);
+                    }
+                }
+            }
+        }
     }
 
     fn terrain_range_hint(&self, chunk_x: i32, chunk_z: i32) -> Option<RangeInclusive<i32>> {

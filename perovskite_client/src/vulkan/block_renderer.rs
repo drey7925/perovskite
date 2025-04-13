@@ -1154,12 +1154,12 @@ fn build_axis_aligned_box_cache_entry(
 
             // plantlike overrides box-like
             let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
-                dbg!(CachedAabbTextures::Plantlike(get_texture(
+                CachedAabbTextures::Plantlike(get_texture(
                     texture_coords,
-                    dbg!(Some(plantlike)),
+                    Some(plantlike),
                     atlas_w,
                     atlas_h,
-                )))
+                ))
             } else {
                 CachedAabbTextures::Prism([
                     get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
