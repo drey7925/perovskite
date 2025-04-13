@@ -663,7 +663,7 @@ impl<'a> EntityCoroutineServices<'a> {
         &self,
         delay: Duration,
         task: impl FnOnce(&HandlerContext) + Send + 'static,
-        cancellation_token: Option<CancellationToken>,
+        cancellation_token: CancelAction,
     ) {
         let ctx = HandlerContext {
             tick: self.game_state.tick(),
@@ -673,17 +673,25 @@ impl<'a> EntityCoroutineServices<'a> {
         tokio::task::spawn(async move {
             if !delay.is_zero() {
                 let sleep_until = tokio::time::Instant::now() + delay;
-                if let Some(cancellation_token) = cancellation_token {
-                    tokio::select! {
-                        _ = tokio::time::sleep_until(sleep_until) => {}
-                        _ = cancellation_token.cancelled() => {
-                            return;
+                match cancellation_token {
+                    CancelAction::Cancel(tok) => {
+                        tokio::select! {
+                            _ = tokio::time::sleep_until(sleep_until) => {}
+                            _ = tok.cancelled() => {
+                                return;
+                            }
                         }
                     }
-                } else {
-                    tokio::time::sleep_until(sleep_until).await;
+                    CancelAction::RunImmediately(tok) => {
+                        tokio::select! {
+                            _ = tokio::time::sleep_until(sleep_until) => {}
+                            _ = tok.cancelled() => {}
+                        }
+                    }
+                    CancelAction::NoCancel => tokio::time::sleep_until(sleep_until).await,
                 }
             }
+
             tokio::task::block_in_place(|| task(&ctx));
         });
     }
@@ -736,6 +744,20 @@ impl<'a> EntityCoroutineServices<'a> {
         let fut = task(ctx);
         tokio::task::spawn(fut)
     }
+}
+
+/// For spawn_async, a mechanism to cancel the operation early
+pub enum CancelAction {
+    /// If this token is signalled, cancel without running the task.
+    /// Note that this may be racy, since there is a potential delay between
+    /// the cancellation token being signalled and the cancellation being received
+    /// in the task future
+    Cancel(CancellationToken),
+    /// If the cancllation is signalled, run the task immediately as if the time
+    /// was reached
+    RunImmediately(CancellationToken),
+    /// Just run the task at the original time, without a way
+    NoCancel,
 }
 
 /// An abstraction over a computation that needs to be deferred because it can't

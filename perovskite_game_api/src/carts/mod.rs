@@ -28,7 +28,9 @@ use perovskite_core::{
     util::{TraceBuffer, TraceLog},
 };
 use perovskite_server::game_state::client_ui::Popup;
-use perovskite_server::game_state::entities::{EntityHandlers, EntityMoveDecision, TrailingEntity};
+use perovskite_server::game_state::entities::{
+    CancelAction, EntityHandlers, EntityMoveDecision, TrailingEntity,
+};
 use perovskite_server::game_state::event::EventInitiator;
 use perovskite_server::game_state::items::{Item, ItemInteractionResult};
 use perovskite_server::game_state::player::Player;
@@ -482,7 +484,7 @@ fn actually_spawn_cart(
             spawned_task_count: AsyncRefcount::new(),
         })),
         EntityTypeId {
-            class: dbg!(config.cart_id),
+            class: config.cart_id,
             data: None,
         },
         Some(trailing_entities.into_boxed_slice()),
@@ -723,7 +725,7 @@ mod util {
             }
         }
 
-        pub(super) fn wait(&mut self) -> impl Future<Output = ()> {
+        pub(super) fn wait_async(&mut self) -> impl Future<Output = ()> {
             self.waiting = true;
             let inner_clone = self.inner.clone();
             async move {
@@ -854,15 +856,22 @@ impl EntityCoroutine for CartCoroutine {
             work_items.push(PendingAction::SignalRelease(signal.0, signal.1));
         }
         let config_clone = self.config.clone();
-        let wait_for_tasks = self.spawned_task_count.wait();
+        let wait_for_tasks = self.spawned_task_count.wait_async();
         self.cancellation.cancel();
         let cart_id = self.id;
         services.spawn_async::<(), _>(move |ctx| async move {
             wait_for_tasks.await;
-
             for work in work_items.into_iter() {
-                if let Err(e) = Self::handle_pending_action(&ctx, &config_clone, work) {
-                    tracing::error!("Failed to handle pending action in pre_delete: {e:?}")
+                match work {
+                    PendingAction::SignalRelease(_, _) | PendingAction::SwitchRelease(_, _) => {
+                        if let Err(e) = Self::handle_pending_action(&ctx, &config_clone, work) {
+                            tracing::error!("Failed to handle pending action in pre_delete: {e:?}")
+                        }
+                    }
+                    PendingAction::SignalEnterBlock(_, _)
+                    | PendingAction::StartingSignalEnterBlockReverse(_, _) => {
+                        tracing::info!("Skipping pending acquisition in cleanup: {:?}", work);
+                    }
                 }
             }
             tracing::info!("All held signals of cart {} cleaned up", cart_id);
@@ -1954,18 +1963,30 @@ impl CartCoroutine {
                 let odometer_time = segment.event_time(action.odometer);
                 let action_time = (returned_moves_time + when as f64 + odometer_time).max(0.0);
                 let config_clone = self.config.clone();
-                let cancel_clone = self.cancellation.clone();
                 let ref_clone = self
                     .spawned_task_count
                     .acquire()
                     .expect("self.spawned_task_count.acquire should succeed unless scheduling was invoked after pre_remove");
+
+                let cancellation = match action.action {
+                    // Switch release/cleanup actions happen immediately on entity deletion
+                    PendingAction::SignalRelease(_, _) | PendingAction::SwitchRelease(_, _) => {
+                        CancelAction::RunImmediately(self.cancellation.clone())
+                    }
+                    // Switch acquisition gets cancelled on entity deletion
+                    PendingAction::SignalEnterBlock(_, _)
+                    | PendingAction::StartingSignalEnterBlockReverse(_, _) => {
+                        CancelAction::Cancel(self.cancellation.clone())
+                    }
+                };
+
                 services.spawn_delayed(
                     Duration::from_secs_f64(action_time),
                     move |ctx| {
                         Self::handle_pending_action(ctx, &config_clone, action.action).unwrap();
                         drop(ref_clone);
                     },
-                    Some(cancel_clone),
+                    cancellation,
                 )
             }
 
