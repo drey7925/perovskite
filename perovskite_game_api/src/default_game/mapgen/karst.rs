@@ -87,7 +87,7 @@ impl KarstGenerator {
     }
 
     #[inline]
-    pub(crate) fn height(&self, xg: i32, zg: i32) -> (f64, f64, f64) {
+    pub(crate) fn height(&self, xg: i32, zg: i32) -> (f32, f32, f32) {
         let profile = self.karst_profile_noise.get([
             xg as f64 * PROFILE_INPUT_SCALE,
             zg as f64 * PROFILE_INPUT_SCALE,
@@ -134,22 +134,24 @@ impl KarstGenerator {
             cave_ceiling = valley - 100.0;
         }
 
-        (height, valley, cave_ceiling)
+        (height as f32, valley as f32, cave_ceiling as f32)
     }
 
-    pub(crate) fn profile(&self, xg: i32, zg: i32) -> f64 {
+    pub(crate) fn profile(&self, xg: i32, zg: i32) -> f32 {
         self.karst_profile_noise.get([
             xg as f64 * PROFILE_INPUT_SCALE,
             zg as f64 * PROFILE_INPUT_SCALE,
-        ]) * 30.0
+        ]) as f32
+            * 30.0
             + 60.0
     }
 
-    pub(crate) fn floor(&self, xg: i32, zg: i32) -> f64 {
+    pub(crate) fn floor(&self, xg: i32, zg: i32) -> f32 {
         self.karst_valley_noise.get([
             xg as f64 * VALLEY_INPUT_SCALE,
             zg as f64 * VALLEY_INPUT_SCALE,
-        ]) * 20.0
+        ]) as f32
+            * 20.0
     }
 
     pub(crate) fn generate(
@@ -157,9 +159,10 @@ impl KarstGenerator {
         chunk_coord: ChunkCoordinate,
         x: u8,
         z: u8,
-        height_map: &[[f64; 16]; 16],
-        cave_floors: &[[f64; 16]; 16],
-        cave_ceiling: &[[f64; 16]; 16],
+        height_map: &[[f32; 16]; 16],
+        cave_floors: &[[f32; 16]; 16],
+        cave_ceiling: &[[f32; 16]; 16],
+        water_heights: &[[f32; 16]; 16],
         chunk: &mut MapChunk,
         gen_ore: impl Fn(BlockCoordinate) -> BlockId,
     ) {
@@ -169,6 +172,7 @@ impl KarstGenerator {
         let blended_elevation = height_map[x as usize][z as usize];
         let cave_floor = cave_floors[x as usize][z as usize];
         let cave_ceiling = cave_ceiling[x as usize][z as usize];
+        let water_height = water_heights[x as usize][z as usize];
 
         for y in 0..16 {
             let offset = ChunkOffset { x, y, z };
@@ -177,9 +181,9 @@ impl KarstGenerator {
             let vert_offset = block_coord.y - (blended_elevation as i32);
 
             let block = if vert_offset > 0
-                || ((block_coord.y as f64) > cave_floor && (block_coord.y as f64) < cave_ceiling)
+                || ((block_coord.y as f32) > cave_floor && (block_coord.y as f32) < cave_ceiling)
             {
-                if block_coord.y > 0 {
+                if block_coord.y as f32 > water_height {
                     self.air
                 } else {
                     self.water

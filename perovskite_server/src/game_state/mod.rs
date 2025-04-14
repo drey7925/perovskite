@@ -192,7 +192,7 @@ impl GameState {
         self.startup_time.elapsed()
     }
 
-    pub(crate) fn mapgen(&self) -> &dyn MapgenInterface {
+    pub fn mapgen(&self) -> &dyn MapgenInterface {
         self.mapgen.as_ref()
     }
 

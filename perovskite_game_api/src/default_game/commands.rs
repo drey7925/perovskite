@@ -1,8 +1,10 @@
+use std::ops::Deref;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use cgmath::Vector3;
+use noise::NoiseFn;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
@@ -15,6 +17,7 @@ use perovskite_server::game_state::{
     event::{EventInitiator, HandlerContext},
     items::ItemStack,
 };
+use rand::Rng;
 
 use crate::game_builder::GameBuilder;
 
@@ -73,6 +76,11 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
         "detach_from_entity",
         Box::new(DetachEntityCommand),
         ": Detaches yourself from the entity you're attached to.",
+    )?;
+    game_builder.add_command(
+        "mgd",
+        Box::new(MapgenDebugCommand),
+        ": Logs mapgen details at the current location to server log",
     )?;
     Ok(())
 }
@@ -538,5 +546,32 @@ impl ChatCommandHandler for DetachEntityCommand {
         context
             .initiator()
             .check_permission_if_player(permissions::WORLD_STATE)
+    }
+}
+
+struct MapgenDebugCommand;
+
+#[async_trait]
+impl ChatCommandHandler for MapgenDebugCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let pos = if let EventInitiator::Player(p) = context.initiator() {
+            p.player.last_position().position
+        } else {
+            bail!("Only players can attach entities");
+        };
+
+        let noise = noise::SuperSimplex::new(12345);
+        let mut v = vec![];
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let x = rng.gen_range(-999999.0..999999.0);
+            let y = rng.gen_range(-999999.9..999999.0);
+            v.push(noise.get([x, y]));
+        }
+        v.sort_by(|x, y| x.total_cmp(y));
+        tracing::info!("100 samples of supersimplex: {v:?}");
+
+        context.mapgen().dump_debug(BlockCoordinate::try_from(pos)?);
+        Ok(())
     }
 }
