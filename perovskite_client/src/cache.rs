@@ -69,6 +69,7 @@ impl CacheManager {
     pub(crate) async fn load_media_by_name(&mut self, media_name: &str) -> Result<Vec<u8>> {
         if let Some(hash) = self.file_hashes.get(media_name).copied() {
             // For media by name, the ID hash is the same as the content hash
+            // blocking on current thread since neither &self nor &hash can satisfy 'static
             let data = tokio::task::block_in_place(|| self.try_get_cached(&hash, Some(&hash)))?;
             if let Some(data) = data {
                 Ok(data)
@@ -88,7 +89,7 @@ impl CacheManager {
                     );
                 }
 
-                tokio::task::block_in_place(|| self.insert_into_cache(&hash, &loaded_data))?;
+                self.insert_into_cache(&hash, &loaded_data).await?;
 
                 Ok(loaded_data)
             }
@@ -101,13 +102,13 @@ impl CacheManager {
         }
     }
 
-    fn insert_into_cache(&mut self, hash: &[u8; 32], data: &[u8]) -> Result<()> {
+    async fn insert_into_cache(&mut self, hash: &[u8; 32], data: &[u8]) -> Result<()> {
         if let Some(cache_dir) = &self.cache_dir {
             let path = get_cache_path(hash, cache_dir);
             if !path.parent().unwrap().exists() {
                 std::fs::create_dir_all(path.parent().unwrap())?;
             }
-            std::fs::write(&path, data)?;
+            tokio::fs::write(&path, data).await?;
         }
         Ok(())
     }
@@ -129,7 +130,7 @@ impl CacheManager {
         }
     }
 
-    pub(crate) fn insert_block_appearance(
+    pub(crate) async fn insert_block_appearance(
         &mut self,
         block_type: &BlockTypeDef,
         data: Vec<u8>,
@@ -139,7 +140,7 @@ impl CacheManager {
             .as_ref()
             .and_then(|x| self.hash_render_info(x));
         if let Some(hash) = hash {
-            self.insert_into_cache(&hash, &data)?;
+            self.insert_into_cache(&hash, &data).await?;
         }
         Ok(())
     }

@@ -199,36 +199,38 @@ impl GameEntity {
 }
 
 impl GameEntity {
-    pub(crate) fn visit_trailing_entities<T>(
+    /// Visits the trailing entities (also the main entity)
+    pub(crate) fn visit_sub_entities_including_trailing<T>(
         &self,
         tick: u64,
         builder: impl Fn(Vector3<f64>, Rad<f32>, Rad<f32>) -> T,
-    ) -> Vec<(T, u32)> {
+        mut callback: impl FnMut(usize, T, u32),
+    ) {
         // This would be really nice as a generator expression...
-        let mut result = vec![];
-        result.push((self.as_transform(tick, &builder), self.class));
+        callback(0, self.as_transform(tick, &builder), self.class);
 
         // fast path
         if self.trailing_entities.is_empty() {
-            return result;
+            return;
         }
         let cm_distance = match self.move_queue.front() {
             Some(current_move) => {
                 let cme = current_move.elapsed(tick);
                 let cm_distance = current_move.partial_odometer_distance(cme) as f32;
                 // First add the trailing entities that are in the same move
-                for &(class, bb_distance) in self.trailing_entities.iter() {
+                for (i, &(class, bb_distance)) in self.trailing_entities.iter().enumerate() {
                     if bb_distance < cm_distance {
                         let move_progress_distance = (cm_distance - bb_distance) as f64;
                         let position = current_move.position_along_length(move_progress_distance);
-                        result.push((
+                        callback(
+                            i + 1,
                             (&builder)(
                                 position,
                                 Rad(current_move.face_direction),
                                 Rad(current_move.pitch),
                             ),
                             class,
-                        ));
+                        );
                     } else {
                         break;
                     }
@@ -252,19 +254,18 @@ impl GameEntity {
             // We now generate moves between acc_end and acc_distance
             let acc_end = acc_distance;
             acc_distance += move_len;
-            for &(class, bb_distance) in self.trailing_entities.iter() {
+            for (i, &(class, bb_distance)) in self.trailing_entities.iter().enumerate() {
                 if bb_distance >= acc_end && bb_distance < acc_distance {
                     let move_progress_distance = (acc_distance - bb_distance) as f64;
                     let position = m.position_along_length(move_progress_distance);
-                    result.push((
+                    callback(
+                        i + 1,
                         builder(position, Rad(m.face_direction), Rad(m.pitch)),
                         class,
-                    ))
+                    )
                 }
             }
         }
-
-        result
     }
 
     pub(crate) fn advance_state(
@@ -439,10 +440,18 @@ impl GameEntity {
             let (position, face_dir, pitch) = self.position(time_tick);
             Some(entity_manager.transform_position(self.class, position, face_dir, pitch))
         } else {
-            let (trailing_pos, class) = self
-                .visit_trailing_entities(time_tick, |pos, face, pitch| (pos, face, pitch))
-                .get(trailing_entity_index as usize)
-                .copied()?;
+            let mut te_pos = None;
+            let visitor = |idx, pos, class| {
+                if idx == trailing_entity_index as usize {
+                    te_pos = Some((pos, class));
+                }
+            };
+            self.visit_sub_entities_including_trailing(
+                time_tick,
+                |pos, face, pitch| (pos, face, pitch),
+                visitor,
+            );
+            let (trailing_pos, class) = te_pos?;
             Some(entity_manager.transform_position(
                 class,
                 trailing_pos.0,
@@ -685,11 +694,13 @@ impl EntityState {
         entity_renderer: &EntityRenderer,
         entity: &GameEntity,
     ) -> impl Iterator<Item = (Matrix4<f32>, u32)> {
-        entity
-            .visit_trailing_entities(time_tick, |pos, face, pitch| {
-                build_transform(player_position, pos, face, pitch)
-            })
-            .into_iter()
+        let mut results = Vec::with_capacity(entity.trailing_entities.len() + 1);
+        entity.visit_sub_entities_including_trailing(
+            time_tick,
+            |pos, face, pitch| build_transform(player_position, pos, face, pitch),
+            |i, pos, class| results.push((pos, class)),
+        );
+        results.into_iter()
     }
 
     pub(crate) fn raycast(
@@ -708,42 +719,41 @@ impl EntityState {
         let mut hit = None;
         let mut best_dist = max_distance;
         for (&id, entity) in &self.entities {
-            for (trailing_index, (inverse_matrix, class)) in entity
-                .visit_trailing_entities(time_tick, |pos, face, pitch| {
-                    build_inverse_transform(player_position, pos, face, pitch)
-                })
-                .into_iter()
-                .enumerate()
-            {
-                let (min, max) = match entity_renderer.mesh_aabb(class) {
-                    None => {
-                        continue;
-                    }
-                    Some((min, max)) => (min, max),
-                };
-                // these transforms incorporate the translation of the entity from model space to
-                // player-centered world space (i.e. translated to be around the player, but without
-                // the player's rotation)
-                //
-                // By inverting it, we have a transform that takes us from player-centered world
-                // space to model space. We want to raycast the [zero -> pointing_vector] ray
-                // segment against the bounding box of the entity which we know in model space.
-                let raycast_start = inverse_matrix * Vector4::new(0.0, 0.0, 0.0, 1.0);
-                let raycast_end = inverse_matrix * pointing_vector;
+            entity.visit_sub_entities_including_trailing(
+                time_tick,
+                |pos, face, pitch| build_inverse_transform(player_position, pos, face, pitch),
+                |trailing_index, inverse_matrix, class| {
+                    let (min, max) = match entity_renderer.mesh_aabb(class) {
+                        None => {
+                            // return from callback
+                            return;
+                        }
+                        Some((min, max)) => (min, max),
+                    };
+                    // these transforms incorporate the translation of the entity from model space to
+                    // player-centered world space (i.e. translated to be around the player, but without
+                    // the player's rotation)
+                    //
+                    // By inverting it, we have a transform that takes us from player-centered world
+                    // space to model space. We want to raycast the [zero -> pointing_vector] ray
+                    // segment against the bounding box of the entity which we know in model space.
+                    let raycast_start = inverse_matrix * Vector4::new(0.0, 0.0, 0.0, 1.0);
+                    let raycast_end = inverse_matrix * pointing_vector;
 
-                let raycast_start = raycast_start.truncate();
-                let raycast_end = raycast_end.truncate();
-                let delta = raycast_end - raycast_start;
-                let delta_inv = Vector3::new(1.0 / delta.x, -1.0 / delta.y, 1.0 / delta.z);
+                    let raycast_start = raycast_start.truncate();
+                    let raycast_end = raycast_end.truncate();
+                    let delta = raycast_end - raycast_start;
+                    let delta_inv = Vector3::new(1.0 / delta.x, -1.0 / delta.y, 1.0 / delta.z);
 
-                let t = check_intersection_core(raycast_start, delta_inv, min, max);
-                if let Some(t) = t {
-                    if t < best_dist {
-                        hit = Some((id, trailing_index as u32, class, t));
-                        best_dist = t;
+                    let t = check_intersection_core(raycast_start, delta_inv, min, max);
+                    if let Some(t) = t {
+                        if t < best_dist {
+                            hit = Some((id, trailing_index as u32, class, t));
+                            best_dist = t;
+                        }
                     }
-                }
-            }
+                },
+            );
         }
         hit
     }

@@ -96,6 +96,7 @@ async fn build_texture_atlas(
 
     let cache_insertions = Arc::new(Mutex::new(Vec::new()));
 
+    // We must block in place; the task cannot be made 'static easily.
     tokio::task::block_in_place(|| {
         std::thread::scope(|s| {
             const NUM_MINI_RENDER_THREADS: usize = 4;
@@ -161,7 +162,7 @@ async fn build_texture_atlas(
     })?;
 
     for (key, value) in cache_insertions.lock().drain(..) {
-        cache_manager.insert_block_appearance(key, value)?;
+        cache_manager.insert_block_appearance(key, value).await?;
     }
 
     let config = texture_packer::TexturePackerConfig {

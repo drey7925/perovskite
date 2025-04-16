@@ -1574,12 +1574,16 @@ impl ServerGameMap {
                 // All good. The chunk is loaded.
                 if read_guard.chunks.contains_key(&coord) {
                     log_trace("get_chunk chunk loaded");
-                    return Ok(MapChunkOuterGuard {
+                    let chunk_guard = MapChunkOuterGuard {
                         read_guard,
                         coord,
                         writeback_permit: Some(writeback_permit),
                         force_writeback: false,
-                    });
+                    };
+                    // We're under a lock preventing the cleanup thread from running, and getting
+                    // this wrong doesn't affect correctness (only performance)
+                    chunk_guard.last_accessed.update_now_relaxed();
+                    return Ok(chunk_guard);
                 }
 
                 load_chunk_tries += 1;

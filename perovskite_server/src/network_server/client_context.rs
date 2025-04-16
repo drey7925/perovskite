@@ -124,23 +124,21 @@ impl PlayerCoroutinePack {
         tracing::info!("Starting workers for {}...", username);
 
         let context_clone = self.context.clone();
-        let kick_closure = move |reason: &str| {
-            tokio::task::block_in_place(|| {
-                let result = context_clone.player_context.kick_player_blocking(reason);
-                context_clone.cancellation.cancel();
-                match result {
-                    Ok(()) => {}
-                    Err(e) => {
-                        tracing::warn!("Error kicking player: {:?}", e);
-                    }
+        let kick_closure = move |reason: &'static str| async move {
+            let result = context_clone.player_context.kick_player(reason).await;
+            context_clone.cancellation.cancel();
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    tracing::warn!("Error kicking player: {:?}", e);
                 }
-            })
+            }
         };
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("inbound_worker_{}", username), async move {
             if let Err(e) = self.inbound_worker.inbound_worker_loop().await {
                 tracing::error!("Error running inbound loop: {:?}", e);
-                kick("Inbound loop crashed");
+                kick("Inbound loop crashed").await;
             }
         })?;
 
@@ -149,7 +147,7 @@ impl PlayerCoroutinePack {
             crate::spawn_async(&format!("chunk_sender_{i}_{username}"), async move {
                 if let Err(e) = sender.chunk_sender_loop().await {
                     tracing::error!("Error running chunk sender: {:?}", e);
-                    kick("Chunk sender loop crashed");
+                    kick("Chunk sender loop crashed").await;
                 }
             })?;
         }
@@ -158,7 +156,7 @@ impl PlayerCoroutinePack {
         crate::spawn_async(&format!("block_event_sender_{}", username), async move {
             if let Err(e) = self.block_event_sender.block_sender_loop().await {
                 tracing::error!("Error running block event sender loop: {:?}", e);
-                kick("Chunk sender loop crashed");
+                kick("Chunk sender loop crashed").await;
             }
         })?;
 
@@ -166,7 +164,7 @@ impl PlayerCoroutinePack {
         crate::spawn_async(&format!("inv_event_sender_{}", username), async move {
             if let Err(e) = self.inventory_event_sender.inv_sender_loop().await {
                 tracing::error!("Error running inventory event sender loop: {:?}", e);
-                kick("inventory event loop crashed");
+                kick("inventory event loop crashed").await;
             }
         })?;
 
@@ -175,7 +173,7 @@ impl PlayerCoroutinePack {
             if let Err(e) = self.misc_outbound_worker.misc_outbound_worker_loop().await {
                 tracing::error!("Error running misc outbound worker loop: {:?}", e);
                 // cancellations are handled in the misc outbound worker
-                kick("Misc outbound worker crashed");
+                kick("Misc outbound worker crashed").await;
             }
         })?;
 
@@ -183,7 +181,7 @@ impl PlayerCoroutinePack {
         crate::spawn_async(&format!("entity_sender_{}", username), async move {
             if let Err(e) = self.entity_sender.entity_sender_loop().await {
                 tracing::error!("Error running entity sender worker loop: {:?}", e);
-                kick("Entity sender crashed");
+                kick("Entity sender crashed").await;
             }
         })?;
 
@@ -191,7 +189,7 @@ impl PlayerCoroutinePack {
         crate::spawn_async(&format!("audio_sender_{}", username), async move {
             if let Err(e) = self.audio_sender.audio_sender_loop().await {
                 tracing::error!("Error running audio sender worker loop: {:?}", e);
-                kick("Audio sender crashed");
+                kick("Audio sender crashed").await;
             }
         })?;
 

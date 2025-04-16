@@ -348,6 +348,10 @@ async fn interrupt_poll_loop(
 
         if lock.ast.is_none() {
             // We can't use get_or_insert_with because we need to bail on error
+            // block_in_place vs spawn_blocking uncertain; we'd need to clone the program and build
+            // a separate engine to ensure 'static bounds
+            //
+            // Still unclear whether this runs long enough to need block_in_place
             let compiled = match tokio::task::block_in_place(|| engine.compile(&lock.program)) {
                 Ok(x) => x,
                 Err(e) => return break_microcontroller(&ctx, coord, ids, e.to_string()),
@@ -370,6 +374,7 @@ async fn interrupt_poll_loop(
             scope.push("bus_message", rhai::Map::new());
         }
 
+        // need block_in_place; we may sleep
         let eval_result = tokio::task::block_in_place(|| {
             engine.eval_ast_with_scope::<()>(&mut scope, lock.ast.as_ref().unwrap())
         });
