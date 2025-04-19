@@ -1834,7 +1834,9 @@ impl InboundWorker {
                                     )?;
                                     *stack = new_stack;
                                 } else {
-                                    todo!("Run the entity's on-place handler instead")
+                                    tracing::error!(
+                                        "TODO: Run the entity's on-place handler instead"
+                                    )
                                 }
                             }
                         }

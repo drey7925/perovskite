@@ -1171,11 +1171,10 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.8"
+version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33c2bf77f2df06183c3aa30d1e96c0695a313d4f9c453cc3762a6db39f99200"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
- "cfg-if",
  "crossbeam-utils",
 ]
 
@@ -1205,22 +1204,18 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-queue"
-version = "0.3.8"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1cfb3ea8a53f37c40dea2c7bedcbd88bdfae54f5e2175d6ecaff1c988353add"
+checksum = "0f58bbc28f91df819d0aa2a2c00cd19754769c2fad90579b3592b1c9ba7a3115"
 dependencies = [
- "cfg-if",
  "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.16"
+version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a22b2d63d4d1dc0b7f1b6b2747dd0088008a9be28b6ddf0b1e7d335e3037294"
-dependencies = [
- "cfg-if",
-]
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crunchy"
@@ -1618,7 +1613,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "279d3efcc55e19917fff7ab3ddd6c14afb6a90881a0078465196fe2f99d08c56"
 dependencies = [
  "bit_field",
- "flume 0.10.14",
+ "flume",
  "half",
  "lebe",
  "miniz_oxide",
@@ -1693,18 +1688,6 @@ dependencies = [
  "futures-sink",
  "nanorand",
  "pin-project",
- "spin",
-]
-
-[[package]]
-name = "flume"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ac459de2512911e4b674ce33cf20befaba382d05b62b008afc1c8b57cbf181"
-dependencies = [
- "futures-core",
- "futures-sink",
- "nanorand",
  "spin",
 ]
 
@@ -3374,12 +3357,13 @@ dependencies = [
  "clap 4.4.7",
  "cpal",
  "criterion",
+ "crossbeam-channel",
+ "crossbeam-queue",
  "directories",
  "egui",
  "egui_plot",
  "egui_winit_vulkano",
  "env_logger",
- "flume 0.11.0",
  "fps_counter",
  "futures",
  "hex",

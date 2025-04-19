@@ -1,10 +1,6 @@
-use anyhow::{anyhow, bail, Context, Result};
-use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
-use perovskite_core::protocol::audio::SoundSource;
-use rustc_hash::FxHashMap;
-use std::{collections::VecDeque, time::Instant};
-
-use crate::audio::{EngineHandle, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT};
+use crate::audio::{
+    EngineHandle, EntityData, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT,
+};
 use crate::client_state::tool_controller::check_intersection_core;
 use crate::client_state::ClientState;
 use crate::vulkan::{
@@ -12,9 +8,15 @@ use crate::vulkan::{
     entity_renderer::EntityRenderer,
     shaders::entity_geometry::EntityGeometryDrawCall,
 };
+use anyhow::{anyhow, bail, Context, Result};
+use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
+use perovskite_core::protocol::audio::SoundSource;
 use perovskite_core::protocol::entities as entities_proto;
 use perovskite_core::protocol::entities::TurbulenceAudioModel;
 use perovskite_core::protocol::game_rpc::EntityTarget;
+use rustc_hash::FxHashMap;
+use std::ops::ControlFlow;
+use std::{collections::VecDeque, time::Instant};
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct EntityMove {
@@ -22,8 +24,8 @@ pub(crate) struct EntityMove {
     velocity: Vector3<f32>,
     acceleration: Vector3<f32>,
     total_time_seconds: f32,
-    face_direction: f32,
-    pitch: f32,
+    face_direction: Rad<f32>,
+    pitch: Rad<f32>,
     start_tick: u64,
     seq: u64,
 }
@@ -35,8 +37,12 @@ pub(crate) enum ElapsedOrOverflow {
 
 impl EntityMove {
     pub(crate) fn elapsed(&self, tick: u64) -> f32 {
-        ((tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0)
+        self.elapsed_unclamped(tick)
             .clamp(0.0, self.total_time_seconds)
+    }
+
+    pub(crate) fn elapsed_unclamped(&self, tick: u64) -> f32 {
+        (tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0
     }
 
     pub(crate) fn elapsed_or_overflow(&self, tick: u64) -> ElapsedOrOverflow {
@@ -116,10 +122,23 @@ impl EntityMove {
             velocity: Vector3::new(0.0, 0.0, 0.0),
             acceleration: Vector3::new(0.0, 0.0, 0.0),
             total_time_seconds: f32::MAX,
-            face_direction: 0.0,
-            pitch: 0.0,
+            face_direction: Rad(0.0),
+            pitch: Rad(0.0),
             start_tick: 0,
             seq: 0,
+        }
+    }
+
+    pub(crate) const fn hold_at_pos(
+        start_pos: Vector3<f64>,
+        face_direction: Rad<f32>,
+        pitch: Rad<f32>,
+    ) -> Self {
+        EntityMove {
+            start_pos,
+            face_direction,
+            pitch,
+            ..Self::zero()
         }
     }
 }
@@ -147,21 +166,22 @@ impl TryFrom<&entities_proto::EntityMove> for EntityMove {
                 .context("Missing acceleration")?
                 .try_into()?,
             total_time_seconds: value.time_ticks as f32 / 1_000_000_000.0,
-            face_direction: value.face_direction,
-            pitch: value.pitch,
+            face_direction: Rad(value.face_direction),
+            pitch: Rad(value.pitch),
             seq: value.sequence,
             start_tick: value.start_tick,
         })
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct GameEntity {
     // todo refine
     // 33 should be enough, server has a queue depth of up to 32
     move_queue: VecDeque<EntityMove>,
     fallback_position: Vector3<f64>,
-    last_face_dir: f32,
-    last_pitch: f32,
+    last_face_dir: Rad<f32>,
+    last_pitch: Rad<f32>,
 
     back_buffer: VecDeque<EntityMove>,
 
@@ -196,18 +216,34 @@ impl GameEntity {
                 .as_str()
             + format!("idx: {:?}", idx).as_str()
     }
-}
 
-impl GameEntity {
-    /// Visits the trailing entities (also the main entity)
-    pub(crate) fn visit_sub_entities_including_trailing<T>(
+    pub(crate) fn current_move(&self) -> Option<EntityMove> {
+        self.move_queue.front().copied()
+    }
+
+    pub(crate) fn max_trailing_length(&self) -> f32 {
+        self.trailing_entities
+            .iter()
+            .map(|x| x.1)
+            .max_by(f32::total_cmp)
+            .unwrap_or(0.0)
+    }
+
+    /// Visits the trailing entities (also the main entity). This function will not allocate unless
+    /// the callback allocates.
+    #[inline]
+    pub(crate) fn visit_sub_entities_including_trailing(
         &self,
         tick: u64,
-        builder: impl Fn(Vector3<f64>, Rad<f32>, Rad<f32>) -> T,
-        mut callback: impl FnMut(usize, T, u32),
+        // (index, position, face_dir, pitch, odometer distance in move, class)
+        mut callback: impl FnMut(usize, Vector3<f64>, f64, EntityMove, u32) -> ControlFlow<(), ()>,
     ) {
+        let (pos, _, move_odometer, move_desc) = self.position_velocity(tick);
+
         // This would be really nice as a generator expression...
-        callback(0, self.as_transform(tick, &builder), self.class);
+        if let ControlFlow::Break(_) = callback(0, pos, move_odometer, move_desc, self.class) {
+            return;
+        }
 
         // fast path
         if self.trailing_entities.is_empty() {
@@ -216,26 +252,27 @@ impl GameEntity {
         let cm_distance = match self.move_queue.front() {
             Some(current_move) => {
                 let cme = current_move.elapsed(tick);
-                let cm_distance = current_move.partial_odometer_distance(cme) as f32;
+                let current_move_distance = current_move.partial_odometer_distance(cme) as f32;
                 // First add the trailing entities that are in the same move
-                for (i, &(class, bb_distance)) in self.trailing_entities.iter().enumerate() {
-                    if bb_distance < cm_distance {
-                        let move_progress_distance = (cm_distance - bb_distance) as f64;
+                for (i, &(class, trail_distance)) in self.trailing_entities.iter().enumerate() {
+                    if trail_distance < current_move_distance {
+                        let move_progress_distance =
+                            (current_move_distance - trail_distance) as f64;
                         let position = current_move.position_along_length(move_progress_distance);
-                        callback(
+                        if let ControlFlow::Break(_) = callback(
                             i + 1,
-                            (&builder)(
-                                position,
-                                Rad(current_move.face_direction),
-                                Rad(current_move.pitch),
-                            ),
+                            position,
+                            move_progress_distance,
+                            *current_move,
                             class,
-                        );
+                        ) {
+                            return;
+                        }
                     } else {
-                        break;
+                        break; // and move onto the back buffer
                     }
                 }
-                cm_distance
+                current_move_distance
             }
             // fast path - if we don't have a current move, we don't have a backbuffer
             // This is ensured by the implementation of pop_until: it will never pop move 0, so
@@ -245,8 +282,8 @@ impl GameEntity {
             None => 0.0,
         };
 
-        // acc_distance represents the distance from the start of the current iterated move, to
-        // the current entity position
+        // acc_distance represents accumulated distance from the start of the current iterated move,
+        // to the current entity position
         let mut acc_distance = cm_distance;
         // Now do the same for the backbuffer, back to front
         for m in self.back_buffer.iter().rev() {
@@ -258,11 +295,11 @@ impl GameEntity {
                 if bb_distance >= acc_end && bb_distance < acc_distance {
                     let move_progress_distance = (acc_distance - bb_distance) as f64;
                     let position = m.position_along_length(move_progress_distance);
-                    callback(
-                        i + 1,
-                        builder(position, Rad(m.face_direction), Rad(m.pitch)),
-                        class,
-                    )
+                    if let ControlFlow::Break(_) =
+                        callback(i + 1, position, move_progress_distance, *m, class)
+                    {
+                        return;
+                    }
                 }
             }
         }
@@ -272,9 +309,7 @@ impl GameEntity {
         &mut self,
         tick_now: u64,
         audio_handle: &EngineHandle,
-        volume: f32,
         player_position: Vector3<f64>,
-        is_attached: bool,
     ) {
         let any_popped = self.pop_until(tick_now);
         if any_popped {
@@ -285,18 +320,12 @@ impl GameEntity {
             );
             let front = self.move_queue.front();
             if let Some(front) = front {
-                let mut flags = SOUND_PRESENT;
-                if !is_attached {
-                    flags |= SOUND_ENTITY_SPATIAL;
-                }
+                let mut flags = SOUND_PRESENT | SOUND_ENTITY_SPATIAL;
 
                 if let Some(audio) = &self.turbulence_audio_model {
                     let control = crate::audio::ProceduralEntitySoundControlBlock {
                         flags,
                         entity_id: self.id,
-                        leading: *front,
-                        second: self.move_queue.get(1).copied(),
-                        entity_len: self.trailing_entities.last().map(|x| x.1).unwrap_or(0.0),
                         turbulence: crate::audio::TurbulenceSourceControlBlock {
                             volume: audio.volume,
                             volume_attached: audio.volume_attached,
@@ -307,7 +336,10 @@ impl GameEntity {
                     self.audio_token = audio_handle.update_entity_state(
                         tick_now,
                         player_position,
-                        control,
+                        crate::audio::EntityData {
+                            control,
+                            entity: Some(self.clone()),
+                        },
                         self.audio_token,
                     );
                 }
@@ -388,21 +420,16 @@ impl GameEntity {
             .move_queue
             .back()
             .map(|m| (m.face_direction, m.pitch))
-            .unwrap_or((0.0, 0.0));
+            .unwrap_or((Rad(0.0), Rad(0.0)));
         Ok(())
     }
 
-    pub(crate) fn as_transform<T>(
+    /// Gets the current position of the entity. Does not heap-allocate.
+    pub(crate) fn position_velocity(
         &self,
         time_tick: u64,
-        builder: impl FnOnce(Vector3<f64>, Rad<f32>, Rad<f32>) -> T,
-    ) -> T {
-        let (pos, face_dir, pitch) = self.position(time_tick);
-        builder(pos, face_dir, pitch)
-    }
-
-    pub(crate) fn position(&self, time_tick: u64) -> (Vector3<f64>, Rad<f32>, Rad<f32>) {
-        let pos = self
+    ) -> (Vector3<f64>, Vector3<f32>, f64, EntityMove) {
+        let (pos, vel, dist, ent_move) = self
             .move_queue
             .front()
             .map(|m| {
@@ -412,22 +439,23 @@ impl GameEntity {
                     .map(|m| m.elapsed(time_tick))
                     .unwrap_or(0.0);
 
-                m.qproj(time)
+                let pos = m.qproj(time);
+                let vel = m.instantaneous_velocity(time);
+                let dist = (m.start_pos - pos).magnitude();
+                (pos, vel, dist, *m)
             })
-            .unwrap_or(self.fallback_position);
-        let (face_dir, pitch) = self
-            .move_queue
-            .front()
-            .map(|m| (m.face_direction, m.pitch))
-            .unwrap_or((self.last_face_dir, self.last_pitch));
-        if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
-            log::info!(
-                "invalid position, move queue contains {:?}",
-                self.move_queue
-            );
-            return (Vector3::zero(), Rad(0.0), Rad(0.0));
-        }
-        (pos, Rad(face_dir), Rad(pitch))
+            .unwrap_or((
+                self.fallback_position,
+                Vector3::zero(),
+                0.0,
+                EntityMove::hold_at_pos(
+                    self.fallback_position,
+                    self.last_face_dir,
+                    self.last_pitch,
+                ),
+            ));
+
+        (pos, vel, dist, ent_move)
     }
 
     pub(crate) fn attach_position(
@@ -437,27 +465,26 @@ impl GameEntity {
         trailing_entity_index: u32,
     ) -> Option<Vector3<f64>> {
         if trailing_entity_index == 0 {
-            let (position, face_dir, pitch) = self.position(time_tick);
-            Some(entity_manager.transform_position(self.class, position, face_dir, pitch))
+            let (position, _, move_progress, move_desc) = self.position_velocity(time_tick);
+            Some(entity_manager.transform_position(
+                self.class,
+                position,
+                move_desc.face_direction,
+                move_desc.pitch,
+            ))
         } else {
             let mut te_pos = None;
-            let visitor = |idx, pos, class| {
+            let visitor = |idx, pos, _move_dist, m: EntityMove, class| {
                 if idx == trailing_entity_index as usize {
-                    te_pos = Some((pos, class));
+                    te_pos = Some((pos, class, m.face_direction, m.pitch));
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
                 }
             };
-            self.visit_sub_entities_including_trailing(
-                time_tick,
-                |pos, face, pitch| (pos, face, pitch),
-                visitor,
-            );
-            let (trailing_pos, class) = te_pos?;
-            Some(entity_manager.transform_position(
-                class,
-                trailing_pos.0,
-                trailing_pos.1,
-                trailing_pos.2,
-            ))
+            self.visit_sub_entities_including_trailing(time_tick, visitor);
+            let (trailing_pos, class, face_dir, pitch) = te_pos?;
+            Some(entity_manager.transform_position(class, trailing_pos, face_dir, pitch))
         }
     }
 
@@ -634,11 +661,7 @@ impl EntityState {
         player_position: Vector3<f64>,
     ) {
         for entity in self.entities.values_mut() {
-            let is_attached = self
-                .attached_to_entity
-                .is_some_and(|x| x.entity_id == entity.id);
-            let volume = if is_attached { 0.125 } else { 1.0 };
-            entity.advance_state(tick_now, audio_handle, volume, player_position, is_attached);
+            entity.advance_state(tick_now, audio_handle, player_position);
         }
     }
 
@@ -695,11 +718,13 @@ impl EntityState {
         entity: &GameEntity,
     ) -> impl Iterator<Item = (Matrix4<f32>, u32)> {
         let mut results = Vec::with_capacity(entity.trailing_entities.len() + 1);
-        entity.visit_sub_entities_including_trailing(
-            time_tick,
-            |pos, face, pitch| build_transform(player_position, pos, face, pitch),
-            |i, pos, class| results.push((pos, class)),
-        );
+        entity.visit_sub_entities_including_trailing(time_tick, |i, pos, _, m, class| {
+            results.push((
+                build_transform(player_position, pos, m.face_direction, m.pitch),
+                class,
+            ));
+            ControlFlow::Continue(())
+        });
         results.into_iter()
     }
 
@@ -721,12 +746,13 @@ impl EntityState {
         for (&id, entity) in &self.entities {
             entity.visit_sub_entities_including_trailing(
                 time_tick,
-                |pos, face, pitch| build_inverse_transform(player_position, pos, face, pitch),
-                |trailing_index, inverse_matrix, class| {
+                |trailing_index, pos, _, m, class| {
+                    let inverse_matrix =
+                        build_inverse_transform(player_position, pos, m.face_direction, m.pitch);
                     let (min, max) = match entity_renderer.mesh_aabb(class) {
                         None => {
-                            // return from callback
-                            return;
+                            // return from callback, continue the loop
+                            return ControlFlow::Continue(());
                         }
                         Some((min, max)) => (min, max),
                     };
@@ -752,6 +778,8 @@ impl EntityState {
                             best_dist = t;
                         }
                     }
+                    // We always have to continue because a later entity might actually be closer
+                    ControlFlow::Continue(())
                 },
             );
         }

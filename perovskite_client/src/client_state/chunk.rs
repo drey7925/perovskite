@@ -198,14 +198,14 @@ pub(crate) enum MeshResult {
     EmptyMesh(Option<u64>),
 }
 
-// TODO move these from static into actual owners
+// Used to reuse allocations from mesh vectors
 pub(crate) struct MeshVectorReclaim {
-    sender: flume::Sender<(Vec<u32>, Vec<CubeGeometryVertex>)>,
-    receiver: flume::Receiver<(Vec<u32>, Vec<CubeGeometryVertex>)>,
+    sender: crossbeam_channel::Sender<(Vec<u32>, Vec<CubeGeometryVertex>)>,
+    receiver: crossbeam_channel::Receiver<(Vec<u32>, Vec<CubeGeometryVertex>)>,
 }
 impl MeshVectorReclaim {
-    fn new() -> MeshVectorReclaim {
-        let (sender, receiver) = flume::bounded(4096);
+    fn new(cap: usize) -> MeshVectorReclaim {
+        let (sender, receiver) = crossbeam_channel::bounded(cap);
         MeshVectorReclaim { sender, receiver }
     }
     pub(crate) fn take(&self) -> Option<(Vec<u32>, Vec<CubeGeometryVertex>)> {
@@ -228,10 +228,17 @@ impl MeshVectorReclaim {
     }
 }
 
+// Consider moving these from static into actual owners
+// Or maybe not, this is really an extension of the allocator (which is global), so there's an
+// argument for making these global as well. In any case they need to be lock-free MPMC anyway for
+// concurrency reasons, so shared references are OK anyway
 lazy_static::lazy_static! {
-    pub(crate) static ref SOLID_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new();
-    pub(crate) static ref TRANSPARENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new();
-    pub(crate) static ref TRANSLUCENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new();
+    pub(crate) static ref SOLID_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
+    pub(crate) static ref TRANSPARENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
+    pub(crate) static ref TRANSLUCENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
+    pub(crate) static ref SOLID_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
+    pub(crate) static ref TRANSPARENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
+    pub(crate) static ref TRANSLUCENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
 }
 
 impl ClientChunk {
@@ -665,15 +672,25 @@ pub(crate) struct MeshBatchBuilder {
 }
 impl MeshBatchBuilder {
     pub(crate) fn new() -> MeshBatchBuilder {
+        let (transparent_idx, transparent_vtx) = TRANSPARENT_BATCH_RECLAIMER
+            .take()
+            .unwrap_or((vec![], vec![]));
+        let (translucent_idx, translucent_vtx) = TRANSLUCENT_BATCH_RECLAIMER
+            .take()
+            .unwrap_or((vec![], vec![]));
+        let (solid_idx, solid_vtx) = SOLID_BATCH_RECLAIMER.take().unwrap_or((
+            Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 6000),
+            Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 4000),
+        ));
         MeshBatchBuilder {
             id: next_id(),
             // rough initial estimate, but should be good enough for now
-            solid_vtx: Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 4000),
-            solid_idx: Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 6000),
-            transparent_vtx: Vec::new(),
-            transparent_idx: Vec::new(),
-            translucent_vtx: Vec::new(),
-            translucent_idx: Vec::new(),
+            solid_vtx,
+            solid_idx,
+            transparent_vtx,
+            transparent_idx,
+            translucent_vtx,
+            translucent_idx,
             base_position: Vector3::zero(),
             chunks: smallvec::SmallVec::new(),
         }

@@ -1,16 +1,20 @@
 use std::collections::hash_map::Entry;
+use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
 use std::io::Cursor;
 use std::num::NonZeroU64;
-use std::ops::{Add, DerefMut, Range};
+use std::ops::{Add, ControlFlow, DerefMut, Range};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
+use atomicbox::AtomicOptionBox;
 use cgmath::{InnerSpace, Vector3, Zero};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, OutputCallbackInfo};
+use crossbeam_channel::TrySendError;
 use hound::WavReader;
 use parking_lot::Mutex;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate};
@@ -24,7 +28,7 @@ use smallvec::SmallVec;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::cache::CacheManager;
-use crate::client_state::entities::{ElapsedOrOverflow, EntityMove};
+use crate::client_state::entities::{ElapsedOrOverflow, EntityMove, GameEntity};
 use crate::client_state::settings::GameSettings;
 use crate::client_state::timekeeper::Timekeeper;
 use crate::client_state::ClientState;
@@ -35,6 +39,7 @@ pub struct EngineHandle {
     drop_guard: DropGuard,
     allocator_state: Mutex<AllocatorState>,
     simple_sound_lengths: FxHashMap<u32, u64>,
+    freeing_receiver: crossbeam_channel::Receiver<Box<EntityData>>,
 }
 
 /// An opaque token used to modify/remove a sound in a slot.
@@ -52,6 +57,8 @@ struct AllocatorState {
     simple_sound_tokens: [u64; NUM_SIMPLE_SOUND_SLOTS],
     simple_sounds_next_sequence: u64,
     entity_slot_tokens: [u64; NUM_PROCEDURAL_ENTITY_SLOTS],
+    // Used for computing scores
+    entity_slot_data_local_copy: [Option<Box<EntityData>>; NUM_PROCEDURAL_ENTITY_SLOTS],
     entity_slots_next_sequence: u64,
 }
 
@@ -64,6 +71,7 @@ impl AllocatorState {
             entity_slot_tokens: [0; NUM_PROCEDURAL_ENTITY_SLOTS],
             // Likewise
             entity_slots_next_sequence: NUM_PROCEDURAL_ENTITY_SLOTS as u64,
+            entity_slot_data_local_copy: [const { None }; NUM_PROCEDURAL_ENTITY_SLOTS],
         }
     }
 }
@@ -152,11 +160,33 @@ impl EngineHandle {
         let index = token.0.get() % (NUM_PROCEDURAL_ENTITY_SLOTS as u64);
         if alloc_lock.entity_slot_tokens[index as usize] == token.0.get() {
             alloc_lock.entity_slot_tokens[index as usize] = 0;
-            let mut lock = self.control.entity_slots[index as usize].lock_write();
-            *lock = ProceduralEntitySoundControlBlock::const_default();
+            self.control.entity_data_slots[index as usize].store(
+                Some(Box::new(EntityData {
+                    control: ProceduralEntitySoundControlBlock::const_default(),
+                    entity: None,
+                })),
+                Ordering::AcqRel,
+            );
             true
         } else {
             false
+        }
+    }
+
+    fn process_pending_frees(&self) {
+        if self.freeing_receiver.is_full() {
+            log::info!("Memory reclaim receiver is full; some memory may have leaked");
+        }
+        // Approximate because inherently racy
+        let len_estimate = self.freeing_receiver.len();
+        if len_estimate > 1 {
+            log::info!(
+                "Dropping approximately {} entity audio control blocks",
+                self.freeing_receiver.len()
+            );
+        }
+        while let Ok(x) = self.freeing_receiver.try_recv() {
+            drop(x);
         }
     }
 
@@ -164,18 +194,23 @@ impl EngineHandle {
         &self,
         tick_now: u64,
         player_position: Vector3<f64>,
-        sound: ProceduralEntitySoundControlBlock,
+        data: EntityData,
         previous_token: Option<ProceduralEntityToken>,
     ) -> Option<ProceduralEntityToken> {
-        assert_ne!(sound.flags & SOUND_PRESENT, 0);
+        self.process_pending_frees();
+
+        let control = data.control;
+        assert_ne!(control.flags & SOUND_PRESENT, 0);
         let mut alloc_lock = self.allocator_state.lock();
 
         if let Some(token) = previous_token {
             let index = token.0.get() % (NUM_PROCEDURAL_ENTITY_SLOTS as u64);
             // If the entity hasn't been evicted, put it back in the same slot
             if alloc_lock.entity_slot_tokens[index as usize] == token.0.get() {
-                let mut lock = self.control.entity_slots[index as usize].lock_write();
-                *lock = sound;
+                alloc_lock.entity_slot_data_local_copy[index as usize] =
+                    Some(Box::new(data.clone()));
+                self.control.entity_data_slots[index as usize]
+                    .store(Some(Box::new(data)), Ordering::AcqRel);
                 return Some(token);
             }
         }
@@ -186,17 +221,19 @@ impl EngineHandle {
         if let Some(index) = alloc_lock.entity_slot_tokens.iter().position(|x| *x == 0) {
             let token = seqnum + (index as u64);
             alloc_lock.entity_slot_tokens[index] = token;
-            {
-                let mut lock = self.control.entity_slots[index].lock_write();
-                *lock = sound;
-            }
-            return Some(ProceduralEntityToken(NonZeroU64::new(token).unwrap()));
+
+            alloc_lock.entity_slot_data_local_copy[index] = Some(Box::new(data.clone()));
+            self.control.entity_data_slots[index].store(Some(Box::new(data)), Ordering::AcqRel);
+
+            Some(ProceduralEntityToken(NonZeroU64::new(token).unwrap()))
         } else {
-            let candidate_score = sound.compute_score(tick_now, player_position);
+            let candidate_score = data.compute_score(tick_now, player_position);
             let mut scores = [0; NUM_PROCEDURAL_ENTITY_SLOTS];
             for i in 0..NUM_PROCEDURAL_ENTITY_SLOTS {
-                let control_block = self.control.entity_slots[i].read();
-                scores[i] = control_block.compute_score(tick_now, player_position);
+                scores[i] = alloc_lock.entity_slot_data_local_copy[i]
+                    .as_ref()
+                    .map(|x| x.compute_score(tick_now, player_position))
+                    .unwrap_or(0);
             }
             let (min_index, min_score) = scores
                 .iter()
@@ -208,12 +245,14 @@ impl EngineHandle {
                 let token = seqnum + (min_index as u64);
                 alloc_lock.entity_slot_tokens[min_index] = token;
                 {
-                    let mut lock = self.control.entity_slots[min_index].lock_write();
-                    *lock = sound;
+                    alloc_lock.entity_slot_data_local_copy[min_index] =
+                        Some(Box::new(data.clone()));
+                    self.control.entity_data_slots[min_index]
+                        .store(Some(Box::new(data)), Ordering::AcqRel);
                 }
                 return Some(ProceduralEntityToken(NonZeroU64::new(token).unwrap()));
             }
-            return None;
+            None
         }
     }
 
@@ -280,11 +319,13 @@ pub(crate) async fn start_engine(
 
     let control = Arc::new(SharedControl::new(settings.clone(), Vector3::zero()));
     let cancellation_token = tokio_util::sync::CancellationToken::new();
+    let (freeing_sender, freeing_receiver) =
+        crossbeam_channel::bounded(NUM_PROCEDURAL_ENTITY_SLOTS * 2);
     if settings.load().audio.enable_audio {
         let control_clone = control.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
         let token_clone = cancellation_token.clone();
-        tokio::task::block_in_place(move || {
+        tokio::task::spawn(async move {
             let host = cpal::default_host();
             // TODO use a selected device from the settings
             let output_device =
@@ -298,17 +339,27 @@ pub(crate) async fn start_engine(
             log::info!("Using config: {:?}", selected_config);
 
             let handle = tokio::runtime::Handle::current();
-            let mut engine_state =
-                EngineState::new(control_clone, selected_config.clone(), timekeeper, wavs)?;
+            let mut engine_state = EngineState::new(
+                control_clone,
+                selected_config.clone(),
+                timekeeper,
+                wavs,
+                freeing_sender,
+            )?;
 
+            // OS threads rather than async tasks because cpal stream is not Send
             let _ = std::thread::spawn(move || {
                 let startup_work = move || {
                     let mut first_callback = true;
                     let stream = output_device
                         .build_output_stream(
                             &selected_config.clone().into(),
-                            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                            move |data: &mut [f32], info: &OutputCallbackInfo| {
                                 if first_callback {
+                                    log::info!(
+                                        "audio engine started, {} samples in first callback",
+                                        data.len() / selected_config.channels() as usize
+                                    );
                                     if let Err(e) =
                                         audio_thread_priority::promote_current_thread_to_real_time(
                                             (data.len() / selected_config.channels() as usize)
@@ -316,6 +367,8 @@ pub(crate) async fn start_engine(
                                             selected_config.sample_rate().0,
                                         )
                                     {
+                                        // Logging on the audio thread, but only doing it for one
+                                        // buffer, at startup, in an exceptional case
                                         log::error!(
                                             "Failed to promote audio thread to real time: {:?}",
                                             e
@@ -355,7 +408,8 @@ pub(crate) async fn start_engine(
                 drop(stream);
             });
             Ok::<(), anyhow::Error>(())
-        })?;
+        })
+        .await??;
         rx.await
             .context("Waiting for audio engine startup failed")?
             .context("Audio engine startup")?;
@@ -369,6 +423,7 @@ pub(crate) async fn start_engine(
         drop_guard: cancellation_token.drop_guard(),
         allocator_state: Mutex::new(AllocatorState::new()),
         simple_sound_lengths: wav_lengths,
+        freeing_receiver,
     })
 }
 
@@ -420,6 +475,7 @@ struct EngineState {
 
     // HashMap: While the server has the IDs as consecutive, this isn't a protocol guarantee
     samplers: FxHashMap<u32, PrerecordedSampler>,
+    freeing_sender: crossbeam_channel::Sender<Box<EntityData>>,
 }
 
 // Const rather than using log! because I don't know what locks we might have to deal when the
@@ -557,11 +613,11 @@ impl EngineState {
                     // A new sound is starting at some point in ths current buffer.
                     // This is how many samples into the buffer.
                     let start_offset_samples =
-                    // saturating sub - we might underflow if either the sound was delivered
-                    // after its scheduled start time, or if we missed it due to a tiny floating or
-                    // rounding error
-                    ((control_block.start_tick.saturating_sub(buffer_start_tick) as f64)
-                        / self.nanos_per_sample) as usize;
+                        // saturating sub - we might underflow if either the sound was delivered
+                        // after its scheduled start time, or if we missed it due to a tiny floating or
+                        // rounding error
+                        ((control_block.start_tick.saturating_sub(buffer_start_tick) as f64)
+                            / self.nanos_per_sample) as usize;
 
                     // let remaining_samples = (samples.saturating_sub(start_offset_samples)) as u64;
                     // TODO: If a sound is truly short (fitting entirely into this buffer), we don't
@@ -617,8 +673,16 @@ impl EngineState {
                 volumes.volume_for(control_block.source),
             );
         }
+        self.update_entity_data();
         for i in 0..NUM_PROCEDURAL_ENTITY_SLOTS {
-            let control_block = self.control.entity_slots[i].read();
+            let entity = match self.private_control.entity_data[i].as_ref() {
+                Some(x) => x,
+                None => {
+                    continue;
+                }
+            };
+
+            let control_block = entity.control;
             if control_block.flags & SOUND_PRESENT == 0 {
                 continue;
             }
@@ -635,7 +699,7 @@ impl EngineState {
                 self.stream_config.channels() as usize,
                 self.nanos_per_sample,
                 buf,
-                control_block,
+                &entity,
                 &player_state,
                 private_state,
                 &mut self.rng,
@@ -657,6 +721,7 @@ impl EngineState {
         stream_config: cpal::SupportedStreamConfig,
         timekeeper: Arc<Timekeeper>,
         sampled_sounds: FxHashMap<u32, WavReader<Cursor<Vec<u8>>>>,
+        freeing_sender: crossbeam_channel::Sender<Box<EntityData>>,
     ) -> Result<EngineState> {
         let mut samplers = FxHashMap::default();
         let mut resampler_cache = FxHashMap::default();
@@ -696,6 +761,7 @@ impl EngineState {
             entity_filter_input_buffer: Vec::with_capacity(
                 stream_config.sample_rate().0 as usize * 2,
             ),
+            freeing_sender,
             samplers,
         })
     }
@@ -790,7 +856,7 @@ impl EngineState {
         channels: usize,
         nanos_per_sample: f64,
         data: &mut [f32],
-        control_block: ProceduralEntitySoundControlBlock,
+        entity: &EntityData,
         player_state: &PlayerState,
         scratchpad: &mut EntityScratchpad,
         rng: &mut SmallRng,
@@ -798,6 +864,14 @@ impl EngineState {
         samples: usize,
         volume_multiplier: f32,
     ) {
+        let control_block = entity.control;
+        let entity = match &entity.entity {
+            Some(x) => x,
+            None => {
+                return;
+            }
+        };
+
         let left_ear_azimuth = player_state.azimuth_radian + std::f64::consts::FRAC_PI_2;
         let left_ear_z = left_ear_azimuth.cos();
         let left_ear_x = left_ear_azimuth.sin();
@@ -813,175 +887,81 @@ impl EngineState {
                 ..EntityScratchpad::default()
             }
         }
+        let current_move = match entity.current_move() {
+            Some(x) => x,
+            None => return,
+        };
+
+        // We make a bold assumption: The audio buffer is small enough that we can assume that the
+        // state of entity passing (approaching, passing by, moving away) is small enough, _and_
+        // (once added), edge effects can be triggered once per buffer.
+
+        let is_spatial = control_block.flags & SOUND_ENTITY_SPATIAL != 0;
+        let is_attached_here = player_state.attached_entity == control_block.entity_id;
+        let (distance_falloff_multiplier, edge_multiplier, balance_left) = if is_spatial
+            && !is_attached_here
+        {
+            let mut min_distance = f64::MAX;
+            let mut min_distance_pos = Vector3::zero();
+            let mut prev_trailing = None;
+
+            entity.visit_sub_entities_including_trailing(
+                buffer_start_tick,
+                |idx, pos, move_dist, m, _class| {
+                    // Potential later optimization: if we're far enough compared to the
+                    // trailing length, bail out of the loop early
+
+                    // If this is a trailing entity, look at the segment between prev and
+                    // this one, pretending that the entity is linked up along it
+                    if control_block.flags & SOUND_ENTITY_LINK_TRAILING_ENTITIES != 0 {
+                        if let Some(p_pos) = prev_trailing {
+                            let prev_to_cur = pos - p_pos;
+                            let prev_to_player = player_state.position - p_pos;
+                            let cur_to_player = pos - player_state.position;
+                            // We are passing if prev_to_cur points in the same direction as
+                            // prev_to_player, and cur_to_player points opposite prev_to_cur
+                            if Vector3::dot(prev_to_player, prev_to_cur) > 0.0
+                                && Vector3::dot(cur_to_player, prev_to_cur) < 0.0
+                            {
+                                let nearest_pos = prev_to_player.project_on(prev_to_cur) + p_pos;
+                                let dist = Vector3::magnitude(nearest_pos - player_state.position);
+                                if dist < min_distance {
+                                    min_distance = dist;
+                                    min_distance_pos = nearest_pos;
+                                }
+                            }
+                        }
+                    }
+                    // Now look at the entity itself
+                    let dist = Vector3::magnitude(pos - player_state.position);
+                    if dist < min_distance {
+                        min_distance = dist;
+                        min_distance_pos = pos;
+                    }
+
+                    prev_trailing = Some(pos);
+                    ControlFlow::Continue(())
+                },
+            );
+
+            let displacement = min_distance_pos - player_state.position;
+            let effective_dir = displacement.normalize();
+            let mut balance_left = left_ear_vec.dot(effective_dir);
+            if balance_left.is_nan() {
+                balance_left = 0.0;
+            }
+
+            let clamped_distance = min_distance.max(MIN_ENTITY_DISTANCE) as f32;
+            (1.0 / clamped_distance, 1.0, balance_left)
+        } else {
+            (1.0, 1.0, 0.0)
+        };
 
         for sample in 0..samples {
             let tick = buffer_start_tick + (sample as f64 * nanos_per_sample) as u64;
-
-            let elapsed_or_overflow = control_block.leading.elapsed_or_overflow(tick);
-            let (entity_move, entity_move_elapsed) = match elapsed_or_overflow {
-                ElapsedOrOverflow::ElapsedThisMove(time) => (control_block.leading, time),
-                ElapsedOrOverflow::OverflowIntoNext(time) => {
-                    if let Some(second) = control_block.second {
-                        (second, time.min(second.total_time_sec()))
-                    } else {
-                        (
-                            control_block.leading,
-                            control_block.leading.total_time_sec(),
-                        )
-                    }
-                }
-            };
-            let current_velocity = entity_move.instantaneous_velocity(entity_move_elapsed);
-
-            let is_spatial = control_block.flags & SOUND_ENTITY_SPATIAL != 0;
-            let is_attached_here = player_state.attached_entity == control_block.entity_id;
-
-            let (distance_falloff_multiplier, edge_multiplier, balance_left) = if is_spatial
-                && !is_attached_here
-            {
-                let entity_pos = entity_move.qproj(entity_move_elapsed);
-                let player_pos = player_state.position;
-                // distance this sample
-                let distance = (player_pos - entity_pos).magnitude();
-                // distance in this sample if the player hadn't moved
-                let distance_unmoved_player = (scratchpad.last_player_pos - entity_pos).magnitude();
-                // avoid unusual jumps in the distance due to numerical error at edges of moves
-                // We need 100 then 10 samples (2.2 ms + 220 us at 44100 Hz) to actually trigger detection
-                let distance_diff =
-                    (distance_unmoved_player - scratchpad.last_distance).clamp(-0.1, 0.1);
-
-                scratchpad.last_distance = distance;
-                scratchpad.last_player_pos = player_pos;
-
-                scratchpad.approach_state = match scratchpad.approach_state {
-                    ApproachState::Initial(acc) => {
-                        // Looking for a decrease
-                        let new_acc = (acc - distance_diff).max(0.0);
-                        if new_acc > 10.0 {
-                            ApproachState::DecreaseDetected(0.0)
-                        } else {
-                            ApproachState::Initial(new_acc)
-                        }
-                    }
-                    ApproachState::DecreaseDetected(acc) => {
-                        let new_acc = (acc + distance_diff).max(0.0);
-                        if new_acc > 1.0 {
-                            scratchpad.edge_cycle = 0.0;
-                            // This is a local minimum
-                            // Is it close enough?
-                            if distance < (2.0 * control_block.entity_len as f64) {
-                                ApproachState::Passing(
-                                    0.0,
-                                    entity_pos,
-                                    player_pos - entity_pos,
-                                    entity_move
-                                        .instantaneous_velocity(entity_move_elapsed)
-                                        .normalize(),
-                                )
-                            } else {
-                                // Nope, we're probably getting some artifact far away, and we might
-                                // end up stuck in Passing for a while until it actually passes by
-                                ApproachState::Initial(0.0)
-                            }
-                        } else {
-                            ApproachState::DecreaseDetected(new_acc)
-                        }
-                    }
-                    x => x,
-                };
-
-                let (effective_displacement, start_recovery) = match &mut scratchpad.approach_state
-                {
-                    ApproachState::Initial(_) => (player_pos - entity_pos, false),
-                    ApproachState::DecreaseDetected(_) => (player_pos - entity_pos, false),
-                    ApproachState::Passing(
-                        travel_since,
-                        captured_entity_location,
-                        _captured_e2p,
-                        captured_velocity,
-                    ) => {
-                        let additional_travel = (current_velocity.magnitude() as f64)
-                            * nanos_per_sample
-                            / 1_000_000_000.0;
-
-                        let new_travel = *travel_since + additional_travel;
-                        if (new_travel / 32.0).floor() != (*travel_since / 32.0).floor() {
-                            scratchpad.edge_cycle = 0.0;
-                        }
-
-                        *travel_since = new_travel;
-                        let player_displacement = player_pos - *captured_entity_location;
-                        let ent_displacement = entity_pos - *captured_entity_location;
-                        let captured_velocity = captured_velocity.cast().unwrap();
-                        let parallel = player_displacement.project_on(captured_velocity);
-                        let perpendicular = player_displacement - parallel;
-
-                        // How far the player has moved *along* with the entity
-                        let parallel_displacement = player_displacement.dot(captured_velocity);
-                        let parallel_met = *travel_since
-                            > (control_block.entity_len as f64 + parallel_displacement);
-
-                        // Heuristic/hacky solution
-                        let entity_own_parallel = ent_displacement.project_on(captured_velocity);
-                        let entity_own_perpendicular = ent_displacement - entity_own_parallel;
-                        let perpendicular_met =
-                            entity_own_perpendicular.magnitude() > control_block.entity_len as f64;
-
-                        (perpendicular, parallel_met | perpendicular_met)
-                    }
-                };
-                // max is a hacky fix for spurious sounds; TODO fix it properly or rewrite this mess
-                let effective_distance = effective_displacement
-                    .magnitude()
-                    .max(distance - control_block.entity_len as f64);
-
-                let clamped_distance = effective_distance.max(MIN_ENTITY_DISTANCE) as f32;
-                // multiplier affects amplitude, not power
-                let distance_falloff_multiplier = 1.0 / (clamped_distance);
-                if start_recovery {
-                    scratchpad.approach_state = ApproachState::Initial(0.0);
-                    scratchpad.trailing_edge_blend_factor = 1.0;
-                    scratchpad.trailing_edge_blend_value = distance_falloff_multiplier;
-                    scratchpad.trailing_edge_blend_source_direction =
-                        effective_displacement.normalize();
-                    scratchpad.edge_cycle = -1.0;
-                }
-                let edge_multiplier = if scratchpad.edge_cycle < 0.0 {
-                    1.0
-                } else if scratchpad.edge_cycle < 0.25 {
-                    scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
-                    1.0 + (2.0 * scratchpad.edge_cycle)
-                } else if scratchpad.edge_cycle < 1.0 {
-                    scratchpad.edge_cycle += nanos_per_sample as f32 / 250_000_000.0;
-                    (5.0 / 3.0) - (2.0 / 3.0 * scratchpad.edge_cycle)
-                } else {
-                    scratchpad.edge_cycle = -1.0;
-                    1.0
-                };
-
-                let distance_falloff_multiplier = scratchpad.trailing_edge_blend_value
-                    * scratchpad.trailing_edge_blend_factor
-                    + distance_falloff_multiplier * (1.0 - scratchpad.trailing_edge_blend_factor);
-                scratchpad.trailing_edge_blend_factor = (scratchpad.trailing_edge_blend_factor
-                    - nanos_per_sample as f32 / 2_000_000_000.0)
-                    .clamp(0.0, 1.0);
-
-                let effective_displacement_smoothed = scratchpad
-                    .trailing_edge_blend_source_direction
-                    * scratchpad.trailing_edge_blend_factor as f64
-                    + effective_displacement.normalize()
-                        * (1.0 - scratchpad.trailing_edge_blend_factor as f64);
-                let effective_dir = effective_displacement_smoothed.normalize();
-                let mut balance_left = left_ear_vec.dot(effective_dir);
-                if balance_left.is_nan() {
-                    balance_left = 0.0;
-                }
-                let edge_strength = MIN_ENTITY_DISTANCE as f32 / clamped_distance;
-                let edge_multiplier = (edge_multiplier * edge_strength) + (1.0 - edge_strength);
-                (distance_falloff_multiplier, edge_multiplier, balance_left)
-            } else {
-                (1.0, 1.0, 0.0)
-            };
+            // Half-clamp: don't allow time to run backwards, but
+            let move_time = current_move.elapsed_unclamped(tick).max(0.0);
+            let current_velocity = current_move.instantaneous_velocity(move_time);
 
             // Theoretically should be N^5 or N^6, but this is subjectively better
             let speed_multiplier = (current_velocity.magnitude() / 70.0).powi(4);
@@ -998,9 +978,9 @@ impl EngineState {
                 * volume_multiplier;
 
             let balance_left = scratchpad.last_balance.update(balance_left, 0.001);
-            let l_amplitude = turbulence_amplitude * (1.0 + 0.8 * balance_left as f32);
+            let l_amplitude = turbulence_amplitude * (1.0 - 0.8 * balance_left as f32);
 
-            let r_amplitude = turbulence_amplitude * (1.0 - 0.8 * balance_left as f32);
+            let r_amplitude = turbulence_amplitude * (1.0 + 0.8 * balance_left as f32);
             let (l, r) = sample_turbulence(scratchpad, rng);
             let (l, r) = if channels == 1 {
                 (l + r / 2.0, 0.0)
@@ -1008,8 +988,6 @@ impl EngineState {
                 (l, r)
             };
             for chan in 0..channels {
-                // let sample_value =
-                //     (2.0 * std::f64::consts::PI * effective_time_delta * (control.id as f64)).sin();
                 let sample_value = if chan == 0 { l } else { r };
                 let amplitude = if channels == 2 {
                     if chan == 0 {
@@ -1052,6 +1030,40 @@ impl EngineState {
         {
             if idx % 2 == 1 {
                 *out_sample = gain * self.entity_filter_right.sample(*in_sample);
+            }
+        }
+    }
+
+    fn update_entity_data(&mut self) {
+        for i in 0..NUM_PROCEDURAL_ENTITY_SLOTS {
+            // The store portion doesn't matter
+            // The load portion also really doesn't matter; we aren't synchronizing with anything
+            if let Some(data) = self.control.entity_data_slots[i].swap(None, Ordering::AcqRel) {
+                let old = self.private_control.entity_data[i].take();
+                if data.control.flags & SOUND_PRESENT != 0 {
+                    self.private_control.entity_data[i] = Some(data);
+                }
+                if let Some(old) = old {
+                    self.free_entity_data_off_thread(old)
+                }
+            }
+        }
+    }
+
+    fn free_entity_data_off_thread(&mut self, data: Box<EntityData>) {
+        // If the channel is full, we can't really do anything other than sadly give up
+        match self.freeing_sender.try_send(data) {
+            Ok(x) => {}
+            // Two error cases, same code, different rationale
+            Err(TrySendError::Disconnected(data)) => {
+                // Shutdown ordering error; if we've lost the freeing receiver, we've also lost
+                // any paths for inbound data, some leakage is a reasonable tradeoff here
+                Box::leak(data);
+            }
+            Err(TrySendError::Full(data)) => {
+                // This shouldn't happen as long as the buffer is large enough, if it does happen
+                // we'll just leak the data to avoid blocking on this thread
+                Box::leak(data);
             }
         }
     }
@@ -1103,6 +1115,7 @@ pub const NUM_PROCEDURAL_ENTITY_SLOTS: usize = 64;
 struct PrivateControl {
     simple_sounds: Box<[SimpleSoundState; NUM_SIMPLE_SOUND_SLOTS]>,
     procedural_entity_sounds: Box<[EntityScratchpad; NUM_PROCEDURAL_ENTITY_SLOTS]>,
+    entity_data: [Option<Box<EntityData>>; NUM_PROCEDURAL_ENTITY_SLOTS],
 }
 impl Default for PrivateControl {
     fn default() -> PrivateControl {
@@ -1111,7 +1124,77 @@ impl Default for PrivateControl {
             procedural_entity_sounds: Box::new(
                 [EntityScratchpad::default(); NUM_PROCEDURAL_ENTITY_SLOTS],
             ),
+            entity_data: [const { None }; NUM_PROCEDURAL_ENTITY_SLOTS],
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct EntityData {
+    pub(crate) control: ProceduralEntitySoundControlBlock,
+    // This contains allocations; we promise to never mutate it on the audio thread,
+    // nor to drop it on the audio thread. The only thing we can do with an EntityData on the
+    // audio thread is to either send it to a lock-free channel, or leak it if the channel is full.
+    //
+    // TODO: Refactor this so we only copy the truly necessary fields, if benchmarks show issues
+    pub(crate) entity: Option<GameEntity>,
+}
+impl Debug for EntityData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntityData")
+            .field("control", &self.control)
+            .field(
+                "entity w/ current move",
+                &self.entity.as_ref().map(|x| x.current_move()),
+            )
+            .finish()
+    }
+}
+impl EntityData {
+    fn compute_score(&self, tick_now: u64, player_position: Vector3<f64>) -> u64 {
+        if self.control.flags & SOUND_PRESENT == 0 {
+            return 0;
+        }
+
+        let entity_data = match self.entity.as_ref() {
+            Some(x) => x,
+            None => return 0,
+        };
+        // TODO: What does sticky mean for an entity that exhausts its moves?
+        if self.control.flags & SOUND_STICKY != 0 {
+            return u64::MAX;
+        }
+
+        let (position, velocity, elapsed, m) = entity_data.position_velocity(tick_now);
+        let distance = (position - player_position).magnitude();
+
+        const BASE_SCORE: u64 = 1 << 60;
+        const BASE_SCORE_F64: f64 = BASE_SCORE as f64;
+        let mut distance_score = if self.control.flags & SOUND_SQUARELAW_ENABLED != 0 {
+            let dropoff = distance.max(1.0);
+            let score = BASE_SCORE_F64 / dropoff;
+            if !score.is_finite() || !score.is_sign_positive() {
+                log::warn!(
+                    "Nonsensical score for control block {:?}, tick {}, pos {:?}",
+                    self,
+                    tick_now,
+                    player_position
+                );
+                return 0;
+            }
+            score as u64
+        } else {
+            BASE_SCORE
+        };
+
+        let mut volume_estimate = 0.0;
+        volume_estimate += self.control.turbulence.volume * (velocity.magnitude() / 70.0).powi(4);
+
+        if volume_estimate < 0.001 {
+            distance_score /= 10;
+        }
+
+        distance_score
     }
 }
 
@@ -1120,7 +1203,7 @@ pub(crate) struct SharedControl {
     enabled: AtomicBool,
     player_state: SeqLock<PlayerState>,
     simple_sounds: Box<[SeqLock<SimpleSoundControlBlock>; NUM_SIMPLE_SOUND_SLOTS]>,
-    entity_slots: Box<[SeqLock<ProceduralEntitySoundControlBlock>; NUM_PROCEDURAL_ENTITY_SLOTS]>,
+    entity_data_slots: [AtomicOptionBox<EntityData>; NUM_PROCEDURAL_ENTITY_SLOTS],
     settings: Arc<ArcSwap<GameSettings>>,
 }
 impl SharedControl {
@@ -1145,7 +1228,7 @@ impl SharedControl {
                 attached_entity: 0,
             }),
             simple_sounds: Box::new([SIMPLE_SOUND_CONST_INIT; NUM_SIMPLE_SOUND_SLOTS]),
-            entity_slots: Box::new([PROCEDURAL_ENTITY_CONST_INIT; NUM_PROCEDURAL_ENTITY_SLOTS]),
+            entity_data_slots: [const { AtomicOptionBox::none() }; NUM_PROCEDURAL_ENTITY_SLOTS],
             // Start all volumes at 0 until they are set by the game loop
             settings,
         }
@@ -1239,97 +1322,13 @@ impl SimpleSoundControlBlock {
     }
 }
 
+#[repr(align(64))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ProceduralEntitySoundControlBlock {
     pub(crate) flags: FlagsType,
     pub(crate) entity_id: u64,
-    pub(crate) leading: EntityMove,
-    pub(crate) second: Option<EntityMove>,
-    pub(crate) entity_len: f32,
     pub(crate) turbulence: TurbulenceSourceControlBlock,
     pub(crate) sound_source: SoundSource,
-}
-
-impl ProceduralEntitySoundControlBlock {
-    pub(crate) fn compute_score(&self, tick_now: u64, player_position: Vector3<f64>) -> u64 {
-        if self.flags & SOUND_PRESENT == 0 {
-            return 0;
-        }
-        // TODO: What does sticky mean for an entity that exhausts its moves?
-        if self.flags & SOUND_STICKY != 0 {
-            return u64::MAX;
-        }
-
-        let (overflow, position) = match self.leading.elapsed_or_overflow(tick_now) {
-            ElapsedOrOverflow::ElapsedThisMove(t) => (0.0, self.leading.qproj(t)),
-            ElapsedOrOverflow::OverflowIntoNext(t) => match self.second {
-                None => (t, self.leading.qproj(self.leading.total_time_sec())),
-                Some(mv) => match mv.elapsed_or_overflow(tick_now) {
-                    ElapsedOrOverflow::ElapsedThisMove(t) => (0.0, mv.qproj(t)),
-                    ElapsedOrOverflow::OverflowIntoNext(t) => (t, mv.qproj(mv.total_time_sec())),
-                },
-            },
-        };
-        let distance = (position - player_position).magnitude();
-
-        const BASE_SCORE: u64 = 1 << 60;
-        const BASE_SCORE_F64: f64 = BASE_SCORE as f64;
-        let mut distance_score = if self.flags & SOUND_SQUARELAW_ENABLED != 0 {
-            let dropoff = distance.max(1.0);
-            let score = BASE_SCORE_F64 / dropoff;
-            if !score.is_finite() || !score.is_sign_positive() {
-                log::warn!(
-                    "Nonsensical score for control block {:?}, tick {}, pos {:?}",
-                    self,
-                    tick_now,
-                    player_position
-                );
-                return 0;
-            }
-            score as u64
-        } else {
-            BASE_SCORE
-        };
-
-        let mut vague_speed_estimate = self
-            .leading
-            .instantaneous_velocity(0.0)
-            .magnitude()
-            .max(
-                self.leading
-                    .instantaneous_velocity(self.leading.total_time_sec() / 2.0)
-                    .magnitude(),
-            )
-            .max(
-                self.leading
-                    .instantaneous_velocity(self.leading.total_time_sec())
-                    .magnitude(),
-            );
-        if let Some(second) = self.second {
-            vague_speed_estimate = vague_speed_estimate
-                .max(second.instantaneous_velocity(0.0).magnitude())
-                .max(
-                    second
-                        .instantaneous_velocity(second.total_time_sec() / 2.0)
-                        .magnitude(),
-                )
-                .max(
-                    second
-                        .instantaneous_velocity(second.total_time_sec())
-                        .magnitude(),
-                )
-        }
-
-        let mut volume_estimate = 0.0;
-        volume_estimate += self.turbulence.volume * (vague_speed_estimate / 70.0).powi(4);
-
-        if volume_estimate < 0.001 {
-            distance_score /= 10;
-        }
-
-        let overflow_demerit = (overflow as f64 / 10.0) * BASE_SCORE_F64;
-        return distance_score.saturating_sub(overflow_demerit as u64);
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1344,9 +1343,6 @@ impl ProceduralEntitySoundControlBlock {
         ProceduralEntitySoundControlBlock {
             flags: 0,
             entity_id: 0,
-            leading: EntityMove::zero(),
-            second: None,
-            entity_len: 0.0,
             turbulence: TurbulenceSourceControlBlock {
                 volume: 0.0,
                 volume_attached: 0.0,
@@ -1421,7 +1417,6 @@ pub const SOUND_SQUARELAW_ENABLED: FlagsType = 0x4;
 pub const SOUND_DIRECTIONAL: FlagsType = 0x8;
 
 /// If set, the entity sound has spatial effects
-/// This should not be set for an entity to which the player is attached.
 pub const SOUND_ENTITY_SPATIAL: FlagsType = 0x2;
 
 /// If set, the sound is considered sticky, and will never be deallocated
@@ -1429,6 +1424,9 @@ pub const SOUND_STICKY: FlagsType = 0x10;
 /// If set, the sound bypasses the attached entity filter. Otherwise, the attached entity filter
 /// is applied.
 pub const SOUND_BYPASS_ATTACHED_ENTITY_FILTER: FlagsType = 0x20;
+/// If set, the segments connecting trailing entities also emit sound. If cleared, the trailing
+/// entities act as point sources.
+pub const SOUND_ENTITY_LINK_TRAILING_ENTITIES: FlagsType = 0x40;
 
 /// The minimum distance considered for square-law effects. By enforcing this, we avoid
 /// excessive amplitudes for near-zero distances.
