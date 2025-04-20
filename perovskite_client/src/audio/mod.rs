@@ -903,7 +903,7 @@ impl EngineState {
         {
             let mut min_distance = f64::MAX;
             let mut min_distance_pos = Vector3::zero();
-            let mut prev_trailing = None;
+            let mut prev_trailing: Option<Vector3<f64>> = None;
 
             entity.visit_sub_entities_including_trailing(
                 buffer_start_tick,
@@ -917,13 +917,14 @@ impl EngineState {
                         if let Some(p_pos) = prev_trailing {
                             let prev_to_cur = pos - p_pos;
                             let prev_to_player = player_state.position - p_pos;
-                            let cur_to_player = pos - player_state.position;
+                            let cur_to_player = player_state.position - pos;
                             // We are passing if prev_to_cur points in the same direction as
                             // prev_to_player, and cur_to_player points opposite prev_to_cur
                             if Vector3::dot(prev_to_player, prev_to_cur) > 0.0
                                 && Vector3::dot(cur_to_player, prev_to_cur) < 0.0
                             {
-                                let nearest_pos = prev_to_player.project_on(prev_to_cur) + p_pos;
+                                let nearest_pos: Vector3<f64> =
+                                    prev_to_player.project_on(prev_to_cur) + p_pos;
                                 let dist = Vector3::magnitude(nearest_pos - player_state.position);
                                 if dist < min_distance {
                                     min_distance = dist;
@@ -932,7 +933,7 @@ impl EngineState {
                             }
                         }
                     }
-                    // Now look at the entity itself
+                    // Now look at the trailing entity itself
                     let dist = Vector3::magnitude(pos - player_state.position);
                     if dist < min_distance {
                         min_distance = dist;
@@ -1426,6 +1427,9 @@ pub const SOUND_STICKY: FlagsType = 0x10;
 pub const SOUND_BYPASS_ATTACHED_ENTITY_FILTER: FlagsType = 0x20;
 /// If set, the segments connecting trailing entities also emit sound. If cleared, the trailing
 /// entities act as point sources.
+///
+/// This should be set for all high-speed entities (i.e. a trailing entity passes in <0.25 sec),
+/// otherwise the resulting sound is full of artifacts
 pub const SOUND_ENTITY_LINK_TRAILING_ENTITIES: FlagsType = 0x40;
 
 /// The minimum distance considered for square-law effects. By enforcing this, we avoid

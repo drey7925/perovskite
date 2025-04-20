@@ -1,5 +1,6 @@
 use crate::audio::{
-    EngineHandle, EntityData, ProceduralEntityToken, SOUND_ENTITY_SPATIAL, SOUND_PRESENT,
+    EngineHandle, EntityData, ProceduralEntityToken, SOUND_ENTITY_LINK_TRAILING_ENTITIES,
+    SOUND_ENTITY_SPATIAL, SOUND_PRESENT,
 };
 use crate::client_state::tool_controller::check_intersection_core;
 use crate::client_state::ClientState;
@@ -320,7 +321,8 @@ impl GameEntity {
             );
             let front = self.move_queue.front();
             if let Some(front) = front {
-                let mut flags = SOUND_PRESENT | SOUND_ENTITY_SPATIAL;
+                let mut flags =
+                    SOUND_PRESENT | SOUND_ENTITY_SPATIAL | SOUND_ENTITY_LINK_TRAILING_ENTITIES;
 
                 if let Some(audio) = &self.turbulence_audio_model {
                     let control = crate::audio::ProceduralEntitySoundControlBlock {
