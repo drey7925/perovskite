@@ -493,6 +493,9 @@ impl BlockBuilder {
         if self.matter_type == MatterType::Solid {
             block.client_info.footstep_sound = game_builder.footstep_sound.0;
         }
+        if self.matter_type == MatterType::Gas {
+            block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
+        }
         block.client_info.groups.sort();
         block.client_info.groups.dedup();
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));

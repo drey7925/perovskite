@@ -25,6 +25,8 @@ use crate::{
     },
 };
 use anyhow::Result;
+use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
+use perovskite_core::protocol::blocks::{CubeRenderInfo, CubeVariantEffect};
 use perovskite_core::{
     constants::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
@@ -43,7 +45,7 @@ use perovskite_server::game_state::{
 
 use super::{
     block_groups::{BRITTLE, GRANULAR},
-    mapgen::OreDefinition,
+    default_mapgen::OreDefinition,
     recipes::RecipeSlot,
     shaped_blocks::{make_slab, make_stairs},
     DefaultGameBuilder, DefaultGameBuilderExtension,
@@ -53,6 +55,7 @@ use super::{
 pub const DIRT: StaticBlockName = StaticBlockName("default:dirt");
 /// Dirt with grass on top.
 pub const DIRT_WITH_GRASS: StaticBlockName = StaticBlockName("default:dirt_with_grass");
+
 /// Solid grey stone.
 pub const STONE: StaticBlockName = StaticBlockName("default:stone");
 
@@ -83,6 +86,8 @@ pub const TNT: StaticBlockName = StaticBlockName("default:tnt");
 pub const LIMESTONE: StaticBlockName = StaticBlockName("default:limestone");
 pub const LIMESTONE_LIGHT: StaticBlockName = StaticBlockName("default:limestone_light");
 pub const LIMESTONE_DARK: StaticBlockName = StaticBlockName("default:limestone_dark");
+pub const DIRT_WITH_SNOW: StaticBlockName = StaticBlockName("default:dirt_with_snow");
+pub const SNOW: StaticBlockName = StaticBlockName("default:snow");
 
 const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_grass_side");
@@ -104,6 +109,8 @@ const TESTONLY_UNKNOWN_TEX: StaticTextureName = StaticTextureName("default:testo
 const LIMESTONE_TEXTURE: StaticTextureName = StaticTextureName("default:limestone");
 const LIMESTONE_LIGHT_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_light");
 const LIMESTONE_DARK_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_dark");
+const SNOW_TEXTURE: StaticTextureName = StaticTextureName("default:snow");
+const DIRT_SNOW_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_snow_side");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -545,6 +552,41 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         LIMESTONE_LIGHT_TEXTURE,
         "textures/limestone_light.png"
     )?;
+    include_texture_bytes!(game_builder, SNOW_TEXTURE, "textures/snow.png")?;
+    include_texture_bytes!(
+        game_builder,
+        DIRT_SNOW_SIDE_TEXTURE,
+        "textures/dirt_snow_side.png"
+    )?;
+    game_builder.add_block(
+        BlockBuilder::new(SNOW)
+            .add_block_group(BRITTLE)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(SNOW_TEXTURE)
+                    // Set liquid for appearance; we will not enable flow on it, however.
+                    .set_liquid_shape(),
+            )
+            // TODO: clients don't have the right physics and treat it as a full
+            // 1m tall block regardless of the variant
+            .set_matter_type(MatterType::Gas)
+            .set_allow_light_propagation(true)
+            .set_display_name("Snow"),
+    )?;
+    game_builder.add_block(
+        BlockBuilder::new(DIRT_WITH_SNOW)
+            .add_block_group(GRANULAR)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+                DIRT_SNOW_SIDE_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+                SNOW_TEXTURE,
+                DIRT_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+            ))
+            .set_dropped_item(DIRT.0, 1)
+            .set_display_name("Dirt with snow"),
+    )?;
 
     let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
@@ -626,7 +668,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Silt (damp)")
             .set_dropped_item(SILT_DRY.0, 1)
             .add_modifier(Box::new(|bt| {
-                // TODO tune these
+                // TODO tune these, TODO move these into the block builder
                 bt.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
                     horizontal_speed: 0.75,
                     vertical_speed: -0.1,

@@ -15,6 +15,7 @@ use super::{block_groups, item_groups, recipes::RecipeSlot, shaped_blocks, Defau
 
 pub mod foliage_groups {
     pub const MAPLE: &str = "maple";
+    pub const PINE: &str = "pine";
     pub const FLOWERS: &str = "flowers";
 }
 
@@ -27,6 +28,16 @@ pub const MAPLE_LEAVES_TEX: StaticTextureName = StaticTextureName("default:maple
 
 pub const MAPLE_PLANKS: StaticBlockName = StaticBlockName("default:maple_planks");
 pub const MAPLE_PLANKS_TEX: StaticTextureName = StaticTextureName("default:maple_planks");
+
+pub const PINE_TREE: StaticBlockName = StaticBlockName("default:pine_tree");
+pub const PINE_TREE_TOP_TEX: StaticTextureName = StaticTextureName("default:pine_tree_top");
+pub const PINE_TREE_SIDE_TEX: StaticTextureName = StaticTextureName("default:pine_tree_side");
+
+pub const PINE_NEEDLES: StaticBlockName = StaticBlockName("default:pine_needles");
+pub const PINE_NEEDLES_TEX: StaticTextureName = StaticTextureName("default:pine_needles");
+
+pub const PINE_PLANKS: StaticBlockName = StaticBlockName("default:pine_planks");
+pub const PINE_PLANKS_TEX: StaticTextureName = StaticTextureName("default:pine_planks");
 
 pub const TALL_GRASS: StaticBlockName = StaticBlockName("default:tall_grass");
 pub const TALL_GRASS_TEX: StaticTextureName = StaticTextureName("default:tall_grass");
@@ -44,34 +55,144 @@ pub const CACTUS_SIDE_TEX: StaticTextureName = StaticTextureName("default:cactus
 pub const STICK_ITEM: StaticItemName = StaticItemName("default:stick");
 pub const STICK_TEX: StaticTextureName = StaticTextureName("default:stick");
 
+struct TreeDef {
+    name: &'static str,
+    trunk: StaticBlockName,
+    trunk_top_tex: StaticTextureName,
+    trunk_side_tex: StaticTextureName,
+    planks: StaticBlockName,
+    planks_tex: StaticTextureName,
+    leaves: Option<(StaticBlockName, StaticTextureName)>,
+    group: &'static str,
+}
+
+fn register_tree(builder: &mut GameBuilder, tree: &TreeDef) -> Result<()> {
+    let trunk = builder.add_block(
+        BlockBuilder::new(tree.trunk)
+            .add_block_group(block_groups::TREE_TRUNK)
+            .add_block_group(block_groups::FIBROUS)
+            .add_block_group(tree.group)
+            .add_item_group(item_groups::TREE_TRUNK)
+            .add_item_group(tree.group)
+            .set_item_sort_key(format!("default:trees:tree_trunk:{}", tree.name))
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+                tree.trunk_side_tex,
+                tree.trunk_side_tex,
+                tree.trunk_top_tex,
+                tree.trunk_top_tex,
+                tree.trunk_side_tex,
+                tree.trunk_side_tex,
+            )),
+    )?;
+
+    let planks = builder.add_block(
+        BlockBuilder::new(tree.planks)
+            .add_block_group(block_groups::WOOD_PLANKS)
+            .add_block_group(block_groups::FIBROUS)
+            .add_block_group(tree.group)
+            .add_item_group(item_groups::WOOD_PLANKS)
+            .add_item_group(tree.group)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(tree.planks_tex))
+            .set_item_sort_key(format!("default:trees:wood_planks:{}", tree.name))
+            .set_display_name(format!(
+                "{} planks",
+                tree.name
+                    .chars()
+                    .next()
+                    .unwrap()
+                    .to_uppercase()
+                    .collect::<String>()
+                    + &tree.name[1..]
+            )),
+    )?;
+
+    builder.register_crafting_recipe(
+        [
+            RecipeSlot::Exact(tree.trunk.0.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        tree.planks.0.to_string(),
+        4,
+        Some(QuantityType::Stack(256)),
+        true,
+    );
+
+    // Register leaves if provided
+    if let Some((leaves_name, leaves_tex)) = tree.leaves {
+        builder.add_block(
+            BlockBuilder::new(leaves_name)
+                .add_block_group(block_groups::FIBROUS)
+                .add_block_group(block_groups::TREE_LEAVES)
+                .add_item_group(item_groups::TREE_LEAVES)
+                .set_cube_appearance(
+                    CubeAppearanceBuilder::new()
+                        .set_single_texture(leaves_tex)
+                        .set_needs_transparency(),
+                )
+                .set_item_sort_key(format!("default:trees:tree_leaves:{}", tree.name))
+                .set_allow_light_propagation(true),
+        )?;
+    }
+
+    shaped_blocks::make_slab(builder, &planks, true)?;
+    shaped_blocks::make_stairs(builder, &planks, true)?;
+    shaped_blocks::make_slab(builder, &trunk, true)?;
+    shaped_blocks::make_stairs(builder, &trunk, true)?;
+
+    Ok(())
+}
+
 pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
+    // Register textures
     include_texture_bytes!(builder, MAPLE_TREE_TOP_TEX, "textures/maple_tree_top.png")?;
     include_texture_bytes!(builder, MAPLE_TREE_SIDE_TEX, "textures/maple_tree_side.png")?;
     include_texture_bytes!(builder, MAPLE_LEAVES_TEX, "textures/maple_leaves.png")?;
     include_texture_bytes!(builder, MAPLE_PLANKS_TEX, "textures/maple_planks.png")?;
+    include_texture_bytes!(builder, PINE_TREE_TOP_TEX, "textures/pine_tree_top.png")?;
+    include_texture_bytes!(builder, PINE_TREE_SIDE_TEX, "textures/pine_tree_side.png")?;
+    include_texture_bytes!(builder, PINE_PLANKS_TEX, "textures/pine_planks.png")?;
+    include_texture_bytes!(builder, PINE_NEEDLES_TEX, "textures/pine_needles.png")?;
     include_texture_bytes!(builder, TALL_GRASS_TEX, "textures/tall_grass.png")?;
     include_texture_bytes!(builder, MARSH_GRASS_TEX, "textures/marsh_grass.png")?;
     include_texture_bytes!(builder, TALL_REED_TEX, "textures/tall_reed.png")?;
     include_texture_bytes!(builder, CACTUS_TOP_TEX, "textures/cactus_top.png")?;
     include_texture_bytes!(builder, CACTUS_SIDE_TEX, "textures/cactus_side.png")?;
     include_texture_bytes!(builder, STICK_TEX, "textures/stick.png")?;
-    let maple_trunk = builder.add_block(
-        BlockBuilder::new(MAPLE_TREE)
-            .add_block_group(block_groups::TREE_TRUNK)
-            .add_block_group(block_groups::FIBROUS)
-            .add_block_group(foliage_groups::MAPLE)
-            .add_item_group(item_groups::TREE_TRUNK)
-            .add_item_group(foliage_groups::MAPLE)
-            .set_item_sort_key("default:trees:tree_trunk:maple")
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
-                MAPLE_TREE_SIDE_TEX,
-                MAPLE_TREE_SIDE_TEX,
-                MAPLE_TREE_TOP_TEX,
-                MAPLE_TREE_TOP_TEX,
-                MAPLE_TREE_SIDE_TEX,
-                MAPLE_TREE_SIDE_TEX,
-            )),
-    )?;
+
+    // Register trees
+    let maple_tree = TreeDef {
+        name: "maple",
+        trunk: MAPLE_TREE,
+        trunk_top_tex: MAPLE_TREE_TOP_TEX,
+        trunk_side_tex: MAPLE_TREE_SIDE_TEX,
+        planks: MAPLE_PLANKS,
+        planks_tex: MAPLE_PLANKS_TEX,
+        leaves: Some((MAPLE_LEAVES, MAPLE_LEAVES_TEX)),
+        group: foliage_groups::MAPLE,
+    };
+
+    let pine_tree = TreeDef {
+        name: "pine",
+        trunk: PINE_TREE,
+        trunk_top_tex: PINE_TREE_TOP_TEX,
+        trunk_side_tex: PINE_TREE_SIDE_TEX,
+        planks: PINE_PLANKS,
+        planks_tex: PINE_PLANKS_TEX,
+        leaves: Some((PINE_NEEDLES, PINE_NEEDLES_TEX)),
+        group: foliage_groups::PINE,
+    };
+
+    register_tree(builder, &maple_tree)?;
+    register_tree(builder, &pine_tree)?;
+
+    // Register other foliage items
     builder.add_block(
         BlockBuilder::new(TALL_GRASS)
             .set_plant_like_appearance(
@@ -82,6 +203,7 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .set_no_drops(),
     )?;
+
     builder.add_block(
         BlockBuilder::new(MARSH_GRASS)
             .set_plant_like_appearance(
@@ -106,9 +228,9 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .set_no_drops(),
     )?;
+
     builder.register_smelting_fuel(RecipeSlot::Group(item_groups::TREE_TRUNK.to_string()), 8);
     builder.register_smelting_fuel(RecipeSlot::Group(item_groups::TREE_LEAVES.to_string()), 1);
-
     builder.register_smelting_fuel(RecipeSlot::Group(item_groups::WOOD_PLANKS.to_string()), 2);
 
     builder.register_basic_item(
@@ -117,18 +239,6 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
         STICK_TEX,
         vec![],
         "default:stick",
-    )?;
-
-    let maple_planks = builder.add_block(
-        BlockBuilder::new(MAPLE_PLANKS)
-            .add_block_group(block_groups::WOOD_PLANKS)
-            .add_block_group(block_groups::FIBROUS)
-            .add_block_group(foliage_groups::MAPLE)
-            .add_item_group(item_groups::WOOD_PLANKS)
-            .add_item_group(foliage_groups::MAPLE)
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(MAPLE_PLANKS_TEX))
-            .set_item_sort_key("default:trees:wood_planks:maple")
-            .set_display_name("Maple planks"),
     )?;
 
     builder.register_crafting_recipe(
@@ -149,37 +259,6 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
         true,
     );
 
-    builder.register_crafting_recipe(
-        [
-            RecipeSlot::Exact(MAPLE_TREE.0.to_string()),
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-            RecipeSlot::Empty,
-        ],
-        MAPLE_PLANKS.0.to_string(),
-        4,
-        Some(QuantityType::Stack(256)),
-        true,
-    );
-
-    builder.add_block(
-        BlockBuilder::new(MAPLE_LEAVES)
-            .add_block_group(block_groups::FIBROUS)
-            .add_block_group(block_groups::TREE_LEAVES)
-            .add_item_group(item_groups::TREE_LEAVES)
-            .set_cube_appearance(
-                CubeAppearanceBuilder::new()
-                    .set_single_texture(MAPLE_LEAVES_TEX)
-                    .set_needs_transparency(),
-            )
-            .set_item_sort_key("default:trees:tree_leaves:maple")
-            .set_allow_light_propagation(true),
-    )?;
     builder.add_block(
         BlockBuilder::new(CACTUS)
             .add_block_group(block_groups::FIBROUS)
@@ -192,10 +271,6 @@ pub(crate) fn register_foliage(builder: &mut GameBuilder) -> Result<()> {
                 CACTUS_SIDE_TEX,
             )),
     )?;
-    shaped_blocks::make_slab(builder, &maple_planks, true)?;
-    shaped_blocks::make_stairs(builder, &maple_planks, true)?;
-    shaped_blocks::make_slab(builder, &maple_trunk, true)?;
-    shaped_blocks::make_stairs(builder, &maple_trunk, true)?;
 
     register_flowers(builder)?;
 

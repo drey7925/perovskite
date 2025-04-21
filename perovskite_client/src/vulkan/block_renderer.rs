@@ -703,7 +703,17 @@ impl BlockRenderer {
             solid_opaque: self.mesh_chunk_subpass(
                 chunk_data,
                 |id| self.block_types().is_solid_opaque(id),
-                |_block, neighbor| self.block_defs.is_solid_opaque(neighbor),
+                |block, neighbor| {
+                    if !self.block_defs.is_solid_opaque(neighbor) {
+                        return false;
+                    }
+                    if !self.block_defs.is_liquid_variant_effect(neighbor) {
+                        return true;
+                    }
+                    // Need to be careful here, since the neighbor block isn't a full block, but we
+                    // know that it'll smooth to us - if it's the same base block type.
+                    return block.equals_ignore_variant(neighbor);
+                },
                 &SOLID_RECLAIMER,
             ),
             transparent: self.mesh_chunk_subpass(

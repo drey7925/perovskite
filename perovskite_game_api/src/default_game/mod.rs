@@ -20,8 +20,8 @@ use anyhow::Result;
 use perovskite_core::protocol;
 
 use self::{
+    default_mapgen::OreDefinition,
     game_settings::DefaultGameSettings,
-    mapgen::OreDefinition,
     recipes::{RecipeBook, RecipeImpl, RecipeSlot},
 };
 use crate::include_texture_bytes;
@@ -84,7 +84,7 @@ pub mod item_groups {
 }
 
 /// Control of the map generator.
-pub mod mapgen;
+pub mod default_mapgen;
 
 /// Additional traits that allow customization of the default game's mechanics (e.g. its crafting recipes).
 pub trait DefaultGameBuilder {
@@ -157,7 +157,8 @@ impl GameBuilderExtension for DefaultGameBuilderExtension {
         self.smelting_recipes.sort();
 
         let ores = self.ores.drain(..).collect();
-        server_builder.set_mapgen(move |blocks, seed| mapgen::build_mapgen(blocks, seed, ores));
+        server_builder
+            .set_mapgen(move |blocks, seed| default_mapgen::build_mapgen(blocks, seed, ores));
     }
 }
 

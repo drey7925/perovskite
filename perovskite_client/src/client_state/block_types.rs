@@ -4,7 +4,9 @@ use std::num::NonZeroU32;
 
 use bitvec::prelude as bv;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
-use perovskite_core::protocol::blocks::{BlockTypeDef, CubeRenderInfo, CubeRenderMode};
+use perovskite_core::protocol::blocks::{
+    BlockTypeDef, CubeRenderInfo, CubeRenderMode, CubeVariantEffect,
+};
 use rustc_hash::FxHashMap;
 
 use super::make_fallback_blockdef;
@@ -15,6 +17,7 @@ pub(crate) struct ClientBlockTypeManager {
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
     solid_opaque_blocks: bv::BitVec,
+    liquid_variant_effect: bv::BitVec,
     transparent_render_blocks: bv::BitVec,
     translucent_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
@@ -36,6 +39,8 @@ impl ClientBlockTypeManager {
 
         let mut solid_opaque_blocks = bv::BitVec::new();
         solid_opaque_blocks.resize(BlockId(max_id).index() + 1, false);
+        let mut liquid_variant_blocks = bv::BitVec::new();
+        liquid_variant_blocks.resize(BlockId(max_id).index() + 1, false);
 
         let mut transparent_render_blocks = bv::BitVec::new();
         transparent_render_blocks.resize(BlockId(max_id).index() + 1, false);
@@ -71,6 +76,9 @@ impl ClientBlockTypeManager {
             if let Some(RenderInfo::Cube(render_info)) = &def.render_info {
                 if render_info.render_mode() == CubeRenderMode::SolidOpaque {
                     solid_opaque_blocks.set(id.index(), true);
+                }
+                if render_info.variant_effect == CubeVariantEffect::Liquid.into() {
+                    liquid_variant_blocks.set(id.index(), true);
                 }
             }
 
@@ -114,6 +122,7 @@ impl ClientBlockTypeManager {
             light_propagators,
             light_emitters,
             solid_opaque_blocks,
+            liquid_variant_effect: liquid_variant_blocks,
             transparent_render_blocks,
             translucent_render_blocks,
             name_to_id,
@@ -180,6 +189,15 @@ impl ClientBlockTypeManager {
         } else {
             // unknown blocks are solid opaque
             true
+        }
+    }
+    #[inline]
+    pub(crate) fn is_liquid_variant_effect(&self, id: BlockId) -> bool {
+        if id.index() < self.liquid_variant_effect.len() {
+            self.liquid_variant_effect[id.index()]
+        } else {
+            // unknown blocks are solid opaque
+            false
         }
     }
     #[inline]

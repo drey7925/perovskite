@@ -1,6 +1,17 @@
 use std::ops::RangeInclusive;
 use std::{ops::BitXor, sync::Arc};
 
+use super::{
+    basic_blocks::{
+        CLAY, DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, SILT_DAMP, SILT_DRY, STONE,
+        WATER,
+    },
+    foliage::{
+        CACTUS, MAPLE_LEAVES, MAPLE_TREE, MARSH_GRASS, TALL_GRASS, TALL_REED, TERRESTRIAL_FLOWERS,
+    },
+};
+use crate::default_game::basic_blocks::{DIRT_WITH_SNOW, SNOW};
+use crate::default_game::foliage::{PINE_NEEDLES, PINE_TREE};
 use noise::{MultiFractal, NoiseFn};
 use perovskite_core::{
     block_id::BlockId,
@@ -14,16 +25,6 @@ use perovskite_server::game_state::{
 };
 use rand::seq::SliceRandom;
 use rand::Rng;
-
-use super::{
-    basic_blocks::{
-        CLAY, DESERT_SAND, DESERT_STONE, DIRT, DIRT_WITH_GRASS, SAND, SILT_DAMP, SILT_DRY, STONE,
-        WATER,
-    },
-    foliage::{
-        CACTUS, MAPLE_LEAVES, MAPLE_TREE, MARSH_GRASS, TALL_GRASS, TALL_REED, TERRESTRIAL_FLOWERS,
-    },
-};
 
 mod karst;
 
@@ -50,15 +51,16 @@ const BEACH_TENDENCY_INPUT_SCALE: f64 = 1.0 / 240.0;
 const DESERT_TENDENCY_INPUT_SCALE: f64 = 1.0 / 480.0;
 const KARST_TENDENCY_INPUT_SCALE: f64 = 1.0 / 7200.0;
 
-// Next seed offset: 27
+// Next seed offset: 29
 // Offsets 10-18 are used for karst
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Biome {
+enum RHBiome {
     DefaultGrassy,
     SandyBeach,
     Desert,
     Saltmarsh,
+    SnowyHighland,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,20 +94,61 @@ impl MacrobiomeNoise {
     }
 }
 
-struct BiomeNoise {
+struct RHBiomeNoise {
     sand_tendency: noise::SuperSimplex,
     desert_tendency: noise::SuperSimplex,
     saltmarsh_tendency: noise::SuperSimplex,
+    highland_tendency: noise::SuperSimplex,
 }
-impl BiomeNoise {
-    fn new(seed: u32) -> BiomeNoise {
-        BiomeNoise {
+impl RHBiomeNoise {
+    const HIGHLAND_INPUT_SCALE: f64 = 1.0 / 2400.0;
+
+    fn new(seed: u32) -> RHBiomeNoise {
+        RHBiomeNoise {
             sand_tendency: noise::SuperSimplex::new(seed.wrapping_add(3)),
             desert_tendency: noise::SuperSimplex::new(seed.wrapping_add(4)),
             saltmarsh_tendency: noise::SuperSimplex::new(seed.wrapping_add(22)),
+            highland_tendency: noise::SuperSimplex::new(seed.wrapping_add(27)),
         }
     }
-    fn get(&self, x: i32, z: i32, elevation: f32, coastal_flatness: f32) -> Biome {
+    /// Returns the biome to use at a location.
+    ///
+    /// Args:
+    ///     x: X block coordinate
+    ///     z: Z block coordinate
+    ///     elevation: The starting elevation, before biome elevation adjustments
+    ///     coastal_flatness: The coastal flatness used in the elevation calculation. When elevation
+    ///         is forced to be flatter near the water, saltmarsh is more likely.
+    ///
+    /// Returns:
+    ///     The biome to use, and an elevation adjustment to make (which should be added to the
+    ///     elevation to get a final value)
+    fn get<const DEBUG: bool>(
+        &self,
+        x: i32,
+        z: i32,
+        elevation: f32,
+        coastal_flatness: f32,
+    ) -> (RHBiome, f32) {
+        let debug_log = if DEBUG {
+            |desc: &'static str, val: f64| {
+                tracing::info!("  {}: {}", desc, val);
+            }
+        } else {
+            |_: &'static str, _: f64| {}
+        };
+        let highland_value = self.highland_tendency.get([
+            x as f64 * Self::HIGHLAND_INPUT_SCALE,
+            z as f64 * Self::HIGHLAND_INPUT_SCALE,
+        ]) as f32;
+        debug_log("highland_value", highland_value as f64);
+        if highland_value > 0.7 {
+            let highland_excess = highland_value - 0.7;
+            let excess_10 = highland_excess * 10.0;
+            let height_adustment = 100.0 * (excess_10 - excess_10.tanh());
+            return (RHBiome::SnowyHighland, height_adustment);
+        }
+
         let sand_value = self.sand_tendency.get([
             x as f64 * BEACH_TENDENCY_INPUT_SCALE,
             z as f64 * BEACH_TENDENCY_INPUT_SCALE,
@@ -115,7 +158,7 @@ impl BiomeNoise {
             // sandy beach
             let range = (excess * -10.0)..=(excess * 3.0 + 0.5);
             if range.contains(&elevation) {
-                return Biome::SandyBeach;
+                return (RHBiome::SandyBeach, 0.0);
             }
         };
         let marsh_value = self.saltmarsh_tendency.get([
@@ -128,7 +171,7 @@ impl BiomeNoise {
             // sandy beach
             let range = (excess * -5.0)..=(excess * 1.0 + 0.5);
             if range.contains(&elevation) {
-                return Biome::Saltmarsh;
+                return (RHBiome::Saltmarsh, 0.0);
             }
         };
         let desert_value = self.desert_tendency.get([
@@ -141,13 +184,13 @@ impl BiomeNoise {
             // 0.7 deserts start at sea level
             let cutoff = (20.0 * (0.8 - desert_value)).max(10.0);
             if elevation > cutoff {
-                return Biome::Desert;
+                return (RHBiome::Desert, 0.0);
             }
         }
-        Biome::DefaultGrassy
+        (RHBiome::DefaultGrassy, 0.0)
     }
 }
-struct RollingHillsElevation {
+struct RollingHillsGenerator {
     coarse: noise::RidgedMulti<noise::SuperSimplex>,
     coarse_nr: noise::SuperSimplex,
     fine: noise::SuperSimplex,
@@ -158,8 +201,10 @@ struct RollingHillsElevation {
     caldera_height: noise::RidgedMulti<noise::SuperSimplex>,
     caldera_height_coarse: noise::SuperSimplex,
     caldera_inner_sharpness: noise::SuperSimplex,
+
+    microbiome_noise: RHBiomeNoise,
 }
-impl RollingHillsElevation {
+impl RollingHillsGenerator {
     const CALDERA_GATE_LOWER: f64 = 0.84;
     const CALDERA_GATE_UPPER: f64 = 0.91;
     const CALDERA_GATE_MID: f64 = 0.90;
@@ -173,8 +218,8 @@ impl RollingHillsElevation {
     const ELEVATION_COARSE_OUTPUT_SCALE: f64 = 60.0;
     const ELEVATION_EXTRA_COARSE_OUTPUT_SCALE: f64 = 40.0;
     const ELEVATION_OFFSET: f64 = 20.0;
-    fn new(seed: u32) -> RollingHillsElevation {
-        RollingHillsElevation {
+    fn new(seed: u32) -> RollingHillsGenerator {
+        RollingHillsGenerator {
             coarse: noise::RidgedMulti::new(seed).set_persistence(0.8),
             coarse_nr: noise::SuperSimplex::new(seed),
             fine: noise::SuperSimplex::new(seed.wrapping_add(1)),
@@ -185,10 +230,11 @@ impl RollingHillsElevation {
             caldera_height: noise::RidgedMulti::new(seed.wrapping_add(24)).set_persistence(0.8),
             caldera_height_coarse: noise::SuperSimplex::new(seed.wrapping_add(25)),
             caldera_inner_sharpness: noise::SuperSimplex::new(seed.wrapping_add(26)),
+            microbiome_noise: RHBiomeNoise::new(seed),
         }
     }
 
-    fn get<const DEBUG: bool>(&self, x: i32, z: i32) -> (f32, f32, f32) {
+    fn get<const DEBUG: bool>(&self, x: i32, z: i32) -> (f32, f32, f32, RHBiome) {
         let debug_log = if DEBUG {
             |desc: &'static str, val: f64| {
                 tracing::info!("{}: {}", desc, val);
@@ -312,7 +358,17 @@ impl RollingHillsElevation {
             debug_log("caldera_blended", caldera_blended);
             adjusted_height = caldera_blended;
         }
-        (adjusted_height as f32, flatness as f32, water_height)
+        let adjusted_height = adjusted_height as f32;
+        let flatness = flatness as f32;
+        let (biome, height_adjustment) =
+            self.microbiome_noise
+                .get::<DEBUG>(x, z, adjusted_height, flatness);
+        (
+            adjusted_height + height_adjustment,
+            flatness,
+            water_height,
+            biome,
+        )
     }
 }
 
@@ -365,6 +421,7 @@ struct DefaultMapgen {
     air: BlockTypeHandle,
     dirt: BlockTypeHandle,
     dirt_grass: BlockTypeHandle,
+    dirt_snow: BlockTypeHandle,
     stone: BlockTypeHandle,
     sand: BlockTypeHandle,
     silt_dry: BlockTypeHandle,
@@ -375,9 +432,14 @@ struct DefaultMapgen {
     desert_sand: BlockTypeHandle,
 
     water: BlockTypeHandle,
+    snow: BlockTypeHandle,
     // todo organize the foliage (and more of the blocks in general) in a better way
     maple_tree: BlockTypeHandle,
     maple_leaves: BlockTypeHandle,
+
+    pine_tree: BlockTypeHandle,
+    pine_needles: BlockTypeHandle,
+
     cactus: BlockTypeHandle,
     tall_grass: BlockTypeHandle,
     flowers: Vec<BlockTypeHandle>,
@@ -385,12 +447,14 @@ struct DefaultMapgen {
     marsh_grass: BlockTypeHandle,
     tall_reed: BlockTypeHandle,
 
-    rolling_hills_elevation_noise: RollingHillsElevation,
+    rolling_hills_noise: RollingHillsGenerator,
     tree_density_noise: noise::Billow<noise::SuperSimplex>,
 
     flower_density_noise: noise::Billow<noise::SuperSimplex>,
     cactus_density_noise: noise::Billow<noise::SuperSimplex>,
     tall_grass_density_noise: noise::Billow<noise::SuperSimplex>,
+
+    snow_noise: noise::SuperSimplex,
 
     karst_noise: karst::KarstGenerator,
 
@@ -400,7 +464,6 @@ struct DefaultMapgen {
     signal_testonly: BlockTypeHandle,
     glass_testonly: BlockTypeHandle,
 
-    biome_noise: BiomeNoise,
     macrobiome_noise: MacrobiomeNoise,
     cave_noise: CaveNoise,
     ores: Vec<(OreDefinition, noise::SuperSimplex)>,
@@ -409,23 +472,25 @@ struct DefaultMapgen {
 
 impl DefaultMapgen {
     #[inline]
-    fn prefill_single(&self, xg: i32, zg: i32) -> (Macrobiome, f32, f32, f32) {
+    fn prefill_single(&self, xg: i32, zg: i32) -> (Macrobiome, f32, f32, f32, RHBiome) {
         let (macrobiome, rolling_hills_blend, karst_blend) = self.macrobiome_single(xg, zg);
         let mut elevation = 0.0;
         let mut flatness = 0.0;
         let mut water_height = 0.0;
+        let mut microbiome = RHBiome::DefaultGrassy;
         if rolling_hills_blend > 0.0 {
-            let (rh_elevation, coastal_flatness, water_height_) =
-                self.rolling_hills_elevation_noise.get::<false>(xg, zg);
+            let (rh_elevation, coastal_flatness, water_height_, microbiome_) =
+                self.rolling_hills_noise.get::<false>(xg, zg);
             flatness = coastal_flatness;
             elevation += rh_elevation * rolling_hills_blend;
             water_height += water_height_ * rolling_hills_blend;
+            microbiome = microbiome_;
         }
         if karst_blend > 0.0 {
             let (raw_elev, _floor, _ceil) = self.karst_noise.height(xg, zg);
             elevation += raw_elev * karst_blend;
         }
-        (macrobiome, elevation, flatness, water_height)
+        (macrobiome, elevation, flatness, water_height, microbiome)
     }
 
     fn macrobiome_single(&self, xg: i32, zg: i32) -> (Macrobiome, f32, f32) {
@@ -443,7 +508,7 @@ impl DefaultMapgen {
         cave_floor_map: &mut [[f32; 16]; 16],
         cave_ceil_map: &mut [[f32; 16]; 16],
         macrobiome_map: &mut [[Macrobiome; 16]; 16],
-        biome_map: &mut [[Biome; 16]; 16],
+        biome_map: &mut [[RHBiome; 16]; 16],
         water_height_map: &mut [[f32; 16]; 16],
     ) {
         let mut rolling_hills_blend = [[0.0; 16]; 16];
@@ -465,14 +530,15 @@ impl DefaultMapgen {
         if any_rolling_hills {
             for x in 0..16 {
                 for z in 0..16 {
-                    let (elevation, flatness, water_height) =
-                        self.rolling_hills_elevation_noise.get::<false>(
+                    let (elevation, flatness, water_height, microbiome) =
+                        self.rolling_hills_noise.get::<false>(
                             (chunk_coord.x * 16) + x as i32,
                             (chunk_coord.z * 16) + z as i32,
                         );
                     coastal_flatness_map[x][z] = flatness;
                     height_map[x][z] += rolling_hills_blend[x][z] * elevation;
                     water_height_map[x][z] += rolling_hills_blend[x][z] * water_height;
+                    biome_map[x][z] = microbiome;
                 }
             }
         }
@@ -489,18 +555,6 @@ impl DefaultMapgen {
                 }
             }
         }
-        if any_rolling_hills {
-            for x in 0..16 {
-                for z in 0..16 {
-                    biome_map[x][z] = self.biome_noise.get(
-                        (chunk_coord.x * 16) + x as i32,
-                        (chunk_coord.z * 16) + z as i32,
-                        height_map[x][z],
-                        coastal_flatness_map[x][z],
-                    );
-                }
-            }
-        }
     }
 }
 
@@ -511,7 +565,7 @@ impl MapgenInterface for DefaultMapgen {
         let mut cave_floor_map: [[f32; 16]; 16] = [[0.0; 16]; 16];
         let mut cave_ceil_map: [[f32; 16]; 16] = [[0.0; 16]; 16];
         let mut macrobiome_map = [[Macrobiome::RollingHills; 16]; 16];
-        let mut biome_map = [[Biome::DefaultGrassy; 16]; 16];
+        let mut biome_map = [[RHBiome::DefaultGrassy; 16]; 16];
         let mut water_height_map: [[f32; 16]; 16] = [[0.0; 16]; 16];
 
         self.prefill(
@@ -657,8 +711,8 @@ impl MapgenInterface for DefaultMapgen {
             let (_, rh_blend, karst_blend) = self.macrobiome_single(xg, zg);
             let mut height = 0.0;
             if rh_blend > 0.0 {
-                let (rh_elevation, _, rh_water_height) =
-                    self.rolling_hills_elevation_noise.get::<false>(xg, zg);
+                let (rh_elevation, _, rh_water_height, _) =
+                    self.rolling_hills_noise.get::<false>(xg, zg);
                 height += rh_blend * rh_elevation;
                 water_height += rh_blend * rh_water_height;
             }
@@ -675,24 +729,42 @@ impl MapgenInterface for DefaultMapgen {
     }
 
     fn dump_debug(&self, pos: BlockCoordinate) {
-        self.rolling_hills_elevation_noise.get::<true>(pos.x, pos.z);
+        self.rolling_hills_noise.get::<true>(pos.x, pos.z);
 
         let mut rng = rand::thread_rng();
         for i in 0..10000 {
             let x = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
             let z = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
             let extra_coarse_pos = [
-                x * RollingHillsElevation::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
-                z * RollingHillsElevation::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
+                x * RollingHillsGenerator::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
+                z * RollingHillsGenerator::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
             ];
             let ce = self
-                .rolling_hills_elevation_noise
+                .rolling_hills_noise
                 .caldera_enable
                 .get(extra_coarse_pos);
-            if ce > RollingHillsElevation::CALDERA_GATE_LOWER
-                && ce < RollingHillsElevation::CALDERA_GATE_UPPER
+            if ce > RollingHillsGenerator::CALDERA_GATE_LOWER
+                && ce < RollingHillsGenerator::CALDERA_GATE_UPPER
             {
                 tracing::info!("Caldera at ({}, {})", x, z);
+                break;
+            }
+        }
+
+        for i in 0..10000 {
+            let x = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
+            let z = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
+            let extra_coarse_pos = [
+                x * RHBiomeNoise::HIGHLAND_INPUT_SCALE,
+                z * RHBiomeNoise::HIGHLAND_INPUT_SCALE,
+            ];
+            let ce = self
+                .rolling_hills_noise
+                .microbiome_noise
+                .highland_tendency
+                .get(extra_coarse_pos);
+            if ce > 0.8 {
+                tracing::info!("Highland at ({}, {})", x, z);
                 break;
             }
         }
@@ -759,7 +831,7 @@ impl DefaultMapgen {
         chunk: &mut MapChunk,
         heightmap: &[[f32; 16]; 16],
         macrobiome_map: &[[Macrobiome; 16]; 16],
-        biome_map: &[[Biome; 16]; 16],
+        biome_map: &[[RHBiome; 16]; 16],
         water_height_map: &[[f32; 16]; 16],
     ) {
         for i in -3..18 {
@@ -779,16 +851,8 @@ impl DefaultMapgen {
                             water_height_map[x.rem_euclid(16) as usize][z.rem_euclid(16) as usize],
                         )
                     } else {
-                        let (macrobiome, elevation, flatness, water_height) =
+                        let (macrobiome, elevation, _flatness, water_height, biome) =
                             self.prefill_single(x, z);
-
-                        let biome = match macrobiome {
-                            Macrobiome::RollingHills => {
-                                self.biome_noise.get(x, z, elevation, flatness)
-                            }
-                            // TODO karst biomes
-                            Macrobiome::Karst => Biome::DefaultGrassy,
-                        };
                         (elevation, macrobiome, biome, water_height)
                     };
                     let ground_y = elevation.floor() as i32;
@@ -803,7 +867,7 @@ impl DefaultMapgen {
                         continue;
                     }
                     match (macrobiome, biome) {
-                        (Macrobiome::RollingHills, Biome::DefaultGrassy) => {
+                        (Macrobiome::RollingHills, RHBiome::DefaultGrassy) => {
                             let tree_value = self.fast_uniform_2d(x, z, self.seed);
                             let tree_cutoff = self.tree_density_noise.get([
                                 (x as f64) * TREE_DENSITY_INPUT_SCALE,
@@ -811,7 +875,7 @@ impl DefaultMapgen {
                             ]) * TREE_DENSITY_OUTPUT_SCALE
                                 + TREE_DENSITY_OUTPUT_OFFSET;
                             if tree_value < tree_cutoff {
-                                self.make_tree(chunk_coord, chunk, x, ground_y, z);
+                                self.make_maple_tree(chunk_coord, chunk, x, ground_y, z);
                             }
 
                             let flower_value =
@@ -850,7 +914,7 @@ impl DefaultMapgen {
                                 );
                             }
                         }
-                        (Macrobiome::RollingHills, Biome::Desert) => {
+                        (Macrobiome::RollingHills, RHBiome::Desert) => {
                             let cactus_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(1));
                             let cactus_cutoff = self.cactus_density_noise.get([
@@ -873,7 +937,7 @@ impl DefaultMapgen {
                                 );
                             }
                         }
-                        (Macrobiome::RollingHills, Biome::SandyBeach | Biome::Saltmarsh) => {
+                        (Macrobiome::RollingHills, RHBiome::SandyBeach | RHBiome::Saltmarsh) => {
                             let marsh_grass_value =
                                 self.fast_uniform_2d(x, z, self.seed.wrapping_add(3));
                             let marsh_grass_cutoff = self.flower_density_noise.get([
@@ -882,7 +946,7 @@ impl DefaultMapgen {
                             ]) * FLOWER_DENSITY_OUTPUT_SCALE
                                 + (4.0 * FLOWER_DENSITY_OUTPUT_OFFSET);
                             if marsh_grass_value < marsh_grass_cutoff {
-                                if biome == Biome::Saltmarsh
+                                if biome == RHBiome::Saltmarsh
                                     && elevation < 0.5
                                     && marsh_grass_value < (0.25 * marsh_grass_cutoff)
                                 {
@@ -908,6 +972,17 @@ impl DefaultMapgen {
                                 }
                             }
                         }
+                        (Macrobiome::RollingHills, RHBiome::SnowyHighland) => {
+                            let tree_value = self.fast_uniform_2d(x, z, self.seed);
+                            let tree_cutoff = self.tree_density_noise.get([
+                                (x as f64) * TREE_DENSITY_INPUT_SCALE,
+                                (z as f64) * TREE_DENSITY_INPUT_SCALE,
+                            ]) * TREE_DENSITY_OUTPUT_SCALE
+                                + TREE_DENSITY_OUTPUT_OFFSET;
+                            if tree_value < tree_cutoff {
+                                self.make_pine_tree(chunk_coord, chunk, x, ground_y, z);
+                            }
+                        }
                         (Macrobiome::Karst, _) => {
                             if ground_y <= 20 {
                                 let tree_value = self.fast_uniform_2d(x, z, self.seed);
@@ -917,7 +992,7 @@ impl DefaultMapgen {
                                 ]) * TREE_DENSITY_OUTPUT_SCALE
                                     + TREE_DENSITY_OUTPUT_OFFSET;
                                 if tree_value < tree_cutoff {
-                                    self.make_tree(chunk_coord, chunk, x, ground_y, z);
+                                    self.make_maple_tree(chunk_coord, chunk, x, ground_y, z);
                                 }
                             } else {
                                 // vines
@@ -950,7 +1025,7 @@ impl DefaultMapgen {
     }
 
     // Generate a tree at the given location. The y coordinate represents the dirt block just below the tree.
-    fn make_tree(
+    fn make_maple_tree(
         &self,
         chunk_coord: ChunkCoordinate,
         chunk: &mut MapChunk,
@@ -979,6 +1054,51 @@ impl DefaultMapgen {
                     );
                     if coord.chunk() == chunk_coord {
                         chunk.set_block(coord.offset(), self.maple_leaves, None);
+                    }
+                }
+            }
+        }
+    }
+
+    // Generate a tree at the given location. The y coordinate represents the dirt block just below the tree.
+    fn make_pine_tree(
+        &self,
+        chunk_coord: ChunkCoordinate,
+        chunk: &mut MapChunk,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) {
+        let height = (5.0 + self.fast_uniform_2d(x, z, self.seed.wrapping_add(6)) * 4.0) as i32;
+        let radius = (2.0 + self.fast_uniform_2d(x, z, self.seed.wrapping_add(7)) * 2.0) as i32;
+        // saturating_add used here since overflow is fine, the chunk checks will all fail from
+        // wraparound
+        for h in 1..=(height - 1) {
+            let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
+            if coord.chunk() == chunk_coord {
+                chunk.set_block(coord.offset(), self.pine_tree, None);
+            }
+        }
+        let r_slope = (radius as f32) / (height - 2) as f32;
+        for h in 3..=height {
+            for i in -radius..=radius {
+                for j in -radius..=radius {
+                    if i == 0 && j == 0 && h < height {
+                        continue;
+                    }
+                    let r_adjusted = (radius - ((h - 3) as f32 * r_slope) as i32).max(1);
+
+                    if (i * i + j * j) > (r_adjusted * r_adjusted) {
+                        continue;
+                    }
+
+                    let coord = BlockCoordinate::new(
+                        x.wrapping_add(i),
+                        y.wrapping_add(h),
+                        z.wrapping_add(j),
+                    );
+                    if coord.chunk() == chunk_coord {
+                        chunk.set_block(coord.offset(), self.pine_needles, None);
                     }
                 }
             }
@@ -1121,6 +1241,49 @@ impl DefaultMapgen {
         }
     }
 
+    fn generate_snowy_highland<F>(
+        &self,
+        vert_offset: i32,
+        water_height: i32,
+        block_coord: BlockCoordinate,
+        gen_ore: F,
+    ) -> BlockId
+    where
+        F: Fn() -> BlockId,
+    {
+        let x = block_coord.x;
+        let z = block_coord.z;
+        if vert_offset > 1 {
+            if block_coord.y > water_height {
+                self.air
+            } else {
+                self.water
+            }
+        } else if vert_offset == 1 && block_coord.y > water_height {
+            let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
+                + (block_coord.y as f64) / 300.0;
+            if snow_tendency < 0.0 {
+                self.air
+            } else {
+                let depth_variant = (snow_tendency * 8.0).clamp(0.0, 7.0) as u16 & 0x7;
+                self.snow.with_variant_unchecked(depth_variant)
+            }
+        } else if vert_offset == 0 && block_coord.y >= water_height {
+            let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
+                + (block_coord.y as f64) / 300.0;
+            if snow_tendency > 0.0 {
+                self.dirt_snow
+            } else {
+                self.dirt_grass
+            }
+        } else if vert_offset > -3 {
+            // todo variable depth of dirt
+            self.dirt
+        } else {
+            gen_ore()
+        }
+    }
+
     fn make_simple_foliage(
         &self,
         chunk_coord: ChunkCoordinate,
@@ -1144,7 +1307,7 @@ impl DefaultMapgen {
         chunk_coord: ChunkCoordinate,
         x: u8,
         z: u8,
-        biome_map: &[[Biome; 16]; 16],
+        biome_map: &[[RHBiome; 16]; 16],
         height_map: &[[f32; 16]; 16],
         water_height_map: &[[f32; 16]; 16],
         chunk: &mut MapChunk,
@@ -1161,21 +1324,24 @@ impl DefaultMapgen {
             let gen_ore = || self.generate_ore(block_coord);
             let water_height = water_height_map[x as usize][z as usize] as i32;
             let block = match biome {
-                Biome::DefaultGrassy => {
+                RHBiome::DefaultGrassy => {
                     self.generate_default_biome(vert_offset, water_height, block_coord, gen_ore)
                 }
-                Biome::SandyBeach => {
+                RHBiome::SandyBeach => {
                     self.generate_sandy_beach(vert_offset, water_height, block_coord, gen_ore)
                 }
-                Biome::Saltmarsh => self.generate_saltmarsh(
+                RHBiome::Saltmarsh => self.generate_saltmarsh(
                     vert_offset,
                     water_height,
                     block_coord,
                     gen_ore,
                     elevation,
                 ),
-                Biome::Desert => {
+                RHBiome::Desert => {
                     self.generate_desert(vert_offset, water_height, block_coord, gen_ore)
+                }
+                RHBiome::SnowyHighland => {
+                    self.generate_snowy_highland(vert_offset, water_height, block_coord, gen_ore)
                 }
             };
             chunk.set_block(offset, block, None);
@@ -1192,6 +1358,9 @@ pub(crate) fn build_mapgen(
         air: blocks.get_by_name(AIR).expect("air"),
         dirt: blocks.get_by_name(DIRT.0).expect("dirt"),
         dirt_grass: blocks.get_by_name(DIRT_WITH_GRASS.0).expect("dirt_grass"),
+        dirt_snow: blocks
+            .get_by_name(DIRT_WITH_SNOW.0)
+            .expect("dirt_with_snow"),
         stone: blocks.get_by_name(STONE.0).expect("stone"),
 
         sand: blocks.get_by_name(SAND.0).expect("sand"),
@@ -1207,8 +1376,13 @@ pub(crate) fn build_mapgen(
             .expect("water")
             .with_variant(0xfff)
             .unwrap(),
+        snow: blocks.get_by_name(SNOW.0).expect("snow"),
         maple_tree: blocks.get_by_name(MAPLE_TREE.0).expect("maple_tree"),
         maple_leaves: blocks.get_by_name(MAPLE_LEAVES.0).expect("maple_leaves"),
+
+        pine_tree: blocks.get_by_name(PINE_TREE.0).expect("pine_tree"),
+        pine_needles: blocks.get_by_name(PINE_NEEDLES.0).expect("pine_needles"),
+
         tall_grass: blocks.get_by_name(TALL_GRASS.0).expect("tall_grass"),
         marsh_grass: blocks.get_by_name(MARSH_GRASS.0).expect("marsh_grass"),
         tall_reed: blocks.get_by_name(TALL_REED.0).expect("tall_reed"),
@@ -1220,8 +1394,7 @@ pub(crate) fn build_mapgen(
 
         cactus: blocks.get_by_name(CACTUS.0).expect("cactus"),
 
-        rolling_hills_elevation_noise: RollingHillsElevation::new(seed),
-        biome_noise: BiomeNoise::new(seed),
+        rolling_hills_noise: RollingHillsGenerator::new(seed),
         macrobiome_noise: MacrobiomeNoise::new(seed),
         karst_noise: karst::KarstGenerator::new(seed, &blocks),
         cave_noise: CaveNoise::new(seed),
@@ -1229,6 +1402,7 @@ pub(crate) fn build_mapgen(
         flower_density_noise: noise::Billow::new(seed.wrapping_add(7)),
         tall_grass_density_noise: noise::Billow::new(seed.wrapping_add(8)),
         cactus_density_noise: noise::Billow::new(seed.wrapping_add(5)),
+        snow_noise: noise::SuperSimplex::new(seed.wrapping_add(28)),
         ores: ores
             .into_iter()
             .enumerate()
