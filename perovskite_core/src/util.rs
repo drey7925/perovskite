@@ -96,3 +96,70 @@ pub trait LogInspect: Sized {
     }
 }
 impl<T> LogInspect for T {}
+
+/// An atomic variation of std::time::Instant, able to count
+/// about 584 years from when it is constructed with new.
+/// It cannot represent times before when it was constructed.
+///
+/// TODO: On machines that do not support 64-bit atomics,
+/// provide a fallback that uses a mutex instead.
+///
+/// Note: This is tailored for some specific uses in Perovskite
+/// (both client and server, hence in the core crate), and isn't
+/// intended to be used by general outside usages.
+pub struct AtomicInstant {
+    initial: std::time::Instant,
+    offset: std::sync::atomic::AtomicU64,
+}
+impl AtomicInstant {
+    pub fn new() -> AtomicInstant {
+        AtomicInstant {
+            initial: std::time::Instant::now(),
+            offset: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+    pub fn get_acquire(&self) -> std::time::Instant {
+        let offset = self.offset.load(std::sync::atomic::Ordering::Acquire);
+        self.initial + std::time::Duration::from_nanos(offset)
+    }
+    pub fn update_now_release(&self) {
+        self.update_to_release(std::time::Instant::now());
+    }
+    pub fn get_relaxed(&self) -> std::time::Instant {
+        let offset = self.offset.load(std::sync::atomic::Ordering::Relaxed);
+        self.initial + std::time::Duration::from_nanos(offset)
+    }
+    pub fn update_now_relaxed(&self) {
+        self.update_to_relaxed(std::time::Instant::now());
+    }
+    pub fn update_to_release(&self, when: std::time::Instant) {
+        if when < self.initial {
+            panic!(
+                "Attempted to set an instant ({:?}) before AtomicInstant was constructed ({:?})",
+                when, self.initial
+            );
+        }
+        let offset = when
+            .duration_since(self.initial)
+            .as_nanos()
+            .try_into()
+            .unwrap();
+        self.offset
+            .store(offset, std::sync::atomic::Ordering::Release);
+    }
+    pub fn update_to_relaxed(&self, when: std::time::Instant) {
+        if when < self.initial {
+            panic!(
+                "Attempted to set an instant ({:?}) before AtomicInstant was constructed ({:?})",
+                when, self.initial
+            );
+        }
+        let offset = when
+            .duration_since(self.initial)
+            .as_nanos()
+            .try_into()
+            .unwrap();
+        self.offset
+            .store(offset, std::sync::atomic::Ordering::Relaxed);
+    }
+}

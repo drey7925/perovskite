@@ -32,11 +32,13 @@ use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
+use super::block_types::ClientBlockTypeManager;
 use crate::vulkan::block_renderer::{
     BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::{VkAllocator, VulkanContext};
+use perovskite_core::util::AtomicInstant;
 use prost::Message;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
@@ -44,8 +46,6 @@ use vulkano::command_buffer::{
 };
 use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
-
-use super::block_types::ClientBlockTypeManager;
 
 pub(crate) trait ChunkDataView {
     fn is_empty_optimization_hint(&self) -> bool;
@@ -186,7 +186,7 @@ pub(crate) struct ClientChunk {
     coord: ChunkCoordinate,
     chunk_data: RwLock<ChunkData>,
     chunk_mesh: Mutex<ChunkMesh>,
-    last_meshed: Mutex<Instant>,
+    last_meshed: AtomicInstant,
     // Speedup hint only
     has_solo_hint: AtomicBool,
 }
@@ -267,7 +267,7 @@ impl ClientChunk {
                     solo_gpu: None,
                     batch: None,
                 }),
-                last_meshed: Mutex::new(Instant::now()),
+                last_meshed: AtomicInstant::new(),
                 has_solo_hint: AtomicBool::new(false),
             },
             occlusion,
@@ -275,7 +275,8 @@ impl ClientChunk {
     }
 
     pub(crate) fn last_meshed(&self) -> Instant {
-        *self.last_meshed.lock()
+        // Relaxed since this is used just for approximate hints
+        self.last_meshed.get_relaxed()
     }
 
     pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<MeshResult> {
@@ -296,7 +297,8 @@ impl ClientChunk {
                 Some(result)
             }
         };
-        *self.last_meshed.lock() = Instant::now();
+        // The ordering doesn't matter; we're doing this under the lock
+        self.last_meshed.update_now_relaxed();
         let mut mesh_lock = self.chunk_mesh.lock();
         let old_batch = mesh_lock.batch;
         if let Some(vertex_data) = vertex_data {
@@ -349,7 +351,7 @@ impl ClientChunk {
 
     pub(crate) fn set_batch(&self, id: u64) {
         self.has_solo_hint.store(false, Ordering::Relaxed);
-        *self.last_meshed.lock() = Instant::now();
+        self.last_meshed.update_now_relaxed();
         let mut lock = self.chunk_mesh.lock();
         lock.batch = Some(id);
     }
@@ -360,8 +362,8 @@ impl ClientChunk {
 
     pub(crate) fn spill_back_to_solo(&self, expecting: u64) -> Option<u64> {
         self.has_solo_hint.store(true, Ordering::Relaxed);
-        *self.last_meshed.lock() = Instant::now();
         let mut lock = self.chunk_mesh.lock();
+        self.last_meshed.update_now_relaxed();
         if lock.batch.is_some_and(|b| b != expecting) {
             panic!("Expected batch {:?}, got {:?}", expecting, lock.batch);
         }
