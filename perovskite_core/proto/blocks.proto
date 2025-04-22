@@ -65,7 +65,7 @@ message BlockTypeDef {
   // How the client should handle physics when interacting with the block
   oneof physics_info {
     Empty air = 20;
-    Empty solid = 21;
+    SolidPhysicsInfo solid = 21;
     FluidPhysicsInfo fluid = 22;
     // Any texture/rendering related info is ignored; rotation and variant_mask are used
     AxisAlignedBoxes solid_custom_collisionboxes = 23;
@@ -201,6 +201,12 @@ message FluidPhysicsInfo {
   double surf_jump_speed = 8;
   // Speed when pressing the lower key when in the surface. Positive means upward.
   double surf_sink_speed = 9;
+}
+
+message SolidPhysicsInfo {
+  // If set, the variant has this effect on physics. For full solid cubes, only CUBE_VARIANT_EFFECT_LIQUID
+  // has an effect at the moment.
+  CubeVariantEffect variant_effect = 1;
 }
 
 // Options available for the interact key when facing a block

@@ -24,15 +24,15 @@ use perovskite_core::{
     protocol::blocks::{block_type_def::PhysicsInfo, BlockTypeDef},
 };
 
-use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
-use perovskite_core::protocol::audio::SoundSource;
-use tracy_client::{plot, span};
-
 use super::{
     input::{BoundAction, InputState},
     settings::GameSettings,
     ChunkManagerView, ClientBlockTypeManager, ClientState,
 };
+use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
+use perovskite_core::protocol::audio::SoundSource;
+use perovskite_core::protocol::blocks::CubeVariantEffect;
+use tracy_client::{plot, span};
 
 const PLAYER_WIDTH: f64 = 0.75;
 const EYE_TO_TOP: f64 = 0.2;
@@ -65,7 +65,7 @@ const DAMPING: f64 = GRAVITY_ACCEL / (TERMINAL_VELOCITY * TERMINAL_VELOCITY);
 // physics-level edge cases with minimal visual jankiness
 const COLLISION_EPS: f64 = 0.000005;
 // Use twice the collision epsilon for detecting surfaces/blocks (when not colliding with them)
-const _DETECTION_EPS: f64 = COLLISION_EPS * 2.;
+const DETECTION_EPS: f64 = COLLISION_EPS * 2.;
 // float_eps is used to avoid issues related to exact float comparisions
 const _FLOAT_EPS: f64 = 0.000001;
 
@@ -216,13 +216,8 @@ impl PhysicsState {
         let block_types = &client_state.block_types;
 
         // The block that the player's foot is in
-        let surrounding_coord = BlockCoordinate {
-            x: self.pos.x.round() as i32,
-            y: (self.pos.y - EYE_TO_BTM).round() as i32,
-            z: self.pos.z.round() as i32,
-        };
-        let surrounding_block = get_block(surrounding_coord, &chunks, block_types);
-
+        let surrounding_coord = BlockCoordinate::try_from(self.pos - vec3(0., EYE_TO_BTM, 0.)).ok();
+        let surrounding_block = surrounding_coord.and_then(|x| get_block(x, &chunks, block_types));
         let block_physics = surrounding_block.and_then(|(x, _)| x.physics_info.as_ref());
 
         let delta = delta.as_secs_f64();
@@ -259,6 +254,8 @@ impl PhysicsState {
         plot!("physics_delta", (target - self.pos).magnitude());
 
         let new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
+        let footstep_coord =
+            BlockCoordinate::try_from(new_pos - vec3(0., EYE_TO_BTM + DETECTION_EPS, 0.)).ok();
         // If we hit a floor or ceiling
         if (new_pos.y - target.y) > COLLISION_EPS {
             self.last_land_height = new_pos.y;
@@ -266,7 +263,6 @@ impl PhysicsState {
                 .mul_element_wise(Vector3::new(1.0, 0.0, 1.0))
                 .magnitude();
             if self.walk_sound_odometer > 1.0 || !self.landed_last_frame {
-                let footstep_coord = surrounding_coord.try_delta(0, -1, 0);
                 if let Some(coord) = footstep_coord {
                     self.animation_state.footstep_coord.push((tick, coord));
                 }
@@ -605,6 +601,14 @@ impl CollisionBox {
         }
     }
 
+    fn liquid_variant(coord: Vector3<f64>, variant: u16) -> CollisionBox {
+        let height = ((variant as f64) / 7.0).clamp(0.025, 1.0);
+        CollisionBox {
+            min: vec3(coord.x - 0.5, coord.y - 0.5, coord.z - 0.5),
+            max: vec3(coord.x + 0.5, coord.y - 0.5 + height, coord.z + 0.5),
+        }
+    }
+
     fn from_aabb(
         coord: Vector3<f64>,
         aa_box: &perovskite_core::protocol::blocks::AxisAlignedBox,
@@ -795,7 +799,12 @@ fn push_collision_boxes(
     output: &mut Vec<CollisionBox>,
 ) {
     match &block.physics_info {
-        Some(PhysicsInfo::Solid(_)) => output.push(CollisionBox::full_cube(coord)),
+        Some(PhysicsInfo::Solid(solid)) => match solid.variant_effect() {
+            CubeVariantEffect::None | CubeVariantEffect::RotateNesw => {
+                output.push(CollisionBox::full_cube(coord))
+            }
+            CubeVariantEffect::Liquid => output.push(CollisionBox::liquid_variant(coord, variant)),
+        },
         Some(PhysicsInfo::Fluid(_)) => {}
         Some(PhysicsInfo::Air(_)) => {}
         Some(PhysicsInfo::SolidCustomCollisionboxes(boxes)) => {

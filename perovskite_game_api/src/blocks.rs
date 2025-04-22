@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use itertools::Itertools;
+use perovskite_core::protocol::blocks::SolidPhysicsInfo;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
@@ -42,6 +43,10 @@ use perovskite_core::{
 #[cfg(feature = "unstable_api")]
 pub use perovskite_server::game_state::blocks as server_api;
 
+use crate::{
+    game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
+    maybe_export,
+};
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
@@ -51,11 +56,7 @@ use perovskite_server::game_state::{
     },
     items::{HasInteractionRules, InteractionRuleExt, Item, ItemStack},
 };
-
-use crate::{
-    game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
-    maybe_export,
-};
+use perovskite_server::media::SoundKey;
 
 pub mod custom_geometry;
 
@@ -201,6 +202,7 @@ pub struct BlockBuilder {
     extended_data_initializer: Option<ExtendedDataInitializer>,
     // Exposed within the crate while not all APIs are complete
     pub(crate) client_info: BlockTypeDef,
+    footstep_sound_override: Option<Option<SoundKey>>,
     variant_effect: VariantEffect,
     liquid_flow_period: Option<Duration>,
     falls_down: bool,
@@ -255,11 +257,14 @@ impl BlockBuilder {
                     variant_effect: CubeVariantEffect::None.into(),
                 })),
                 tool_custom_hitbox: None,
-                physics_info: Some(PhysicsInfo::Solid(Empty {})),
+                physics_info: Some(PhysicsInfo::Solid(SolidPhysicsInfo {
+                    variant_effect: CubeVariantEffect::None.into(),
+                })),
                 sound_id: 0,
                 sound_volume: 0.0,
             },
             variant_effect: VariantEffect::None,
+            footstep_sound_override: None,
             liquid_flow_period: None,
             falls_down: false,
             matter_type: MatterType::Solid,
@@ -379,6 +384,9 @@ impl BlockBuilder {
             CubeVariantEffect::RotateNesw => VariantEffect::RotateNesw,
             CubeVariantEffect::Liquid => VariantEffect::Liquid,
         };
+        self.client_info.physics_info = Some(PhysicsInfo::Solid(SolidPhysicsInfo {
+            variant_effect: appearance.render_info.variant_effect().into(),
+        }));
         self.client_info.render_info = Some(RenderInfo::Cube(appearance.render_info));
         self
     }
@@ -478,6 +486,13 @@ impl BlockBuilder {
         self
     }
 
+    /// Overrides the footstep sound for this block. Note that footstep sounds for liquid blocks
+    /// have tbd behavior (and gas blocks, for that matter)
+    pub fn set_footstep_sound(mut self, sound: Option<SoundKey>) -> Self {
+        self.footstep_sound_override = Some(sound);
+        self
+    }
+
     /// Set the appearance of the block to that specified by the given builder
     pub(crate) fn build_and_deploy_into(
         mut self,
@@ -491,11 +506,16 @@ impl BlockBuilder {
             MatterType::Gas => DEFAULT_GAS.to_string(),
         });
         if self.matter_type == MatterType::Solid {
-            block.client_info.footstep_sound = game_builder.footstep_sound.0;
+            block.client_info.footstep_sound = game_builder.default_solid_footstep_sound.0;
         }
         if self.matter_type == MatterType::Gas {
             block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
         }
+
+        if let Some(sound) = self.footstep_sound_override {
+            block.client_info.footstep_sound = sound.map(|x| x.0).unwrap_or(0);
+        }
+
         block.client_info.groups.sort();
         block.client_info.groups.dedup();
         block.dig_handler_inline = Some(self.dropped_item.build_dig_handler(game_builder));

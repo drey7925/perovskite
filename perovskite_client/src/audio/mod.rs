@@ -1581,41 +1581,13 @@ fn sample_turbulence(scratchpad: &mut EntityScratchpad, rng: &mut SmallRng) -> (
     (filtered, filtered)
 }
 
-#[derive(Clone, Copy, Debug)]
-enum ApproachState {
-    // Haven't seen a large enough decrease yet, value is accumulated decrease
-    Initial(f64),
-    // Haven't seen a large enough increase yet, value is accumulated increase
-    DecreaseDetected(f64),
-    // Fields:
-    // * Distance of the approach
-    // * Entity travel since that approach
-    // * Entity location at capture time
-    // * Entity->player displacement at capture time, unnormalized
-    // * Entity movement direction at capture time, normalized
-    Passing(f64, Vector3<f64>, Vector3<f64>, Vector3<f32>),
-}
-
 #[derive(Copy, Clone, Debug)]
 struct EntityScratchpad {
     // Really simple first-order IIR filter, single state
     turbulence_iir_state: IirLpfCascade<1>,
     // The entity ID, used to make sure that we're looking at the same entity
     entity_id: u64,
-    // Last player position, used for close-approach detection
-    last_player_pos: Vector3<f64>,
-    // Last distance
-    last_distance: f64,
-    approach_state: ApproachState,
-    // Overview of algorithm:
-    // Track distance from last_player_pos vs current player pos
-    // Once it hits a local minimum, reset acc_since_last_approach,
-    // and start counting it up. Snapshot the actual approach distance
-    // into last_approach_distance
     last_balance: SmoothedVar,
-    trailing_edge_blend_factor: f32,
-    trailing_edge_blend_value: f32,
-    trailing_edge_blend_source_direction: Vector3<f64>,
     // Used to provide an extra burst of sound at edges
     edge_cycle: f32,
     edge_strength: f32,
@@ -1625,13 +1597,7 @@ impl Default for EntityScratchpad {
         EntityScratchpad {
             turbulence_iir_state: IirLpfCascade::default(),
             entity_id: u64::MAX,
-            last_player_pos: Vector3::zero(),
-            last_distance: 0.0,
-            approach_state: ApproachState::Initial(0.0),
             last_balance: Default::default(),
-            trailing_edge_blend_value: 0.0,
-            trailing_edge_blend_factor: 0.0,
-            trailing_edge_blend_source_direction: Vector3::zero(),
             edge_cycle: -1.0,
             edge_strength: 0.0,
         }

@@ -97,6 +97,7 @@ impl AddAssign for BlockInteractionResult {
 }
 
 pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
+use perovskite_core::protocol::blocks::SolidPhysicsInfo;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
 pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
@@ -816,7 +817,11 @@ fn make_unknown_block_serverside(
                     ..Default::default()
                 },
             )),
-            physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(E)),
+            physics_info: Some(blocks_proto::block_type_def::PhysicsInfo::Solid(
+                SolidPhysicsInfo {
+                    ..Default::default()
+                },
+            )),
             groups: vec![block_groups::DEFAULT_SOLID.to_string()],
             base_dig_time: 1.0,
             wear_multiplier: 0.0,

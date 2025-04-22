@@ -1259,14 +1259,18 @@ impl DefaultMapgen {
             } else {
                 self.water
             }
-        } else if vert_offset == 1 && block_coord.y > water_height {
-            let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
-                + (block_coord.y as f64) / 300.0;
-            if snow_tendency < 0.0 {
-                self.air
+        } else if vert_offset == 1 {
+            if block_coord.y > water_height {
+                let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
+                    + (block_coord.y as f64) / 300.0;
+                if snow_tendency < 0.0 {
+                    self.air
+                } else {
+                    let depth_variant = (snow_tendency * 8.0).clamp(0.0, 7.0) as u16 & 0x7;
+                    self.snow.with_variant_unchecked(depth_variant)
+                }
             } else {
-                let depth_variant = (snow_tendency * 8.0).clamp(0.0, 7.0) as u16 & 0x7;
-                self.snow.with_variant_unchecked(depth_variant)
+                self.water
             }
         } else if vert_offset == 0 && block_coord.y >= water_height {
             let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])

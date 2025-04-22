@@ -181,7 +181,7 @@ pub struct GameBuilder {
     // over all the extensions for various things like pre_run
     pub(crate) builder_extensions: HashMap<TypeId, Box<dyn GameBuilderExtension>>,
 
-    pub(crate) footstep_sound: SoundKey,
+    pub(crate) default_solid_footstep_sound: SoundKey,
 }
 impl GameBuilder {
     /// Creates a new game builder using server configuration from the
@@ -301,17 +301,31 @@ impl GameBuilder {
             DEFAULT_FOOTSTEP_SOUND_NAME,
             include_bytes!("media/simple_footstep.wav"),
         )?;
+        inner.media_mut().register_from_memory(
+            SNOW_FOOTSTEP_SOUND_NAME,
+            include_bytes!("media/footstep_snow.wav"),
+        )?;
+        inner.media_mut().register_from_memory(
+            GRASS_FOOTSTEP_SOUND_NAME,
+            include_bytes!("media/footstep_grass.wav"),
+        )?;
 
         let footstep_key = inner
             .media_mut()
             .register_file_for_sampled_audio(DEFAULT_FOOTSTEP_SOUND_NAME)?;
+        inner
+            .media_mut()
+            .register_file_for_sampled_audio(SNOW_FOOTSTEP_SOUND_NAME)?;
+        inner
+            .media_mut()
+            .register_file_for_sampled_audio(GRASS_FOOTSTEP_SOUND_NAME)?;
 
         Ok(GameBuilder {
             inner,
             liquids_by_flow_time: HashMap::new(),
             falling_blocks: vec![],
             builder_extensions: HashMap::new(),
-            footstep_sound: footstep_key,
+            default_solid_footstep_sound: footstep_key,
         })
     }
     /// Registers a block and its corresponding item in the game.
@@ -321,6 +335,22 @@ impl GameBuilder {
 
     pub fn get_block(&self, block_name: StaticBlockName) -> Option<BlockTypeHandle> {
         self.inner.blocks().get_by_name(block_name.0)
+    }
+
+    pub fn get_sound_id(&self, sound_name: &str) -> Option<SoundKey> {
+        self.inner.media().get_sound_by_name(sound_name)
+    }
+    pub fn register_sound_from_memory(
+        &mut self,
+        sound_name: &str,
+        data: &[u8],
+    ) -> Result<SoundKey> {
+        self.inner
+            .media_mut()
+            .register_from_memory(sound_name, data)?;
+        self.inner
+            .media_mut()
+            .register_file_for_sampled_audio(sound_name)
     }
 
     /// Registers a simple item that cannot be placed, doesn't have a block automatically generated for it, and is not a tool
@@ -429,3 +459,5 @@ pub use include_texture_bytes;
 use perovskite_server::media::SoundKey;
 
 pub const DEFAULT_FOOTSTEP_SOUND_NAME: &str = "default:footstep.wav";
+pub const SNOW_FOOTSTEP_SOUND_NAME: &str = "default:footstep_snow.wav";
+pub const GRASS_FOOTSTEP_SOUND_NAME: &str = "default:footstep_grass.wav";

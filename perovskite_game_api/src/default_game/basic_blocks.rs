@@ -14,7 +14,15 @@
 
 use std::{sync::atomic::AtomicU32, time::Duration};
 
+use super::{
+    block_groups::{BRITTLE, GRANULAR},
+    default_mapgen::OreDefinition,
+    recipes::RecipeSlot,
+    shaped_blocks::{make_slab, make_stairs},
+    DefaultGameBuilder, DefaultGameBuilderExtension,
+};
 use crate::default_game::chest::register_chest;
+use crate::game_builder::{GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME};
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -41,14 +49,6 @@ use perovskite_core::{
 use perovskite_server::game_state::{
     blocks::BlockInteractionResult,
     items::{Item, ItemStack},
-};
-
-use super::{
-    block_groups::{BRITTLE, GRANULAR},
-    default_mapgen::OreDefinition,
-    recipes::RecipeSlot,
-    shaped_blocks::{make_slab, make_stairs},
-    DefaultGameBuilder, DefaultGameBuilderExtension,
 };
 
 /// Dirt without grass on it.
@@ -558,35 +558,6 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         DIRT_SNOW_SIDE_TEXTURE,
         "textures/dirt_snow_side.png"
     )?;
-    game_builder.add_block(
-        BlockBuilder::new(SNOW)
-            .add_block_group(BRITTLE)
-            .set_cube_appearance(
-                CubeAppearanceBuilder::new()
-                    .set_single_texture(SNOW_TEXTURE)
-                    // Set liquid for appearance; we will not enable flow on it, however.
-                    .set_liquid_shape(),
-            )
-            // TODO: clients don't have the right physics and treat it as a full
-            // 1m tall block regardless of the variant
-            .set_matter_type(MatterType::Gas)
-            .set_allow_light_propagation(true)
-            .set_display_name("Snow"),
-    )?;
-    game_builder.add_block(
-        BlockBuilder::new(DIRT_WITH_SNOW)
-            .add_block_group(GRANULAR)
-            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
-                DIRT_SNOW_SIDE_TEXTURE,
-                DIRT_SNOW_SIDE_TEXTURE,
-                SNOW_TEXTURE,
-                DIRT_TEXTURE,
-                DIRT_SNOW_SIDE_TEXTURE,
-                DIRT_SNOW_SIDE_TEXTURE,
-            ))
-            .set_dropped_item(DIRT.0, 1)
-            .set_display_name("Dirt with snow"),
-    )?;
 
     let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
@@ -594,6 +565,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_single_texture(DIRT_TEXTURE)
             .set_display_name("Dirt block"),
     )?;
+
+    let grass_footstep = game_builder
+        .get_sound_id(GRASS_FOOTSTEP_SOUND_NAME)
+        .expect("grass footstep sound");
+
     game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_GRASS)
             .add_block_group(GRANULAR)
@@ -606,16 +582,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_GRASS_SIDE_TEXTURE,
             ))
             .set_dropped_item(DIRT.0, 1)
+            .set_footstep_sound(Some(grass_footstep))
             // testonly
-            .set_dropped_item_closure(|| {
-                // Test only: There is no way to get glass yet (no sand, no crafting)
-                // We need glass to test renderer changes
-                if TESTONLY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 2 == 0 {
-                    (StaticItemName("default:dirt"), 1)
-                } else {
-                    (StaticItemName("default:glass"), 5)
-                }
-            }),
+            .set_dropped_item(DIRT.0, 1),
     )?;
     let stone = game_builder.add_block(
         BlockBuilder::new(STONE)
@@ -702,6 +671,41 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_single_texture(DESERT_SAND_TEXTURE)
             .set_display_name("Desert sand")
             .set_falls_down(true),
+    )?;
+
+    let snow_footstep = game_builder
+        .get_sound_id(SNOW_FOOTSTEP_SOUND_NAME)
+        .expect("snow footstep sound");
+
+    // TODO: separate solid snow block for user-placed snow
+    // TODO: drops snowballs, rather than whole snow blocks
+    game_builder.add_block(
+        BlockBuilder::new(SNOW)
+            .add_block_group(BRITTLE)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(SNOW_TEXTURE)
+                    // Set liquid for appearance; we will not enable flow on it, however.
+                    .set_liquid_shape(),
+            )
+            .set_allow_light_propagation(true)
+            .set_footstep_sound(Some(snow_footstep))
+            .set_display_name("Snow"),
+    )?;
+    game_builder.add_block(
+        BlockBuilder::new(DIRT_WITH_SNOW)
+            .add_block_group(GRANULAR)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+                DIRT_SNOW_SIDE_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+                SNOW_TEXTURE,
+                DIRT_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+                DIRT_SNOW_SIDE_TEXTURE,
+            ))
+            .set_dropped_item(DIRT.0, 1)
+            .set_footstep_sound(Some(snow_footstep))
+            .set_display_name("Dirt with snow"),
     )?;
 
     let glass = game_builder.add_block(

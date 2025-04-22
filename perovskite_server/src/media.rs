@@ -74,6 +74,7 @@ struct SampledAudioDetails {
 pub struct MediaManager {
     resources: HashMap<String, Resource>,
     sampled_audio: Vec<SampledAudioDetails>,
+    audio_lookup: HashMap<String, SoundKey>,
 }
 
 impl MediaManager {
@@ -121,6 +122,7 @@ impl MediaManager {
         MediaManager {
             resources: HashMap::new(),
             sampled_audio: Vec::new(),
+            audio_lookup: HashMap::new(),
         }
     }
 
@@ -148,7 +150,13 @@ impl MediaManager {
         });
 
         log::info!("Registered sound {} with id {}", name, index);
+        self.audio_lookup
+            .insert(name.to_string(), SoundKey(index as u32));
         Ok(SoundKey(index as u32))
+    }
+
+    pub fn get_sound_by_name(&self, name: &str) -> Option<SoundKey> {
+        self.audio_lookup.get(name).copied()
     }
 
     pub(crate) fn sampled_sound_client_protos(&self) -> Vec<SampledSound> {
