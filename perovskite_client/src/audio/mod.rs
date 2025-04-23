@@ -409,7 +409,9 @@ pub(crate) async fn start_engine(
             });
             Ok::<(), anyhow::Error>(())
         })
-        .await??;
+        .await
+        .context("audio spawn task panicked")?
+        .context("audio spawn task returned error")?;
         rx.await
             .context("Waiting for audio engine startup failed")?
             .context("Audio engine startup")?;
@@ -726,7 +728,7 @@ impl EngineState {
         let mut samplers = FxHashMap::default();
         let mut resampler_cache = FxHashMap::default();
         for (k, v) in sampled_sounds {
-            println!("{}", k);
+            log::info!("Resampling sound ID {k}");
             samplers.insert(
                 k,
                 PrerecordedSampler::from_wav(
@@ -1465,7 +1467,7 @@ impl PrerecordedSampler {
         let mut left = Vec::new();
         let mut right = Vec::new();
         for (i, sample) in wav.into_samples::<i32>().enumerate() {
-            let sample = sample.unwrap();
+            let sample = sample?;
             if source_channels == 1 {
                 left.push(sample as f32);
                 right.push(sample as f32);

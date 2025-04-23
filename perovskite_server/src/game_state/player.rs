@@ -778,6 +778,18 @@ impl PlayerManager {
                         log::error!("Writeback for {name} failed: {:?}", e);
                     }
                 }
+                match self.game_state.upgrade() {
+                    None => {
+                        log::warn!("Game state gone, not trying to remove player entity");
+                    }
+                    Some(gs) => {
+                        let entity_id = entry.get().entity_id;
+                        tokio::task::spawn(async move {
+                            gs.entities().remove(entity_id).await;
+                            log::info!("Player entity with id {entity_id} removed")
+                        });
+                    }
+                }
                 entry.remove();
             }
             Entry::Vacant(_) => {

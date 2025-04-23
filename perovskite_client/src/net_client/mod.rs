@@ -17,7 +17,7 @@
 use std::{sync::Arc, time::Duration};
 
 use self::client_workers::*;
-use anyhow::{anyhow, bail, Error, Result};
+use anyhow::{anyhow, bail, Context, Error, Result};
 
 use arc_swap::ArcSwap;
 use opaque_ke::{
@@ -199,7 +199,8 @@ pub(crate) async fn connect_game(
             &audio_defs.sampled_sounds,
             &mut cache_manager,
         )
-        .await?,
+        .await
+        .context("Failed to start audio engine")?,
     );
 
     let (action_sender, action_receiver) = mpsc::channel(4);
