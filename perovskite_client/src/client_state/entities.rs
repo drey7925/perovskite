@@ -5,9 +5,7 @@ use crate::audio::{
 use crate::client_state::tool_controller::check_intersection_core;
 use crate::client_state::ClientState;
 use crate::vulkan::{
-    block_renderer::{BlockRenderer, CubeExtents, VkCgvBufferGpu},
-    entity_renderer::EntityRenderer,
-    shaders::entity_geometry::EntityGeometryDrawCall,
+    entity_renderer::EntityRenderer, shaders::entity_geometry::EntityGeometryDrawCall,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
@@ -623,35 +621,13 @@ pub(crate) struct EntityState {
     // todo properly encapsulate
     pub(crate) entities: FxHashMap<u64, GameEntity>,
 
-    pub(crate) fallback_entity: VkCgvBufferGpu,
-
     pub(crate) attached_to_entity: Option<EntityTarget>,
 }
 impl EntityState {
     // TODO - this should not use the block renderer once we're properly using meshes from the server.
-    pub(crate) fn new(block_renderer: &BlockRenderer) -> Result<Self> {
-        let fake_extents = CubeExtents::new((-0.375, 0.375), (-0.2, 1.5), (-0.01, 0.01));
-        let tex = [block_renderer.fake_entity_tex_coords(); 6];
-
-        let mut vtx = vec![];
-        let mut idx = vec![];
-
-        block_renderer.emit_single_cube_simple(
-            fake_extents,
-            Vector3::zero(),
-            tex,
-            &mut vtx,
-            &mut idx,
-        );
-
+    pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             entities: FxHashMap::default(),
-            fallback_entity: VkCgvBufferGpu::from_buffers(
-                &vtx,
-                &idx,
-                block_renderer.clone_vk_allocator(),
-            )?
-            .unwrap(),
             attached_to_entity: None,
         })
     }
@@ -684,18 +660,12 @@ impl EntityState {
             .flat_map(|(_id, entity)| {
                 self.entity_transforms(player_position, time_tick, entity_renderer, entity)
             })
-            .map(|(model_matrix, class)| {
-                EntityGeometryDrawCall {
+            .flat_map(|(model_matrix, class)| {
+                let model = entity_renderer.get_singleton(class)?;
+                Some(EntityGeometryDrawCall {
                     model_matrix,
-                    model: entity_renderer
-                        .get_singleton(class)
-                        // class 0 is the fallback
-                        .unwrap_or(
-                            entity_renderer
-                                .get_singleton(0)
-                                .unwrap_or(self.fallback_entity.clone()),
-                        ),
-                }
+                    model,
+                })
             })
             .collect()
     }

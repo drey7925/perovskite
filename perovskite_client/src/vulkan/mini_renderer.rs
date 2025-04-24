@@ -26,14 +26,8 @@ use vulkano::{
     DeviceSize,
 };
 
-use crate::client_state::settings::Supersampling;
-use crate::{
-    client_state::chunk::{ChunkDataView, ChunkOffsetExt},
-    vulkan::shaders::SceneState,
-};
-
 use super::{
-    block_renderer::{BlockRenderer, VkCgvBufferGpu, VkChunkVertexDataGpu},
+    block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
     make_ssaa_render_pass,
     shaders::{
         cube_geometry::{
@@ -42,6 +36,12 @@ use super::{
         PipelineWrapper,
     },
     Texture2DHolder, VulkanContext,
+};
+use crate::client_state::settings::Supersampling;
+use crate::vulkan::shaders::VkBufferGpu;
+use crate::{
+    client_state::chunk::{ChunkDataView, ChunkOffsetExt},
+    vulkan::shaders::SceneState,
 };
 
 pub(crate) struct MiniBlockRenderer {
@@ -194,7 +194,7 @@ impl MiniBlockRenderer {
                 ..Default::default()
             },
         )?;
-        let pass = VkCgvBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
+        let pass = VkBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
 
         if let Some(pass) = pass {
             self.cube_pipeline.bind(

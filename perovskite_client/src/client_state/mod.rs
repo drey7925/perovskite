@@ -745,7 +745,7 @@ impl ClientState {
                 0.0,
             )))),
             chat: Arc::new(Mutex::new(ChatState::new())),
-            entities: Mutex::new(EntityState::new(&block_renderer)?),
+            entities: Mutex::new(EntityState::new()?),
 
             block_renderer: Arc::new(block_renderer),
             entity_renderer: Arc::new(entity_renderer),

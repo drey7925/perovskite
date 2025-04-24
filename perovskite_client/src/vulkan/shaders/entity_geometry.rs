@@ -15,11 +15,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::{
+    shaders::vert_3d::ModelMatrix, CommandBufferBuilder, Texture2DHolder, VulkanContext,
+    VulkanWindow,
+};
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
 use smallvec::smallvec;
 use std::sync::Arc;
 use tracy_client::span;
+use vulkano::buffer::BufferContents;
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorComponents,
@@ -52,20 +57,32 @@ use vulkano::{
     shader::ShaderModule,
 };
 
-use crate::vulkan::{
-    block_renderer::VkCgvBufferGpu, shaders::vert_3d::ModelMatrix, CommandBufferBuilder,
-    Texture2DHolder, VulkanContext, VulkanWindow,
-};
-
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
-    LiveRenderConfig, PipelineProvider, PipelineWrapper,
+    LiveRenderConfig, PipelineProvider, PipelineWrapper, VkBufferGpu,
 };
 
-use super::{cube_geometry::CubeGeometryVertex, frag_lighting_sparse, SceneState};
+use super::{frag_lighting_sparse, SceneState};
+
+#[derive(BufferContents, Vertex, Copy, Clone, Debug, PartialEq)]
+#[repr(C)]
+pub(crate) struct EntityVertex {
+    /// Position, given relative to the origin of the chunk in world space.
+    /// Not transformed into camera space via a view matrix yet
+    #[format(R32G32B32_SFLOAT)]
+    pub(crate) position: [f32; 3],
+
+    /// Normal, given in world space
+    #[format(R32G32B32_SFLOAT)]
+    pub(crate) normal: [f32; 3],
+
+    // Texture coordinate in tex space (0-1)
+    #[format(R32G32_SFLOAT)]
+    pub(crate) uv_texcoord: [f32; 2],
+}
 
 pub(crate) struct EntityGeometryDrawCall {
-    pub(crate) model: VkCgvBufferGpu,
+    pub(crate) model: VkBufferGpu<EntityVertex>,
     pub(crate) model_matrix: Matrix4<f32>,
 }
 
@@ -158,7 +175,7 @@ pub(crate) struct EntityPipelineProvider {
 }
 impl EntityPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<EntityPipelineProvider> {
-        let vs_entity = vert_3d::load_cube_geometry(device.clone())?;
+        let vs_entity = vert_3d::load_entity_tentative(device.clone())?;
         let fs = frag_lighting_sparse::load(device.clone())?;
         Ok(EntityPipelineProvider {
             device,
@@ -184,7 +201,7 @@ impl EntityPipelineProvider {
             .entry_point("main")
             .context("Missing fragment shader")?;
         let vertex_input_state =
-            CubeGeometryVertex::per_vertex().definition(&vs.info().input_interface)?;
+            EntityVertex::per_vertex().definition(&vs.info().input_interface)?;
         let stages_sparse = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_sparse),

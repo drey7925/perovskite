@@ -7,9 +7,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use texture_packer::{importer::ImageImporter, Rect};
 
 use super::{
-    block_renderer::VkCgvBufferGpu, shaders::cube_geometry::CubeGeometryVertex, Texture2DHolder,
-    VkAllocator, VulkanContext,
+    shaders::cube_geometry::CubeGeometryVertex, Texture2DHolder, VkAllocator, VulkanContext,
 };
+use crate::vulkan::shaders::entity_geometry::EntityVertex;
+use crate::vulkan::shaders::VkBufferGpu;
 use anyhow::{bail, ensure, Error, Result};
 use cgmath::{Matrix3, Rad, Vector3, Zero};
 
@@ -23,7 +24,7 @@ pub(crate) struct EntityRenderer {
     mesh_definitions: FxHashMap<u32, EntityMesh>,
     /// These include buffers that render a single entity. Later on, as we add various accelerated and
     /// instanced rendering, the renderer may build buffers with multiple entities in them.
-    singleton_gpu_buffers: FxHashMap<u32, Option<VkCgvBufferGpu>>,
+    singleton_gpu_buffers: FxHashMap<u32, Option<VkBufferGpu<EntityVertex>>>,
 }
 impl EntityRenderer {
     pub(crate) async fn new(
@@ -105,7 +106,7 @@ impl EntityRenderer {
                     def.short_name,
                 )?;
                 let singleton_buffer =
-                    VkCgvBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.clone_allocator())?;
+                    VkBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.clone_allocator())?;
                 singleton_gpu_buffers.insert(def.entity_class, singleton_buffer);
 
                 all_meshes.insert(def.entity_class, mesh);
@@ -158,13 +159,10 @@ impl EntityRenderer {
             for i in 0..vertices_len {
                 let u = mesh.u[i] * tex_rectangle.w + tex_rectangle.l;
                 let v = mesh.v[i] * tex_rectangle.h + tex_rectangle.t;
-                vertices.push(CubeGeometryVertex {
+                vertices.push(EntityVertex {
                     position: [mesh.x[i], mesh.y[i], mesh.z[i]],
                     normal: [mesh.nx[i], mesh.ny[i], mesh.nz[i]],
                     uv_texcoord: [u, v],
-                    brightness: 1.0,
-                    global_brightness_contribution: 0.0,
-                    wave_horizontal: 0.0,
                 });
                 aabb_min.x = aabb_min.x.min(mesh.x[i]);
                 aabb_min.y = aabb_min.y.min(mesh.y[i]);
@@ -217,7 +215,7 @@ impl EntityRenderer {
         }
     }
 
-    pub(crate) fn get_singleton(&self, class: u32) -> Option<VkCgvBufferGpu> {
+    pub(crate) fn get_singleton(&self, class: u32) -> Option<VkBufferGpu<EntityVertex>> {
         self.singleton_gpu_buffers.get(&class).cloned().flatten()
     }
 
@@ -237,7 +235,7 @@ impl EntityRenderer {
 pub(crate) struct EntityMesh {
     // Note: As the shaders evolve, we will stop using CubeGeometryVertex and instead will use
     // a more capable vertex type that can express entity-specific details.
-    pub(crate) vtx: Vec<CubeGeometryVertex>,
+    pub(crate) vtx: Vec<EntityVertex>,
     pub(crate) idx: Vec<u32>,
     pub(crate) attach_offset: Vector3<f64>,
     pub(crate) attach_in_model_space: bool,

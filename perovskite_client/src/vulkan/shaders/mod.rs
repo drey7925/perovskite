@@ -14,11 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use super::{CommandBufferBuilder, VkAllocator, VulkanContext, VulkanWindow};
 use crate::client_state::settings::Supersampling;
 use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
-
-use super::{CommandBufferBuilder, VulkanContext, VulkanWindow};
+use std::sync::Arc;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
@@ -35,8 +37,8 @@ pub(crate) mod vert_3d {
             src: r"
             #version 460
                 layout(location = 0) in vec3 position;
-                layout(location = 1) in vec3 normal;
                 layout(location = 2) in vec2 uv_texcoord;
+                layout(location = 1) in uint normal;
                 layout(location = 3) in float brightness;
                 layout(location = 4) in float global_brightness_contribution;
                 layout(location = 5) in float wave_horizontal;
@@ -56,6 +58,24 @@ pub(crate) mod vert_3d {
                 layout(location = 1) out float brightness_out;
                 layout(location = 2) out vec3 global_brightness_out;
 
+
+
+                vec3 decode_normal(uint index) {
+                     const float sqrt_half = sqrt(0.5);
+                     const vec3 normals[10] = vec3[](
+                        vec3(1.0, 0.0, 0.0),
+                        vec3(-1.0, 0.0, 0.0),
+                        vec3(0.0, 1.0, 0.0),
+                        vec3(0.0, -1.0, 0.0),
+                        vec3(0.0, 0.0, 1.0),
+                        vec3(0.0, 0.0, -1.0),
+                        vec3(sqrt_half, 0.0, sqrt_half),
+                        vec3(sqrt_half, 0.0, -sqrt_half),
+                        vec3(-sqrt_half, 0.0, sqrt_half),
+                        vec3(-sqrt_half, 0.0, -sqrt_half)
+                    );
+                    return normals[index];
+                }
                 void main() {
                     float wave_x = wave_horizontal * plant_wave_vector.x;
                     float wave_z = wave_horizontal * plant_wave_vector.y;
@@ -63,8 +83,39 @@ pub(crate) mod vert_3d {
                     gl_Position = vp_matrix * model_matrix * vec4(position_with_wave, 1.0);
                     uv_texcoord_out = uv_texcoord;
                     brightness_out = brightness;
-                    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, normal));
+                    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, decode_normal(normal)));
                     global_brightness_out = global_brightness_color * global_brightness_contribution * gbc_adjustment;
+                }
+            "
+            },
+            // WIP entity shader - essentially just a simple transform-and-shade pipeline. At some
+            // point, this should be re-structured to better scale entity rendering (e.g. doing move
+            // calcs on the GPU for batches of entities)
+            entity_tentative: {
+            ty: "vertex",
+            src: r"#version 460
+                layout(location = 0) in vec3 position;
+                layout(location = 1) in vec3 normal;
+                layout(location = 2) in vec2 uv_texcoord;
+                // TODO: bring back entity lighting at some later point
+
+                layout(set = 1, binding = 0) uniform EntityUniformData {
+                    mat4 vp_matrix;
+                };
+                // 64 bytes of push constants :(
+                layout(push_constant) uniform ModelMatrix {
+                    mat4 model_matrix;
+                };
+
+                layout(location = 0) out vec2 uv_texcoord_out;
+                layout(location = 1) out float brightness_out;
+                layout(location = 2) out vec3 global_brightness_out;
+
+                void main() {
+                    gl_Position = vp_matrix * model_matrix * vec4(position, 1.0);
+                    uv_texcoord_out = uv_texcoord;
+                    brightness_out = 1.0;
+                    global_brightness_out = vec3(0.0, 0.0, 0.0);
                 }
             "
             },
@@ -235,4 +286,64 @@ pub(crate) struct SceneState {
     pub(crate) global_light_color: [f32; 3],
     pub(crate) clear_color: [f32; 4],
     pub(crate) sun_direction: Vector3<f32>,
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct VkBufferCpu<T: BufferContents + Copy> {
+    pub(crate) vtx: Vec<T>,
+    pub(crate) idx: Vec<u32>,
+}
+impl<T: BufferContents + Copy> VkBufferCpu<T> {
+    pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<Option<VkBufferGpu<T>>> {
+        VkBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct VkBufferGpu<T: BufferContents + Copy> {
+    pub(crate) vtx: Subbuffer<[T]>,
+    pub(crate) idx: Subbuffer<[u32]>,
+}
+impl<T: BufferContents + Copy> VkBufferGpu<T> {
+    pub(crate) fn from_buffers(
+        vtx: &[T],
+        idx: &[u32],
+        allocator: Arc<VkAllocator>,
+    ) -> Result<Option<VkBufferGpu<T>>> {
+        if vtx.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(VkBufferGpu {
+                vtx: Buffer::from_iter(
+                    allocator.clone(),
+                    BufferCreateInfo {
+                        usage: BufferUsage::VERTEX_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        // TODO: Consider whether we should manage our own staging buffer,
+                        // and copy into VRAM, or just use one buffer that's host sequential write
+                        // plus device local
+                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                            | MemoryTypeFilter::PREFER_DEVICE,
+                        ..Default::default()
+                    },
+                    vtx.iter().copied(),
+                )?,
+                idx: Buffer::from_iter(
+                    allocator,
+                    BufferCreateInfo {
+                        usage: BufferUsage::INDEX_BUFFER,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                            | MemoryTypeFilter::PREFER_DEVICE,
+                        ..Default::default()
+                    },
+                    idx.iter().copied(),
+                )?,
+            }))
+        }
+    }
 }

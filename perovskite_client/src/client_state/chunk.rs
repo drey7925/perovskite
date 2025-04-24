@@ -33,10 +33,9 @@ use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Sub
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use super::block_types::ClientBlockTypeManager;
-use crate::vulkan::block_renderer::{
-    BlockRenderer, VkCgvBufferCpu, VkCgvBufferGpu, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
-};
+use crate::vulkan::block_renderer::{BlockRenderer, VkChunkVertexDataCpu, VkChunkVertexDataGpu};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{VkAllocator, VulkanContext};
 use perovskite_core::util::AtomicInstant;
 use prost::Message;
@@ -627,7 +626,7 @@ impl MeshBatch {
         Some(CubeGeometryDrawCall {
             models: VkChunkVertexDataGpu {
                 solid_opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
-                    Some(VkCgvBufferGpu {
+                    Some(VkBufferGpu {
                         vtx: self.solid_vtx.as_ref().unwrap().clone(),
                         idx: self.solid_idx.as_ref().unwrap().clone(),
                     })
@@ -636,7 +635,7 @@ impl MeshBatch {
                 },
 
                 transparent: if self.transparent_vtx.is_some() && self.transparent_idx.is_some() {
-                    Some(VkCgvBufferGpu {
+                    Some(VkBufferGpu {
                         vtx: self.transparent_vtx.as_ref().unwrap().clone(),
                         idx: self.transparent_idx.as_ref().unwrap().clone(),
                     })
@@ -645,7 +644,7 @@ impl MeshBatch {
                 },
 
                 translucent: if self.translucent_vtx.is_some() && self.translucent_idx.is_some() {
-                    Some(VkCgvBufferGpu {
+                    Some(VkBufferGpu {
                         vtx: self.translucent_vtx.as_ref().unwrap().clone(),
                         idx: self.translucent_idx.as_ref().unwrap().clone(),
                     })
@@ -710,7 +709,7 @@ impl MeshBatchBuilder {
     }
 
     fn extend_buffer(
-        input: &VkCgvBufferCpu,
+        input: &VkBufferCpu<CubeGeometryVertex>,
         vtx: &mut Vec<CubeGeometryVertex>,
         idx: &mut Vec<u32>,
         delta_offset: Vector3<f32>,

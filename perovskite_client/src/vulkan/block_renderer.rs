@@ -37,6 +37,7 @@ use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 
+use super::{RectF32, VkAllocator};
 use crate::cache::CacheManager;
 use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
@@ -45,14 +46,13 @@ use crate::client_state::chunk::{
 };
 use crate::client_state::ClientState;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-
-use super::{RectF32, VkAllocator};
 
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
 const TESTONLY_ENTITY: &str = "builtin:testonly_entity";
@@ -76,6 +76,11 @@ impl CubeFace {
     #[inline(always)]
     fn index(&self) -> usize {
         *self as usize
+    }
+
+    #[inline(always)]
+    fn repr(&self) -> u8 {
+        *self as u8
     }
 }
 
@@ -304,71 +309,11 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
     CubeFace::PlantXMinusZMinus,
 ];
 
-#[derive(Clone, PartialEq)]
-pub(crate) struct VkCgvBufferCpu {
-    pub(crate) vtx: Vec<CubeGeometryVertex>,
-    pub(crate) idx: Vec<u32>,
-}
-impl VkCgvBufferCpu {
-    fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<Option<VkCgvBufferGpu>> {
-        VkCgvBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct VkCgvBufferGpu {
-    pub(crate) vtx: Subbuffer<[CubeGeometryVertex]>,
-    pub(crate) idx: Subbuffer<[u32]>,
-}
-impl VkCgvBufferGpu {
-    pub(crate) fn from_buffers(
-        vtx: &[CubeGeometryVertex],
-        idx: &[u32],
-        allocator: Arc<VkAllocator>,
-    ) -> Result<Option<VkCgvBufferGpu>> {
-        if vtx.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(VkCgvBufferGpu {
-                vtx: Buffer::from_iter(
-                    allocator.clone(),
-                    BufferCreateInfo {
-                        usage: BufferUsage::VERTEX_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        // TODO: Consider whether we should manage our own staging buffer,
-                        // and copy into VRAM, or just use one buffer that's host sequential write
-                        // plus device local
-                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
-                            | MemoryTypeFilter::PREFER_DEVICE,
-                        ..Default::default()
-                    },
-                    vtx.iter().copied(),
-                )?,
-                idx: Buffer::from_iter(
-                    allocator,
-                    BufferCreateInfo {
-                        usage: BufferUsage::INDEX_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
-                            | MemoryTypeFilter::PREFER_DEVICE,
-                        ..Default::default()
-                    },
-                    idx.iter().copied(),
-                )?,
-            }))
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexDataGpu {
-    pub(crate) solid_opaque: Option<VkCgvBufferGpu>,
-    pub(crate) transparent: Option<VkCgvBufferGpu>,
-    pub(crate) translucent: Option<VkCgvBufferGpu>,
+    pub(crate) solid_opaque: Option<VkBufferGpu<CubeGeometryVertex>>,
+    pub(crate) transparent: Option<VkBufferGpu<CubeGeometryVertex>>,
+    pub(crate) translucent: Option<VkBufferGpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
@@ -390,9 +335,9 @@ impl VkChunkVertexDataGpu {
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
-    pub(crate) solid_opaque: Option<VkCgvBufferCpu>,
-    pub(crate) transparent: Option<VkCgvBufferCpu>,
-    pub(crate) translucent: Option<VkCgvBufferCpu>,
+    pub(crate) solid_opaque: Option<VkBufferCpu<CubeGeometryVertex>>,
+    pub(crate) transparent: Option<VkBufferCpu<CubeGeometryVertex>>,
+    pub(crate) translucent: Option<VkBufferCpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
@@ -746,7 +691,7 @@ impl BlockRenderer {
         // This only applies to cube blocks.
         suppress_face_when: G,
         reclaimer: &MeshVectorReclaim,
-    ) -> Option<VkCgvBufferCpu>
+    ) -> Option<VkBufferCpu<CubeGeometryVertex>>
     where
         F: Fn(BlockId) -> bool,
         G: Fn(BlockId, BlockId) -> bool,
@@ -784,7 +729,7 @@ impl BlockRenderer {
             // allocation to reclaim.
             None
         } else {
-            Some(VkCgvBufferCpu { vtx, idx })
+            Some(VkBufferCpu { vtx, idx })
         }
     }
 
@@ -898,7 +843,7 @@ impl BlockRenderer {
                     e,
                     0,
                     chunk_data.lightmap()[neighbor_index],
-                    0.0,
+                    0,
                     CUBE_FACE_BRIGHTNESS_BIASES[i],
                 );
             }
@@ -925,7 +870,7 @@ impl BlockRenderer {
                 // TODO proper brightness for entities
                 0xf0,
                 0x00,
-                0.0,
+                0,
                 CUBE_FACE_BRIGHTNESS_BIASES[i],
             );
         }
@@ -959,7 +904,7 @@ impl BlockRenderer {
                 e,
                 chunk_data.lightmap()[offset.as_extended_index()],
                 0x00,
-                plantlike_render_info.wave_effect_scale,
+                (plantlike_render_info.wave_effect_scale * 255.0).clamp(0.0, 255.0) as u8,
                 1.0,
             );
         }
@@ -1013,7 +958,7 @@ impl BlockRenderer {
                             e,
                             chunk_data.lightmap()[neighbor_index],
                             chunk_data.lightmap()[offset.as_extended_index()],
-                            0.0,
+                            0,
                             CUBE_FACE_BRIGHTNESS_BIASES[i],
                         );
                     }
@@ -1029,7 +974,7 @@ impl BlockRenderer {
                             e,
                             chunk_data.lightmap()[offset.as_extended_index()],
                             0x00,
-                            0.0,
+                            0,
                             1.0,
                         );
                     }
@@ -1059,7 +1004,7 @@ impl BlockRenderer {
 
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
-                vk_pos, frame, face, &mut vtx, &mut idx, e, 0xff, 0x00, 0.0, 1.0,
+                vk_pos, frame, face, &mut vtx, &mut idx, e, 0xff, 0x00, 0, 1.0,
             );
         }
 
@@ -1131,7 +1076,7 @@ impl BlockRenderer {
             model_matrix,
             models: VkChunkVertexDataGpu {
                 solid_opaque: None,
-                transparent: Some(VkCgvBufferGpu { vtx, idx }),
+                transparent: Some(VkBufferGpu::<CubeGeometryVertex> { vtx, idx }),
                 translucent: None,
             },
         }))
@@ -1387,7 +1332,6 @@ const GLOBAL_BRIGHTNESS_TABLE_RAW: [f32; 16] = [
     0.0, 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75,
     0.8125, 0.875, 0.9375,
 ];
-// TODO enable global brightness
 const BRIGHTNESS_TABLE_RAW: [f32; 16] = [
     0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
     0.875, 0.9375, 1.00,
@@ -1406,15 +1350,15 @@ lazy_static::lazy_static! {
 #[inline]
 fn make_cgv(
     coord: Vector3<f32>,
-    normal: Vector3<f32>,
+    normal: u8,
     tex_uv: Vector2<f32>,
-    brightness: f32,
-    global_brightness: f32,
-    wave_horizontal: f32,
+    brightness: u8,
+    global_brightness: u8,
+    wave_horizontal: u8,
 ) -> CubeGeometryVertex {
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
-        normal: [normal.x, normal.y, normal.z],
+        normal,
         uv_texcoord: tex_uv.into(),
         brightness,
         global_brightness_contribution: global_brightness,
@@ -1437,7 +1381,7 @@ pub(crate) fn emit_cube_face_vk(
     e: CubeExtents,
     encoded_brightness: u8,
     encoded_brightness_2: u8,
-    horizontal_wave: f32,
+    horizontal_wave: u8,
     brightness_bias: f32,
 ) {
     // Flip the coordinate system to Vulkan
@@ -1460,8 +1404,7 @@ pub(crate) fn emit_cube_face_vk(
     let brightness = brightness_1.max(brightness_2);
     let global_brightness = global_brightness_1.max(global_brightness_2);
 
-    let normal = e.normals[face.index()];
-    let normal = vec3(normal.0 as f32, -normal.1 as f32, normal.2 as f32).normalize();
+    let normal = face.repr();
     let mut vertices = match face {
         CubeFace::ZMinus => [
             make_cgv(
@@ -1470,7 +1413,7 @@ pub(crate) fn emit_cube_face_vk(
                 tl,
                 brightness,
                 global_brightness.max(global_brightness_2),
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[2],
@@ -1478,7 +1421,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness.max(global_brightness_2),
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[6],
@@ -1486,7 +1429,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[4],
@@ -1494,7 +1437,7 @@ pub(crate) fn emit_cube_face_vk(
                 tr,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
         ],
         CubeFace::ZPlus => [
@@ -1504,7 +1447,7 @@ pub(crate) fn emit_cube_face_vk(
                 tl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[7],
@@ -1512,7 +1455,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[3],
@@ -1520,7 +1463,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[1],
@@ -1528,7 +1471,7 @@ pub(crate) fn emit_cube_face_vk(
                 tr,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
         ],
         CubeFace::XMinus => [
@@ -1538,7 +1481,7 @@ pub(crate) fn emit_cube_face_vk(
                 tl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[3],
@@ -1546,7 +1489,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[2],
@@ -1554,7 +1497,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[0],
@@ -1562,7 +1505,7 @@ pub(crate) fn emit_cube_face_vk(
                 tr,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
         ],
         CubeFace::XPlus => [
@@ -1572,7 +1515,7 @@ pub(crate) fn emit_cube_face_vk(
                 tl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[6],
@@ -1580,7 +1523,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[7],
@@ -1588,7 +1531,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[5],
@@ -1596,7 +1539,7 @@ pub(crate) fn emit_cube_face_vk(
                 tr,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
         ],
         // For Y+ and Y-, the top of the texture is front of the cube (prior to any rotations)
@@ -1608,7 +1551,7 @@ pub(crate) fn emit_cube_face_vk(
                 tl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[3],
@@ -1616,7 +1559,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[7],
@@ -1624,7 +1567,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[6],
@@ -1632,7 +1575,7 @@ pub(crate) fn emit_cube_face_vk(
                 tr,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
         ],
         CubeFace::YPlus => [
@@ -1642,7 +1585,7 @@ pub(crate) fn emit_cube_face_vk(
                 tl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[5],
@@ -1650,7 +1593,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[1],
@@ -1658,7 +1601,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[0],
@@ -1666,7 +1609,7 @@ pub(crate) fn emit_cube_face_vk(
                 tr,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
         ],
         CubeFace::PlantXMinusZMinus => [
@@ -1684,7 +1627,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[6],
@@ -1692,7 +1635,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[4],
@@ -1718,7 +1661,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[3],
@@ -1726,7 +1669,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[1],
@@ -1752,7 +1695,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[2],
@@ -1760,7 +1703,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[0],
@@ -1786,7 +1729,7 @@ pub(crate) fn emit_cube_face_vk(
                 bl,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[7],
@@ -1794,7 +1737,7 @@ pub(crate) fn emit_cube_face_vk(
                 br,
                 brightness,
                 global_brightness,
-                0.0,
+                0,
             ),
             make_cgv(
                 coord + e.vertices[5],
@@ -1815,13 +1758,16 @@ pub(crate) fn emit_cube_face_vk(
 }
 
 #[inline]
-fn get_brightnesses(encoded_brightness: u8, brightness_bias: f32) -> (f32, f32) {
+fn get_brightnesses(encoded_brightness: u8, brightness_bias: f32) -> (u8, u8) {
     let brightness_upper = (encoded_brightness >> 4) as usize;
     let brightness_lower = (encoded_brightness & 0x0F) as usize;
 
     let global_brightness = GLOBAL_BRIGHTNESS_TABLE[brightness_upper];
     let brightness = BRIGHTNESS_TABLE[brightness_lower] * brightness_bias;
-    (global_brightness, brightness)
+    (
+        (global_brightness * 255.0) as u8,
+        (brightness * 255.0) as u8,
+    )
 }
 
 trait TexRefHelper {

@@ -73,25 +73,25 @@ pub(crate) struct CubeGeometryVertex {
     #[format(R32G32B32_SFLOAT)]
     pub(crate) position: [f32; 3],
 
-    /// Normal, given in world space
-    #[format(R32G32B32_SFLOAT)]
-    pub(crate) normal: [f32; 3],
-
     // Texture coordinate in tex space (0-1)
     #[format(R32G32_SFLOAT)]
     pub(crate) uv_texcoord: [f32; 2],
 
+    /// Normal, given in world space
+    #[format(R8_UINT)]
+    pub(crate) normal: u8,
+
     // The local brightness (from nearby sources, unchanging as the global lighting varies)
-    #[format(R32_SFLOAT)]
-    pub(crate) brightness: f32,
+    #[format(R8_UNORM)]
+    pub(crate) brightness: u8,
 
     // How much the global brightness should affect the brightness of this vertex
-    #[format(R32_SFLOAT)]
-    pub(crate) global_brightness_contribution: f32,
+    #[format(R8_UNORM)]
+    pub(crate) global_brightness_contribution: u8,
 
     // How much this vertex should wave with wavy input
-    #[format(R32_SFLOAT)]
-    pub(crate) wave_horizontal: f32,
+    #[format(R8_UNORM)]
+    pub(crate) wave_horizontal: u8,
 }
 pub(crate) struct CubeGeometryDrawCall {
     pub(crate) models: VkChunkVertexDataGpu,
