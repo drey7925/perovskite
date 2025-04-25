@@ -47,6 +47,7 @@ use crate::{
     game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
     maybe_export,
 };
+use perovskite_server::game_state::items::PlaceHandler;
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
@@ -161,9 +162,13 @@ pub(crate) type ExtendedDataInitializer = Box<
 >;
 
 #[derive(Debug, Clone, Copy)]
-enum VariantEffect {
+pub enum BlockVariantEffect {
+    /// Variant has no effect
     None,
+    /// Rotate the block depending on its variant. When placing, use player face direction to
+    /// specify rotation
     RotateNesw,
+    /// Variant 0-7 adjusts height.
     Liquid,
 }
 
@@ -203,10 +208,11 @@ pub struct BlockBuilder {
     // Exposed within the crate while not all APIs are complete
     pub(crate) client_info: BlockTypeDef,
     footstep_sound_override: Option<Option<SoundKey>>,
-    variant_effect: VariantEffect,
+    variant_effect: BlockVariantEffect,
     liquid_flow_period: Option<Duration>,
     falls_down: bool,
     matter_type: MatterType,
+    trivially_replaceable: bool,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -263,11 +269,12 @@ impl BlockBuilder {
                 sound_id: 0,
                 sound_volume: 0.0,
             },
-            variant_effect: VariantEffect::None,
+            variant_effect: BlockVariantEffect::None,
             footstep_sound_override: None,
             liquid_flow_period: None,
             falls_down: false,
             matter_type: MatterType::Solid,
+            trivially_replaceable: false,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -325,8 +332,8 @@ impl BlockBuilder {
     /// Adds multiple block groups to the list of groups for this block.
     /// These can affect diggability, dig speed, and other behavior in
     /// the map.
-    pub fn add_block_groups(mut self, grops: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        for group in grops {
+    pub fn add_block_groups(mut self, groups: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        for group in groups {
             self = self.add_block_group(group);
         }
         self
@@ -380,9 +387,9 @@ impl BlockBuilder {
     /// Set the appearance of the block to that specified by the given builder
     pub fn set_cube_appearance(mut self, appearance: CubeAppearanceBuilder) -> Self {
         self.variant_effect = match appearance.render_info.variant_effect() {
-            CubeVariantEffect::None => VariantEffect::None,
-            CubeVariantEffect::RotateNesw => VariantEffect::RotateNesw,
-            CubeVariantEffect::Liquid => VariantEffect::Liquid,
+            CubeVariantEffect::None => BlockVariantEffect::None,
+            CubeVariantEffect::RotateNesw => BlockVariantEffect::RotateNesw,
+            CubeVariantEffect::Liquid => BlockVariantEffect::Liquid,
         };
         self.client_info.physics_info = Some(PhysicsInfo::Solid(SolidPhysicsInfo {
             variant_effect: appearance.render_info.variant_effect().into(),
@@ -413,9 +420,9 @@ impl BlockBuilder {
             .iter()
             .any(|b| b.rotation() == AxisAlignedBoxRotation::Nesw)
         {
-            VariantEffect::RotateNesw
+            BlockVariantEffect::RotateNesw
         } else {
-            VariantEffect::None
+            BlockVariantEffect::None
         };
         self.client_info.render_info = Some(RenderInfo::AxisAlignedBoxes(
             appearance.display_proto.clone(),
@@ -493,6 +500,15 @@ impl BlockBuilder {
         self
     }
 
+    /// Marks this block trivially replaceable:
+    ///   * Placing items on this block will replace it, without giving an item to the player
+    ///   * Various other game content will treat this block as air-like, e.g. the carts track tool
+    ///         will place through it
+    pub fn set_trivially_replaceable(mut self, trivially_replaceable: bool) -> Self {
+        self.trivially_replaceable = trivially_replaceable;
+        self
+    }
+
     /// Set the appearance of the block to that specified by the given builder
     pub(crate) fn build_and_deploy_into(
         mut self,
@@ -511,6 +527,12 @@ impl BlockBuilder {
         if self.matter_type == MatterType::Gas {
             block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
         }
+        if self.trivially_replaceable {
+            block
+                .client_info
+                .groups
+                .push(TRIVIALLY_REPLACEABLE.to_string());
+        }
 
         if let Some(sound) = self.footstep_sound_override {
             block.client_info.footstep_sound = sound.map(|x| x.0).unwrap_or(0);
@@ -526,57 +548,19 @@ impl BlockBuilder {
 
         let mut item = self.item;
         let item_name = ItemName(item.proto.short_name.clone());
-        let extended_data_initializer = self.extended_data_initializer.take();
         // todo factor out a default place handler and export it to users of the API
-        item.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
-            if stack.proto().quantity == 0 {
-                return Ok(None);
-            }
-            let extended_data = match &extended_data_initializer {
-                Some(x) => x(ctx.clone(), coord, anchor, stack)?,
-                None => None,
-            };
-            let variant = match self.variant_effect {
-                VariantEffect::None => 0,
-                VariantEffect::RotateNesw => ctx
-                    .initiator()
-                    .position()
-                    .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
-                    .unwrap_or(0),
-                VariantEffect::Liquid => 0xfff,
-            };
-            match ctx
-                .game_map()
-                .compare_and_set_block_predicate(
-                    coord,
-                    |block, _, block_types| {
-                        // fast path
-                        if block == AIR_ID {
-                            return Ok(true);
-                        };
-                        let block_type = block_types.get_block(&block)?.0;
-                        Ok(block_type
-                            .client_info
-                            .groups
-                            .iter()
-                            .any(|g| g == TRIVIALLY_REPLACEABLE))
-                    },
-                    block_handle.with_variant(variant)?,
-                    extended_data,
-                )?
-                .0
-            {
-                CasOutcome::Match => Ok(stack.decrement()),
-                CasOutcome::Mismatch => Ok(Some(stack.clone())),
-            }
-        }));
+        item.place_on_block_handler = Some(build_place_handler(
+            self.variant_effect,
+            self.extended_data_initializer,
+            block_handle,
+        ));
         for modifier in self.item_modifiers {
             modifier(&mut item);
         }
         game_builder.inner.items_mut().register_item(item)?;
 
         if let Some(period) = self.liquid_flow_period {
-            if !matches!(self.variant_effect, VariantEffect::Liquid) {
+            if !matches!(self.variant_effect, BlockVariantEffect::Liquid) {
                 tracing::warn!(
                     "Liquid flow is only supported for blocks with a liquid variant effect"
                 );
@@ -752,6 +736,54 @@ fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
     Some(TextureReference {
         texture_name: tex_name,
         crop: None,
+    })
+}
+
+pub fn build_place_handler(
+    variant_effect: BlockVariantEffect,
+    extended_data_initializer: Option<ExtendedDataInitializer>,
+    block_id: BlockId,
+) -> Box<PlaceHandler> {
+    Box::new(move |ctx, coord, anchor, stack| {
+        if stack.proto().quantity == 0 {
+            return Ok(None);
+        }
+        let extended_data = match &extended_data_initializer {
+            Some(x) => x(ctx.clone(), coord, anchor, stack)?,
+            None => None,
+        };
+        let variant = match variant_effect {
+            BlockVariantEffect::None => 0,
+            BlockVariantEffect::RotateNesw => ctx
+                .initiator()
+                .position()
+                .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
+                .unwrap_or(0),
+            BlockVariantEffect::Liquid => 0xfff,
+        };
+
+        let place_step = |coord, extended_data| {
+            ctx.game_map().compare_and_set_block_predicate(
+                coord,
+                |block, _, block_types| {
+                    Ok(block == AIR_ID || block_types.is_trivially_replaceable(block))
+                },
+                block_id.with_variant(variant)?,
+                extended_data,
+            )
+        };
+
+        // First step: are we placing onto a trivially replaceable block? If so, that block (the
+        // anchor) ought to be overwritten
+        let (outcome, _, extended_data) = place_step(anchor, extended_data)?;
+        if outcome == CasOutcome::Match {
+            return Ok(stack.decrement());
+        }
+        // Second step: try to place in the actual addressed spot
+        match place_step(coord, extended_data)?.0 {
+            CasOutcome::Match => Ok(stack.decrement()),
+            CasOutcome::Mismatch => Ok(Some(stack.clone())),
+        }
     })
 }
 

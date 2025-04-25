@@ -10,7 +10,7 @@ use super::{
         CACTUS, MAPLE_LEAVES, MAPLE_TREE, MARSH_GRASS, TALL_GRASS, TALL_REED, TERRESTRIAL_FLOWERS,
     },
 };
-use crate::default_game::basic_blocks::{DIRT_WITH_SNOW, SNOW};
+use crate::default_game::basic_blocks::{DIRT_WITH_SNOW, SNOW, SNOW_BLOCK};
 use crate::default_game::foliage::{PINE_NEEDLES, PINE_TREE};
 use noise::{MultiFractal, NoiseFn};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
@@ -433,6 +433,7 @@ struct DefaultMapgen {
 
     water: BlockTypeHandle,
     snow: BlockTypeHandle,
+    snow_block: BlockTypeHandle,
     // todo organize the foliage (and more of the blocks in general) in a better way
     maple_tree: BlockTypeHandle,
     maple_leaves: BlockTypeHandle,
@@ -1274,7 +1275,11 @@ impl DefaultMapgen {
                     AIR_ID
                 } else {
                     let depth_variant = (snow_tendency * 8.0).clamp(0.0, 7.0) as u16 & 0x7;
-                    self.snow.with_variant_unchecked(depth_variant)
+                    if depth_variant >= 7 {
+                        self.snow_block
+                    } else {
+                        self.snow.with_variant_unchecked(depth_variant)
+                    }
                 }
             } else {
                 self.water
@@ -1387,6 +1392,7 @@ pub(crate) fn build_mapgen(
             .with_variant(0xfff)
             .unwrap(),
         snow: blocks.get_by_name(SNOW.0).expect("snow"),
+        snow_block: blocks.get_by_name(SNOW_BLOCK.0).expect("snow_block"),
         maple_tree: blocks.get_by_name(MAPLE_TREE.0).expect("maple_tree"),
         maple_leaves: blocks.get_by_name(MAPLE_LEAVES.0).expect("maple_leaves"),
 

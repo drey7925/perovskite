@@ -23,6 +23,7 @@ use super::{
 };
 use crate::default_game::chest::register_chest;
 use crate::game_builder::{GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME};
+use crate::items::ItemBuilder;
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -32,9 +33,11 @@ use crate::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
     },
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
+use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{CubeRenderInfo, CubeVariantEffect};
+use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::{
     constants::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
@@ -87,7 +90,11 @@ pub const LIMESTONE: StaticBlockName = StaticBlockName("default:limestone");
 pub const LIMESTONE_LIGHT: StaticBlockName = StaticBlockName("default:limestone_light");
 pub const LIMESTONE_DARK: StaticBlockName = StaticBlockName("default:limestone_dark");
 pub const DIRT_WITH_SNOW: StaticBlockName = StaticBlockName("default:dirt_with_snow");
+/// Snow, not a full block
 pub const SNOW: StaticBlockName = StaticBlockName("default:snow");
+/// A full, solid block of snow
+pub const SNOW_BLOCK: StaticBlockName = StaticBlockName("default:snow_block");
+pub const SNOWBALL: StaticItemName = StaticItemName("default:snowball");
 
 const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_grass_side");
@@ -111,6 +118,8 @@ const LIMESTONE_LIGHT_TEXTURE: StaticTextureName = StaticTextureName("default:li
 const LIMESTONE_DARK_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_dark");
 const SNOW_TEXTURE: StaticTextureName = StaticTextureName("default:snow");
 const DIRT_SNOW_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_snow_side");
+
+const SNOWBALL_TEXTURE: StaticTextureName = StaticTextureName("default:snowball");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -559,6 +568,8 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         "textures/dirt_snow_side.png"
     )?;
 
+    include_texture_bytes!(game_builder, SNOWBALL_TEXTURE, "textures/snowball.png")?;
+
     let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
@@ -677,11 +688,9 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .get_sound_id(SNOW_FOOTSTEP_SOUND_NAME)
         .expect("snow footstep sound");
 
-    // TODO: separate solid snow block for user-placed snow
-    // TODO: drops snowballs, rather than whole snow blocks
-    game_builder.add_block(
+    let snow = game_builder.add_block(
         BlockBuilder::new(SNOW)
-            .add_block_group(BRITTLE)
+            .add_block_group(GRANULAR)
             .set_cube_appearance(
                 CubeAppearanceBuilder::new()
                     .set_single_texture(SNOW_TEXTURE)
@@ -690,8 +699,65 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_allow_light_propagation(true)
             .set_footstep_sound(Some(snow_footstep))
+            .set_trivially_replaceable(true)
             .set_display_name("Snow"),
     )?;
+    let snow_block = game_builder.add_block(
+        BlockBuilder::new(SNOW_BLOCK)
+            .add_block_group(GRANULAR)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(SNOW_TEXTURE))
+            .set_allow_light_propagation(false)
+            .set_footstep_sound(Some(snow_footstep))
+            .set_trivially_replaceable(false)
+            .set_display_name("Snow block"),
+    )?;
+    let snow_id = snow.id;
+    let snow_block_id = snow_block.id;
+    game_builder.inner.items_mut().register_item(Item {
+        place_on_block_handler: Some(Box::new(move |ctx, place_coord, anchor_coord, stack| {
+            let incremented =
+                ctx.game_map()
+                    .mutate_block_atomically(anchor_coord, |block, _| {
+                        if block.equals_ignore_variant(snow_id) && block.variant() < 7 {
+                            *block = block.with_variant_unchecked(block.variant() + 1);
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    })?;
+            if incremented {
+                return Ok(stack.decrement());
+            }
+            // We couldn't increment at the anchor coord, place at the place coord instead...
+            let replaced =
+                ctx.game_map()
+                    .mutate_block_atomically(place_coord, move |block, _| {
+                        if ctx.block_types().is_trivially_replaceable(*block) {
+                            *block = snow_id.with_variant_unchecked(0);
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    })?;
+            if replaced {
+                Ok(stack.decrement())
+            } else {
+                Ok(Some(stack.clone()))
+            }
+        })),
+        ..Item::default_with_proto(ItemDef {
+            short_name: SNOWBALL.0.to_string(),
+            display_name: "Snowball".to_string(),
+            inventory_texture: Some(SNOWBALL_TEXTURE.into()),
+            groups: vec![],
+            interaction_rules: default_item_interaction_rules(),
+            quantity_type: Some(
+                perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
+            ),
+            block_apperance: String::new(),
+            sort_key: "default:snowball".into(),
+        })
+    })?;
     game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_SNOW)
             .add_block_group(GRANULAR)
@@ -721,7 +787,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
-        .add_block_group(TRIVIALLY_REPLACEABLE)
+        .set_trivially_replaceable(true)
         .add_item_group("testonly_wet")
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
@@ -781,6 +847,13 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             CubeAppearanceBuilder::new().set_single_texture(TESTONLY_UNKNOWN_TEX),
         ),
     )?;
+    game_builder.register_crafting_recipe(
+        std::array::from_fn(|_| RecipeSlot::Exact(SNOWBALL.0.to_string())),
+        snow_block.item_name.0.to_string(),
+        1,
+        Some(QuantityType::Stack(256)),
+        false,
+    );
 
     make_stairs(game_builder, &stone, true)?;
     make_stairs(game_builder, &glass, true)?;

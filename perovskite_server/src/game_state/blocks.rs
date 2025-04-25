@@ -440,6 +440,7 @@ pub struct BlockTypeManager {
     // Separate copy of BlockType.client_info.allow_light_propagation, packed densely in order
     // to be more cache friendly
     light_propagation: bitvec::vec::BitVec,
+    trivially_replaceable_block_group: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
     cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
 }
@@ -450,6 +451,7 @@ impl BlockTypeManager {
             name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         }
@@ -457,6 +459,14 @@ impl BlockTypeManager {
     /// Given a handle, return the block.
     pub fn get_block(&self, handle: &BlockTypeHandle) -> Result<(&BlockType, u16)> {
         self.get_block_by_id(*handle)
+    }
+
+    pub fn is_trivially_replaceable(&self, id: BlockId) -> bool {
+        *self
+            .trivially_replaceable_block_group
+            .get(id.index())
+            .as_deref()
+            .unwrap_or(&false)
     }
 
     pub(crate) fn get_block_by_id(&self, id: BlockId) -> Result<(&BlockType, u16)> {
@@ -497,8 +507,6 @@ impl BlockTypeManager {
 
                 block.client_info.id = id.base_id();
                 info!("Registering block {} as {:?}", block.short_name(), id);
-                self.light_propagation
-                    .set(id.index(), block.client_info.allow_light_propagation);
                 *existing = block;
                 id
             }
@@ -534,6 +542,7 @@ impl BlockTypeManager {
             name_to_base_id_map: FxHashMap::default(),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         };
@@ -550,7 +559,6 @@ impl BlockTypeManager {
 
         let present_indices: HashSet<usize> =
             HashSet::from_iter(block_proto.block_type.iter().map(|x| BlockId(x.id).index()));
-        manager.light_propagation.resize(max_index + 1, false);
         for i in 0..=max_index {
             let unknown_block_name = format!("by_id:0x{:x}", i << 12);
             manager.block_types.push(make_unknown_block_serverside(
@@ -714,14 +722,33 @@ impl BlockTypeManager {
     // Performs some last setup before the block manager becomes immutable.
     pub(crate) fn pre_build(&mut self) -> Result<()> {
         for (name, group) in self.fast_block_groups.iter_mut() {
-            group.resize(self.block_types.len(), false);
-            for (index, block) in self.block_types.iter().enumerate() {
-                if block.client_info.groups.contains(name) {
-                    group.set(index, true);
-                }
+            Self::pre_build_block_group(&self.block_types, name, group);
+        }
+        Self::pre_build_block_group(
+            &self.block_types,
+            TRIVIALLY_REPLACEABLE,
+            &mut self.trivially_replaceable_block_group,
+        );
+        self.light_propagation.resize(self.block_types.len(), false);
+        for (index, block) in self.block_types.iter().enumerate() {
+            if block.client_info.allow_light_propagation {
+                self.light_propagation.set(index, true);
             }
         }
         Ok(())
+    }
+
+    fn pre_build_block_group(
+        block_types: &[BlockType],
+        group_name: &str,
+        group: &mut bitvec::vec::BitVec,
+    ) {
+        group.resize(block_types.len(), false);
+        for (index, block) in block_types.iter().enumerate() {
+            if block.client_info.groups.iter().any(|x| x == group_name) {
+                group.set(index, true);
+            }
+        }
     }
 }
 

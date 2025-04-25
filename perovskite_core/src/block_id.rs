@@ -86,7 +86,8 @@ impl BlockId {
         );
         Ok(BlockId(self.base_id() | (variant as u32)))
     }
-    /// Like [with_variant], but silently truncates excess bits
+    /// Like [with_variant], but silently truncates excess bits. Note that while this is marked
+    /// unchecked, it is still safe from a Rust memory safety standpoint.
     #[inline(always)]
     pub fn with_variant_unchecked(self, variant: u16) -> BlockId {
         BlockId(self.base_id() | (variant as u32 & BLOCK_VARIANT_MASK))

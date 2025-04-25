@@ -78,7 +78,7 @@ where
     fn from_bytes(bytes: &[u8]) -> Result<Self>;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CasOutcome {
     /// The block compared equal to the expected and was set accordingly.
     Match,
@@ -1209,7 +1209,13 @@ impl ServerGameMap {
     }
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
-    /// The old block is returned along with its extended data, if any.
+    /// Return value:
+    ///   * CasOutcome: Whether compare and set succeeded
+    ///   * The old block is returned
+    ///   * Extended data: if match succeeded then its extended data is returned. **Caution:** If
+    ///     match fails, `new_extended_data` is returned; if you need the existing block's
+    ///     extended data, inspect it from the predicate and/or use [Self::mutate_block_atomically]
+    ///     instead
     pub fn compare_and_set_block_predicate<F, T: TryAsHandle>(
         &self,
         coord: BlockCoordinate,
@@ -1236,7 +1242,7 @@ impl ServerGameMap {
                 .get(&coord.offset().as_index().try_into().unwrap()),
             self.block_type_manager(),
         )? {
-            return Ok((CasOutcome::Mismatch, old_block, None));
+            return Ok((CasOutcome::Mismatch, old_block, new_extended_data));
         }
         let new_data_was_some = new_extended_data.is_some();
         let old_data = match new_extended_data {
@@ -1287,7 +1293,9 @@ impl ServerGameMap {
     /// inventory functions associated with the inventory manager - they may deadlock. However,
     /// accessing the inventories in the extended data passed into your callback *is* safe.
     ///
-    /// tl;dr your mutator isn't given a HandlerContext, nor a GameState; don't sneak one in.
+    /// It *is* safe to call non-mutating block_types functions (e.g. checking if a block is in a
+    /// block group, or getting its name) from the mutator, but care should be taken to avoid
+    /// particularly slow operations (e.g. checking a lot of groups, etc).
     ///
     /// TODO: See https://play.rust-lang.org/?version=nightly&mode=debug&edition=2024&gist=d1809ad103fe25aa3d7e9e8284a71fac
     /// Once auto traits and negative impls are stabilized, add a bound using this technique.
