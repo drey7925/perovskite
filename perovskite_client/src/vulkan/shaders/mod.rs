@@ -139,8 +139,8 @@ pub(crate) mod frag_lighting {
     #version 460
 
     layout(location = 0) in vec2 uv_texcoord;
-    layout(location = 1) in float brightness;
-    layout(location = 2) in vec3 global_brightness;
+    layout(location = 1) flat in float brightness;
+    layout(location = 2) flat in vec3 global_brightness;
 
     layout(location = 0) out vec4 f_color;
     layout(set = 0, binding = 0) uniform sampler2D tex;
@@ -164,8 +164,8 @@ pub(crate) mod frag_lighting_sparse {
     #version 460
 
     layout(location = 0) in vec2 uv_texcoord;
-    layout(location = 1) in float brightness;
-    layout(location = 2) in vec3 global_brightness;
+    layout(location = 1) flat in float brightness;
+    layout(location = 2) flat in vec3 global_brightness;
 
     layout(location = 0) out vec4 f_color;
     layout(set = 0, binding = 0) uniform sampler2D tex;

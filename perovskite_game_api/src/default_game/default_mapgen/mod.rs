@@ -13,6 +13,7 @@ use super::{
 use crate::default_game::basic_blocks::{DIRT_WITH_SNOW, SNOW};
 use crate::default_game::foliage::{PINE_NEEDLES, PINE_TREE};
 use noise::{MultiFractal, NoiseFn};
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::{
     block_id::BlockId,
     constants::blocks::AIR,
@@ -418,7 +419,6 @@ pub struct OreDefinition {
 }
 
 struct DefaultMapgen {
-    air: BlockTypeHandle,
     dirt: BlockTypeHandle,
     dirt_grass: BlockTypeHandle,
     dirt_snow: BlockTypeHandle,
@@ -631,7 +631,7 @@ impl MapgenInterface for DefaultMapgen {
                                 None,
                             );
                         }
-                        chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
+                        chunk.set_block(ChunkOffset { x, y: 5, z }, AIR_ID, None);
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
                             if z == 5 && chunk_coord.z % 4 == 0 {
@@ -641,7 +641,7 @@ impl MapgenInterface for DefaultMapgen {
                             } else if z == 6 && chunk_coord.z % 4 == 0 && x == 8 {
                                 self.signal_testonly.with_variant(18).unwrap()
                             } else {
-                                self.air
+                                AIR_ID
                             },
                             None,
                         );
@@ -671,7 +671,7 @@ impl MapgenInterface for DefaultMapgen {
                                 None,
                             );
                         }
-                        chunk.set_block(ChunkOffset { x, y: 5, z }, self.air, None);
+                        chunk.set_block(ChunkOffset { x, y: 5, z }, AIR_ID, None);
                         chunk.set_block(
                             ChunkOffset { x, y: 6, z },
                             if x == 5 && chunk_coord.x % 4 == 0 {
@@ -681,7 +681,7 @@ impl MapgenInterface for DefaultMapgen {
                             } else if x == 6 && chunk_coord.x % 4 == 0 && z == 7 {
                                 self.signal_testonly.with_variant(19).unwrap()
                             } else {
-                                self.air
+                                AIR_ID
                             },
                             None,
                         );
@@ -777,7 +777,7 @@ impl DefaultMapgen {
         let (is_cave, cave_bias) = self.cave_noise.get(coord);
         if is_cave {
             // TODO - lava, etc?
-            return self.air;
+            return AIR_ID;
         }
         for (ore, noise) in &self.ores {
             let mut cutoff = ore
@@ -1038,7 +1038,10 @@ impl DefaultMapgen {
         for h in 1..=4 {
             let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
             if coord.chunk() == chunk_coord {
-                chunk.set_block(coord.offset(), self.maple_tree, None);
+                let cur = chunk.get_block(coord.offset());
+                if cur == self.maple_leaves || cur == AIR_ID {
+                    chunk.set_block(coord.offset(), self.maple_tree, None);
+                }
             }
         }
         for h in 3..=5 {
@@ -1053,7 +1056,10 @@ impl DefaultMapgen {
                         z.wrapping_add(j),
                     );
                     if coord.chunk() == chunk_coord {
-                        chunk.set_block(coord.offset(), self.maple_leaves, None);
+                        let cur = chunk.get_block(coord.offset());
+                        if cur == AIR_ID {
+                            chunk.set_block(coord.offset(), self.maple_leaves, None);
+                        }
                     }
                 }
             }
@@ -1076,7 +1082,11 @@ impl DefaultMapgen {
         for h in 1..=(height - 1) {
             let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
             if coord.chunk() == chunk_coord {
-                chunk.set_block(coord.offset(), self.pine_tree, None);
+                let cur = chunk.get_block(coord.offset());
+                // pine trunk replaces needles or air
+                if cur == self.pine_needles || cur == AIR_ID {
+                    chunk.set_block(coord.offset(), self.pine_tree, None);
+                }
             }
         }
         let r_slope = (radius as f32) / (height - 2) as f32;
@@ -1098,7 +1108,11 @@ impl DefaultMapgen {
                         z.wrapping_add(j),
                     );
                     if coord.chunk() == chunk_coord {
-                        chunk.set_block(coord.offset(), self.pine_needles, None);
+                        let cur = chunk.get_block(coord.offset());
+                        // pine needles replace only air
+                        if cur == AIR_ID {
+                            chunk.set_block(coord.offset(), self.pine_needles, None);
+                        }
                     }
                 }
             }
@@ -1136,7 +1150,7 @@ impl DefaultMapgen {
     {
         if vert_offset > 0 {
             if block_coord.y > water_height {
-                self.air
+                AIR_ID
             } else {
                 self.water
             }
@@ -1163,7 +1177,7 @@ impl DefaultMapgen {
     {
         if vert_offset > 0 {
             if block_coord.y > water_height {
-                self.air
+                AIR_ID
             } else {
                 self.water
             }
@@ -1188,7 +1202,7 @@ impl DefaultMapgen {
     {
         if vert_offset > 0 {
             if block_coord.y > water_height {
-                self.air
+                AIR_ID
             } else {
                 self.water
             }
@@ -1226,7 +1240,7 @@ impl DefaultMapgen {
     {
         if vert_offset > 0 {
             if block_coord.y > water_height {
-                self.air
+                AIR_ID
             } else {
                 self.water
             }
@@ -1255,7 +1269,7 @@ impl DefaultMapgen {
         let z = block_coord.z;
         if vert_offset > 1 {
             if block_coord.y > water_height {
-                self.air
+                AIR_ID
             } else {
                 self.water
             }
@@ -1264,7 +1278,7 @@ impl DefaultMapgen {
                 let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
                     + (block_coord.y as f64) / 300.0;
                 if snow_tendency < 0.0 {
-                    self.air
+                    AIR_ID
                 } else {
                     let depth_variant = (snow_tendency * 8.0).clamp(0.0, 7.0) as u16 & 0x7;
                     self.snow.with_variant_unchecked(depth_variant)
@@ -1299,7 +1313,7 @@ impl DefaultMapgen {
     ) {
         let coord = BlockCoordinate::new(x, y + 1, z);
         if coord.chunk() == chunk_coord {
-            if chunk.get_block(coord.offset()) == self.air {
+            if chunk.get_block(coord.offset()) == AIR_ID {
                 chunk.set_block(coord.offset(), block, None);
             }
         }
@@ -1359,7 +1373,6 @@ pub(crate) fn build_mapgen(
     ores: Vec<OreDefinition>,
 ) -> Arc<dyn MapgenInterface> {
     Arc::new(DefaultMapgen {
-        air: blocks.get_by_name(AIR).expect("air"),
         dirt: blocks.get_by_name(DIRT.0).expect("dirt"),
         dirt_grass: blocks.get_by_name(DIRT_WITH_GRASS.0).expect("dirt_grass"),
         dirt_snow: blocks
