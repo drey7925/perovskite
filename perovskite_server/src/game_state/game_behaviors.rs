@@ -104,7 +104,7 @@ impl GameBehaviors {
         struct DummyAsyncHandler;
         #[async_trait]
         impl GenericAsyncHandler<Player, ()> for DummyAsyncHandler {
-            async fn handle(&self, req: &Player, context: HandlerContext<'_>) -> Result<()> {
+            async fn handle(&self, _req: &Player, _context: HandlerContext<'_>) -> Result<()> {
                 Ok(())
             }
         }

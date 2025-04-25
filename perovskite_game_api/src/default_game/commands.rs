@@ -1,10 +1,12 @@
 use std::ops::Deref;
 use std::time::Instant;
 
+use crate::game_builder::GameBuilder;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use cgmath::Vector3;
 use noise::NoiseFn;
+use perovskite_core::constants::permissions::WORLD_STATE;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
@@ -18,8 +20,6 @@ use perovskite_server::game_state::{
     items::ItemStack,
 };
 use rand::Rng;
-
-use crate::game_builder::GameBuilder;
 
 pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Result<()> {
     game_builder.add_command(
@@ -81,6 +81,11 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
         "mgd",
         Box::new(MapgenDebugCommand),
         ": Logs mapgen details at the current location to server log",
+    )?;
+    game_builder.add_command(
+        "mgr",
+        Box::new(MapgenRegenerateCommand),
+        ": Regenerates the current chunk",
     )?;
     Ok(())
 }
@@ -572,6 +577,32 @@ impl ChatCommandHandler for MapgenDebugCommand {
         tracing::info!("100 samples of supersimplex: {v:?}");
 
         context.mapgen().dump_debug(BlockCoordinate::try_from(pos)?);
+        Ok(())
+    }
+}
+
+struct MapgenRegenerateCommand;
+
+#[async_trait]
+impl ChatCommandHandler for MapgenRegenerateCommand {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !message.contains("--force") {
+            bail!("Destructive operation, use --force to confirm");
+        }
+        let pos = if let EventInitiator::Player(p) = context.initiator() {
+            p.player.last_position().position
+        } else {
+            bail!("Only players can regenerate a chunk");
+        };
+        if !context.initiator().check_permission_if_player(WORLD_STATE) {
+            bail!("Insufficient permissions")
+        }
+        let block_coord: BlockCoordinate = pos.try_into()?;
+        let chunk_coord = block_coord.chunk();
+        context
+            .game_map()
+            .debug_only_regenerate_chunk(chunk_coord)?;
+
         Ok(())
     }
 }

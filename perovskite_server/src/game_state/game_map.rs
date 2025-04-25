@@ -153,6 +153,8 @@ pub(crate) enum ChunkUsage {
     Server,
 }
 
+const _MAX_OFFSET: usize = 16 * 16 * 16;
+
 /// Representation of a single chunk in memory. Most game logic should instead use the game map directly,
 /// which abstracts over chunk boundaries and presents a unified interface that does not require being aware
 /// of how chunks are divided.
@@ -163,12 +165,12 @@ pub struct MapChunk {
     coord: ChunkCoordinate,
     // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
     // more calls similar to mutate_block_atomically
-    pub(crate) block_ids: Arc<[AtomicU32; 4096]>,
+    block_ids: Arc<[AtomicU32; _MAX_OFFSET]>,
     extended_data: Box<FxHashMap<u16, ExtendedData>>,
     dirty: bool,
 }
 impl MapChunk {
-    fn new(coord: ChunkCoordinate, storage: Arc<[AtomicU32; 4096]>) -> Self {
+    fn new(coord: ChunkCoordinate, storage: Arc<[AtomicU32; _MAX_OFFSET]>) -> Self {
         Self {
             coord,
             block_ids: storage,
@@ -186,7 +188,7 @@ impl MapChunk {
         let mut extended_data = Vec::new();
 
         if usage == ChunkUsage::Server {
-            for index in 0..4096 {
+            for index in 0.._MAX_OFFSET {
                 let offset = ChunkOffset::from_index(index);
                 let block_coord = self.coord.with_offset(offset);
 
@@ -281,7 +283,7 @@ impl MapChunk {
         coordinate: ChunkCoordinate,
         bytes: &[u8],
         game_state: Arc<GameState>,
-        storage: Arc<[AtomicU32; 4096]>,
+        storage: Arc<[AtomicU32; _MAX_OFFSET]>,
     ) -> Result<MapChunk> {
         let _span = span!("parse chunk");
         let proto = mapchunk_proto::StoredChunk::decode(bytes)
@@ -387,20 +389,20 @@ fn parse_v1(
     mut chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
     game_state: Arc<GameState>,
-    storage: Arc<[AtomicU32; 4096]>,
+    storage: Arc<[AtomicU32; _MAX_OFFSET]>,
     run_cold_load_postprocessors: bool,
 ) -> std::result::Result<MapChunk, Error> {
     let mut extended_data = FxHashMap::default();
     ensure!(
-        chunk_data.block_ids.len() == 4096,
-        "Block IDs length != 4096"
+        chunk_data.block_ids.len() == _MAX_OFFSET,
+        "Block IDs length != _MAX_OFFSET"
     );
     if run_cold_load_postprocessors {
         // The length should be right so this should be safe and zero or low cost
         for processor in game_state.block_types().cold_load_postprocessors() {
             let cast: &mut [BlockId] =
                 bytemuck::cast_slice_mut(chunk_data.block_ids.as_mut_slice());
-            let sized: &mut [BlockId; 4096] =
+            let sized: &mut [BlockId; _MAX_OFFSET] =
                 cast.try_into().expect("Failed to convert to BlockId array");
             processor(sized);
         }
@@ -413,7 +415,7 @@ fn parse_v1(
         simple_storage,
     } in chunk_data.extended_data.into_iter()
     {
-        ensure!(offset_in_chunk < 4096);
+        ensure!(offset_in_chunk < (_MAX_OFFSET as u32));
         let offset = ChunkOffset::from_index(offset_in_chunk as usize);
         let block_coord = coordinate.with_offset(offset);
         let block_id = *chunk_data.block_ids.get(offset_in_chunk as usize).expect(
@@ -500,7 +502,7 @@ impl<'a> MapChunkInnerWriteGuard<'a> {
         }
     }
 
-    fn clone_block_ids(&self) -> Box<[u32; 4096]> {
+    fn clone_block_ids(&self) -> Box<[u32; _MAX_OFFSET]> {
         self.block_ids
             .iter()
             .map(|x| x.load(Ordering::Relaxed))
@@ -557,13 +559,13 @@ struct MapChunkHolder {
     // A bit hacky - there are two arcs to the same data - one in the chunk, and one here.
     // The one in MapChunk is used for strong reads/writes under the control of a RwLock.
     // This one here is used for weak reads that don't require any consistency guarantees.
-    atomic_storage: Arc<[AtomicU32; 4096]>,
+    atomic_storage: Arc<[AtomicU32; _MAX_OFFSET]>,
     // This is set only if chunk's state is ready.
     fast_path_read_ready: AtomicBool,
 }
 impl MapChunkHolder {
     fn new_empty() -> Self {
-        // We're OK with allowing this lint; we really do want this atomic copied 4096 times.
+        // We're OK with allowing this lint; we really do want this atomic copied _MAX_OFFSET times.
         #[allow(clippy::declare_interior_mutable_const)]
         const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
@@ -572,10 +574,10 @@ impl MapChunkHolder {
             last_accessed: AtomicInstant::new(),
             last_written: AtomicInstant::new(),
             // TODO: make bloom filter configurable or adaptive
-            // For now, 128 bytes is a reasonable overhead (a chunk contains 4096 u32s which is 16 KiB already + extended data)
+            // For now, 128 bytes is a reasonable overhead (a chunk contains _MAX_OFFSET u32s which is 16 KiB already + extended data)
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
             block_bloom_filter: cbloom::Filter::with_size_and_hashers(128, 5),
-            atomic_storage: Arc::new([ATOMIC_INITIALIZER; 4096]),
+            atomic_storage: Arc::new([ATOMIC_INITIALIZER; _MAX_OFFSET]),
             fast_path_read_ready: AtomicBool::new(false),
         }
     }
@@ -1115,11 +1117,15 @@ impl ServerGameMap {
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
     /// The old block is returned along with its extended data, if any.
+    ///
+    /// Args:
+    ///   coord: The coordinate to set
+    ///   block: The block to set, as a `BlockId`, a `FastBlockName`, or `&str`.
     pub fn set_block<T: TryAsHandle>(
         &self,
         coord: BlockCoordinate,
         block: T,
-        new_data: Option<ExtendedData>,
+        ext_data: Option<ExtendedData>,
     ) -> Result<(BlockId, Option<ExtendedData>)> {
         let new_id = block
             .as_handle(&self.block_type_manager)
@@ -1128,9 +1134,10 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
-        let old_id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        let old_block = old_id.into();
-        let old_data = match new_data {
+        let old_id = chunk.block_ids[coord.offset().as_index()]
+            .load(Ordering::Relaxed)
+            .into();
+        let old_data = match ext_data {
             Some(new_data) => chunk
                 .extended_data
                 .insert(coord.offset().as_index().try_into().unwrap(), new_data),
@@ -1141,9 +1148,7 @@ impl ServerGameMap {
         chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
 
         chunk.dirty = true;
-        let light_change = self
-            .block_type_manager()
-            .allows_light_propagation(old_id.into())
+        let light_change = self.block_type_manager().allows_light_propagation(old_id)
             ^ self.block_type_manager().allows_light_propagation(new_id);
         if light_change {
             chunk_guard.update_lighting_after_edit(
@@ -1159,11 +1164,13 @@ impl ServerGameMap {
             .insert(new_id.base_id() as u64);
 
         self.enqueue_writeback(chunk_guard)?;
-        self.broadcast_block_change(BlockUpdate {
-            location: coord,
-            new_value: new_id,
-        });
-        Ok((old_block, old_data))
+        if old_id != new_id {
+            self.broadcast_block_change(BlockUpdate {
+                location: coord,
+                new_value: new_id,
+            });
+        }
+        Ok((old_id, old_data))
     }
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
@@ -1720,7 +1727,7 @@ impl ServerGameMap {
     fn load_uncached_or_generate_chunk(
         &self,
         coord: ChunkCoordinate,
-        storage: Arc<[AtomicU32; 4096]>,
+        storage: Arc<[AtomicU32; _MAX_OFFSET]>,
     ) -> Result<(MapChunk, bool)> {
         let data = self
             .database
@@ -1992,6 +1999,36 @@ impl ServerGameMap {
             result[i] = WRITEBACK_QUEUE_SIZE - self.writeback_senders[i].capacity()
         }
         result
+    }
+
+    /// A racy, hacky updater that rebuilds a chunk in-place, while misusing existing APIs for
+    /// ensuring that clients see the update.
+    ///
+    /// This should only be used for mapgen development; if you need a productionized way of
+    /// regenerating a chunk from scratch, please file a feature request.
+    pub fn debug_only_regenerate_chunk(&self, coord: ChunkCoordinate) -> Result<()> {
+        let mut detached_chunk = MapChunk {
+            coord,
+            block_ids: Arc::new([const { AtomicU32::new(0) }; _MAX_OFFSET]),
+            extended_data: Box::new(Default::default()),
+            dirty: false,
+        };
+        self.game_state
+            .upgrade()
+            .context("Missing gamestate")?
+            .mapgen
+            .fill_chunk(coord, &mut detached_chunk);
+
+        for i in 0.._MAX_OFFSET {
+            let block_coord = coord.with_offset(ChunkOffset::from_index(i));
+            self.set_block::<BlockId>(
+                block_coord,
+                detached_chunk.block_ids[i].load(Ordering::Relaxed).into(),
+                None,
+            )?;
+        }
+
+        Ok(())
     }
 }
 impl Drop for ServerGameMap {
@@ -3152,7 +3189,7 @@ impl GameMapTimer {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
         let map = game_state.game_map();
-        for i in 0..4096 {
+        for i in 0.._MAX_OFFSET {
             let block_id = BlockId(chunk.block_ids[i].load(Ordering::Relaxed));
             assert!(holder
                 .block_bloom_filter
@@ -3242,7 +3279,7 @@ impl GameMapTimer {
         state: &ShardState,
         permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     ) -> Result<()> {
-        let old_block_ids: Box<[u32; 4096]> = chunk.clone_block_ids();
+        let old_block_ids: Box<[u32; _MAX_OFFSET]> = chunk.clone_block_ids();
         let ctx = HandlerContext {
             tick: 0,
             initiator: EventInitiator::Engine,
@@ -3349,7 +3386,7 @@ impl GameMapTimer {
 }
 
 fn reconcile_after_bulk_handler(
-    old_block_ids: &[u32; 4096],
+    old_block_ids: &[u32; _MAX_OFFSET],
     chunk: &mut MapChunkInnerWriteGuard<'_>,
     holder: &MapChunkHolder,
     game_state: &Arc<GameState>,
@@ -3359,7 +3396,7 @@ fn reconcile_after_bulk_handler(
 ) {
     let mut seen_blocks = FxHashSet::default();
     let mut any_updated = false;
-    for i in 0..4096 {
+    for i in 0.._MAX_OFFSET {
         let old_block_id = BlockId::from(old_block_ids[i]);
         let new_block_id = BlockId::from(chunk.block_ids[i].load(Ordering::Relaxed));
         if old_block_id != new_block_id {

@@ -1038,10 +1038,7 @@ impl DefaultMapgen {
         for h in 1..=4 {
             let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
             if coord.chunk() == chunk_coord {
-                let cur = chunk.get_block(coord.offset());
-                if cur == self.maple_leaves || cur == AIR_ID {
-                    chunk.set_block(coord.offset(), self.maple_tree, None);
-                }
+                chunk.set_block(coord.offset(), self.maple_tree, None);
             }
         }
         for h in 3..=5 {
@@ -1082,11 +1079,7 @@ impl DefaultMapgen {
         for h in 1..=(height - 1) {
             let coord = BlockCoordinate::new(x, y.wrapping_add(h), z);
             if coord.chunk() == chunk_coord {
-                let cur = chunk.get_block(coord.offset());
-                // pine trunk replaces needles or air
-                if cur == self.pine_needles || cur == AIR_ID {
-                    chunk.set_block(coord.offset(), self.pine_tree, None);
-                }
+                chunk.set_block(coord.offset(), self.pine_tree, None);
             }
         }
         let r_slope = (radius as f32) / (height - 2) as f32;
