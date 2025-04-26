@@ -694,13 +694,15 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_appearance(
                 CubeAppearanceBuilder::new()
                     .set_single_texture(SNOW_TEXTURE)
-                    // Set liquid for appearance; we will not enable flow on it, however.
-                    .set_liquid_shape(),
+                    .set_variant_from_height(),
             )
             .set_allow_light_propagation(true)
             .set_footstep_sound(Some(snow_footstep))
             .set_trivially_replaceable(true)
-            .set_display_name("Snow"),
+            .set_display_name("Snow")
+            .set_dropped_item_closure_extended(|param| {
+                (SNOWBALL, param.variant.clamp(0, 7) as u32 + 1)
+            }),
     )?;
     let snow_block = game_builder.add_block(
         BlockBuilder::new(SNOW_BLOCK)
@@ -719,7 +721,12 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 ctx.game_map()
                     .mutate_block_atomically(anchor_coord, |block, _| {
                         if block.equals_ignore_variant(snow_id) && block.variant() < 7 {
-                            *block = block.with_variant_unchecked(block.variant() + 1);
+                            let new_variant = block.variant() + 1;
+                            if new_variant < 7 {
+                                *block = block.with_variant_unchecked(new_variant);
+                            } else {
+                                *block = snow_block_id;
+                            }
                             Ok(true)
                         } else {
                             Ok(false)

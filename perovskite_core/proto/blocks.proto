@@ -169,14 +169,16 @@ enum CubeVariantEffect {
   // Bottom two bits of variant 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
   // The top and bottom textures are rotated to line up.
   CUBE_VARIANT_EFFECT_ROTATE_NESW = 1;
-  // Variant 0xfff is a full cube representing a source of this liquid. Variants 0-8 indicate flowing instances of this liquid.
-  // Variant 0xfff has the same appearance as variant 0, but game logic may choose to make a distinction (i.e. 0xfff can be collected
-  // into a bucket and creates other variants around it, variants 0-8 can't)
-  // Behavior for variants 9 - 0xffe is unspecified (may become specified in the future) - builtin and default game code guarantees not
+  // Variant 0xfff is a full cube representing a source of this liquid. Variants 0-7 indicate flowing instances of this liquid.
+  // Variant 0xfff has the same appearance as variant 7, but game logic may choose to make a distinction (i.e. 0xfff can be collected
+  // into a bucket and creates other liquid around it, variants 0-7 can't)
+  // Behavior for variants 8 - 0xffe is unspecified (may become specified in the future) - builtin and default game code guarantees not
   // to crash upon those variants, but may act arbitrarily
   //
   // Note - this may be superseded by its own render_info oneof type in the future.
   CUBE_VARIANT_EFFECT_LIQUID = 2;
+  /// Same as CUBE_VARIANT_EFFECT_LIQUID, but without smoothly connecting neighboring heights
+  CUBE_VARIANT_HEIGHT = 3;
 }
 
 message FluidPhysicsInfo {

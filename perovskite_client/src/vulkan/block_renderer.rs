@@ -26,7 +26,7 @@ use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
-    self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo,
+    self as blocks_proto, AxisAlignedBoxes, BlockTypeDef, CubeRenderInfo, CubeVariantEffect,
 };
 use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
@@ -652,12 +652,20 @@ impl BlockRenderer {
                     if !self.block_defs.is_solid_opaque(neighbor) {
                         return false;
                     }
-                    if !self.block_defs.is_liquid_variant_effect(neighbor) {
+                    if !self.block_defs.is_extent_controlled_by_variant(neighbor) {
                         return true;
                     }
                     // Need to be careful here, since the neighbor block isn't a full block, but we
-                    // know that it'll smooth to us - if it's the same base block type.
-                    return block.equals_ignore_variant(neighbor);
+                    // know that it'll smooth to us - if it's the same base block type and doesn't
+                    // require a strict check
+                    if self
+                        .block_defs
+                        .check_neighbor_variant_for_face_suppression(block)
+                    {
+                        return block == neighbor;
+                    } else {
+                        return block.equals_ignore_variant(neighbor);
+                    }
                 },
                 &SOLID_RECLAIMER,
             ),
@@ -748,7 +756,6 @@ impl BlockRenderer {
         match &block.render_info {
             Some(RenderInfo::Cube(cube_render_info)) => {
                 self.emit_full_cube(
-                    block,
                     id,
                     offset,
                     chunk_data,
@@ -776,7 +783,6 @@ impl BlockRenderer {
 
     fn emit_full_cube<F>(
         &self,
-        block: &BlockTypeDef,
         id: BlockId,
         offset: ChunkOffset,
         chunk_data: &impl ChunkDataView,
@@ -799,7 +805,7 @@ impl BlockRenderer {
             e,
             offset,
             suppress_face_when,
-            block,
+            id,
             chunk_data,
             pos,
             textures,
@@ -814,7 +820,7 @@ impl BlockRenderer {
         e: CubeExtents,
         offset: ChunkOffset,
         suppress_face_when: F,
-        block: &BlockTypeDef,
+        id: BlockId,
         chunk_data: &impl ChunkDataView,
         pos: Vector3<f32>,
         textures: [RectF32; 6],
@@ -831,9 +837,7 @@ impl BlockRenderer {
                 offset.z as i8 + n_z,
             )
                 .as_extended_index();
-            if e.force_face(i)
-                || !suppress_face_when(BlockId(block.id), chunk_data.block_ids()[neighbor_index])
-            {
+            if e.force_face(i) || !suppress_face_when(id, chunk_data.block_ids()[neighbor_index]) {
                 emit_cube_face_vk(
                     pos,
                     textures[i],
@@ -1186,7 +1190,32 @@ fn get_cube_extents(
         blocks_proto::CubeVariantEffect::Liquid => {
             build_liquid_cube_extents(chunk_data, offset, id)
         }
+        CubeVariantEffect::CubeVariantHeight => cube_variant_height_unblended(id.variant()),
     }
+}
+
+fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
+    let y_max = variant_to_height(variant);
+    CubeExtents {
+        vertices: [
+            vec3(-0.5, y_max, -0.5),
+            vec3(-0.5, y_max, 0.5),
+            vec3(-0.5, 0.5, -0.5),
+            vec3(-0.5, 0.5, 0.5),
+            vec3(0.5, y_max, -0.5),
+            vec3(0.5, y_max, 0.5),
+            vec3(0.5, 0.5, -0.5),
+            vec3(0.5, 0.5, 0.5),
+        ],
+        normals: DEFAULT_FACE_NORMALS,
+        // top face should be forced if it's not flush with the bottom of the next block
+        force: [false, false, variant < 7, false, false, false],
+    }
+}
+
+fn variant_to_height(variant: u16) -> f32 {
+    let height = ((variant as f32) / 7.0).clamp(0.025, 1.0);
+    0.5 - height
 }
 
 fn build_liquid_cube_extents(
@@ -1204,11 +1233,6 @@ fn build_liquid_cube_extents(
             0
         }
     };
-
-    fn variant_to_height(variant: u16) -> f32 {
-        let height = ((variant as f32) / 7.0).clamp(0.025, 1.0);
-        0.5 - height
-    }
 
     let y_xn_zn = variant_to_height(
         variant

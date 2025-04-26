@@ -1162,7 +1162,9 @@ impl ServerGameMap {
         chunk_guard
             .block_bloom_filter
             .insert(new_id.base_id() as u64);
-
+        // TODO: Do we enqueue a writeback for a no-op change? For the most part, we expect
+        // set_block to normally change blocks, so this is moot. However, it might make sense to
+        // see if we can just turn this to a call to mutate_block_atomically
         self.enqueue_writeback(chunk_guard)?;
         if old_id != new_id {
             self.broadcast_block_change(BlockUpdate {
@@ -2014,6 +2016,10 @@ impl ServerGameMap {
     ///
     /// This should only be used for mapgen development; if you need a productionized way of
     /// regenerating a chunk from scratch, please file a feature request.
+    ///
+    /// In particular, this also serves a purpose of intentionally generating high writeback traffic
+    /// to debug writeback behavior; a proper regeneration would be done at a chunk level instead.
+    /// rather than as spam of single-block writes
     pub fn debug_only_regenerate_chunk(&self, coord: ChunkCoordinate) -> Result<()> {
         let mut detached_chunk = MapChunk {
             coord,

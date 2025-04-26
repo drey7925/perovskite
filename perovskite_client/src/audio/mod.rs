@@ -357,7 +357,7 @@ pub(crate) async fn start_engine(
                             move |data: &mut [f32], info: &OutputCallbackInfo| {
                                 if first_callback {
                                     log::info!(
-                                        "audio engine started, {} samples in first callback",
+                                        "audio render thread is live, {} samples in first callback",
                                         data.len() / selected_config.channels() as usize
                                     );
                                     if let Err(e) =
@@ -367,8 +367,9 @@ pub(crate) async fn start_engine(
                                             selected_config.sample_rate().0,
                                         )
                                     {
-                                        // Logging on the audio thread, but only doing it for one
-                                        // buffer, at startup, in an exceptional case
+                                        // Logging (and string formatting, and heap allocation, eww)
+                                        // on the audio thread, but only doing it for one buffer,
+                                        // at startup, in an exceptional case
                                         log::error!(
                                             "Failed to promote audio thread to real time: {:?}",
                                             e

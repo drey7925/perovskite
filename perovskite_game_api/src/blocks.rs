@@ -61,21 +61,29 @@ use perovskite_server::media::SoundKey;
 
 pub mod custom_geometry;
 
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct DroppedItemClosureParam {
+    pub block_coordinate: BlockCoordinate,
+    pub variant: u16,
+}
+
 /// The item obtained when the block is dug.
 /// TODO stabilize item stack and expose a vec<itemstack> option
 enum DroppedItem {
     None,
     Fixed(String, u32),
-    Dynamic(Box<dyn Fn() -> (StaticItemName, u32) + Sync + Send + 'static>),
+    Dynamic(Box<dyn Fn(DroppedItemClosureParam) -> (StaticItemName, u32) + Sync + Send + 'static>),
     NotDiggable,
 }
 impl DroppedItem {
     fn build_dig_handler_inner<F>(closure: F, _game_builder: &GameBuilder) -> Box<InlineHandler>
     where
-        F: Fn() -> Vec<ItemStack> + Sync + Send + 'static,
+        F: Fn(DroppedItemClosureParam) -> Vec<ItemStack> + Sync + Send + 'static,
     {
         Box::new(move |ctx, target_block, ext_data, stack| {
             let block_type = ctx.block_types().get_block(target_block)?.0;
+            let variant = target_block.variant();
             let rule = ctx
                 .items()
                 .get_stack_item(stack)
@@ -85,7 +93,10 @@ impl DroppedItem {
                 ext_data.clear();
 
                 Ok(BlockInteractionResult {
-                    item_stacks: closure(),
+                    item_stacks: closure(DroppedItemClosureParam {
+                        block_coordinate: ctx.location(),
+                        variant,
+                    }),
                     tool_wear: match rule {
                         Some(rule) => rule.computed_tool_wear(block_type)?,
                         None => 0,
@@ -99,9 +110,9 @@ impl DroppedItem {
 
     fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
         match self {
-            DroppedItem::None => Self::build_dig_handler_inner(Vec::new, game_builder),
+            DroppedItem::None => Self::build_dig_handler_inner(|_| Vec::new(), game_builder),
             DroppedItem::Fixed(item, count) => Self::build_dig_handler_inner(
-                move || {
+                move |_| {
                     vec![ItemStack {
                         proto: protocol::items::ItemStack {
                             item_name: item.clone(),
@@ -114,8 +125,8 @@ impl DroppedItem {
                 game_builder,
             ),
             DroppedItem::Dynamic(closure) => Self::build_dig_handler_inner(
-                move || {
-                    let (item, count) = closure();
+                move |param| {
+                    let (item, count) = closure(param);
                     vec![ItemStack {
                         proto: protocol::items::ItemStack {
                             item_name: item.0.to_string(),
@@ -169,7 +180,7 @@ pub enum BlockVariantEffect {
     /// specify rotation
     RotateNesw,
     /// Variant 0-7 adjusts height.
-    Liquid,
+    LiquidLikeHeight,
 }
 
 /// Represents a block built by [GameBuilder::add_block]
@@ -307,9 +318,20 @@ impl BlockBuilder {
         mut self,
         closure: impl Fn() -> (StaticItemName, u32) + Send + Sync + 'static,
     ) -> Self {
+        self.dropped_item = DroppedItem::Dynamic(Box::new(move |(_param)| closure()));
+        self
+    }
+
+    /// Sets a closure that indicates what item a player will get when digging this
+    /// block. Examples may include a different number of items based on the variant
+    pub fn set_dropped_item_closure_extended(
+        mut self,
+        closure: impl Fn(DroppedItemClosureParam) -> (StaticItemName, u32) + Send + Sync + 'static,
+    ) -> Self {
         self.dropped_item = DroppedItem::Dynamic(Box::new(closure));
         self
     }
+
     /// Sets that this block should drop nothing when dug
     pub fn set_no_drops(mut self) -> Self {
         self.dropped_item = DroppedItem::None;
@@ -389,7 +411,9 @@ impl BlockBuilder {
         self.variant_effect = match appearance.render_info.variant_effect() {
             CubeVariantEffect::None => BlockVariantEffect::None,
             CubeVariantEffect::RotateNesw => BlockVariantEffect::RotateNesw,
-            CubeVariantEffect::Liquid => BlockVariantEffect::Liquid,
+            CubeVariantEffect::Liquid | CubeVariantEffect::CubeVariantHeight => {
+                BlockVariantEffect::LiquidLikeHeight
+            }
         };
         self.client_info.physics_info = Some(PhysicsInfo::Solid(SolidPhysicsInfo {
             variant_effect: appearance.render_info.variant_effect().into(),
@@ -560,7 +584,7 @@ impl BlockBuilder {
         game_builder.inner.items_mut().register_item(item)?;
 
         if let Some(period) = self.liquid_flow_period {
-            if !matches!(self.variant_effect, BlockVariantEffect::Liquid) {
+            if !matches!(self.variant_effect, BlockVariantEffect::LiquidLikeHeight) {
                 tracing::warn!(
                     "Liquid flow is only supported for blocks with a liquid variant effect"
                 );
@@ -680,6 +704,12 @@ impl CubeAppearanceBuilder {
         self.render_info.variant_effect = CubeVariantEffect::Liquid.into();
         self
     }
+
+    /// Same as [Self::set_liquid_shape], but does not smoothly connect neighboring blocks
+    pub(crate) fn set_variant_from_height(mut self) -> Self {
+        self.render_info.variant_effect = CubeVariantEffect::CubeVariantHeight.into();
+        self
+    }
 }
 
 impl Default for CubeAppearanceBuilder {
@@ -759,7 +789,7 @@ pub fn build_place_handler(
                 .position()
                 .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
                 .unwrap_or(0),
-            BlockVariantEffect::Liquid => 0xfff,
+            BlockVariantEffect::LiquidLikeHeight => 0xfff,
         };
 
         let place_step = |coord, extended_data| {

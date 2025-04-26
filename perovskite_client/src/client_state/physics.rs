@@ -601,7 +601,7 @@ impl CollisionBox {
         }
     }
 
-    fn liquid_variant(coord: Vector3<f64>, variant: u16) -> CollisionBox {
+    fn height_from_variant(coord: Vector3<f64>, variant: u16) -> CollisionBox {
         let height = ((variant as f64) / 7.0).clamp(0.025, 1.0);
         CollisionBox {
             min: vec3(coord.x - 0.5, coord.y - 0.5, coord.z - 0.5),
@@ -803,7 +803,9 @@ fn push_collision_boxes(
             CubeVariantEffect::None | CubeVariantEffect::RotateNesw => {
                 output.push(CollisionBox::full_cube(coord))
             }
-            CubeVariantEffect::Liquid => output.push(CollisionBox::liquid_variant(coord, variant)),
+            CubeVariantEffect::Liquid | CubeVariantEffect::CubeVariantHeight => {
+                output.push(CollisionBox::height_from_variant(coord, variant))
+            }
         },
         Some(PhysicsInfo::Fluid(_)) => {}
         Some(PhysicsInfo::Air(_)) => {}

@@ -241,9 +241,9 @@ pub(crate) async fn make_client_contexts(
     let inventory_events = game_state.inventory_manager().subscribe();
     let chunk_tracker = Arc::new(ChunkTracker::new());
     let chunk_aimd = Arc::new(Mutex::new(Aimd {
-        val: crate::network_server::client_context::INITIAL_CHUNKS_PER_UPDATE as f64,
+        val: INITIAL_CHUNKS_PER_UPDATE as f64,
         floor: 0.,
-        ceiling: crate::network_server::client_context::MAX_CHUNKS_PER_UPDATE as f64,
+        ceiling: MAX_CHUNKS_PER_UPDATE as f64,
         additive_increase: 64.,
         multiplicative_decrease: 0.5,
     }));
