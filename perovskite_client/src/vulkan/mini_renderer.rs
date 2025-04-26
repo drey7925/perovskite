@@ -205,7 +205,7 @@ impl MiniBlockRenderer {
             )?;
             let draw_call = CubeGeometryDrawCall {
                 models: VkChunkVertexDataGpu {
-                    solid_opaque: None,
+                    opaque: None,
                     transparent: Some(pass),
                     translucent: None,
                 },

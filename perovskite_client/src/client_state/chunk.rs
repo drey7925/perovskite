@@ -154,7 +154,7 @@ struct ChunkMesh {
 impl Drop for ChunkMesh {
     fn drop(&mut self) {
         if let Some(cpu_data) = self.solo_cpu.take() {
-            if let Some(solid) = cpu_data.solid_opaque {
+            if let Some(solid) = cpu_data.opaque {
                 SOLID_RECLAIMER.put(solid.idx, solid.vtx);
             }
             if let Some(transparent) = cpu_data.transparent {
@@ -287,7 +287,7 @@ impl ClientChunk {
             ChunkRenderState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
             ChunkRenderState::AuditNoRender => {
                 let result = renderer.mesh_chunk(&data)?;
-                if result.solid_opaque.is_some()
+                if result.opaque.is_some()
                     || result.transparent.is_some()
                     || result.translucent.is_some()
                 {
@@ -625,7 +625,7 @@ impl MeshBatch {
 
         Some(CubeGeometryDrawCall {
             models: VkChunkVertexDataGpu {
-                solid_opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
+                opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
                     Some(VkBufferGpu {
                         vtx: self.solid_vtx.as_ref().unwrap().clone(),
                         idx: self.solid_idx.as_ref().unwrap().clone(),
@@ -736,7 +736,7 @@ impl MeshBatchBuilder {
         if self.base_position == Vector3::zero() {
             self.base_position = chunk_pos;
         }
-        if let Some(opaque) = cpu.solid_opaque.as_ref() {
+        if let Some(opaque) = cpu.opaque.as_ref() {
             Self::extend_buffer(
                 opaque,
                 &mut self.solid_vtx,

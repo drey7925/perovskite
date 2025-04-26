@@ -15,9 +15,10 @@ pub(crate) struct ClientBlockTypeManager {
     fallback_block_def: BlockTypeDef,
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
+    opaque_blocks: bv::BitVec,
     solid_opaque_blocks: bv::BitVec,
-    variant_controls_extent: bv::BitVec,
-    check_neighbor_variant: bv::BitVec,
+    allow_suppression_same_base_block: bv::BitVec,
+    allow_face_suppress_on_exact_match: bv::BitVec,
     transparent_render_blocks: bv::BitVec,
     translucent_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
@@ -37,12 +38,14 @@ impl ClientBlockTypeManager {
         let mut light_propagators = bv::BitVec::new();
         light_propagators.resize(BlockId(max_id).index() + 1, false);
 
+        let mut opaque_blocks = bv::BitVec::new();
+        opaque_blocks.resize(BlockId(max_id).index() + 1, false);
         let mut solid_opaque_blocks = bv::BitVec::new();
         solid_opaque_blocks.resize(BlockId(max_id).index() + 1, false);
-        let mut variant_controls_extent = bv::BitVec::new();
-        variant_controls_extent.resize(BlockId(max_id).index() + 1, false);
-        let mut check_neighbor_variant = bv::BitVec::new();
-        check_neighbor_variant.resize(BlockId(max_id).index() + 1, false);
+        let mut allow_suppression_same_base_block = bv::BitVec::new();
+        allow_suppression_same_base_block.resize(BlockId(max_id).index() + 1, false);
+        let mut allow_face_suppress_on_exact_match = bv::BitVec::new();
+        allow_face_suppress_on_exact_match.resize(BlockId(max_id).index() + 1, false);
 
         let mut transparent_render_blocks = bv::BitVec::new();
         transparent_render_blocks.resize(BlockId(max_id).index() + 1, false);
@@ -77,16 +80,19 @@ impl ClientBlockTypeManager {
             };
             if let Some(RenderInfo::Cube(render_info)) = &def.render_info {
                 if render_info.render_mode() == CubeRenderMode::SolidOpaque {
-                    solid_opaque_blocks.set(id.index(), true);
+                    opaque_blocks.set(id.index(), true);
+                    solid_opaque_blocks.set(
+                        id.index(),
+                        render_info.variant_effect() != CubeVariantEffect::Liquid
+                            && render_info.variant_effect() != CubeVariantEffect::CubeVariantHeight,
+                    );
                 }
-                if render_info.variant_effect == CubeVariantEffect::Liquid.into()
-                    || render_info.variant_effect == CubeVariantEffect::CubeVariantHeight.into()
-                {
-                    variant_controls_extent.set(id.index(), true);
+                if render_info.variant_effect == CubeVariantEffect::Liquid.into() {
+                    allow_suppression_same_base_block.set(id.index(), true);
                 }
                 // Only liquids blend smoothly to their neighbors
                 if render_info.variant_effect == CubeVariantEffect::CubeVariantHeight.into() {
-                    check_neighbor_variant.set(id.index(), true);
+                    allow_face_suppress_on_exact_match.set(id.index(), true);
                 }
             }
 
@@ -129,9 +135,10 @@ impl ClientBlockTypeManager {
             fallback_block_def: make_fallback_blockdef(),
             light_propagators,
             light_emitters,
+            opaque_blocks,
             solid_opaque_blocks,
-            variant_controls_extent,
-            check_neighbor_variant,
+            allow_suppression_same_base_block,
+            allow_face_suppress_on_exact_match,
             transparent_render_blocks,
             translucent_render_blocks,
             name_to_id,
@@ -192,6 +199,15 @@ impl ClientBlockTypeManager {
         }
     }
     #[inline]
+    pub(crate) fn is_opaque(&self, id: BlockId) -> bool {
+        if id.index() < self.opaque_blocks.len() {
+            self.opaque_blocks[id.index()]
+        } else {
+            // unknown blocks are solid opaque
+            true
+        }
+    }
+    #[inline]
     pub(crate) fn is_solid_opaque(&self, id: BlockId) -> bool {
         if id.index() < self.solid_opaque_blocks.len() {
             self.solid_opaque_blocks[id.index()]
@@ -201,9 +217,9 @@ impl ClientBlockTypeManager {
         }
     }
     #[inline]
-    pub(crate) fn is_extent_controlled_by_variant(&self, id: BlockId) -> bool {
-        if id.index() < self.variant_controls_extent.len() {
-            self.variant_controls_extent[id.index()]
+    pub(crate) fn allow_face_suppress_on_same_base_block(&self, id: BlockId) -> bool {
+        if id.index() < self.allow_suppression_same_base_block.len() {
+            self.allow_suppression_same_base_block[id.index()]
         } else {
             // unknown blocks are solid opaque
             false
@@ -211,9 +227,9 @@ impl ClientBlockTypeManager {
     }
 
     #[inline]
-    pub(crate) fn check_neighbor_variant_for_face_suppression(&self, id: BlockId) -> bool {
-        if id.index() < self.check_neighbor_variant.len() {
-            self.check_neighbor_variant[id.index()]
+    pub(crate) fn allow_face_suppress_on_exact_match(&self, id: BlockId) -> bool {
+        if id.index() < self.allow_face_suppress_on_exact_match.len() {
+            self.allow_face_suppress_on_exact_match[id.index()]
         } else {
             // unknown blocks are solid opaque
             false

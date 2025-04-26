@@ -311,13 +311,13 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
 
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexDataGpu {
-    pub(crate) solid_opaque: Option<VkBufferGpu<CubeGeometryVertex>>,
+    pub(crate) opaque: Option<VkBufferGpu<CubeGeometryVertex>>,
     pub(crate) transparent: Option<VkBufferGpu<CubeGeometryVertex>>,
     pub(crate) translucent: Option<VkBufferGpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
-        if self.solid_opaque.is_some() || self.transparent.is_some() || self.translucent.is_some() {
+        if self.opaque.is_some() || self.transparent.is_some() || self.translucent.is_some() {
             Some(self.clone())
         } else {
             None
@@ -326,7 +326,7 @@ impl VkChunkVertexDataGpu {
 
     pub(crate) fn empty() -> VkChunkVertexDataGpu {
         VkChunkVertexDataGpu {
-            solid_opaque: None,
+            opaque: None,
             transparent: None,
             translucent: None,
         }
@@ -335,14 +335,14 @@ impl VkChunkVertexDataGpu {
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
-    pub(crate) solid_opaque: Option<VkBufferCpu<CubeGeometryVertex>>,
+    pub(crate) opaque: Option<VkBufferCpu<CubeGeometryVertex>>,
     pub(crate) transparent: Option<VkBufferCpu<CubeGeometryVertex>>,
     pub(crate) translucent: Option<VkBufferCpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
         VkChunkVertexDataCpu {
-            solid_opaque: None,
+            opaque: None,
             transparent: None,
             translucent: None,
         }
@@ -350,7 +350,7 @@ impl VkChunkVertexDataCpu {
 
     pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<VkChunkVertexDataGpu> {
         Ok(VkChunkVertexDataGpu {
-            solid_opaque: match &self.solid_opaque {
+            opaque: match &self.opaque {
                 Some(x) => x.to_gpu(allocator.clone())?,
                 None => None,
             },
@@ -645,27 +645,22 @@ impl BlockRenderer {
         }
 
         Ok(VkChunkVertexDataCpu {
-            solid_opaque: self.mesh_chunk_subpass(
+            opaque: self.mesh_chunk_subpass(
                 chunk_data,
-                |id| self.block_types().is_solid_opaque(id),
+                |id| self.block_types().is_opaque(id),
                 |block, neighbor| {
-                    if !self.block_defs.is_solid_opaque(neighbor) {
-                        return false;
-                    }
-                    if !self.block_defs.is_extent_controlled_by_variant(neighbor) {
+                    if self.block_defs.is_solid_opaque(neighbor) {
                         return true;
                     }
-                    // Need to be careful here, since the neighbor block isn't a full block, but we
-                    // know that it'll smooth to us - if it's the same base block type and doesn't
-                    // require a strict check
-                    if self
+                    // Need to be careful here, since the neighbor block isn't a full block.
+                    // If we're OK with suppressing on exact matches and the neighbor matches,
+                    // we're good. Likewise if we can suppress based on base block, and it matches
+                    (self
                         .block_defs
-                        .check_neighbor_variant_for_face_suppression(block)
-                    {
-                        return block == neighbor;
-                    } else {
-                        return block.equals_ignore_variant(neighbor);
-                    }
+                        .allow_face_suppress_on_same_base_block(block)
+                        && block.equals_ignore_variant(neighbor))
+                        || (self.block_defs.allow_face_suppress_on_exact_match(block)
+                            && block == neighbor)
                 },
                 &SOLID_RECLAIMER,
             ),
@@ -1079,7 +1074,7 @@ impl BlockRenderer {
         Ok(Some(CubeGeometryDrawCall {
             model_matrix,
             models: VkChunkVertexDataGpu {
-                solid_opaque: None,
+                opaque: None,
                 transparent: Some(VkBufferGpu::<CubeGeometryVertex> { vtx, idx }),
                 translucent: None,
             },

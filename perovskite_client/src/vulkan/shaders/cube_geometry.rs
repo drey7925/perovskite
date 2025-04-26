@@ -148,7 +148,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
         let mut effective_calls = 0;
         for call in draw_calls.iter_mut() {
             let pass_data = match pass {
-                BlockRenderPass::Opaque => call.models.solid_opaque.take(),
+                BlockRenderPass::Opaque => call.models.opaque.take(),
                 BlockRenderPass::Transparent => call.models.transparent.take(),
                 BlockRenderPass::Translucent => call.models.translucent.take(),
             };
