@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Error, Result};
+use anyhow::{anyhow, ensure, Context, Error, Result};
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
 use circular_buffer::CircularBuffer;
 use futures::Future;
@@ -605,7 +605,9 @@ impl<'a> EntityCoroutineServices<'a> {
             let map_clone = self.game_state.game_map_clone();
             DeferrableResult::Deferred(Deferral {
                 deferred_call: Box::pin(async move {
-                    tokio::task::block_in_place(move || (map_clone.get_block(coord), coord))
+                    tokio::task::spawn_blocking(move || (map_clone.get_block(coord), coord))
+                        .await
+                        .unwrap_or_else(|e| (Err(anyhow!(e)), coord))
                 }),
             })
         }
@@ -643,9 +645,11 @@ impl<'a> EntityCoroutineServices<'a> {
                 DeferrableResult::Deferred(Deferral {
                     deferred_call: Box::pin(async move {
                         tracing::debug!("MBA invoking");
-                        tokio::task::block_in_place(move || {
+                        tokio::task::spawn_blocking(move || {
                             (map_clone.mutate_block_atomically(coord, mutator), ())
                         })
+                        .await
+                        .unwrap_or_else(|e| (Err(anyhow!(e)), ()))
                     }),
                 })
             }
@@ -665,11 +669,7 @@ impl<'a> EntityCoroutineServices<'a> {
         task: impl FnOnce(&HandlerContext) + Send + 'static,
         cancellation_token: CancelAction,
     ) {
-        let ctx = HandlerContext {
-            tick: self.game_state.tick(),
-            initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
-            game_state: self.game_state.clone(),
-        };
+        let gs_clone = self.game_state.clone();
         tokio::task::spawn(async move {
             if !delay.is_zero() {
                 let sleep_until = tokio::time::Instant::now() + delay;
@@ -692,7 +692,26 @@ impl<'a> EntityCoroutineServices<'a> {
                 }
             }
 
-            tokio::task::block_in_place(|| task(&ctx));
+            match tokio::task::spawn_blocking(|| {
+                let ctx = HandlerContext {
+                    tick: gs_clone.tick(),
+                    initiator: EventInitiator::Plugin("entity_coroutine".to_string()),
+                    game_state: gs_clone,
+                };
+                run_handler!(|| Ok(task(&ctx)), "entity_spawn_delayed", ctx.initiator())
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!("entity spawn_delayed panicked: {e:?}")
+                }
+                Err(e) => {
+                    // This is a more severe error; run_handler() catches panics, so if a panic were
+                    // caught by spawn_blocking, this means something went badly wrong
+                    tracing::error!("entity spawn_delayed panicked *internally*: {e:?}")
+                }
+            }
         });
     }
 

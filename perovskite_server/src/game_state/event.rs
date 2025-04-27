@@ -258,8 +258,10 @@ impl<'a> HandlerContext<'a> {
         };
         tokio::task::spawn(async move {
             tokio::time::sleep(delay).await;
-            if let Err(e) = tokio::task::block_in_place(move || f(&our_clone)) {
-                tracing::error!("Error in deferred function: {}", e);
+            match tokio::task::spawn_blocking(move || f(&our_clone)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::error!("Error in deferred function: {}", e),
+                Err(e) => tracing::error!("Panic in deferred function: {}", e),
             }
         });
     }

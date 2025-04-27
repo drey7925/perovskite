@@ -92,7 +92,7 @@ impl CommandManager {
                 ChatCommand {
                     action: Box::new(DbFailureInjectionChatHandler),
                     help_text:
-                    "val1 val2 inject db crashes and hangs with these probabilities, respectively. Valid values are 0-256 inclusive."
+                    "val1 val2 inject db crashes and hangs with these probabilities / 256, respectively. Valid values are 0-256 inclusive."
                         .to_string(),
                 },
             );

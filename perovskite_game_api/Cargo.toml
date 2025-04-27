@@ -98,7 +98,7 @@ tokio-console = ["dep:console-subscriber"]
 discord = ["dep:serenity"]
 
 [dev-dependencies]
-criterion = { version = "0.4", features = ["html_reports"] }
+criterion = { version = "0.4", features = ["html_reports", "async", "async_tokio"] }
 
 [[bench]]
 name = "mapgen_bench"

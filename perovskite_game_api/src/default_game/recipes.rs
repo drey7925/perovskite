@@ -217,25 +217,16 @@ mod test {
 
         use crate::default_game::recipes::RecipeSlot;
         use perovskite_server::game_state::items::ItemStack;
-        let item_1 = Item {
-            proto: protocol::items::ItemDef {
-                short_name: "a".into(),
-                groups: vec!["a".into()],
-                ..Default::default()
-            },
+        let item_1 = Item::default_with_proto(protocol::items::ItemDef {
+            short_name: "a".into(),
+            groups: vec!["a".into()],
             ..Default::default()
-        };
-        let item_2 = Item {
-            proto: protocol::items::ItemDef {
-                short_name: "b".into(),
-                groups: vec!["b".into()],
-                ..Default::default()
-            },
-            dig_handler: None,
-            tap_handler: None,
-            place_on_block_handler: None,
+        });
+        let item_2 = Item::default_with_proto(protocol::items::ItemDef {
+            short_name: "b".into(),
+            groups: vec!["b".into()],
             ..Default::default()
-        };
+        });
 
         let recipe = RecipeImpl {
             slots: [
