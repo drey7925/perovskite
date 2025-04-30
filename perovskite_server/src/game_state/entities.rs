@@ -2838,6 +2838,8 @@ pub trait EntityHandlers: Send + Sync {
     /// Args:
     ///     ctx: Event context providing access to the game state
     ///     target: The entity and trailing index being interacted with
+    ///     menu_entry: The menu entry selected by the player, empty string if none selected. Note:
+    ///        not validated or sanitized, passed from client.
     ///
     /// Returns:
     ///     Any popup to display to the player
@@ -2848,6 +2850,7 @@ pub trait EntityHandlers: Send + Sync {
         &self,
         _ctx: &HandlerContext,
         _target: EntityTarget,
+        _menu_entry: &str,
     ) -> Result<Option<Popup>> {
         Ok(None)
     }
@@ -3037,6 +3040,7 @@ fn make_unknown_entity_appearance() -> EntityDef {
             tool_interaction_groups: vec![],
             base_dig_time: 1.0,
             turbulence_audio: None,
+            interact_key_options: vec![],
         },
         handlers: Box::new(NoOpEntityHandlers),
     }

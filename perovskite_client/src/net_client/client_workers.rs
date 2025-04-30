@@ -317,6 +317,7 @@ impl OutboundContext {
                         interaction_target: Some(action.target.into()),
                         position: Some(action.player_pos.to_proto()?),
                         item_slot: action.item_slot,
+                        menu_entry: action.menu_entry,
                     },
                 ))
                 .await?;
@@ -485,7 +486,7 @@ impl InboundContext {
         self.shared_state.batcher.cancel();
         Ok(())
     }
-    async fn handle_message(&mut self, message: &StreamToClient) -> Result<()> {
+    async fn handle_message(&mut self, message: &mut StreamToClient) -> Result<()> {
         if message.tick == 0 {
             log::warn!("Got message with tick 0");
         } else {
@@ -495,7 +496,7 @@ impl InboundContext {
                 .update_error(message.tick);
         }
         *self.shared_state.client_state.server_perf.lock() = message.performance_metrics.clone();
-        match &message.server_message {
+        match &mut message.server_message {
             None => {
                 log::warn!("Got empty message from server");
             }
@@ -616,28 +617,30 @@ impl InboundContext {
         .enqueue(coord);
     }
 
-    async fn handle_mapchunk(&mut self, chunk: &rpc::MapChunk) -> Result<()> {
+    async fn handle_mapchunk(&mut self, chunk: &mut rpc::MapChunk) -> Result<()> {
         match &chunk.chunk_coord {
             Some(coord) => {
                 tokio::task::block_in_place(|| {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
 
-                    let data = self
+                    let mut data = self
                         .snappy_helper
                         .decode::<StoredChunk>(&chunk.snappy_encoded_bytes)?
                         .chunk_data
+                        .take()
                         .with_context(|| "inner chunk_data missing")?;
-                    let block_ids: &[u32; 4096] = match &data {
+                    let (block_ids, ced) = match data {
                         perovskite_core::protocol::map::stored_chunk::ChunkData::V1(v1_data) => {
                             ensure!(v1_data.block_ids.len() == 4096);
-                            v1_data.block_ids.deref().try_into().unwrap()
+                            (v1_data.block_ids, v1_data.client_extended_data)
                         }
                     };
                     let extra_chunks = self.shared_state.client_state.chunks.insert_or_update(
                         &self.shared_state.client_state,
                         coord,
-                        block_ids,
+                        block_ids.deref().try_into().unwrap(),
+                        ced,
                         &self.shared_state.client_state.block_types,
                     )?;
 
@@ -714,7 +717,10 @@ impl InboundContext {
         Ok(())
     }
 
-    async fn handle_map_delta_update(&mut self, batch: &rpc::MapDeltaUpdateBatch) -> Result<()> {
+    async fn handle_map_delta_update(
+        &mut self,
+        batch: &mut rpc::MapDeltaUpdateBatch,
+    ) -> Result<()> {
         let (missing_coord, unknown_coords) =
             tokio::task::block_in_place(|| self.map_delta_update_sync(batch))?;
         if missing_coord {
@@ -759,9 +765,9 @@ impl InboundContext {
 
     fn map_delta_update_sync(
         &mut self,
-        batch: &rpc::MapDeltaUpdateBatch,
+        batch: &mut rpc::MapDeltaUpdateBatch,
     ) -> Result<(bool, Vec<BlockCoordinate>), anyhow::Error> {
-        self.apply_map_audio_delta_batch(batch);
+        self.apply_map_audio_delta_batch(&batch);
 
         let (needs_remesh, unknown_coords, missing_coord) =
             self.shared_state

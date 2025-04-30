@@ -81,3 +81,10 @@ message CustomMesh {
     // All values must be <= the number of vertices in the parallel arrays above.
     repeated uint32 indices = 10;
 }
+
+// Text that's rendered on signs, other blocks, etc.
+// At some point this will contain rendering information to properly apply it to a block
+// For now, this just wraps a string
+message BlockText {
+    string text = 1;
+}

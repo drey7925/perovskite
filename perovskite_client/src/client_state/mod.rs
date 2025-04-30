@@ -103,11 +103,12 @@ pub(crate) struct InventoryAction {
     pub(crate) swap: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct InteractKeyAction {
     pub(crate) target: ToolTarget,
     pub(crate) item_slot: u32,
     pub(crate) player_pos: PlayerPositionUpdate,
+    pub(crate) menu_entry: String,
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +238,7 @@ impl ChunkManager {
         client_state: &ClientState,
         coord: ChunkCoordinate,
         block_ids: &[u32; 4096],
+        ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<usize> {
         // Lock order: chunks -> [renderable_chunks] -> light_columns
@@ -256,10 +258,11 @@ impl ChunkManager {
                 client_state.world_audio.lock().remove_chunk(coord);
                 chunk_entry
                     .get()
-                    .update_from(coord, block_ids, block_types)?
+                    .update_from(coord, block_ids, ced, block_types)?
             }
             std::collections::hash_map::Entry::Vacant(x) => {
-                let (chunk, occlusion) = ClientChunk::from_proto(coord, block_ids, block_types)?;
+                let (chunk, occlusion) =
+                    ClientChunk::from_proto(coord, block_ids, ced, block_types)?;
                 light_column.insert_empty(coord.y);
                 x.insert(Arc::new(chunk));
                 occlusion
@@ -276,7 +279,7 @@ impl ChunkManager {
 
     pub(crate) fn apply_delta_batch(
         &self,
-        batch: &MapDeltaUpdateBatch,
+        batch: &mut MapDeltaUpdateBatch,
         block_types: &ClientBlockTypeManager,
     ) -> Result<(FxHashSet<ChunkCoordinate>, Vec<BlockCoordinate>, bool)> {
         let mut needs_remesh = FxHashSet::default();
@@ -285,7 +288,7 @@ impl ChunkManager {
 
         let chunk_lock = self.chunks.read();
         let light_lock = self.light_columns.read();
-        for update in batch.updates.iter() {
+        for update in batch.updates.drain(..) {
             let block_coord: BlockCoordinate = match &update.block_coord {
                 Some(x) => x.into(),
                 None => {
@@ -998,6 +1001,7 @@ pub(crate) struct FrameState {
 use crate::audio;
 use crate::audio::MapSoundState;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
+use perovskite_core::protocol::map::ClientExtendedData;
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {
     blocks_proto::BlockTypeDef {

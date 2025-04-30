@@ -42,6 +42,7 @@ pub mod game_behaviors;
 pub mod recipes;
 /// Helpers for stairs, slabs, and other blocks derived from a base block
 pub mod shaped_blocks;
+pub mod signs;
 /// Standard tools - pickaxes, shovels, axes
 pub mod tools;
 
@@ -283,6 +284,7 @@ fn register_player_entity(builder: &mut GameBuilder) -> Result<EntityClassId> {
             tool_interaction_groups: vec![],
             base_dig_time: 1.0,
             turbulence_audio: None,
+            interact_key_options: vec![],
         },
         handlers: Box::new(game_state::entities::NoOpEntityHandlers),
     })

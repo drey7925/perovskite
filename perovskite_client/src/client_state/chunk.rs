@@ -26,7 +26,7 @@ use perovskite_core::protocol::game_rpc as rpc_proto;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
-
+use egui::ahash::{HashMapExt, HashSetExt};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -37,8 +37,10 @@ use crate::vulkan::block_renderer::{BlockRenderer, VkChunkVertexDataCpu, VkChunk
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{VkAllocator, VulkanContext};
+use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
 use prost::Message;
+use rustc_hash::{FxHashMap, FxHashSet};
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
     PrimaryCommandBufferAbstract,
@@ -53,6 +55,7 @@ pub(crate) trait ChunkDataView {
     fn get_block(&self, offset: ChunkOffset) -> BlockId {
         self.block_ids()[offset.as_extended_index()]
     }
+    fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData>;
 }
 
 pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
@@ -70,6 +73,10 @@ impl ChunkDataView for LockedChunkDataView<'_> {
 
     fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
+    }
+
+    fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
+        self.0.client_ext_data.get(&(offset.as_index() as u16))
     }
 }
 
@@ -142,6 +149,7 @@ pub(crate) struct ChunkData {
     pub(crate) lightmap: Option<Box<[u8; 18 * 18 * 18]>>,
 
     render_state: ChunkRenderState,
+    client_ext_data: FxHashMap<u16, ClientExtendedData>,
 }
 
 pub(crate) const TARGET_BATCH_OCCUPANCY: usize = 128;
@@ -244,6 +252,7 @@ impl ClientChunk {
     pub(crate) fn from_proto(
         coord: ChunkCoordinate,
         block_ids: &[u32; 4096],
+        ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<(ClientChunk, Lightfield)> {
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
@@ -253,6 +262,12 @@ impl ClientChunk {
         } else {
             None
         };
+
+        let mut client_ext_data: FxHashMap<u16, ClientExtendedData> =
+            FxHashMap::with_capacity(ced.len());
+        for val in ced {
+            client_ext_data.insert(val.offset_in_chunk as u16, val);
+        }
         Ok((
             ClientChunk {
                 coord,
@@ -260,6 +275,7 @@ impl ClientChunk {
                     block_ids,
                     render_state: ChunkRenderState::NeedProcessing,
                     lightmap,
+                    client_ext_data,
                 }),
                 chunk_mesh: Mutex::new(ChunkMesh {
                     solo_cpu: None,
@@ -373,18 +389,24 @@ impl ClientChunk {
         &self,
         coord: ChunkCoordinate,
         block_ids: &[u32; 4096],
+        ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<Lightfield> {
         ensure!(coord == self.coord);
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
-        // unwrap is safe: we verified the length
+        let ids = Self::expand_ids(block_ids);
+        let mut client_ext_data = FxHashMap::with_capacity(ced.len());
+        for val in ced {
+            client_ext_data.insert(val.offset_in_chunk as u16, val);
+        }
         let mut data_guard = self.chunk_data.write();
-        data_guard.block_ids = Self::expand_ids(block_ids);
+        data_guard.block_ids = ids;
         data_guard.render_state = ChunkRenderState::NeedProcessing;
+        data_guard.client_ext_data = client_ext_data;
         Ok(occlusion)
     }
 
-    pub(crate) fn apply_delta(&self, proto: &rpc_proto::MapDeltaUpdate) -> Result<bool> {
+    pub(crate) fn apply_delta(&self, proto: rpc_proto::MapDeltaUpdate) -> Result<bool> {
         let block_coord: BlockCoordinate = proto
             .block_coord
             .clone()
@@ -406,7 +428,18 @@ impl ClientChunk {
             chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()] =
                 new_id;
         }
-
+        match proto.new_client_ext_data {
+            None => {
+                chunk_data
+                    .client_ext_data
+                    .remove(&(block_coord.offset().as_index() as u16));
+            }
+            Some(x) => {
+                chunk_data
+                    .client_ext_data
+                    .insert(block_coord.offset().as_index() as u16, x);
+            }
+        }
         Ok(old_id != new_id)
     }
 
@@ -473,6 +506,25 @@ impl ClientChunk {
             .as_deref()
             .map(|x| x[offset.as_extended_index()])
             .unwrap_or(BlockId(0))
+    }
+    pub(crate) fn get_single_with_extended_data(
+        &self,
+        offset: ChunkOffset,
+    ) -> (BlockId, Option<ClientExtendedData>) {
+        let id = self
+            .chunk_data
+            .read()
+            .block_ids
+            .as_deref()
+            .map(|x| x[offset.as_extended_index()])
+            .unwrap_or(BlockId(0));
+        let ext_data = self
+            .chunk_data
+            .read()
+            .client_ext_data
+            .get(&(offset.as_index() as u16))
+            .cloned();
+        (id, ext_data)
     }
 
     pub(crate) fn coord(&self) -> ChunkCoordinate {

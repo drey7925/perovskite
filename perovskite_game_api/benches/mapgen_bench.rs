@@ -7,6 +7,7 @@ fn chunk_benchmarks(c: &mut Criterion) {
     let (mut game, work_dir) = GameBuilder::using_tempdir().unwrap();
     game.initialize_default_game().unwrap();
     carts::register_carts(&mut game).unwrap();
+    game.force_seed(Some(0));
     game.run_task_in_server(|gs| {
         let mut z = 0;
         c.bench_function("ground_level", |b| {
@@ -30,6 +31,16 @@ fn chunk_benchmarks(c: &mut Criterion) {
                 z += 1;
                 gs.game_map()
                     .serialize_for_client(ChunkCoordinate::new(1, 16, z), true, || {})
+            })
+        });
+
+        gs.game_map()
+            .benchmark_serialize_for_server(ChunkCoordinate::new(2, 0, 0))
+            .unwrap();
+        c.bench_function("serialize_same_chunk", |b| {
+            b.iter(|| {
+                gs.game_map()
+                    .benchmark_serialize_for_server(ChunkCoordinate::new(2, 0, 0))
             })
         });
 

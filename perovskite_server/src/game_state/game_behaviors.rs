@@ -75,7 +75,7 @@ impl GameBehaviors {
             Cow::to_mut(&mut permissions).extend(
                 self.defined_permissions
                     .iter()
-                    .map(|x| ELIGIBLE_PREFIX.to_owned() + x),
+                    .map(|x| ELIGIBLE_PREFIX.to_owned() + x.as_str()),
             );
             Cow::to_mut(&mut permissions).extend([
                 FLY.to_owned(),

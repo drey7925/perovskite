@@ -20,6 +20,7 @@ package perovskite.protocol.entities;
 
 import "coordinates.proto";
 import "render.proto";
+import "blocks.proto";
 
 message EntityMove {
   // The starting position for the movement
@@ -118,4 +119,5 @@ message EntityAppearance {
   double base_dig_time = 6;
   // Turbulence sound, if present for this entity
   TurbulenceAudioModel turbulence_audio = 7;
+  repeated perovskite.protocol.blocks.InteractKeyOption interact_key_options = 8;
 }

@@ -17,6 +17,7 @@ use crate::{
 };
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
+use perovskite_core::protocol::blocks::InteractKeyOption;
 use perovskite_core::protocol::entities::TurbulenceAudioModel;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
@@ -139,7 +140,12 @@ lazy_static::lazy_static! {
 struct CartHandlers;
 
 impl EntityHandlers for CartHandlers {
-    fn on_interact_key(&self, ctx: &HandlerContext, target: EntityTarget) -> Result<Option<Popup>> {
+    fn on_interact_key(
+        &self,
+        ctx: &HandlerContext,
+        target: EntityTarget,
+        _menu_entry: &str,
+    ) -> Result<Option<Popup>> {
         let work = |p: &Player| -> Result<()> {
             // Race condition but oh well
             let old_attachment = p.detach_from_entity_blocking()?;
@@ -280,6 +286,10 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
                 volume_attached: 0.01525,
                 lpf_cutoff_hz: 1000.0,
             }),
+            interact_key_options: vec![InteractKeyOption {
+                id: "board_exit".to_string(),
+                label: "Board/exit".to_string(),
+            }],
         },
         handlers: Box::new(CartHandlers),
     })?;

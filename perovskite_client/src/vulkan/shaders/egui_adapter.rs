@@ -180,6 +180,10 @@ pub(crate) fn set_up_fonts(egui_ctx: &mut egui::Context) {
         "NotoSansJP-Light".to_owned(),
         egui::FontData::from_static(include_bytes!("../../fonts/NotoSansJP-Light.ttf")),
     );
+    fonts.font_data.insert(
+        "MPlus1Code-Light".to_owned(),
+        egui::FontData::from_static(include_bytes!("../../fonts/MPLUS1Code-Light.ttf")),
+    );
     fonts
         .families
         .entry(egui::FontFamily::Proportional)
@@ -190,5 +194,24 @@ pub(crate) fn set_up_fonts(egui_ctx: &mut egui::Context) {
         .entry(egui::FontFamily::Proportional)
         .or_default()
         .insert(1, "NotoSansJP-Light".to_owned());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "MPlus1Code-Light".to_owned());
+
+    let mut mono_fonts = fonts
+        .families
+        .get(&egui::FontFamily::Monospace)
+        .unwrap()
+        .clone();
+    mono_fonts.push("NotoSansJP-Light".to_owned());
+    mono_fonts.push("NotoSans-Light".to_owned());
+    // A font family that tries to render with monospace and falls back to noto
+    // for wider character selection
+    fonts.families.insert(
+        egui::FontFamily::Name("MonospaceBestEffort".into()),
+        mono_fonts,
+    );
     egui_ctx.set_fonts(fonts);
 }

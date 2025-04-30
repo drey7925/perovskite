@@ -143,6 +143,7 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
             tool_interaction_groups: vec![],
             base_dig_time: 1.0,
             turbulence_audio: None,
+            interact_key_options: vec![],
         },
         handlers: Box::new(DuckHandlers),
     })?;

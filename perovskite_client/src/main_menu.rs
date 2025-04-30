@@ -470,7 +470,11 @@ pub(crate) fn draw_settings_menu(
                     draw_input_settings(ui, prospective_settings, input_capture);
                 });
 
-
+            CollapsingHeader::new("Display settings")
+                .default_open(true)
+                .show(ui, |ui| {
+                    draw_display_settings(ui, prospective_settings);
+                });
             CollapsingHeader::new("Render settings")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -563,6 +567,25 @@ fn draw_input_settings(
             }
 
         })
+}
+
+fn draw_display_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
+    egui::Grid::new("display_grid")
+        .num_columns(2)
+        .spacing([40.0, 4.0])
+        .striped(true)
+        .show(ui, |ui| {
+            ui.label("Hover menu on bottom panel")
+                .on_hover_text("When checked, the hover menu (interact options, hover text, etc) is on the bottom of the screen. If unchecked, make a popup near the middle of the screen instead.");
+            ui.add(
+                egui::Checkbox::new(
+                    &mut prospective_settings.display.hover_text_on_bottom_panel,
+                    "Enable"
+                ),
+            );
+            ui.end_row();
+
+        });
 }
 
 fn draw_render_settings(

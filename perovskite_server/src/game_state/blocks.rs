@@ -14,6 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::{bail, ensure, Context, Result};
+use log::{info, warn};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeMap;
 use std::{
     any::Any,
     borrow::Borrow,
@@ -21,10 +25,6 @@ use std::{
     ops::{AddAssign, Deref, DerefMut},
     sync::atomic::{AtomicU32, Ordering},
 };
-
-use anyhow::{bail, ensure, Context, Result};
-use log::{info, warn};
-use rustc_hash::FxHashMap;
 
 use crate::database::database_engine::{GameDatabase, KeySpace};
 
@@ -57,8 +57,8 @@ pub struct ExtendedData {
 
     /// Inventories that can be shown in inventory views
     /// Note that nothing here prevents you from messing with inventories that are still
-    /// visible in popups.
-    /// TODO: switch back to std hashmap once get_many_mut is stabilized
+    /// visible in popups; they will be stale until client refreshes the popup view
+    /// TODO: switch back to std hashmap/btreemap once get_many_mut is stabilized
     pub inventories: hashbrown::HashMap<String, Inventory>,
 }
 impl Default for ExtendedData {
@@ -98,6 +98,7 @@ impl AddAssign for BlockInteractionResult {
 
 pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
 use perovskite_core::protocol::blocks::SolidPhysicsInfo;
+use perovskite_core::protocol::map::ClientExtendedData;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
 pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
@@ -115,36 +116,6 @@ pub type InlineHandler = dyn Fn(
     + Sync;
 
 pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; 4096]) + Send + Sync + 'static;
-
-/// How extended data for this block type ought to be handled.
-///
-/// For now, this enum has only one option; in the future, additional variants will be added
-#[derive(PartialEq, Eq)]
-pub enum ExtDataHandling {
-    /// When storing/loading this block type, it has extended data that is
-    /// needed by the block type's plugins/handlers code on the server.
-    /// Note that this loading may still be done lazily - they may only be loaded when
-    /// an event handler actually tries to read/write them.
-    ServerSide,
-    // /// This block type has extended data that affects the client's behavior.
-    // /// The xattrs will be loaded and parsed every time the block is sent to a client,
-    // /// but the result may be cached for use with multiple clients/users.
-    // /// This may be expensive - a block-specific handler will be called every time
-    // /// the block is loaded and needs to be sent to a client.
-    // ///
-    // /// NOT YET IMPLEMENTED
-    // ClientSideShared,
-    // /// Same as ClientSideShared, except the result must not be cached across
-    // /// clients/users. That is, if the same block is being sent to ten players
-    // /// in a space, the event handler will need to be run ten times, making this even
-    // /// more expensive than ClientSideShared.
-    // ///
-    // /// Clients may still cache the resulting extended data until it is invalidated
-    // /// and re-sent, or that part of the map is otherwise dropped from the cache.
-    // ///
-    // /// NOT YET IMPLEMENTED
-    // ClientSideUnshared,
-}
 
 /// In-memory representation of the different types of blocks that can exist in the world.
 ///
@@ -168,8 +139,6 @@ pub enum ExtDataHandling {
 pub struct BlockType {
     /// All block details that are common between the client and the server
     pub client_info: blocks_proto::BlockTypeDef,
-    /// How extended data ought to be handled for this block.
-    pub extended_data_handling: ExtDataHandling,
 
     /// Called when the block is being loaded into memory. Should be a pure function
     /// and as fast as possible. Typically, this should simply be a wrapper around a protobuf
@@ -184,17 +153,19 @@ pub struct BlockType {
     pub deserialize_extended_data_handler:
         Option<Box<dyn Fn(InlineContext, &[u8]) -> Result<Option<CustomData>> + Send + Sync>>,
     /// Called when the block is being written back to disk. Should be a pure function
-    /// and as fast as possible. Should typically be a wrapper around a protobuf serialization
-    /// step or similar. This callback does not need to handle any block inventories; they are automatically
+    /// and as fast as possible. It should typically be a wrapper around a protobuf serialization
+    /// step or similar. This callback does not need to handle any block inventories; they are
     /// handled by the engine.
     ///
-    /// Only called if `extended_data_handling` is not equal to `NoExtData` and the extended data itself is
-    /// Some. If this returns None, no extended data will be serialized to storage - an example
-    /// use for this would be to avoid the storage overhead if the extended data is *logically*
-    /// empty.
+    /// Only called if the extended data itself is Some. If this returns None, no extended data will
+    /// be serialized to storage - an example use for this would be to avoid the storage overhead if
+    /// the extended data is *logically* empty.
     ///
-    /// If this returns an Err, the game will crash since this represents data loss. Note that this can cause
-    /// other changes to a map chunk to be lost.
+    /// If this returns an Err, the game will crash since this represents data loss. Note that this
+    /// can cause other changes to a map chunk to be lost.
+    ///
+    /// Note that this is likely to be slower on the client as well, especially if it impacts block
+    /// rendering/appearance (TBD if this is the case)
     pub serialize_extended_data_handler:
         Option<Box<dyn Fn(InlineContext, &CustomData) -> Result<Option<Vec<u8>>> + Send + Sync>>,
     // NOT YET IMPLEMENTED
@@ -218,6 +189,21 @@ pub struct BlockType {
     //             + Sync,
     //     >,
     // >,
+    /// Called when the client needs this block, and client_info.has_client_extended_data is true.
+    ///
+    /// This should be fast. If handler is None or return value is Ok(None), no client-side extended
+    /// data is sent. The return value does *not* need offset_in_chunk specified; the engine will
+    /// overwrite it
+    ///
+    /// If this returns an Err, the game will crash (the exact semantics from recovering from the
+    /// error are not yet clear)
+    pub make_client_extended_data: Option<
+        Box<
+            dyn Fn(InlineContext, &ExtendedData) -> Result<Option<ClientExtendedData>>
+                + Send
+                + Sync,
+        >,
+    >,
     /// Called when the block is dug. This function (or dig_handler_inline) should explicitly remove the block (i.e. replace it with air)
     /// if it should be removed from the map when dug.
     ///
@@ -242,8 +228,8 @@ pub struct BlockType {
     /// Called when the block is dug. To update the block on the map, assign a new value to the BlockTypeRef.
     /// To update extended data, use the DerefMut trait on ExtendedDataHolder
     ///
-    /// If this returns Err, a message will be logged and the user that dug the block will get an error message in some
-    /// TBD way (for now, just a log message on the client). dig_handler_full will not be called in that case
+    /// If this returns Err, a message will be logged, and the user that dug the block will get an error message in some
+    /// TBD way. dig_handler_full will not be called in that case
     ///
     /// Note that if the handler performs changes, they will not be rolled back if the handler subsequently returns Err.
     pub dig_handler_inline: Option<Box<InlineHandler>>,
@@ -272,8 +258,18 @@ pub struct BlockType {
     /// This can mutate the given block (using handlercontext) if desired, and return a popup (if desired)
     ///
     /// The signature of this callback is subject to change.
-    pub interact_key_handler:
-        Option<Box<dyn Fn(HandlerContext, BlockCoordinate) -> Result<Option<Popup>> + Send + Sync>>,
+    ///
+    /// Args:
+    ///     * HandlerContext: Handler context giving access to the player/initator, game state, etc
+    ///     * BlockCoordinate: Coordinate that was interacted with
+    ///     * &str: Indicates the name of the named interact key option. Empty for the unnamed default
+    ///         handler used when no named handlers are present. The string is passed from the client, and is
+    ///         not validated or sanitized.
+    ///         Assuming a proper client, this will be one of the entries in interact_key_option in the block proto
+    pub interact_key_handler: Option<
+        Box<dyn Fn(HandlerContext, BlockCoordinate, &str) -> Result<Option<Popup>> + Send + Sync>,
+    >,
+
     // Internal impl details
     pub(crate) is_unknown_block: bool,
 }
@@ -292,9 +288,9 @@ impl Default for BlockType {
     fn default() -> Self {
         Self {
             client_info: Default::default(),
-            extended_data_handling: ExtDataHandling::ServerSide,
             deserialize_extended_data_handler: None,
             serialize_extended_data_handler: None,
+            make_client_extended_data: None,
             dig_handler_full: None,
             dig_handler_inline: None,
             tap_handler_full: None,
@@ -437,10 +433,11 @@ pub struct BlockTypeManager {
     name_to_base_id_map: FxHashMap<String, u32>,
     init_complete: bool,
 
-    // Separate copy of BlockType.client_info.allow_light_propagation, packed densely in order
-    // to be more cache friendly
+    // Separate copy of BlockType.client_info.allow_light_propagation, packed densely
+    // to be more cache-friendly
     light_propagation: bitvec::vec::BitVec,
     trivially_replaceable_block_group: bitvec::vec::BitVec,
+    has_client_side_extended_data: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
     cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
 }
@@ -451,6 +448,7 @@ impl BlockTypeManager {
             name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            has_client_side_extended_data: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
@@ -483,6 +481,16 @@ impl BlockTypeManager {
             self.light_propagation[id.index()]
         } else {
             // unknown blocks don't propagate light
+            false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn has_client_side_extended_data(&self, id: BlockId) -> bool {
+        if id.index() < self.has_client_side_extended_data.len() {
+            self.has_client_side_extended_data[id.index()]
+        } else {
+            // Unknown blocks don't have client-side extended data
             false
         }
     }
@@ -543,6 +551,7 @@ impl BlockTypeManager {
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
+            has_client_side_extended_data: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         };
@@ -730,9 +739,14 @@ impl BlockTypeManager {
             &mut self.trivially_replaceable_block_group,
         );
         self.light_propagation.resize(self.block_types.len(), false);
+        self.has_client_side_extended_data
+            .resize(self.block_types.len(), false);
         for (index, block) in self.block_types.iter().enumerate() {
             if block.client_info.allow_light_propagation {
                 self.light_propagation.set(index, true);
+            }
+            if block.client_info.has_client_extended_data {
+                self.has_client_side_extended_data.set(index, true);
             }
         }
         Ok(())
@@ -858,12 +872,14 @@ fn make_unknown_block_serverside(
             tool_custom_hitbox: None,
             sound_id: 0,
             sound_volume: 0.0,
+            interact_key_option: vec![],
+            has_client_extended_data: false,
         },
-        extended_data_handling: ExtDataHandling::ServerSide,
         deserialize_extended_data_handler: Some(Box::new(
             unknown_block_deserialize_data_passthrough,
         )),
         serialize_extended_data_handler: Some(Box::new(unknown_block_serialize_data_passthrough)),
+        make_client_extended_data: None,
         dig_handler_full: None,
         dig_handler_inline: Some(Box::new(move |ctx, block, _, _| {
             *block = ctx
@@ -898,6 +914,8 @@ fn make_air_block() -> BlockType {
             tool_custom_hitbox: None,
             sound_id: 0,
             sound_volume: 0.0,
+            interact_key_option: vec![],
+            has_client_extended_data: false,
         },
         ..Default::default()
     }

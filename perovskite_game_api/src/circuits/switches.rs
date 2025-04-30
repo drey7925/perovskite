@@ -67,8 +67,9 @@ pub(crate) fn register_switches(
             )
             .set_allow_light_propagation(true)
             .set_display_name("Switch")
+            .add_interact_key_menu_entry("", "Turn on")
             .add_modifier(Box::new(|block| {
-                block.interact_key_handler = Some(Box::new(move |ctx, coord| {
+                block.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
                     let switch_off = ctx
                         .block_types()
                         .resolve_name(&switch_off_name)
@@ -139,8 +140,9 @@ pub(crate) fn register_switches(
             .set_dropped_item(SWITCH_OFF.0, 1)
             .set_display_name("Switch")
             .add_item_group(HIDDEN_FROM_CREATIVE)
+            .add_interact_key_menu_entry("", "Turn off")
             .add_modifier(Box::new(|block| {
-                block.interact_key_handler = Some(Box::new(move |ctx, coord| {
+                block.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
                     let switch_off = ctx
                         .block_types()
                         .resolve_name(&switch_off_name)
@@ -232,8 +234,9 @@ pub(crate) fn register_switches(
             .set_allow_light_propagation(true)
             .set_display_name("Button")
             .register_circuit_callbacks()
+            .add_interact_key_menu_entry("", "Turn on")
             .add_modifier(Box::new(|block| {
-                block.interact_key_handler = Some(Box::new(move |ctx, coord| {
+                block.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
                     let button_off = ctx
                         .block_types()
                         .resolve_name(&button_off_name)
@@ -332,7 +335,7 @@ pub(crate) fn register_switches(
             .set_display_name("Button")
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .add_modifier(Box::new(|block| {
-                block.interact_key_handler = Some(Box::new(move |ctx, coord| {
+                block.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
                     let button_off = ctx
                         .block_types()
                         .resolve_name(&button_off_name)

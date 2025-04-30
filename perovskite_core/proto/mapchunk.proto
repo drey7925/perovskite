@@ -19,16 +19,26 @@ syntax = "proto3";
 package perovskite.protocol.map;
 
 import "items.proto";
+import "render.proto";
+import "blocks.proto";
 
 message ExtendedData {
     // Offset in the chunk, 0..4095
     uint32 offset_in_chunk = 1;
-    // Serialized data, passed to the relevant handler
+    // Serialized data, passed to the relevant handler.
     bytes serialized_data = 2;
-    // Inventories stored in a block
+    // Inventories stored in a block. Stored on the server, client uses a different interface (i.e. InventoryUpdate with
+    // view IDs) to get this.
     map<string, perovskite.protocol.items.Inventory> inventories = 3;
-    // Simple key-value storage
+    // Simple key-value storage.
     map<string, string> simple_storage = 4;
+}
+
+message ClientExtendedData {
+    // Offset in the chunk, 0..4095
+    uint32 offset_in_chunk = 1;
+    // Text to display.
+    repeated perovskite.protocol.render.BlockText block_text = 2;
 }
 
 message ChunkV1 {
@@ -36,6 +46,8 @@ message ChunkV1 {
     repeated uint32 block_ids = 1 [packed=true];
     // Extended data; only available on the server
     repeated ExtendedData extended_data = 2;
+    // Extended data as relevant to the client
+    repeated ClientExtendedData client_extended_data = 3;
 }
 
 message StoredChunk {

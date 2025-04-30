@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use perovskite_core::constants::{self, item_groups::HIDDEN_FROM_CREATIVE};
 use perovskite_server::game_state::{
     blocks::{
-        BlockInteractionResult, BlockTypeHandle, CustomData, ExtDataHandling, ExtendedData,
-        ExtendedDataHolder, InlineContext,
+        BlockInteractionResult, BlockTypeHandle, CustomData, ExtendedData, ExtendedDataHolder,
+        InlineContext,
     },
     client_ui::{Popup, UiElementContainer},
     game_map::{TimerCallback, TimerInlineCallback, TimerSettings, TimerState},
@@ -21,7 +21,7 @@ use crate::{
 
 use super::{block_groups::BRITTLE, recipes::RecipeBook, DefaultGameBuilderExtension};
 
-/// Furnace that's not current lit
+/// Furnace that's not currently lit
 pub const FURNACE: StaticBlockName = StaticBlockName("default:furnace");
 /// Furnace that's lit
 pub const FURNACE_ON: StaticBlockName = StaticBlockName("default:furnace_on");
@@ -262,9 +262,10 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_rotate_laterally(),
             )
             .set_display_name("Furnace")
+            .add_interact_key_menu_entry("", "Open furnace")
             .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(make_furnace_popup));
+                bt.interact_key_handler =
+                    Some(Box::new(|ctx, coord, _| make_furnace_popup(ctx, coord)));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
                 bt.deserialize_extended_data_handler = Some(Box::new(furnace_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
@@ -289,9 +290,10 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
             .set_light_emission(8)
             .set_display_name("Lit furnace (should not see this)")
             .set_dropped_item(FURNACE.0, 1)
+            .add_interact_key_menu_entry("", "Open furnace")
             .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(make_furnace_popup));
+                bt.interact_key_handler =
+                    Some(Box::new(|ctx, coord, _| make_furnace_popup(ctx, coord)));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
                 bt.deserialize_extended_data_handler = Some(Box::new(furnace_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));

@@ -14,6 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cgmath::num_traits::Float;
@@ -27,13 +29,17 @@ use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
 use super::physics::apply_aabox_transformation;
-use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
+use super::{
+    input::BoundAction, make_fallback_blockdef, ClientState, GameAction, InteractKeyAction,
+};
+use crate::client_state::chunk::ChunkDataView;
 use line_drawing::WalkVoxels;
 use perovskite_core::game_actions::ToolTarget;
-use perovskite_core::protocol::blocks::BlockTypeDef;
+use perovskite_core::protocol::blocks::{BlockTypeDef, InteractKeyOption};
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
-use perovskite_core::protocol::items::ItemDef;
+use perovskite_core::protocol::items::{InteractionRule, ItemDef};
+use perovskite_core::protocol::map::ClientExtendedData;
 use rustc_hash::FxHashSet;
 use sha2::digest::generic_array::functional::FunctionalSequence;
 
@@ -53,6 +59,18 @@ impl ToolTargetWithId {
             ToolTargetWithId::Entity(id, class) => ToolTarget::Entity(*id),
         }
     }
+    pub(crate) fn without_trailing_index(&self) -> ToolTargetWithId {
+        match self {
+            ToolTargetWithId::Block(x, id) => ToolTargetWithId::Block(*x, *id),
+            ToolTargetWithId::Entity(id, class) => ToolTargetWithId::Entity(
+                EntityTarget {
+                    entity_id: id.entity_id,
+                    trailing_entity_index: 0,
+                },
+                *class,
+            ),
+        }
+    }
 }
 
 struct TargetProperties<'a> {
@@ -68,6 +86,8 @@ struct TargetProperties<'a> {
     ///
     /// For blocks, always false and irrelevant
     merge_trailing_entities: bool,
+    interact_key_options: &'a [InteractKeyOption],
+    hover_text: Option<Cow<'a, str>>,
 }
 
 #[derive(Clone, Copy)]
@@ -97,21 +117,45 @@ impl DigState {
     }
 }
 
-fn target_properties(state: &ClientState, target: ToolTargetWithId) -> TargetProperties {
+fn target_properties(
+    state: &ClientState,
+    target: ToolTargetWithId,
+    ext: Option<ClientExtendedData>,
+) -> TargetProperties {
     match target {
-        ToolTargetWithId::Block(_coord, id) => state
-            .block_types
-            .get_blockdef(id)
-            .map(|x| TargetProperties {
-                target_groups: &x.groups,
-                base_dig_time: x.base_dig_time,
-                merge_trailing_entities: false,
-            })
-            .unwrap_or(TargetProperties {
-                target_groups: &FALLBACK_GROUPS,
-                base_dig_time: 1.0,
-                merge_trailing_entities: false,
-            }),
+        ToolTargetWithId::Block(coord, id) => {
+            if let Some(blockdef) = state.block_types.get_blockdef(id) {
+                let hover_text: Option<Cow<str>> = if blockdef.has_client_extended_data {
+                    ext.map(|x| {
+                        x.block_text
+                            .iter()
+                            .map(|x| x.text.clone())
+                            // needless allocation but oh well, temporary impl
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .map(|x| Cow::Owned(x))
+                } else {
+                    None
+                };
+
+                TargetProperties {
+                    target_groups: &blockdef.groups,
+                    base_dig_time: blockdef.base_dig_time,
+                    merge_trailing_entities: false,
+                    interact_key_options: &blockdef.interact_key_option,
+                    hover_text,
+                }
+            } else {
+                TargetProperties {
+                    target_groups: &FALLBACK_GROUPS,
+                    base_dig_time: 1.0,
+                    merge_trailing_entities: false,
+                    interact_key_options: &[],
+                    hover_text: Some(Cow::Borrowed("")),
+                }
+            }
+        }
         ToolTargetWithId::Entity(_target, class) => state
             .entity_renderer
             .client_info(class)
@@ -119,12 +163,17 @@ fn target_properties(state: &ClientState, target: ToolTargetWithId) -> TargetPro
                 target_groups: &x.tool_interaction_groups,
                 base_dig_time: x.base_dig_time,
                 merge_trailing_entities: x.merge_trailing_entities_for_dig,
+                interact_key_options: &x.interact_key_options,
+                // TODO: hover text for entities
+                hover_text: None,
             })
             .unwrap_or(TargetProperties {
                 // Undiggable - for now
                 target_groups: &[],
                 base_dig_time: 1.0,
                 merge_trailing_entities: false,
+                interact_key_options: &[],
+                hover_text: None,
             }),
     }
 }
@@ -143,6 +192,8 @@ pub(crate) struct ToolController {
     can_dig_place: bool,
     can_tap_interact: bool,
     futile_dig_since: Option<Instant>,
+    menu_entries: Arc<Vec<InteractKeyOption>>,
+    selected_menu_entry: Option<(ToolTargetWithId, usize)>,
 }
 impl ToolController {
     pub(crate) fn new() -> ToolController {
@@ -155,6 +206,8 @@ impl ToolController {
             can_dig_place: false,
             can_tap_interact: false,
             futile_dig_since: None,
+            menu_entries: Arc::new(vec![]),
+            selected_menu_entry: None,
         }
     }
 
@@ -180,7 +233,7 @@ impl ToolController {
         if let Some(progress) = &mut self.dig_progress {
             progress.item_dig_behavior = Self::compute_dig_behavior(
                 &item,
-                target_properties(client_state, progress.target).target_groups,
+                target_properties(client_state, progress.target, None).target_groups,
             );
         }
         self.current_item = item;
@@ -194,28 +247,76 @@ impl ToolController {
         delta_nanos: u64,
         tick: u64,
     ) -> ToolState {
-        let (dist, pointee, neighbor, target_properties) =
-            match self.compute_pointee(client_state, &player_pos, tick) {
-                Some(x) => x,
-                None => {
-                    // Ensure that we don't leave pending input events that fire when we finally do get a pointee
-                    let mut input = client_state.input.lock();
-                    input.take_just_pressed(BoundAction::Dig);
-                    input.take_just_released(BoundAction::Dig);
-                    input.take_just_pressed(BoundAction::Place);
-                    input.take_just_pressed(BoundAction::Interact);
-                    self.dig_progress = None;
-                    return ToolState {
-                        pointee: None,
-                        neighbor: None,
-                        action: None,
-                    };
+        let (_dist, pointee, neighbor, target_properties) = match Self::compute_pointee(
+            client_state,
+            &player_pos,
+            tick,
+            &self.fallback_blockdef,
+            &self.current_item_interacting_groups,
+        ) {
+            Some(x) => x,
+            None => {
+                // Ensure that we don't leave pending input events that fire when we finally do get a pointee
+                let mut input = client_state.input.lock();
+                input.take_just_pressed(BoundAction::Dig);
+                input.take_just_released(BoundAction::Dig);
+                input.take_just_pressed(BoundAction::Place);
+                input.take_just_pressed(BoundAction::Interact);
+                self.dig_progress = None;
+                self.selected_menu_entry = None;
+                return ToolState {
+                    pointee: None,
+                    neighbor: None,
+                    action: None,
+                    interact_key_options: None,
+                    selected_interact_option: 0,
+                    hover_text: None,
+                };
+            }
+        };
+
+        match self.selected_menu_entry {
+            Some((target, _)) => {
+                // menu is up, if pointee changed, reset it
+                if target.without_trailing_index() != pointee.without_trailing_index() {
+                    if target_properties.interact_key_options.is_empty() {
+                        self.menu_entries = Arc::new(vec![]);
+                        self.selected_menu_entry = None;
+                    } else {
+                        self.menu_entries =
+                            Arc::new(target_properties.interact_key_options.to_vec());
+                        self.selected_menu_entry = Some((pointee, 0));
+                    }
                 }
-            };
-        let mut action = None;
+            }
+            None => {
+                // No current menu up, bring one up
+                if !target_properties.interact_key_options.is_empty() {
+                    self.menu_entries = Arc::new(target_properties.interact_key_options.to_vec());
+                    self.selected_menu_entry = Some((pointee, 0))
+                }
+            }
+        }
 
         let mut input = client_state.input.lock();
+        let mut keyed_command = None;
+        if let Some((_, slot)) = &mut self.selected_menu_entry {
+            // Take these away, so the HUD can't have them
+            let scroll_slots = input.take_scroll_slots();
+            let hotbar_input = input.take_hotbar_selection();
+            if let Some(hotbar_input) = hotbar_input {
+                if (hotbar_input as usize) < self.menu_entries.len() {
+                    *slot = hotbar_input as usize;
+                    keyed_command = Some(hotbar_input);
+                }
+            }
+            if self.menu_entries.len() > 0 {
+                *slot = ((*slot as i32) - scroll_slots).rem_euclid(self.menu_entries.len() as i32)
+                    as usize;
+            }
+        }
 
+        let mut action = None;
         if input.is_pressed(BoundAction::Dig) && self.can_dig_place {
             if self
                 .dig_progress
@@ -297,11 +398,29 @@ impl ToolController {
                 item_slot: self.current_slot,
                 player_pos,
             }))
+        } else if let Some(cmd) = keyed_command {
+            if self.can_tap_interact {
+                action = Some(GameAction::InteractKey(super::InteractKeyAction {
+                    target: pointee.target(),
+                    item_slot: self.current_slot,
+                    player_pos,
+                    menu_entry: self
+                        .menu_entries
+                        .get(cmd as usize)
+                        .map(|x| x.id.clone())
+                        .unwrap_or(String::new()),
+                }))
+            }
         } else if input.take_just_pressed(BoundAction::Interact) && self.can_tap_interact {
             action = Some(GameAction::InteractKey(super::InteractKeyAction {
                 target: pointee.target(),
                 item_slot: self.current_slot,
                 player_pos,
+                menu_entry: self
+                    .selected_menu_entry
+                    .and_then(|(_, index)| self.menu_entries.get(index))
+                    .map(|x| x.id.clone())
+                    .unwrap_or(String::new()),
             }))
         }
 
@@ -336,6 +455,15 @@ impl ToolController {
             pointee: Some(pointee),
             neighbor,
             action,
+            interact_key_options: if self.menu_entries.is_empty()
+                || self.selected_menu_entry.is_none()
+            {
+                None
+            } else {
+                Some(self.menu_entries.clone())
+            },
+            selected_interact_option: self.selected_menu_entry.map(|x| x.1).unwrap_or(0),
+            hover_text: target_properties.hover_text.map(|x| x.to_string()),
         }
     }
 
@@ -353,18 +481,24 @@ impl ToolController {
     ///
     /// Returns: (pointed target, if applicable the preceding block, target info)
     fn compute_pointee<'a>(
-        &'a self,
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
         tick: u64,
+        fallback_blockdef: &BlockTypeDef,
+        current_item_interacting_groups: &[Vec<String>],
     ) -> Option<(
         f64,
         ToolTargetWithId,
         Option<BlockCoordinate>,
         TargetProperties<'a>,
     )> {
-        let block_pointee = self.compute_block_pointee(client_state, last_pos);
-        let entity_pointee = self.compute_entity_pointee(client_state, last_pos, tick);
+        let block_pointee = Self::compute_block_pointee(
+            client_state,
+            last_pos,
+            fallback_blockdef,
+            current_item_interacting_groups,
+        );
+        let entity_pointee = Self::compute_entity_pointee(client_state, last_pos, tick);
         if let Some(blk) = block_pointee {
             if let Some(ent) = entity_pointee {
                 if blk.0 > ent.0 {
@@ -383,9 +517,10 @@ impl ToolController {
     }
 
     fn compute_block_pointee<'a>(
-        &'a self,
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
+        fallback_blockdef: &BlockTypeDef,
+        current_item_interacting_groups: &[Vec<String>],
     ) -> Option<(
         f64,
         ToolTargetWithId,
@@ -425,11 +560,11 @@ impl ToolController {
             };
             let chunk = chunks.get(&coord.chunk());
             if let Some(chunk) = chunk {
-                let id = chunk.get_single(coord.offset());
+                let (id, ext) = chunk.get_single_with_extended_data(coord.offset());
                 let block_def = client_state
                     .block_types
                     .get_blockdef(id)
-                    .unwrap_or(&self.fallback_blockdef);
+                    .unwrap_or(fallback_blockdef);
                 if let Some(t) = check_intersection(
                     vec3(coord.x as f64, coord.y as f64, coord.z as f64),
                     block_def,
@@ -438,13 +573,13 @@ impl ToolController {
                     id.variant(),
                 ) {
                     let target = ToolTargetWithId::Block(coord, id);
-                    for rule in self.current_item_interacting_groups.iter() {
+                    for rule in current_item_interacting_groups.iter() {
                         if rule.iter().all(|x| block_def.groups.contains(x)) {
                             return Some((
                                 t,
                                 target,
                                 prev,
-                                target_properties(client_state, target),
+                                target_properties(client_state, target, ext),
                             ));
                         }
                     }
@@ -456,7 +591,6 @@ impl ToolController {
     }
 
     fn compute_entity_pointee<'a>(
-        &'a self,
         client_state: &'a ClientState,
         last_pos: &PlayerPositionUpdate,
         tick: u64,
@@ -491,7 +625,7 @@ impl ToolController {
                     distance as f64,
                     target,
                     None,
-                    target_properties(client_state, target),
+                    target_properties(client_state, target, None),
                 )
             })
     }
@@ -623,8 +757,14 @@ pub(crate) struct ToolState {
     // The previous block coordinate, where we would place a block
     // if the place button were pressed
     pub(crate) neighbor: Option<BlockCoordinate>,
-    // The action taken during this frame
+    // The action taken during this frame, if there was one
     pub(crate) action: Option<GameAction>,
+    // The menu entries, if a menu is up (None vec otherwise)
+    pub(crate) interact_key_options: Option<Arc<Vec<InteractKeyOption>>>,
+    // Index of selected menu item, irrelevant if interact_key_options is empty
+    pub(crate) selected_interact_option: usize,
+    // The header for the menu, if a menu is up
+    pub(crate) hover_text: Option<String>,
 }
 
 impl ToolState {

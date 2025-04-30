@@ -482,6 +482,36 @@ impl ChatCommandHandler for TestonlyBenchmarkCommand {
                 )))
                 .await?;
         }
+        {
+            let start = Instant::now();
+            for _ in 1..1000000 {
+                std::hint::black_box(tokio::task::block_in_place(|| {}))
+            }
+            let end = Instant::now();
+            context
+                .initiator()
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
+                    "1 million null block_in_place took {} ms ({:?} per iter)",
+                    (end - start).as_millis(),
+                    (end - start) / 1000000,
+                )))
+                .await?;
+        }
+        {
+            let start = Instant::now();
+            for _ in 1..100000 {
+                tokio::task::spawn_blocking(|| {}).await?;
+            }
+            let end = Instant::now();
+            context
+                .initiator()
+                .send_chat_message_async(ChatMessage::new_server_message(format!(
+                    "100k null spawn_blocking w/ await took {} ms ({:?} per iter)",
+                    (end - start).as_millis(),
+                    (end - start) / 100000,
+                )))
+                .await?;
+        }
         Ok(())
     }
 }

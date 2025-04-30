@@ -94,6 +94,9 @@ pub struct Item {
 
 impl Item {
     pub fn default_with_proto(proto: perovskite_core::protocol::items::ItemDef) -> Item {
+        if proto.interaction_rules.is_empty() {
+            tracing::warn!("Item with empty interaction rules: {}", proto.short_name)
+        }
         Item {
             proto,
             dig_handler: None,

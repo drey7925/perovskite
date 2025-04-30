@@ -9,7 +9,7 @@ use perovskite_core::chat::{ChatMessage, SERVER_ERROR_COLOR};
 use perovskite_core::constants::permissions;
 use perovskite_core::protocol;
 use perovskite_core::protocol::items::item_stack::QuantityType;
-use perovskite_server::game_state::blocks::{ExtDataHandling, ExtendedData};
+use perovskite_server::game_state::blocks::ExtendedData;
 use perovskite_server::game_state::client_ui::UiElementContainer;
 use perovskite_server::game_state::items::ItemStack;
 
@@ -52,14 +52,14 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_rotate_laterally(),
             )
             .set_display_name("Unlocked chest")
+            .add_interact_key_menu_entry("", "Open chest")
             .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
+                bt.interact_key_handler = Some(Box::new(|ctx, coord, s| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
                         Ok(Some(make_chest_popup(&ctx, coord, p)?))
                     }
                     _ => Ok(None),
-                }))
+                }));
             })),
     )?;
 
@@ -80,9 +80,9 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_rotate_laterally(),
             )
             .set_display_name("Locked chest")
+            .add_interact_key_menu_entry("", "Open chest")
             .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(|ctx, coord| match ctx.initiator() {
+                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
                         let (_, owner) =
                             ctx.game_map().get_block_with_extended_data(coord, |data| {

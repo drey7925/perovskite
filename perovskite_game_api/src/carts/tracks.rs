@@ -1055,7 +1055,7 @@ pub(crate) fn register_tracks(
             .set_allow_light_propagation(true)
             .set_display_name("Railway track")
             .add_modifier(Box::new(|bt| {
-                bt.interact_key_handler = Some(Box::new(|ctx, coord| {
+                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| {
                     let block = ctx.game_map().get_block(coord)?;
                     let tile_id = TileId::from_variant(block.variant(), false, false);
                     ctx.initiator()
@@ -1268,7 +1268,7 @@ fn register_rail_slope(
                 .set_allow_light_propagation(true)
                 .set_display_name(format!("Slope {numerator}/{denominator}"))
                 .add_modifier(Box::new(|bt| {
-                    bt.interact_key_handler = Some(Box::new(|ctx, coord| {
+                    bt.interact_key_handler = Some(Box::new(|ctx, coord, _| {
                         let block = ctx.game_map().get_block(coord)?;
                         let tile_id = TileId::from_variant(block.variant(), false, false);
                         ctx.initiator().send_chat_message(ChatMessage::new(

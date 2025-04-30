@@ -16,9 +16,7 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::BlockCoordinate;
-use perovskite_server::game_state::blocks::{
-    BlockType, ExtDataHandling, ExtendedData, FastBlockName,
-};
+use perovskite_server::game_state::blocks::{BlockType, ExtendedData, FastBlockName};
 use perovskite_server::game_state::client_ui::{Popup, PopupAction, UiElementContainer};
 use perovskite_server::game_state::event::HandlerContext;
 
@@ -1062,10 +1060,9 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
     );
 
     let block_modifier = |block: &mut BlockType| {
-        block.extended_data_handling = ExtDataHandling::ServerSide;
         let name_ok = FastBlockName::new(UNBROKEN_NAME.0);
         let name_broken = FastBlockName::new(BROKEN_NAME.0);
-        block.interact_key_handler = Some(Box::new(move |ctx, coord| {
+        block.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
             let ids = MicrocontrollerIds {
                 ok: ctx.block_types().resolve_name(&name_ok).unwrap(),
                 broken: ctx.block_types().resolve_name(&name_broken).unwrap(),
@@ -1109,6 +1106,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             .set_axis_aligned_boxes_appearance(make_chip_shape(broken_box_properties))
             .set_allow_light_propagation(true)
             .set_display_name("Basic microcontroller (broken)")
+            .add_interact_key_menu_entry("", "Fix and reprogram")
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_inventory_texture(UNBROKEN_TEXTURE)
             .set_dropped_item(UNBROKEN_NAME.0, 1)
@@ -1130,6 +1128,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             .set_axis_aligned_boxes_appearance(make_chip_shape(box_properties))
             .set_allow_light_propagation(true)
             .set_display_name("Basic microcontroller")
+            .add_interact_key_menu_entry("", "Program microcontroller")
             .set_inventory_texture(UNBROKEN_TEXTURE)
             .register_circuit_callbacks()
             .add_modifier(Box::new(block_modifier)),

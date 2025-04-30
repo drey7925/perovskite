@@ -57,6 +57,7 @@ ron = "0.8.1"
 either = "1.15.0"
 tokio-scoped = "0.2.0"
 arc-swap = "1.7.1"
+smartstring = "1.0.1"
 
 [dev-dependencies]
 ctor = "0.2.0"

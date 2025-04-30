@@ -22,6 +22,7 @@ use super::{
     DefaultGameBuilder, DefaultGameBuilderExtension,
 };
 use crate::default_game::chest::register_chest;
+use crate::default_game::signs::register_sign;
 use crate::game_builder::{GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME};
 use crate::items::ItemBuilder;
 use crate::{
@@ -835,6 +836,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     register_chest(game_builder)?;
+    register_sign(game_builder)?;
 
     game_builder.add_block(
         BlockBuilder::new(StaticBlockName("testonly:aabb_geometry_test"))

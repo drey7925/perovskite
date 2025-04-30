@@ -1,10 +1,29 @@
+use super::{
+    block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
+    make_ssaa_render_pass,
+    shaders::{
+        cube_geometry::{
+            BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
+        },
+        PipelineWrapper,
+    },
+    Texture2DHolder, VulkanContext,
+};
+use crate::client_state::settings::Supersampling;
+use crate::vulkan::shaders::VkBufferGpu;
+use crate::{
+    client_state::chunk::{ChunkDataView, ChunkOffsetExt},
+    vulkan::shaders::SceneState,
+};
 use anyhow::{Context, Result};
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 use image::{DynamicImage, RgbaImage};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
+use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};
@@ -24,24 +43,6 @@ use vulkano::{
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sync::GpuFuture,
     DeviceSize,
-};
-
-use super::{
-    block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
-    make_ssaa_render_pass,
-    shaders::{
-        cube_geometry::{
-            BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
-        },
-        PipelineWrapper,
-    },
-    Texture2DHolder, VulkanContext,
-};
-use crate::client_state::settings::Supersampling;
-use crate::vulkan::shaders::VkBufferGpu;
-use crate::{
-    client_state::chunk::{ChunkDataView, ChunkOffsetExt},
-    vulkan::shaders::SceneState,
 };
 
 pub(crate) struct MiniBlockRenderer {
@@ -254,6 +255,10 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
 
     fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
         &FAKE_LIGHTMAP
+    }
+
+    fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
+        None
     }
 }
 

@@ -3511,6 +3511,7 @@ dependencies = [
  "serde",
  "sha2",
  "smallvec",
+ "smartstring",
  "snap",
  "thiserror",
  "tokio",

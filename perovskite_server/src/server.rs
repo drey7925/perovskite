@@ -220,6 +220,8 @@ pub fn testonly_in_memory() -> Result<Server> {
         game_behaviors,
         CommandManager::new(),
         TypeMap::new(),
+        // Force seed to 0 for testing
+        Some(0),
     )?;
     let bind_address = SocketAddr::new(IpAddr::from_str("::").unwrap(), 0);
     Server::new(runtime, gs, bind_address, LoadedTlsConfig::NoTls)
@@ -253,6 +255,7 @@ pub struct ServerBuilder {
     commands: CommandManager,
     extensions: type_map::concurrent::TypeMap,
     startup_actions: Vec<Box<dyn FnOnce(&Arc<GameState>) -> Result<()> + Send + Sync + 'static>>,
+    force_seed: Option<u32>,
 }
 
 struct DummyMapgen;
@@ -313,12 +316,17 @@ impl ServerBuilder {
             commands: CommandManager::new(),
             extensions: type_map::concurrent::TypeMap::new(),
             startup_actions: Vec::new(),
+            force_seed: None,
         })
     }
 
     #[cfg(not(feature = "db_failure_injection"))]
     fn make_rocksdb_backend(db_dir: PathBuf, options: Options) -> Result<Arc<dyn GameDatabase>> {
         Ok(Arc::new(RocksDbBackend::new(db_dir, options)?))
+    }
+
+    pub fn force_seed(&mut self, force_seed: Option<u32>) {
+        self.force_seed = force_seed
     }
 
     #[cfg(feature = "db_failure_injection")]
@@ -408,6 +416,7 @@ impl ServerBuilder {
             self.game_behaviors,
             self.commands,
             self.extensions,
+            self.force_seed,
         )?;
         for (name, settings, callback) in self.map_timers {
             game_state

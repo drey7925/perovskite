@@ -76,6 +76,12 @@ message BlockTypeDef {
   // Only applicable for nonzero sound_id
   float sound_volume = 31;
 
+  // If non-empty, a menu is shown when the block is targeted, scrolling allows selecting an item from the menu
+  repeated InteractKeyOption interact_key_option = 41;
+  // If set, client-side extended data in the chunk is consulted. If unset, it may be ignored (if
+  // client-side extended data is provided but this is false, the behavior is unspecified and may be
+  // inconsistent across client features)
+  bool has_client_extended_data = 42;
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans (-0.5, 0.5) on
@@ -213,8 +219,8 @@ message SolidPhysicsInfo {
 
 // Options available for the interact key when facing a block
 message InteractKeyOption {
-  // internal ID, assigned and managed by perovskite core
-  uint32 id = 1;
+  // short, unique ID passed to handler
+  string id = 1;
   // human readable label in-game
   string label = 2;
 }

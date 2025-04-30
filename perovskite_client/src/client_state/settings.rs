@@ -68,6 +68,20 @@ impl Default for RenderSettings {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub(crate) struct DisplaySettings {
+    pub(crate) hover_text_on_bottom_panel: bool,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            hover_text_on_bottom_panel: false,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub(crate) struct AudioVolumes {
@@ -157,6 +171,7 @@ impl Default for DebugSettings {
 #[serde(default)]
 pub(crate) struct GameSettings {
     pub(crate) input: KeybindSettings,
+    pub(crate) display: DisplaySettings,
     pub(crate) render: RenderSettings,
     pub(crate) audio: AudioSettings,
     pub(crate) last_hostname: String,

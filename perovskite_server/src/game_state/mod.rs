@@ -120,9 +120,10 @@ impl GameState {
         game_behaviors: GameBehaviors,
         commands: CommandManager,
         extensions: type_map::concurrent::TypeMap,
+        force_seed: Option<u32>,
     ) -> Result<Arc<Self>> {
         let server_start_time = Instant::now();
-        let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed")?;
+        let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed", force_seed)?;
         let mapgen = mapgen_provider(blocks.clone(), mapgen_seed);
         // If we don't have a time of day yet, start in the morning.
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
@@ -454,7 +455,11 @@ fn put_double_meta_value(db: &dyn GameDatabase, name: &[u8], value: f64) -> Resu
     Ok(())
 }
 
-fn get_or_create_seed<T: VarInt + Debug + Copy>(db: &dyn GameDatabase, name: &[u8]) -> Result<T>
+fn get_or_create_seed<T: VarInt + Debug + Copy>(
+    db: &dyn GameDatabase,
+    name: &[u8],
+    force_seed: Option<T>,
+) -> Result<T>
 where
     Standard: Distribution<T>,
 {
@@ -488,7 +493,7 @@ where
             }
         },
         None => {
-            let seed: T = rand::random();
+            let seed: T = force_seed.unwrap_or_else(|| rand::random());
             db.put(&key, &seed.encode_var_vec())?;
             info!(
                 "Generated seed {:?} for {}",

@@ -126,7 +126,7 @@
 
 use perovskite_core::{block_id::BlockId, chat::ChatMessage, coordinates::BlockCoordinate};
 use perovskite_server::game_state::{
-    blocks::{CustomData, ExtDataHandling, ExtendedData, InlineContext},
+    blocks::{CustomData, ExtendedData, InlineContext},
     client_ui::{Popup, PopupAction, PopupResponse, UiElementContainer},
     event::HandlerContext,
 };
@@ -421,11 +421,11 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
             .set_allow_light_propagation(true)
             .set_light_emission(8)
             .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(spawn_popup));
+                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
                 bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
             }))
+            .add_interact_key_menu_entry("", "Signal Properties")
             .add_item_modifier(Box::new(|it| {
                 let old_place_handler = it.place_on_block_handler.take().unwrap();
                 it.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, stack| {
@@ -530,11 +530,11 @@ fn register_single_signal(
             .set_allow_light_propagation(true)
             .set_light_emission(8)
             .add_modifier(Box::new(|bt| {
-                bt.extended_data_handling = ExtDataHandling::ServerSide;
-                bt.interact_key_handler = Some(Box::new(spawn_popup));
+                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
                 bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
             }))
+            .add_interact_key_menu_entry("", "Signal Properties")
             .add_item_modifier(Box::new(|it| {
                 let old_place_handler = it.place_on_block_handler.take().unwrap();
                 it.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, stack| {

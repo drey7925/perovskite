@@ -1054,10 +1054,11 @@ impl BlockEventSender {
         );
 
         let mut update_protos = Vec::new();
-        for update in updates.values() {
+        for (coord, update) in updates {
             update_protos.push(proto::MapDeltaUpdate {
-                block_coord: Some(update.location.into()),
-                new_id: update.new_value.into(),
+                block_coord: Some(coord.into()),
+                new_id: update.id.into(),
+                new_client_ext_data: update.new_ext_data,
             })
         }
 
@@ -2108,6 +2109,7 @@ impl InboundWorker {
             initiator: initiator.clone(),
             game_state: self.context.game_state.clone(),
         };
+        let menu_entry = interact_message.menu_entry.clone();
         let handler = match interact_message
             .interaction_target
             .as_ref()
@@ -2129,7 +2131,7 @@ impl InboundWorker {
                     .0
                     .interact_key_handler
                 {
-                    Some(Either::Left(move || (handler)(ctx, coord)))
+                    Some(Either::Left(move || (handler)(ctx, coord, &menu_entry)))
                 } else {
                     None
                 }
@@ -2160,7 +2162,9 @@ impl InboundWorker {
                     .get_type(class)
                     .with_context(|| format!("Class {} not found", class))?;
                 Some(Either::Right(move || {
-                    class_def.handlers.on_interact_key(&ctx, *target)
+                    class_def
+                        .handlers
+                        .on_interact_key(&ctx, *target, &menu_entry)
                 }))
             }
         };

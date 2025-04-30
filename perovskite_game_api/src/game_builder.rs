@@ -275,12 +275,17 @@ impl GameBuilder {
         Ok(())
     }
 
+    pub fn force_seed(&mut self, seed: Option<u32>) {
+        self.inner.force_seed(seed);
+    }
+
     /// Run the game server
     pub fn run_game_server(mut self) -> Result<()> {
         self.pre_build()?;
         self.inner.build()?.serve()
     }
 
+    /// Starts a server, runs a task in it, and returns. This is meant for unit-testing
     pub fn run_task_in_server<T>(
         mut self,
         task: impl FnOnce(&GameState) -> Result<T>,

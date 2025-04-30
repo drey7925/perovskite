@@ -40,7 +40,7 @@ use crate::{
 };
 use crate::{run_handler, CachelineAligned};
 
-use super::blocks::BlockInteractionResult;
+use super::blocks::{BlockInteractionResult, BlockType, BlockTypeHandle};
 use super::event::log_trace;
 use super::{
     blocks::{
@@ -64,6 +64,7 @@ use crate::server::ServerArgs;
 use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwapOption;
 use integer_encoding::{VarIntReader, VarIntWriter};
+use perovskite_core::protocol::map::ClientExtendedData;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -186,17 +187,35 @@ impl MapChunk {
     ) -> Result<mapchunk_proto::StoredChunk> {
         let _span = span!("serialize chunk");
         let mut extended_data = Vec::new();
-
-        if usage == ChunkUsage::Server {
-            for index in 0.._MAX_OFFSET {
-                let offset = ChunkOffset::from_index(index);
-                let block_coord = self.coord.with_offset(offset);
-
-                if let Some(ext_data) = self.extended_data.get(&index.try_into().unwrap()) {
-                    if let Some(ext_data_proto) =
-                        self.extended_data_to_proto(index, block_coord, ext_data, game_state)?
-                    {
+        let mut client_extended_data = Vec::new();
+        match usage {
+            ChunkUsage::Server => {
+                for (index, ext_data) in self.extended_data.iter() {
+                    let index = *index as usize;
+                    let offset = ChunkOffset::from_index(index);
+                    let block_coord = self.coord.with_offset(offset);
+                    if let Some(ext_data_proto) = self.extended_data_to_proto_server(
+                        index,
+                        block_coord,
+                        ext_data,
+                        game_state,
+                    )? {
                         extended_data.push(ext_data_proto);
+                    }
+                }
+            }
+            ChunkUsage::Client => {
+                for (index, ext_data) in self.extended_data.iter() {
+                    let index = *index as usize;
+                    let offset = ChunkOffset::from_index(index);
+                    let block_coord = self.coord.with_offset(offset);
+                    if let Some(ext_data_proto) = self.extended_data_to_proto_client(
+                        index,
+                        block_coord,
+                        ext_data,
+                        game_state,
+                    )? {
+                        client_extended_data.push(ext_data_proto);
                     }
                 }
             }
@@ -211,6 +230,7 @@ impl MapChunk {
                         .map(|x| x.load(Ordering::Relaxed))
                         .collect(),
                     extended_data,
+                    client_extended_data,
                 },
             )),
             startup_counter: game_state.startup_counter,
@@ -218,8 +238,31 @@ impl MapChunk {
 
         Ok(proto)
     }
+    fn extended_data_to_proto_client(
+        &self,
+        block_index: usize,
+        block_coord: BlockCoordinate,
+        ext_data: &ExtendedData,
+        game_state: &GameState,
+    ) -> Result<Option<mapchunk_proto::ClientExtendedData>> {
+        // We're in MapChunk, so we have at least a read-level mutex, meaning we can use a relaxed load
+        let id = self.block_ids[block_index].load(Ordering::Relaxed);
 
-    fn extended_data_to_proto(
+        if !game_state
+            .block_types()
+            .has_client_side_extended_data(id.into())
+        {
+            return Ok(None);
+        }
+        let serialized_custom_data =
+            client_serialize_inner(block_coord, ext_data, game_state, id.into())?;
+        Ok(serialized_custom_data.map(|x| ClientExtendedData {
+            offset_in_chunk: block_index as u32,
+            ..x
+        }))
+    }
+
+    fn extended_data_to_proto_server(
         &self,
         block_index: usize,
         block_coord: BlockCoordinate,
@@ -385,6 +428,33 @@ impl MapChunk {
     }
 }
 
+fn client_serialize_inner(
+    block_coord: BlockCoordinate,
+    ext_data: &ExtendedData,
+    game_state: &GameState,
+    id: BlockId,
+) -> Result<Option<ClientExtendedData>, Error> {
+    let (block_type, _) = game_state.block_types().get_block_by_id(id.into())?;
+
+    Ok(match &block_type.make_client_extended_data {
+        Some(converter) => {
+            let handler_context = InlineContext {
+                tick: game_state.tick(),
+                initiator: EventInitiator::Engine,
+                location: block_coord,
+                block_types: game_state.block_types(),
+                items: game_state.item_manager(),
+            };
+
+            converter(handler_context, ext_data)?
+        }
+        None => {
+            error!("Block at {:?}, type {} indicated client-specific extended data, but had no handler to generate client extended data", block_coord, block_type.client_info.short_name);
+            None
+        }
+    })
+}
+
 fn parse_v1(
     mut chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
@@ -476,10 +546,11 @@ fn parse_v1(
     })
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct BlockUpdate {
     pub(crate) location: BlockCoordinate,
-    pub(crate) new_value: BlockId,
+    pub(crate) id: BlockId,
+    pub(crate) new_ext_data: Option<ClientExtendedData>,
 }
 
 struct MapChunkInnerReadGuard<'a> {
@@ -1134,6 +1205,8 @@ impl ServerGameMap {
         let chunk_guard = self.get_chunk(coord.chunk())?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
+        let new_client_ext = self.maybe_client_ext_data(coord, new_id, ext_data.as_ref())?;
+
         let old_id = chunk.block_ids[coord.offset().as_index()]
             .load(Ordering::Relaxed)
             .into();
@@ -1166,11 +1239,8 @@ impl ServerGameMap {
         // set_block to normally change blocks, so this is moot. However, it might make sense to
         // see if we can just turn this to a call to mutate_block_atomically
         self.enqueue_writeback(chunk_guard)?;
-        if old_id != new_id {
-            self.broadcast_block_change(BlockUpdate {
-                location: coord,
-                new_value: new_id,
-            });
+        if old_id != new_id || new_client_ext.is_some() {
+            self.broadcast_block_id_change(coord, new_id, new_client_ext);
         }
         Ok((old_id, old_data))
     }
@@ -1247,6 +1317,10 @@ impl ServerGameMap {
             return Ok((CasOutcome::Mismatch, old_block, new_extended_data));
         }
         let new_data_was_some = new_extended_data.is_some();
+
+        let new_client_ext =
+            self.maybe_client_ext_data(coord, new_id, new_extended_data.as_ref())?;
+
         let old_data = match new_extended_data {
             Some(new_data) => chunk
                 .extended_data
@@ -1275,10 +1349,7 @@ impl ServerGameMap {
             .block_bloom_filter
             .insert(new_id.base_id() as u64);
         self.enqueue_writeback(chunk_guard)?;
-        self.broadcast_block_change(BlockUpdate {
-            location: coord,
-            new_value: new_id,
-        });
+        self.broadcast_block_id_change(coord, new_id, new_client_ext);
         Ok((CasOutcome::Match, old_block, old_data))
     }
 
@@ -1314,7 +1385,7 @@ impl ServerGameMap {
             let (result, block_changed) = self.mutate_block_atomically_locked(
                 &chunk_guard,
                 &mut chunk,
-                coord.offset(),
+                coord,
                 mutator,
                 self,
             )?;
@@ -1364,13 +1435,8 @@ impl ServerGameMap {
             }
         };
 
-        let (result, block_changed) = self.mutate_block_atomically_locked(
-            &chunk_guard,
-            &mut chunk,
-            coord.offset(),
-            mutator,
-            self,
-        )?;
+        let (result, block_changed) =
+            self.mutate_block_atomically_locked(&chunk_guard, &mut chunk, coord, mutator, self)?;
         if block_changed {
             // mutate_block_atomically_locked already sent a broadcast.
             chunk_guard.update_lighting_after_edit(
@@ -1390,13 +1456,14 @@ impl ServerGameMap {
         &self,
         holder: &MapChunkHolder,
         chunk: &mut MapChunkInnerWriteGuard<'_>,
-        offset: ChunkOffset,
+        coord: BlockCoordinate,
         mutator: F,
         game_map: &ServerGameMap,
     ) -> Result<(T, bool)>
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
+        let offset = coord.offset();
         let mut extended_data = chunk
             .extended_data
             .remove(&offset.as_index().try_into().unwrap());
@@ -1412,6 +1479,7 @@ impl ServerGameMap {
         // This would have been a nice optimization, but I can't even consistently be sure to set
         // the dirty bit in my own code. Do this for now, until there's a better design.
         let extended_data_dirty = true; //data_holder.dirty();
+        let client_ext_data = self.maybe_client_ext_data(coord, new_id, extended_data.as_ref())?;
         if let Some(new_data) = extended_data {
             chunk
                 .extended_data
@@ -1432,11 +1500,12 @@ impl ServerGameMap {
                 .inventory_manager()
                 .broadcast_block_update(chunk.coord.with_offset(offset));
         }
-        if new_id != old_id {
-            game_map.broadcast_block_change(BlockUpdate {
-                location: chunk.coord.with_offset(offset),
-                new_value: new_id,
-            });
+        if new_id != old_id || client_ext_data.is_some() {
+            game_map.broadcast_block_id_change(
+                chunk.coord.with_offset(offset),
+                new_id,
+                client_ext_data,
+            );
         }
 
         Ok((closure_result?, new_id != old_id))
@@ -1814,10 +1883,19 @@ impl ServerGameMap {
     }
 
     // Broadcasts when a block on the map changes
-    fn broadcast_block_change(&self, update: BlockUpdate) {
+    fn broadcast_block_id_change(
+        &self,
+        coord: BlockCoordinate,
+        id: BlockId,
+        new_ext_data: Option<ClientExtendedData>,
+    ) {
         // The only error we expect is that there are no receivers. This is fine; we might
         // be running a timer for a block that's still loaded after all players log out
-        let _ = self.block_update_sender.send(update);
+        let _ = self.block_update_sender.send(BlockUpdate {
+            location: coord,
+            id,
+            new_ext_data,
+        });
     }
     /// Enqueues this chunk to be written back to the database.
     fn enqueue_writeback(&self, chunk: MapChunkOuterGuard<'_>) -> Result<()> {
@@ -1853,9 +1931,8 @@ impl ServerGameMap {
         mark_action: impl FnOnce(),
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
         if load_if_missing {
-            (mark_action)();
             let chunk_guard = self.get_chunk(coord)?;
-
+            (mark_action)();
             let chunk = chunk_guard.wait_and_get_for_read()?;
             log_trace("chunk loaded, serializing");
             Ok(Some(
@@ -1876,6 +1953,18 @@ impl ServerGameMap {
                 Ok(None)
             }
         }
+    }
+
+    #[doc(hidden)]
+    pub fn benchmark_serialize_for_server(
+        &self,
+        coord: ChunkCoordinate,
+    ) -> Result<Option<mapchunk_proto::StoredChunk>> {
+        let chunk = self.get_chunk(coord)?;
+        let chunk = chunk.wait_and_get_for_read()?;
+        Ok(Some(
+            chunk.serialize(ChunkUsage::Server, &self.game_state())?,
+        ))
     }
 
     pub(crate) async fn do_shutdown(&self) -> Result<()> {
@@ -2043,6 +2132,23 @@ impl ServerGameMap {
         }
 
         Ok(())
+    }
+
+    fn maybe_client_ext_data(
+        &self,
+        coord: BlockCoordinate,
+        id: BlockId,
+        ext_data: Option<&ExtendedData>,
+    ) -> Result<Option<ClientExtendedData>> {
+        if let Some(ext_data) = ext_data {
+            if self.block_type_manager().has_client_side_extended_data(id) {
+                client_serialize_inner(coord, ext_data, &self.game_state(), id)
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
     }
 }
 impl Drop for ServerGameMap {
@@ -3177,7 +3283,7 @@ impl GameMapTimer {
             upper_coord,
             upper_writeback_permit,
             state.timer_state.current_tick_time,
-        );
+        )?;
         reconcile_after_bulk_handler(
             &lower_old_block_ids,
             &mut lower_chunk,
@@ -3186,7 +3292,7 @@ impl GameMapTimer {
             lower_coord,
             lower_writeback_permit,
             state.timer_state.current_tick_time,
-        );
+        )?;
 
         Ok(())
     }
@@ -3245,7 +3351,7 @@ impl GameMapTimer {
                 map.mutate_block_atomically_locked(
                     holder,
                     chunk,
-                    offset,
+                    coord.with_offset(offset),
                     |block_id, extended_data| {
                         let ctx = InlineContext {
                             // todo actual ticks
@@ -3338,7 +3444,7 @@ impl GameMapTimer {
             coord,
             permit,
             state.timer_state.current_tick_time,
-        );
+        )?;
         Ok(())
     }
 
@@ -3407,28 +3513,46 @@ fn reconcile_after_bulk_handler(
     coord: ChunkCoordinate,
     permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     _update_time: Instant,
-) {
+) -> Result<()> {
     let mut seen_blocks = FxHashSet::default();
     let mut any_updated = false;
     for i in 0.._MAX_OFFSET {
         let old_block_id = BlockId::from(old_block_ids[i]);
         let new_block_id = BlockId::from(chunk.block_ids[i].load(Ordering::Relaxed));
-        if old_block_id != new_block_id {
+        let may_have_client_ext = game_state
+            .block_types()
+            .has_client_side_extended_data(new_block_id);
+        if old_block_id != new_block_id || may_have_client_ext {
             if seen_blocks.insert(new_block_id.base_id()) {
                 // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
-                // on x86_64.
-                // Only insert unique block ids (still need to test this optimization)
-                // TODO fork the bloom filter library and extend it to support constant lengths
+                // on x86_64. Without forking the library, it seems unavoidable
                 holder
                     .block_bloom_filter
                     .insert(new_block_id.base_id() as u64);
             }
             chunk.dirty = true;
             any_updated = true;
-            game_state.game_map().broadcast_block_change(BlockUpdate {
-                location: coord.with_offset(ChunkOffset::from_index(i)),
-                new_value: new_block_id,
-            });
+            let new_ext = match chunk.extended_data.get(&(i as u16)) {
+                None => None,
+                Some(x) => {
+                    if may_have_client_ext {
+                        client_serialize_inner(
+                            chunk.coord.with_offset(ChunkOffset::from_index(i)),
+                            x,
+                            &game_state,
+                            new_block_id,
+                        )?
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            game_state.game_map().broadcast_block_id_change(
+                coord.with_offset(ChunkOffset::from_index(i)),
+                new_block_id,
+                new_ext,
+            );
         }
     }
 
@@ -3436,6 +3560,7 @@ fn reconcile_after_bulk_handler(
         permit.take().unwrap().send(WritebackReq::Chunk(coord));
         holder.last_written.update_now_release();
     }
+    Ok(())
 }
 
 fn reacquire_writeback_permit<'a, 'b>(

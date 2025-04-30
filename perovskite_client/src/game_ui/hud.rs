@@ -71,9 +71,9 @@ impl GameHud {
             };
             if slot_delta != 0 {
                 {
-                    let new_slot = (self.hotbar_slot as i32 - slot_delta)
-                        .rem_euclid(total_slots.try_into().unwrap());
-                    self.set_slot(new_slot.try_into().unwrap(), client_state);
+                    let new_slot =
+                        (self.hotbar_slot as i32 - slot_delta).rem_euclid(total_slots.try_into()?);
+                    self.set_slot(new_slot.try_into()?, client_state);
                 }
             }
             if let Some(x) = slot_selection {

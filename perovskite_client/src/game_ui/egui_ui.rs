@@ -1,7 +1,7 @@
 use anyhow::Result;
 use egui::{
-    vec2, Button, Color32, Context, Id, ScrollArea, Sense, Stroke, TextEdit, TextStyle, TextureId,
-    Vec2b,
+    vec2, Align2, Button, Color32, Context, Id, ScrollArea, Sense, Stroke, TextEdit, TextStyle,
+    TextureId, Vec2b,
 };
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;
@@ -29,6 +29,7 @@ use parking_lot::MutexGuard;
 use perovskite_core::protocol::game_rpc::ServerPerformanceMetrics;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc, usize};
 
@@ -56,6 +57,7 @@ pub(crate) struct EguiUi {
 
     debug_open: bool,
     perf_open: bool,
+    interact_menu_last_min: usize,
 
     visible_popups: Vec<PopupDescription>,
 
@@ -96,6 +98,8 @@ impl EguiUi {
             chat_force_scroll_to_end: false,
             debug_open: false,
             perf_open: false,
+            interact_menu_last_min: 0,
+
             inventory_view: None,
             scale: 1.0,
             scale_override: 1.0,
@@ -242,7 +246,6 @@ impl EguiUi {
         }
 
         // these render a TopBottomPanel, so they need to be last
-        self.render_chat_history(ctx, client_state);
         if let Some((timeout, message)) = &self.status_bar {
             if *timeout > Instant::now() {
                 self.render_status_bar(ctx, &message)
@@ -257,6 +260,11 @@ impl EguiUi {
         if self.perf_open {
             self.render_perf(ctx, client_state);
         }
+        self.maybe_render_interact_menu(ctx, client_state, tool_state);
+
+        // Chat comes last, since otherwise its panel messes with coordinate calculations
+        // for hover text
+        self.render_chat_history(ctx, client_state);
     }
 
     pub(crate) fn push_status_bar(&mut self, duration: Duration, message: String) {
@@ -407,10 +415,13 @@ impl EguiUi {
         client_state: &ClientState,
         enabled: bool,
     ) -> ControlFlow<(), ()> {
+        let center = [ctx.screen_rect().max.x * 0.4, ctx.screen_rect().max.y * 0.4];
+
         egui::Window::new(popup.title.clone())
-            .id(Id::new(popup.popup_id))
+            .id(Id::new(("SERVER_POPUP", popup.popup_id)))
             .collapsible(false)
             .resizable(true)
+            .default_pos(center)
             .show(ctx, |ui| {
                 ui.set_enabled(enabled);
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
@@ -894,6 +905,159 @@ impl EguiUi {
                 );
             });
     }
+
+    fn render_hover_text_only(&mut self, ctx: &Context, state: &ClientState, text: Option<&str>) {
+        if let Some(text) = text {
+            let contents = |ui: &mut egui::Ui| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .font(egui::FontId::new(
+                            16.0,
+                            egui::FontFamily::Name("MonospaceBestEffort".into()),
+                        ))
+                        .color(Color32::WHITE),
+                );
+            };
+            if state.settings.load().display.hover_text_on_bottom_panel {
+                egui::TopBottomPanel::bottom("hover_text")
+                    .frame(egui::Frame {
+                        fill: Color32::from_black_alpha(192),
+                        stroke: Stroke {
+                            width: 0.0,
+                            color: Color32::TRANSPARENT,
+                        },
+                        ..Default::default()
+                    })
+                    .show(ctx, contents);
+            } else {
+                let center = [
+                    ctx.screen_rect().center().x + 5.0,
+                    ctx.screen_rect().center().y + 5.0,
+                ];
+                egui::Window::new("Hover text")
+                    .title_bar(false)
+                    .anchor(Align2::LEFT_TOP, center)
+                    .frame(egui::Frame {
+                        fill: Color32::from_black_alpha(192),
+                        stroke: Stroke {
+                            width: 0.0,
+                            color: Color32::TRANSPARENT,
+                        },
+                        ..Default::default()
+                    })
+                    .show(ctx, contents);
+            }
+        }
+    }
+
+    fn maybe_render_interact_menu(
+        &mut self,
+        ctx: &Context,
+        state: &ClientState,
+        tool_state: &ToolState,
+    ) {
+        let opts = match &tool_state.interact_key_options {
+            Some(x) => x,
+            None => {
+                self.interact_menu_last_min = 0;
+                self.render_hover_text_only(ctx, state, tool_state.hover_text.as_deref());
+                return;
+            }
+        };
+        if opts.is_empty() {
+            self.interact_menu_last_min = 0;
+            self.render_hover_text_only(ctx, state, tool_state.hover_text.as_deref());
+            return;
+        }
+        //    selection
+        //    v
+        // <--*>
+        // ^
+        // view_range_min
+        let mut min = self.interact_menu_last_min;
+        let mut max = (min + 4).min(opts.len() - 1);
+        if tool_state.selected_interact_option <= min {
+            min = tool_state.selected_interact_option.saturating_sub(1);
+            max = (min + 4).min(max);
+        } else if tool_state.selected_interact_option >= max {
+            max = (tool_state.selected_interact_option + 1).min(opts.len() - 1);
+            min = max.saturating_sub(4);
+        }
+        self.interact_menu_last_min = min;
+
+        let min_sigil = if min == 0 { "    " } else { " ↑  " };
+        let max_sigil = if max >= opts.len() - 1 {
+            "    "
+        } else {
+            " ↓  "
+        };
+        let contents = |ui: &mut egui::Ui| {
+            if let Some(hover_text) = &tool_state.hover_text {
+                ui.label(
+                    egui::RichText::new(hover_text)
+                        .font(egui::FontId::new(
+                            16.0,
+                            egui::FontFamily::Name("MonospaceBestEffort".into()),
+                        ))
+                        .color(Color32::WHITE),
+                );
+            }
+            for idx in min..=max {
+                let entry = &opts[idx];
+                let sigil = if idx == tool_state.selected_interact_option {
+                    "[>] "
+                } else if idx == min {
+                    min_sigil
+                } else if idx == max {
+                    max_sigil
+                } else {
+                    "    "
+                };
+                ui.label(
+                    egui::RichText::new(format!("{sigil}{}", &entry.label))
+                        .font(egui::FontId::new(
+                            16.0,
+                            egui::FontFamily::Name("MonospaceBestEffort".into()),
+                        ))
+                        .color(if idx == tool_state.selected_interact_option {
+                            Color32::WHITE
+                        } else {
+                            Color32::DARK_GRAY
+                        }),
+                );
+            }
+        };
+        if state.settings.load().display.hover_text_on_bottom_panel {
+            egui::TopBottomPanel::bottom("interact_key_menu")
+                .frame(egui::Frame {
+                    fill: Color32::from_black_alpha(192),
+                    stroke: Stroke {
+                        width: 0.0,
+                        color: Color32::TRANSPARENT,
+                    },
+                    ..Default::default()
+                })
+                .show(ctx, contents);
+        } else {
+            let center = [
+                ctx.screen_rect().center().x + 5.0,
+                ctx.screen_rect().center().y + 5.0,
+            ];
+            egui::Window::new("Interact Menu")
+                .title_bar(false)
+                .anchor(Align2::LEFT_TOP, center)
+                .frame(egui::Frame {
+                    fill: Color32::from_black_alpha(192),
+                    stroke: Stroke {
+                        width: 0.0,
+                        color: Color32::TRANSPARENT,
+                    },
+                    ..Default::default()
+                })
+                .show(ctx, contents);
+        }
+    }
+
     fn render_debug(&mut self, ctx: &Context, state: &ClientState, tool_state: &ToolState) {
         egui::TopBottomPanel::bottom("debug_panel")
             .max_height(240.0)

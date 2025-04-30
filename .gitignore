@@ -4,3 +4,4 @@ rust-toolchain.toml
 dhat-heap.json
 *.log
 /.idea
+*.png~

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use itertools::Itertools;
-use perovskite_core::protocol::blocks::SolidPhysicsInfo;
+use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
@@ -279,6 +279,8 @@ impl BlockBuilder {
                 })),
                 sound_id: 0,
                 sound_volume: 0.0,
+                interact_key_option: vec![],
+                has_client_extended_data: false,
             },
             variant_effect: BlockVariantEffect::None,
             footstep_sound_override: None,
@@ -403,6 +405,25 @@ impl BlockBuilder {
             extended_data_initializer: ExtendedDataInitializer,
         ) -> Self {
             self.extended_data_initializer = Some(extended_data_initializer);
+            self
+        }
+    );
+
+    maybe_export!(
+        /// Adds a named entry to the interact key menu. Signature TBD.
+        /// If you only need one option, but want to show it to the user to
+        /// convey the meaning of interaction, internal_name can be left empty
+        fn add_interact_key_menu_entry(
+            mut self,
+            internal_name: impl Into<String>,
+            display_name: impl Into<String>,
+        ) -> Self {
+            self.client_info
+                .interact_key_option
+                .push(InteractKeyOption {
+                    id: internal_name.into(),
+                    label: display_name.into(),
+                });
             self
         }
     );

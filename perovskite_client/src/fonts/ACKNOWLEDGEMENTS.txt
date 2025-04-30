@@ -1,4 +1,5 @@
 The Noto Sans family of fonts is used under the Open Font License. We graciously thank the authors of the font for sharing it under this permissive license.
+The MPLUS1 Code family of fonts is also used under the Open Font License. We graciously thank Coji Morishita and contributors to the MPLUS project for sharing it under this permissive license.
 
 A copy of the OFL is included below:
 

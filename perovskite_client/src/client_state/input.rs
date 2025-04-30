@@ -417,6 +417,7 @@ impl InputState {
         }
     }
 
+    /// Returns a zero-based index for the hotbar selection picked by the player
     pub(crate) fn take_hotbar_selection(&mut self) -> Option<u32> {
         if self.modal_active {
             return None;

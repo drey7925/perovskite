@@ -154,13 +154,17 @@ on my available time and mood.
 * Rendering and display:
     * TBD
     * Maybe a raytraced system?
-    * Render distance limits
     * Fog for distant chunks
 * Game map
     * Further optimized APIs
         * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
     * Out-of-line chunk loading (e.g. offloaded onto a dedicated executor)
     * Map bypass (i.e. stream chunks directly to the client for display)
+* Block handling
+    * Further refinements of signs/text
+    * Implement place_on handler
+    * Implement step_on handler and wire up to client context
+    * Further client-side extended data
 * Entities
     * Optimized (shader-assisted?) entity renderer
     * Simpler (tokio-driven) entity API (i.e. use a tokio task rather than the custom coroutine)
