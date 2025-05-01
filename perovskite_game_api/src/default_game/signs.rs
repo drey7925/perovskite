@@ -12,7 +12,7 @@ use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::protocol::render::BlockText;
+use perovskite_core::protocol::render::{BlockText, TextureReference};
 use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
@@ -142,7 +142,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
         ..Item::default_with_proto(ItemDef {
             short_name: SIGN_ITEM.0.to_string(),
             display_name: "Wooden Sign".to_string(),
-            inventory_texture: None,
+            inventory_texture: Some(SIGN_ITEM_TEX.into()),
             groups: vec![],
             block_apperance: "".to_string(),
             interaction_rules: default_item_interaction_rules(),
