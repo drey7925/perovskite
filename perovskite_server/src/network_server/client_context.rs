@@ -96,6 +96,7 @@ static CLIENT_CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 pub(crate) struct PlayerCoroutinePack {
     context: Arc<SharedContext>,
     chunk_senders: [MapChunkSender; 2],
+    net_prioritizer: NetPrioritizer,
     block_event_sender: BlockEventSender,
     inventory_event_sender: InventoryEventSender,
     inbound_worker: InboundWorker,
@@ -134,6 +135,14 @@ impl PlayerCoroutinePack {
                 }
             }
         };
+        let kick = kick_closure.clone();
+        crate::spawn_async(&format!("net_prio_{}", username), async move {
+            if let Err(e) = self.net_prioritizer.run_loop().await {
+                tracing::error!("Error running outbound network priotizier: {:?}", e);
+                kick("net prio crashed").await;
+            }
+        })?;
+
         let kick = kick_closure.clone();
         crate::spawn_async(&format!("inbound_worker_{}", username), async move {
             if let Err(e) = self.inbound_worker.inbound_worker_loop().await {
@@ -296,15 +305,28 @@ pub(crate) async fn make_client_contexts(
         hinted_chunks: vec![],
         shard_parity: 1,
     };
+
+    let (entity_tx, entity_rx) = mpsc::channel(16);
+    let (map_tx, map_rx) = mpsc::channel(16);
+    let (prio_tx, prio_rx) = mpsc::channel(16);
+
+    let net_prioritizer = NetPrioritizer {
+        context: context.clone(),
+        map_rx,
+        entity_rx,
+        prio_rx,
+        tx: outbound_tx,
+    };
+
     let block_event_sender = BlockEventSender {
         context: context.clone(),
-        outbound_tx: outbound_tx.clone(),
+        outbound_tx: map_tx.clone(),
         block_events,
         chunk_tracker,
     };
     let inventory_event_sender = InventoryEventSender {
         context: context.clone(),
-        outbound_tx: outbound_tx.clone(),
+        outbound_tx: prio_tx.clone(),
         inventory_events,
         interested_inventories,
     };
@@ -312,19 +334,19 @@ pub(crate) async fn make_client_contexts(
     let misc_outbound_worker = MiscOutboundWorker {
         context: context.clone(),
         player_event_receiver,
-        outbound_tx: outbound_tx.clone(),
+        outbound_tx: prio_tx.clone(),
     };
 
     let entity_sender = EntityEventSender {
         context: context.clone(),
-        outbound_tx: outbound_tx.clone(),
+        outbound_tx: entity_tx.clone(),
         sent_entities: FxHashMap::default(),
         last_update: 0,
     };
 
     let audio_sender = AudioSender {
         context: context.clone(),
-        outbound_tx,
+        outbound_tx: prio_tx.clone(),
         events: context.game_state.audio().subscribe(),
         position_watch: pos_recv_clone,
     };
@@ -332,6 +354,7 @@ pub(crate) async fn make_client_contexts(
     Ok(PlayerCoroutinePack {
         context,
         chunk_senders: [chunk_sender_0, chunk_sender_1],
+        net_prioritizer,
         block_event_sender,
         inventory_event_sender,
         inbound_worker,
@@ -539,6 +562,34 @@ impl SnappyEncoder {
             .snappy_encoder
             .compress(&self.snappy_input_buffer, &mut self.snappy_output_buffer)?;
         Ok(self.snappy_output_buffer[0..actual_compressed_len].to_vec())
+    }
+}
+
+struct NetPrioritizer {
+    context: Arc<SharedContext>,
+    map_rx: mpsc::Receiver<tonic::Result<StreamToClient>>,
+    entity_rx: mpsc::Receiver<tonic::Result<StreamToClient>>,
+    prio_rx: mpsc::Receiver<tonic::Result<StreamToClient>>,
+    tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+}
+impl NetPrioritizer {
+    async fn run_loop(&mut self) -> Result<()> {
+        while !self.context.cancellation.is_cancelled() {
+            let message = tokio::select! {
+                biased;
+                _ = self.context.cancellation.cancelled() => break,
+                msg = self.prio_rx.recv() => msg,
+                msg = self.entity_rx.recv() => msg,
+                msg = self.map_rx.recv() => msg,
+            };
+            let message = match message {
+                Some(msg) => msg,
+                None => break,
+            };
+            self.tx.send(message).await?;
+        }
+        tracing::info!("Prioritized outbound sender exiting");
+        Ok(())
     }
 }
 
