@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_client"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Game client"
@@ -13,7 +13,7 @@ argon2 = "0.5.3"
 anyhow = {  version = "1" , features = ["backtrace"]}
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
-perovskite_core = { path = "../perovskite_core", version = "0.1.0" }
+perovskite_core = { path = "../perovskite_core", version = "0.1.1" }
 egui = "0.24.1"
 egui_winit_vulkano = "0.27.0"
 env_logger = "0.11.3"

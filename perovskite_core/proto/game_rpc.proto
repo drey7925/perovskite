@@ -406,8 +406,9 @@ message StartAuth {
   //        * Client chunk load distance limit
   //        * Performance metrics
   //        * Footstep
-  // 7 - 2025-04-19 ~ ...
+  // 7 - 2025-04-19 ~ 2025-04-30
   //        * SolidBlockPhysics variant effect
+  //        * Client-side ext data v1, only block text without decoration
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }
