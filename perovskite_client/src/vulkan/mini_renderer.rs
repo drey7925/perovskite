@@ -23,7 +23,6 @@ use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
-use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};

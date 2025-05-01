@@ -24,7 +24,6 @@ use super::{
 use crate::default_game::chest::register_chest;
 use crate::default_game::signs::register_sign;
 use crate::game_builder::{GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME};
-use crate::items::ItemBuilder;
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -34,14 +33,12 @@ use crate::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
     },
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use perovskite_core::constants::items::default_item_interaction_rules;
-use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
-use perovskite_core::protocol::blocks::{CubeRenderInfo, CubeVariantEffect};
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::{
     constants::{
-        block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED, TRIVIALLY_REPLACEABLE},
+        block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
         item_groups::HIDDEN_FROM_CREATIVE,
     },
     protocol::{

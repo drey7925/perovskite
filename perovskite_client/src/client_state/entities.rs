@@ -1,13 +1,13 @@
 use crate::audio::{
-    EngineHandle, EntityData, ProceduralEntityToken, SOUND_ENTITY_LINK_TRAILING_ENTITIES,
-    SOUND_ENTITY_SPATIAL, SOUND_PRESENT,
+    EngineHandle, ProceduralEntityToken, SOUND_ENTITY_LINK_TRAILING_ENTITIES, SOUND_ENTITY_SPATIAL,
+    SOUND_PRESENT,
 };
 use crate::client_state::tool_controller::check_intersection_core;
 use crate::client_state::ClientState;
 use crate::vulkan::{
     entity_renderer::EntityRenderer, shaders::entity_geometry::EntityGeometryDrawCall,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Rad, Vector3, Vector4, Zero};
 use perovskite_core::protocol::audio::SoundSource;
 use perovskite_core::protocol::entities as entities_proto;
@@ -319,7 +319,7 @@ impl GameEntity {
             );
             let front = self.move_queue.front();
             if let Some(front) = front {
-                let mut flags =
+                let flags =
                     SOUND_PRESENT | SOUND_ENTITY_SPATIAL | SOUND_ENTITY_LINK_TRAILING_ENTITIES;
 
                 if let Some(audio) = &self.turbulence_audio_model {

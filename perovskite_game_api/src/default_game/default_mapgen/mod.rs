@@ -16,7 +16,6 @@ use noise::{MultiFractal, NoiseFn};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::{
     block_id::BlockId,
-    constants::blocks::AIR,
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
 use perovskite_server::game_state::{
@@ -319,7 +318,7 @@ impl RollingHillsGenerator {
         // We have a rare activation band: if the value is between 0.89 and 0.91, we have the walls
         // of the caldera, and 0.91+ will eventually enable water inside the caldera
         debug_log("caldera_gate", caldera_gate);
-        let mut water_height = if caldera_gate > Self::CALDERA_GATE_MID {
+        let water_height = if caldera_gate > Self::CALDERA_GATE_MID {
             30.0
         } else {
             0.0

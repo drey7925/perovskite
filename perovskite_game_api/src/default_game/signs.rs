@@ -17,9 +17,8 @@ use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
 };
-use perovskite_server::game_state::event::{EventInitiator, HandlerContext, PlayerInitiator};
-use perovskite_server::game_state::items::{Item, ItemStack};
-use std::ops::DerefMut;
+use perovskite_server::game_state::event::{EventInitiator, HandlerContext};
+use perovskite_server::game_state::items::Item;
 
 const SIGN_TEXTURE_TEMP: StaticTextureName = StaticTextureName("default:sign_tmp");
 const SIGN_ITEM_TEX: StaticTextureName = StaticTextureName("default:sign_item");

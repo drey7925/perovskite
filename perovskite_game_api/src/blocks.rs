@@ -320,7 +320,7 @@ impl BlockBuilder {
         mut self,
         closure: impl Fn() -> (StaticItemName, u32) + Send + Sync + 'static,
     ) -> Self {
-        self.dropped_item = DroppedItem::Dynamic(Box::new(move |(_param)| closure()));
+        self.dropped_item = DroppedItem::Dynamic(Box::new(move |_param| closure()));
         self
     }
 
@@ -556,7 +556,7 @@ impl BlockBuilder {
 
     /// Set the appearance of the block to that specified by the given builder
     pub(crate) fn build_and_deploy_into(
-        mut self,
+        self,
         game_builder: &mut GameBuilder,
     ) -> Result<BuiltBlock> {
         let mut block = BlockType::default();

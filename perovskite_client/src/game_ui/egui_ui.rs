@@ -29,7 +29,6 @@ use parking_lot::MutexGuard;
 use perovskite_core::protocol::game_rpc::ServerPerformanceMetrics;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc, usize};
 

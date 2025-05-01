@@ -17,7 +17,6 @@
 use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
 use rustc_hash::FxHashMap;
-use std::collections::BTreeMap;
 use std::{
     any::Any,
     borrow::Borrow,

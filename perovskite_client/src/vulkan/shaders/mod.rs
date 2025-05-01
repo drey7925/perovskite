@@ -62,11 +62,13 @@ pub(crate) mod vert_3d {
 
                 vec3 decode_normal(uint index) {
                      const float sqrt_half = sqrt(0.5);
+                     // Matches CubeFace in BlockRenderer
                      const vec3 normals[10] = vec3[](
                         vec3(1.0, 0.0, 0.0),
                         vec3(-1.0, 0.0, 0.0),
-                        vec3(0.0, 1.0, 0.0),
+                        // Warning: CubeFace Y+ then Y- is in world coords, not Vk coords
                         vec3(0.0, -1.0, 0.0),
+                        vec3(0.0, 1.0, 0.0),
                         vec3(0.0, 0.0, 1.0),
                         vec3(0.0, 0.0, -1.0),
                         vec3(sqrt_half, 0.0, sqrt_half),

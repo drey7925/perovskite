@@ -5,7 +5,7 @@ use perovskite_game_api::{
     carts, default_game::DefaultGameBuilder, game_builder::GameBuilder, BlockCoordinate,
 };
 use std::future::Future;
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
 struct AsyncExecutorAdapter {
     handle: Handle,

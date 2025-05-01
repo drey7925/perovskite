@@ -1,5 +1,4 @@
 use std::collections::hash_map::Entry;
-use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::io::Cursor;
 use std::num::NonZeroU64;
@@ -28,7 +27,7 @@ use smallvec::SmallVec;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::cache::CacheManager;
-use crate::client_state::entities::{ElapsedOrOverflow, EntityMove, GameEntity};
+use crate::client_state::entities::GameEntity;
 use crate::client_state::settings::GameSettings;
 use crate::client_state::timekeeper::Timekeeper;
 use crate::client_state::ClientState;

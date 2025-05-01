@@ -1,4 +1,3 @@
-use crate::default_game::DefaultGameBuilder;
 use crate::{
     blocks::{BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, GameBuilderExtension},

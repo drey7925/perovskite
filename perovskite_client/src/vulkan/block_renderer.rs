@@ -20,7 +20,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use cgmath::num_traits::Num;
-use cgmath::{vec3, ElementWise, InnerSpace, Matrix4, Vector2, Vector3, Zero};
+use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
@@ -51,7 +51,7 @@ use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
@@ -1424,7 +1424,7 @@ pub(crate) fn emit_cube_face_vk(
     let global_brightness = global_brightness_1.max(global_brightness_2);
 
     let normal = face.repr();
-    let mut vertices = match face {
+    let vertices = match face {
         CubeFace::ZMinus => [
             make_cgv(
                 coord + e.vertices[0],

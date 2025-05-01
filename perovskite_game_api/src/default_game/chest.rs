@@ -54,7 +54,7 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Unlocked chest")
             .add_interact_key_menu_entry("", "Open chest")
             .add_modifier(Box::new(|bt| {
-                bt.interact_key_handler = Some(Box::new(|ctx, coord, s| match ctx.initiator() {
+                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
                         Ok(Some(make_chest_popup(&ctx, coord, p)?))
                     }

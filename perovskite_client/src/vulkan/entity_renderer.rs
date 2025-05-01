@@ -6,9 +6,7 @@ use perovskite_core::{constants::textures::FALLBACK_UNKNOWN_TEXTURE, protocol::e
 use rustc_hash::{FxHashMap, FxHashSet};
 use texture_packer::{importer::ImageImporter, Rect};
 
-use super::{
-    shaders::cube_geometry::CubeGeometryVertex, Texture2DHolder, VkAllocator, VulkanContext,
-};
+use super::{Texture2DHolder, VkAllocator, VulkanContext};
 use crate::vulkan::shaders::entity_geometry::EntityVertex;
 use crate::vulkan::shaders::VkBufferGpu;
 use anyhow::{bail, ensure, Error, Result};

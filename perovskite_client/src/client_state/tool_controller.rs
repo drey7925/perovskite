@@ -29,16 +29,13 @@ use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
 use super::physics::apply_aabox_transformation;
-use super::{
-    input::BoundAction, make_fallback_blockdef, ClientState, GameAction, InteractKeyAction,
-};
-use crate::client_state::chunk::ChunkDataView;
+use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
 use line_drawing::WalkVoxels;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::blocks::{BlockTypeDef, InteractKeyOption};
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::items::interaction_rule::DigBehavior;
-use perovskite_core::protocol::items::{InteractionRule, ItemDef};
+use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
 use rustc_hash::FxHashSet;
 use sha2::digest::generic_array::functional::FunctionalSequence;

@@ -624,7 +624,7 @@ impl InboundContext {
                     let _span = span!("handle_mapchunk");
                     let coord = coord.into();
 
-                    let mut data = self
+                    let data = self
                         .snappy_helper
                         .decode::<StoredChunk>(&chunk.snappy_encoded_bytes)?
                         .chunk_data

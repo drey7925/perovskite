@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::time::Instant;
 
 use crate::game_builder::GameBuilder;

@@ -40,7 +40,7 @@ use crate::{
 };
 use crate::{run_handler, CachelineAligned};
 
-use super::blocks::{BlockInteractionResult, BlockType, BlockTypeHandle};
+use super::blocks::BlockInteractionResult;
 use super::event::log_trace;
 use super::{
     blocks::{

@@ -40,7 +40,7 @@ use crate::vulkan::{VkAllocator, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
 use prost::Message;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
     PrimaryCommandBufferAbstract,
