@@ -26,9 +26,9 @@ use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::entities::IterEntity;
 use crate::game_state::entities::Movement;
-use crate::game_state::event::log_trace;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
+use crate::game_state::event::{log_trace, WeakPlayerRef};
 use crate::game_state::event::{run_traced, run_traced_sync};
 
 use crate::game_state::event::PlayerInitiator;
@@ -40,13 +40,13 @@ use crate::game_state::inventory::TypeErasedInventoryView;
 use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
 
-use crate::game_state::items::Item;
+use crate::game_state::items::{default_generic_handler, Item};
 
-use crate::game_state::player::PlayerEventReceiver;
 use crate::game_state::player::PlayerState;
+use crate::game_state::player::{Player, PlayerEventReceiver};
 use crate::game_state::player::{PlayerContext, PlayerEvent};
 use crate::game_state::GameState;
-use crate::run_handler;
+use crate::{run_handler, spawn_async};
 
 use anyhow::bail;
 use anyhow::Context;
@@ -80,6 +80,7 @@ use perovskite_core::util::{LogInspect, TraceBuffer};
 use prost::Message;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;
@@ -1322,7 +1323,6 @@ impl InventoryEventSender {
         Ok(())
     }
 }
-
 // State/structure backing a gRPC GameStream on the inbound side
 pub(crate) struct InboundWorker {
     context: Arc<SharedContext>,
@@ -1339,8 +1339,68 @@ pub(crate) struct InboundWorker {
     next_pos_writeback: Instant,
 }
 impl InboundWorker {
+    fn process_footstep(player: Arc<Player>, ctx: &SharedContext, coord: BlockCoordinate) {
+        let ppu = player.last_position();
+        let res = Self::map_handler_sync(
+            ctx,
+            None,
+            move |_| {
+                &move |ctx, coord, stack| {
+                    default_generic_handler(ctx, coord, stack, {
+                        move |gs| {
+                            gs.game_map().run_block_interaction(
+                                coord,
+                                &ctx.initiator,
+                                None,
+                                |bt| bt.step_on_handler_inline.as_deref(),
+                                |bt| bt.step_on_handler_full.as_deref(),
+                            )
+                        }
+                    })
+                }
+            },
+            coord,
+            ppu,
+        );
+        if let Err(e) = res {
+            tracing::error!("Footstep handler failed: {e:?}");
+        }
+    }
+
+    async fn off_loop_footsteps_worker(
+        ctx: Arc<SharedContext>,
+        mut rx: mpsc::Receiver<BlockCoordinate>,
+    ) -> Result<()> {
+        let player = Arc::downgrade(&ctx.player_context.player);
+        while !ctx.cancellation.is_cancelled() {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        None => {break}
+                        Some(coord) => {
+                            match player.upgrade() {
+                                Some(p) => block_in_place(|| Self::process_footstep(p, &ctx, coord)),
+                                None => { tracing::warn!("Can't upgrade player weak ref in footstep worker"); break; }
+                            }
+                        }
+                    }
+                }
+                _ = ctx.cancellation.cancelled() => {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     // Poll for world events and send them through outbound_tx
     pub(crate) async fn inbound_worker_loop(&mut self) -> Result<()> {
+        let (mut step_tx, step_rx) = mpsc::channel(32);
+        let mut step_worker_handle = spawn_async(
+            &format!("{}_footstep_worker", &self.context.player_context.name),
+            Self::off_loop_footsteps_worker(self.context.clone(), step_rx),
+        )?;
+
         const INBOUND_TIMEOUT: Duration = Duration::from_secs(10);
         while !self.context.cancellation.is_cancelled() {
             let timeout = tokio::time::sleep(INBOUND_TIMEOUT);
@@ -1361,7 +1421,7 @@ impl InboundWorker {
                             return Ok(());
                         }
                         Ok(Some(message)) => {
-                            match run_traced(trace_buffer, async { self.handle_message(&message).await }).await {
+                            match run_traced(trace_buffer, async { self.handle_message(&message, &mut step_tx).await }).await {
                                 Ok(_) => {},
                                 Err(e) => {
                                     warn!("Client {} failed to handle message: {:?}, error: {:?}", self.context.id, message, e);
@@ -1371,6 +1431,9 @@ impl InboundWorker {
                         }
                     }
 
+                },
+                _ = &mut step_worker_handle => {
+                    info!("Off-thread footstep worker finished")
                 }
                 _ = self.context.cancellation.cancelled() => {
                     info!("Client inbound context {} detected cancellation and shutting down", self.context.id)
@@ -1417,7 +1480,11 @@ impl InboundWorker {
         Ok(())
     }
 
-    async fn handle_message(&mut self, message: &proto::StreamToServer) -> Result<()> {
+    async fn handle_message(
+        &mut self,
+        message: &proto::StreamToServer,
+        step_tx: &mut mpsc::Sender<BlockCoordinate>,
+    ) -> Result<()> {
         let enable_perf_stats = message.want_performance_metrics
             && self
                 .context
@@ -1451,7 +1518,8 @@ impl InboundWorker {
                     ActionTarget::BlockCoord(coord) => {
                         // TODO check whether the current item can dig this block, and whether
                         // it's been long enough since the last dig
-                        self.run_map_handlers(
+                        Self::run_map_handlers(
+                            &self.context,
                             coord.into(),
                             dig_message.item_slot,
                             |item| {
@@ -1463,7 +1531,8 @@ impl InboundWorker {
                         .await?;
                     }
                     ActionTarget::EntityTarget(id) => {
-                        self.run_map_handlers(
+                        Self::run_map_handlers(
+                            &self.context,
                             *id,
                             dig_message.item_slot,
                             |item| {
@@ -1489,7 +1558,8 @@ impl InboundWorker {
                     .context("missing target")?
                 {
                     ActionTarget::BlockCoord(coord) => {
-                        self.run_map_handlers(
+                        Self::run_map_handlers(
+                            &self.context,
                             coord.into(),
                             tap_message.item_slot,
                             |item| {
@@ -1501,7 +1571,8 @@ impl InboundWorker {
                         .await?
                     }
                     ActionTarget::EntityTarget(id) => {
-                        self.run_map_handlers(
+                        Self::run_map_handlers(
+                            &self.context,
                             *id,
                             tap_message.item_slot,
                             |item| {
@@ -1515,7 +1586,7 @@ impl InboundWorker {
                 }
             }
             Some(proto::stream_to_server::ClientMessage::PositionUpdate(pos_update)) => {
-                self.handle_pos_update(message.client_tick, pos_update)
+                self.handle_pos_update(message.client_tick, pos_update, step_tx)
                     .await?;
             }
             Some(proto::stream_to_server::ClientMessage::BugCheck(bug_check)) => {
@@ -1574,13 +1645,13 @@ impl InboundWorker {
     #[tracing::instrument(
         name = "map_handler",
         level = "trace",
-        skip(self, coord, selected_inv_slot, get_item_handler),
+        skip(ctx, coord, selected_inv_slot, get_item_handler),
         fields(
-            player_name = %self.context.player_context.name(),
+            player_name = %ctx.player_context.name(),
         ),
     )]
     async fn run_map_handlers<F, T>(
-        &mut self,
+        ctx: &SharedContext,
         coord: T,
         selected_inv_slot: u32,
         get_item_handler: F,
@@ -1590,13 +1661,19 @@ impl InboundWorker {
         F: FnOnce(Option<&Item>) -> &items::GenericInteractionHandler<T>,
     {
         block_in_place(|| {
-            self.map_handler_sync(selected_inv_slot, get_item_handler, coord, player_position)
+            Self::map_handler_sync(
+                ctx,
+                Some(selected_inv_slot),
+                get_item_handler,
+                coord,
+                player_position,
+            )
         })
     }
 
     fn map_handler_sync<F, T>(
-        &mut self,
-        selected_inv_slot: u32,
+        ctx: &SharedContext,
+        selected_inv_slot: Option<u32>,
         get_item_handler: F,
         coord: T,
         player_position: PlayerPositionUpdate,
@@ -1605,20 +1682,24 @@ impl InboundWorker {
         F: FnOnce(Option<&Item>) -> &items::GenericInteractionHandler<T>,
     {
         log_trace("Running map handlers");
-        let game_state = &self.context.game_state;
+        let game_state = &ctx.game_state;
 
         game_state.inventory_manager().mutate_inventory_atomically(
-            &self.context.player_context.main_inventory(),
+            &ctx.player_context.main_inventory(),
             |inventory| {
+                let mut none_stack = None;
                 log_trace("In inventory mutator");
-                let stack = inventory
-                    .contents_mut()
-                    .get_mut(selected_inv_slot as usize)
-                    .with_context(|| "Item slot was out of bounds")?;
+                let stack = match selected_inv_slot {
+                    Some(x) => inventory
+                        .contents_mut()
+                        .get_mut(x as usize)
+                        .with_context(|| "Item slot was out of bounds")?,
+                    None => &mut none_stack,
+                };
 
                 let initiator = EventInitiator::Player(PlayerInitiator {
-                    player: &self.context.player_context.player,
-                    weak: Arc::downgrade(&self.context.player_context.player),
+                    player: &ctx.player_context.player,
+                    weak: Arc::downgrade(&ctx.player_context.player),
                     position: player_position,
                 });
 
@@ -1678,7 +1759,12 @@ impl InboundWorker {
         Ok(())
     }
 
-    async fn handle_pos_update(&mut self, _tick: u64, update: &proto::ClientUpdate) -> Result<()> {
+    async fn handle_pos_update(
+        &mut self,
+        _tick: u64,
+        update: &proto::ClientUpdate,
+        step_tx: &mut mpsc::Sender<BlockCoordinate>,
+    ) -> Result<()> {
         match &update.position {
             Some(pos_update) => {
                 let (az, el) = match &pos_update.face_direction {
@@ -1742,7 +1828,18 @@ impl InboundWorker {
                     )
                     .await;
 
-                // For now, just use the last coordinate
+                let mut dropped = 0;
+                for step in &update.footstep_coordinate {
+                    if let Some(coord) = step.coord {
+                        if let Err(_) = step_tx.try_send(coord.try_into()?) {
+                            dropped += 1;
+                        }
+                    }
+                }
+                if dropped > 0 {
+                    tracing::warn!("Dropped {} footstep events", dropped);
+                }
+
                 if let Some(footstep) = update.footstep_coordinate.last() {
                     let coord = footstep.coord.context("Missing coord")?.into();
                     let footstep_sound_id = self

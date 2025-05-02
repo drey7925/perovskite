@@ -269,6 +269,19 @@ pub struct BlockType {
         Box<dyn Fn(HandlerContext, BlockCoordinate, &str) -> Result<Option<Popup>> + Send + Sync>,
     >,
 
+    /// Called when the block is stepped on.
+    ///
+    /// Caveats:
+    /// * Some step-on events may be lost at either client or server. We currently
+    ///   trust the client to report these accurately, and don't validate them.
+    /// * The player position update is unsynchronized and potentially stale
+    /// * The held itemstack is always None, and tool_wear in the return value is ignored.
+    ///
+    /// See [Self::dig_handler_inline]/[Self::dig_handler_full] for details on inline vs full
+    pub step_on_handler_inline: Option<Box<InlineHandler>>,
+    /// Same as [Self::step_on_handler_inline] but allows accessing the game state
+    pub step_on_handler_full: Option<Box<FullHandler>>,
+
     // Internal impl details
     pub(crate) is_unknown_block: bool,
 }
@@ -296,6 +309,8 @@ impl Default for BlockType {
             tap_handler_inline: None,
             place_upon_handler: None,
             interact_key_handler: None,
+            step_on_handler_full: None,
+            step_on_handler_inline: None,
             is_unknown_block: false,
         }
     }
@@ -570,7 +585,6 @@ impl BlockTypeManager {
         for i in 0..=max_index {
             let unknown_block_name = format!("by_id:0x{:x}", i << 12);
             manager.block_types.push(make_unknown_block_serverside(
-                &manager,
                 BlockId((i as u32) << 12),
                 unknown_block_name.clone(),
             ));
@@ -838,14 +852,8 @@ fn unknown_block_deserialize_data_passthrough(
     })))
 }
 
-fn make_unknown_block_serverside(
-    manager: &BlockTypeManager,
-    id: BlockId,
-    short_name: String,
-) -> BlockType {
+fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
     assert_eq!(id.variant(), 0);
-
-    let air = manager.make_block_name(AIR.to_string());
 
     BlockType {
         client_info: blocks_proto::BlockTypeDef {
@@ -881,16 +889,15 @@ fn make_unknown_block_serverside(
         make_client_extended_data: None,
         dig_handler_full: None,
         dig_handler_inline: Some(Box::new(move |ctx, block, _, _| {
-            *block = ctx
-                .block_types()
-                .resolve_name(&air)
-                .context("Couldn't find air block")?;
+            *block = AIR_ID;
             Ok(BlockInteractionResult::default())
         })),
         tap_handler_full: None,
         tap_handler_inline: None,
         place_upon_handler: None,
         interact_key_handler: None,
+        step_on_handler_full: None,
+        step_on_handler_inline: None,
         is_unknown_block: true,
     }
 }

@@ -43,8 +43,9 @@ use crate::{
 };
 use log::warn;
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use perovskite_core::protocol::game_rpc::EntityTarget;
+use perovskite_core::protocol::game_rpc::{EntityTarget, PlayerPosition};
 use prost::Message;
+use seqlock::SeqLock;
 use tokio::{select, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -59,9 +60,10 @@ pub struct Player {
     // client(s) are notified of the change.
     //
     // We should ensure that the only way to get mutating access is through something like a PlayerMutView that
-    // Derefs to a player and has its own mutating functions that appropriate track whether any updates need
+    // Derefs to a player and has its own mutating functions that appropriately track whether any updates need
     // to be sent to clients, or only through this struct (which can maintain the necessary invariant)
     pub(crate) state: Mutex<PlayerState>,
+    fast_pos: SeqLock<PlayerPositionUpdate>,
     // Sends events for that player; the corresponding receiver will send them over the network to the client.
     sender: PlayerEventSender,
     game_state: Arc<GameState>,
@@ -80,7 +82,7 @@ impl Player {
         self.main_inventory_key
     }
     pub fn last_position(&self) -> PlayerPositionUpdate {
-        self.state.lock().last_position
+        self.fast_pos.read()
     }
     pub fn selected_hotbar_slot(&self) -> Option<u32> {
         self.state.lock().hotbar_slot
@@ -136,15 +138,17 @@ impl Player {
             None,
         );
 
+        let ppu = PlayerPositionUpdate {
+            position,
+            velocity: vec3(0., 0., 0.),
+            face_direction: (0., 0.),
+        };
+
         Ok(Player {
             name: proto.name.clone(),
             main_inventory_key,
             state: Mutex::new(PlayerState {
-                last_position: PlayerPositionUpdate {
-                    position,
-                    velocity: vec3(0., 0., 0.),
-                    face_direction: (0., 0.),
-                },
+                last_position: ppu,
                 active_popups: vec![],
                 inventory_popup: game_state
                     .game_behaviors()
@@ -175,6 +179,7 @@ impl Player {
                 temporary_permissions: HashSet::new(),
                 attached_to_entity: None,
             }),
+            fast_pos: SeqLock::new(ppu),
             sender,
             game_state,
             entity_id,
@@ -207,16 +212,17 @@ impl Player {
             },
             None,
         );
+        let ppu = PlayerPositionUpdate {
+            position,
+            velocity: Vector3::zero(),
+            face_direction: (0., 0.),
+        };
 
         let player = Player {
             name: name.to_string(),
             main_inventory_key,
             state: PlayerState {
-                last_position: PlayerPositionUpdate {
-                    position,
-                    velocity: Vector3::zero(),
-                    face_direction: (0., 0.),
-                },
+                last_position: ppu,
                 active_popups: vec![],
                 inventory_popup: game_state
                     .game_behaviors()
@@ -248,6 +254,7 @@ impl Player {
                 attached_to_entity: None,
             }
             .into(),
+            fast_pos: SeqLock::new(ppu),
             sender,
             game_state,
             entity_id,
@@ -383,6 +390,7 @@ impl Player {
 
     pub async fn set_position(&self, position: Vector3<f64>) -> Result<()> {
         self.state.lock().last_position.position = position;
+        self.fast_pos.lock_write().position = position;
         self.sender
             .tx
             .send(PlayerEvent::ReinitPlayerState(true))
@@ -599,18 +607,23 @@ pub(crate) struct PlayerContext {
     manager: Arc<PlayerManager>,
 }
 impl PlayerContext {
+    /// Updates the player's position, does not force a resync.
+    /// This is used to handle the inbound position updates set by the
+    /// player's interactive movement
     pub(crate) fn update_position(&self, pos: PlayerPositionUpdate) {
         self.player.state.lock().last_position = pos;
+        *self.fast_pos.lock_write() = pos;
     }
     /// Internal method that will get more parameters as we add more animation/interaction state in player
     /// position update messages
     pub(crate) fn update_client_position_state(&self, pos: PlayerPositionUpdate, hotbar_slot: u32) {
         let mut lock = self.player.state.lock();
         lock.last_position = pos;
+        *self.fast_pos.lock_write() = pos;
         lock.hotbar_slot = Some(hotbar_slot);
     }
     pub(crate) fn last_position(&self) -> PlayerPositionUpdate {
-        self.player.state.lock().last_position
+        self.player.fast_pos.read()
     }
     pub fn name(&self) -> &str {
         &self.player.name

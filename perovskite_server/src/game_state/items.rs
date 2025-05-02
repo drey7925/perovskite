@@ -520,7 +520,7 @@ impl InteractionRuleExt for proto::InteractionRule {
     }
 }
 
-fn default_generic_handler(
+pub(crate) fn default_generic_handler(
     ctx: &HandlerContext,
     coord: BlockCoordinate,
     stack: &ItemStack,

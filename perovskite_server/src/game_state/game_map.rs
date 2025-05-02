@@ -2726,7 +2726,7 @@ pub struct TimerSettings {
     /// 1.0 - spread the shards as far apart as possible
     /// Intermediate values - spread the shards out, but in a smaller span of time
     pub spreading: f64,
-    /// The set of block types (*not* including variant types) that this timer should act on
+    /// The set of block types (matches ignoring variant) that this timer should act on
     pub block_types: Vec<BlockId>,
     /// If set, do *not* use block bloom filters to determine whether a block is present.
     /// This is useful for bulk update callbacks that might need to run in all chunks.
@@ -2736,10 +2736,13 @@ pub struct TimerSettings {
     ///
     /// **Warning:** Ignored for handlers that act on entire chunks (e.g. BulkUpdate or BulkUpdateWithNeighbors)
     pub per_block_probability: f64,
-    /// For *bulk handlers only*, if the bulk handler leaves a chunk unchanged, do not run the bulk handler for that chunk
+    /// If the bulk handler leaves a chunk unchanged, do not run the bulk handler for that chunk
     /// again until the next time the chunk is modified by external means.
     ///
     /// For bulk handlers with neighbors, the handler will run if the chunk or any neighbors have been modified.
+    ///
+    /// **Warning:** For per-block actions with a probability, this will idle the timer for a chunk
+    /// if eligible blocks are present, but not selected due to the probability.
     pub idle_chunk_after_unchanged: bool,
     pub _ne: NonExhaustive,
 }
@@ -2793,7 +2796,7 @@ impl GameMapTimer {
                         &format!("timer_{}_shard_{}", self.name, fine_shard),
                         // TODO error-check this
                         // It's brittle on shutdown due to closed channels
-                        // We should probaly shut down the timers before shutting down the rest of the map
+                        // We should probably shut down the timers before shutting down the rest of the map
                         async move {
                             cloned_self
                                 .run_shard(

@@ -34,7 +34,9 @@ use crate::{
     },
 };
 use anyhow::Result;
+use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::items::default_item_interaction_rules;
+use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::{
     constants::{
@@ -46,6 +48,10 @@ use perovskite_core::{
         blocks::{block_type_def::PhysicsInfo, FluidPhysicsInfo},
         items::{item_stack::QuantityType, InteractionRule},
     },
+};
+use perovskite_server::game_state::blocks::{ExtendedDataHolder, InlineContext};
+use perovskite_server::game_state::game_map::{
+    TimerCallback, TimerInlineCallback, TimerSettings, TimerState,
 };
 use perovskite_server::game_state::{
     blocks::BlockInteractionResult,
@@ -90,8 +96,10 @@ pub const LIMESTONE_DARK: StaticBlockName = StaticBlockName("default:limestone_d
 pub const DIRT_WITH_SNOW: StaticBlockName = StaticBlockName("default:dirt_with_snow");
 /// Snow, not a full block
 pub const SNOW: StaticBlockName = StaticBlockName("default:snow");
+pub const SNOW_FOOTPRINT: StaticBlockName = StaticBlockName("default:snow_footprint");
 /// A full, solid block of snow
 pub const SNOW_BLOCK: StaticBlockName = StaticBlockName("default:snow_block");
+pub const SNOW_BLOCK_FOOTPRINT: StaticBlockName = StaticBlockName("default:snow_block_footprint");
 pub const SNOWBALL: StaticItemName = StaticItemName("default:snowball");
 
 const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
@@ -115,6 +123,7 @@ const LIMESTONE_TEXTURE: StaticTextureName = StaticTextureName("default:limeston
 const LIMESTONE_LIGHT_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_light");
 const LIMESTONE_DARK_TEXTURE: StaticTextureName = StaticTextureName("default:limestone_dark");
 const SNOW_TEXTURE: StaticTextureName = StaticTextureName("default:snow");
+const SNOW_FOOTPRINT_TEXTURE: StaticTextureName = StaticTextureName("default:snow_footprint");
 const DIRT_SNOW_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_snow_side");
 
 const SNOWBALL_TEXTURE: StaticTextureName = StaticTextureName("default:snowball");
@@ -562,6 +571,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, SNOW_TEXTURE, "textures/snow.png")?;
     include_texture_bytes!(
         game_builder,
+        SNOW_FOOTPRINT_TEXTURE,
+        "textures/snow_footprint.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
         DIRT_SNOW_SIDE_TEXTURE,
         "textures/dirt_snow_side.png"
     )?;
@@ -686,6 +700,32 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .get_sound_id(SNOW_FOOTSTEP_SOUND_NAME)
         .expect("snow footstep sound");
 
+    let snow_footprint = game_builder.add_block(
+        BlockBuilder::new(SNOW_FOOTPRINT)
+            .add_block_group(GRANULAR)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_individual_textures(
+                        SNOW_TEXTURE,
+                        SNOW_TEXTURE,
+                        SNOW_FOOTPRINT_TEXTURE,
+                        SNOW_TEXTURE,
+                        SNOW_TEXTURE,
+                        SNOW_TEXTURE,
+                    )
+                    .set_variant_from_height(),
+            )
+            .set_allow_light_propagation(true)
+            .add_item_group(HIDDEN_FROM_CREATIVE)
+            .set_footstep_sound(Some(snow_footstep))
+            .set_trivially_replaceable(true)
+            .set_display_name("Snow w/ footprint")
+            .set_dropped_item_closure_extended(|param| {
+                (SNOWBALL, param.variant.clamp(0, 7) as u32 + 1)
+            }),
+    )?;
+    let snow_footprint_id = snow_footprint.id;
+
     let snow = game_builder.add_block(
         BlockBuilder::new(SNOW)
             .add_block_group(GRANULAR)
@@ -696,12 +736,38 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_allow_light_propagation(true)
             .set_footstep_sound(Some(snow_footstep))
+            .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_trivially_replaceable(true)
             .set_display_name("Snow")
             .set_dropped_item_closure_extended(|param| {
                 (SNOWBALL, param.variant.clamp(0, 7) as u32 + 1)
-            }),
+            })
+            .add_modifier(Box::new(move |bt| {
+                bt.step_on_handler_inline = Some(Box::new(move |_, block, _, _| {
+                    *block = snow_footprint_id.with_variant_of(*block);
+                    Ok(BlockInteractionResult::default())
+                }))
+            })),
     )?;
+
+    let snow_block_footprint = game_builder.add_block(
+        BlockBuilder::new(SNOW_BLOCK_FOOTPRINT)
+            .add_block_group(GRANULAR)
+            .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+                SNOW_TEXTURE,
+                SNOW_TEXTURE,
+                SNOW_FOOTPRINT_TEXTURE,
+                SNOW_TEXTURE,
+                SNOW_TEXTURE,
+                SNOW_TEXTURE,
+            ))
+            .set_allow_light_propagation(false)
+            .add_item_group(HIDDEN_FROM_CREATIVE)
+            .set_footstep_sound(Some(snow_footstep))
+            .set_trivially_replaceable(false)
+            .set_display_name("Snow block w/ footprint"),
+    )?;
+    let snow_block_footprint_id = snow_block_footprint.id;
     let snow_block = game_builder.add_block(
         BlockBuilder::new(SNOW_BLOCK)
             .add_block_group(GRANULAR)
@@ -709,7 +775,13 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(false)
             .set_footstep_sound(Some(snow_footstep))
             .set_trivially_replaceable(false)
-            .set_display_name("Snow block"),
+            .set_display_name("Snow block")
+            .add_modifier(Box::new(move |bt| {
+                bt.step_on_handler_inline = Some(Box::new(move |_, block, _, _| {
+                    *block = snow_block_footprint_id.with_variant_of(*block);
+                    Ok(BlockInteractionResult::default())
+                }))
+            })),
     )?;
     let snow_id = snow.id;
     let snow_block_id = snow_block.id;
@@ -718,10 +790,14 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             let incremented =
                 ctx.game_map()
                     .mutate_block_atomically(anchor_coord, |block, _| {
-                        if block.equals_ignore_variant(snow_id) && block.variant() < 7 {
+                        if (block.equals_ignore_variant(snow_id)
+                            || block.equals_ignore_variant(snow_footprint_id))
+                            && block.variant() < 7
+                        {
                             let new_variant = block.variant() + 1;
                             if new_variant < 7 {
-                                *block = block.with_variant_unchecked(new_variant);
+                                // Placing snow covers up footprints
+                                *block = snow_id.with_variant_unchecked(new_variant);
                             } else {
                                 *block = snow_block_id;
                             }
@@ -756,9 +832,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             inventory_texture: Some(SNOWBALL_TEXTURE.into()),
             groups: vec![],
             interaction_rules: default_item_interaction_rules(),
-            quantity_type: Some(
-                perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
-            ),
+            quantity_type: Some(protocol::items::item_def::QuantityType::Stack(256)),
             block_apperance: String::new(),
             sort_key: "default:snowball".into(),
         })
@@ -778,6 +852,49 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_footstep_sound(Some(snow_footstep))
             .set_display_name("Dirt with snow"),
     )?;
+
+    struct RemoveSnowFootprintsTimerCallback {
+        snow_id: BlockId,
+        snow_footprint_id: BlockId,
+        snow_block_id: BlockId,
+        snow_block_footprint_id: BlockId,
+    }
+    impl TimerInlineCallback for RemoveSnowFootprintsTimerCallback {
+        fn inline_callback(
+            &self,
+            _: BlockCoordinate,
+            _: &TimerState,
+            block: &mut BlockId,
+            _: &mut ExtendedDataHolder,
+            _: &InlineContext,
+        ) -> Result<()> {
+            if block.equals_ignore_variant(self.snow_block_footprint_id) {
+                *block = self.snow_block_id;
+            } else if block.equals_ignore_variant(self.snow_footprint_id) {
+                *block = self.snow_id.with_variant_of(*block);
+            }
+            Ok(())
+        }
+    }
+    game_builder.inner.add_timer(
+        "snow_rm_footprints",
+        TimerSettings {
+            interval: Duration::from_secs(5),
+            shards: 16,
+            spreading: 1.0,
+            block_types: vec![snow_footprint_id, snow_block_footprint_id],
+            ignore_block_type_presence_check: false,
+            per_block_probability: 0.1,
+            idle_chunk_after_unchanged: false,
+            ..Default::default()
+        },
+        TimerCallback::PerBlockLocked(Box::new(RemoveSnowFootprintsTimerCallback {
+            snow_id,
+            snow_footprint_id,
+            snow_block_id,
+            snow_block_footprint_id,
+        })),
+    );
 
     let glass = game_builder.add_block(
         BlockBuilder::new(GLASS)
