@@ -14,9 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::database::database_engine::{GameDatabase, KeySpace};
 use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
 use rustc_hash::FxHashMap;
+use std::time::Instant;
 use std::{
     any::Any,
     borrow::Borrow,
@@ -24,8 +26,6 @@ use std::{
     ops::{AddAssign, Deref, DerefMut},
     sync::atomic::{AtomicU32, Ordering},
 };
-
-use crate::database::database_engine::{GameDatabase, KeySpace};
 
 use super::{
     client_ui::Popup,
@@ -652,11 +652,15 @@ impl BlockTypeManager {
             }
         }
     }
-    pub(crate) fn save_to(&self, db: &dyn GameDatabase) -> Result<()> {
+    pub(crate) fn save_to(&self, db: &dyn GameDatabase, startup_count: u64) -> Result<()> {
+        let encoded = self.to_proto().encode_to_vec();
         db.put(
             &KeySpace::Metadata.make_key(BLOCK_MANAGER_META_KEY_LEGACY),
-            &self.to_proto().encode_to_vec(),
+            &encoded,
         )?;
+        let mut backup_key = BLOCK_MANAGER_BACKUP_KEY_PREFIX.to_vec();
+        backup_key.extend_from_slice(&startup_count.to_string().as_bytes());
+        db.put(&KeySpace::UserMeta.make_key(&backup_key), &encoded)?;
         db.flush()
     }
 
@@ -824,6 +828,7 @@ impl OwnedFastBlockGroup {
 }
 
 const BLOCK_MANAGER_META_KEY_LEGACY: &[u8] = b"block_types";
+const BLOCK_MANAGER_BACKUP_KEY_PREFIX: &[u8] = b"blocks_backup_";
 
 const E: blocks_proto::Empty = blocks_proto::Empty {};
 

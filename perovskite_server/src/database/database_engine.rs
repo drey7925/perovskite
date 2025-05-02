@@ -35,6 +35,9 @@ pub(crate) enum KeySpace {
     UserMeta,
     /// Entities
     Entity,
+    /// Disaster recovery, write-only during normal gameplay, read only by recovery paths, manual
+    /// tools, etc.
+    DisasterRecovery,
 }
 impl KeySpace {
     pub(crate) fn make_key(&self, key: &[u8]) -> Vec<u8> {
@@ -53,6 +56,7 @@ impl KeySpace {
             KeySpace::UserMeta => b'u',
             KeySpace::Player => b'P',
             KeySpace::Entity => b'e',
+            KeySpace::DisasterRecovery => b'd',
         }
     }
 }

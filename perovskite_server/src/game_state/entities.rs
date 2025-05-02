@@ -2908,6 +2908,7 @@ pub struct EntityTypeId {
 }
 
 const ENTITY_TYPE_MANAGER_META_KEY: &[u8] = b"entity_types";
+const ENTITY_TYPE_MANAGER_BACKUP_KEY: &[u8] = b"entity_types_backup";
 
 pub struct EntityTypeManager {
     types: Vec<Option<EntityDef>>,
@@ -2982,11 +2983,15 @@ impl EntityTypeManager {
             .collect()
     }
 
-    pub(crate) fn save_to(&self, db: &dyn GameDatabase) -> Result<()> {
+    pub(crate) fn save_to(&self, db: &dyn GameDatabase, startup_count: u64) -> Result<()> {
+        let encoded = self.to_server_proto().encode_to_vec();
         db.put(
             &KeySpace::Metadata.make_key(ENTITY_TYPE_MANAGER_META_KEY),
-            &self.to_server_proto().encode_to_vec(),
+            &encoded,
         )?;
+        let mut backup_key = ENTITY_TYPE_MANAGER_BACKUP_KEY.to_vec();
+        backup_key.extend_from_slice(&startup_count.to_string().as_bytes());
+        db.put(&KeySpace::DisasterRecovery.make_key(&backup_key), &encoded)?;
         db.flush()
     }
 

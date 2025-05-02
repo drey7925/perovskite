@@ -120,6 +120,7 @@ impl GameState {
         game_behaviors: GameBehaviors,
         commands: CommandManager,
         extensions: type_map::concurrent::TypeMap,
+        startup_counter: u64,
         force_seed: Option<u32>,
     ) -> Result<Arc<Self>> {
         let server_start_time = Instant::now();
@@ -128,7 +129,6 @@ impl GameState {
         // If we don't have a time of day yet, start in the morning.
         let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
         let day_length = game_behaviors.day_length;
-        let startup_counter = advance_startup_counter(db.as_ref())?;
         let result = Arc::new_cyclic(|weak| Self {
             data_dir: args.data_dir.clone(),
             map: ServerGameMap::new(weak.clone(), db.clone(), blocks, &args).unwrap(),
@@ -501,42 +501,6 @@ where
                 String::from_utf8_lossy(name)
             );
             Ok(seed)
-        }
-    }
-}
-
-/// Returns a new value each time the function is called.
-fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
-    let key = b"startup_counter".to_vec();
-    let key = KeySpace::Metadata.make_key(&key);
-    match db.get(&key)? {
-        Some(x) => match u64::decode_var(&x) {
-            Some((val, read)) => {
-                if read != x.len() {
-                    warn!(
-                        "Saved startup counter was {} bytes but only {} bytes were decoded (to {:?})",
-                        x.len(),
-                        read,
-                        val
-                    )
-                }
-                let next_counter = val + 1;
-                info!(
-                    "Previous startup counter {:?} advanced to {:?}",
-                    val, next_counter
-                );
-                db.put(&key, &next_counter.encode_var_vec())?;
-                Ok(next_counter)
-            }
-            None => {
-                bail!("Decoding varint for startup counter failed",);
-            }
-        },
-        None => {
-            let counter = 1;
-            db.put(&key, &counter.encode_var_vec())?;
-            info!("Initialized startup counter to {:?}", counter,);
-            Ok(counter)
         }
     }
 }

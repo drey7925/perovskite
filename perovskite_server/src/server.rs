@@ -25,6 +25,8 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use integer_encoding::VarInt;
+use log::{info, warn};
 use perovskite_core::coordinates::ChunkCoordinate;
 use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
@@ -35,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use tonic::transport::{Identity, ServerTlsConfig};
 use type_map::concurrent::TypeMap;
 
-use crate::database::database_engine::InMemGameDabase;
+use crate::database::database_engine::{InMemGameDabase, KeySpace};
 use crate::database::rocksdb::RocksdbOptions;
 use crate::game_state::game_map::MapChunk;
 use crate::{
@@ -189,9 +191,10 @@ pub fn testonly_in_memory() -> Result<Server> {
     let entities = EntityTypeManager::create_or_load(db.as_ref())?;
     blocks.pre_build()?;
     let blocks = Arc::new(blocks);
-    blocks.save_to(db.as_ref())?;
+    let startup_counter = advance_startup_counter(db.as_ref())?;
+    blocks.save_to(db.as_ref(), startup_counter)?;
     entities.pre_build()?;
-    entities.save_to(db.as_ref())?;
+    entities.save_to(db.as_ref(), startup_counter)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -220,6 +223,7 @@ pub fn testonly_in_memory() -> Result<Server> {
         game_behaviors,
         CommandManager::new(),
         TypeMap::new(),
+        0,
         // Force seed to 0 for testing
         Some(0),
     )?;
@@ -227,6 +231,41 @@ pub fn testonly_in_memory() -> Result<Server> {
     Server::new(runtime, gs, bind_address, LoadedTlsConfig::NoTls)
 }
 
+/// Returns a new value each time the function is called.
+fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
+    let key = b"startup_counter".to_vec();
+    let key = KeySpace::Metadata.make_key(&key);
+    match db.get(&key)? {
+        Some(x) => match u64::decode_var(&x) {
+            Some((val, read)) => {
+                if read != x.len() {
+                    warn!(
+                        "Saved startup counter was {} bytes but only {} bytes were decoded (to {:?})",
+                        x.len(),
+                        read,
+                        val
+                    )
+                }
+                let next_counter = val + 1;
+                info!(
+                    "Previous startup counter {:?} advanced to {:?}",
+                    val, next_counter
+                );
+                db.put(&key, &next_counter.encode_var_vec())?;
+                Ok(next_counter)
+            }
+            None => {
+                bail!("Decoding varint for startup counter failed",);
+            }
+        },
+        None => {
+            let counter = 1;
+            db.put(&key, &counter.encode_var_vec())?;
+            info!("Initialized startup counter to {:?}", counter,);
+            Ok(counter)
+        }
+    }
+}
 impl Drop for Server {
     fn drop(&mut self) {
         tracing::info!("Server dropped, starting shutdown");
@@ -261,7 +300,7 @@ pub struct ServerBuilder {
 struct DummyMapgen;
 
 impl MapgenInterface for DummyMapgen {
-    fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk) {
+    fn fill_chunk(&self, _coord: ChunkCoordinate, _chunk: &mut MapChunk) {
         // pass
     }
 }
@@ -399,10 +438,11 @@ impl ServerBuilder {
         );
         self.blocks.pre_build()?;
         let blocks = Arc::new(self.blocks);
-        blocks.save_to(self.db.as_ref())?;
+        let startup_counter = advance_startup_counter(self.db.as_ref())?;
+        blocks.save_to(self.db.as_ref(), startup_counter)?;
 
         self.entities.pre_build()?;
-        self.entities.save_to(self.db.as_ref())?;
+        self.entities.save_to(self.db.as_ref(), startup_counter)?;
 
         let _rt_guard = self.runtime.enter();
         let game_state = GameState::new(
@@ -416,6 +456,7 @@ impl ServerBuilder {
             self.game_behaviors,
             self.commands,
             self.extensions,
+            startup_counter,
             self.force_seed,
         )?;
         for (name, settings, callback) in self.map_timers {
