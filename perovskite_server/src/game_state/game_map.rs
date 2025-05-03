@@ -2234,7 +2234,7 @@ impl MapCacheCleanup {
 const BROADCAST_CHANNEL_SIZE: usize = 8192;
 const WRITEBACK_QUEUE_SIZE: usize = 256;
 const WRITEBACK_COALESCE_TIME: Duration = Duration::from_secs(3);
-const WRITEBACK_COALESCE_MAX_SIZE: usize = 8;
+const WRITEBACK_COALESCE_MAX_SIZE: usize = 256;
 
 struct GameMapWriteback {
     map: Arc<ServerGameMap>,
