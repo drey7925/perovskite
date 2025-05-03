@@ -24,5 +24,3 @@ pub mod vulkan;
 
 // Made public for early testing
 pub mod audio;
-
-pub mod loadtester;

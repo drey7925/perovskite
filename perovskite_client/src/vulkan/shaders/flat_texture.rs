@@ -36,7 +36,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
-    descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
+    descriptor_set::{DescriptorSet, WriteDescriptorSet},
     device::Device,
     memory::allocator::AllocationCreateInfo,
     pipeline::{
@@ -165,7 +165,7 @@ impl FlatTextureDrawBuilder {
 pub(crate) struct FlatTexPipelineWrapper {
     pipeline: Arc<GraphicsPipeline>,
     buffer: Subbuffer<UniformData>,
-    texture_descriptor_set: Arc<PersistentDescriptorSet>,
+    texture_descriptor_set: Arc<DescriptorSet>,
 }
 impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapper {
     type PassIdentifier = ();
@@ -178,9 +178,10 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone())?;
         for call in calls {
-            builder
-                .bind_vertex_buffers(0, call.vertex_buffer.clone())?
-                .draw(call.vertex_buffer.len() as u32, 1, 0, 0)?;
+            builder.bind_vertex_buffers(0, call.vertex_buffer.clone())?;
+            unsafe {
+                builder.draw(call.vertex_buffer.len() as u32, 1, 0, 0)?;
+            }
         }
         Ok(())
     }
@@ -197,8 +198,8 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
             .set_layouts()
             .get(1)
             .with_context(|| "Layout missing set 1")?;
-        let per_frame_set = PersistentDescriptorSet::new(
-            &ctx.descriptor_set_allocator,
+        let per_frame_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, self.buffer.clone())],
             [],
@@ -266,8 +267,7 @@ impl PipelineProvider for FlatTexPipelineProvider {
             .fs
             .entry_point("main")
             .context("Missing fragment shader")?;
-        let vertex_input_state =
-            FlatTextureVertex::per_vertex().definition(&vs.info().input_interface)?;
+        let vertex_input_state = FlatTextureVertex::per_vertex().definition(&vs)?;
         let stages = smallvec![
             PipelineShaderStageCreateInfo::new(vs),
             PipelineShaderStageCreateInfo::new(fs),

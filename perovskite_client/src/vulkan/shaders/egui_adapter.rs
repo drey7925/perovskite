@@ -27,7 +27,7 @@ use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use anyhow::{Context, Result};
 use vulkano::image::sampler::{Filter, SamplerCreateInfo};
-use winit::event_loop::EventLoopWindowTarget;
+use winit::event_loop::ActiveEventLoop;
 
 // Main thread components of egui rendering (e.g. the Gui which contains a non-Send event loop)
 pub(crate) struct EguiAdapter {
@@ -50,7 +50,7 @@ impl EguiAdapter {
 
     pub(crate) fn new(
         ctx: &VulkanWindow,
-        event_loop: &EventLoopWindowTarget<()>,
+        event_loop: &ActiveEventLoop,
         egui_ui: Arc<Mutex<EguiUi>>,
     ) -> Result<EguiAdapter> {
         let config = GuiConfig {
@@ -130,7 +130,7 @@ impl EguiAdapter {
 
         if let Some(draw_call) = egui.get_carried_itemstack(ctx, client_state)? {
             let mut secondary_builder = AutoCommandBufferBuilder::secondary(
-                ctx.command_buffer_allocator.deref(),
+                ctx.command_buffer_allocator.clone(),
                 ctx.graphics_queue.queue_family_index(),
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
@@ -174,15 +174,15 @@ pub(crate) fn set_up_fonts(egui_ctx: &mut egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NotoSans-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/NotoSans-Light.ttf")),
+        egui::FontData::from_static(include_bytes!("../../fonts/NotoSans-Light.ttf")).into(),
     );
     fonts.font_data.insert(
         "NotoSansJP-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/NotoSansJP-Light.ttf")),
+        egui::FontData::from_static(include_bytes!("../../fonts/NotoSansJP-Light.ttf")).into(),
     );
     fonts.font_data.insert(
         "MPlus1Code-Light".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../fonts/MPLUS1Code-Light.ttf")),
+        egui::FontData::from_static(include_bytes!("../../fonts/MPLUS1Code-Light.ttf")).into(),
     );
     fonts
         .families

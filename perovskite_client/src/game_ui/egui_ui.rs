@@ -167,7 +167,7 @@ impl EguiUi {
     ) {
         self.scale = ctx.input(|i| i.pixels_per_point);
         // TODO have more things controlled by the scale. e.g. font sizes?
-        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::PlusEquals)) {
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Plus)) {
             self.scale_override += 0.1;
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Minus)) {
             self.scale_override -= 0.1;
@@ -791,7 +791,7 @@ impl EguiUi {
                             ui.horizontal_top(|ui| {
                                 let formatted_message = format_chat(message);
                                 ui.label(formatted_message.0);
-                                ui.add(egui::Label::new(formatted_message.1).wrap(true));
+                                ui.add(egui::Label::new(formatted_message.1).wrap());
                             });
                         }
                         if self.chat_scroll_counter != messages.len()
@@ -875,7 +875,7 @@ impl EguiUi {
                                 ui.horizontal_top(|ui| {
                                     let formatted_message = format_chat(message);
                                     ui.label(formatted_message.0);
-                                    ui.add(egui::Label::new(formatted_message.1).wrap(true));
+                                    ui.add(egui::Label::new(formatted_message.1).wrap());
                                 });
                             }
                             ui.scroll_to_cursor(Some(egui::Align::Max));

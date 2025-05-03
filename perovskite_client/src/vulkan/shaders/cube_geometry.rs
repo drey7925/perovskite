@@ -15,11 +15,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::client_state::settings::Supersampling;
-use anyhow::{Context, Result};
+use crate::vulkan::{
+    block_renderer::VkChunkVertexDataGpu,
+    shaders::{frag_lighting, vert_3d::ModelMatrix},
+    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
+};
+use anyhow::{ensure, Context, Result};
 use cgmath::{Angle, Matrix4, Rad};
 use smallvec::smallvec;
 use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
+use vulkano::descriptor_set::DescriptorSet;
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorComponents,
@@ -34,7 +40,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
-    descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
+    descriptor_set::WriteDescriptorSet,
     device::Device,
     memory::allocator::AllocationCreateInfo,
     pipeline::{
@@ -50,12 +56,7 @@ use vulkano::{
     },
     render_pass::{RenderPass, Subpass},
     shader::ShaderModule,
-};
-
-use crate::vulkan::{
-    block_renderer::VkChunkVertexDataGpu,
-    shaders::{frag_lighting, vert_3d::ModelMatrix},
-    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
+    DeviceSize,
 };
 
 use crate::vulkan::shaders::{
@@ -102,10 +103,11 @@ pub(crate) struct CubePipelineWrapper {
     solid_pipeline: Arc<GraphicsPipeline>,
     sparse_pipeline: Arc<GraphicsPipeline>,
     translucent_pipeline: Arc<GraphicsPipeline>,
-    solid_descriptor: Arc<PersistentDescriptorSet>,
-    sparse_descriptor: Arc<PersistentDescriptorSet>,
-    translucent_descriptor: Arc<PersistentDescriptorSet>,
+    solid_descriptor: Arc<DescriptorSet>,
+    sparse_descriptor: Arc<DescriptorSet>,
+    translucent_descriptor: Arc<DescriptorSet>,
     start_time: Instant,
+    max_draw_indexed_index_value: u32,
 }
 const PLANT_WAVE_FREQUENCY_HZ: f64 = 0.25;
 impl CubePipelineWrapper {
@@ -159,8 +161,20 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
                 builder
                     .push_constants(layout.clone(), 0, push_data)?
                     .bind_vertex_buffers(0, pass_data.vtx.clone())?
-                    .bind_index_buffer(pass_data.idx.clone())?
-                    .draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
+                    .bind_index_buffer(pass_data.idx.clone())?;
+                ensure!(pass_data.vtx.len() < self.max_draw_indexed_index_value as DeviceSize);
+                unsafe {
+                    // Safety:
+                    // Every vertex number that is retrieved from the index buffer must fall within the range of the bound vertex-rate vertex buffers.
+                    //   - Assured by block_renderer, which generates vertices and corresponding indices one-triangle-at-a-time.
+                    // Every vertex number that is retrieved from the index buffer, if it is not the special primitive restart value, must be no greater than the max_draw_indexed_index_value device limit.
+                    //   - Verified above
+                    // If a descriptor set binding was created with DescriptorBindingFlags::PARTIALLY_BOUND, then if the shader accesses a descriptor in that binding, the descriptor must be initialized and contain a valid resource.
+                    //   - N/A, we don't set PARTIALLY_BOUND
+                    // Shader safety: We rely on "Vulkano will validate many of these requirements, but it is only able to do so when the resources involved are statically known."
+                    //   - TODO: validate these more closely.
+                    builder.draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
+                }
             }
         }
         plot!("total_calls", draw_calls.len() as f64);
@@ -222,8 +236,8 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             },
         )?;
 
-        let per_frame_set = PersistentDescriptorSet::new(
-            &ctx.descriptor_set_allocator,
+        let per_frame_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
             [],
@@ -283,8 +297,7 @@ impl CubePipelineProvider {
             .fs_sparse
             .entry_point("main")
             .context("Missing fragment shader")?;
-        let vertex_input_state =
-            CubeGeometryVertex::per_vertex().definition(&vs.info().input_interface)?;
+        let vertex_input_state = CubeGeometryVertex::per_vertex().definition(&vs)?;
         let stages_solid = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_solid),
@@ -390,6 +403,11 @@ impl CubePipelineProvider {
             sparse_descriptor,
             translucent_descriptor,
             start_time: Instant::now(),
+            max_draw_indexed_index_value: self
+                .device
+                .physical_device()
+                .properties()
+                .max_draw_indexed_index_value,
         })
     }
 }

@@ -87,18 +87,19 @@ impl ClientBlockTypeManager {
                             && render_info.variant_effect() != CubeVariantEffect::CubeVariantHeight,
                     );
                 }
-                if render_info.variant_effect == CubeVariantEffect::Liquid.into() {
+
+                if render_info.variant_effect() == CubeVariantEffect::Liquid {
                     allow_suppression_same_base_block.set(id.index(), true);
                 }
                 // Only liquids blend smoothly to their neighbors
-                if render_info.variant_effect == CubeVariantEffect::CubeVariantHeight.into() {
+                if render_info.variant_effect() == CubeVariantEffect::CubeVariantHeight {
                     allow_face_suppress_on_exact_match.set(id.index(), true);
                 }
             }
 
             let is_transparent = match &def.render_info {
                 Some(RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. })) => {
-                    *x == CubeRenderMode::Transparent.into()
+                    *x == i32::from(CubeRenderMode::Transparent)
                 }
                 // plant-like blocks always go into the transparent pass
                 Some(RenderInfo::PlantLike(_)) => true,
@@ -113,7 +114,7 @@ impl ClientBlockTypeManager {
 
             let is_translucent = def.render_info.as_ref().is_some_and(|x| match x {
                 RenderInfo::Cube(CubeRenderInfo { render_mode: x, .. }) => {
-                    *x == CubeRenderMode::Translucent.into()
+                    *x == i32::from(CubeRenderMode::Translucent)
                 }
                 _ => false,
             });

@@ -43,7 +43,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
 use tracy_client::span;
-use winit::event::Event;
+use winit::event::{DeviceEvent, Event, WindowEvent};
 
 use crate::client_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
@@ -770,9 +770,14 @@ impl ClientState {
         })
     }
 
-    pub(crate) fn window_event(&self, event: &Event<()>) {
+    pub(crate) fn window_event(&self, event: &WindowEvent) {
         let mut input = self.input.lock();
-        input.event(event);
+        input.window_event(event);
+    }
+
+    pub(crate) fn device_event(&self, event: &DeviceEvent) {
+        let mut input = self.input.lock();
+        input.handle_device_event(event);
     }
     pub(crate) fn last_position(&self) -> PlayerPositionUpdate {
         let lock = self.physics_state.lock();
@@ -973,7 +978,7 @@ impl ClientState {
             let mut time_lock = self.light_cycle.lock();
             time_lock
                 .time_state_mut()
-                .set_time(state_update.time_of_day);
+                .set_time(state_update.time_of_day)?;
             time_lock
                 .time_state_mut()
                 .set_day_length(Duration::from_secs_f64(state_update.day_length_sec));

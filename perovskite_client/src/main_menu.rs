@@ -1,15 +1,6 @@
 use std::ops::ControlFlow;
 use std::{ops::Deref, sync::Arc};
 
-use anyhow::{anyhow, Context};
-use arc_swap::ArcSwap;
-use egui::{
-    CollapsingHeader, Color32, FontId, InnerResponse, Layout, ProgressBar, RichText, TextEdit, Ui,
-};
-use tokio::sync::{oneshot, watch};
-use vulkano::{image::SampleCount, render_pass::Subpass};
-use winit::{event::WindowEvent, event_loop::EventLoop};
-
 use crate::client_state::input::{BoundAction, Keybind, KeybindSettings};
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
@@ -21,6 +12,16 @@ use crate::{
         VulkanWindow,
     },
 };
+use anyhow::{anyhow, Context};
+use arc_swap::ArcSwap;
+use egui::epaint::color;
+use egui::{
+    CollapsingHeader, Color32, FontId, InnerResponse, Layout, ProgressBar, RichText, TextEdit, Ui,
+};
+use tokio::sync::{oneshot, watch};
+use vulkano::{image::SampleCount, render_pass::Subpass};
+use winit::event_loop::ActiveEventLoop;
+use winit::{event::WindowEvent, event_loop::EventLoop};
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub(crate) enum InputCapture {
@@ -48,7 +49,7 @@ pub(crate) struct MainMenu {
 impl MainMenu {
     pub(crate) fn new(
         ctx: &VulkanWindow,
-        event_loop: &EventLoop<()>,
+        event_loop: &ActiveEventLoop,
         settings: Arc<ArcSwap<GameSettings>>,
     ) -> MainMenu {
         let gui_config = egui_winit_vulkano::GuiConfig {
@@ -446,6 +447,15 @@ fn make_connection(
     (state, settings)
 }
 
+fn rich_label(label: &str, changed: bool) -> egui::Label {
+    let color = if changed {
+        egui::Color32::from_rgb(0x8c, 0xff, 0xff)
+    } else {
+        egui::Color32::GRAY
+    };
+    egui::Label::new(egui::RichText::new(label).color(color))
+}
+
 pub(crate) fn draw_settings_menu(
     egui_ctx: &egui::Context,
     settings: &ArcSwap<GameSettings>,
@@ -551,7 +561,7 @@ fn draw_input_settings(
                 let button_text = if *input_capture == InputCapture::Capturing(*action) {
                     "...".to_string()
                 } else {
-                    format!("{:?}", prospective_settings.input.get(*action))
+                    prospective_settings.input.get(*action).to_ui_string()
                 };
 
                 if ui.button(button_text).clicked() {

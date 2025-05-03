@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "perovskite.protocol.game_rpc.EntityTarget",
             "#[derive(Eq, Hash)]",
         )
-        .compile(
+        .compile_protos(
             &[
                 "proto/coordinates.proto",
                 "proto/blocks.proto",

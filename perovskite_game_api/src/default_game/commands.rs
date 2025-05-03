@@ -229,7 +229,7 @@ impl ChatCommandHandler for SetTimeCommand {
             bail!("Incorrect usage: should be /settime <time>");
         }
         let time: f64 = params[1].parse()?;
-        context.set_time_of_day(time);
+        context.set_time_of_day(time)?;
         Ok(())
     }
     fn should_show_in_help_menu(&self, context: &HandlerContext<'_>) -> bool {

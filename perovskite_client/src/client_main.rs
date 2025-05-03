@@ -18,7 +18,7 @@ use anyhow::Result;
 use clap::Parser;
 use winit::event_loop::EventLoop;
 
-use crate::vulkan::game_renderer::GameRenderer;
+use crate::vulkan::game_renderer::{GameApplication, GameRenderer};
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -29,9 +29,9 @@ pub struct ClientArgs {
 
 pub fn run_client() -> Result<()> {
     let _tracy_client = tracy_client::Client::start();
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new()?;
 
-    let window = GameRenderer::create(&event_loop)?;
-    window.run_loop(event_loop);
+    let mut app = GameApplication::new();
+    event_loop.run_app(&mut app)?;
     Ok(())
 }

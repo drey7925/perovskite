@@ -211,7 +211,7 @@ impl GameSettings {
         }
         let config = std::fs::read_to_string(&config_file)?;
         log::info!("Loaded settings from {}", clean_path(config_file));
-        let parsed = match ron::from_str(&config) {
+        let mut parsed: GameSettings = match ron::from_str(&config) {
             Ok(parsed) => parsed,
             Err(err) => {
                 log::error!("Failed to parse settings: {}", err);
@@ -222,6 +222,7 @@ impl GameSettings {
                 });
             }
         };
+        parsed.input = parsed.input.migrate_scancodes();
         Ok(parsed)
     }
 

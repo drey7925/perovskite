@@ -6,7 +6,7 @@ use cgmath::SquareMatrix;
 use smallvec::smallvec;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
-use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
@@ -132,7 +132,10 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
         _draw_calls: (),
         _pass: Self::PassIdentifier,
     ) -> anyhow::Result<()> {
-        builder.draw(6, 1, 0, 0)?;
+        unsafe {
+            // Safety: TODO
+            builder.draw(6, 1, 0, 0)?;
+        }
         Ok(())
     }
 
@@ -173,8 +176,8 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
             },
             per_frame_data,
         )?;
-        let per_frame_set = PersistentDescriptorSet::new(
-            &ctx.descriptor_set_allocator,
+        let per_frame_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
             [],

@@ -39,7 +39,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage},
-    descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet},
+    descriptor_set::{DescriptorSet, WriteDescriptorSet},
     device::Device,
     memory::allocator::AllocationCreateInfo,
     pipeline::{
@@ -88,7 +88,7 @@ pub(crate) struct EntityGeometryDrawCall {
 
 pub(crate) struct EntityPipelineWrapper {
     pipeline: Arc<GraphicsPipeline>,
-    descriptor: Arc<PersistentDescriptorSet>,
+    descriptor: Arc<DescriptorSet>,
 }
 
 impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipelineWrapper {
@@ -108,8 +108,11 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
             builder
                 .push_constants(layout.clone(), 0, push_data)?
                 .bind_vertex_buffers(0, call.model.vtx.clone())?
-                .bind_index_buffer(call.model.idx.clone())?
-                .draw_indexed(call.model.idx.len().try_into()?, 1, 0, 0, 0)?;
+                .bind_index_buffer(call.model.idx.clone())?;
+            unsafe {
+                // TODO this needs validation
+                builder.draw_indexed(call.model.idx.len().try_into()?, 1, 0, 0, 0)?;
+            }
         }
 
         Ok(())
@@ -149,8 +152,8 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
             },
         )?;
 
-        let per_frame_set = PersistentDescriptorSet::new(
-            &ctx.descriptor_set_allocator,
+        let per_frame_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
             per_frame_set_layout.clone(),
             [WriteDescriptorSet::buffer(0, uniform_buffer)],
             [],
@@ -200,8 +203,7 @@ impl EntityPipelineProvider {
             .fs_sparse
             .entry_point("main")
             .context("Missing fragment shader")?;
-        let vertex_input_state =
-            EntityVertex::per_vertex().definition(&vs.info().input_interface)?;
+        let vertex_input_state = EntityVertex::per_vertex().definition(&vs)?;
         let stages_sparse = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_sparse),

@@ -10,12 +10,12 @@ categories = ["games"]
 
 [dependencies]
 argon2 = "0.5.3"
-anyhow = {  version = "1" , features = ["backtrace"]}
+anyhow = { version = "1", features = ["backtrace"] }
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
 perovskite_core = { path = "../perovskite_core", version = "0.1.1" }
-egui = "0.24.1"
-egui_winit_vulkano = "0.27.0"
+egui = "0.31.1"
+egui_winit_vulkano = "0.28.0"
 env_logger = "0.11.3"
 fps_counter = "3.0.0"
 hex = "0.4.3"
@@ -25,44 +25,40 @@ log = "0.4.17"
 microbench = "0.5.0"
 opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
 parking_lot = "0.12.1"
-rand = "0.8.5"
+rand = { version = "0.8.5", features = ["small_rng"] }
 rustc-hash = "2.0.0"
 texture_packer = { version = "0.29.0", features = ["bmp", "gif", "jpeg", "png", "tga", "webp", "common"] }
 tokio = { version = "1.38.2", features = ["full"] }
 tokio-scoped = "0.2.0"
 tokio-stream = "0.1.14"
 tokio-util = "0.7.8"
-tonic = { version = "0.12.3", features = ["gzip", "tls", "tls-webpki-roots", "tls-native-roots"] }
-tracy-client = { version = "0.17.0", default-features = false, features = ["system-tracing", "context-switch-tracing", "sampling", "code-transfer",
-            "broadcast"] }
-vulkano = "0.34.1"
-vulkano-shaders = { version = "0.34.0", features = ["shaderc-build-from-source"] }
-vulkano-win = "0.34.0"
-winit = { version = "0.28", features = ["serde"] }
+tonic = { version = "0.13.0", features = ["gzip", "tls-ring", "tls-webpki-roots", "tls-native-roots"] }
+tracy-client = { version = "0.18.0", default-features = false, features = ["system-tracing", "context-switch-tracing", "sampling", "code-transfer",
+    "broadcast"] }
+vulkano = "0.35.1"
+vulkano-shaders = { version = "0.35.0", features = ["shaderc-build-from-source"] }
+winit = { version = "0.30.10", features = ["serde"] }
 unicode-normalization = "0.1.22"
 textwrap = { version = "0.16.0", default-features = false }
 serde = { version = "1.0.163", features = ["derive"] }
-prost = "0.13.1"
+prost = "0.13.5"
 toml = "0.8.14"
-directories = "5.0.1"
+directories = "6.0.0"
 arc-swap = "1.6.0"
-ron = "0.8.0"
+ron = "0.10.1"
 futures = "0.3.28"
-cbloom = "0.1.3"
 bitvec = "1.0.1"
-mimalloc = { version = "0.1.37", default-features = false }
+mimalloc = { version = "0.1.46", default-features = false }
 snap = "1.1.0"
 lazy_static = "1.4.0"
 sha2 = "0.10.6"
 splines = { version = "4.2.0", features = ["cgmath"] }
 smallvec = "1.13.1"
-circular-buffer = "0.1.6"
-sanitize-filename = "0.5.0"
 cpal = "0.15.3"
 seqlock = "0.2.0"
 rubato = "0.15.0"
 hound = "3.5.1"
-egui_plot = "0.24.1"
+egui_plot = "0.31.0"
 audio_thread_priority = "0.33.0"
 atomicbox = "0.4.0"
 crossbeam-channel = "0.5.15"

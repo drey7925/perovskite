@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use super::settings::GameSettings;
 use rustc_hash::FxHashSet;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use winit::event::{DeviceEvent, ElementState, MouseScrollDelta, WindowEvent};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::platform::scancode::PhysicalKeyExtScancode;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub(crate) enum BoundAction {
@@ -197,6 +199,40 @@ impl KeybindSettings {
             BoundAction::ViewRangeDown => self.view_range_down = keybind,
         }
     }
+
+    pub(crate) fn migrate_scancodes(self) -> Self {
+        fn migrate(keybind: Keybind) -> Keybind {
+            match keybind {
+                Keybind::ScanCode(x) => Keybind::Key(PhysicalKey::from_scancode(x)),
+                x => x,
+            }
+        }
+        KeybindSettings {
+            camera_sensitivity: self.camera_sensitivity,
+            scroll_inverse_sensitivity: self.scroll_inverse_sensitivity,
+            move_forward: migrate(self.move_forward),
+            move_backward: migrate(self.move_backward),
+            move_left: migrate(self.move_left),
+            move_right: migrate(self.move_right),
+            jump: migrate(self.jump),
+            descend: migrate(self.descend),
+            fast_move: migrate(self.fast_move),
+            toggle_physics: migrate(self.toggle_physics),
+            interact_key: migrate(self.interact_key),
+            dig: migrate(self.dig),
+            place: migrate(self.place),
+            mouse_capture: migrate(self.mouse_capture),
+            inventory: migrate(self.inventory),
+            menu: migrate(self.menu),
+            chat: migrate(self.chat),
+            chat_slash: migrate(self.chat_slash),
+            physics_debug: migrate(self.physics_debug),
+            performance_panel: migrate(self.performance_panel),
+            view_range_up: migrate(self.view_range_up),
+            view_range_down: migrate(self.view_range_down),
+            hotbar_slots: self.hotbar_slots.map(|x| migrate(x)),
+        }
+    }
 }
 impl Default for KeybindSettings {
     fn default() -> Self {
@@ -204,35 +240,35 @@ impl Default for KeybindSettings {
         Self {
             camera_sensitivity: 0.3,
             scroll_inverse_sensitivity: 100,
-            move_forward: ScanCode(0x11),
-            move_backward: ScanCode(0x1f),
-            move_left: ScanCode(0x1e),
-            move_right: ScanCode(0x20),
-            toggle_physics: ScanCode(0x19),
-            jump: ScanCode(0x39),
-            descend: ScanCode(0x1d),
-            fast_move: ScanCode(0x2a),
-            interact_key: ScanCode(0x21),
+            move_forward: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            move_backward: Key(PhysicalKey::Code(KeyCode::KeyS)),
+            move_left: Key(PhysicalKey::Code(KeyCode::KeyA)),
+            move_right: Key(PhysicalKey::Code(KeyCode::KeyD)),
+            toggle_physics: Key(PhysicalKey::Code(KeyCode::KeyP)),
+            jump: Key(PhysicalKey::Code(KeyCode::KeyJ)),
+            descend: Key(PhysicalKey::Code(KeyCode::ShiftLeft)),
+            fast_move: Key(PhysicalKey::Code(KeyCode::ControlLeft)),
+            interact_key: Key(PhysicalKey::Code(KeyCode::KeyW)),
             dig: MouseButton(winit::event::MouseButton::Left),
             place: MouseButton(winit::event::MouseButton::Right),
-            mouse_capture: ScanCode(0x38),
-            inventory: ScanCode(0x17),
-            menu: ScanCode(0x1),
-            chat: ScanCode(0x14),
-            chat_slash: ScanCode(0x35),
-            physics_debug: ScanCode(0x3b),
-            performance_panel: ScanCode(0x3c),
-            view_range_up: ScanCode(0x1b),
-            view_range_down: ScanCode(0x1a),
+            mouse_capture: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            inventory: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            menu: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            chat: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            chat_slash: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            physics_debug: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            performance_panel: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            view_range_up: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            view_range_down: Key(PhysicalKey::Code(KeyCode::KeyW)),
             hotbar_slots: [
-                ScanCode(2),
-                ScanCode(3),
-                ScanCode(4),
-                ScanCode(5),
-                ScanCode(6),
-                ScanCode(7),
-                ScanCode(8),
-                ScanCode(9),
+                Key(PhysicalKey::Code(KeyCode::Digit1)),
+                Key(PhysicalKey::Code(KeyCode::Digit2)),
+                Key(PhysicalKey::Code(KeyCode::Digit3)),
+                Key(PhysicalKey::Code(KeyCode::Digit4)),
+                Key(PhysicalKey::Code(KeyCode::Digit5)),
+                Key(PhysicalKey::Code(KeyCode::Digit6)),
+                Key(PhysicalKey::Code(KeyCode::Digit7)),
+                Key(PhysicalKey::Code(KeyCode::Digit8)),
             ],
         }
     }
@@ -241,7 +277,27 @@ impl Default for KeybindSettings {
 #[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum Keybind {
     ScanCode(u32),
+    Key(winit::keyboard::PhysicalKey),
     MouseButton(winit::event::MouseButton),
+}
+
+impl Keybind {
+    pub(crate) fn to_ui_string(&self) -> String {
+        match self {
+            Keybind::ScanCode(sc) => {
+                format!("ScanCode({})", sc)
+            }
+            Keybind::Key(PhysicalKey::Code(code)) => {
+                format!("[{:?}]", code)
+            }
+            Keybind::Key(PhysicalKey::Unidentified(nkc)) => {
+                format!("[{:?}]", nkc)
+            }
+            Keybind::MouseButton(btn) => {
+                format!("Mouse({:?})", btn)
+            }
+        }
+    }
 }
 
 pub(crate) struct InputState {
@@ -274,20 +330,6 @@ impl InputState {
             pending_scroll_slots: 0,
             mouse_captured: true,
             modal_active: false,
-        }
-    }
-
-    pub(crate) fn event<T>(&mut self, event: &winit::event::Event<'_, T>) {
-        match event {
-            winit::event::Event::WindowEvent {
-                window_id: _,
-                event,
-            } => self.handle_window_event(event),
-            winit::event::Event::DeviceEvent {
-                device_id: _,
-                event,
-            } => self.handle_device_event(event),
-            _ => {}
         }
     }
 
@@ -332,22 +374,22 @@ impl InputState {
             .remove(&self.settings.load().input.get(action))
     }
 
-    fn handle_window_event(&mut self, event: &WindowEvent) {
-        if let WindowEvent::KeyboardInput { input, .. } = event {
+    pub(crate) fn window_event(&mut self, event: &WindowEvent) {
+        if let WindowEvent::KeyboardInput { event: input, .. } = event {
             match input.state {
                 ElementState::Pressed => {
                     self.active_keybinds
-                        .insert(Keybind::ScanCode(input.scancode));
-                    self.new_presses.insert(Keybind::ScanCode(input.scancode));
-                    if Keybind::ScanCode(input.scancode) == self.settings.load().input.mouse_capture
+                        .insert(Keybind::Key(input.physical_key));
+                    self.new_presses.insert(Keybind::Key(input.physical_key));
+                    if Keybind::Key(input.physical_key) == self.settings.load().input.mouse_capture
                     {
                         self.mouse_captured = !self.mouse_captured;
                     }
                 }
                 ElementState::Released => {
                     self.active_keybinds
-                        .remove(&Keybind::ScanCode(input.scancode));
-                    self.new_releases.insert(Keybind::ScanCode(input.scancode));
+                        .remove(&Keybind::Key(input.physical_key));
+                    self.new_releases.insert(Keybind::Key(input.physical_key));
                 }
             }
         } else if let &WindowEvent::MouseInput { state, button, .. } = event {
@@ -368,7 +410,7 @@ impl InputState {
         }
     }
 
-    fn handle_device_event(&mut self, event: &DeviceEvent) {
+    pub(crate) fn handle_device_event(&mut self, event: &DeviceEvent) {
         let settings = self.settings.load();
         if self.mouse_captured {
             if let DeviceEvent::MouseMotion { delta } = event {

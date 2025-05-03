@@ -126,8 +126,12 @@ impl GameState {
         let server_start_time = Instant::now();
         let mapgen_seed = get_or_create_seed(db.as_ref(), b"mapgen_seed", force_seed)?;
         let mapgen = mapgen_provider(blocks.clone(), mapgen_seed);
-        // If we don't have a time of day yet, start in the morning.
-        let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")?.unwrap_or(0.25);
+        // If we don't have a time of day yet, start in the morning. If the time is corrupted,
+        // also start in the morning.
+        let time_of_day = get_double_meta_value(db.as_ref(), b"time_of_day")
+            .ok()
+            .flatten()
+            .unwrap_or(0.25);
         let day_length = game_behaviors.day_length;
         let result = Arc::new_cyclic(|weak| Self {
             data_dir: args.data_dir.clone(),
@@ -286,12 +290,13 @@ impl GameState {
     }
 
     /// Sets the time of day. 0 is midnight, 1 is the next midnight.
-    pub fn set_time_of_day(&self, time_of_day: f64) {
-        self.time_state.lock().set_time(time_of_day);
+    pub fn set_time_of_day(&self, time_of_day: f64) -> Result<()> {
+        self.time_state.lock().set_time(time_of_day)?;
         if self.resync_all_player_states.send(()).is_err() {
             tracing::info!("Player resync had no closures waiting for it.");
             // pass, nobody was listening.
         }
+        Ok(())
     }
 
     pub(crate) fn subscribe_player_state_resyncs(&self) -> tokio::sync::watch::Receiver<()> {
@@ -433,7 +438,7 @@ where
                 )
             }
             let value = f64::from_le_bytes(x.try_into().unwrap());
-            if value.is_nan() {
+            if value.is_nan() || value.is_infinite() {
                 bail!(
                     "Decoding double for {} metadata failed - got NaN",
                     String::from_utf8_lossy(name)

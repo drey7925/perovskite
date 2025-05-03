@@ -36,6 +36,7 @@ use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo
 use vulkano::command_buffer::{
     BlitImageInfo, BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo,
 };
+use vulkano::descriptor_set::DescriptorSet;
 use vulkano::format::NumericFormat;
 use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
 use vulkano::image::{
@@ -52,12 +53,10 @@ use vulkano::{
         PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderPassBeginInfo,
         SubpassContents,
     },
-    descriptor_set::{
-        allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
-    },
+    descriptor_set::{allocator::StandardDescriptorSetAllocator, WriteDescriptorSet},
     device::{
-        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue,
-        QueueCreateInfo,
+        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures,
+        Queue, QueueCreateInfo,
     },
     format::{ClearValue, Format, FormatFeatures},
     image::{view::ImageView, ImageUsage},
@@ -70,7 +69,8 @@ use vulkano::{
     DeviceSize, Validated, Version,
 };
 use winit::dpi::Size;
-use winit::window::WindowBuilder;
+use winit::event_loop::ActiveEventLoop;
+use winit::window::WindowAttributes;
 use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 
 pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
@@ -96,11 +96,12 @@ pub(crate) struct VulkanContext {
 
     /// For settings, all GPUs detected on this machine
     all_gpus: Vec<String>,
+    max_draw_indexed_index_value: u32,
 }
 
 impl VulkanContext {
-    pub(crate) fn command_buffer_allocator(&self) -> &StandardCommandBufferAllocator {
-        &self.command_buffer_allocator
+    pub(crate) fn command_buffer_allocator(&self) -> Arc<StandardCommandBufferAllocator> {
+        self.command_buffer_allocator.clone()
     }
 
     pub(crate) fn clone_allocator(&self) -> Arc<VkAllocator> {
@@ -125,7 +126,7 @@ impl VulkanContext {
 
     fn start_command_buffer(&self) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> {
         let builder = AutoCommandBufferBuilder::primary(
-            self.command_buffer_allocator.as_ref(),
+            self.command_buffer_allocator.clone(),
             self.graphics_queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
@@ -176,12 +177,12 @@ impl VulkanWindow {
     }
 
     pub(crate) fn create(
-        event_loop: &EventLoop<()>,
+        event_loop: &ActiveEventLoop,
         settings: &Arc<ArcSwap<GameSettings>>,
     ) -> Result<VulkanWindow> {
         let library: Arc<vulkano::VulkanLibrary> =
             vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
-        let required_extensions = Surface::required_extensions(event_loop);
+        let required_extensions = Surface::required_extensions(event_loop)?;
         let instance = Instance::new(
             library,
             InstanceCreateInfo {
@@ -196,12 +197,10 @@ impl VulkanWindow {
             },
         )?;
 
-        let window = Arc::new(
-            WindowBuilder::new()
-                .with_title("Perovskite Game Client")
-                .with_min_inner_size(Size::Physical((256, 256).into()))
-                .build(event_loop)?,
-        );
+        let attrs = WindowAttributes::new()
+            .with_title("Perovskite Game Client")
+            .with_min_inner_size(Size::Physical((256, 256).into()));
+        let window = Arc::new(event_loop.create_window(attrs)?);
         let surface = Surface::from_window(instance.clone(), window.clone())?;
 
         let viewport = Viewport {
@@ -214,8 +213,8 @@ impl VulkanWindow {
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
-        let device_features = Features {
-            ..Features::empty()
+        let device_features = DeviceFeatures {
+            ..DeviceFeatures::empty()
         };
 
         let (physical_device, graphics_family_index, transfer_family_index) =
@@ -391,6 +390,9 @@ impl VulkanWindow {
                 color_format,
                 depth_format,
                 all_gpus,
+                max_draw_indexed_index_value: physical_device
+                    .properties()
+                    .max_draw_indexed_index_value,
             }),
             ssaa_render_pass,
             post_blit_render_pass,
@@ -797,7 +799,7 @@ impl Texture2DHolder {
         )?;
 
         let mut copy_builder = AutoCommandBufferBuilder::primary(
-            &ctx.command_buffer_allocator,
+            ctx.command_buffer_allocator.clone(),
             ctx.transfer_queue.queue_family_index(),
             vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
         )?;
@@ -835,14 +837,14 @@ impl Texture2DHolder {
         pipeline: &GraphicsPipeline,
         set: usize,
         binding: u32,
-    ) -> Result<Arc<PersistentDescriptorSet>> {
+    ) -> Result<Arc<DescriptorSet>> {
         let layout = pipeline
             .layout()
             .set_layouts()
             .get(set)
             .with_context(|| "uniform set missing")?;
-        let descriptor_set = PersistentDescriptorSet::new(
-            &self.descriptor_set_allocator,
+        let descriptor_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
             layout.clone(),
             [WriteDescriptorSet::image_view_sampler(
                 binding,

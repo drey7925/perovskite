@@ -24,25 +24,6 @@ use arc_swap::ArcSwap;
 use cgmath::{vec3, InnerSpace};
 use log::info;
 
-use parking_lot::Mutex;
-use tokio::sync::{oneshot, watch};
-use tracy_client::{plot, span, Client};
-use vulkano::command_buffer::SubpassEndInfo;
-use vulkano::render_pass::Subpass;
-use vulkano::{
-    command_buffer::PrimaryAutoCommandBuffer,
-    swapchain::{self, SwapchainPresentInfo},
-    sync::{future::FenceSignalFuture, GpuFuture},
-    Validated, VulkanError,
-};
-
-use winit::event::ElementState;
-use winit::{
-    dpi::{PhysicalPosition, PhysicalSize},
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
-};
-
 use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
@@ -51,6 +32,28 @@ use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
+};
+use parking_lot::Mutex;
+use tokio::sync::{oneshot, watch};
+use tracy_client::{plot, span, Client};
+use vulkano::command_buffer::{CommandBufferExecFuture, SubpassEndInfo};
+use vulkano::render_pass::Subpass;
+use vulkano::swapchain::{PresentFuture, SwapchainAcquireFuture};
+use vulkano::sync::future::JoinFuture;
+use vulkano::{
+    command_buffer::PrimaryAutoCommandBuffer,
+    swapchain::{self, SwapchainPresentInfo},
+    sync::{future::FenceSignalFuture, GpuFuture},
+    Validated, VulkanError,
+};
+use winit::application::ApplicationHandler;
+use winit::event::{DeviceEvent, DeviceId, ElementState};
+use winit::event_loop::ActiveEventLoop;
+use winit::window::WindowId;
+use winit::{
+    dpi::{PhysicalPosition, PhysicalSize},
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
 };
 
 use super::{
@@ -385,12 +388,7 @@ impl GameState {
             GameState::Error(x) => GameStateMutRef::ConnectError(x),
         }
     }
-    fn update_if_connected(
-        &mut self,
-        ctx: &VulkanWindow,
-        event_loop: &EventLoopWindowTarget<()>,
-        control_flow: &mut ControlFlow,
-    ) {
+    fn update_if_connected(&mut self, ctx: &VulkanWindow, event_loop: &ActiveEventLoop) {
         if let GameState::Connecting(state) = self {
             match state.result.try_recv() {
                 Ok(Ok(client_state)) => {
@@ -429,7 +427,7 @@ impl GameState {
                 *self = GameState::Error(err)
             } else if game.client_state.cancel_requested() {
                 if *game.client_state.wants_exit_from_game.lock() {
-                    *control_flow = ControlFlow::ExitWithCode(0);
+                    event_loop.exit();
                 }
                 *self = GameState::MainMenu;
             }
@@ -499,6 +497,10 @@ pub(crate) enum GameStateMutRef<'a> {
     Active(&'a mut ActiveGame),
 }
 
+type FutureType = FenceSignalFuture<
+    PresentFuture<CommandBufferExecFuture<JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture>>>,
+>;
+
 pub struct GameRenderer {
     ctx: VulkanWindow,
     settings: Arc<ArcSwap<GameSettings>>,
@@ -508,9 +510,14 @@ pub struct GameRenderer {
     rt: Arc<tokio::runtime::Runtime>,
 
     warned_about_capture_issue: bool,
+
+    fences: Vec<Option<Arc<FutureType>>>,
+    previous_fence_i: usize,
+    input_capture: InputCapture,
+    need_swapchain_recreate: bool,
 }
 impl GameRenderer {
-    pub(crate) fn create(event_loop: &EventLoop<()>) -> Result<GameRenderer> {
+    pub(crate) fn create(event_loop: &ActiveEventLoop) -> Result<GameRenderer> {
         let settings = Arc::new(ArcSwap::new(GameSettings::load_from_disk()?.into()));
 
         let ctx = VulkanWindow::create(event_loop, &settings).unwrap();
@@ -521,6 +528,8 @@ impl GameRenderer {
                 .unwrap(),
         );
         let main_menu = MainMenu::new(&ctx, event_loop, settings.clone());
+        let frames_in_flight = ctx.swapchain_images.len();
+        let fences = vec![None; frames_in_flight];
         Ok(GameRenderer {
             ctx,
             settings,
@@ -528,319 +537,363 @@ impl GameRenderer {
             main_menu: Mutex::new(main_menu),
             rt,
             warned_about_capture_issue: false,
+            fences,
+            previous_fence_i: 0,
+            input_capture: InputCapture::NotCapturing,
+            need_swapchain_recreate: false,
         })
     }
+}
 
-    pub fn run_loop(mut self, event_loop: EventLoop<()>) {
-        let mut recreate_swapchain = false;
+pub struct GameApplication {
+    renderer: Option<GameRenderer>,
+}
+impl GameApplication {
+    pub fn new() -> Self {
+        Self { renderer: None }
+    }
+}
 
-        let frames_in_flight = self.ctx.swapchain_images.len();
-        let mut fences: Vec<Option<Arc<FenceSignalFuture<_>>>> = vec![None; frames_in_flight];
-        let mut previous_fence_i = 0;
+impl ApplicationHandler for GameApplication {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.renderer.is_none() {
+            self.renderer = Some(GameRenderer::create(event_loop).unwrap());
+        }
+    }
 
-        let mut input_capture = InputCapture::NotCapturing;
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.window_event(event_loop, window_id, event);
+        }
+    }
 
-        event_loop.run(move |event, event_loop, control_flow| {
-            let mut game_lock = self.game.lock();
-            game_lock.update_if_connected(&self.ctx, event_loop, control_flow);
-            {
-                let _span = span!("client_state handling window event");
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.device_event(event_loop, device_id, event);
+        }
+    }
 
-                if let InputCapture::Capturing(action) = input_capture {
-                    if let Event::WindowEvent {
-                        window_id: _,
-                        event
-                    } = &event {
-                        match event {WindowEvent::KeyboardInput { input, .. } => {
-                            input_capture =
-                                InputCapture::Captured(action, Keybind::ScanCode(input.scancode));
-                            return;
-                        }
-                        WindowEvent::MouseInput {
-                            state: ElementState::Pressed,
-                            button,
-                            ..
-                        } => {
-                            input_capture =
-                                InputCapture::Captured(action, Keybind::MouseButton(*button));
-                            return;
-                        }
-                        _ => {}
-                    }}
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.ctx.window.request_redraw();
+        }
+    }
+}
+
+impl GameRenderer {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if event == WindowEvent::RedrawRequested {
+            return self.redraw();
+        }
+
+        if let InputCapture::Capturing(action) = self.input_capture {
+            match &event {
+                WindowEvent::KeyboardInput { event, .. } => {
+                    self.input_capture =
+                        InputCapture::Captured(action, Keybind::Key(event.physical_key));
+                    return;
                 }
-
-                if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                    let consumed = if let Event::WindowEvent {
-                        window_id: _,
-                        event,
-                    } = &event
-                    {
-                        game.egui_adapter.as_mut().unwrap().window_event(event)
-                    } else {
-                        false
-                    };
-
-                    if !consumed {
-                        game.client_state.window_event(&event);
-                    }
-                } else if let Event::WindowEvent {
-                    window_id: _,
-                    event,
-                } = &event
-                {
-                    self.main_menu.lock().update(event);
-                }
-            }
-            match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button,
                     ..
                 } => {
-                    if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                        game.client_state.shutdown.cancel();
-                    }
-                    *control_flow = ControlFlow::Exit;
-                }
-                Event::WindowEvent {
-                    event: WindowEvent::Resized(_),
-                    ..
-                } => {
-                    recreate_swapchain = true;
-                }
-                Event::MainEventsCleared => {
-                    if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                        if self.ctx.want_recreate.swap(false, Ordering::AcqRel) {
-                            recreate_swapchain = true;
-                        }
-
-                        let _span = span!("MainEventsCleared");
-                        if self.ctx.window.has_focus()
-                            && game.client_state.input.lock().is_mouse_captured()
-                        {
-                            let size = self.ctx.window.inner_size();
-                            match self.ctx
-                                .window
-                                .set_cursor_position(PhysicalPosition::new(
-                                    size.width / 2,
-                                    size.height / 2,
-                                )) {
-                                Ok(_) => (),
-                                Err(e) => {
-                                    if !self.warned_about_capture_issue {
-                                        self.warned_about_capture_issue = true;
-                                        log::warn!(
-                                            "Failed to move cursor position to center of window. This message will only display once per session. {:?}", e
-                                        )
-                                    }
-                                }
-                            }
-                            let mode = if cfg!(target_os = "macos") {
-                                winit::window::CursorGrabMode::Locked
-                            } else {
-                                winit::window::CursorGrabMode::Confined
-                            };
-                            match self
-                                .ctx
-                                .window
-                                .set_cursor_grab(mode)
-                            {
-                                Ok(_) => (),
-                                Err(e) => {
-                                    if !self.warned_about_capture_issue {
-                                        self.warned_about_capture_issue = true;
-                                        log::warn!(
-                                            "Failed to grab cursor, falling back to non-confined. This message will only display once per session. {:?}", e
-                                        )
-                                    }
-                                }
-                            }
-                            self.ctx.window.set_cursor_visible(false);
-                        } else {
-                            self.ctx.window.set_cursor_visible(true);
-                            // todo this is actually fallible, and some window managers get unhappy
-                            match self.ctx
-                                .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None) {
-                                Ok(_) => (),
-                                Err(_) => {
-                                    if !self.warned_about_capture_issue {
-                                        self.warned_about_capture_issue = true;
-                                        log::warn!(
-                                            "Failed to release cursor, falling back to non-confined. This message will only display once per session."
-                                        )
-                                    }
-                                }
-                                }
-                        }
-                    } else {
-                        self.ctx
-                            .window
-                            .set_cursor_grab(winit::window::CursorGrabMode::None)
-                            .unwrap();
-                        self.ctx.window.set_cursor_visible(true);
-                    }
-
-                    if recreate_swapchain {
-                        let _span = span!("Recreate swapchain");
-                        let size = self.ctx.window.inner_size();
-
-                        if size.height == 0 || size.width == 0 {
-                            if let GameStateMutRef::Active(game) = game_lock.as_mut()
-                            {
-                                game.advance_without_rendering();
-                                // Hacky, otherwise we spin really fast here, while also messing
-                                // with physics state thanks to tiny updates.
-                                //
-                                // This has to hold together long enough until vulkano releases the
-                                // taskgraph and this whole module is rewritten anyway.
-                                std::thread::sleep(Duration::from_millis(100));
-                            }
-                            return;
-                        }
-
-                        recreate_swapchain = false;
-                        self.ctx.recreate_swapchain(size, self.settings.load().render.supersampling).unwrap();
-                        self.ctx.viewport.extent = size.into();
-                        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                            if let Err(e) = game.handle_resize(&mut self.ctx) {
-                                *game_lock = GameState::Error(e)
-                            };
-                        }
-                    }
-
-                    let _swapchain_span = span!("Acquire swapchain image");
-                    let (image_i, suboptimal, acquire_future) =
-                        match swapchain::acquire_next_image(self.ctx.swapchain.clone(), None) {
-                            Ok(r) => r,
-                            Err(Validated::Error(VulkanError::OutOfDate)) => {
-                                info!("Swapchain out of date");
-                                recreate_swapchain = true;
-                                if let GameStateMutRef::Active(game) = game_lock.as_mut()
-                                {
-                                    game.advance_without_rendering();
-                                }
-                                return;
-                            }
-                            Err(e) => panic!("failed to acquire next image: {:?}", e),
-                        };
-                    Client::running()
-                        .expect("tracy client must be running")
-                        .frame_mark();
-                    if suboptimal {
-                        recreate_swapchain = true;
-                    }
-                    if let Some(image_fence) = &fences[image_i as usize] {
-                        // TODO: This sometimes stalls for a long time. Figure out why.
-                        image_fence.wait(None).unwrap();
-                    }
-                    let previous_future = match fences[previous_fence_i as usize].clone() {
-                        // Create a NowFuture
-                        None => {
-                            let mut now = vulkano::sync::now(self.ctx.vk_device.clone());
-                            now.cleanup_finished();
-                            now.boxed()
-                        }
-                        // Use the existing FenceSignalFuture
-                        Some(fence) => fence.boxed(),
-                    };
-                    drop(_swapchain_span);
-                    let window_size = self.ctx.window.inner_size();
-
-                    let fb_holder = &self.ctx.framebuffers[image_i as usize];
-
-                    let game_command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut()
-                    {
-                        match game.build_command_buffers(
-                            window_size,
-                            &self.ctx,
-                            fb_holder,
-                            &mut input_capture,
-                        ) {
-                            Ok(x) => {Some(x)}
-                            Err(e) => {
-                                *game_lock = GameState::Error(e);
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    let command_buffers = if let Some(command_buffers) = game_command_buffers {
-                        command_buffers
-                    } else {
-                        // either we're in the main menu or we got an error building the real
-                        // game buffers
-                        let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
-                        // we're not in the active game, allow the IME
-                        self.ctx.window.set_ime_allowed(true);
-                        self.ctx
-                            .start_ssaa_render_pass(
-                                &mut command_buf_builder,
-                                fb_holder.ssaa_framebuffer.clone(),
-                                [0.0, 0.0, 0.0, 0.0],
-                            )
-                            .unwrap();
-                        command_buf_builder.end_render_pass(SubpassEndInfo {
-                            ..Default::default()
-                        }).unwrap();
-                        // With the render pass done, blit to the final framebuffer
-                        fb_holder.blit_supersampling(&mut command_buf_builder).unwrap();
-                        self.ctx.start_post_blit_render_pass(
-                            &mut command_buf_builder,
-                            fb_holder.post_blit_framebuffer.clone(),
-                        ).unwrap();
-
-                        if let Some(connection_settings) = self.main_menu.lock().draw(
-                            &mut self.ctx,
-                            &mut game_lock,
-                            &mut command_buf_builder,
-                            &mut input_capture
-                        ) {
-                            self.start_connection(connection_settings);
-                        }
-                        command_buf_builder.end_render_pass(SubpassEndInfo {
-                            ..Default::default()
-                        }).unwrap();
-
-                        command_buf_builder
-                            .build()
-                            .with_context(|| "Command buffer build failed")
-                            .unwrap()
-                    };
-
-                    {
-                        let _span = span!("submit to Vulkan");
-                        let future = previous_future
-                            .join(acquire_future)
-                            .then_execute(self.ctx.graphics_queue.clone(), command_buffers)
-                            .unwrap()
-                            .then_swapchain_present(
-                                self.ctx.graphics_queue.clone(),
-                                SwapchainPresentInfo::swapchain_image_index(
-                                    self.ctx.swapchain.clone(),
-                                    image_i,
-                                ),
-                            )
-                            .then_signal_fence_and_flush();
-                        fences[image_i as usize] = match future {
-                            // Holding this in an Arc makes this easier
-                            #[allow(clippy::arc_with_non_send_sync)]
-                            Ok(value) => Some(Arc::new(value)),
-                            Err(Validated::Error(VulkanError::OutOfDate)) => {
-                                recreate_swapchain = true;
-                                None
-                            }
-                            Err(e) => {
-                                log::error!("failed to flush future: {e}");
-                                None
-                            }
-                        };
-                    }
-                    previous_fence_i = image_i;
+                    self.input_capture =
+                        InputCapture::Captured(action, Keybind::MouseButton(*button));
+                    return;
                 }
                 _ => {}
             }
-        })
+        }
+        if let WindowEvent::Resized(_) = &event {
+            self.need_swapchain_recreate = true;
+        }
+
+        let mut game_lock = self.game.lock();
+
+        game_lock.update_if_connected(&self.ctx, event_loop);
+        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+            if event == WindowEvent::CloseRequested || event == WindowEvent::Destroyed {
+                game.client_state.shutdown.cancel();
+                event_loop.exit();
+                return;
+            }
+            let consumed = game.egui_adapter.as_mut().unwrap().window_event(&event);
+
+            if !consumed {
+                game.client_state.window_event(&event);
+            }
+        } else {
+            if event == WindowEvent::CloseRequested || event == WindowEvent::Destroyed {
+                event_loop.exit();
+                return;
+            }
+            self.main_menu.lock().update(&event);
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        let mut game_lock = self.game.lock();
+
+        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+            game.client_state.device_event(&event);
+        }
+    }
+
+    fn redraw(&mut self) {
+        let mut game_lock = self.game.lock();
+
+        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+            if self.ctx.want_recreate.swap(false, Ordering::AcqRel) {
+                self.need_swapchain_recreate = true;
+            }
+
+            let _span = span!("MainEventsCleared");
+            if self.ctx.window.has_focus() && game.client_state.input.lock().is_mouse_captured() {
+                let size = self.ctx.window.inner_size();
+                match self
+                    .ctx
+                    .window
+                    .set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2))
+                {
+                    Ok(_) => (),
+                    Err(e) => {
+                        if !self.warned_about_capture_issue {
+                            self.warned_about_capture_issue = true;
+                            log::warn!(
+                                            "Failed to move cursor position to center of window. This message will only display once per session. {:?}", e
+                                        )
+                        }
+                    }
+                }
+                let mode = if cfg!(target_os = "macos") {
+                    winit::window::CursorGrabMode::Locked
+                } else {
+                    winit::window::CursorGrabMode::Confined
+                };
+                match self.ctx.window.set_cursor_grab(mode) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        if !self.warned_about_capture_issue {
+                            self.warned_about_capture_issue = true;
+                            log::warn!(
+                                            "Failed to grab cursor, falling back to non-confined. This message will only display once per session. {:?}", e
+                                        )
+                        }
+                    }
+                }
+                self.ctx.window.set_cursor_visible(false);
+            } else {
+                self.ctx.window.set_cursor_visible(true);
+                // todo this is actually fallible, and some window managers get unhappy
+                match self
+                    .ctx
+                    .window
+                    .set_cursor_grab(winit::window::CursorGrabMode::None)
+                {
+                    Ok(_) => (),
+                    Err(_) => {
+                        if !self.warned_about_capture_issue {
+                            self.warned_about_capture_issue = true;
+                            log::warn!(
+                                            "Failed to release cursor, falling back to non-confined. This message will only display once per session."
+                                        )
+                        }
+                    }
+                }
+            }
+        } else {
+            self.ctx
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::None)
+                .unwrap();
+            self.ctx.window.set_cursor_visible(true);
+        }
+
+        if self.need_swapchain_recreate {
+            let _span = span!("Recreate swapchain");
+            let size = self.ctx.window.inner_size();
+
+            if size.height == 0 || size.width == 0 {
+                if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                    game.advance_without_rendering();
+                    // Hacky, otherwise we spin really fast here, while also messing
+                    // with physics state thanks to tiny updates.
+                    //
+                    // This has to hold together long enough until vulkano releases the
+                    // taskgraph and this whole module is rewritten anyway.
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                return;
+            }
+
+            self.need_swapchain_recreate = false;
+            self.ctx
+                .recreate_swapchain(size, self.settings.load().render.supersampling)
+                .unwrap();
+            self.ctx.viewport.extent = size.into();
+            if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                if let Err(e) = game.handle_resize(&mut self.ctx) {
+                    *game_lock = GameState::Error(e)
+                };
+            }
+        }
+
+        let _swapchain_span = span!("Acquire swapchain image");
+        let (image_i, suboptimal, acquire_future) =
+            match swapchain::acquire_next_image(self.ctx.swapchain.clone(), None) {
+                Ok(r) => r,
+                Err(Validated::Error(VulkanError::OutOfDate)) => {
+                    info!("Swapchain out of date");
+                    self.need_swapchain_recreate = true;
+                    if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                        game.advance_without_rendering();
+                    }
+                    return;
+                }
+                Err(e) => panic!("failed to acquire next image: {:?}", e),
+            };
+        Client::running()
+            .expect("tracy client must be running")
+            .frame_mark();
+        if suboptimal {
+            self.need_swapchain_recreate = true;
+        }
+        if let Some(image_fence) = &self.fences[image_i as usize] {
+            // TODO: This sometimes stalls for a long time. Figure out why.
+            image_fence.wait(None).unwrap();
+        }
+        let previous_future = match self.fences[self.previous_fence_i as usize].clone() {
+            // Create a NowFuture
+            None => {
+                let mut now = vulkano::sync::now(self.ctx.vk_device.clone());
+                now.cleanup_finished();
+                now.boxed()
+            }
+            // Use the existing FenceSignalFuture
+            Some(fence) => fence.boxed(),
+        };
+        drop(_swapchain_span);
+        let window_size = self.ctx.window.inner_size();
+
+        let fb_holder = &self.ctx.framebuffers[image_i as usize];
+
+        let game_command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+            match game.build_command_buffers(
+                window_size,
+                &self.ctx,
+                fb_holder,
+                &mut self.input_capture,
+            ) {
+                Ok(x) => Some(x),
+                Err(e) => {
+                    *game_lock = GameState::Error(e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let command_buffers = if let Some(command_buffers) = game_command_buffers {
+            command_buffers
+        } else {
+            // either we're in the main menu or we got an error building the real
+            // game buffers
+            let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
+            // we're not in the active game, allow the IME
+            self.ctx.window.set_ime_allowed(true);
+            self.ctx
+                .start_ssaa_render_pass(
+                    &mut command_buf_builder,
+                    fb_holder.ssaa_framebuffer.clone(),
+                    [0.0, 0.0, 0.0, 0.0],
+                )
+                .unwrap();
+            command_buf_builder
+                .end_render_pass(SubpassEndInfo {
+                    ..Default::default()
+                })
+                .unwrap();
+            // With the render pass done, blit to the final framebuffer
+            fb_holder
+                .blit_supersampling(&mut command_buf_builder)
+                .unwrap();
+            self.ctx
+                .start_post_blit_render_pass(
+                    &mut command_buf_builder,
+                    fb_holder.post_blit_framebuffer.clone(),
+                )
+                .unwrap();
+
+            if let Some(connection_settings) = self.main_menu.lock().draw(
+                &mut self.ctx,
+                &mut game_lock,
+                &mut command_buf_builder,
+                &mut self.input_capture,
+            ) {
+                self.start_connection(connection_settings);
+            }
+            command_buf_builder
+                .end_render_pass(SubpassEndInfo {
+                    ..Default::default()
+                })
+                .unwrap();
+
+            command_buf_builder
+                .build()
+                .with_context(|| "Command buffer build failed")
+                .unwrap()
+        };
+
+        {
+            let _span = span!("submit to Vulkan");
+            let future = previous_future
+                .join(acquire_future)
+                .then_execute(self.ctx.graphics_queue.clone(), command_buffers)
+                .unwrap()
+                .then_swapchain_present(
+                    self.ctx.graphics_queue.clone(),
+                    SwapchainPresentInfo::swapchain_image_index(
+                        self.ctx.swapchain.clone(),
+                        image_i,
+                    ),
+                )
+                .then_signal_fence_and_flush();
+            self.fences[image_i as usize] = match future {
+                // Holding this in an Arc makes this easier
+                #[allow(clippy::arc_with_non_send_sync)]
+                Ok(value) => Some(Arc::new(value)),
+                Err(Validated::Error(VulkanError::OutOfDate)) => {
+                    self.need_swapchain_recreate = true;
+                    None
+                }
+                Err(e) => {
+                    log::error!("failed to flush future: {e}");
+                    None
+                }
+            };
+        }
+        self.previous_fence_i = image_i as usize;
     }
 
     fn start_connection(&self, connection: ConnectionSettings) {

@@ -143,8 +143,7 @@ impl Server {
             PerovskiteGameServer::new(PerovskiteGameServerImpl::new(self.game_state.clone()));
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(perovskite_core::protocol::DESCRIPTOR_SET)
-            .build()
-            .unwrap();
+            .build_v1()?;
 
         let mut server_builder = tonic::transport::Server::builder();
 

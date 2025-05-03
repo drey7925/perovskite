@@ -34,7 +34,7 @@ use perovskite_core::{
         StreamToServer,
     },
 };
-use rand::rngs::OsRng;
+use rand::rngs::{OsRng, ThreadRng};
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::ClientTlsConfig;

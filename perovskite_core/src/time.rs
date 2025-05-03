@@ -1,3 +1,4 @@
+use anyhow::ensure;
 use std::time::{Duration, Instant};
 
 pub struct TimeState {
@@ -13,9 +14,11 @@ impl TimeState {
             day_length,
         }
     }
-    pub fn set_time(&mut self, game_time_days: f64) {
+    pub fn set_time(&mut self, game_time_days: f64) -> anyhow::Result<()> {
         self.realtime_start = Instant::now();
+        ensure!(game_time_days.is_finite());
         self.game_time_start_days = game_time_days;
+        Ok(())
     }
     pub fn set_day_length(&mut self, day_length: Duration) {
         self.day_length = day_length;

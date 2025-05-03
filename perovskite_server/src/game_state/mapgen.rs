@@ -34,17 +34,22 @@ pub trait MapgenInterface: Send + Sync {
     /// on the gameplay experience, and inconsistent IID noise that affects single blocks (like
     /// ore generation) will probably not be noticed.
     ///
+    /// ^ Caveat: This consistency is mostly important for gameplay experience, and to a small
+    /// extent performance/view distance (due to terrain_range_hint). However, sudden jumps and
+    /// large inconsistencies are OK if they match your intended gameplay/style, or if you need
+    /// to make a major change and accept such inconsistencies as a consequence of that change.
+    ///
     /// Users of the map must NOT assume block-for-block consistency between calls to fill_chunk
     /// (noting that it will likely be called only once, barring crashes that cause unsaved
     /// changes to the map).
     fn fill_chunk(&self, coord: ChunkCoordinate, chunk: &mut MapChunk);
 
     /// Provide an estimate of chunk coordinate Y values (one value -> 16 blocks) where terrain
-    /// is most likely to be seen at the given (X,Z) chunk coordinate, or None for no hint
+    /// is most likely to be seen at the given (X, Z) chunk coordinate, or None for no hint
     ///
     /// This is used for speeding up chunk loading. Favor speed over exact precision, but prefer to
     /// err on the side of including a chunk in the range if unsure.
-    fn terrain_range_hint(&self, chunk_x: i32, chunk_z: i32) -> Option<RangeInclusive<i32>> {
+    fn terrain_range_hint(&self, _chunk_x: i32, _chunk_z: i32) -> Option<RangeInclusive<i32>> {
         None
     }
 
@@ -53,5 +58,5 @@ pub trait MapgenInterface: Send + Sync {
     /// specific mapgen.
     ///
     /// By default, does nothing.
-    fn dump_debug(&self, pos: BlockCoordinate) {}
+    fn dump_debug(&self, _pos: BlockCoordinate) {}
 }
