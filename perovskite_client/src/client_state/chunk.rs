@@ -540,6 +540,10 @@ impl ClientChunk {
         let _ = span!("chunk_data_mut");
         ChunkDataViewMut(self.chunk_data.write())
     }
+
+    pub(crate) fn has_mesh(&self) -> bool {
+        self.chunk_mesh.lock().solo_cpu.is_some()
+    }
 }
 
 fn check_frustum(transformation: Matrix4<f32>) -> bool {

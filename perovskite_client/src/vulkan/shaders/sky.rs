@@ -86,6 +86,15 @@ vulkano_shaders::shader! {
                 vec2 pix = gl_FragCoord.xy / supersampling;
                 int ix = int(pix.x) % 2;
                 int iy = int(pix.y) % 2;
+
+                // Raytracing experiment
+                vec2 pix2 = gl_FragCoord.xy / 8.0;
+                int ix2 = int(pix2.x) % 2;
+                int iy2 = int(pix2.y) % 2;
+                if ((ix2 ^ iy2) != 0) {
+                    discard;
+                }
+
                 float pdither = (float(ix ^ iy) - 0.5) / 3.0;
                 alignment += pdither;
 

@@ -43,6 +43,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
 use tracy_client::span;
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryCommandBufferAbstract,
+};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::sync::GpuFuture;
+use vulkano::DeviceSize;
 use winit::event::{DeviceEvent, Event, WindowEvent};
 
 use crate::client_state::chunk::ClientChunk;
@@ -129,6 +136,7 @@ pub(crate) struct ChunkManager {
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
     light_columns: parking_lot::RwLock<LightColumnMap>,
     mesh_batches: Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
+    pub(crate) fake_raytace_data: parking_lot::RwLock<Option<Subbuffer<[u32]>>>,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
@@ -137,6 +145,7 @@ impl ChunkManager {
             renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
             light_columns: parking_lot::RwLock::new(FxHashMap::default()),
             mesh_batches: Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
+            fake_raytace_data: parking_lot::RwLock::new(None),
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -599,6 +608,48 @@ impl ChunkManager {
             }
         }
     }
+
+    pub(crate) fn set_fake_raytrace_data(&self, data: Vec<u32>, ctx: &VulkanContext) -> Result<()> {
+        let staging_buffer = Buffer::from_iter(
+            ctx.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            data.iter().copied(),
+        )?;
+        let target_buffer = Buffer::new_slice(
+            ctx.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            data.len() as DeviceSize,
+        )?;
+
+        let transfer_queue = ctx.clone_transfer_queue();
+        let mut command_buffer = AutoCommandBufferBuilder::primary(
+            ctx.command_buffer_allocator(),
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+        command_buffer.copy_buffer(CopyBufferInfo::buffers(
+            staging_buffer,
+            target_buffer.clone(),
+        ))?;
+        command_buffer.build()?.execute(transfer_queue)?.flush()?;
+        *self.fake_raytace_data.write() = Some(target_buffer);
+        Ok(())
+    }
 }
 pub(crate) struct ChunkManagerView<'a> {
     guard: RwLockReadGuard<'a, ChunkMap>,
@@ -925,7 +976,7 @@ impl ClientState {
         FrameState {
             scene_state: SceneState {
                 vp_matrix: view_proj_matrix,
-                clear_color: [sky.x, sky.y, sky.z, 1.],
+                clear_color: [0., 0., 0., 1.],
                 global_light_color: lighting.into(),
                 sun_direction,
             },

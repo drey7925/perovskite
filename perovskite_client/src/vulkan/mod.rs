@@ -20,6 +20,8 @@ pub mod game_renderer;
 pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
 pub(crate) mod util;
+// Public for benchmarking
+pub mod gpu_chunk_table;
 
 use std::sync::atomic::AtomicBool;
 use std::{ops::Deref, sync::Arc};

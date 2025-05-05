@@ -33,6 +33,7 @@ use crate::audio::{
     EvictedAudioHealer, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT,
     SOUND_SQUARELAW_ENABLED,
 };
+use crate::vulkan::gpu_chunk_table::ChunkHashtableBuilder;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
@@ -380,6 +381,9 @@ pub(crate) struct InboundContext {
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
+        let state_clone = self.shared_state.clone();
+        tokio::task::spawn(fake_raytrace_prep(state_clone));
+
         while !self.shared_state.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -945,5 +949,34 @@ impl SnappyDecodeHelper {
             snappy_decoder: snap::raw::Decoder::new(),
             snappy_output_buffer: Vec::new(),
         }
+    }
+}
+
+async fn fake_raytrace_prep(ctx: Arc<SharedState>) {
+    while !ctx.cancellation.is_cancelled() {
+        log::info!("raytrace prep starting");
+        let view = ctx.client_state.chunks.renderable_chunks_cloned_view();
+        let mut builder = ChunkHashtableBuilder::new();
+        for (coord, data) in view.iter() {
+            if data.has_mesh() {
+                builder.add_chunk(*coord, ());
+            }
+        }
+        drop(view);
+
+        ctx.client_state
+            .chunks
+            .set_fake_raytrace_data(
+                builder.build(20, 3).unwrap(),
+                ctx.client_state.block_renderer.vk_ctx(),
+            )
+            .unwrap();
+
+        tokio::select!(
+            _ = ctx.cancellation.cancelled() => { return; },
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                // pass
+            }
+        )
     }
 }

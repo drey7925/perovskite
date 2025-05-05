@@ -26,6 +26,7 @@ pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
 pub(crate) mod entity_geometry;
 pub(crate) mod flat_texture;
+pub(crate) mod raytracer;
 
 /// Shaders that render 3D
 /// If we need more advanced texturing, this might be subdivided later on
@@ -148,6 +149,14 @@ pub(crate) mod frag_lighting {
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
+
+        // While developing raytracing, stencil out half the scene
+        vec2 pix = gl_FragCoord.xy / 8.0;
+        int ix = int(pix.x) % 2;
+        int iy = int(pix.y) % 2;
+        if ((ix ^ iy) != 0) {
+            discard;
+        }
         vec4 color = texture(tex, uv_texcoord);
         f_color = vec4((brightness + global_brightness.r) * color.r,
                        (brightness + global_brightness.g) * color.g,
@@ -173,6 +182,14 @@ pub(crate) mod frag_lighting_sparse {
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
+
+        // While developing raytracing, stencil out half the scene
+        vec2 pix = gl_FragCoord.xy / 8.0;
+        int ix = int(pix.x) % 2;
+        int iy = int(pix.y) % 2;
+        if ((ix ^ iy) != 0) {
+            discard;
+        }
         vec4 color = texture(tex, uv_texcoord);
         f_color = vec4((brightness + global_brightness.r) * color.r,
                        (brightness + global_brightness.g) * color.g,
@@ -286,6 +303,7 @@ where
 pub(crate) struct SceneState {
     pub(crate) vp_matrix: Matrix4<f32>,
     pub(crate) global_light_color: [f32; 3],
+    // TODO: This doesn't do anything because the background is rendered by the sky shader
     pub(crate) clear_color: [f32; 4],
     pub(crate) sun_direction: Vector3<f32>,
 }

@@ -642,7 +642,7 @@ fn check_intersection(
     );
     match &block_def.tool_custom_hitbox {
         Some(boxes) => {
-            if boxes.boxes.is_empty() || boxes.boxes.is_empty() {
+            if boxes.boxes.is_empty() {
                 check_intersection_core(
                     pos,
                     delta_inv,

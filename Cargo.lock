@@ -3540,7 +3540,6 @@ dependencies = [
  "cpal",
  "criterion",
  "crossbeam-channel",
- "crossbeam-queue",
  "directories",
  "egui",
  "egui_plot",
@@ -3554,7 +3553,6 @@ dependencies = [
  "lazy_static",
  "line_drawing",
  "log",
- "microbench",
  "mimalloc",
  "opaque-ke",
  "parking_lot",
@@ -3573,10 +3571,8 @@ dependencies = [
  "texture_packer",
  "textwrap",
  "tokio",
- "tokio-scoped",
  "tokio-stream",
  "tokio-util",
- "toml",
  "tonic 0.13.0",
  "tracy-client 0.18.0",
  "unicode-normalization",
@@ -5414,15 +5410,8 @@ dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "toml_write",
  "winnow",
 ]
-
-[[package]]
-name = "toml_write"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfb942dfe1d8e29a7ee7fcbde5bd2b9a25fb89aa70caea2eba3bee836ff41076"
 
 [[package]]
 name = "tonic"

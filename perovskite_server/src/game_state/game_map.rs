@@ -867,6 +867,9 @@ const NUM_CHUNK_SHARDS: usize = 16;
 
 /// Shard ID for a chunk. Not guaranteed stable across process restarts, use only for locality
 pub(crate) fn shard_id(coord: ChunkCoordinate) -> usize {
+    // With coarse sharding, each player ends up in only a few shards, improving locality
+    // For high-performance single-player, it may be worth using a finer hash (which must still
+    // ignore the y-coordinate for lighting consistency)
     (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
 }
 
