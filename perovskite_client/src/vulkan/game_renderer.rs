@@ -583,7 +583,7 @@ impl ApplicationHandler for GameApplication {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(renderer) = &mut self.renderer {
             renderer.ctx.window.request_redraw();
         }
@@ -598,7 +598,7 @@ impl GameRenderer {
         event: WindowEvent,
     ) {
         if event == WindowEvent::RedrawRequested {
-            return self.redraw();
+            return self.redraw(event_loop);
         }
 
         if let InputCapture::Capturing(action) = self.input_capture {
@@ -625,8 +625,8 @@ impl GameRenderer {
         }
 
         let mut game_lock = self.game.lock();
-
         game_lock.update_if_connected(&self.ctx, event_loop);
+
         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
             if event == WindowEvent::CloseRequested || event == WindowEvent::Destroyed {
                 game.client_state.shutdown.cancel();
@@ -660,9 +660,10 @@ impl GameRenderer {
         }
     }
 
-    fn redraw(&mut self) {
+    fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let mut game_lock = self.game.lock();
 
+        game_lock.update_if_connected(&self.ctx, event_loop);
         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
             if self.ctx.want_recreate.swap(false, Ordering::AcqRel) {
                 self.need_swapchain_recreate = true;
