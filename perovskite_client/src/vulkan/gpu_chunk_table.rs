@@ -7,10 +7,7 @@ use anyhow::Context;
 use perovskite_core::coordinates::ChunkCoordinate;
 use rand::distributions::uniform::SampleRange;
 use rustc_hash::{FxHashMap, FxHashSet};
-
-/// The blocks in a chunk, ordered X/Z/Y. [perovskite_core::coordinates::ChunkOffset::as_index] may
-/// be used to index into this.
-pub type ChunkData = ();
+use std::ops::Deref;
 
 /// Computes a parametrized hash over the coordinate.
 ///
@@ -73,21 +70,28 @@ const PRIME: u32 = 1610612741;
 ///
 /// Each chunk can be found starting at int offset 4N + 32 + 4096*i.
 ///
-/// WARNING, WIP: The table only contains presence (values, flags), and is length 4N + 32.
-pub struct ChunkHashtableBuilder {
+/// Data buffers are the blocks in a chunk, ordered X/Z/Y. [perovskite_core::coordinates::ChunkOffset::as_index]
+/// may be used to index into this.
+pub struct ChunkHashtableBuilder<T>
+where
+    T: Deref<Target = [u32]>,
+{
     // Not a FxHashMap: paranoid that we don't have a hard guarantee of iteration order being same
     // on each iteration of an unchanged map (although it's a reasonable assumption to make)
-    chunks: FxHashMap<ChunkCoordinate, ChunkData>,
+    chunks: FxHashMap<ChunkCoordinate, T>,
 }
-impl ChunkHashtableBuilder {
-    pub fn new() -> ChunkHashtableBuilder {
+impl<T> ChunkHashtableBuilder<T>
+where
+    T: Deref<Target = [u32]>,
+{
+    pub fn new() -> ChunkHashtableBuilder<T> {
         ChunkHashtableBuilder {
             chunks: FxHashMap::default(),
         }
     }
 
     /// Adds a chunk to this builder.
-    pub fn add_chunk(&mut self, coord: ChunkCoordinate, data: ChunkData) {
+    pub fn add_chunk(&mut self, coord: ChunkCoordinate, data: T) {
         self.chunks.insert(coord, data);
     }
 
@@ -105,7 +109,7 @@ impl ChunkHashtableBuilder {
         let expanded = self.chunks.len() + (self.chunks.len() >> 2) + (self.chunks.len() >> 3);
         let n = expanded.max(8).next_power_of_two();
         let mut data = Vec::new();
-        data.resize(4 * n + 32, 0);
+        data.resize(4100 * n + 32, 0);
         let n32 = n.try_into().context("n overflowed u32")?;
         data[0] = n32;
 
@@ -158,6 +162,8 @@ impl ChunkHashtableBuilder {
                 data[base + 1] = coord.y as u32;
                 data[base + 2] = coord.z as u32;
                 data[base + 3] = FLAG_HASHTABLE_PRESENT;
+                let base2 = 4 * n + 32 + 4096 * i;
+                data[base2..base2 + 4096].copy_from_slice(self.chunks.get(coord).unwrap().deref());
             }
         }
 
@@ -194,10 +200,11 @@ pub fn gpu_table_lookup(table: &[u32], key: ChunkCoordinate) -> u32 {
 #[test]
 fn test_build_and_probe() {
     let mut builder = ChunkHashtableBuilder::new();
+    let data = vec![0u32; 4096];
     for x in -15..15 {
         for y in -15..15 {
             for z in -15..15 {
-                builder.add_chunk(ChunkCoordinate::new(x, y, z), ());
+                builder.add_chunk(ChunkCoordinate::new(x, y, z), data.as_slice());
             }
         }
     }

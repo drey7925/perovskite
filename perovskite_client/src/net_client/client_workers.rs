@@ -33,8 +33,10 @@ use crate::audio::{
     EvictedAudioHealer, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT,
     SOUND_SQUARELAW_ENABLED,
 };
+use crate::client_state::chunk::{ChunkDataView, ChunkOffsetExt};
 use crate::vulkan::gpu_chunk_table::ChunkHashtableBuilder;
 use perovskite_core::block_id::BlockId;
+use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
@@ -959,7 +961,14 @@ async fn fake_raytrace_prep(ctx: Arc<SharedState>) {
         let mut builder = ChunkHashtableBuilder::new();
         for (coord, data) in view.iter() {
             if data.has_mesh() {
-                builder.add_chunk(*coord, ());
+                let mut chunk = vec![];
+                chunk.resize(4096, 0);
+                let mesh_data = data.chunk_data();
+                for i in 0..4096 {
+                    chunk[i] =
+                        mesh_data.block_ids()[ChunkOffset::from_index(i).as_extended_index()].0;
+                }
+                builder.add_chunk(*coord, chunk);
             }
         }
         drop(view);
