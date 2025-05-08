@@ -66,8 +66,10 @@ vulkano_shaders::shader! {
         raytraced_frag: {
         ty: "fragment",
         path: "src/vulkan/shaders/raytracer_frag.glsl"
-        }
-    }
+        },
+    },
+    vulkan_version: "1.3",
+    spirv_version: "1.3",
 }
 
 pub(crate) struct RaytracedPipelineWrapper {

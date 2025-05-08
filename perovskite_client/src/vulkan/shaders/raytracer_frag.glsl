@@ -1,6 +1,7 @@
 #version 460
-layout(location = 0) in vec4 global_coord_facedir;
+#extension GL_KHR_shader_subgroup_vote: enable
 
+layout(location = 0) in vec4 global_coord_facedir;
 layout(set = 0, binding = 0) uniform RaytracedUniformData {
 // Takes an NDC position and transforms it *back* to world space
     mat4 inverse_vp_matrix;
@@ -136,8 +137,16 @@ bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
         if (old_g.x >= 16 || old_g.y >= 16 || old_g.z >= 16) { continue; }
 
         uint offset = 256 * uint(old_g.x) + 16 * uint(old_g.z) + uint(old_g.y);
-        if (offset >= 0 && offset < 4096 && chunks[base + offset] != 0) {
-            f_color = vec4(start_cc, 1.0);
+
+        if (offset >= 0 && offset < 4096) {
+            bool is_nonzero = chunks[base + offset] != 0;
+            if (subgroupAny(is_nonzero) && !subgroupAll(is_nonzero)) {
+                f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                return true;
+            }
+            if (is_nonzero) {
+                f_color = vec4(start_cc, 1.0);
+            }
             return true;
         }
 
@@ -214,10 +223,10 @@ void main() {
     int ix2 = int(pix2.x) % 2;
     int iy2 = int(pix2.y) % 2;
 
-    if ((ix2 ^ iy2) == 0) {
-        // Complementary to the control on the raster code
-        discard;
-    }
+//    if ((ix2 ^ iy2) == 0) {
+//        // Complementary to the control on the raster code
+//        discard;
+//    }
     vec3 facedir = normalize(global_coord_facedir.xyz);
 
     vec3 facedir_world = vec3(facedir.x, -facedir.y, facedir.z);

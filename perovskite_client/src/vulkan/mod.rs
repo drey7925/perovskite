@@ -212,6 +212,7 @@ impl VulkanWindow {
         };
 
         let device_extensions = DeviceExtensions {
+            ext_shader_subgroup_vote: true,
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
@@ -224,6 +225,7 @@ impl VulkanWindow {
                 &instance,
                 &surface,
                 &device_extensions,
+                &device_features,
                 &settings.load().render.preferred_gpu,
             )?;
 

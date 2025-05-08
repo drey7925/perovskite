@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use vulkano::device::DeviceFeatures;
 use vulkano::{
     device::{
         physical::{PhysicalDevice, PhysicalDeviceType},
@@ -24,6 +25,7 @@ pub(crate) fn select_physical_device(
     instance: &Arc<Instance>,
     surface: &Arc<Surface>,
     device_extensions: &DeviceExtensions,
+    device_features: &DeviceFeatures,
     preferred_gpu: &str,
 ) -> Result<(Arc<PhysicalDevice>, u32, u32)> {
     log::info!(
@@ -38,6 +40,7 @@ pub(crate) fn select_physical_device(
         .enumerate_physical_devices()
         .expect("failed to enumerate physical devices")
         .filter(|p| p.supported_extensions().contains(device_extensions))
+        .filter(|p| p.supported_features().contains(device_features))
         .filter_map(|p| {
             p.queue_family_properties()
                 .iter()
