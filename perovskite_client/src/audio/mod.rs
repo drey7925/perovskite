@@ -962,8 +962,7 @@ impl EngineState {
 
         for sample in 0..samples {
             let tick = buffer_start_tick + (sample as f64 * nanos_per_sample) as u64;
-            // Half-clamp: don't allow time to run backwards, but
-            let move_time = current_move.elapsed_unclamped(tick).max(0.0);
+            let move_time = current_move.elapsed(tick);
             let current_velocity = current_move.instantaneous_velocity(move_time);
 
             // Theoretically should be N^5 or N^6, but this is subjectively better
