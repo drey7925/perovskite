@@ -81,7 +81,6 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, uvec3 k, uint n_minus_one, uint
     (g1idx.y > g0idx.y ? 1 : 0),
     (g1idx.z > g0idx.z ? 1 : 0)
     );
-    vec3 gp = g0idx + gpd;
 
     vec3 gfrac = g0 - g0idx;
     vec3 slope = g1 - g0;
@@ -98,7 +97,7 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, uvec3 k, uint n_minus_one, uint
     v.x * v.y
     );
     vec3 v2d = v2 / (v.x * v.y * v.z);
-    vec3 err = (gp - g0) * v2;
+    vec3 err = (gpd - gfrac) * v2;
     vec3 derr = sgns * v2;
     int i = 0;
 
@@ -284,7 +283,6 @@ void main() {
     (g1idx.y > g0idx.y ? 1 : 0),
     (g1idx.z > g0idx.z ? 1 : 0)
     );
-    vec3 gp = g0idx + gpd;
 
     // Will this vectorize?
     vec3 v = vec3(
@@ -298,7 +296,7 @@ void main() {
     v.x * v.y
     );
     vec3 v2d = v2 / (v.x * v.y * v.z);
-    vec3 err = (gp - g0) * v2;
+    vec3 err = (gpd - gfrac) * v2;
     vec3 derr = sgns * v2;
     int i = 0;
     vec3 col = vec3(1.0, 1.0, 1.0);

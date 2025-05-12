@@ -5,3 +5,4 @@ dhat-heap.json
 *.log
 /.idea
 *.png~
+*.spv
