@@ -1,4 +1,5 @@
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::shaders::{LiveRenderConfig, PipelineProvider, PipelineWrapper, SceneState};
 use crate::vulkan::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 use anyhow::Context;
@@ -31,48 +32,23 @@ use vulkano::shader::ShaderModule;
 vulkano_shaders::shader! {
     shaders: {
         raytraced_vtx: {
-        ty: "vertex",
-        src: r"
-            #version 460
-                const vec2 vertices[6] = vec2[](
-                    vec2(-1.0, -1.0),
-                    vec2(-1.0, 1.0),
-                    vec2(1.0, 1.0),
-
-                    vec2(-1.0, -1.0),
-                    vec2(1.0, 1.0),
-                    vec2(1.0, -1.0)
-                );
-
-                layout(set = 0, binding = 0) uniform RaytracedUniformData {
-                    // Takes an NDC position and transforms it *back* to world space
-                    mat4 inverse_vp_matrix;
-                    ivec3 coarse_pos;
-                    vec3 fine_pos;
-                    // vec3 sun_direction;
-                    // Used for dither
-                    float supersampling;
-                };
-
-                layout(location = 0) out vec4 global_coord_facedir;
-
-                void main() {
-                    vec4 pos_ndc = vec4(vertices[gl_VertexIndex], 0.5, 1.0);
-                    gl_Position = pos_ndc;
-                    global_coord_facedir = inverse_vp_matrix * pos_ndc;
-                }
-            "
+            ty: "vertex",
+            path: "src/vulkan/shaders/raytracer_vtx.glsl"
         },
         raytraced_frag: {
-        ty: "fragment",
-        path: "src/vulkan/shaders/raytracer_frag.glsl"
-        }
-    }
+            ty: "fragment",
+            path: "src/vulkan/shaders/raytracer_frag.glsl"
+        },
+    },
+    vulkan_version: "1.3",
+    spirv_version: "1.3",
 }
 
 pub(crate) struct RaytracedPipelineWrapper {
     pipeline: Arc<GraphicsPipeline>,
+    descriptor_set: Arc<DescriptorSet>,
     supersampling: Supersampling,
+    raytrace_control_ssbo_len: u32,
 }
 
 impl PipelineWrapper<(), (SceneState, Subbuffer<[u32]>, Vector3<f64>)>
@@ -123,11 +99,12 @@ impl PipelineWrapper<(), (SceneState, Subbuffer<[u32]>, Vector3<f64>)>
             supersampling: self.supersampling.to_float(),
             coarse_pos: [player_chunk.x, player_chunk.y, player_chunk.z].into(),
             fine_pos: [fine.x as f32, fine.y as f32, fine.z as f32].into(),
+            max_cube_info_idx: self.raytrace_control_ssbo_len,
         };
         let per_frame_set_layout = layout
             .set_layouts()
-            .get(0)
-            .with_context(|| "Raytraced layout missing set 0")?;
+            .get(1)
+            .with_context(|| "Raytraced layout missing set 1")?;
         let uniform_buffer = Buffer::from_data(
             ctx.memory_allocator.clone(),
             BufferCreateInfo {
@@ -154,7 +131,7 @@ impl PipelineWrapper<(), (SceneState, Subbuffer<[u32]>, Vector3<f64>)>
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout,
             0,
-            vec![per_frame_set],
+            vec![self.descriptor_set.clone(), per_frame_set],
         )?;
         Ok(())
     }
@@ -167,14 +144,14 @@ pub(crate) struct RaytracedPipelineProvider {
 }
 impl PipelineProvider for RaytracedPipelineProvider {
     type DrawCall<'a> = ();
-    type PerPipelineConfig<'a> = ();
+    type PerPipelineConfig<'a> = &'a BlockRenderer;
     type PerFrameConfig = (SceneState, Subbuffer<[u32]>, Vector3<f64>);
     type PipelineWrapperImpl = RaytracedPipelineWrapper;
 
     fn make_pipeline(
         &self,
         ctx: &VulkanWindow,
-        _config: Self::PerPipelineConfig<'_>,
+        config: Self::PerPipelineConfig<'_>,
         global_config: &LiveRenderConfig,
     ) -> anyhow::Result<Self::PipelineWrapperImpl> {
         let vs = self
@@ -247,9 +224,28 @@ impl PipelineProvider for RaytracedPipelineProvider {
             ..GraphicsPipelineCreateInfo::layout(layout.clone())
         };
         let pipeline = GraphicsPipeline::new(self.device.clone(), None, pipeline_info)?;
+        let raytrace_control_ssbo = config.raytrace_control_ssbo();
+        let raytrace_control_ssbo_len = raytrace_control_ssbo
+            .len()
+            .try_into()
+            .context("raytrace control ssbo len too large")?;
+        let descriptor_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            dbg!(pipeline.layout().set_layouts().get(0))
+                .with_context(|| "descriptor set missing")?
+                .clone(),
+            [
+                config.atlas().write_descriptor_set(0),
+                WriteDescriptorSet::buffer(1, raytrace_control_ssbo),
+            ],
+            [],
+        )?;
+
         Ok(RaytracedPipelineWrapper {
             pipeline,
+            descriptor_set,
             supersampling: global_config.supersampling,
+            raytrace_control_ssbo_len,
         })
     }
 }

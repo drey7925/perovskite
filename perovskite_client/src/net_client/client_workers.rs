@@ -961,14 +961,11 @@ async fn fake_raytrace_prep(ctx: Arc<SharedState>) {
         let mut builder = ChunkHashtableBuilder::new();
         for (coord, data) in view.iter() {
             if data.has_mesh() {
-                let mut chunk = vec![];
-                chunk.resize(4096, 0);
                 let mesh_data = data.chunk_data();
-                for i in 0..4096 {
-                    chunk[i] =
-                        mesh_data.block_ids()[ChunkOffset::from_index(i).as_extended_index()].0;
-                }
-                builder.add_chunk(*coord, chunk);
+                // This cast takes newtype(u32) -> u32
+                let chunk = bytemuck::cast_slice(mesh_data.block_ids()).to_vec();
+                let lights = mesh_data.lightmap().to_vec();
+                builder.add_chunk(*coord, chunk, lights);
             }
         }
         drop(view);

@@ -4,11 +4,16 @@ use perovskite_core::coordinates::ChunkCoordinate;
 
 fn build_hashtable(c: &mut Criterion) {
     let data = vec![0; 4096];
+    let lights = vec![0; 4096];
     let mut builder = ChunkHashtableBuilder::new();
     for x in -15..15 {
         for y in -15..15 {
             for z in -15..15 {
-                builder.add_chunk(ChunkCoordinate::new(x, y, z), data.as_slice());
+                builder.add_chunk(
+                    ChunkCoordinate::new(x, y, z),
+                    data.as_slice(),
+                    lights.as_slice(),
+                );
             }
         }
     }

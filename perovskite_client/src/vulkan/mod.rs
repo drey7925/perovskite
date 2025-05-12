@@ -33,10 +33,11 @@ use log::warn;
 use smallvec::smallvec;
 
 use texture_packer::Rect;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
 use vulkano::command_buffer::{
-    BlitImageInfo, BufferImageCopy, CopyBufferToImageInfo, SubpassBeginInfo,
+    BlitImageInfo, BufferImageCopy, CommandBufferUsage, CopyBufferInfo, CopyBufferToImageInfo,
+    SubpassBeginInfo,
 };
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::format::NumericFormat;
@@ -143,6 +144,90 @@ impl VulkanContext {
             ClearValue::Depth(1.0)
         }
     }
+
+    pub(crate) fn copy_to_device<T: BufferContents>(&self, data: T) -> Result<Subbuffer<T>> {
+        let staging_buffer = Buffer::from_data(
+            self.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            data,
+        )?;
+        let target_buffer = Buffer::new_sized(
+            self.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?;
+
+        let transfer_queue = self.clone_transfer_queue();
+        let mut command_buffer = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator(),
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+        command_buffer.copy_buffer(CopyBufferInfo::buffers(
+            staging_buffer,
+            target_buffer.clone(),
+        ))?;
+        command_buffer.build()?.execute(transfer_queue)?.flush()?;
+        Ok(target_buffer)
+    }
+
+    pub(crate) fn iter_to_device<T: BufferContents>(
+        &self,
+        data: impl ExactSizeIterator<Item = T>,
+    ) -> Result<Subbuffer<[T]>> {
+        let staging_buffer = Buffer::from_iter(
+            self.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            data,
+        )?;
+        let target_buffer = Buffer::new_slice(
+            self.clone_allocator(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            staging_buffer.len(),
+        )?;
+
+        let transfer_queue = self.clone_transfer_queue();
+        let mut command_buffer = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator(),
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+        command_buffer.copy_buffer(CopyBufferInfo::buffers(
+            staging_buffer,
+            target_buffer.clone(),
+        ))?;
+        command_buffer.build()?.execute(transfer_queue)?.flush()?;
+        Ok(target_buffer)
+    }
 }
 
 pub(crate) struct VulkanWindow {
@@ -212,6 +297,7 @@ impl VulkanWindow {
         };
 
         let device_extensions = DeviceExtensions {
+            ext_shader_subgroup_vote: true,
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
@@ -224,6 +310,7 @@ impl VulkanWindow {
                 &instance,
                 &surface,
                 &device_extensions,
+                &device_features,
                 &settings.load().render.preferred_gpu,
             )?;
 
@@ -848,14 +935,18 @@ impl Texture2DHolder {
         let descriptor_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             layout.clone(),
-            [WriteDescriptorSet::image_view_sampler(
-                binding,
-                self.image_view.clone(),
-                self.sampler.clone(),
-            )],
+            [self.write_descriptor_set(binding)],
             [],
         )?;
         Ok(descriptor_set)
+    }
+
+    pub(crate) fn write_descriptor_set(&self, binding: u32) -> WriteDescriptorSet {
+        WriteDescriptorSet::image_view_sampler(
+            binding,
+            self.image_view.clone(),
+            self.sampler.clone(),
+        )
     }
 
     pub(crate) fn dimensions(&self) -> (u32, u32) {

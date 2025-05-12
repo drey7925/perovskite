@@ -46,12 +46,13 @@ use crate::client_state::chunk::{
 };
 use crate::client_state::ClientState;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
@@ -444,7 +445,15 @@ pub(crate) struct BlockRenderer {
     axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
     fake_entity_tex_coords: RectF32,
     vk_ctx: Arc<VulkanContext>,
+    raytrace_control_ssbo: Subbuffer<[SimpleCubeInfo]>,
 }
+
+impl BlockRenderer {
+    pub(crate) fn raytrace_control_ssbo(&self) -> Subbuffer<[SimpleCubeInfo]> {
+        self.raytrace_control_ssbo.clone()
+    }
+}
+
 impl BlockRenderer {
     pub(crate) async fn new(
         block_defs: Arc<ClientBlockTypeManager>,
@@ -560,6 +569,7 @@ impl BlockRenderer {
                 })
                 .collect(),
         };
+        let raytrace_control_ssbo = simple_block_tex_coords.build_ssbo(&ctx)?;
 
         let axis_aligned_box_blocks = AxisAlignedBoxBlocksCache {
             blocks: block_defs
@@ -593,6 +603,7 @@ impl BlockRenderer {
             fake_entity_tex_coords: fake_entity_rect.div(atlas_dims),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
+            raytrace_control_ssbo,
             vk_ctx: ctx,
         })
     }
@@ -1153,19 +1164,38 @@ fn build_simple_cache_entry(
     texture_coords: &FxHashMap<String, Rect>,
     w: f32,
     h: f32,
-) -> Option<[MaybeDynamicRect; 6]> {
+) -> Option<SimpleTexCoordEntry> {
     match &block_def.render_info {
-        Some(RenderInfo::Cube(render_info)) => Some([
-            get_texture(texture_coords, render_info.tex_right.as_ref(), w, h),
-            get_texture(texture_coords, render_info.tex_left.as_ref(), w, h),
-            get_texture(texture_coords, render_info.tex_top.as_ref(), w, h),
-            get_texture(texture_coords, render_info.tex_bottom.as_ref(), w, h),
-            get_texture(texture_coords, render_info.tex_back.as_ref(), w, h),
-            get_texture(texture_coords, render_info.tex_front.as_ref(), w, h),
-        ]),
+        Some(RenderInfo::Cube(render_info)) => {
+            let mut flags = 1;
+            if render_info.variant_effect() == CubeVariantEffect::RotateNesw {
+                flags |= 2;
+            }
+            let coords = [
+                get_texture(texture_coords, render_info.tex_right.as_ref(), w, h),
+                get_texture(texture_coords, render_info.tex_left.as_ref(), w, h),
+                get_texture(texture_coords, render_info.tex_top.as_ref(), w, h),
+                get_texture(texture_coords, render_info.tex_bottom.as_ref(), w, h),
+                get_texture(texture_coords, render_info.tex_back.as_ref(), w, h),
+                get_texture(texture_coords, render_info.tex_front.as_ref(), w, h),
+            ];
+            if coords
+                .iter()
+                .any(|x| matches!(x, MaybeDynamicRect::Dynamic(_)))
+            {
+                flags |= 4;
+            }
+            Some(SimpleTexCoordEntry {
+                shader_flags: flags,
+                coords,
+            })
+        }
         Some(RenderInfo::PlantLike(render_info)) => {
             let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
-            Some([coords; 6])
+            Some(SimpleTexCoordEntry {
+                shader_flags: 1 | 4,
+                coords: [coords; 6],
+            })
         }
         _ => None,
     }
@@ -1285,31 +1315,59 @@ impl MaybeDynamicRect {
     }
 }
 
-struct SimpleTexCoordCache {
-    blocks: Vec<Option<[MaybeDynamicRect; 6]>>,
+struct SimpleTexCoordEntry {
+    shader_flags: u32,
+    coords: [MaybeDynamicRect; 6],
 }
+
+struct SimpleTexCoordCache {
+    blocks: Vec<Option<SimpleTexCoordEntry>>,
+}
+
+impl SimpleTexCoordCache {
+    pub(crate) fn build_ssbo(&self, ctx: &VulkanContext) -> Result<Subbuffer<[SimpleCubeInfo]>> {
+        let buf = ctx.iter_to_device(self.blocks.iter().map(|x| {
+            match x.as_ref() {
+                None => SimpleCubeInfo {
+                    flags: 0.into(),
+                    tex: [TexRef {
+                        top_left: [0.0, 0.0],
+                        width_height: [0.0, 0.0],
+                    }; 6],
+                },
+                Some(x) => {
+                    SimpleCubeInfo {
+                        flags: x.shader_flags.into(),
+                        tex: x.coords.map(|rect| {
+                            // Temporary/transitional
+                            let coords = rect.rect(0);
+                            TexRef {
+                                // reorder here to avoid extra swizzles in the shader
+                                top_left: [coords.l, coords.t],
+                                width_height: [coords.w, coords.h],
+                            }
+                        }),
+                    }
+                }
+            }
+        }))?;
+        Ok(buf)
+    }
+}
+
 impl SimpleTexCoordCache {
     fn get(&self, block_id: BlockId) -> Option<[RectF32; 6]> {
         self.blocks
             .get(block_id.index())
             .and_then(|x| x.as_ref())
-            .and_then(|entry| {
-                Some([
-                    entry[0].rect(block_id.variant()),
-                    entry[1].rect(block_id.variant()),
-                    entry[2].rect(block_id.variant()),
-                    entry[3].rect(block_id.variant()),
-                    entry[4].rect(block_id.variant()),
-                    entry[5].rect(block_id.variant()),
-                ])
-            })
+            .map(|entry| entry.coords.map(|x| x.rect(block_id.variant())))
     }
 
     fn get_zero(&self, block_id: BlockId) -> Option<RectF32> {
         self.blocks
             .get(block_id.index())
             .and_then(|x| x.as_ref())
-            .and_then(|entry| Some(entry[0].rect(block_id.variant())))
+            .and_then(|entry| Some(entry.coords[0].rect(block_id.variant())))
     }
 }
 
@@ -1389,7 +1447,7 @@ fn make_cgv(
 /// Arguments:
 ///    coord: The center of the overall cube, in world space, with y-axis up (opposite Vulkan)
 ///     This is the center of the cube body, not the current face.
-///    frame: The texture for the face.
+///    frame: The texture of the face.
 #[inline]
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,

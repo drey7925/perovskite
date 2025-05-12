@@ -27,9 +27,19 @@ pub fn phash(coord: ChunkCoordinate, k1: u32, k2: u32, k3: u32, p: u32, n: u32) 
     ((xp.wrapping_add(yp).wrapping_add(zp)) % p) & (n - 1)
 }
 
+/// The actual data payload of each chunk
+pub const CHUNK_LEN: usize = 18 * 18 * 18;
+// 18 * 18 * 18, overaligned to 32 bytes
+pub const CHUNK_LIGHTS_OFFSET: usize = 5856;
+pub const CHUNK_LIGHTS_LEN: usize = 18 * 18 * 18 / 4; // 1458
+/// Data payload + alignment
+pub const CHUNK_STRIDE: usize = 5856 + 1472; // 7328
+
 pub mod ht_consts {
     /// If set in flags, this entry has a valid chunk. If unset, x/y/z are nonsensical, with
     /// arbitrary (likely 0 values), and the same holds for the corresponding chunk data
+    ///
+    /// Note that if this is absent, the WHOLE flags must be 0
     pub const FLAG_HASHTABLE_PRESENT: u32 = 1;
 
     pub const OFFSET_N: usize = 0;
@@ -56,43 +66,46 @@ const PRIME: u32 = 1610612741;
 /// 4..7                     [   k3  ][     reserved/padding       ]
 ///    ...                   [ reserved/padding                    ]
 /// 28..31                   [ reserved/padding                    ]
-/// 32..35                   [   x0  ][   y0   ][   z0   ][ flags0 ]
-/// 36..39                   [   x1  ][   y1   ][   z1   ][ flags1 ]
-/// 4i+32 .. 4i + 35         [   x_i ][   y_i  ][   z_i  ][ f_i    ]
+/// 32..35                   [ flags0 ][   x0  ][   y0   ][   z0   ]
+/// 36..39                   [ flags1 ][   x1  ][   y1   ][   z1   ]
+/// 4i+32 .. 4i + 35         [ f_i    ][   x_i ][   y_i  ][   z_i  ]
 /// 4(N-1)+32 .. 4(N-1) + 35 [ x_n-1 ][ y_n-1  ][ z_n-1  ][ f_n-1  ]
-/// 4N+32 .. 4N + 4127       [ Chunk 0 data, as 4096 ints ...      ]
-/// 4N+4128 .. 4N + 8224     [ Chunk 1 data, as 4096 ints ...      ]
+/// 4N+32 .. 5863            [ Chunk 0 data, as CHUNK_STRIDE ints  ]
 /// ...                      [ More chunks                ...      ]
-/// 4100N-4064 .. 4100N+31   [ Chunk N data, as 4096 ints ...      ]
 /// ```
+///
+/// Each chunk internally is 5832 ints (blocks), 1458 ints (lights, u8 packed into u32 using machine
+/// endianness, e.g. on x86 `[1u8, 0u8, 0u8, 0u8]` -> `1u32`.)
 ///
 /// Chunk x/y/z are transmuted i32 -> u32 when stored.
 ///
-/// Each chunk can be found starting at int offset 4N + 32 + 4096*i.
+/// Each chunk can be found starting at int offset 4N + 32 + CHUNK_LEN*i.
 ///
 /// Data buffers are the blocks in a chunk, ordered X/Z/Y. [perovskite_core::coordinates::ChunkOffset::as_index]
 /// may be used to index into this.
-pub struct ChunkHashtableBuilder<T>
+pub struct ChunkHashtableBuilder<T, U>
 where
     T: Deref<Target = [u32]>,
+    U: Deref<Target = [u8]>,
 {
     // Not a FxHashMap: paranoid that we don't have a hard guarantee of iteration order being same
     // on each iteration of an unchanged map (although it's a reasonable assumption to make)
-    chunks: FxHashMap<ChunkCoordinate, T>,
+    chunks: FxHashMap<ChunkCoordinate, (T, U)>,
 }
-impl<T> ChunkHashtableBuilder<T>
+impl<T, U> ChunkHashtableBuilder<T, U>
 where
     T: Deref<Target = [u32]>,
+    U: Deref<Target = [u8]>,
 {
-    pub fn new() -> ChunkHashtableBuilder<T> {
+    pub fn new() -> ChunkHashtableBuilder<T, U> {
         ChunkHashtableBuilder {
             chunks: FxHashMap::default(),
         }
     }
 
     /// Adds a chunk to this builder.
-    pub fn add_chunk(&mut self, coord: ChunkCoordinate, data: T) {
-        self.chunks.insert(coord, data);
+    pub fn add_chunk(&mut self, coord: ChunkCoordinate, data: T, lights: U) {
+        self.chunks.insert(coord, (data, lights));
     }
 
     /// Builds a chunk hashtable.
@@ -109,7 +122,7 @@ where
         let expanded = self.chunks.len() + (self.chunks.len() >> 2) + (self.chunks.len() >> 3);
         let n = expanded.max(8).next_power_of_two();
         let mut data = Vec::new();
-        data.resize(4100 * n + 32, 0);
+        data.resize((4 + CHUNK_STRIDE) * n + 32, 0);
         let n32 = n.try_into().context("n overflowed u32")?;
         data[0] = n32;
 
@@ -157,13 +170,14 @@ where
 
         for (i, entry) in table.iter().enumerate() {
             if let Some(coord) = entry {
-                let base = (4 * i) + 32;
-                data[base] = coord.x as u32;
-                data[base + 1] = coord.y as u32;
-                data[base + 2] = coord.z as u32;
-                data[base + 3] = FLAG_HASHTABLE_PRESENT;
-                let base2 = 4 * n + 32 + 4096 * i;
-                data[base2..base2 + 4096].copy_from_slice(self.chunks.get(coord).unwrap().deref());
+                let control_base = (4 * i) + 32;
+                data[control_base] = FLAG_HASHTABLE_PRESENT;
+                data[control_base + 1] = coord.x as u32;
+                data[control_base + 2] = coord.y as u32;
+                data[control_base + 3] = coord.z as u32;
+                let data_base = 4 * n + 32 + CHUNK_STRIDE * i;
+                let (blocks, lights) = self.chunks.get(coord).unwrap();
+                data[data_base..data_base + CHUNK_LEN].copy_from_slice(blocks.deref());
             }
         }
 
@@ -200,11 +214,16 @@ pub fn gpu_table_lookup(table: &[u32], key: ChunkCoordinate) -> u32 {
 #[test]
 fn test_build_and_probe() {
     let mut builder = ChunkHashtableBuilder::new();
-    let data = vec![0u32; 4096];
+    let data = vec![0u32; 18 * 18 * 18];
+    let lights = vec![0u8; 18 * 18 * 18];
     for x in -15..15 {
         for y in -15..15 {
             for z in -15..15 {
-                builder.add_chunk(ChunkCoordinate::new(x, y, z), data.as_slice());
+                builder.add_chunk(
+                    ChunkCoordinate::new(x, y, z),
+                    data.as_slice(),
+                    lights.as_slice(),
+                );
             }
         }
     }

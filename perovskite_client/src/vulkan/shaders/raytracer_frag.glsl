@@ -1,62 +1,82 @@
 #version 460
-layout(location = 0) in vec4 global_coord_facedir;
+#extension GL_KHR_shader_subgroup_vote: enable
 
-layout(set = 0, binding = 0) uniform RaytracedUniformData {
-// Takes an NDC position and transforms it *back* to world space
-    mat4 inverse_vp_matrix;
-    ivec3 coarse_pos;
-    vec3 fine_pos;
-// vec3 sun_direction;
-// Used for dither
-    float supersampling;
-};
-layout(set = 0, binding = 1) readonly buffer chunk_map {
-    uint chunks[];
-};
+layout(location = 0) in vec4 global_coord_facedir;
 layout(location = 0) out vec4 f_color;
 
-uint phash(uvec3 coord, uvec3 k, uint n) {
+#include "raytracer_bindings.glsl"
+
+const mat2x4 face_swizzlers[] = {
+// X+
+mat2x4(
+vec4(0, 0, -1, 1), vec4(0, -1, 0, 1)
+),
+// X-
+mat2x4(
+vec4(0, 0, 1, 0), vec4(0, -1, 0, 1)
+),
+// Y+
+mat2x4(
+vec4(1, 0, 0, 0), vec4(0, 0, 1, 0)
+),
+// Y-
+mat2x4(
+vec4(-1, 0, 0, 1), vec4(0, 0, -1, 1)
+),
+// Z+
+mat2x4(
+vec4(1, 0, 0, 0), vec4(0, -1, 0, 1)
+),
+// Z-
+mat2x4(
+vec4(-1, 0, 0, 1), vec4(0, -1, 0, 1)
+),
+};
+
+const int face_backoffs_offset[] = {
+18 * 18, -18 * 18,
+-1, -1,
+18, -18
+};
+
+uint phash(uvec3 coord, uvec3 k, uint n_minus_one) {
     uvec3 products = coord * k;
     uint sum = products.x + products.y + products.z;
-    return (sum % 1610612741) & (n - 1);
+    return (sum % 1610612741) & n_minus_one;
 }
 
-uint map_lookup(uvec3 coord, uvec3 k, uint n, uint mx) {
-    uvec3 products = coord * k;
-    uint sum = products.x + products.y + products.z;
-    uint slot = (sum % 1610612741) & (n - 1);
-    for (int s = 0; s <= mx; s++) {
-        uint base = slot * 4 + 32;
-        if ((chunks[base + 3] & 1) == 0) {
-            return 0xffffffff;
-        }
-        if (uvec3(chunks[base], chunks[base + 1], chunks[base + 2]) == coord) {
-            return slot;
-        }
-        slot = (slot + 1) & (n - 1);
-    }
-    return 0xffffffff;
-}
+//uint map_lookup(uvec3 coord, uvec3 k, uint n, uint mx) {
+//    uvec3 products = coord * k;
+//    uint sum = products.x + products.y + products.z;
+//    uint slot = (sum % 1610612741) & (n - 1);
+//    for (int s = 0; s <= mx; s++) {
+//        uint base = slot * 4 + 32;
+//        if ((chunks[base + 3] & 1) == 0) {
+//            return 0xffffffff;
+//        }
+//        if (uvec3(chunks[base], chunks[base + 1], chunks[base + 2]) == coord) {
+//            return slot;
+//        }
+//        slot = (slot + 1) & (n - 1);
+//    }
+//    return 0xffffffff;
+//}
 
 // Raytraces through a single chunk, returns true if hit, false if no hit.
 // (tentative signature, to be updated later)
-bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
-    uvec3 chk = uvec3(chunk + coarse_pos);
-    uint res = map_lookup(chk, k, n, mx);
-    if (res == 0xffffffff) {
-        return false;
-    }
-    uint base = 4 * n + 32 + 4096 * res;
-    //f_color = vec4(g1 / 16, 1.0);
-    //return true;
-    vec3 hit_color = normalize(g1 - g0) / 2 + 0.5;
+bool traverse_chunk(uint slot, vec3 g0, vec3 g1, uvec3 k, uint n_minus_one, uint mx, uint face) {
+    // 32 ints for header (may move to a UBO later), 4n ints for packed keys table, 5832 ints per chunk, and 343 ints
+    // to account for the fact that offset [0,0,0] is partway in chunk (lighting/neighbor data)
+    // 32 + 343 = 375
+    // but also 379 because n-1 rather than n
+    uint base = 4 * n_minus_one + 379 + (7328 * slot);
 
-    vec3 g0idx = floor(g0);
-    vec3 g1idx = floor(g1);
-    vec3 sgns = sign(g1idx - g0idx);
+    ivec3 g0idx = ivec3(floor(g0));
+    ivec3 g1idx = ivec3(floor(g1));
+    ivec3 sgns = ivec3(sign(g1idx - g0idx));
 
-    vec3 g = g0idx;
-    vec3 gpd = vec3(
+    ivec3 g = g0idx;
+    uvec3 gpd = uvec3(
     (g1idx.x > g0idx.x ? 1 : 0),
     (g1idx.y > g0idx.y ? 1 : 0),
     (g1idx.z > g0idx.z ? 1 : 0)
@@ -82,14 +102,12 @@ bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
     vec3 derr = sgns * v2;
     int i = 0;
 
-
+    // CubeFace is structured such that gpd can be used to get the correct side
     for (; i < 60; i++) {
 
 
         vec3 start_cc = gfrac;
         vec3 end_cc;
-        vec3 old_g = g;
-
 
         //        if ((g.y == 3) && (g.x == 4)) {
         //            f_color = vec4(0.0, 1.0, 1.0, 1.0);
@@ -98,7 +116,18 @@ bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
 
         vec3 r = abs(err);
 
-
+        // Hide latency by overlaying fetch with next-block calc
+        uint block_id;
+        ivec3 old_g = g;
+        ivec3 mask = ivec3(~15);
+        if ((g & mask) == ivec3(0)) {
+            uint offset = g.x * 324 + g.y + g.z * 18;
+            block_id = chunks[base + offset];
+        } else {
+            block_id = 0;
+        }
+        uint n_face;
+        vec2 luv;
         if (sgns.x != 0 && (sgns.y == 0 || r.x < r.y) && (sgns.z == 0 || r.x < r.z)) {
             g.x += sgns.x;
             float diff = gpd.x - gfrac.x;
@@ -106,6 +135,8 @@ bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
             end_cc = gfrac;
             err.x += derr.x;
             gfrac.x -= sgns.x;
+            n_face = 1 - gpd.x;
+            luv = gfrac.yz;
         }
         else if (sgns.y != 0 && (sgns.z == 0 || r.y < r.z)) {
             g.y += sgns.y;
@@ -114,6 +145,8 @@ bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
             end_cc = gfrac;
             err.y += derr.y;
             gfrac.y -= sgns.y;
+            n_face = 2 + gpd.y;
+            luv = gfrac.xz;
         }
         else if (sgns.z != 0) {
             g.z += sgns.z;
@@ -122,25 +155,26 @@ bool traverse_chunk(ivec3 chunk, vec3 g0, vec3 g1, uvec3 k, uint n, uint mx) {
             end_cc = gfrac;
             err.z += derr.z;
             gfrac.z -= sgns.z;
-
+            n_face = 5 - gpd.z;
+            luv = gfrac.xy;
         }
 
-        //        if(gfrac.x < 0.05 || gfrac.x > 0.95 || gfrac.y < 0.05 || gfrac.y > 0.95 || gfrac.z < 0.05 || gfrac.z > 0.95) {
-        //            hit_color = vec3(0, 0, 0);
-        //        }
-
-        //        if (offset < 0 || offset >= 4096) {
-        //            return true;
-        //        }
-        if (old_g.x < 0 || old_g.y < 0 || old_g.z < 0) { continue; }
-        if (old_g.x >= 16 || old_g.y >= 16 || old_g.z >= 16) { continue; }
-
-        uint offset = 256 * uint(old_g.x) + 16 * uint(old_g.z) + uint(old_g.y);
-        if (offset >= 0 && offset < 4096 && chunks[base + offset] != 0) {
-            f_color = vec4(start_cc, 1.0);
-            return true;
+        if (block_id != 0) {
+            uint idx = block_id >> 12;
+            if (idx >= max_cube_info_idx) {
+                // TODO proper fallback
+                idx = 1;
+            }
+            if ((cube_info[idx].flags & 1) != 0) {
+                // TODO: cube rotation :(
+                vec2 tl = cube_info[idx].tex[face].top_left;
+                vec2 wh = cube_info[idx].tex[face].width_height;
+                vec2 uv = vec4(start_cc, 1) * face_swizzlers[face];
+                f_color = texture(tex, tl + (uv * wh));
+                return true;
+            }
         }
-
+        face = n_face;
         if (old_g == g1idx) {
             break;
         }
@@ -179,16 +213,16 @@ void main() {
             if (idx0 == 0) {
                 f_color = vec4(1.0, 0.0, 0.0, 1.0);
                 return;
-            } else if (idx0 ==1 ) {
+            } else if (idx0 ==1) {
                 f_color = vec4(1.0, 1.0, 0.0, 1.0);
                 return;
-            } else if (idx0 ==2 ) {
+            } else if (idx0 ==2) {
                 f_color = vec4(0.0, 1.0, 0.0, 1.0);
                 return;
-            } else if (idx0 ==3 ) {
+            } else if (idx0 ==3) {
                 f_color = vec4(0.0, 0.0, 1.0, 1.0);
                 return;
-            } else if (idx0 ==4 ) {
+            } else if (idx0 ==4) {
                 f_color = vec4(1.0, 1.0, 0.0, 1.0);
                 return;
             }
@@ -208,20 +242,20 @@ void main() {
             }
         }
     }
-
+    uint last_face = 0;
     // Raytracing experiment
     vec2 pix2 = gl_FragCoord.xy / (2.0 * supersampling);
     int ix2 = int(pix2.x) % 2;
     int iy2 = int(pix2.y) % 2;
 
-    if ((ix2 ^ iy2) == 0) {
-        // Complementary to the control on the raster code
-        discard;
-    }
+    //    if ((ix2 ^ iy2) == 0) {
+    //        // Complementary to the control on the raster code
+    //        discard;
+    //    }
     vec3 facedir = normalize(global_coord_facedir.xyz);
 
     vec3 facedir_world = vec3(facedir.x, -facedir.y, facedir.z);
-    uint n = chunks[0];
+    uint n_minus_one = chunks[0] - 1;
     uint mx = chunks[1];
     uint k1 = uint(chunks[2]);
     uint k2 = uint(chunks[3]);
@@ -238,14 +272,14 @@ void main() {
     vec3 g0 = fine_pos_fixed / 16.0;
     vec3 g1 = (fine_pos_fixed + (500 * facedir_world)) / 16.0;
 
-    vec3 g0idx = floor(g0);
+    ivec3 g0idx = ivec3(floor(g0));
     vec3 gfrac = g0 - g0idx;
     vec3 slope = g1 - g0;
-    vec3 g1idx = floor(g1);
-    vec3 sgns = sign(g1idx - g0idx);
+    ivec3 g1idx = ivec3(floor(g1));
+    ivec3 sgns = sign(g1idx - g0idx);
 
-    vec3 g = g0idx;
-    vec3 gpd = vec3(
+    ivec3 g = g0idx;
+    uvec3 gpd = uvec3(
     (g1idx.x > g0idx.x ? 1 : 0),
     (g1idx.y > g0idx.y ? 1 : 0),
     (g1idx.z > g0idx.z ? 1 : 0)
@@ -273,7 +307,21 @@ void main() {
 
         vec3 start_cc = gfrac;
         vec3 end_cc;
-        vec3 old_g = g;
+        ivec3 old_g = g;
+
+        uvec3 chk = uvec3(g + coarse_pos);
+        // Hide latency by interleaving map lookup with next-chunk calc
+        // We do this by doing the first lookup now, and hoping that we have a prefetched cacheline
+        // by the time we finish the math for next chunk
+
+        // This is inlined from the old map lookup function and rearranged
+        uvec3 products = chk * k;
+        uint sum = products.x + products.y + products.z;
+        uint try_slot = (sum % 1610612741) & n_minus_one;
+        uint slot_base = try_slot * 4 + 32;
+        uint slot_flag = chunks[slot_base];
+
+        uint n_face;
         //col = gfrac;
         if (sgns.x != 0 && (sgns.y == 0 || r.x < r.y) && (sgns.z == 0 || r.x < r.z)) {
             g.x += sgns.x;
@@ -283,6 +331,7 @@ void main() {
             err.x += derr.x;
             gfrac.x -= sgns.x;
             col = gfrac;
+            n_face = 1 - gpd.x;
         }
         else if (sgns.y != 0 && (sgns.z == 0 || r.y < r.z)) {
             g.y += sgns.y;
@@ -292,6 +341,7 @@ void main() {
             err.y += derr.y;
             gfrac.y -= sgns.y;
             col = gfrac;
+            n_face = 2 + gpd.y;
         }
         else if (sgns.z != 0) {
             g.z += sgns.z;
@@ -301,27 +351,31 @@ void main() {
             err.z += derr.z;
             gfrac.z -= sgns.z;
             col = gfrac;
+            n_face = 5 - gpd.z;
 
         } else {
             f_color = vec4(1.0, 1.0, 0.0, 1.0);
             return;
         }
 
-        if (traverse_chunk(ivec3(old_g), start_cc * 16.0, end_cc * 16.0, k, n, mx)) {
+        uint slot = 0xffffffff;
+        for (int s = 0; s <= mx; s++) {
+            if (slot_flag == 0) {
+                break;
+            }
+            if (uvec3(chunks[slot_base + 1], chunks[slot_base + 2], chunks[slot_base + 3]) == chk) {
+                slot = try_slot;
+                break;
+            }
+            try_slot = (try_slot + 1) & n_minus_one;
+            slot_base = try_slot * 4 + 32;
+            slot_flag = chunks[slot_base];
+        }
+
+        if (slot != 0xffffffff && traverse_chunk(slot, start_cc * 16.0, end_cc * 16.0, k, n_minus_one, mx, last_face)) {
             return;
         }
-        //        ivec3 t = ivec3(g);
-        //        uvec3 chk = uvec3(t + cpos);
-        //        uint res = map_lookup(chk, k, n, mx);
-        //        if (res != 0xffffffff) {
-        //            if ((col.x < 0.0625 || col.x > 0.125) && (col.y < 0.0625 || col.y > 0.125) && (col.z < 0.0625 || col.z > 0.125)) {
-        //                f_color = vec4(col, 1.0);
-        //                return;
-        //            } else {
-        //                f_color = vec4(0.0, 0.0, 0.0, 1.0);
-        //                return;
-        //            }
-        //        }
+        last_face = n_face;
 
         if (old_g == g1idx) {
             break;

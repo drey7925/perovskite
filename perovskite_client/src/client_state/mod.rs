@@ -610,44 +610,7 @@ impl ChunkManager {
     }
 
     pub(crate) fn set_fake_raytrace_data(&self, data: Vec<u32>, ctx: &VulkanContext) -> Result<()> {
-        let staging_buffer = Buffer::from_iter(
-            ctx.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            data.iter().copied(),
-        )?;
-        let target_buffer = Buffer::new_slice(
-            ctx.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-            data.len() as DeviceSize,
-        )?;
-
-        let transfer_queue = ctx.clone_transfer_queue();
-        let mut command_buffer = AutoCommandBufferBuilder::primary(
-            ctx.command_buffer_allocator(),
-            transfer_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-        command_buffer.copy_buffer(CopyBufferInfo::buffers(
-            staging_buffer,
-            target_buffer.clone(),
-        ))?;
-        command_buffer.build()?.execute(transfer_queue)?.flush()?;
-        *self.fake_raytace_data.write() = Some(target_buffer);
+        *self.fake_raytace_data.write() = Some(ctx.iter_to_device(data.iter().copied())?);
         Ok(())
     }
 }

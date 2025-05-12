@@ -376,9 +376,11 @@ impl ActiveGame {
             )?
         };
         self.sky_pipeline = self.sky_provider.make_pipeline(ctx, (), &global_config)?;
-        self.raytraced_pipeline = self
-            .raytraced_provider
-            .make_pipeline(ctx, (), &global_config)?;
+        self.raytraced_pipeline = self.raytraced_provider.make_pipeline(
+            ctx,
+            &self.client_state.block_renderer,
+            &global_config,
+        )?;
         self.egui_adapter
             .as_mut()
             .context("Missing egui adapter")?
@@ -492,8 +494,11 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
     let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;
     let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, (), &global_render_config)?;
     let raytraced_provider = raytracer::RaytracedPipelineProvider::new(vk_wnd.vk_device.clone())?;
-    let raytraced_pipeline =
-        raytraced_provider.make_pipeline(&vk_wnd, (), &global_render_config)?;
+    let raytraced_pipeline = raytraced_provider.make_pipeline(
+        &vk_wnd,
+        &client_state.block_renderer,
+        &global_render_config,
+    )?;
 
     let game = ActiveGame {
         cube_provider,
