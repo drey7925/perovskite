@@ -969,13 +969,10 @@ async fn fake_raytrace_prep(ctx: Arc<SharedState>) {
             }
         }
         drop(view);
-
+        let (table, header) = builder.build(20, 3).unwrap();
         ctx.client_state
             .chunks
-            .set_fake_raytrace_data(
-                builder.build(20, 3).unwrap(),
-                ctx.client_state.block_renderer.vk_ctx(),
-            )
+            .set_fake_raytrace_data(table, header, ctx.client_state.block_renderer.vk_ctx())
             .unwrap();
 
         tokio::select!(

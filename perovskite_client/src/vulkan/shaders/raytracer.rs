@@ -42,6 +42,7 @@ vulkano_shaders::shader! {
     },
     vulkan_version: "1.3",
     spirv_version: "1.3",
+    custom_derives: [Debug, Clone, Copy]
 }
 
 pub(crate) struct RaytracedPipelineWrapper {
@@ -51,8 +52,16 @@ pub(crate) struct RaytracedPipelineWrapper {
     raytrace_control_ssbo_len: u32,
 }
 
-impl PipelineWrapper<(), (SceneState, Subbuffer<[u32]>, Vector3<f64>)>
-    for RaytracedPipelineWrapper
+impl
+    PipelineWrapper<
+        (),
+        (
+            SceneState,
+            Subbuffer<[u32]>,
+            Subbuffer<ChunkMapHeader>,
+            Vector3<f64>,
+        ),
+    > for RaytracedPipelineWrapper
 {
     type PassIdentifier = ();
 
@@ -72,11 +81,16 @@ impl PipelineWrapper<(), (SceneState, Subbuffer<[u32]>, Vector3<f64>)>
     fn bind<L>(
         &mut self,
         ctx: &VulkanContext,
-        per_frame_config: (SceneState, Subbuffer<[u32]>, Vector3<f64>),
+        per_frame_config: (
+            SceneState,
+            Subbuffer<[u32]>,
+            Subbuffer<ChunkMapHeader>,
+            Vector3<f64>,
+        ),
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: Self::PassIdentifier,
     ) -> anyhow::Result<()> {
-        let (per_frame_config, ssbo, player_pos) = per_frame_config;
+        let (per_frame_config, ssbo, header, player_pos) = per_frame_config;
         command_buf_builder.bind_pipeline_graphics(self.pipeline.clone())?;
         let layout = self.pipeline.layout().clone();
 
@@ -123,7 +137,8 @@ impl PipelineWrapper<(), (SceneState, Subbuffer<[u32]>, Vector3<f64>)>
             per_frame_set_layout.clone(),
             [
                 WriteDescriptorSet::buffer(0, uniform_buffer),
-                WriteDescriptorSet::buffer(1, ssbo),
+                WriteDescriptorSet::buffer(1, header),
+                WriteDescriptorSet::buffer(2, ssbo),
             ],
             [],
         )?;
@@ -145,7 +160,12 @@ pub(crate) struct RaytracedPipelineProvider {
 impl PipelineProvider for RaytracedPipelineProvider {
     type DrawCall<'a> = ();
     type PerPipelineConfig<'a> = &'a BlockRenderer;
-    type PerFrameConfig = (SceneState, Subbuffer<[u32]>, Vector3<f64>);
+    type PerFrameConfig = (
+        SceneState,
+        Subbuffer<[u32]>,
+        Subbuffer<ChunkMapHeader>,
+        Vector3<f64>,
+    );
     type PipelineWrapperImpl = RaytracedPipelineWrapper;
 
     fn make_pipeline(

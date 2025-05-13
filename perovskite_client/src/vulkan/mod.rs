@@ -145,7 +145,11 @@ impl VulkanContext {
         }
     }
 
-    pub(crate) fn copy_to_device<T: BufferContents>(&self, data: T) -> Result<Subbuffer<T>> {
+    pub(crate) fn copy_to_device<T: BufferContents>(
+        &self,
+        data: T,
+        usage: BufferUsage,
+    ) -> Result<Subbuffer<T>> {
         let staging_buffer = Buffer::from_data(
             self.clone_allocator(),
             BufferCreateInfo {
@@ -162,7 +166,7 @@ impl VulkanContext {
         let target_buffer = Buffer::new_sized(
             self.clone_allocator(),
             BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::TRANSFER_DST | usage,
                 ..Default::default()
             },
             AllocationCreateInfo {
@@ -188,6 +192,7 @@ impl VulkanContext {
     pub(crate) fn iter_to_device<T: BufferContents>(
         &self,
         data: impl ExactSizeIterator<Item = T>,
+        usage: BufferUsage,
     ) -> Result<Subbuffer<[T]>> {
         let staging_buffer = Buffer::from_iter(
             self.clone_allocator(),
@@ -205,7 +210,7 @@ impl VulkanContext {
         let target_buffer = Buffer::new_slice(
             self.clone_allocator(),
             BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::TRANSFER_DST | usage,
                 ..Default::default()
             },
             AllocationCreateInfo {

@@ -136,7 +136,8 @@ pub(crate) struct ChunkManager {
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
     light_columns: parking_lot::RwLock<LightColumnMap>,
     mesh_batches: Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
-    pub(crate) fake_raytace_data: parking_lot::RwLock<Option<Subbuffer<[u32]>>>,
+    pub(crate) fake_raytace_data:
+        parking_lot::RwLock<Option<(Subbuffer<[u32]>, Subbuffer<ChunkMapHeader>)>>,
 }
 impl ChunkManager {
     pub(crate) fn new() -> ChunkManager {
@@ -609,8 +610,16 @@ impl ChunkManager {
         }
     }
 
-    pub(crate) fn set_fake_raytrace_data(&self, data: Vec<u32>, ctx: &VulkanContext) -> Result<()> {
-        *self.fake_raytace_data.write() = Some(ctx.iter_to_device(data.iter().copied())?);
+    pub(crate) fn set_fake_raytrace_data(
+        &self,
+        data: Vec<u32>,
+        table: ChunkMapHeader,
+        ctx: &VulkanContext,
+    ) -> Result<()> {
+        *self.fake_raytace_data.write() = Some((
+            ctx.iter_to_device(data.iter().copied(), BufferUsage::STORAGE_BUFFER)?,
+            ctx.copy_to_device(table, BufferUsage::UNIFORM_BUFFER)?,
+        ));
         Ok(())
     }
 }
@@ -1019,6 +1028,7 @@ pub(crate) struct FrameState {
 
 use crate::audio;
 use crate::audio::MapSoundState;
+use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 use perovskite_core::protocol::map::ClientExtendedData;
 

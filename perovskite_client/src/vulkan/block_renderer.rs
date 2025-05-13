@@ -1326,7 +1326,7 @@ struct SimpleTexCoordCache {
 
 impl SimpleTexCoordCache {
     pub(crate) fn build_ssbo(&self, ctx: &VulkanContext) -> Result<Subbuffer<[SimpleCubeInfo]>> {
-        let buf = ctx.iter_to_device(self.blocks.iter().map(|x| {
+        let iterator = self.blocks.iter().map(|x| {
             match x.as_ref() {
                 None => SimpleCubeInfo {
                     flags: 0.into(),
@@ -1350,7 +1350,8 @@ impl SimpleTexCoordCache {
                     }
                 }
             }
-        }))?;
+        });
+        let buf = ctx.iter_to_device(iterator, BufferUsage::STORAGE_BUFFER)?;
         Ok(buf)
     }
 }

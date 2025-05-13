@@ -284,10 +284,10 @@ impl ActiveGame {
 
         {
             let frd = self.client_state.chunks.fake_raytace_data.read();
-            if let Some(ssbo) = frd.as_ref() {
+            if let Some((ssbo, header)) = frd.as_ref() {
                 self.raytraced_pipeline.bind(
                     ctx,
-                    (scene_state, ssbo.clone(), player_position),
+                    (scene_state, ssbo.clone(), header.clone(), player_position),
                     &mut command_buf_builder,
                     (),
                 )?;

@@ -28,6 +28,11 @@ layout(set = 1, binding = 0) uniform RaytracedUniformData {
 // length of RaytraceControl
     uint max_cube_info_idx;
 };
-layout(set = 1, binding = 1) readonly buffer chunk_map {
+layout(set = 1, binding = 1) uniform ChunkMapHeader {
+    uint n_minus_one;
+    uint mxc;
+    uvec3 k;
+};
+layout(set = 1, binding = 2) readonly buffer chunk_map {
     uint chunks[];
 };

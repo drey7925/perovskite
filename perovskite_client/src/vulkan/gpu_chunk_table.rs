@@ -3,6 +3,7 @@
 use crate::vulkan::gpu_chunk_table::ht_consts::{
     FLAG_HASHTABLE_PRESENT, OFFSET_K1, OFFSET_K2, OFFSET_K3, OFFSET_MXC, OFFSET_N,
 };
+use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use anyhow::Context;
 use perovskite_core::coordinates::ChunkCoordinate;
 use rand::distributions::uniform::SampleRange;
@@ -15,16 +16,16 @@ use std::ops::Deref;
 ///     coord: The coordinate to hash
 ///     k1, k2, k3: Discovered hash parameters
 ///
-pub fn phash(coord: ChunkCoordinate, k1: u32, k2: u32, k3: u32, p: u32, n: u32) -> u32 {
+pub fn phash(coord: ChunkCoordinate, k1: u32, k2: u32, k3: u32, p: u32, n_minus_one: u32) -> u32 {
     let ChunkCoordinate { x, y, z } = coord;
-    assert!(n.is_power_of_two());
+    assert!((n_minus_one + 1).is_power_of_two());
     let x = x as u32;
     let y = y as u32;
     let z = z as u32;
     let xp = x.wrapping_mul(k1);
     let yp = y.wrapping_mul(k2);
     let zp = z.wrapping_mul(k3);
-    ((xp.wrapping_add(yp).wrapping_add(zp)) % p) & (n - 1)
+    ((xp.wrapping_add(yp).wrapping_add(zp)) % p) & n_minus_one
 }
 
 /// The actual data payload of each chunk
@@ -62,10 +63,6 @@ const PRIME: u32 = 1610612741;
 /// Each row is 4 ints, i.e. 16 bytes
 ///
 /// ```ignore                   0         1        2         3
-/// 0..3                     [   N   ][  MXC   ][   k1   ][  k2    ]
-/// 4..7                     [   k3  ][     reserved/padding       ]
-///    ...                   [ reserved/padding                    ]
-/// 28..31                   [ reserved/padding                    ]
 /// 32..35                   [ flags0 ][   x0  ][   y0   ][   z0   ]
 /// 36..39                   [ flags1 ][   x1  ][   y1   ][   z1   ]
 /// 4i+32 .. 4i + 35         [ f_i    ][   x_i ][   y_i  ][   z_i  ]
@@ -79,7 +76,7 @@ const PRIME: u32 = 1610612741;
 ///
 /// Chunk x/y/z are transmuted i32 -> u32 when stored.
 ///
-/// Each chunk can be found starting at int offset 4N + 32 + CHUNK_LEN*i.
+/// Each chunk can be found starting at int offset 4N + CHUNK_LEN*i.
 ///
 /// Data buffers are the blocks in a chunk, ordered X/Z/Y. [perovskite_core::coordinates::ChunkOffset::as_index]
 /// may be used to index into this.
@@ -116,15 +113,18 @@ where
     ///     max_probe_len: If the longest collision probe takes <= max_probe_len values, stop and
     ///         accept the attempt. This does not include the first one (i.e., first try w/o
     ///         collision is counted as 0)
-    pub fn build(&self, max_tries: usize, max_probe_len: usize) -> anyhow::Result<Vec<u32>> {
+    pub fn build(
+        &self,
+        max_tries: usize,
+        max_probe_len: usize,
+    ) -> anyhow::Result<(Vec<u32>, ChunkMapHeader)> {
         //const SENTINEL_FILLER: u32 = 0xcdcdcdcd;
         // oversize to 1.25x
         let expanded = self.chunks.len() + (self.chunks.len() >> 2) + (self.chunks.len() >> 3);
         let n = expanded.max(8).next_power_of_two();
         let mut data = Vec::new();
         data.resize((4 + CHUNK_STRIDE) * n + 32, 0);
-        let n32 = n.try_into().context("n overflowed u32")?;
-        data[0] = n32;
+        let n_minus_one = (n - 1).try_into().context("n overflowed u32")?;
 
         let mut rng = rand::thread_rng();
 
@@ -139,7 +139,7 @@ where
             mapping.resize(n, None);
             let mut max_probes = 0;
             for (coord, _) in &self.chunks {
-                let mut slot = phash(*coord, k1, k2, k3, PRIME, n32) as usize;
+                let mut slot = phash(*coord, k1, k2, k3, PRIME, n_minus_one) as usize;
                 let mut probes = 0;
                 while mapping[slot].is_some() {
                     probes += 1;
@@ -160,44 +160,50 @@ where
             }
         }
         let (k1, k2, k3, table) = best_k.unwrap();
-        data[OFFSET_MXC] = best_probes
+        let mxc: u32 = best_probes
             .try_into()
             .context("max_probes overflowed u32")?;
-        data[OFFSET_K1] = k1;
-        data[OFFSET_K2] = k2;
-        data[OFFSET_K3] = k3;
-        dbg!(&data[0..5]);
+        let header = ChunkMapHeader {
+            n_minus_one,
+            mxc: mxc.into(),
+            k: [k1, k2, k3],
+        };
+        dbg!(header);
 
         for (i, entry) in table.iter().enumerate() {
             if let Some(coord) = entry {
-                let control_base = (4 * i) + 32;
+                let control_base = 4 * i;
                 data[control_base] = FLAG_HASHTABLE_PRESENT;
                 data[control_base + 1] = coord.x as u32;
                 data[control_base + 2] = coord.y as u32;
                 data[control_base + 3] = coord.z as u32;
-                let data_base = 4 * n + 32 + CHUNK_STRIDE * i;
+                let data_base = 4 * n + CHUNK_STRIDE * i;
+                let light_base = 4 * n + CHUNK_STRIDE * i + CHUNK_LIGHTS_OFFSET;
                 let (blocks, lights) = self.chunks.get(coord).unwrap();
                 data[data_base..data_base + CHUNK_LEN].copy_from_slice(blocks.deref());
+                data[light_base..light_base + CHUNK_LIGHTS_LEN]
+                    .copy_from_slice(bytemuck::cast_slice(lights));
             }
         }
 
-        Ok(data)
+        Ok((data, header))
     }
 }
 
-pub fn gpu_table_lookup(table: &[u32], key: ChunkCoordinate) -> u32 {
-    let n = table[OFFSET_N];
-    let mxc = table[OFFSET_MXC];
-    let k1 = table[OFFSET_K1];
-    let k2 = table[OFFSET_K2];
-    let k3 = table[OFFSET_K3];
-
+pub fn gpu_table_lookup(table: &[u32], header: &ChunkMapHeader, key: ChunkCoordinate) -> u32 {
     let x = key.x as u32;
     let y = key.y as u32;
     let z = key.z as u32;
 
-    let mut slot = phash(key, k1, k2, k3, PRIME, n);
-
+    let mut slot = phash(
+        key,
+        header.k[0],
+        header.k[1],
+        header.k[2],
+        PRIME,
+        header.n_minus_one,
+    );
+    let mxc = *header.mxc;
     for _ in 0..=mxc {
         let base = (slot as usize) * 4 + 32;
         if table[base + 3] & FLAG_HASHTABLE_PRESENT == 0 {
@@ -206,7 +212,7 @@ pub fn gpu_table_lookup(table: &[u32], key: ChunkCoordinate) -> u32 {
         if table[base] == x && table[base + 1] == y && table[base + 2] == z {
             return slot;
         }
-        slot = (slot + 1) & (n - 1);
+        slot = (slot + 1) & (header.n_minus_one);
     }
     u32::MAX
 }
@@ -227,15 +233,12 @@ fn test_build_and_probe() {
             }
         }
     }
-    let table = builder.build(10, 3).unwrap();
-    println!(
-        "Table n: {} mxc {} k1 {} k2 {} k3 {}",
-        table[0], table[1], table[2], table[3], table[4]
-    );
+    let (table, header) = builder.build(10, 3).unwrap();
+
     for x in -20..20 {
         for y in -20..20 {
             for z in -20..20 {
-                if gpu_table_lookup(&table, ChunkCoordinate::new(x, y, z)) == u32::MAX {
+                if gpu_table_lookup(&table, &header, ChunkCoordinate::new(x, y, z)) == u32::MAX {
                     println!("!!! {x} {y} {z}")
                 }
             }
@@ -243,6 +246,6 @@ fn test_build_and_probe() {
     }
     assert_eq!(
         u32::MAX,
-        gpu_table_lookup(&table, ChunkCoordinate::new(1, 100, 2))
+        gpu_table_lookup(&table, &header, ChunkCoordinate::new(1, 100, 2))
     );
 }

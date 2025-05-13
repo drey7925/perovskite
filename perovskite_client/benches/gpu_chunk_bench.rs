@@ -21,21 +21,25 @@ fn build_hashtable(c: &mut Criterion) {
         b.iter(|| black_box(&builder).build(10, 3).unwrap())
     });
 
-    let table = builder.build(10, 3).unwrap();
+    let (table, header) = builder.build(10, 3).unwrap();
 
     c.bench_function("lookup_27kchunk_hit", |b| {
+        let header_bb = black_box(&header);
         b.iter(|| {
             gpu_table_lookup(
                 black_box(&table),
+                header_bb,
                 black_box(ChunkCoordinate::new(10, 10, 10)),
             )
         })
     });
 
     c.bench_function("lookup_27kchunk_miss", |b| {
+        let header_bb = black_box(&header);
         b.iter(|| {
             gpu_table_lookup(
                 black_box(&table),
+                header_bb,
                 black_box(ChunkCoordinate::new(30, 10, 10)),
             )
         })
