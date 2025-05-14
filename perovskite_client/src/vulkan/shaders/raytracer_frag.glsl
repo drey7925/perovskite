@@ -9,27 +9,27 @@ layout(location = 0) out vec4 f_color;
 const mat2x4 face_swizzlers[] = {
 // X+
 mat2x4(
-vec4(0, 0, -1, 1), vec4(0, -1, 0, 1)
+vec4(0, 0, 1, 0), vec4(0, -1, 0, 1)
 ),
 // X-
 mat2x4(
-vec4(0, 0, 1, 0), vec4(0, -1, 0, 1)
+vec4(0, 0, -1, 1), vec4(0, -1, 0, 1)
 ),
 // Y+
 mat2x4(
-vec4(1, 0, 0, 0), vec4(0, 0, 1, 0)
+vec4(-1, 0, 0, 1), vec4(0, 0, 1, 0)
 ),
 // Y-
 mat2x4(
-vec4(-1, 0, 0, 1), vec4(0, 0, -1, 1)
+vec4(1, 0, 0, 0), vec4(0, 0, 1, 0)
 ),
 // Z+
 mat2x4(
-vec4(1, 0, 0, 0), vec4(0, -1, 0, 1)
+vec4(-1, 0, 0, 1), vec4(0, -1, 0, 1)
 ),
 // Z-
 mat2x4(
-vec4(-1, 0, 0, 1), vec4(0, -1, 0, 1)
+vec4(1, 0, 0, 0), vec4(0, -1, 0, 1)
 ),
 };
 
@@ -48,8 +48,8 @@ const float brightness_table[] = {
 };
 
 const int face_backoffs_offset[] = {
-18 * 18, -18 * 18,
--1, -1,
+18 * 18, 18 * 18,
+1, -1,
 18, -18
 };
 
@@ -154,7 +154,7 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
             info.end_cc = gfrac;
             err.x += derr.x;
             gfrac.x -= sgns.x;
-            n_face = 1 - gpd.x;
+            n_face = gpd.x;
         }
         else if (sgns.y != 0 && (sgns.z == 0 || r.y <= r.z)) {
             g.y += sgns.y;
@@ -172,7 +172,7 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
             info.end_cc = gfrac;
             err.z += derr.z;
             gfrac.z -= sgns.z;
-            n_face = 5 - gpd.z;
+            n_face = 4 + gpd.z;
         }
 
         if (block_id != 0) {
@@ -190,6 +190,25 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
     return false;
 }
 
+vec3 decode_normal(uint index) {
+    const float sqrt_half = sqrt(0.5);
+    // Matches CubeFace in BlockRenderer
+    const vec3 normals[10] = vec3[](
+    vec3(1.0, 0.0, 0.0),
+    vec3(-1.0, 0.0, 0.0),
+    // Warning: CubeFace Y+ then Y- is in world coords, not Vk coords
+    // This has Vk coords, to match up with the global light direction in Vk coords
+    vec3(0.0, -1.0, 0.0),
+    vec3(0.0, 1.0, 0.0),
+    vec3(0.0, 0.0, 1.0),
+    vec3(0.0, 0.0, -1.0),
+    vec3(sqrt_half, 0.0, sqrt_half),
+    vec3(sqrt_half, 0.0, -sqrt_half),
+    vec3(-sqrt_half, 0.0, sqrt_half),
+    vec3(-sqrt_half, 0.0, -sqrt_half)
+    );
+    return normals[index];
+}
 
 bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
     ivec3 g0idx = ivec3(floor(g0));
@@ -247,7 +266,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             end_cc = gfrac;
             err.x += derr.x;
             gfrac.x -= sgns.x;
-            n_face = 1 - gpd.x;
+            n_face = gpd.x;
         }
         else if (sgns.y != 0 && (sgns.z == 0 || r.y <= r.z)) {
             g.y += sgns.y;
@@ -265,7 +284,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             end_cc = gfrac;
             err.z += derr.z;
             gfrac.z -= sgns.z;
-            n_face = 5 - gpd.z;
+            n_face = 4 + gpd.z;
         } else {
             return false;
         }
@@ -392,12 +411,12 @@ void main() {
     vec3 g1 = (fine_pos_fixed + (500 * facedir_world)) / 16.0;
 
     HitInfo info = {
-        ivec3(0),
-        vec3(0),
-        vec3(0),
-        0,
-        0,
-        0,
+    ivec3(0),
+    vec3(0),
+    vec3(0),
+    0,
+    0,
+    0,
     };
     if (traverse_space(g0, g1, info)) {
         uint idx = info.block_id >> 12;
@@ -411,8 +430,13 @@ void main() {
             vec2 wh = cube_info[idx].tex[info.face].width_height;
             vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
             vec4 tex_color = texture(tex, tl + (uv * wh));
-
-            f_color = tex_color;
+            float global_brightness_contribution = global_brightness_table[(info.light_data & 0xf0u) >> 4];
+            float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, decode_normal(info.face)));
+            // TODO: Do a ray query to the sun instead
+            vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
+            f_color = vec4(
+                (brightness_table[info.light_data & 0x0fu] + global_light) * tex_color.rgb, 1.0
+            );
             return;
         }
     }

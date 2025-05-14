@@ -27,6 +27,8 @@ layout(set = 1, binding = 0) uniform RaytracedUniformData {
     float supersampling;
 // length of RaytraceControl
     uint max_cube_info_idx;
+    vec3 global_light_direction;
+    vec3 global_brightness_color;
 };
 layout(set = 1, binding = 1) uniform ChunkMapHeader {
     uint n_minus_one;

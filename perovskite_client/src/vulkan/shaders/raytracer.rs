@@ -113,7 +113,14 @@ impl
             supersampling: self.supersampling.to_float(),
             coarse_pos: [player_chunk.x, player_chunk.y, player_chunk.z].into(),
             fine_pos: [fine.x as f32, fine.y as f32, fine.z as f32].into(),
-            max_cube_info_idx: self.raytrace_control_ssbo_len,
+            max_cube_info_idx: self.raytrace_control_ssbo_len.into(),
+            global_brightness_color: per_frame_config.global_light_color.into(),
+            global_light_direction: [
+                per_frame_config.sun_direction.x,
+                per_frame_config.sun_direction.y,
+                per_frame_config.sun_direction.z,
+            ]
+            .into(),
         };
         let per_frame_set_layout = layout
             .set_layouts()
