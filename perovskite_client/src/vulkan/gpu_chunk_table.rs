@@ -131,6 +131,24 @@ where
         // K values, max num probes, table
         let mut best_probes = usize::MAX;
         let mut best_k: Option<(u32, u32, u32, Vec<Option<ChunkCoordinate>>)> = None;
+
+        // Calculate the min and max coordinates of all chunks
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut min_z = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        let mut max_z = i32::MIN;
+
+        for (coord, _) in &self.chunks {
+            min_x = min_x.min(coord.x);
+            min_y = min_y.min(coord.y);
+            min_z = min_z.min(coord.z);
+            max_x = max_x.max(coord.x);
+            max_y = max_y.max(coord.y);
+            max_z = max_z.max(coord.z);
+        }
+
         'tries: for _ in 0..max_tries {
             let k1 = (100000000..u32::MAX).sample_single(&mut rng);
             let k2 = (100000000..u32::MAX).sample_single(&mut rng);
@@ -160,15 +178,6 @@ where
             }
         }
         let (k1, k2, k3, table) = best_k.unwrap();
-        let mxc: u32 = best_probes
-            .try_into()
-            .context("max_probes overflowed u32")?;
-        let header = ChunkMapHeader {
-            n_minus_one,
-            mxc: mxc.into(),
-            k: [k1, k2, k3],
-        };
-        dbg!(header);
 
         for (i, entry) in table.iter().enumerate() {
             if let Some(coord) = entry {
@@ -185,6 +194,17 @@ where
                     .copy_from_slice(bytemuck::cast_slice(lights));
             }
         }
+        let mxc: u32 = best_probes
+            .try_into()
+            .context("max_probes overflowed u32")?;
+        let header = ChunkMapHeader {
+            n_minus_one,
+            mxc: mxc.into(),
+            k: [k1, k2, k3].into(),
+            min_chunk: [min_x, min_y, min_z].into(),
+            max_chunk: [max_x, max_y, max_z].into(),
+        };
+        dbg!(header);
 
         Ok((data, header))
     }

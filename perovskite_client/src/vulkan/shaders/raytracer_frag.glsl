@@ -48,7 +48,7 @@ const float brightness_table[] = {
 };
 
 const int face_backoffs_offset[] = {
-18 * 18, 18 * 18,
+18 * 18, -18 * 18,
 1, -1,
 18, -18
 };
@@ -87,7 +87,11 @@ struct HitInfo {
 
 // Raytraces through a single chunk, returns true if hit, false if no hit.
 // (tentative signature, to be updated later)
-bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
+//
+// hit_info's start_cc/end_cc represent the hit state of this chunk when we start traversing
+bool traverse_chunk(uint slot, inout HitInfo info) {
+    info.start_cc *= 16;
+    info.end_cc *= 16;
     // 4n ints for packed keys table, 5832 ints per chunk, and 343 ints
     // to account for the fact that offset [0,0,0] is partway in chunk (lighting/neighbor data)
     // 343 + 4 = 347 because n-1 rather than n
@@ -95,26 +99,20 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
     // 5860 is 5856 (length of block data) + 4 (n-1 compensation)
     uint light_base = 4 * n_minus_one + 5860 + (7328 * slot);
 
-    ivec3 g0idx = ivec3(floor(g0));
-    ivec3 g1idx = ivec3(floor(g1));
-    ivec3 sgns = ivec3(sign(g1idx - g0idx));
+    ivec3 g = ivec3(floor(info.start_cc));
+    ivec3 g1idx = ivec3(floor(info.end_cc));
+    ivec3 sgns = ivec3(sign(g1idx - g));
 
-    ivec3 g = g0idx;
     uvec3 gpd = uvec3(
-    (g1idx.x > g0idx.x ? 1 : 0),
-    (g1idx.y > g0idx.y ? 1 : 0),
-    (g1idx.z > g0idx.z ? 1 : 0)
+    (g1idx.x > g.x ? 1 : 0),
+    (g1idx.y > g.y ? 1 : 0),
+    (g1idx.z > g.z ? 1 : 0)
     );
 
-    vec3 gfrac = g0 - g0idx;
-    vec3 slope = g1 - g0;
+    vec3 gfrac = info.start_cc - g;
+    vec3 slope = info.end_cc - info.start_cc;
 
-    // Will this vectorize?
-    vec3 v = vec3(
-    g0.x == g1.x ? 1 : g1.x - g0.x,
-    g0.y == g1.y ? 1 : g1.y - g0.y,
-    g0.z == g1.z ? 1 : g1.z - g0.z
-    );
+    vec3 v = mix(info.end_cc - info.start_cc, vec3(1), equal(info.start_cc, info.end_cc));
     vec3 derr = vec3(
     v.y * v.z,
     v.x * v.z,
@@ -136,7 +134,6 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
         // Hide latency by overlaying fetch with next-block calc
         uint block_id;
         bool should_break = g == g1idx;
-        ivec3 old_g = g;
         ivec3 mask = ivec3(~15);
         uint offset;
         if ((g & mask) == ivec3(0)) {
@@ -175,8 +172,9 @@ bool traverse_chunk(uint slot, vec3 g0, vec3 g1, inout HitInfo info) {
             n_face = 4 + gpd.z;
         }
 
-        if (block_id != 0) {
+        if (block_id != 0 && block_id != info.block_id) {
             info.block_id = block_id;
+            info.hit_block = g;
             uint l_offset = 343+(offset) + face_backoffs_offset[info.face];
             uint raw_light = chunks[light_base + (l_offset / 4)];
             info.light_data = (raw_light >> (8 * (l_offset & 3u)));
@@ -224,12 +222,8 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
     (g1idx.z > g0idx.z ? 1 : 0)
     );
 
-    // Will this vectorize?
-    vec3 v = vec3(
-    g0.x == g1.x ? 1 : g1.x - g0.x,
-    g0.y == g1.y ? 1 : g1.y - g0.y,
-    g0.z == g1.z ? 1 : g1.z - g0.z
-    );
+    vec3 v = mix(g1 - g0, vec3(1), equal(g1, g0));
+
     vec3 derr = vec3(
     v.y * v.z,
     v.x * v.z,
@@ -237,15 +231,13 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
     );
     vec3 err = (gpd - gfrac) * derr;
     derr *= sgns;
-    for (;;) {
+    uint slot_base;
+    uint try_slot;
+    for (uint i = 0; i < 60; i++) {
         vec3 r = abs(err);
 
-        vec3 start_cc = gfrac;
-        vec3 end_cc;
+        info.start_cc = gfrac;
         bool should_break = g == g1idx;
-        ivec3 old_g = g;
-
-
         uvec3 chk = uvec3(g + coarse_pos);
         // Hide latency by interleaving map lookup with next-chunk calc
         // We do this by doing the first lookup now, and hoping that we have a prefetched cacheline
@@ -263,7 +255,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             g.x += sgns.x;
             float diff = gpd.x - gfrac.x;
             gfrac += diff * (slope / slope.x);
-            end_cc = gfrac;
+            info.end_cc = gfrac;
             err.x += derr.x;
             gfrac.x -= sgns.x;
             n_face = gpd.x;
@@ -272,7 +264,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             g.y += sgns.y;
             float diff = gpd.y - gfrac.y;
             gfrac += diff * (slope / slope.y);
-            end_cc = gfrac;
+            info.end_cc = gfrac;
             err.y += derr.y;
             gfrac.y -= sgns.y;
             n_face = 2 + gpd.y;
@@ -281,12 +273,10 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             g.z += sgns.z;
             float diff = gpd.z - gfrac.z;
             gfrac += diff * (slope / slope.z);
-            end_cc = gfrac;
+            info.end_cc = gfrac;
             err.z += derr.z;
             gfrac.z -= sgns.z;
             n_face = 4 + gpd.z;
-        } else {
-            return false;
         }
 
         uint slot = 0xffffffff;
@@ -303,7 +293,11 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             slot_flag = chunks[slot_base];
         }
 
-        if (slot != 0xffffffff && traverse_chunk(slot, start_cc * 16.0, end_cc * 16.0, info)) {
+        if (slot != 0xffffffff && traverse_chunk(slot, info)) {
+            // We need to restore the old value of g prior to updates.
+            // Holding it in a register will increase register pressure.
+            // However, we know that chk = old_g + coarse_pos, and it's OK for hits to be mildly expensive
+            info.hit_block += 16 * (ivec3(chk) - coarse_pos);
             return true;
         }
         info.face = n_face;
@@ -315,6 +309,21 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
     return false;
 }
 
+// Compute the range of distances that could possibly hit a chunk
+// returns min, max
+vec2 t_range(vec3 start, vec3 dir) {
+    dir = normalize(dir);
+    vec3 c_min = min_chunk - coarse_pos;
+    vec3 c_max = max_chunk - coarse_pos;
+    vec3 t_for_min = (c_min - start) / dir;
+    vec3 t_for_max = (c_max + 1 - start) / dir;
+    vec3 t_min = min(t_for_min, t_for_max);
+    vec3 t_max = max(t_for_min, t_for_max);
+    return vec2(
+        max(0, max(t_min.x, max(t_min.y, t_min.z))),
+        min(30, min(t_max.x, min(t_max.y, t_max.z)))
+    );
+}
 
 void main() {
     vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
@@ -403,12 +412,24 @@ void main() {
 
     // All raster geometry, as well as non-rendering calcs, assume that blocks have
     // their *centers* at integer coordinates.
-    // However, we have the *edges* as axis-aligned. Fix this here.
+    // However, we have the *edges* as axis-aligned.
     // Note that this shader works in world space, with Y up throughout.
     // The Y axis orientation has been flipped in the calculation of facedir_world.
-    vec3 fine_pos_fixed = fine_pos + vec3(0.5, 0.5, 0.5);
-    vec3 g0 = fine_pos_fixed / 16.0;
-    vec3 g1 = (fine_pos_fixed + (500 * facedir_world)) / 16.0;
+    // This is fixed on the CPU to save some registers.
+    vec2 t_min_max = t_range(fine_pos, facedir_world);
+//
+//    if ((ix2 ^ iy2) == 0) {
+//        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
+//        return;
+//    }
+    if (t_min_max.x > t_min_max.y) {
+        return;
+    }
+
+
+    vec3 g0 = fine_pos + (t_min_max.x * facedir_world);
+
+    vec3 g1 = fine_pos + (t_min_max.y * facedir_world);
 
     HitInfo info = {
     ivec3(0),
@@ -418,6 +439,8 @@ void main() {
     0,
     0,
     };
+    //    uint primary_hops_remaining = 2;
+    //    while (primary_hops_remaining > 0) {
     if (traverse_space(g0, g1, info)) {
         uint idx = info.block_id >> 12;
         if (idx >= max_cube_info_idx) {
@@ -435,9 +458,10 @@ void main() {
             // TODO: Do a ray query to the sun instead
             vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
             f_color = vec4(
-                (brightness_table[info.light_data & 0x0fu] + global_light) * tex_color.rgb, 1.0
+            (brightness_table[info.light_data & 0x0fu] + global_light) * tex_color.rgb, tex_color.a
             );
             return;
+            //            }
         }
     }
     discard;

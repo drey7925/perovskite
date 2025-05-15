@@ -95,12 +95,14 @@ impl
         let layout = self.pipeline.layout().clone();
 
         let player_chunk = BlockCoordinate::try_from(player_pos)?.chunk();
-        let fine = player_pos
-            - vec3(
-                (player_chunk.x * 16) as f64,
-                (player_chunk.y * 16) as f64,
-                (player_chunk.z * 16) as f64,
-            );
+        let fine = (1.0 / 16.0)
+            * (player_pos
+                - vec3(
+                    (player_chunk.x * 16) as f64,
+                    (player_chunk.y * 16) as f64,
+                    (player_chunk.z * 16) as f64,
+                )
+                + vec3(0.5, 0.5, 0.5));
 
         let per_frame_data = RaytracedUniformData {
             inverse_vp_matrix: per_frame_config
