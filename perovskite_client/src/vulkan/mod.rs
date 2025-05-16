@@ -33,6 +33,7 @@ use log::warn;
 use smallvec::smallvec;
 
 use texture_packer::Rect;
+use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
 use vulkano::command_buffer::{
@@ -150,30 +151,36 @@ impl VulkanContext {
         data: T,
         usage: BufferUsage,
     ) -> Result<Subbuffer<T>> {
-        let staging_buffer = Buffer::from_data(
-            self.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            data,
-        )?;
-        let target_buffer = Buffer::new_sized(
-            self.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST | usage,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-        )?;
+        let staging_buffer = {
+            let _span = span!("build staging buffer");
+            Buffer::from_data(
+                self.clone_allocator(),
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_SRC,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                data,
+            )?
+        };
+        let target_buffer = {
+            let _span = span!("build target buffer");
+            Buffer::new_sized(
+                self.clone_allocator(),
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_DST | usage,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )?
+        };
 
         let transfer_queue = self.clone_transfer_queue();
         let mut command_buffer = AutoCommandBufferBuilder::primary(
@@ -185,7 +192,14 @@ impl VulkanContext {
             staging_buffer,
             target_buffer.clone(),
         ))?;
-        command_buffer.build()?.execute(transfer_queue)?.flush()?;
+        let fut = {
+            let _span = span!("build target buffer future");
+            command_buffer.build()?.execute(transfer_queue)?
+        };
+        {
+            let _span = span!("flush target buffer future");
+            fut.flush()?
+        }
         Ok(target_buffer)
     }
 
@@ -194,31 +208,37 @@ impl VulkanContext {
         data: impl ExactSizeIterator<Item = T>,
         usage: BufferUsage,
     ) -> Result<Subbuffer<[T]>> {
-        let staging_buffer = Buffer::from_iter(
-            self.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            data,
-        )?;
-        let target_buffer = Buffer::new_slice(
-            self.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST | usage,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-            staging_buffer.len(),
-        )?;
+        let staging_buffer = {
+            let _span = span!("build staging buffer");
+            Buffer::from_iter(
+                self.clone_allocator(),
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_SRC,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                data,
+            )?
+        };
+        let target_buffer = {
+            let _span = span!("build target buffer");
+            Buffer::new_slice(
+                self.clone_allocator(),
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_DST | usage,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+                staging_buffer.len(),
+            )?
+        };
 
         let transfer_queue = self.clone_transfer_queue();
         let mut command_buffer = AutoCommandBufferBuilder::primary(
@@ -230,7 +250,15 @@ impl VulkanContext {
             staging_buffer,
             target_buffer.clone(),
         ))?;
-        command_buffer.build()?.execute(transfer_queue)?.flush()?;
+        let fut = {
+            let _span = span!("build target buffer future");
+            command_buffer.build()?.execute(transfer_queue)?
+        };
+        {
+            let _span = span!("flush target buffer future");
+            fut.flush()?
+        }
+
         Ok(target_buffer)
     }
 }

@@ -204,7 +204,6 @@ where
             min_chunk: [min_x, min_y, min_z].into(),
             max_chunk: [max_x, max_y, max_z].into(),
         };
-        dbg!(header);
 
         Ok((data, header))
     }

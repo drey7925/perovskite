@@ -616,6 +616,7 @@ impl ChunkManager {
         table: ChunkMapHeader,
         ctx: &VulkanContext,
     ) -> Result<()> {
+        let _span = span!("set_fake_raytrace_data");
         *self.fake_raytace_data.write() = Some((
             ctx.iter_to_device(data.iter().copied(), BufferUsage::STORAGE_BUFFER)?,
             ctx.copy_to_device(table, BufferUsage::UNIFORM_BUFFER)?,

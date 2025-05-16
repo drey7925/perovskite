@@ -957,24 +957,26 @@ impl SnappyDecodeHelper {
 async fn fake_raytrace_prep(ctx: Arc<SharedState>) {
     while !ctx.cancellation.is_cancelled() {
         log::info!("raytrace prep starting");
-        let view = ctx.client_state.chunks.renderable_chunks_cloned_view();
-        let mut builder = ChunkHashtableBuilder::new();
-        for (coord, data) in view.iter() {
-            if data.has_mesh() {
-                let mesh_data = data.chunk_data();
-                // This cast takes newtype(u32) -> u32
-                let chunk = bytemuck::cast_slice(mesh_data.block_ids()).to_vec();
-                let lights = mesh_data.lightmap().to_vec();
-                builder.add_chunk(*coord, chunk, lights);
+        {
+            let _span = span!("raytrace prep");
+            let view = ctx.client_state.chunks.renderable_chunks_cloned_view();
+            let mut builder = ChunkHashtableBuilder::new();
+            for (coord, data) in view.iter() {
+                if data.has_mesh() {
+                    let mesh_data = data.chunk_data();
+                    // This cast takes newtype(u32) -> u32
+                    let chunk = bytemuck::cast_slice(mesh_data.block_ids()).to_vec();
+                    let lights = mesh_data.lightmap().to_vec();
+                    builder.add_chunk(*coord, chunk, lights);
+                }
             }
+            drop(view);
+            let (table, header) = builder.build(20, 3).unwrap();
+            ctx.client_state
+                .chunks
+                .set_fake_raytrace_data(table, header, ctx.client_state.block_renderer.vk_ctx())
+                .unwrap();
         }
-        drop(view);
-        let (table, header) = builder.build(20, 3).unwrap();
-        ctx.client_state
-            .chunks
-            .set_fake_raytrace_data(table, header, ctx.client_state.block_renderer.vk_ctx())
-            .unwrap();
-
         tokio::select!(
             _ = ctx.cancellation.cancelled() => { return; },
             _ = tokio::time::sleep(Duration::from_millis(250)) => {

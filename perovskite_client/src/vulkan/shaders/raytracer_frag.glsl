@@ -53,6 +53,12 @@ const int face_backoffs_offset[] = {
 18, -18
 };
 
+const vec3 face_reflectors[] = {
+vec3(-1, 1, 1), vec3(-1, 1, 1),
+vec3(1, -1, 1), vec3(1, -1, 1),
+vec3(1, 1, -1), vec3(1, 1, -1),
+};
+
 uint phash(uvec3 coord, uvec3 k, uint n_minus_one) {
     uvec3 products = coord * k;
     uint sum = products.x + products.y + products.z;
@@ -88,7 +94,8 @@ struct HitInfo {
 // Raytraces through a single chunk, returns true if hit, false if no hit.
 // (tentative signature, to be updated later)
 //
-// hit_info's start_cc/end_cc represent the hit state of this chunk when we start traversing
+// input: hit_info's start_cc/end_cc represent the hit state of this chunk when we start traversing
+// output: start_cc/end_cc represent the hit state of the block we hit, if there was a hit. Otherwise, undefined
 bool traverse_chunk(uint slot, inout HitInfo info) {
     info.start_cc *= 16;
     info.end_cc *= 16;
@@ -134,6 +141,8 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
         // Hide latency by overlaying fetch with next-block calc
         uint block_id;
         bool should_break = g == g1idx;
+
+        info.hit_block = g;
         ivec3 mask = ivec3(~15);
         uint offset;
         if ((g & mask) == ivec3(0)) {
@@ -174,12 +183,12 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
 
         if (block_id != 0 && block_id != info.block_id) {
             info.block_id = block_id;
-            info.hit_block = g;
             uint l_offset = 343+(offset) + face_backoffs_offset[info.face];
             uint raw_light = chunks[light_base + (l_offset / 4)];
             info.light_data = (raw_light >> (8 * (l_offset & 3u)));
             return true;
         }
+        info.block_id = block_id;
         info.face = n_face;
         if (should_break) {
             return false;
@@ -320,9 +329,21 @@ vec2 t_range(vec3 start, vec3 dir) {
     vec3 t_min = min(t_for_min, t_for_max);
     vec3 t_max = max(t_for_min, t_for_max);
     return vec2(
-        max(0, max(t_min.x, max(t_min.y, t_min.z))),
-        min(30, min(t_max.x, min(t_max.y, t_max.z)))
+    max(0, max(t_min.x, max(t_min.y, t_min.z))),
+    min(30, min(t_max.x, min(t_max.y, t_max.z)))
     );
+}
+
+vec4 sample_simple(HitInfo info, uint idx) {
+    vec2 tl = cube_info[idx].tex[info.face].top_left;
+    vec2 wh = cube_info[idx].tex[info.face].width_height;
+    vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
+    vec4 tex_color = texture(tex, tl + (uv * wh));
+    float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.light_data, 4, 4)];
+    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, decode_normal(info.face)));
+    // TODO: Do a ray query to the sun instead
+    vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
+    return vec4((brightness_table[bitfieldExtract(info.light_data, 0, 4)] + global_light) * tex_color.rgb, tex_color.a);
 }
 
 void main() {
@@ -417,19 +438,21 @@ void main() {
     // The Y axis orientation has been flipped in the calculation of facedir_world.
     // This is fixed on the CPU to save some registers.
     vec2 t_min_max = t_range(fine_pos, facedir_world);
-//
-//    if ((ix2 ^ iy2) == 0) {
-//        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
-//        return;
-//    }
+    //
+    //    if ((ix2 ^ iy2) == 0) {
+    //        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
+    //        return;
+    //    }
     if (t_min_max.x > t_min_max.y) {
-        return;
+        discard;
     }
 
-
     vec3 g0 = fine_pos + (t_min_max.x * facedir_world);
-
     vec3 g1 = fine_pos + (t_min_max.y * facedir_world);
+
+    uint hops_remaining = 5;
+    float alpha_remaining = 1.0;
+    f_color = vec4(0);
 
     HitInfo info = {
     ivec3(0),
@@ -439,9 +462,16 @@ void main() {
     0,
     0,
     };
-    //    uint primary_hops_remaining = 2;
-    //    while (primary_hops_remaining > 0) {
-    if (traverse_space(g0, g1, info)) {
+
+    uint spec_block = 0;
+    vec3 spec_start;
+    vec3 spec_dir;
+
+    for (;;) {
+        if (!traverse_space(g0, g1, info)) {
+            break;
+        }
+        // traverse_space will put valid data into info iff it returns true
         uint idx = info.block_id >> 12;
         if (idx >= max_cube_info_idx) {
             // TODO proper fallback
@@ -449,21 +479,60 @@ void main() {
         }
         if ((cube_info[idx].flags & 1) != 0) {
             // TODO: cube rotation :(
-            vec2 tl = cube_info[idx].tex[info.face].top_left;
-            vec2 wh = cube_info[idx].tex[info.face].width_height;
-            vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
-            vec4 tex_color = texture(tex, tl + (uv * wh));
-            float global_brightness_contribution = global_brightness_table[(info.light_data & 0xf0u) >> 4];
-            float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, decode_normal(info.face)));
-            // TODO: Do a ray query to the sun instead
-            vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
-            f_color = vec4(
-            (brightness_table[info.light_data & 0x0fu] + global_light) * tex_color.rgb, tex_color.a
-            );
-            return;
-            //            }
+            vec4 rgba = sample_simple(info, idx);
+            float alpha_contrib = alpha_remaining * rgba.a;
+            f_color.rgb += alpha_contrib * rgba.rgb;
+            f_color.a += alpha_contrib;
+            alpha_remaining -= alpha_contrib;
+            // TODO proper specular from the block, for now hardcode glass/water
+            if (spec_block == 0 && (info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
+                spec_block = info.block_id;
+                spec_start = (vec3(info.hit_block) + info.start_cc) / 16.0;
+                // todo: stash the specular strength into spec_dir to save a register
+                spec_dir = facedir_world * face_reflectors[info.face];
+            }
+        }
+        if (hops_remaining == 0 || alpha_remaining < 0.01) {
+            break;
+        }
+        hops_remaining--;
+        vec3 midpoint = (info.start_cc + info.end_cc) / 2;
+        vec3 new_pos = (vec3(info.hit_block) + midpoint) / 16.0;
+        if (length(new_pos - g0) > t_min_max.y) {
+            f_color = vec4(1.0, 0.0, 0.0, 1.0);
+            break;
+        }
+
+        g0 = new_pos;
+    }
+    if (spec_block == 0) {
+        return;
+    }
+    info.block_id = spec_block;
+    info.face = 0;
+
+    t_min_max = t_range(spec_start, spec_dir);
+    //
+    //    if ((ix2 ^ iy2) == 0) {
+    //        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
+    //        return;
+    //    }
+    if (t_min_max.x > t_min_max.y) {
+        return;
+    }
+    // we just had a specular, so t0 is 0 and start is just spec_start;
+    g1 = spec_start + (spec_dir * t_min_max.y);
+    if (traverse_space(g0, g1, info)) {
+        // traverse_space will put valid data into info iff it returns true
+        uint idx = info.block_id >> 12;
+        if (idx >= max_cube_info_idx) {
+            // TODO proper fallback
+            idx = 1;
+        }
+        if ((cube_info[idx].flags & 1) != 0) {
+            vec4 rgba = sample_simple(info, idx);
+            f_color.rgb += 0.1 * rgba.rgb * rgba.a;
         }
     }
-    discard;
 
 }
