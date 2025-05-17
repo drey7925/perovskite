@@ -90,6 +90,9 @@ impl EguiAdapter {
             },
             &LiveRenderConfig {
                 supersampling: Supersampling::None,
+                // irrelevant for this pipeline
+                raytracing: false,
+                raytracing_reflections: false,
             },
         )?;
 
@@ -164,6 +167,8 @@ impl EguiAdapter {
             },
             &LiveRenderConfig {
                 supersampling: Supersampling::None,
+                raytracing: false,
+                raytracing_reflections: false,
             },
         )?;
         Ok(())

@@ -348,9 +348,12 @@ impl ActiveGame {
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
-        let global_config = LiveRenderConfig {
-            supersampling: self.client_state.settings.load().render.supersampling,
-        };
+        let global_config = self
+            .client_state
+            .settings
+            .load()
+            .render
+            .build_global_config();
         self.cube_pipeline = self.cube_provider.make_pipeline(
             ctx,
             self.client_state.block_renderer.atlas(),
@@ -457,9 +460,7 @@ impl GameState {
 }
 
 fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Result<ActiveGame> {
-    let global_render_config = LiveRenderConfig {
-        supersampling: client_state.settings.load().render.supersampling,
-    };
+    let global_render_config = client_state.settings.load().render.build_global_config();
 
     let cube_provider = cube_geometry::CubePipelineProvider::new(vk_wnd.vk_device.clone())?;
     let cube_pipeline = cube_provider.make_pipeline(

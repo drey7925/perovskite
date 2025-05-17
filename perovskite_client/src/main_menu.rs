@@ -701,9 +701,25 @@ fn draw_render_settings(
                     .suffix(" chunks"),
             );
             ui.end_row();
+            ui.label("Raytracing")
+                .on_hover_text("If set, enables raytracing. Requires a powerful GPU, but does not (currently) require hardware-accelerated raytracing (e.g. RTX/RDNA)");
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.render.raytracing,
+                "Enabled"
+            ));
+            ui.end_row();
+            ui.label("Raytraced reflections")
+                .on_hover_text("Controls reflections from shiny surfaces. Only applicable if raytracing is enabled");
+            ui.add_enabled(
+                prospective_settings.render.raytracing,
+                egui::Checkbox::new(
+                &mut prospective_settings.render.raytraced_reflections,
+                "Enabled"
+            ));
+            ui.end_row();
             let ssaa_label = ui.label("Supersampling")
                 .on_hover_text("Smooths edges of geometry and textures, at the expense of performance.");
-            egui::ComboBox::from_id_source(ssaa_label.id)
+            egui::ComboBox::from_id_salt(ssaa_label.id)
                 .selected_text(
                     match prospective_settings.render.supersampling {
                         Supersampling::None => "Disabled",

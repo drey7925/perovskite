@@ -1,6 +1,7 @@
 use std::{fs::create_dir_all, path::PathBuf};
 
 use super::input::KeybindSettings;
+use crate::vulkan::shaders::LiveRenderConfig;
 use anyhow::{Context, Result};
 use perovskite_core::protocol::audio::SoundSource;
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,18 @@ pub(crate) struct RenderSettings {
     pub(crate) fov_degrees: f64,
     pub(crate) supersampling: Supersampling,
     pub(crate) render_distance: u32,
+    pub(crate) raytracing: bool,
+    pub(crate) raytraced_reflections: bool,
+}
+
+impl RenderSettings {
+    pub(crate) fn build_global_config(&self) -> LiveRenderConfig {
+        LiveRenderConfig {
+            supersampling: self.supersampling,
+            raytracing: self.raytracing,
+            raytracing_reflections: self.raytraced_reflections,
+        }
+    }
 }
 
 impl Default for RenderSettings {
@@ -64,6 +77,8 @@ impl Default for RenderSettings {
             fov_degrees: 75.0,
             supersampling: Supersampling::X2,
             render_distance: 50,
+            raytracing: false,
+            raytraced_reflections: true,
         }
     }
 }

@@ -6,6 +6,7 @@ use anyhow::Context;
 use cgmath::{vec3, SquareMatrix, Vector3};
 use perovskite_core::coordinates::BlockCoordinate;
 use smallvec::smallvec;
+use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
@@ -27,7 +28,7 @@ use vulkano::pipeline::{
     GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
 };
 use vulkano::render_pass::Subpass;
-use vulkano::shader::ShaderModule;
+use vulkano::shader::{ShaderModule, SpecializationConstant};
 
 vulkano_shaders::shader! {
     shaders: {
@@ -189,6 +190,10 @@ impl PipelineProvider for RaytracedPipelineProvider {
             .context("Missing vertex shader")?;
         let fs = self
             .fs
+            .specialize(HashMap::from_iter([(
+                0,
+                SpecializationConstant::Bool(global_config.raytracing_reflections),
+            )]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let stages = smallvec![

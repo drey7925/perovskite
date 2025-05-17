@@ -4,6 +4,8 @@
 layout(location = 0) in vec4 global_coord_facedir;
 layout(location = 0) out vec4 f_color;
 
+layout (constant_id = 0) const bool SPECULAR = true;
+
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"
 
@@ -205,8 +207,8 @@ vec3 decode_normal(uint index) {
     vec3(-1.0, 0.0, 0.0),
     // Warning: CubeFace Y+ then Y- is in world coords, not Vk coords
     // This has Vk coords, to match up with the global light direction in Vk coords
-    vec3(0.0, -1.0, 0.0),
     vec3(0.0, 1.0, 0.0),
+    vec3(0.0, -1.0, 0.0),
     vec3(0.0, 0.0, 1.0),
     vec3(0.0, 0.0, -1.0),
     vec3(sqrt_half, 0.0, sqrt_half),
@@ -485,11 +487,16 @@ void main() {
             f_color.a += alpha_contrib;
             alpha_remaining -= alpha_contrib;
             // TODO proper specular from the block, for now hardcode glass/water
-            if (spec_block == 0 && (info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
-                spec_block = info.block_id;
-                spec_start = (vec3(info.hit_block) + info.start_cc) / 16.0;
-                // todo: stash the specular strength into spec_dir to save a register
-                spec_dir = facedir_world * face_reflectors[info.face];
+            if (SPECULAR) {
+                if (spec_block == 0 && (info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
+                    spec_block = info.block_id;
+                    spec_start = (vec3(info.hit_block) + info.start_cc) / 16.0;
+                    // stash the fresnel blend factor into spec_dir's magnitude to save a register
+                    spec_dir = normalize(facedir_world * face_reflectors[info.face]);
+                    float cos_theta = dot(decode_normal(info.face), spec_dir);
+
+                    spec_dir *= (0.02 + 0.98 * pow(1 - cos_theta, 5));
+                }
             }
         }
         if (hops_remaining == 0 || alpha_remaining < 0.01) {
@@ -505,13 +512,18 @@ void main() {
 
         g0 = new_pos;
     }
+    if (!SPECULAR) {
+        return;
+    }
     if (spec_block == 0) {
         return;
     }
     info.block_id = spec_block;
     info.face = 0;
 
-    t_min_max = t_range(spec_start, spec_dir);
+    float fresnel = length(spec_dir);
+    spec_dir = normalize(spec_dir);
+    t_min_max = t_range(spec_start, normalize(spec_dir));
     //
     //    if ((ix2 ^ iy2) == 0) {
     //        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
@@ -523,8 +535,7 @@ void main() {
     // we just had a specular, so t0 is 0 and start is just spec_start;
     g1 = spec_start + (spec_dir * t_min_max.y);
     vec4 spec_rgba = vec4(0);
-    float half_angle = 0.5 * acos(dot(decode_normal(info.face), normalize(-spec_dir)));
-    float fresnel = 0.02 + 0.98 * pow(1 - cos(half_angle), 5);
+
     if (traverse_space(spec_start, g1, info)) {
         // traverse_space will put valid data into info iff it returns true
         uint idx = info.block_id >> 12;

@@ -228,6 +228,7 @@ impl FlatTexPipelineProvider {
 }
 pub(crate) struct FlatPipelineConfig<'a> {
     pub(crate) atlas: &'a Texture2DHolder,
+    // Used to specialize for pre- vs post-blit usages
     pub(crate) subpass: Subpass,
     pub(crate) enable_depth_stencil: bool,
     pub(crate) enable_supersampling: bool,

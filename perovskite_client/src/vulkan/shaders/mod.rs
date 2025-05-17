@@ -277,6 +277,8 @@ pub(crate) trait PipelineWrapper<T, U> {
 
 pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
+    pub(crate) raytracing: bool,
+    pub(crate) raytracing_reflections: bool,
 }
 
 pub(crate) trait PipelineProvider
