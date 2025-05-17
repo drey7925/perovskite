@@ -24,12 +24,11 @@ layout(set = 1, binding = 0) uniform RaytracedUniformData {
     // in unit of chunks
     vec3 fine_pos;
 // Will be re-enabled once we have sky
-// vec3 sun_direction;
+    vec3 sun_direction;
 // Used for dither, only during development
     float supersampling;
 // length of RaytraceControl
     uint max_cube_info_idx;
-    vec3 global_light_direction;
     vec3 global_brightness_color;
 };
 layout(set = 1, binding = 1) uniform ChunkMapHeader {

@@ -5,6 +5,7 @@ layout(location = 0) in vec4 global_coord_facedir;
 layout(location = 0) out vec4 f_color;
 
 #include "raytracer_bindings.glsl"
+#include "sky.glsl"
 
 const mat2x4 face_swizzlers[] = {
 // X+
@@ -188,7 +189,6 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
             info.light_data = (raw_light >> (8 * (l_offset & 3u)));
             return true;
         }
-        info.block_id = block_id;
         info.face = n_face;
         if (should_break) {
             return false;
@@ -340,7 +340,7 @@ vec4 sample_simple(HitInfo info, uint idx) {
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
     vec4 tex_color = texture(tex, tl + (uv * wh));
     float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.light_data, 4, 4)];
-    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, decode_normal(info.face)));
+    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(info.face)));
     // TODO: Do a ray query to the sun instead
     vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
     return vec4((brightness_table[bitfieldExtract(info.light_data, 0, 4)] + global_light) * tex_color.rgb, tex_color.a);
@@ -522,7 +522,10 @@ void main() {
     }
     // we just had a specular, so t0 is 0 and start is just spec_start;
     g1 = spec_start + (spec_dir * t_min_max.y);
-    if (traverse_space(g0, g1, info)) {
+    vec4 spec_rgba = vec4(0);
+    float half_angle = 0.5 * acos(dot(decode_normal(info.face), normalize(-spec_dir)));
+    float fresnel = 0.02 + 0.98 * pow(1 - cos(half_angle), 5);
+    if (traverse_space(spec_start, g1, info)) {
         // traverse_space will put valid data into info iff it returns true
         uint idx = info.block_id >> 12;
         if (idx >= max_cube_info_idx) {
@@ -530,9 +533,12 @@ void main() {
             idx = 1;
         }
         if ((cube_info[idx].flags & 1) != 0) {
-            vec4 rgba = sample_simple(info, idx);
-            f_color.rgb += 0.1 * rgba.rgb * rgba.a;
+            spec_rgba = sample_simple(info, idx);
         }
     }
+    if (spec_rgba.a < 0.1) {
+        spec_rgba = vec4(sky_rgb(spec_dir, sun_direction), 1.0);
+    }
+    f_color.rgb += fresnel * spec_rgba.rgb * spec_rgba.a;
 
 }

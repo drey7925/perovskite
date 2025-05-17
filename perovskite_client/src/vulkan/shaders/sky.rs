@@ -2,7 +2,7 @@ use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::{LiveRenderConfig, PipelineProvider, PipelineWrapper, SceneState};
 use crate::vulkan::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 use anyhow::{Context, Result};
-use cgmath::SquareMatrix;
+use cgmath::{vec3, ElementWise, SquareMatrix};
 use smallvec::smallvec;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
@@ -61,68 +61,7 @@ vulkano_shaders::shader! {
         },
         sky_frag: {
         ty: "fragment",
-        src: r"
-            #version 460
-
-            layout(location = 0) in vec4 global_coords_position;
-            layout(set = 0, binding = 0) uniform SkyUniformData {
-                // Takes an NDC position and transforms it *back* to world space
-                mat4 inverse_vp_matrix;
-                vec3 sun_direction;
-                float supersampling;
-            };
-            layout(location = 0) out vec4 f_color;
-
-            const vec3 base_blue = vec3(0.25, 0.6, 1.0);
-            const vec3 base_orange = vec3(1.0, 0.5, 0.1);
-
-            void main() {
-                vec3 ngc = normalize(global_coords_position.xyz);
-                //f_color.xyz = (ngc / 2.0) + vec3(0.5, 0.5, 0.5);
-                vec3 rayleigh = vec3(5.8e-6, 13.5e-6, 33.1e-6);
-                float alignment = dot(ngc, sun_direction);
-
-                // TODO This dither has a very weak effect on banding. Implement a real dither.
-                vec2 pix = gl_FragCoord.xy / supersampling;
-                int ix = int(pix.x) % 2;
-                int iy = int(pix.y) % 2;
-
-                // Raytracing experiment
-                vec2 pix2 = gl_FragCoord.xy / 8.0;
-                int ix2 = int(pix2.x) % 2;
-                int iy2 = int(pix2.y) % 2;
-                if ((ix2 ^ iy2) != 0) {
-                    discard;
-                }
-
-                float pdither = (float(ix ^ iy) - 0.5) / 3.0;
-                alignment += pdither;
-
-                // Extinction effect strongest during sunset and after
-                float sun_height = max(-sun_direction.y, 0.0);
-                float extinction_strength = 4.0 / (4 * sun_height + 1.0);
-                float extinction_unscaled = (alignment * 0.3) + 0.7;
-                float extinction = pow(extinction_unscaled, extinction_strength);
-                float leakage_correction = clamp(-sun_direction.y * 5.0 + 1.0, 0.0, 1.0);
-
-                vec3 base_color = ((ngc / 2.0) + vec3(0.5, 0.5, 0.5));
-
-                float sunset_strength = 1.25 * max(0.8 - abs(sun_height), 0.0);
-                float sunset_blend_factor = max(sunset_strength - max(-ngc.y, 0.0), 0.0);
-
-                base_color = sunset_blend_factor * base_orange + (1.0 - sunset_blend_factor) * base_blue;
-                float extra_extinction = max(1.0, 4 * ngc.y + 1.0);
-
-                f_color.xyz = extinction * extra_extinction * leakage_correction * base_color;
-
-                f_color.w = 1.0;
-                if (abs(ngc.x - sun_direction.x) < 0.1 &&
-                    abs(ngc.y - sun_direction.y) < 0.1 &&
-                    abs(ngc.z - sun_direction.z) < 0.1) {
-                    f_color.xyz = vec3(1.0, 1.0, 1.0);
-                }
-            }
-        "
+        path: "src/vulkan/shaders/simple_sky_frag.glsl"
         }
     }
 }
@@ -165,7 +104,10 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
                     format!("VP matrix was singular: {:?}", per_frame_config.vp_matrix)
                 })?
                 .into(),
-            sun_direction: per_frame_config.sun_direction.into(),
+            sun_direction: per_frame_config
+                .sun_direction
+                .mul_element_wise(vec3(1.0, -1.0, 1.0))
+                .into(),
             supersampling: self.supersampling.to_float(),
         };
         let per_frame_set_layout = layout

@@ -117,9 +117,9 @@ impl
             fine_pos: [fine.x as f32, fine.y as f32, fine.z as f32].into(),
             max_cube_info_idx: self.raytrace_control_ssbo_len.into(),
             global_brightness_color: per_frame_config.global_light_color.into(),
-            global_light_direction: [
+            sun_direction: [
                 per_frame_config.sun_direction.x,
-                per_frame_config.sun_direction.y,
+                per_frame_config.sun_direction.y * -1.0,
                 per_frame_config.sun_direction.z,
             ]
             .into(),
