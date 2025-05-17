@@ -25,7 +25,7 @@ vec3 sky_rgb(vec3 dir, vec3 sun_direction) {
     if (abs(dir.x - sun_direction.x) < 0.1 &&
     abs(dir.y - sun_direction.y) < 0.1 &&
     abs(dir.z - sun_direction.z) < 0.1) {
-        color = vec3(1.0, 1.0, 1.0);
+        color = color * 4;
     }
     return color;
 }
