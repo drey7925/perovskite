@@ -36,11 +36,14 @@ use perovskite_core::{
 };
 use rand::rngs::{OsRng, ThreadRng};
 use tokio::sync::{mpsc, watch};
+use tokio::task::block_in_place;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::ClientTlsConfig;
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::client_state::ChunkManager;
+use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::VulkanContext;
 use crate::{
     audio,
@@ -140,7 +143,7 @@ pub(crate) async fn connect_game(
 
     progress.send((5.0 / TOTAL_STEPS, "Loading block textures...".to_string()))?;
 
-    let block_types = Arc::new(tokio::task::block_in_place(|| {
+    let block_types = Arc::new(block_in_place(|| {
         ClientBlockTypeManager::new(block_defs_proto.into_inner().block_types)
     })?);
 
@@ -150,6 +153,12 @@ pub(crate) async fn connect_game(
     ))?;
     let block_renderer =
         { BlockRenderer::new(block_types.clone(), &mut cache_manager, vk_ctx.clone()).await? };
+
+    let chunks = block_in_place(|| -> Result<_> {
+        Ok(ChunkManager::new(Arc::new(RaytraceBufferManager::new(
+            vk_ctx.clone(),
+        )?)))
+    })?;
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
     let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
@@ -208,6 +217,7 @@ pub(crate) async fn connect_game(
     let client_state = Arc::new(ClientState::new(
         settings,
         block_types,
+        chunks,
         items,
         action_sender,
         hud,

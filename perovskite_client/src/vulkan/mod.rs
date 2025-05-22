@@ -22,6 +22,7 @@ pub(crate) mod shaders;
 pub(crate) mod util;
 // Public for benchmarking
 pub mod gpu_chunk_table;
+pub(crate) mod raytrace_buffer;
 
 use std::sync::atomic::AtomicBool;
 use std::{ops::Deref, sync::Arc};
@@ -98,6 +99,7 @@ pub(crate) struct VulkanContext {
     /// The format of the depth buffer used for rendering to *screen*. Probed at startup, and used for both render-to-screen and render-to-texture
     depth_format: Format,
 
+    swapchain_len: usize,
     /// For settings, all GPUs detected on this machine
     all_gpus: Vec<String>,
     max_draw_indexed_index_value: u32,
@@ -146,7 +148,7 @@ impl VulkanContext {
         }
     }
 
-    pub(crate) fn copy_to_device<T: BufferContents>(
+    pub(crate) fn val_to_device<T: BufferContents>(
         &self,
         data: T,
         usage: BufferUsage,
@@ -260,6 +262,29 @@ impl VulkanContext {
         }
 
         Ok(target_buffer)
+    }
+
+    pub(crate) fn copy_to_device<T: ?Sized>(
+        &self,
+        src: Subbuffer<T>,
+        dst: Subbuffer<T>,
+    ) -> Result<()> {
+        let transfer_queue = self.clone_transfer_queue();
+        let mut command_buffer = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator(),
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+        command_buffer.copy_buffer(CopyBufferInfo::buffers(src, dst.clone()))?;
+        let fut = {
+            let _span = span!("build target buffer future");
+            command_buffer.build()?.execute(transfer_queue)?
+        };
+        {
+            let _span = span!("flush target buffer future");
+            fut.flush()?
+        }
+        Ok(())
     }
 }
 
@@ -404,7 +429,7 @@ impl VulkanWindow {
             let mut image_count = caps.min_image_count;
             if let Some(max_image_count) = caps.max_image_count {
                 if max_image_count >= 3 {
-                    image_count = 3;
+                    image_count = caps.min_image_count.max(3);
                 }
             }
 
@@ -423,6 +448,7 @@ impl VulkanWindow {
             )?;
             (swapchain, images, image_format)
         };
+        let swapchain_len = swapchain_images.len();
 
         let depth_format = find_best_depth_format(&physical_device)?;
 
@@ -512,6 +538,7 @@ impl VulkanWindow {
                 color_format,
                 depth_format,
                 all_gpus,
+                swapchain_len,
                 max_draw_indexed_index_value: physical_device
                     .properties()
                     .max_draw_indexed_index_value,
@@ -720,6 +747,7 @@ fn find_best_format(
 
 #[derive(Clone)]
 pub(crate) struct FramebufferHolder {
+    image_i: usize,
     supersampling: Supersampling,
     ssaa_framebuffer: Arc<Framebuffer>,
     // Vector starting with the source and ending with the target. It may be a singleton, but must
@@ -766,7 +794,8 @@ pub(crate) fn get_framebuffers_with_depth(
 ) -> Result<Vec<FramebufferHolder>> {
     images
         .iter()
-        .map(|image| -> anyhow::Result<_> {
+        .enumerate()
+        .map(|(image_i, image)| -> anyhow::Result<_> {
             let view = ImageView::new_default(image.clone()).unwrap();
             let ssaa_depth_view = ImageView::new_default(Image::new(
                 allocator.clone(),
@@ -856,6 +885,7 @@ pub(crate) fn get_framebuffers_with_depth(
             )?;
 
             Ok(FramebufferHolder {
+                image_i,
                 supersampling,
                 ssaa_framebuffer,
                 blit_path,

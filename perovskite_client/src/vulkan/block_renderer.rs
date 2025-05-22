@@ -45,6 +45,7 @@ use crate::client_state::chunk::{
     TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
 };
 use crate::client_state::ClientState;
+use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
@@ -334,6 +335,13 @@ impl VkChunkVertexDataGpu {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct VkChunkRaytraceData {
+    pub(crate) flags: u32,
+    // Only Some if we overrode anything
+    pub(crate) blocks: Option<Vec<u32>>,
+    pub(crate) dirty: bool,
+}
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
     pub(crate) opaque: Option<VkBufferCpu<CubeGeometryVertex>>,
@@ -626,6 +634,42 @@ impl BlockRenderer {
 
     pub(crate) fn vk_ctx(&self) -> &VulkanContext {
         &self.vk_ctx
+    }
+
+    pub(crate) fn build_raytrace_data(
+        &self,
+        block_ids: &[BlockId; 18 * 18 * 18],
+    ) -> Option<VkChunkRaytraceData> {
+        let _span = span!("build_raytrace_data");
+
+        if !block_ids
+            .iter()
+            .any(|x| self.block_defs.is_raytrace_present(*x))
+        {
+            return None;
+        }
+
+        let max_block_id = (self.raytrace_control_ssbo.len() as u32) << 12 - 1;
+        let mut flags = FLAG_HASHTABLE_PRESENT;
+
+        let blocks = if block_ids.iter().any(|x| x.0 > max_block_id) {
+            Some(block_ids.iter().map(|x| x.0.min(max_block_id)).collect())
+        } else {
+            None
+        };
+
+        if block_ids
+            .iter()
+            .any(|x| self.block_defs.is_raytrace_heavy(*x))
+        {
+            flags |= FLAG_HASHTABLE_HEAVY;
+        }
+
+        Some(VkChunkRaytraceData {
+            flags,
+            blocks,
+            dirty: true,
+        })
     }
 
     pub(crate) fn mesh_chunk(

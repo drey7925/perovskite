@@ -40,6 +40,7 @@ use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
+use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tonic::Streaming;
 use tracy_client::{plot, span};
@@ -110,6 +111,9 @@ pub(crate) async fn make_contexts(
         neighbor_propagator_handles.push(handle);
     }
 
+    let state_clone = client_state.clone();
+    let cancel_clone = cancellation.clone();
+    let raytrace_worker_handle = spawn_blocking(|| do_raytrace_work(state_clone, cancel_clone));
     let (batcher, batcher_handle) = MeshBatcher::new(client_state.clone());
 
     let (audio_healer, audio_healer_handle) = EvictedAudioHealer::new(client_state.clone());
@@ -138,6 +142,7 @@ pub(crate) async fn make_contexts(
         inline_nprop_scratchpad: NeighborPropagationScratchpad::default(),
         inline_fcn_scratchpad: FastChunkNeighbors::default(),
         audio_healer_handle,
+        raytrace_worker_handle,
     };
 
     let outbound = OutboundContext {
@@ -148,6 +153,23 @@ pub(crate) async fn make_contexts(
     };
 
     Ok((inbound, outbound))
+}
+
+fn do_raytrace_work(client_state: Arc<ClientState>, cancellation: CancellationToken) -> Result<()> {
+    tracy_client::set_thread_name!("raytrace_worker");
+    while !cancellation.is_cancelled() {
+        let next_wakeup = Instant::now() + Duration::from_millis(10);
+
+        client_state
+            .chunks
+            .raytrace_buffers()
+            .batch_done(&client_state.chunks, false)?;
+
+        if let Some(remaining) = next_wakeup.checked_duration_since(Instant::now()) {
+            std::thread::sleep(remaining);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct OutboundContext {
@@ -380,12 +402,10 @@ pub(crate) struct InboundContext {
     inline_fcn_scratchpad: FastChunkNeighbors,
 
     audio_healer_handle: tokio::task::JoinHandle<Result<()>>,
+    raytrace_worker_handle: tokio::task::JoinHandle<Result<()>>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
-        let state_clone = self.shared_state.clone();
-        tokio::task::spawn(fake_raytrace_prep(state_clone));
-
         while !self.shared_state.cancellation.is_cancelled() {
             tokio::select! {
                 message = self.inbound_rx.message() => {
@@ -420,12 +440,14 @@ impl InboundContext {
                     // pass
                 },
                 result = &mut self.mesh_worker_handles.next() => {
-                    match &result {
+                    match result {
                         Some(Err(e)) => {
                             log::error!("Error awaiting mesh worker: {e:?}");
+                            return Err(e.into());
                         }
                         Some(Ok(Err(e))) => {
                             log::error!("Mesh worker crashed: {e:?}");
+                            return Err(e.into());
                         }
                         Some(Ok(_)) => {
                             log::info!("Mesh worker exiting");
@@ -437,12 +459,14 @@ impl InboundContext {
                     break;
                 }
                 result = &mut self.neighbor_propagator_handles.next() => {
-                    match &result {
+                    match result {
                         Some(Err(e)) => {
                             log::error!("Error awaiting neighbor propagator: {e:?}");
+                            return Err(e.into());
                         }
                         Some(Ok(Err(e))) => {
                             log::error!("Neighbor propagator crashed: {e:?}");
+                            return Err(e.into());
                         }
                         Some(Ok(_)) => {
                             log::info!("Neighbor propagator exiting");
@@ -454,28 +478,49 @@ impl InboundContext {
                     break;
                 },
                 result = &mut self.batcher_handle => {
-                    match &result {
+                    match result {
                         Ok(Err(e)) => {
                             log::error!("Mesh batcher crashed: {e:?}");
+                            return Err(e.into());
                         },
                         Ok(Ok(_)) => {
                             log::info!("Mesh batcher exiting");
                         },
                         Err(e) => {
                             log::error!("Error awaiting mesh batcher: {e:?}");
+                            return Err(e.into());
                         }
                     }
+                    break;
                 },
                 result = &mut self.audio_healer_handle => {
-                    match &result {
+                    match result {
                         Ok(Err(e)) => {
                             log::error!("Audio healer crashed: {e:?}");
+                            return Err(e.into());
                         },
                         Ok(Ok(_)) => {
                             log::info!("Audio healer exiting");
                         },
                         Err(e) => {
                             log::error!("Error awaiting audio healer: {e:?}");
+                            return Err(e.into());
+                        }
+                    }
+                    break;
+                },
+                result = &mut self.raytrace_worker_handle => {
+                    match result {
+                        Ok(Err(e)) => {
+                            log::error!("Raytrace worker crashed: {e:?}");
+                            return Err(e.into());
+                        },
+                        Ok(Ok(_)) => {
+                            log::info!("Raytrace worker exiting");
+                        },
+                        Err(e) => {
+                            log::error!("Error awaiting raytrace worker: {e:?}");
+                            return Err(e.into());
                         }
                     }
                 }
@@ -823,6 +868,11 @@ impl InboundContext {
                     self.enqueue_for_meshing(coord);
                 }
             }
+            self.shared_state
+                .client_state
+                .chunks
+                .raytrace_buffers()
+                .batch_done(&self.shared_state.client_state.chunks, false)?;
         }
         Ok((missing_coord, unknown_coords))
     }
@@ -951,37 +1001,5 @@ impl SnappyDecodeHelper {
             snappy_decoder: snap::raw::Decoder::new(),
             snappy_output_buffer: Vec::new(),
         }
-    }
-}
-
-async fn fake_raytrace_prep(ctx: Arc<SharedState>) {
-    while !ctx.cancellation.is_cancelled() {
-        log::info!("raytrace prep starting");
-        {
-            let _span = span!("raytrace prep");
-            let view = ctx.client_state.chunks.renderable_chunks_cloned_view();
-            let mut builder = ChunkHashtableBuilder::new();
-            for (coord, data) in view.iter() {
-                if data.has_mesh() {
-                    let mesh_data = data.chunk_data();
-                    // This cast takes newtype(u32) -> u32
-                    let chunk = bytemuck::cast_slice(mesh_data.block_ids()).to_vec();
-                    let lights = mesh_data.lightmap().to_vec();
-                    builder.add_chunk(*coord, chunk, lights);
-                }
-            }
-            drop(view);
-            let (table, header) = builder.build(20, 3).unwrap();
-            ctx.client_state
-                .chunks
-                .set_fake_raytrace_data(table, header, ctx.client_state.block_renderer.vk_ctx())
-                .unwrap();
-        }
-        tokio::select!(
-            _ = ctx.cancellation.cancelled() => { return; },
-            _ = tokio::time::sleep(Duration::from_millis(250)) => {
-                // pass
-            }
-        )
     }
 }

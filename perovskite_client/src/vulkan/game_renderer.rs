@@ -283,11 +283,15 @@ impl ActiveGame {
             .context("Entities pipeline draw failed")?;
 
         {
-            let frd = self.client_state.chunks.fake_raytace_data.read();
-            if let Some((ssbo, header)) = frd.as_ref() {
+            let frd = self
+                .client_state
+                .chunks
+                .raytrace_buffers()
+                .acquire(framebuffer.image_i);
+            if let Some(slot) = frd {
                 self.raytraced_pipeline.bind(
                     ctx,
-                    (scene_state, ssbo.clone(), header.clone(), player_position),
+                    (scene_state, slot.data, slot.header, player_position),
                     &mut command_buf_builder,
                     (),
                 )?;
@@ -814,7 +818,7 @@ impl GameRenderer {
             // TODO: This sometimes stalls for a long time. Figure out why.
             image_fence.wait(None).unwrap();
         }
-        let previous_future = match self.fences[self.previous_fence_i as usize].clone() {
+        let previous_future = match self.fences[self.previous_fence_i].clone() {
             // Create a NowFuture
             None => {
                 let mut now = vulkano::sync::now(self.ctx.vk_device.clone());

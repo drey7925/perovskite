@@ -21,6 +21,8 @@ pub(crate) struct ClientBlockTypeManager {
     allow_face_suppress_on_exact_match: bv::BitVec,
     transparent_render_blocks: bv::BitVec,
     translucent_render_blocks: bv::BitVec,
+    raytrace_present: bv::BitVec,
+    raytrace_heavy: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
     audio_emitters: Vec<Option<(NonZeroU32, f32)>>,
 }
@@ -53,6 +55,11 @@ impl ClientBlockTypeManager {
         let mut translucent_render_blocks = bv::BitVec::new();
         translucent_render_blocks.resize(BlockId(max_id).index() + 1, false);
 
+        let mut raytrace_present = bv::BitVec::new();
+        raytrace_present.resize(BlockId(max_id).index() + 1, false);
+        let mut raytrace_heavy = bv::BitVec::new();
+        raytrace_heavy.resize(BlockId(max_id).index() + 1, false);
+
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
         let mut audio_emitters = Vec::new();
@@ -78,22 +85,38 @@ impl ClientBlockTypeManager {
             } else {
                 def.light_emission as u8
             };
-            if let Some(RenderInfo::Cube(render_info)) = &def.render_info {
-                if render_info.render_mode() == CubeRenderMode::SolidOpaque {
-                    opaque_blocks.set(id.index(), true);
-                    solid_opaque_blocks.set(
-                        id.index(),
-                        render_info.variant_effect() != CubeVariantEffect::Liquid
-                            && render_info.variant_effect() != CubeVariantEffect::CubeVariantHeight,
-                    );
-                }
+            match &def.render_info {
+                Some(RenderInfo::Cube(render_info)) => {
+                    raytrace_present.set(id.index(), true);
+                    if render_info.render_mode() == CubeRenderMode::SolidOpaque {
+                        opaque_blocks.set(id.index(), true);
+                        solid_opaque_blocks.set(
+                            id.index(),
+                            render_info.variant_effect() != CubeVariantEffect::Liquid
+                                && render_info.variant_effect()
+                                    != CubeVariantEffect::CubeVariantHeight,
+                        );
+                    }
 
-                if render_info.variant_effect() == CubeVariantEffect::Liquid {
-                    allow_suppression_same_base_block.set(id.index(), true);
+                    if render_info.variant_effect() == CubeVariantEffect::Liquid {
+                        allow_suppression_same_base_block.set(id.index(), true);
+                        raytrace_heavy.set(id.index(), true);
+                    }
+                    // Only liquids blend smoothly to their neighbors
+                    if render_info.variant_effect() == CubeVariantEffect::CubeVariantHeight {
+                        allow_face_suppress_on_exact_match.set(id.index(), true);
+                        raytrace_heavy.set(id.index(), true);
+                    }
                 }
-                // Only liquids blend smoothly to their neighbors
-                if render_info.variant_effect() == CubeVariantEffect::CubeVariantHeight {
-                    allow_face_suppress_on_exact_match.set(id.index(), true);
+                None | Some(RenderInfo::Empty(_)) => { /* pass */ }
+                Some(RenderInfo::PlantLike(_)) => {
+                    raytrace_present.set(id.index(), true);
+                    transparent_render_blocks.set(id.index(), true);
+                }
+                Some(RenderInfo::AxisAlignedBoxes(_)) => {
+                    raytrace_present.set(id.index(), true);
+                    raytrace_heavy.set(id.index(), true);
+                    transparent_render_blocks.set(id.index(), true);
                 }
             }
 
@@ -121,6 +144,7 @@ impl ClientBlockTypeManager {
 
             if is_translucent {
                 translucent_render_blocks.set(id.index(), true);
+                raytrace_heavy.set(id.index(), true);
             }
 
             if let Some(sound_id) = NonZeroU32::new(def.sound_id) {
@@ -142,6 +166,8 @@ impl ClientBlockTypeManager {
             allow_face_suppress_on_exact_match,
             transparent_render_blocks,
             translucent_render_blocks,
+            raytrace_present,
+            raytrace_heavy,
             name_to_id,
             audio_emitters,
         })
@@ -252,6 +278,24 @@ impl ClientBlockTypeManager {
             self.translucent_render_blocks[id.index()]
         } else {
             // unknown blocks are solid opaque
+            false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_raytrace_present(&self, id: BlockId) -> bool {
+        if id.index() < self.raytrace_present.len() {
+            self.raytrace_present[id.index()]
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_raytrace_heavy(&self, id: BlockId) -> bool {
+        if id.index() < self.raytrace_heavy.len() {
+            self.raytrace_heavy[id.index()]
+        } else {
             false
         }
     }

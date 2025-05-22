@@ -10,6 +10,7 @@ use super::{
     Texture2DHolder, VulkanContext,
 };
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::block_renderer::VkChunkRaytraceData;
 use crate::vulkan::shaders::VkBufferGpu;
 use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
@@ -257,6 +258,11 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
     }
 
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
+        None
+    }
+
+    fn raytrace_data(&self) -> Option<&VkChunkRaytraceData> {
+        log::warn!("Tried to access raytrace data from FakeChunkDataView");
         None
     }
 }

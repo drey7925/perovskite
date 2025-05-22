@@ -26,6 +26,7 @@ use perovskite_core::protocol::game_rpc as rpc_proto;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
+use bytemuck::cast_slice;
 use egui::ahash::{HashMapExt, HashSetExt};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
@@ -33,7 +34,9 @@ use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Sub
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 use super::block_types::ClientBlockTypeManager;
-use crate::vulkan::block_renderer::{BlockRenderer, VkChunkVertexDataCpu, VkChunkVertexDataGpu};
+use crate::vulkan::block_renderer::{
+    BlockRenderer, VkChunkRaytraceData, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
+};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{VkAllocator, VulkanContext};
@@ -56,9 +59,11 @@ pub(crate) trait ChunkDataView {
         self.block_ids()[offset.as_extended_index()]
     }
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData>;
+    fn raytrace_data(&self) -> Option<&VkChunkRaytraceData>;
 }
 
 pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
+
 impl ChunkDataView for LockedChunkDataView<'_> {
     fn is_empty_optimization_hint(&self) -> bool {
         !self
@@ -71,6 +76,10 @@ impl ChunkDataView for LockedChunkDataView<'_> {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
 
+    fn raytrace_data(&self) -> Option<&VkChunkRaytraceData> {
+        self.0.raytrace_data.as_ref()
+    }
+
     fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
@@ -81,7 +90,10 @@ impl ChunkDataView for LockedChunkDataView<'_> {
 }
 
 pub(crate) struct ChunkDataViewMut<'a>(RwLockWriteGuard<'a, ChunkData>);
-impl ChunkDataViewMut<'_> {
+
+impl<'a> ChunkDataViewMut<'a> {}
+
+impl<'a> ChunkDataViewMut<'a> {
     pub(crate) fn is_empty_optimization_hint(&self) -> bool {
         !self
             .0
@@ -102,6 +114,10 @@ impl ChunkDataViewMut<'_> {
             Box::new([0; 18 * 18 * 18])
         })
     }
+
+    pub(crate) fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
+        self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
+    }
     pub(crate) fn set_state(&mut self, state: ChunkRenderState) {
         self.0.render_state = state;
     }
@@ -112,6 +128,26 @@ impl ChunkDataViewMut<'_> {
             .as_ref()
             .map(|x| x[offset.as_extended_index()])
             .unwrap_or(BlockId(0))
+    }
+    pub(crate) fn raytrace_data(&self) -> Option<&VkChunkRaytraceData> {
+        self.0.raytrace_data.as_ref()
+    }
+    pub(crate) fn copy_rt_data(&mut self) -> Option<(Vec<u32>, Vec<u8>)> {
+        let rt_blocks = if let Some(rt) = self.raytrace_data_mut() {
+            rt.dirty = false;
+            rt.blocks.as_ref().map(|x| x.to_vec())
+        } else {
+            return None;
+        };
+        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()).to_vec());
+        let lights = self.lightmap_mut().to_vec();
+        Some((chunk, lights))
+    }
+    pub(crate) fn raytrace_data_mut(&mut self) -> Option<&mut VkChunkRaytraceData> {
+        self.0.raytrace_data.as_mut()
+    }
+    pub(crate) fn downgrade(self) -> LockedChunkDataView<'a> {
+        LockedChunkDataView(RwLockWriteGuard::downgrade(self.0))
     }
 }
 
@@ -149,6 +185,8 @@ pub(crate) struct ChunkData {
     pub(crate) lightmap: Option<Box<[u8; 18 * 18 * 18]>>,
 
     render_state: ChunkRenderState,
+
+    raytrace_data: Option<VkChunkRaytraceData>,
     client_ext_data: FxHashMap<u16, ClientExtendedData>,
 }
 
@@ -198,7 +236,7 @@ pub(crate) struct ClientChunk {
     has_solo_hint: AtomicBool,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub(crate) enum MeshResult {
     NewMesh(Option<u64>),
     SameMesh,
@@ -276,6 +314,7 @@ impl ClientChunk {
                     render_state: ChunkRenderState::NeedProcessing,
                     lightmap,
                     client_ext_data,
+                    raytrace_data: None,
                 }),
                 chunk_mesh: Mutex::new(ChunkMesh {
                     solo_cpu: None,
@@ -294,9 +333,22 @@ impl ClientChunk {
         self.last_meshed.get_relaxed()
     }
 
-    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<MeshResult> {
-        let data = self.chunk_data();
+    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<(MeshResult, MeshResult)> {
+        let mut data = self.chunk_data_mut();
+        let new_rt_data = renderer.build_raytrace_data(data.block_ids());
+        data.0.raytrace_data = new_rt_data;
 
+        let data = data.downgrade();
+        let raster_result = self.mesh_raster_with(renderer, &data)?;
+
+        Ok((raster_result, MeshResult::NewMesh(None)))
+    }
+
+    fn mesh_raster_with(
+        &self,
+        renderer: &BlockRenderer,
+        data: &LockedChunkDataView,
+    ) -> Result<MeshResult> {
         let vertex_data = match data.0.render_state {
             ChunkRenderState::NeedProcessing => Some(renderer.mesh_chunk(&data)?),
             ChunkRenderState::NoRender => None,

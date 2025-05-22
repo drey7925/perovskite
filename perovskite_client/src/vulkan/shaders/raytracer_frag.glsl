@@ -428,6 +428,34 @@ void main() {
             }
         }
     }
+    vec2 pix_fine = gl_FragCoord.xy / (2 * supersampling);
+    int ixp = int(pix_fine.x);
+    int iyp = int(pix_fine.y) - 64;
+    uint rows = (n_minus_one + 1) / 1024;
+    if (iyp >= 0 && iyp < rows) {
+        if (ixp < 1024) {
+            uint slot = iyp * 1024 + ixp;
+            uint slot_base = slot * 4;
+
+            if ((chunks[slot_base] & 1) == 0) {
+                f_color = vec4(0,0,0,1);
+                return;
+            }
+            uvec3 putative = uvec3(chunks[slot_base + 1], chunks[slot_base + 2], chunks[slot_base + 3]);
+            uvec3 products = putative * k;
+            uint sum = products.x + products.y + products.z;
+            uint try_slot = (sum % 1610612741) & n_minus_one;
+            if (try_slot == slot) {
+                f_color = vec4(0,1,0,1);
+                return;
+            } else {
+                f_color = vec4(1,1,0,1);
+                return;
+            }
+        }
+    }
+
+
     vec2 pix2 = gl_FragCoord.xy / (2.0 * supersampling);
     int ix2 = int(pix2.x) % 2;
     int iy2 = int(pix2.y) % 2;
@@ -512,7 +540,7 @@ void main() {
                         new_dir = facedir_world * face_reflectors[info.face];
                     }
                     float cos_theta = dot(normal, new_dir);
-                    float fresnel = (0.02 + 0.98 * pow(1 - cos_theta, 5));
+                    float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
                     if (fresnel >= length(spec_dir)) {
                         spec_block = info.block_id;
                         spec_start = hit_pos;

@@ -23,6 +23,7 @@ use std::time::Duration;
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
+use egui::ahash::HashMapExt;
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{
@@ -134,19 +135,20 @@ pub(crate) type LightColumnMap = FxHashMap<(i32, i32), ChunkColumn>;
 pub(crate) struct ChunkManager {
     chunks: parking_lot::RwLock<ChunkMap>,
     renderable_chunks: parking_lot::RwLock<ChunkMap>,
+    raytrace_dirty: parking_lot::RwLock<FxHashSet<ChunkCoordinate>>,
     light_columns: parking_lot::RwLock<LightColumnMap>,
     mesh_batches: Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
-    pub(crate) fake_raytace_data:
-        parking_lot::RwLock<Option<(Subbuffer<[u32]>, Subbuffer<ChunkMapHeader>)>>,
+    raytrace_buffers: Arc<RaytraceBufferManager>,
 }
 impl ChunkManager {
-    pub(crate) fn new() -> ChunkManager {
+    pub(crate) fn new(raytrace_buffers: Arc<RaytraceBufferManager>) -> ChunkManager {
         ChunkManager {
             chunks: parking_lot::RwLock::new(FxHashMap::default()),
             renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
+            raytrace_dirty: parking_lot::RwLock::new(FxHashSet::default()),
             light_columns: parking_lot::RwLock::new(FxHashMap::default()),
             mesh_batches: Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
-            fake_raytace_data: parking_lot::RwLock::new(None),
+            raytrace_buffers,
         }
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
@@ -170,6 +172,19 @@ impl ChunkManager {
         }
     }
 
+    pub(crate) fn take_rt_dirty_chunks(&self) -> ChunkManagerClonedView {
+        let chunks = self.renderable_chunks.read();
+        let mut dirty = self.raytrace_dirty.write();
+        let mut result = ChunkMap::with_capacity(dirty.len());
+        for coord in dirty.drain() {
+            if let Some(chunk) = chunks.get(&coord) {
+                result.insert(coord, chunk.clone());
+            }
+        }
+
+        ChunkManagerClonedView { data: result }
+    }
+
     pub(crate) fn chunk_lock(&self) -> RwLockWriteGuard<ChunkMap> {
         let _span = span!("Acquire global chunk lock");
         self.chunks.write()
@@ -191,7 +206,8 @@ impl ChunkManager {
                 self.spill(&chunks_lock, batch, "remove");
             }
         }
-        // Lock order: chunks -> renderable_chunks -> light_columns
+        // Lock order: chunks -> renderable_chunks -> rt_dirty
+        //                                         -> light_columns
         let mut render_chunks_lock = {
             let _span = span!("Acquire global renderable chunk lock");
             self.renderable_chunks.write()
@@ -412,23 +428,33 @@ impl ChunkManager {
         // use of chunks is likewise scoped to the physics code)
         let src = self.chunks.read();
         if let Some(chunk) = src.get(&coord) {
-            match chunk.mesh_with(renderer)? {
+            let (raster_state, _raytrace_state) = chunk.mesh_with(renderer)?;
+
+            let mut dst = {
+                let _span = span!("renderable chunks writelock");
+                self.renderable_chunks.write()
+            };
+            {
+                let _span = span!("raytrace dirty insert (meshed)");
+                self.raytrace_dirty.write().insert(coord);
+            }
+            match raster_state {
                 MeshResult::SameMesh => {
                     // Don't spill or anything
                 }
                 MeshResult::NewMesh(batch) => {
                     // We take the lock after mesh_with to keep the lock scope as short as possible
                     // and avoid blocking the render thread
-                    let mut dst = self.renderable_chunks.write();
                     dst.insert(coord, chunk.clone());
+                    drop(dst);
                     if let Some(batch) = batch {
                         self.spill(&src, batch, "newmesh");
                     }
                 }
                 MeshResult::EmptyMesh(batch) => {
                     // Likewise.
-                    let mut dst = self.renderable_chunks.write();
                     dst.remove(&coord);
+                    drop(dst);
                     if let Some(batch) = batch {
                         self.spill(&src, batch, "emptymesh");
                     }
@@ -610,18 +636,8 @@ impl ChunkManager {
         }
     }
 
-    pub(crate) fn set_fake_raytrace_data(
-        &self,
-        data: Vec<u32>,
-        table: ChunkMapHeader,
-        ctx: &VulkanContext,
-    ) -> Result<()> {
-        let _span = span!("set_fake_raytrace_data");
-        *self.fake_raytace_data.write() = Some((
-            ctx.iter_to_device(data.iter().copied(), BufferUsage::STORAGE_BUFFER)?,
-            ctx.copy_to_device(table, BufferUsage::UNIFORM_BUFFER)?,
-        ));
-        Ok(())
+    pub(crate) fn raytrace_buffers(&self) -> &RaytraceBufferManager {
+        &self.raytrace_buffers
     }
 }
 pub(crate) struct ChunkManagerView<'a> {
@@ -633,6 +649,12 @@ impl<'a> ChunkManagerView<'a> {
     }
     pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
         self.guard.contains_key(coord)
+    }
+
+    pub(crate) fn iter(
+        &'a self,
+    ) -> impl Iterator<Item = (&'a ChunkCoordinate, &'a Arc<ClientChunk>)> {
+        self.guard.iter()
     }
 }
 
@@ -745,6 +767,7 @@ impl ClientState {
     pub(crate) fn new(
         settings: Arc<ArcSwap<GameSettings>>,
         block_types: Arc<ClientBlockTypeManager>,
+        chunks: ChunkManager,
         items: Arc<ClientItemManager>,
         action_sender: mpsc::Sender<GameAction>,
         hud: GameHud,
@@ -762,7 +785,7 @@ impl ClientState {
             items,
             last_update: Mutex::new(timekeeper.now()),
             physics_state: Mutex::new(physics::PhysicsState::new(settings.clone())),
-            chunks: ChunkManager::new(),
+            chunks,
             inventories: Mutex::new(InventoryViewManager::new()),
             tool_controller: Mutex::new(ToolController::new()),
             shutdown: tokio_util::sync::CancellationToken::new(),
@@ -1029,6 +1052,7 @@ pub(crate) struct FrameState {
 
 use crate::audio;
 use crate::audio::MapSoundState;
+use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 use perovskite_core::protocol::map::ClientExtendedData;
