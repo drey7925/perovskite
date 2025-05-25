@@ -27,6 +27,7 @@ pub(crate) enum BoundAction {
     ChatSlash,
     DebugPanel,
     PerfPanel,
+    AuxDebugKey,
     ViewRangeUp,
     ViewRangeDown,
 }
@@ -56,6 +57,7 @@ impl BoundAction {
             BoundAction::ChatSlash => "Chat slash command",
             BoundAction::DebugPanel => "Debug panel",
             BoundAction::PerfPanel => "Performance panel",
+            BoundAction::AuxDebugKey => "Aux debug key",
             BoundAction::ViewRangeUp => "Increase view range",
             BoundAction::ViewRangeDown => "Decrease view range",
         }
@@ -83,6 +85,7 @@ impl BoundAction {
             BoundAction::ChatSlash => "Open chat with / prefilled for a command - it's highly recommended to keep this bound to your slash key in your choice of keyboard layout",
             BoundAction::DebugPanel => "Open/close the debug panel",
             BoundAction::PerfPanel => "Open/close the performance panel",
+            BoundAction::AuxDebugKey => "Development-only keybind, used for WIP features.",
             BoundAction::ViewRangeUp => "Increase the max chunk view distance",
             BoundAction::ViewRangeDown => "Decrease the max chunk view distance",
         }
@@ -108,6 +111,7 @@ impl BoundAction {
             BoundAction::ChatSlash,
             BoundAction::DebugPanel,
             BoundAction::PerfPanel,
+            BoundAction::AuxDebugKey,
             BoundAction::ViewRangeUp,
             BoundAction::ViewRangeDown,
         ];
@@ -143,6 +147,7 @@ pub(crate) struct KeybindSettings {
 
     pub(crate) physics_debug: Keybind,
     pub(crate) performance_panel: Keybind,
+    pub(crate) aux_debug_key: Keybind,
 
     pub(crate) view_range_up: Keybind,
     pub(crate) view_range_down: Keybind,
@@ -170,6 +175,7 @@ impl KeybindSettings {
             BoundAction::ChatSlash => self.chat_slash,
             BoundAction::DebugPanel => self.physics_debug,
             BoundAction::PerfPanel => self.performance_panel,
+            BoundAction::AuxDebugKey => self.aux_debug_key,
             BoundAction::ViewRangeUp => self.view_range_up,
             BoundAction::ViewRangeDown => self.view_range_down,
         }
@@ -195,6 +201,7 @@ impl KeybindSettings {
             BoundAction::ChatSlash => self.chat_slash = keybind,
             BoundAction::DebugPanel => self.physics_debug = keybind,
             BoundAction::PerfPanel => self.performance_panel = keybind,
+            BoundAction::AuxDebugKey => self.aux_debug_key = keybind,
             BoundAction::ViewRangeUp => self.view_range_up = keybind,
             BoundAction::ViewRangeDown => self.view_range_down = keybind,
         }
@@ -228,6 +235,7 @@ impl KeybindSettings {
             chat_slash: migrate(self.chat_slash),
             physics_debug: migrate(self.physics_debug),
             performance_panel: migrate(self.performance_panel),
+            aux_debug_key: migrate(self.aux_debug_key),
             view_range_up: migrate(self.view_range_up),
             view_range_down: migrate(self.view_range_down),
             hotbar_slots: self.hotbar_slots.map(|x| migrate(x)),
@@ -248,18 +256,19 @@ impl Default for KeybindSettings {
             jump: Key(PhysicalKey::Code(KeyCode::KeyJ)),
             descend: Key(PhysicalKey::Code(KeyCode::ShiftLeft)),
             fast_move: Key(PhysicalKey::Code(KeyCode::ControlLeft)),
-            interact_key: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            interact_key: Key(PhysicalKey::Code(KeyCode::KeyF)),
             dig: MouseButton(winit::event::MouseButton::Left),
             place: MouseButton(winit::event::MouseButton::Right),
-            mouse_capture: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            inventory: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            menu: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            chat: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            chat_slash: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            physics_debug: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            performance_panel: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            view_range_up: Key(PhysicalKey::Code(KeyCode::KeyW)),
-            view_range_down: Key(PhysicalKey::Code(KeyCode::KeyW)),
+            mouse_capture: Key(PhysicalKey::Code(KeyCode::AltLeft)),
+            inventory: Key(PhysicalKey::Code(KeyCode::KeyI)),
+            menu: Key(PhysicalKey::Code(KeyCode::Escape)),
+            chat: Key(PhysicalKey::Code(KeyCode::KeyT)),
+            chat_slash: Key(PhysicalKey::Code(KeyCode::Slash)),
+            physics_debug: Key(PhysicalKey::Code(KeyCode::F1)),
+            performance_panel: Key(PhysicalKey::Code(KeyCode::F2)),
+            aux_debug_key: Key(PhysicalKey::Code(KeyCode::F12)),
+            view_range_up: Key(PhysicalKey::Code(KeyCode::BracketRight)),
+            view_range_down: Key(PhysicalKey::Code(KeyCode::BracketLeft)),
             hotbar_slots: [
                 Key(PhysicalKey::Code(KeyCode::Digit1)),
                 Key(PhysicalKey::Code(KeyCode::Digit2)),
