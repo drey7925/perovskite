@@ -163,8 +163,8 @@ impl ChunkManager {
     /// * The clone does not hold any locks on the data in this chunk manager (i.e. insertions and deletions
     ///   are possible while the cloned view is live).
     /// * The clone does not track any insertions/deletions of this chunk manager.
-    ///    * it will not show chunks inserted after cloned_view returned
-    ///    * if chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
+    ///    * It will not show chunks inserted after this function returns.
+    ///    * If chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
     ///      memory will not be released until the cloned view is dropped, due to Arcs owned by the cloned view.
     pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkManagerClonedView {
         ChunkManagerClonedView {
@@ -428,8 +428,7 @@ impl ChunkManager {
         // use of chunks is likewise scoped to the physics code)
         let src = self.chunks.read();
         if let Some(chunk) = src.get(&coord) {
-            let (raster_state, _raytrace_state) = chunk.mesh_with(renderer)?;
-
+            let raster_state = chunk.mesh_with(renderer, Some(&self.raytrace_buffers))?;
             let mut dst = {
                 let _span = span!("renderable chunks writelock");
                 self.renderable_chunks.write()
@@ -1042,6 +1041,8 @@ impl ClientState {
         self.server_perf.lock().clone()
     }
 }
+
+struct ClientPerformanceMetrics {}
 
 pub(crate) struct FrameState {
     pub(crate) scene_state: SceneState,

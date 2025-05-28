@@ -717,6 +717,15 @@ fn draw_render_settings(
                 "Enabled"
             ));
             ui.end_row();
+            ui.label("On-demand raytracing")
+                .on_hover_text("If enabled, raytracing data is only uploaded for the current area, on demand when [TBD key] is pressed. This may improve usability on older or integrated GPUs that lag during data uploads, allowing raytraced screenshots to be taken, at the expense of realtime raytracing experience.");
+            ui.add_enabled(
+                prospective_settings.render.raytracing,
+                egui::Checkbox::new(
+                    &mut prospective_settings.render.on_demand_raytracing,
+                    "Enabled"
+                ));
+            ui.end_row();
             let ssaa_label = ui.label("Supersampling")
                 .on_hover_text("Smooths edges of geometry and textures, at the expense of performance.");
             egui::ComboBox::from_id_salt(ssaa_label.id)

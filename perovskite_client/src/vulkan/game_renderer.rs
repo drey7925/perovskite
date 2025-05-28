@@ -24,9 +24,19 @@ use arc_swap::ArcSwap;
 use cgmath::{vec3, InnerSpace};
 use log::info;
 
+use super::{
+    shaders::{
+        cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
+        egui_adapter::EguiAdapter,
+        entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
+    },
+    FramebufferHolder, VulkanContext, VulkanWindow,
+};
 use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
+use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
+use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use crate::vulkan::shaders::{raytracer, sky, LiveRenderConfig};
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
@@ -36,7 +46,10 @@ use crate::{
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
-use vulkano::command_buffer::{CommandBufferExecFuture, SubpassEndInfo};
+use vulkano::buffer::Subbuffer;
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferExecFuture, CopyBufferInfo, SubpassEndInfo,
+};
 use vulkano::render_pass::Subpass;
 use vulkano::swapchain::{PresentFuture, SwapchainAcquireFuture};
 use vulkano::sync::future::JoinFuture;
@@ -54,15 +67,6 @@ use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-};
-
-use super::{
-    shaders::{
-        cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
-        egui_adapter::EguiAdapter,
-        entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
-    },
-    FramebufferHolder, VulkanContext, VulkanWindow,
 };
 
 pub(crate) struct ActiveGame {
@@ -84,8 +88,10 @@ pub(crate) struct ActiveGame {
     egui_adapter: Option<EguiAdapter>,
 
     client_state: Arc<ClientState>,
-    // Held across frames to avoid constant reallocations
+    // Held across frames to avoid constant reallocations. Only the allocation itself is important
     cube_draw_calls: Vec<CubeGeometryDrawCall>,
+
+    raytrace_data: Option<RaytraceBuffer>,
 }
 
 impl ActiveGame {
@@ -100,7 +106,10 @@ impl ActiveGame {
         ctx: &VulkanWindow,
         framebuffer: &FramebufferHolder,
         input_capture: &mut InputCapture,
-    ) -> Result<Arc<PrimaryAutoCommandBuffer>> {
+    ) -> Result<(
+        Arc<PrimaryAutoCommandBuffer>,
+        Option<Arc<PrimaryAutoCommandBuffer>>,
+    )> {
         let _span = span!("build renderer buffers");
         let mut command_buf_builder = ctx.start_command_buffer()?;
         let start_tick = self.client_state.timekeeper.now();
@@ -124,6 +133,56 @@ impl ActiveGame {
             start_tick,
         );
         ctx.window.set_ime_allowed(ime_enabled);
+
+        ctx.reclaim_u32.unsequester(framebuffer.image_i);
+
+        let RtFrameData {
+            new_buffer,
+            update_steps,
+        } = self.client_state.chunks.raytrace_buffers().acquire(&ctx)?;
+        if let Some(new_buffer) = new_buffer {
+            if let Some(old) = self.raytrace_data.replace(new_buffer) {
+                ctx.reclaim_u32.give_buffer(
+                    old.data,
+                    Some(framebuffer.image_i),
+                    Duration::from_secs(5),
+                );
+            }
+        }
+
+        let prework_buffer = if update_steps.is_empty() {
+            None
+        } else {
+            let mut buf = ctx.start_command_buffer()?;
+            for step in update_steps {
+                match step {
+                    RenderThreadAction::Incremental {
+                        staging_buffer,
+                        scatter_gather_list,
+                    } => {
+                        let dst_buffer = self
+                            .raytrace_data
+                            .as_ref()
+                            .context("Got raytrace incremental update without a raytrace buffer")?
+                            .data
+                            .buffer
+                            .clone();
+
+                        buf.copy_buffer(CopyBufferInfo {
+                            regions: scatter_gather_list.into_iter().collect(),
+                            ..CopyBufferInfo::buffers(staging_buffer.buffer.clone(), dst_buffer)
+                        })?;
+                        ctx.reclaim_u32.give_buffer(
+                            staging_buffer,
+                            Some(framebuffer.image_i),
+                            Duration::from_secs(5),
+                        );
+                    }
+                }
+            }
+
+            Some(buf)
+        };
 
         ctx.start_ssaa_render_pass(
             &mut command_buf_builder,
@@ -283,15 +342,15 @@ impl ActiveGame {
             .context("Entities pipeline draw failed")?;
 
         {
-            let frd = self
-                .client_state
-                .chunks
-                .raytrace_buffers()
-                .acquire(framebuffer.image_i);
-            if let Some(slot) = frd {
+            if let Some(buf) = self.raytrace_data.as_ref() {
                 self.raytraced_pipeline.bind(
                     ctx,
-                    (scene_state, slot.data, slot.header, player_position),
+                    (
+                        scene_state,
+                        buf.data.clone(),
+                        buf.header.clone(),
+                        player_position,
+                    ),
                     &mut command_buf_builder,
                     (),
                 )?;
@@ -346,9 +405,18 @@ impl ActiveGame {
         command_buf_builder.end_render_pass(SubpassEndInfo {
             ..Default::default()
         })?;
-        command_buf_builder
+        let primary = command_buf_builder
             .build()
-            .with_context(|| "Command buffer build failed")
+            .with_context(|| "Command buffer build failed")?;
+        let prework = match prework_buffer {
+            None => None,
+            Some(x) => Some(
+                x.build()
+                    .with_context(|| "Command buffer build failed for prework buffer")?,
+            ),
+        };
+
+        Ok((primary, prework))
     }
 
     fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
@@ -519,6 +587,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         client_state,
         egui_adapter: None,
         cube_draw_calls: vec![],
+        raytrace_data: None,
     };
 
     Ok(game)
@@ -554,12 +623,11 @@ impl GameRenderer {
     pub(crate) fn create(event_loop: &ActiveEventLoop) -> Result<GameRenderer> {
         let settings = Arc::new(ArcSwap::new(GameSettings::load_from_disk()?.into()));
 
-        let ctx = VulkanWindow::create(event_loop, &settings).unwrap();
+        let ctx = VulkanWindow::create(event_loop, &settings)?;
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
-                .build()
-                .unwrap(),
+                .build()?,
         );
         let main_menu = MainMenu::new(&ctx, event_loop, settings.clone());
         let frames_in_flight = ctx.swapchain_images.len();
@@ -818,7 +886,7 @@ impl GameRenderer {
             // TODO: This sometimes stalls for a long time. Figure out why.
             image_fence.wait(None).unwrap();
         }
-        let previous_future = match self.fences[self.previous_fence_i].clone() {
+        let mut previous_future = match self.fences[self.previous_fence_i].clone() {
             // Create a NowFuture
             None => {
                 let mut now = vulkano::sync::now(self.ctx.vk_device.clone());
@@ -894,17 +962,32 @@ impl GameRenderer {
                 })
                 .unwrap();
 
-            command_buf_builder
-                .build()
-                .with_context(|| "Command buffer build failed")
-                .unwrap()
+            (
+                command_buf_builder
+                    .build()
+                    .with_context(|| "Command buffer build failed")
+                    .unwrap(),
+                None,
+            )
         };
+
+        let (primary, prework) = command_buffers;
+
+        if let Some(prework) = prework {
+            previous_future = Box::new(
+                previous_future
+                    .then_execute(self.ctx.graphics_queue.clone(), prework)
+                    .unwrap()
+                    .then_signal_fence_and_flush()
+                    .unwrap(),
+            );
+        }
 
         {
             let _span = span!("submit to Vulkan");
             let future = previous_future
                 .join(acquire_future)
-                .then_execute(self.ctx.graphics_queue.clone(), command_buffers)
+                .then_execute(self.ctx.graphics_queue.clone(), primary)
                 .unwrap()
                 .then_swapchain_present(
                     self.ctx.graphics_queue.clone(),

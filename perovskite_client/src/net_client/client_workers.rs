@@ -33,10 +33,8 @@ use crate::audio::{
     EvictedAudioHealer, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT,
     SOUND_SQUARELAW_ENABLED,
 };
-use crate::client_state::chunk::{ChunkDataView, ChunkOffsetExt};
-use crate::vulkan::gpu_chunk_table::ChunkHashtableBuilder;
+use crate::client_state::input::BoundAction;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
 use tokio::sync::mpsc;
@@ -159,12 +157,17 @@ fn do_raytrace_work(client_state: Arc<ClientState>, cancellation: CancellationTo
     tracy_client::set_thread_name!("raytrace_worker");
     while !cancellation.is_cancelled() {
         let next_wakeup = Instant::now() + Duration::from_millis(10);
-
-        client_state
-            .chunks
-            .raytrace_buffers()
-            .batch_done(&client_state.chunks, false)?;
-
+        if !client_state.settings.load().render.on_demand_raytracing
+            || client_state
+                .input
+                .lock()
+                .take_just_pressed(BoundAction::AuxDebugKey)
+        {
+            client_state
+                .chunks
+                .raytrace_buffers()
+                .do_rebuild(client_state.chunks.renderable_chunks_cloned_view())?;
+        }
         if let Some(remaining) = next_wakeup.checked_duration_since(Instant::now()) {
             std::thread::sleep(remaining);
         }
@@ -868,11 +871,6 @@ impl InboundContext {
                     self.enqueue_for_meshing(coord);
                 }
             }
-            self.shared_state
-                .client_state
-                .chunks
-                .raytrace_buffers()
-                .batch_done(&self.shared_state.client_state.chunks, false)?;
         }
         Ok((missing_coord, unknown_coords))
     }

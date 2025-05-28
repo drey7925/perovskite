@@ -52,6 +52,7 @@ pub(crate) struct RenderSettings {
     pub(crate) render_distance: u32,
     pub(crate) raytracing: bool,
     pub(crate) raytraced_reflections: bool,
+    pub(crate) on_demand_raytracing: bool,
 }
 
 impl RenderSettings {
@@ -79,6 +80,7 @@ impl Default for RenderSettings {
             render_distance: 50,
             raytracing: false,
             raytraced_reflections: true,
+            on_demand_raytracing: false,
         }
     }
 }

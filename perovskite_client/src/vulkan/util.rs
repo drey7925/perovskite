@@ -39,17 +39,54 @@ pub(crate) fn select_physical_device(
     let (selected_gpu, graphics_queue_family_index) = instance
         .enumerate_physical_devices()
         .expect("failed to enumerate physical devices")
-        .filter(|p| p.supported_extensions().contains(device_extensions))
-        .filter(|p| p.supported_features().contains(device_features))
-        .filter_map(|p| {
-            p.queue_family_properties()
+        .filter(|p| {
+            if !p.supported_extensions().contains(device_extensions) {
+                let missing = device_extensions.difference(&p.supported_extensions());
+                log::warn!(
+                    "GPU '{}' rejected: missing required extensions: {:?}",
+                    p.properties().device_name,
+                    missing
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .filter(|p| {
+            if !p.supported_features().contains(device_features) {
+                let missing = device_features.difference(&p.supported_features());
+                log::warn!(
+                    "GPU '{}' rejected: missing required features: {:?}",
+                    p.properties().device_name,
+                    missing
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .filter_map(|device| {
+            let result = device
+                .queue_family_properties()
                 .iter()
                 .enumerate()
-                .position(|(i, q)| {
-                    q.queue_flags.contains(QueueFlags::GRAPHICS)
-                        && p.surface_support(i as u32, surface).unwrap_or(false)
-                })
-                .map(|q| (p, q as u32))
+                .position(|(queue_family_index, queue)| {
+                    queue.queue_flags.contains(QueueFlags::GRAPHICS)
+                        && device
+                            .surface_support(queue_family_index as u32, surface)
+                            .unwrap_or(false)
+                });
+
+            match result {
+                Some(queue_family_index) => Some((device, queue_family_index as u32)),
+                None => {
+                    log::warn!(
+                        "GPU '{}' rejected: no suitable graphics queue family with surface support",
+                        device.properties().device_name
+                    );
+                    None
+                }
+            }
         })
         .min_by_key(|(p, _)| {
             if !preferred_gpu.is_empty()
@@ -65,7 +102,14 @@ pub(crate) fn select_physical_device(
                 PhysicalDeviceType::IntegratedGpu => 2,
                 PhysicalDeviceType::VirtualGpu => 3,
                 PhysicalDeviceType::Cpu => 4,
-                _ => 5,
+                PhysicalDeviceType::Other => {
+                    log::warn!(
+                        "Unknown GPU type detected for device '{}'",
+                        p.properties().device_name
+                    );
+                    5
+                }
+                _ => 6,
             }
         })
         .with_context(|| "no device available")?;

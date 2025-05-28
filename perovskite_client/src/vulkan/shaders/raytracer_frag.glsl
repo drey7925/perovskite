@@ -1,5 +1,5 @@
 #version 460
-#extension GL_KHR_shader_subgroup_vote: enable
+// #extension GL_KHR_shader_subgroup_vote: enable
 
 layout(location = 0) in vec4 global_coord_facedir;
 layout(location = 0) out vec4 f_color;
@@ -305,7 +305,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             slot_flag = chunks[slot_base];
         }
 
-        if (slot != 0xffffffff && traverse_chunk(slot, info)) {
+        if (slot != 0xffffffff && traverse_chunk(slot, info) && ((slot_flag & 4u) == 0)) {
             // We need to restore the old value of g prior to updates.
             // Holding it in a register will increase register pressure.
             // However, we know that chk = old_g + coarse_pos, and it's OK for hits to be mildly expensive

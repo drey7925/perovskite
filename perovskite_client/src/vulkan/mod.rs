@@ -24,14 +24,17 @@ pub(crate) mod util;
 pub mod gpu_chunk_table;
 pub(crate) mod raytrace_buffer;
 
-use std::sync::atomic::AtomicBool;
-use std::{ops::Deref, sync::Arc};
-
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwap;
 use image::GenericImageView;
 use log::warn;
+use parking_lot::Mutex;
 use smallvec::smallvec;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
+use std::{ops::Deref, sync::Arc};
 
 use texture_packer::Rect;
 use tracy_client::span;
@@ -86,7 +89,6 @@ use self::util::select_physical_device;
 
 pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
 
-#[derive(Clone)]
 pub(crate) struct VulkanContext {
     vk_device: Arc<Device>,
     graphics_queue: Arc<Queue>,
@@ -103,6 +105,8 @@ pub(crate) struct VulkanContext {
     /// For settings, all GPUs detected on this machine
     all_gpus: Vec<String>,
     max_draw_indexed_index_value: u32,
+
+    pub(crate) reclaim_u32: BufferReclaim<u32>,
 }
 
 impl VulkanContext {
@@ -148,7 +152,7 @@ impl VulkanContext {
         }
     }
 
-    pub(crate) fn val_to_device<T: BufferContents>(
+    pub(crate) fn val_to_device_via_staging<T: BufferContents>(
         &self,
         data: T,
         usage: BufferUsage,
@@ -205,7 +209,7 @@ impl VulkanContext {
         Ok(target_buffer)
     }
 
-    pub(crate) fn iter_to_device<T: BufferContents>(
+    pub(crate) fn iter_to_device_via_staging<T: BufferContents>(
         &self,
         data: impl ExactSizeIterator<Item = T>,
         usage: BufferUsage,
@@ -260,6 +264,53 @@ impl VulkanContext {
             let _span = span!("flush target buffer future");
             fut.flush()?
         }
+
+        Ok(target_buffer)
+    }
+
+    pub(crate) fn iter_to_device_via_staging_with_reclaim<T: BufferContents>(
+        &self,
+        data: impl ExactSizeIterator<Item = T>,
+        reclaim_type: ReclaimType,
+        reclaim: &BufferReclaim<T>,
+        size_class: DeviceSize,
+    ) -> Result<ReclaimableBuffer<T>> {
+        ensure!(data.len() >= size_class as usize);
+        let staging_buffer = {
+            let _span = span!("build staging buffer");
+            let buf = reclaim.take_or_create(&self, ReclaimType::CpuTransferSrc, size_class)?;
+            let mut guard = buf.buffer.write()?;
+            for (src, dst) in data.zip(guard.iter_mut()) {
+                *dst = src;
+            }
+            drop(guard);
+            buf
+        };
+
+        let target_buffer = {
+            let _span = span!("build target buffer");
+            reclaim.take_or_create(&self, reclaim_type, size_class)?
+        };
+
+        let transfer_queue = self.clone_transfer_queue();
+        let mut command_buffer = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator(),
+            transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+        command_buffer.copy_buffer(CopyBufferInfo::buffers(
+            staging_buffer.buffer.clone(),
+            target_buffer.buffer.clone(),
+        ))?;
+        let fut = {
+            let _span = span!("build target buffer future");
+            command_buffer.build()?.execute(transfer_queue)?
+        };
+        {
+            let _span = span!("flush target buffer future");
+            fut.flush()?
+        }
+        reclaim.give_buffer(staging_buffer, None, Duration::from_secs(1));
 
         Ok(target_buffer)
     }
@@ -355,7 +406,6 @@ impl VulkanWindow {
         };
 
         let device_extensions = DeviceExtensions {
-            ext_shader_subgroup_vote: true,
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
@@ -542,6 +592,7 @@ impl VulkanWindow {
                 max_draw_indexed_index_value: physical_device
                     .properties()
                     .max_draw_indexed_index_value,
+                reclaim_u32: BufferReclaim::new(),
             }),
             ssaa_render_pass,
             post_blit_render_pass,
@@ -1061,5 +1112,188 @@ impl From<Rect> for RectF32 {
 impl From<&Rect> for RectF32 {
     fn from(rect: &Rect) -> Self {
         (*rect).into()
+    }
+}
+
+#[repr(usize)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ReclaimType {
+    CpuTransferSrc = 0,
+    GpuSsboTransferDst = 1,
+}
+
+impl ReclaimType {
+    fn buffer_create_info(&self) -> BufferCreateInfo {
+        match self {
+            ReclaimType::CpuTransferSrc => BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            ReclaimType::GpuSsboTransferDst => BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+        }
+    }
+    fn allocation_create_info(&self) -> AllocationCreateInfo {
+        match self {
+            ReclaimType::CpuTransferSrc => AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            ReclaimType::GpuSsboTransferDst => AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+pub(crate) struct ReclaimableBuffer<T> {
+    reclaim_type: ReclaimType,
+    buffer: Subbuffer<[T]>,
+    expiration: Instant,
+    sequester: Option<usize>,
+}
+
+impl<T> Deref for ReclaimableBuffer<T> {
+    type Target = Subbuffer<[T]>;
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+struct ReclaimInner<T> {
+    pending: Vec<ReclaimableBuffer<T>>,
+    ready: Vec<ReclaimBuffersByType<T>>,
+}
+
+pub(crate) struct BufferReclaim<T> {
+    inner: Mutex<ReclaimInner<T>>,
+}
+
+impl<T: BufferContents> BufferReclaim<T> {
+    pub(crate) fn take_or_create(
+        &self,
+        ctx: &VulkanContext,
+        reclaim_type: ReclaimType,
+        capacity: DeviceSize,
+    ) -> Result<ReclaimableBuffer<T>> {
+        if let Some(x) = self.take_buffer(reclaim_type, capacity) {
+            Ok(x)
+        } else {
+            let inner = Buffer::new_slice(
+                ctx.memory_allocator.clone(),
+                reclaim_type.buffer_create_info(),
+                reclaim_type.allocation_create_info(),
+                capacity,
+            )?;
+            Ok(ReclaimableBuffer {
+                reclaim_type,
+                buffer: inner,
+                // doesn't matter, will be updated when received for reclaim
+                expiration: Instant::now(),
+                sequester: None,
+            })
+        }
+    }
+    fn new() -> BufferReclaim<T> {
+        BufferReclaim {
+            inner: Mutex::new(ReclaimInner {
+                pending: vec![],
+                ready: vec![ReclaimBuffersByType::new(), ReclaimBuffersByType::new()],
+            }),
+        }
+    }
+
+    fn give_buffer(
+        &self,
+        mut buffer: ReclaimableBuffer<T>,
+        sequester: Option<usize>,
+        ttl: Duration,
+    ) {
+        buffer.expiration = Instant::now() + ttl;
+        buffer.sequester = sequester;
+        let mut inner = self.inner.lock();
+        Self::clean_expired(&mut inner);
+        if buffer.sequester.is_some() {
+            inner.pending.push(buffer);
+        } else {
+            inner.ready[buffer.reclaim_type as usize].give_buffer(buffer);
+        }
+    }
+
+    fn take_buffer(
+        &self,
+        reclaim_type: ReclaimType,
+        size: DeviceSize,
+    ) -> Option<ReclaimableBuffer<T>> {
+        let mut inner = self.inner.lock();
+        Self::clean_expired(&mut inner);
+        inner.ready[reclaim_type as usize].take_buffer(size)
+    }
+
+    fn clean_expired(inner: &mut ReclaimInner<T>) {
+        clean_expired(Instant::now(), &mut inner.pending);
+    }
+    fn unsequester(&self, frame: usize) {
+        let mut inner = self.inner.lock();
+        Self::clean_expired(&mut inner);
+        let mut i = 0;
+        while i < inner.pending.len() {
+            let candidate = &inner.pending[i];
+            if candidate.sequester == Some(frame) {
+                let buffer = inner.pending.swap_remove(i);
+                inner.ready[buffer.reclaim_type as usize].give_buffer(buffer);
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
+fn clean_expired<T>(exp: Instant, buffers: &mut Vec<ReclaimableBuffer<T>>) {
+    let mut i = 0;
+    while i < buffers.len() {
+        let candidate = &buffers[i];
+        if candidate.expiration < exp {
+            drop(buffers.swap_remove(i));
+        } else {
+            i += 1;
+        }
+    }
+}
+
+struct ReclaimBuffersByType<T> {
+    by_size_class: BTreeMap<DeviceSize, Vec<ReclaimableBuffer<T>>>,
+}
+
+impl<T> ReclaimBuffersByType<T> {
+    fn new() -> Self {
+        Self {
+            by_size_class: Default::default(),
+        }
+    }
+    fn give_buffer(&mut self, mut buffer: ReclaimableBuffer<T>) {
+        match self.by_size_class.entry(buffer.len()) {
+            Entry::Vacant(x) => {
+                x.insert(vec![buffer]);
+            }
+            Entry::Occupied(x) => {
+                x.into_mut().push(buffer);
+            }
+        }
+    }
+
+    fn take_buffer(&mut self, size: DeviceSize) -> Option<ReclaimableBuffer<T>> {
+        self.by_size_class.get_mut(&size).and_then(|x| x.pop())
+    }
+
+    fn clean_expired(&mut self) {
+        let now = Instant::now();
+        for class in self.by_size_class.values_mut() {
+            clean_expired(now, class);
+        }
     }
 }

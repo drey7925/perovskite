@@ -1,7 +1,10 @@
 //! GPU-friendly data structures, mostly used for the new raytracer.
 
+use crate::client_state::chunk::{ChunkDataView, ClientChunk};
+use crate::client_state::ChunkManagerClonedView;
 use crate::vulkan::gpu_chunk_table::ht_consts::{
-    FLAG_HASHTABLE_PRESENT, OFFSET_K1, OFFSET_K2, OFFSET_K3, OFFSET_MXC, OFFSET_N,
+    FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE, OFFSET_K1, OFFSET_K2, OFFSET_K3, OFFSET_MXC,
+    OFFSET_N,
 };
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use anyhow::Context;
@@ -38,12 +41,16 @@ pub const CHUNK_STRIDE: usize = 5856 + 1472; // 7328
 
 pub mod ht_consts {
     /// If set in flags, this entry has a valid chunk. If unset, x/y/z are nonsensical, with
-    /// arbitrary (likely 0 values), and the same holds for the corresponding chunk data
+    /// arbitrary (likely 0 values), and the same holds for the corresponding chunk data. This is
+    /// for entirely unoccupied entries in the hashtable.
     ///
     /// Note that if this is absent, the WHOLE flags must be 0
     pub const FLAG_HASHTABLE_PRESENT: u32 = 1;
     /// If set, this chunk includes more complex and expensive-to-render geometry.
     pub const FLAG_HASHTABLE_HEAVY: u32 = 2;
+    /// If set, this chunk used to be present, but is no longer. A tombstone is left for the sake of
+    /// proper collision chaining.
+    pub const FLAG_HASHTABLE_TOMBSTONE: u32 = 4;
 
     pub const OFFSET_N: usize = 0;
     pub const OFFSET_MXC: usize = 1;
@@ -82,152 +89,128 @@ const PRIME: u32 = 1610612741;
 ///
 /// Data buffers are the blocks in a chunk, ordered X/Z/Y. [perovskite_core::coordinates::ChunkOffset::as_index]
 /// may be used to index into this.
-pub struct ChunkHashtableBuilder<T, U>
-where
-    T: Deref<Target = [u32]>,
-    U: Deref<Target = [u8]>,
-{
-    // Not a FxHashMap: paranoid that we don't have a hard guarantee of iteration order being same
-    // on each iteration of an unchanged map (although it's a reasonable assumption to make)
-    chunks: FxHashMap<ChunkCoordinate, (T, U)>,
-}
-impl<T, U> ChunkHashtableBuilder<T, U>
-where
-    T: Deref<Target = [u32]>,
-    U: Deref<Target = [u8]>,
-{
-    pub fn new() -> ChunkHashtableBuilder<T, U> {
-        ChunkHashtableBuilder {
-            chunks: FxHashMap::default(),
-        }
+/// Builds a chunk hashtable.
+///
+/// Args:
+///     max_tries: Maximum number of attempts to make before giving up and taking the best
+///         mapping possible.
+///     max_probe_len: If the longest collision probe takes <= max_probe_len values, stop and
+///         accept the attempt. This does not include the first one (i.e., first try w/o
+///         collision is counted as 0)
+pub(crate) fn build_chunk_hashtable(
+    chunks: ChunkManagerClonedView,
+    max_tries: usize,
+    max_probe_len: usize,
+) -> (Vec<u32>, ChunkMapHeader) {
+    // oversize to 1.75x
+    let expanded = chunks.len() + (chunks.len() >> 2) + (chunks.len() >> 3);
+    let n = expanded.max(8).next_power_of_two();
+    let mut data = Vec::new();
+    data.resize((4 + CHUNK_STRIDE) * n + 32, 0);
+    let n_minus_one = (n - 1).try_into().expect("n overflowed u32");
+
+    let mut rng = rand::thread_rng();
+
+    // K values, max num probes, table
+    let mut best_probes = usize::MAX;
+    let mut best_k: Option<(u32, u32, u32, Vec<_>)> = None;
+
+    // Calculate the min and max coordinates of all chunks
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut min_z = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    let mut max_z = i32::MIN;
+
+    for (coord, _) in chunks.iter() {
+        min_x = min_x.min(coord.x);
+        min_y = min_y.min(coord.y);
+        min_z = min_z.min(coord.z);
+        max_x = max_x.max(coord.x);
+        max_y = max_y.max(coord.y);
+        max_z = max_z.max(coord.z);
     }
 
-    /// Adds a chunk to this builder.
-    pub fn add_chunk(&mut self, coord: ChunkCoordinate, data: T, lights: U) {
-        self.chunks.insert(coord, (data, lights));
-    }
-
-    /// Builds a chunk hashtable.
-    ///
-    /// Args:
-    ///     max_tries: Maximum number of attempts to make before giving up and taking the best
-    ///         mapping possible.
-    ///     max_probe_len: If the longest collision probe takes <= max_probe_len values, stop and
-    ///         accept the attempt. This does not include the first one (i.e., first try w/o
-    ///         collision is counted as 0)
-    pub fn build(
-        &self,
-        max_tries: usize,
-        max_probe_len: usize,
-    ) -> anyhow::Result<(Vec<u32>, ChunkMapHeader)> {
-        // oversize to 1.75x
-        let expanded = self.chunks.len() + (self.chunks.len() >> 2) + (self.chunks.len() >> 3);
-        let n = expanded.max(8).next_power_of_two();
-        let mut data = Vec::new();
-        data.resize((4 + CHUNK_STRIDE) * n + 32, 0);
-        let n_minus_one = (n - 1).try_into().context("n overflowed u32")?;
-
-        let mut rng = rand::thread_rng();
-
-        // K values, max num probes, table
-        let mut best_probes = usize::MAX;
-        let mut best_k: Option<(u32, u32, u32, Vec<_>)> = None;
-
-        // Calculate the min and max coordinates of all chunks
-        let mut min_x = i32::MAX;
-        let mut min_y = i32::MAX;
-        let mut min_z = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut max_y = i32::MIN;
-        let mut max_z = i32::MIN;
-
-        for (coord, _) in &self.chunks {
-            min_x = min_x.min(coord.x);
-            min_y = min_y.min(coord.y);
-            min_z = min_z.min(coord.z);
-            max_x = max_x.max(coord.x);
-            max_y = max_y.max(coord.y);
-            max_z = max_z.max(coord.z);
-        }
-
-        'tries: for _ in 0..max_tries {
-            let k1 = (100000000..u32::MAX).sample_single(&mut rng);
-            let k2 = (100000000..u32::MAX).sample_single(&mut rng);
-            let k3 = (100000000..u32::MAX).sample_single(&mut rng);
-            let mut mapping: Vec<Option<(ChunkCoordinate, usize)>> = Vec::new();
-            mapping.resize(n, None);
-            let mut max_probes = 0;
-            for (coord, _) in &self.chunks {
-                let mut new_coord = *coord;
-                let mut slot = phash(new_coord, k1, k2, k3, n_minus_one) as usize;
-                let mut new_probes = 0;
-                while let Some((present_coord, present_probes)) = &mut mapping[slot].as_mut() {
-                    if new_probes > *present_probes {
-                        new_probes += 1;
-                        max_probes = max_probes.max(new_probes);
-                        std::mem::swap(&mut new_coord, present_coord);
-                        std::mem::swap(&mut new_probes, present_probes);
-                    }
+    'tries: for _ in 0..max_tries {
+        let k1 = (100000000..u32::MAX).sample_single(&mut rng);
+        let k2 = (100000000..u32::MAX).sample_single(&mut rng);
+        let k3 = (100000000..u32::MAX).sample_single(&mut rng);
+        let mut mapping: Vec<Option<(ChunkCoordinate, usize)>> = Vec::new();
+        mapping.resize(n, None);
+        let mut max_probes = 0;
+        for (coord, _) in chunks.iter() {
+            let mut new_coord = *coord;
+            let mut slot = phash(new_coord, k1, k2, k3, n_minus_one) as usize;
+            let mut new_probes = 0;
+            while let Some((present_coord, present_probes)) = &mut mapping[slot].as_mut() {
+                if new_probes > *present_probes {
                     new_probes += 1;
-
-                    slot = (slot + 1) & (n - 1);
+                    max_probes = max_probes.max(new_probes);
+                    std::mem::swap(&mut new_coord, present_coord);
+                    std::mem::swap(&mut new_probes, present_probes);
                 }
-                if new_probes >= best_probes {
-                    continue 'tries;
-                }
-                mapping[slot] = Some((new_coord, new_probes));
-                max_probes = max_probes.max(new_probes);
-            }
-            assert_eq!(
-                max_probes,
-                mapping
-                    .iter()
-                    .map(|x| x.as_ref().map(|x| x.1).unwrap_or(0))
-                    .max()
-                    .unwrap()
-            );
-            if max_probes < best_probes {
-                best_k = Some((k1, k2, k3, mapping));
-                best_probes = max_probes;
-            }
-            if max_probes <= max_probe_len {
-                break;
-            }
-        }
-        let (k1, k2, k3, table) = best_k.unwrap();
+                new_probes += 1;
 
-        for (i, entry) in table.iter().enumerate() {
-            if let Some((coord, _)) = entry {
-                let control_base = 4 * i;
-                data[control_base] = FLAG_HASHTABLE_PRESENT;
-                data[control_base + 1] = coord.x as u32;
-                data[control_base + 2] = coord.y as u32;
-                data[control_base + 3] = coord.z as u32;
-                let data_base = 4 * n + CHUNK_STRIDE * i;
-                let light_base = 4 * n + CHUNK_STRIDE * i + CHUNK_LIGHTS_OFFSET;
-                let (blocks, lights) = self.chunks.get(coord).unwrap();
-                data[data_base..data_base + CHUNK_LEN].copy_from_slice(blocks.deref());
-                data[light_base..light_base + CHUNK_LIGHTS_LEN]
-                    .copy_from_slice(bytemuck::cast_slice(lights));
+                slot = (slot + 1) & (n - 1);
             }
+            if new_probes >= best_probes {
+                continue 'tries;
+            }
+            mapping[slot] = Some((new_coord, new_probes));
+            max_probes = max_probes.max(new_probes);
         }
-        let mxc: u32 = best_probes
-            .try_into()
-            .context("max_probes overflowed u32")?;
-        let header = ChunkMapHeader {
-            n_minus_one,
-            mxc: mxc.into(),
-            k: [k1, k2, k3].into(),
-            min_chunk: [min_x, min_y, min_z].into(),
-            max_chunk: [max_x, max_y, max_z].into(),
-        };
-
-        Ok((data, header))
+        assert_eq!(
+            max_probes,
+            mapping
+                .iter()
+                .map(|x| x.as_ref().map(|x| x.1).unwrap_or(0))
+                .max()
+                .unwrap()
+        );
+        if max_probes < best_probes {
+            best_k = Some((k1, k2, k3, mapping));
+            best_probes = max_probes;
+        }
+        if max_probes <= max_probe_len {
+            break;
+        }
     }
-}
+    let (k1, k2, k3, table) = best_k.unwrap();
 
-pub fn build_empty() -> anyhow::Result<(Vec<u32>, ChunkMapHeader)> {
-    ChunkHashtableBuilder::<Vec<u32>, Vec<u8>>::new().build(1, 1)
+    for (i, entry) in table.iter().enumerate() {
+        if let Some((coord, _)) = entry {
+            let control_base = 4 * i;
+            data[control_base] = FLAG_HASHTABLE_PRESENT;
+            data[control_base + 1] = coord.x as u32;
+            data[control_base + 2] = coord.y as u32;
+            data[control_base + 3] = coord.z as u32;
+            let data_base = 4 * n + CHUNK_STRIDE * i;
+            let light_base = 4 * n + CHUNK_STRIDE * i + CHUNK_LIGHTS_OFFSET;
+            let chunk = chunks.get(coord).unwrap();
+            let chunk_data = chunk.chunk_data();
+            let (blocks, lights) = match chunk_data.effective_rt_data() {
+                Some(x) => x,
+                None => {
+                    data[control_base] |= FLAG_HASHTABLE_TOMBSTONE;
+                    continue;
+                }
+            };
+            data[data_base..data_base + CHUNK_LEN].copy_from_slice(blocks);
+            data[light_base..light_base + CHUNK_LIGHTS_LEN]
+                .copy_from_slice(bytemuck::cast_slice(lights));
+        }
+    }
+    let mxc: u32 = best_probes.try_into().expect("max_probes overflowed u32");
+    let header = ChunkMapHeader {
+        n_minus_one,
+        mxc: mxc.into(),
+        k: [k1, k2, k3].into(),
+        min_chunk: [min_x, min_y, min_z].into(),
+        max_chunk: [max_x, max_y, max_z].into(),
+    };
+
+    (data, header)
 }
 
 pub fn gpu_table_lookup(table: &[u32], header: &ChunkMapHeader, key: ChunkCoordinate) -> u32 {
@@ -254,37 +237,4 @@ pub fn gpu_table_lookup(table: &[u32], header: &ChunkMapHeader, key: ChunkCoordi
         slot = (slot + 1) & (header.n_minus_one);
     }
     u32::MAX
-}
-
-#[test]
-fn test_build_and_probe() {
-    let mut builder = ChunkHashtableBuilder::new();
-    let data = vec![0u32; 18 * 18 * 18];
-    let lights = vec![0u8; 18 * 18 * 18];
-    for x in -15..15 {
-        for y in -15..15 {
-            for z in -15..15 {
-                builder.add_chunk(
-                    ChunkCoordinate::new(x, y, z),
-                    data.as_slice(),
-                    lights.as_slice(),
-                );
-            }
-        }
-    }
-    let (table, header) = builder.build(10, 3).unwrap();
-
-    for x in -15..15 {
-        for y in -15..15 {
-            for z in -15..15 {
-                if gpu_table_lookup(&table, &header, ChunkCoordinate::new(x, y, z)) == u32::MAX {
-                    panic!("Lookup failed for {x} {y} {z}")
-                }
-            }
-        }
-    }
-    assert_eq!(
-        u32::MAX,
-        gpu_table_lookup(&table, &header, ChunkCoordinate::new(1, 100, 2))
-    );
 }

@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::hash::{Hash, Hasher};
 use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -37,13 +38,14 @@ use super::block_types::ClientBlockTypeManager;
 use crate::vulkan::block_renderer::{
     BlockRenderer, VkChunkRaytraceData, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
+use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{VkAllocator, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
 use prost::Message;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
     PrimaryCommandBufferAbstract,
@@ -60,6 +62,17 @@ pub(crate) trait ChunkDataView {
     }
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData>;
     fn raytrace_data(&self) -> Option<&VkChunkRaytraceData>;
+
+    fn effective_rt_data(&self) -> Option<(&[u32], &[u8])> {
+        let rt_blocks = if let Some(rt) = self.raytrace_data() {
+            rt.blocks.as_deref()
+        } else {
+            return None;
+        };
+        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()));
+        let lights = self.lightmap();
+        Some((chunk, lights))
+    }
 }
 
 pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
@@ -76,10 +89,6 @@ impl ChunkDataView for LockedChunkDataView<'_> {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
     }
 
-    fn raytrace_data(&self) -> Option<&VkChunkRaytraceData> {
-        self.0.raytrace_data.as_ref()
-    }
-
     fn lightmap(&self) -> &[u8; 18 * 18 * 18] {
         self.0.lightmap.as_deref().unwrap_or(&ZERO_LIGHTMAP)
     }
@@ -87,11 +96,21 @@ impl ChunkDataView for LockedChunkDataView<'_> {
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
         self.0.client_ext_data.get(&(offset.as_index() as u16))
     }
+
+    fn raytrace_data(&self) -> Option<&VkChunkRaytraceData> {
+        self.0.raytrace_data.as_ref()
+    }
 }
 
 pub(crate) struct ChunkDataViewMut<'a>(RwLockWriteGuard<'a, ChunkData>);
 
-impl<'a> ChunkDataViewMut<'a> {}
+pub(crate) fn hash_rt(data: Option<(&[u32], &[u8])>) -> (u64, u64) {
+    let mut blocks_hasher = FxHasher::default();
+    let mut lights_hasher = FxHasher::default();
+    data.map(|x| x.0).hash(&mut blocks_hasher);
+    data.map(|x| x.1).hash(&mut lights_hasher);
+    (blocks_hasher.finish(), lights_hasher.finish())
+}
 
 impl<'a> ChunkDataViewMut<'a> {
     pub(crate) fn is_empty_optimization_hint(&self) -> bool {
@@ -129,25 +148,22 @@ impl<'a> ChunkDataViewMut<'a> {
             .map(|x| x[offset.as_extended_index()])
             .unwrap_or(BlockId(0))
     }
-    pub(crate) fn raytrace_data(&self) -> Option<&VkChunkRaytraceData> {
-        self.0.raytrace_data.as_ref()
-    }
-    pub(crate) fn copy_rt_data(&mut self) -> Option<(Vec<u32>, Vec<u8>)> {
-        let rt_blocks = if let Some(rt) = self.raytrace_data_mut() {
-            rt.dirty = false;
-            rt.blocks.as_ref().map(|x| x.to_vec())
-        } else {
-            return None;
-        };
-        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()).to_vec());
-        let lights = self.lightmap_mut().to_vec();
-        Some((chunk, lights))
-    }
     pub(crate) fn raytrace_data_mut(&mut self) -> Option<&mut VkChunkRaytraceData> {
         self.0.raytrace_data.as_mut()
     }
     pub(crate) fn downgrade(self) -> LockedChunkDataView<'a> {
         LockedChunkDataView(RwLockWriteGuard::downgrade(self.0))
+    }
+
+    fn effective_rt_data(&self) -> Option<(&[u32], &[u8])> {
+        let rt_blocks = if let Some(rt) = &self.0.raytrace_data {
+            rt.blocks.as_deref()
+        } else {
+            return None;
+        };
+        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()));
+        let lights = self.lightmap();
+        Some((chunk, lights))
     }
 }
 
@@ -187,6 +203,10 @@ pub(crate) struct ChunkData {
     render_state: ChunkRenderState,
 
     raytrace_data: Option<VkChunkRaytraceData>,
+    // A hash ***which may collide*** over raytracing data. We're making a reasonable tradeoff that
+    // in case of collision, a chunk will be stale until the next rebuild (or until another change
+    // is detected via the hash)
+    raytrace_hash: (u64, u64),
     client_ext_data: FxHashMap<u16, ClientExtendedData>,
 }
 
@@ -315,6 +335,7 @@ impl ClientChunk {
                     lightmap,
                     client_ext_data,
                     raytrace_data: None,
+                    raytrace_hash: hash_rt(None),
                 }),
                 chunk_mesh: Mutex::new(ChunkMesh {
                     solo_cpu: None,
@@ -333,15 +354,40 @@ impl ClientChunk {
         self.last_meshed.get_relaxed()
     }
 
-    pub(crate) fn mesh_with(&self, renderer: &BlockRenderer) -> Result<(MeshResult, MeshResult)> {
+    pub(crate) fn mesh_with(
+        &self,
+        renderer: &BlockRenderer,
+        raytracer: Option<&RaytraceBufferManager>,
+    ) -> Result<MeshResult> {
         let mut data = self.chunk_data_mut();
         let new_rt_data = renderer.build_raytrace_data(data.block_ids());
         data.0.raytrace_data = new_rt_data;
+        let old_hash = data.0.raytrace_hash;
+        data.0.raytrace_hash = hash_rt(data.effective_rt_data());
 
         let data = data.downgrade();
         let raster_result = self.mesh_raster_with(renderer, &data)?;
 
-        Ok((raster_result, MeshResult::NewMesh(None)))
+        if let Some(rt) = raytracer {
+            let rt_data = data.effective_rt_data();
+            if let Some(rt_data) = rt_data {
+                let blocks = if old_hash.0 != data.0.raytrace_hash.0 {
+                    Some(rt_data.0)
+                } else {
+                    None
+                };
+
+                let lights = if old_hash.1 != data.0.raytrace_hash.1 {
+                    Some(rt_data.1)
+                } else {
+                    None
+                };
+                rt.push_chunk(self.coord, blocks, lights)?
+            } else {
+                // TODO: push empty chunks
+            }
+        }
+        Ok(raster_result)
     }
 
     fn mesh_raster_with(
@@ -882,6 +928,7 @@ impl MeshBatchBuilder {
             if buf.is_empty() {
                 Ok(None)
             } else {
+                let _span = span!("mesh_batch_builder build buffers");
                 let staging_buffer = Buffer::from_iter(
                     allocator.clone(),
                     BufferCreateInfo {

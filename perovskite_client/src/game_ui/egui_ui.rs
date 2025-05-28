@@ -73,7 +73,7 @@ pub(crate) struct EguiUi {
     chat_scroll_counter: usize,
 
     prospective_settings: GameSettings,
-    perf_records: ServerPerformanceMetrics,
+    server_perf_records: ServerPerformanceMetrics,
 
     status_bar: Option<(Instant, String)>,
 }
@@ -115,7 +115,7 @@ impl EguiUi {
             chat_scroll_counter: 0,
 
             prospective_settings: (**settings.load()).clone(),
-            perf_records: ServerPerformanceMetrics::default(),
+            server_perf_records: ServerPerformanceMetrics::default(),
             status_bar: None,
         }
     }
@@ -1233,7 +1233,7 @@ impl EguiUi {
                                 ui,
                                 "Shard writeback queue",
                                 &perf.mapshard_writeback_len,
-                                &mut self.perf_records.mapshard_writeback_len,
+                                &mut self.server_perf_records.mapshard_writeback_len,
                                 "writeback_plot",
                             );
                         });
@@ -1242,7 +1242,7 @@ impl EguiUi {
                                 ui,
                                 "Shard occupancy",
                                 &perf.mapshard_loaded_chunks,
-                                &mut self.perf_records.mapshard_loaded_chunks,
+                                &mut self.server_perf_records.mapshard_loaded_chunks,
                                 "occupancy_plot",
                             );
                         });

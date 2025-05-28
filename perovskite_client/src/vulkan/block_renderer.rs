@@ -17,10 +17,10 @@
 use std::collections::HashSet;
 use std::ops::Deref;
 
-use std::sync::Arc;
-
 use cgmath::num_traits::Num;
 use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
@@ -335,12 +335,15 @@ impl VkChunkVertexDataGpu {
     }
 }
 
+static RAYTRACE_CHUNK_VERSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
 #[derive(Clone)]
 pub(crate) struct VkChunkRaytraceData {
     pub(crate) flags: u32,
     // Only Some if we overrode anything
     pub(crate) blocks: Option<Vec<u32>>,
-    pub(crate) dirty: bool,
+    // May only be used for debugging, still TBD. Small enough to keep for now
+    pub(crate) version: usize,
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
@@ -649,7 +652,7 @@ impl BlockRenderer {
             return None;
         }
 
-        let max_block_id = (self.raytrace_control_ssbo.len() as u32) << 12 - 1;
+        let max_block_id = ((self.raytrace_control_ssbo.len() as u32) << 12) - 1;
         let mut flags = FLAG_HASHTABLE_PRESENT;
 
         let blocks = if block_ids.iter().any(|x| x.0 > max_block_id) {
@@ -668,7 +671,7 @@ impl BlockRenderer {
         Some(VkChunkRaytraceData {
             flags,
             blocks,
-            dirty: true,
+            version: RAYTRACE_CHUNK_VERSION_COUNTER.fetch_add(1, Ordering::Relaxed),
         })
     }
 
@@ -709,7 +712,7 @@ impl BlockRenderer {
                     }
                     // Need to be careful here, since the neighbor block isn't a full block.
                     // If we're OK with suppressing on exact matches and the neighbor matches,
-                    // we're good. Likewise if we can suppress based on base block, and it matches
+                    // we're good. Likewise, if we can suppress based on base block, and it matches
                     (self
                         .block_defs
                         .allow_face_suppress_on_same_base_block(block)
@@ -1395,7 +1398,7 @@ impl SimpleTexCoordCache {
                 }
             }
         });
-        let buf = ctx.iter_to_device(iterator, BufferUsage::STORAGE_BUFFER)?;
+        let buf = ctx.iter_to_device_via_staging(iterator, BufferUsage::STORAGE_BUFFER)?;
         Ok(buf)
     }
 }
