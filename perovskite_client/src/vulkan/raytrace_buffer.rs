@@ -190,6 +190,10 @@ impl RaytraceBufferManager {
     ) -> Result<()> {
         let mut state = self.state.lock();
 
+        if let Some(catchup) = state.catchup.as_mut() {
+            catchup.append_chunk(coord, blocks, lights)?;
+        }
+
         state.incremental.append_chunk(coord, blocks, lights)?;
 
         Ok(())
