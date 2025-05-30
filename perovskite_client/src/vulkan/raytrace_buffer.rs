@@ -318,8 +318,7 @@ impl UpdateBuilder {
                 guard[blocks_pos..blocks_pos + blocks_len].copy_from_slice(blocks);
             }
             if let Some(lights) = lights {
-                //guard[lights_pos..lights_pos + lights_len].copy_from_slice(cast_slice(lights));
-                guard[lights_pos..lights_pos + lights_len].fill(u32::MAX);
+                guard[lights_pos..lights_pos + lights_len].copy_from_slice(cast_slice(lights));
             }
         }
 

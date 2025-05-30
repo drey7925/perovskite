@@ -6,6 +6,7 @@ layout(location = 0) out vec4 f_color;
 
 layout (constant_id = 0) const bool SPECULAR = true;
 layout (constant_id = 1) const bool FUZZY_SHADOWS = true;
+layout (constant_id = 2) const int VIEW_DISTANCE_CLAMP = 30;
 
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"
@@ -333,7 +334,7 @@ vec2 t_range(vec3 start, vec3 dir) {
     vec3 t_max = max(t_for_min, t_for_max);
     return vec2(
     max(0, max(t_min.x, max(t_min.y, t_min.z))),
-    min(30, min(t_max.x, min(t_max.y, t_max.z)))
+    min(VIEW_DISTANCE_CLAMP, min(t_max.x, min(t_max.y, t_max.z)))
     );
 }
 
@@ -557,7 +558,6 @@ void main() {
         vec3 midpoint = (info.start_cc + info.end_cc) / 2;
         vec3 new_pos = (vec3(info.hit_block) + midpoint) / 16.0;
         if (length(new_pos - g0) > t_min_max.y) {
-            f_color = vec4(1.0, 0.0, 0.0, 1.0);
             break;
         }
 

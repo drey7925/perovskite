@@ -157,12 +157,16 @@ fn do_raytrace_work(client_state: Arc<ClientState>, cancellation: CancellationTo
     tracy_client::set_thread_name!("raytrace_worker");
     while !cancellation.is_cancelled() {
         let next_wakeup = Instant::now() + Duration::from_millis(10);
-        if !client_state.settings.load().render.on_demand_raytracing
-            || client_state
-                .input
-                .lock()
-                .take_just_pressed(BoundAction::AuxDebugKey)
-        {
+        let should_raytrace = {
+            let settings = client_state.settings.load();
+            settings.render.raytracing
+                && (!settings.render.on_demand_raytracing
+                    || client_state
+                        .input
+                        .lock()
+                        .take_just_pressed(BoundAction::AuxDebugKey))
+        };
+        if should_raytrace {
             client_state
                 .chunks
                 .raytrace_buffers()

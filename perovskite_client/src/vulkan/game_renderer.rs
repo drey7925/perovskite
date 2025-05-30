@@ -135,53 +135,64 @@ impl ActiveGame {
         ctx.window.set_ime_allowed(ime_enabled);
 
         ctx.reclaim_u32.unsequester(framebuffer.image_i);
+        let prework_buffer = if self.client_state.settings.load().render.raytracing {
+            let RtFrameData {
+                new_buffer,
+                update_steps,
+            } = self.client_state.chunks.raytrace_buffers().acquire(&ctx)?;
+            if let Some(new_buffer) = new_buffer {
+                if let Some(old) = self.raytrace_data.replace(new_buffer) {
+                    ctx.reclaim_u32.give_buffer(
+                        old.data,
+                        Some(framebuffer.image_i),
+                        Duration::from_secs(5),
+                    );
+                }
+            }
+            if update_steps.is_empty() {
+                None
+            } else {
+                let mut buf = ctx.start_command_buffer()?;
+                for step in update_steps {
+                    match step {
+                        RenderThreadAction::Incremental {
+                            staging_buffer,
+                            scatter_gather_list,
+                        } => {
+                            let dst_buffer = self
+                                .raytrace_data
+                                .as_ref()
+                                .context(
+                                    "Got raytrace incremental update without a raytrace buffer",
+                                )?
+                                .data
+                                .buffer
+                                .clone();
 
-        let RtFrameData {
-            new_buffer,
-            update_steps,
-        } = self.client_state.chunks.raytrace_buffers().acquire(&ctx)?;
-        if let Some(new_buffer) = new_buffer {
-            if let Some(old) = self.raytrace_data.replace(new_buffer) {
+                            buf.copy_buffer(CopyBufferInfo {
+                                regions: scatter_gather_list.into_iter().collect(),
+                                ..CopyBufferInfo::buffers(staging_buffer.buffer.clone(), dst_buffer)
+                            })?;
+                            ctx.reclaim_u32.give_buffer(
+                                staging_buffer,
+                                Some(framebuffer.image_i),
+                                Duration::from_secs(5),
+                            );
+                        }
+                    }
+                }
+
+                Some(buf)
+            }
+        } else {
+            if let Some(buf) = self.raytrace_data.take() {
                 ctx.reclaim_u32.give_buffer(
-                    old.data,
+                    buf.data,
                     Some(framebuffer.image_i),
                     Duration::from_secs(5),
                 );
             }
-        }
-
-        let prework_buffer = if update_steps.is_empty() {
             None
-        } else {
-            let mut buf = ctx.start_command_buffer()?;
-            for step in update_steps {
-                match step {
-                    RenderThreadAction::Incremental {
-                        staging_buffer,
-                        scatter_gather_list,
-                    } => {
-                        let dst_buffer = self
-                            .raytrace_data
-                            .as_ref()
-                            .context("Got raytrace incremental update without a raytrace buffer")?
-                            .data
-                            .buffer
-                            .clone();
-
-                        buf.copy_buffer(CopyBufferInfo {
-                            regions: scatter_gather_list.into_iter().collect(),
-                            ..CopyBufferInfo::buffers(staging_buffer.buffer.clone(), dst_buffer)
-                        })?;
-                        ctx.reclaim_u32.give_buffer(
-                            staging_buffer,
-                            Some(framebuffer.image_i),
-                            Duration::from_secs(5),
-                        );
-                    }
-                }
-            }
-
-            Some(buf)
         };
 
         ctx.start_ssaa_render_pass(
