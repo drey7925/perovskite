@@ -53,17 +53,15 @@ pub(crate) struct RaytracedPipelineWrapper {
     raytrace_control_ssbo_len: u32,
 }
 
-impl
-    PipelineWrapper<
-        (),
-        (
-            SceneState,
-            Subbuffer<[u32]>,
-            Subbuffer<ChunkMapHeader>,
-            Vector3<f64>,
-        ),
-    > for RaytracedPipelineWrapper
-{
+pub(crate) struct RaytracingPerFrameConfig {
+    pub(crate) scene_state: SceneState,
+    pub(crate) data: Subbuffer<[u32]>,
+    pub(crate) header: Subbuffer<ChunkMapHeader>,
+    pub(crate) player_pos: Vector3<f64>,
+    pub(crate) render_distance: u32,
+}
+
+impl PipelineWrapper<(), RaytracingPerFrameConfig> for RaytracedPipelineWrapper {
     type PassIdentifier = ();
 
     fn draw<L>(
@@ -82,22 +80,31 @@ impl
     fn bind<L>(
         &mut self,
         ctx: &VulkanContext,
-        per_frame_config: (
-            SceneState,
-            Subbuffer<[u32]>,
-            Subbuffer<ChunkMapHeader>,
-            Vector3<f64>,
-        ),
+        per_frame_config: RaytracingPerFrameConfig,
         command_buf_builder: &mut CommandBufferBuilder<L>,
         _pass: Self::PassIdentifier,
     ) -> anyhow::Result<()> {
-        let (per_frame_config, ssbo, header, player_pos) = per_frame_config;
         command_buf_builder.bind_pipeline_graphics(self.pipeline.clone())?;
         let layout = self.pipeline.layout().clone();
 
-        let player_chunk = BlockCoordinate::try_from(player_pos)?.chunk();
+        let clamped = vec3(
+            per_frame_config
+                .player_pos
+                .x
+                .clamp(u32::MIN as f64, u32::MAX as f64),
+            per_frame_config
+                .player_pos
+                .y
+                .clamp(u32::MIN as f64, u32::MAX as f64),
+            per_frame_config
+                .player_pos
+                .z
+                .clamp(u32::MIN as f64, u32::MAX as f64),
+        );
+
+        let player_chunk = BlockCoordinate::try_from(clamped)?.chunk();
         let fine = (1.0 / 16.0)
-            * (player_pos
+            * (per_frame_config.player_pos
                 - vec3(
                     (player_chunk.x * 16) as f64,
                     (player_chunk.y * 16) as f64,
@@ -105,25 +112,30 @@ impl
                 )
                 + vec3(0.5, 0.5, 0.5));
 
-        let per_frame_data = RaytracedUniformData {
+        let per_frame_data = RaytracingPerFrameData {
             inverse_vp_matrix: per_frame_config
+                .scene_state
                 .vp_matrix
                 .invert()
                 .with_context(|| {
-                    format!("VP matrix was singular: {:?}", per_frame_config.vp_matrix)
+                    format!(
+                        "VP matrix was singular: {:?}",
+                        per_frame_config.scene_state.vp_matrix
+                    )
                 })?
                 .into(),
             supersampling: self.supersampling.to_float(),
             coarse_pos: [player_chunk.x, player_chunk.y, player_chunk.z].into(),
             fine_pos: [fine.x as f32, fine.y as f32, fine.z as f32].into(),
             max_cube_info_idx: self.raytrace_control_ssbo_len.into(),
-            global_brightness_color: per_frame_config.global_light_color.into(),
+            global_brightness_color: per_frame_config.scene_state.global_light_color.into(),
             sun_direction: [
-                per_frame_config.sun_direction.x,
-                per_frame_config.sun_direction.y * -1.0,
-                per_frame_config.sun_direction.z,
+                per_frame_config.scene_state.sun_direction.x,
+                per_frame_config.scene_state.sun_direction.y * -1.0,
+                per_frame_config.scene_state.sun_direction.z,
             ]
             .into(),
+            render_distance: per_frame_config.render_distance,
         };
         let per_frame_set_layout = layout
             .set_layouts()
@@ -147,8 +159,8 @@ impl
             per_frame_set_layout.clone(),
             [
                 WriteDescriptorSet::buffer(0, uniform_buffer),
-                WriteDescriptorSet::buffer(1, header),
-                WriteDescriptorSet::buffer(2, ssbo),
+                WriteDescriptorSet::buffer(1, per_frame_config.header),
+                WriteDescriptorSet::buffer(2, per_frame_config.data),
             ],
             [],
         )?;
@@ -170,12 +182,7 @@ pub(crate) struct RaytracedPipelineProvider {
 impl PipelineProvider for RaytracedPipelineProvider {
     type DrawCall<'a> = ();
     type PerPipelineConfig<'a> = &'a BlockRenderer;
-    type PerFrameConfig = (
-        SceneState,
-        Subbuffer<[u32]>,
-        Subbuffer<ChunkMapHeader>,
-        Vector3<f64>,
-    );
+    type PerFrameConfig = RaytracingPerFrameConfig;
     type PipelineWrapperImpl = RaytracedPipelineWrapper;
 
     fn make_pipeline(
@@ -190,10 +197,16 @@ impl PipelineProvider for RaytracedPipelineProvider {
             .context("Missing vertex shader")?;
         let fs = self
             .fs
-            .specialize(HashMap::from_iter([(
-                0,
-                SpecializationConstant::Bool(global_config.raytracing_reflections),
-            )]))?
+            .specialize(HashMap::from_iter([
+                (
+                    0,
+                    SpecializationConstant::Bool(global_config.raytracing_reflections),
+                ),
+                (
+                    2,
+                    SpecializationConstant::U32(global_config.render_distance),
+                ),
+            ]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let stages = smallvec![

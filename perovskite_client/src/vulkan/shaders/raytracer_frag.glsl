@@ -6,7 +6,6 @@ layout(location = 0) out vec4 f_color;
 
 layout (constant_id = 0) const bool SPECULAR = true;
 layout (constant_id = 1) const bool FUZZY_SHADOWS = true;
-layout (constant_id = 2) const int VIEW_DISTANCE_CLAMP = 30;
 
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"
@@ -334,7 +333,7 @@ vec2 t_range(vec3 start, vec3 dir) {
     vec3 t_max = max(t_for_min, t_for_max);
     return vec2(
     max(0, max(t_min.x, max(t_min.y, t_min.z))),
-    min(VIEW_DISTANCE_CLAMP, min(t_max.x, min(t_max.y, t_max.z)))
+    min(render_distance, min(t_max.x, min(t_max.y, t_max.z)))
     );
 }
 
@@ -351,9 +350,7 @@ vec4 sample_simple(HitInfo info, uint idx) {
 }
 
 float random (vec2 st, float f) {
-    return fract(sin(dot(st.xy,
-    vec2(12.9898,78.233)))*
-    f);
+    return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * f);
 }
 
 
@@ -439,7 +436,7 @@ void main() {
             uint slot_base = slot * 4;
 
             if ((chunks[slot_base] & 1) == 0) {
-                f_color = vec4(0,0,0,1);
+                f_color = vec4(0, 0, 0, 1);
                 return;
             }
             uvec3 putative = uvec3(chunks[slot_base + 1], chunks[slot_base + 2], chunks[slot_base + 3]);
@@ -447,10 +444,10 @@ void main() {
             uint sum = products.x + products.y + products.z;
             uint try_slot = (sum % 1610612741) & n_minus_one;
             if (try_slot == slot) {
-                f_color = vec4(0,1,0,1);
+                f_color = vec4(0, 1, 0, 1);
                 return;
             } else {
-                f_color = vec4(1,1,0,1);
+                f_color = vec4(1, 1, 0, 1);
                 return;
             }
         }

@@ -93,6 +93,8 @@ impl EguiAdapter {
                 // irrelevant for this pipeline
                 raytracing: false,
                 raytracing_reflections: false,
+                // irrelevant for this pipeline
+                render_distance: 0,
             },
         )?;
 
@@ -169,6 +171,7 @@ impl EguiAdapter {
                 supersampling: Supersampling::None,
                 raytracing: false,
                 raytracing_reflections: false,
+                render_distance: 0,
             },
         )?;
         Ok(())

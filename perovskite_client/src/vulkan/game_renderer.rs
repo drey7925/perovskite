@@ -36,7 +36,7 @@ use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
-use crate::vulkan::shaders::raytracer::ChunkMapHeader;
+use crate::vulkan::shaders::raytracer::{ChunkMapHeader, RaytracingPerFrameConfig};
 use crate::vulkan::shaders::{raytracer, sky, LiveRenderConfig};
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
@@ -356,12 +356,13 @@ impl ActiveGame {
             if let Some(buf) = self.raytrace_data.as_ref() {
                 self.raytraced_pipeline.bind(
                     ctx,
-                    (
+                    RaytracingPerFrameConfig {
                         scene_state,
-                        buf.data.clone(),
-                        buf.header.clone(),
-                        player_position,
-                    ),
+                        data: buf.data.clone(),
+                        header: buf.header.clone(),
+                        player_pos: player_position,
+                        render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
+                    },
                     &mut command_buf_builder,
                     (),
                 )?;

@@ -61,6 +61,7 @@ impl RenderSettings {
             supersampling: self.supersampling,
             raytracing: self.raytracing,
             raytracing_reflections: self.raytraced_reflections,
+            render_distance: self.render_distance,
         }
     }
 }

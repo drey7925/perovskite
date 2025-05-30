@@ -279,6 +279,7 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
     pub(crate) raytracing: bool,
     pub(crate) raytracing_reflections: bool,
+    pub(crate) render_distance: u32,
 }
 
 pub(crate) trait PipelineProvider

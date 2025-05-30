@@ -15,7 +15,7 @@ layout(set = 0, binding = 1) readonly buffer RaytraceControl {
     SimpleCubeInfo cube_info[];
 };
 
-layout(set = 1, binding = 0) uniform RaytracedUniformData {
+layout(set = 1, binding = 0) uniform RaytracingPerFrameData {
 // Takes an NDC position and transforms it *back* to world space
     mat4 inverse_vp_matrix;
 // Player position
@@ -30,6 +30,7 @@ layout(set = 1, binding = 0) uniform RaytracedUniformData {
 // length of RaytraceControl
     uint max_cube_info_idx;
     vec3 global_brightness_color;
+    uint render_distance;
 };
 layout(set = 1, binding = 1) uniform ChunkMapHeader {
     uint n_minus_one;
