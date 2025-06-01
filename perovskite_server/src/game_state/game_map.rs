@@ -2185,7 +2185,7 @@ impl MapCacheCleanup {
                     tokio::task::block_in_place(|| self.do_cleanup())?;
                 }
                 _ = self.cancellation.cancelled() => {
-                    info!("Map cache cleanup thread shutting down");
+                    info!("Map cache cleanup thread shutting down for shard ID {}", self.shard_id);
                     break;
                 }
             }
@@ -2253,7 +2253,7 @@ impl GameMapWriteback {
             tokio::task::block_in_place(|| self.do_writebacks(writebacks))?;
         }
 
-        info!("Map writeback exiting");
+        info!("Map writeback exiting for shard ID {}", self.shard_id);
         Ok(())
     }
 
@@ -2315,7 +2315,7 @@ impl GameMapWriteback {
                 }
             },
             _ = self.cancellation.cancelled() => {
-                log::info!("Map writeback detected cancellation");
+                log::info!("Map writeback detected cancellation while gathering");
                 false
             }
         };
@@ -2856,6 +2856,9 @@ impl GameMapTimer {
 
                     tokio::task::block_in_place(|| self.delegate_locking_path(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types, &mut shard_state))?;
                     shard_state.timer_state.prev_tick_time = current_tick_start;
+                },
+                _ = self.cancellation.cancelled() => {
+                    break;
                 }
             }
         }
