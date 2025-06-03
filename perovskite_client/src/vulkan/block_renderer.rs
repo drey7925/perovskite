@@ -41,8 +41,8 @@ use super::{RectF32, VkAllocator};
 use crate::cache::CacheManager;
 use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
-    ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, SOLID_RECLAIMER,
-    TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
+    ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim,
+    RAYTRACE_FALLBACK_RECLAIMER, SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
 };
 use crate::client_state::ClientState;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
@@ -316,10 +316,15 @@ pub(crate) struct VkChunkVertexDataGpu {
     pub(crate) opaque: Option<VkBufferGpu<CubeGeometryVertex>>,
     pub(crate) transparent: Option<VkBufferGpu<CubeGeometryVertex>>,
     pub(crate) translucent: Option<VkBufferGpu<CubeGeometryVertex>>,
+    pub(crate) raytrace_fallback: Option<VkBufferGpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
-        if self.opaque.is_some() || self.transparent.is_some() || self.translucent.is_some() {
+        if self.opaque.is_some()
+            || self.transparent.is_some()
+            || self.translucent.is_some()
+            || self.raytrace_fallback.is_some()
+        {
             Some(self.clone())
         } else {
             None
@@ -331,6 +336,7 @@ impl VkChunkVertexDataGpu {
             opaque: None,
             transparent: None,
             translucent: None,
+            raytrace_fallback: None,
         }
     }
 }
@@ -350,6 +356,7 @@ pub(crate) struct VkChunkVertexDataCpu {
     pub(crate) opaque: Option<VkBufferCpu<CubeGeometryVertex>>,
     pub(crate) transparent: Option<VkBufferCpu<CubeGeometryVertex>>,
     pub(crate) translucent: Option<VkBufferCpu<CubeGeometryVertex>>,
+    pub(crate) raytrace_fallback: Option<VkBufferCpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
@@ -357,6 +364,7 @@ impl VkChunkVertexDataCpu {
             opaque: None,
             transparent: None,
             translucent: None,
+            raytrace_fallback: None,
         }
     }
 
@@ -371,6 +379,10 @@ impl VkChunkVertexDataCpu {
                 None => None,
             },
             translucent: match &self.translucent {
+                Some(x) => x.to_gpu(allocator.clone())?,
+                None => None,
+            },
+            raytrace_fallback: match &self.raytrace_fallback {
                 Some(x) => x.to_gpu(allocator)?,
                 None => None,
             },
@@ -739,6 +751,15 @@ impl BlockRenderer {
                         || self.block_defs.is_solid_opaque(neighbor)
                 },
                 &TRANSLUCENT_RECLAIMER,
+            ),
+            raytrace_fallback: self.mesh_chunk_subpass(
+                chunk_data,
+                |block| self.block_defs.is_raytrace_fallback_render(block),
+                |block, neighbor| {
+                    // TODO: Add proper logic for raytrace_fallback face suppression
+                    todo!()
+                },
+                &RAYTRACE_FALLBACK_RECLAIMER,
             ),
         })
     }
@@ -1135,6 +1156,7 @@ impl BlockRenderer {
                 opaque: None,
                 transparent: Some(VkBufferGpu::<CubeGeometryVertex> { vtx, idx }),
                 translucent: None,
+                raytrace_fallback: None,
             },
         }))
     }

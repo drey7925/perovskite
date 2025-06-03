@@ -698,9 +698,9 @@ impl VulkanWindow {
 
 fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
     const FORMATS_TO_TRY: [Format; 5] = [
-        Format::D24_UNORM_S8_UINT,
         Format::X8_D24_UNORM_PACK32,
         Format::D32_SFLOAT,
+        Format::D24_UNORM_S8_UINT,
         Format::D32_SFLOAT_S8_UINT,
         Format::D16_UNORM,
     ];
@@ -786,7 +786,7 @@ fn find_best_format(
     // This requires enabling ext_swapchain_colorspace and also getting shaders to do
     // srgb conversions if applicable
 
-    dbg!(formats)
+    formats
         .iter()
         .find(|(format, space)| {
             *space == ColorSpace::SrgbNonLinear

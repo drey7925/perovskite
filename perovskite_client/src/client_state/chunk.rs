@@ -229,6 +229,9 @@ impl Drop for ChunkMesh {
             if let Some(translucent) = cpu_data.translucent {
                 TRANSLUCENT_RECLAIMER.put(translucent.idx, translucent.vtx);
             }
+            if let Some(raytrace_fallback) = cpu_data.raytrace_fallback {
+                RAYTRACE_FALLBACK_RECLAIMER.put(raytrace_fallback.idx, raytrace_fallback.vtx);
+            }
         }
     }
 }
@@ -301,9 +304,11 @@ lazy_static::lazy_static! {
     pub(crate) static ref SOLID_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
     pub(crate) static ref TRANSPARENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
     pub(crate) static ref TRANSLUCENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
+    pub(crate) static ref RAYTRACE_FALLBACK_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
     pub(crate) static ref SOLID_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
     pub(crate) static ref TRANSPARENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
     pub(crate) static ref TRANSLUCENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
+    pub(crate) static ref RAYTRACE_FALLBACK_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
 }
 
 impl ClientChunk {
@@ -736,6 +741,8 @@ pub(crate) struct MeshBatch {
     transparent_idx: Option<Subbuffer<[u32]>>,
     translucent_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
     translucent_idx: Option<Subbuffer<[u32]>>,
+    raytrace_fallback_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
+    raytrace_fallback_idx: Option<Subbuffer<[u32]>>,
 
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
     base_position: Vector3<f64>,
@@ -805,6 +812,17 @@ impl MeshBatch {
                 } else {
                     None
                 },
+
+                raytrace_fallback: if self.raytrace_fallback_vtx.is_some()
+                    && self.raytrace_fallback_idx.is_some()
+                {
+                    Some(VkBufferGpu {
+                        vtx: self.raytrace_fallback_vtx.as_ref().unwrap().clone(),
+                        idx: self.raytrace_fallback_idx.as_ref().unwrap().clone(),
+                    })
+                } else {
+                    None
+                },
             },
             model_matrix: matrix.cast().unwrap(),
         })
@@ -822,6 +840,8 @@ pub(crate) struct MeshBatchBuilder {
     transparent_idx: Vec<u32>,
     translucent_vtx: Vec<CubeGeometryVertex>,
     translucent_idx: Vec<u32>,
+    raytrace_fallback_vtx: Vec<CubeGeometryVertex>,
+    raytrace_fallback_idx: Vec<u32>,
     base_position: Vector3<f64>,
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
 }
@@ -831,6 +851,9 @@ impl MeshBatchBuilder {
             .take()
             .unwrap_or((vec![], vec![]));
         let (translucent_idx, translucent_vtx) = TRANSLUCENT_BATCH_RECLAIMER
+            .take()
+            .unwrap_or((vec![], vec![]));
+        let (raytrace_fallback_idx, raytrace_fallback_vtx) = RAYTRACE_FALLBACK_BATCH_RECLAIMER
             .take()
             .unwrap_or((vec![], vec![]));
         let (solid_idx, solid_vtx) = SOLID_BATCH_RECLAIMER.take().unwrap_or((
@@ -846,6 +869,8 @@ impl MeshBatchBuilder {
             transparent_idx,
             translucent_vtx,
             translucent_idx,
+            raytrace_fallback_vtx,
+            raytrace_fallback_idx,
             base_position: Vector3::zero(),
             chunks: smallvec::SmallVec::new(),
         }
@@ -911,6 +936,14 @@ impl MeshBatchBuilder {
                 translucent,
                 &mut self.translucent_vtx,
                 &mut self.translucent_idx,
+                (chunk_pos - self.base_position).cast().unwrap(),
+            );
+        }
+        if let Some(raytrace_fallback) = cpu.raytrace_fallback.as_ref() {
+            Self::extend_buffer(
+                raytrace_fallback,
+                &mut self.raytrace_fallback_vtx,
+                &mut self.raytrace_fallback_idx,
                 (chunk_pos - self.base_position).cast().unwrap(),
             );
         }
@@ -1017,6 +1050,20 @@ impl MeshBatchBuilder {
                 &mut any_commands,
                 BufferUsage::INDEX_BUFFER,
             )?,
+            raytrace_fallback_vtx: build_buffer(
+                &self.raytrace_fallback_vtx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::VERTEX_BUFFER,
+            )?,
+            raytrace_fallback_idx: build_buffer(
+                &self.raytrace_fallback_idx,
+                ctx.clone_allocator(),
+                &mut command_buffer,
+                &mut any_commands,
+                BufferUsage::INDEX_BUFFER,
+            )?,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
         };
@@ -1036,6 +1083,8 @@ impl MeshBatchBuilder {
         self.transparent_idx.clear();
         self.translucent_vtx.clear();
         self.translucent_idx.clear();
+        self.raytrace_fallback_vtx.clear();
+        self.raytrace_fallback_idx.clear();
         self.chunks.clear();
         self.base_position = Vector3::zero();
         self.id = next_id();

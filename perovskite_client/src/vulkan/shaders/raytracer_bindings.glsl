@@ -18,6 +18,7 @@ layout(set = 0, binding = 1) readonly buffer RaytraceControl {
 layout(set = 1, binding = 0) uniform RaytracingPerFrameData {
 // Takes an NDC position and transforms it *back* to world space
     mat4 inverse_vp_matrix;
+    mat4 forward_vp_matrix;
 // Player position
     // in unit of chunks
     ivec3 coarse_pos;

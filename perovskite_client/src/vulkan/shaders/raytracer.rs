@@ -124,6 +124,7 @@ impl PipelineWrapper<(), RaytracingPerFrameConfig> for RaytracedPipelineWrapper 
                     )
                 })?
                 .into(),
+            forward_vp_matrix: per_frame_config.scene_state.vp_matrix.into(),
             supersampling: self.supersampling.to_float(),
             coarse_pos: [player_chunk.x, player_chunk.y, player_chunk.z].into(),
             fine_pos: [fine.x as f32, fine.y as f32, fine.z as f32].into(),
@@ -248,11 +249,7 @@ impl PipelineProvider for RaytracedPipelineProvider {
                 ..Default::default()
             }),
             depth_stencil_state: Some(DepthStencilState {
-                depth: Some(DepthState {
-                    // No depth test whatsoever
-                    compare_op: CompareOp::Always,
-                    write_enable: false,
-                }),
+                depth: Some(DepthState::simple()),
                 depth_bounds: Default::default(),
                 stencil: Default::default(),
                 ..Default::default()
@@ -278,7 +275,10 @@ impl PipelineProvider for RaytracedPipelineProvider {
             .context("raytrace control ssbo len too large")?;
         let descriptor_set = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
-            dbg!(pipeline.layout().set_layouts().get(0))
+            pipeline
+                .layout()
+                .set_layouts()
+                .get(0)
                 .with_context(|| "descriptor set missing")?
                 .clone(),
             [

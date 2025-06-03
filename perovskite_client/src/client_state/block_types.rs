@@ -23,6 +23,7 @@ pub(crate) struct ClientBlockTypeManager {
     translucent_render_blocks: bv::BitVec,
     raytrace_present: bv::BitVec,
     raytrace_heavy: bv::BitVec,
+    raytrace_fallback_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
     audio_emitters: Vec<Option<(NonZeroU32, f32)>>,
 }
@@ -59,6 +60,9 @@ impl ClientBlockTypeManager {
         raytrace_present.resize(BlockId(max_id).index() + 1, false);
         let mut raytrace_heavy = bv::BitVec::new();
         raytrace_heavy.resize(BlockId(max_id).index() + 1, false);
+
+        let mut raytrace_fallback_render_blocks = bv::BitVec::new();
+        raytrace_fallback_render_blocks.resize(BlockId(max_id).index() + 1, false);
 
         let mut light_emitters = Vec::new();
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
@@ -147,6 +151,13 @@ impl ClientBlockTypeManager {
                 raytrace_heavy.set(id.index(), true);
             }
 
+            // TODO: Add logic to determine which blocks should be raytrace_fallback
+            let is_raytrace_fallback = false; //todo!();
+
+            if is_raytrace_fallback {
+                raytrace_fallback_render_blocks.set(id.index(), true);
+            }
+
             if let Some(sound_id) = NonZeroU32::new(def.sound_id) {
                 audio_emitters[id.index()] = Some((sound_id, def.sound_volume));
             }
@@ -168,6 +179,7 @@ impl ClientBlockTypeManager {
             translucent_render_blocks,
             raytrace_present,
             raytrace_heavy,
+            raytrace_fallback_render_blocks,
             name_to_id,
             audio_emitters,
         })
@@ -296,6 +308,16 @@ impl ClientBlockTypeManager {
         if id.index() < self.raytrace_heavy.len() {
             self.raytrace_heavy[id.index()]
         } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_raytrace_fallback_render(&self, id: BlockId) -> bool {
+        if id.index() < self.raytrace_fallback_render_blocks.len() {
+            self.raytrace_fallback_render_blocks[id.index()]
+        } else {
+            // unknown blocks are solid opaque
             false
         }
     }

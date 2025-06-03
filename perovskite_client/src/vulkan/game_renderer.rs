@@ -336,6 +336,21 @@ impl ActiveGame {
                     BlockRenderPass::Translucent,
                 )
                 .context("Translucent pipeline draw failed")?;
+            self.cube_pipeline
+                .bind(
+                    ctx,
+                    scene_state,
+                    &mut command_buf_builder,
+                    BlockRenderPass::RayTraceFallback,
+                )
+                .context("RayTraceFallback bind failed")?;
+            self.cube_pipeline
+                .draw(
+                    &mut command_buf_builder,
+                    &mut self.cube_draw_calls,
+                    BlockRenderPass::RayTraceFallback,
+                )
+                .context("RayTraceFallback pipeline draw failed")?;
         }
         let entity_draw_calls = {
             let lock = self.client_state.entities.lock();

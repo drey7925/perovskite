@@ -209,6 +209,7 @@ impl MiniBlockRenderer {
                     opaque: None,
                     transparent: Some(pass),
                     translucent: None,
+                    raytrace_fallback: None,
                 },
                 model_matrix: Matrix4::identity(),
             };

@@ -355,6 +355,7 @@ float random (vec2 st, float f) {
 
 
 void main() {
+    gl_FragDepth = 1.0;
     vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
     int ix3 = int(pix3.x);
     int iy3 = int(pix3.y);
@@ -518,11 +519,20 @@ void main() {
             float alpha_contrib = (1 - f_color.a) * rgba.a;
             f_color.rgb += alpha_contrib * rgba.rgb;
             f_color.a += alpha_contrib;
+
+            vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
+            if (f_color.a > 0.99) {
+                vec4 rpos = vec4((hit_pos - fine_pos) * 16.0, 1.0) * vec4(1, -1, 1, 1);
+                rpos *= (1.0 + random(gl_FragCoord.xy, 12345.6) / 100.0);
+                vec4 transformed = forward_vp_matrix * rpos;
+                gl_FragDepth = clamp(transformed.z / transformed.w, 0, 1);
+                break;
+            }
+
             // TODO proper specular from the block, for now hardcode glass/water
             if (SPECULAR) {
                 if ((info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
                     vec3 new_dir;
-                    vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
                     vec3 normal = decode_normal(info.face);
                     if (FUZZY_SHADOWS && info.block_id != 0x7000) {
                         vec3 tangent = normalize(cross(facedir_world, normal));
@@ -548,7 +558,7 @@ void main() {
                 }
             }
         }
-        if (hops_remaining == 0 || f_color.a > 0.99) {
+        if (hops_remaining == 0) {
             break;
         }
         hops_remaining--;
