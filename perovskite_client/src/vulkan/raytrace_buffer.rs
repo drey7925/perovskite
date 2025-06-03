@@ -3,7 +3,8 @@ use crate::client_state::{ChunkManagerClonedView, ClientState};
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
 use crate::vulkan::gpu_chunk_table::{
-    build_chunk_hashtable, gpu_table_lookup, CHUNK_LIGHTS_OFFSET, CHUNK_STRIDE,
+    build_chunk_hashtable, gpu_table_lookup, CHUNK_LEN, CHUNK_LIGHTS_LEN, CHUNK_LIGHTS_OFFSET,
+    CHUNK_STRIDE,
 };
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VulkanContext};
@@ -185,8 +186,8 @@ impl RaytraceBufferManager {
     pub(crate) fn push_chunk(
         &self,
         coord: ChunkCoordinate,
-        blocks: Option<&[u32]>,
-        lights: Option<&[u8]>,
+        blocks: Option<&[u32; 5832]>,
+        lights: Option<&[u8; 5832]>,
     ) -> Result<()> {
         let mut state = self.state.lock();
 
@@ -245,30 +246,22 @@ impl UpdateBuilder {
     pub(crate) fn append_chunk(
         &mut self,
         coord: ChunkCoordinate,
-        blocks: Option<&[u32]>,
-        lights: Option<&[u8]>,
+        blocks: Option<&[u32; 5832]>,
+        lights: Option<&[u8; 5832]>,
     ) -> Result<()> {
         let _span = span!("UpdateBuilder append_chunk");
-
-        let blocks_len = blocks.map(|b| b.len()).unwrap_or(0);
-        let lights_len_bytes = lights.map(|b| b.len()).unwrap_or(0);
-        ensure!(
-            lights_len_bytes % 4 == 0,
-            "lights len should be divisible by 4"
-        );
-        let lights_len = lights_len_bytes / 4;
 
         let mut needed_len = 0;
         let blocks_pos = match self.staging_buffer_locations_blocks.get(&coord).copied() {
             None => {
-                needed_len += blocks_len;
+                needed_len += CHUNK_LIGHTS_OFFSET;
                 None
             }
             Some(x) => Some(x),
         };
         let lights_pos = match self.staging_buffer_locations_lights.get(&coord).copied() {
             None => {
-                needed_len += lights_len;
+                needed_len += CHUNK_LIGHTS_LEN;
                 None
             }
             Some(x) => Some(x),
@@ -286,12 +279,14 @@ impl UpdateBuilder {
         let (blocks_pos, blocks_copy_len) = match blocks_pos {
             Some(x) => (x, None),
             None => {
-                if blocks_len != 0 {
+                if blocks.is_some() {
                     let current_pos = self.append_pos;
-                    self.append_pos += blocks_len;
+                    // Extra 24 bytes of wasted padding data in cases where lights aren't being
+                    // updated. The bookkeeping cost makes it not worth it
+                    self.append_pos += CHUNK_LIGHTS_OFFSET;
                     self.staging_buffer_locations_blocks
                         .insert(coord, current_pos);
-                    (current_pos, Some(blocks_len))
+                    (current_pos, Some(CHUNK_LIGHTS_OFFSET))
                 } else {
                     (0, None)
                 }
@@ -300,12 +295,12 @@ impl UpdateBuilder {
         let (lights_pos, lights_copy_len) = match lights_pos {
             Some(x) => (x, None),
             None => {
-                if lights_len != 0 {
+                if lights.is_some() {
                     let current_pos = self.append_pos;
-                    self.append_pos += lights_len;
+                    self.append_pos += CHUNK_LIGHTS_LEN;
                     self.staging_buffer_locations_lights
                         .insert(coord, current_pos);
-                    (current_pos, Some(lights_len))
+                    (current_pos, Some(CHUNK_LIGHTS_LEN))
                 } else {
                     (0, None)
                 }
@@ -315,10 +310,11 @@ impl UpdateBuilder {
         {
             let mut guard = self.staging_buffer.write()?;
             if let Some(blocks) = blocks {
-                guard[blocks_pos..blocks_pos + blocks_len].copy_from_slice(blocks);
+                guard[blocks_pos..blocks_pos + CHUNK_LEN].copy_from_slice(blocks);
             }
             if let Some(lights) = lights {
-                guard[lights_pos..lights_pos + lights_len].copy_from_slice(cast_slice(lights));
+                guard[lights_pos..lights_pos + CHUNK_LIGHTS_LEN]
+                    .copy_from_slice(cast_slice(lights));
             }
         }
 
@@ -327,7 +323,7 @@ impl UpdateBuilder {
                 assert_eq!(lights_pos, blocks_pos + block_len);
                 Some(UnresolvedCopy {
                     src_pos: blocks_pos * 4,
-                    len: (blocks_len + lights_len) * 4,
+                    len: (block_len + lights_len) * 4,
                     coord,
                     lights_only: false,
                 })

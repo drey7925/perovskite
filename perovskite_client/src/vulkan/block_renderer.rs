@@ -347,7 +347,7 @@ static RAYTRACE_CHUNK_VERSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 pub(crate) struct VkChunkRaytraceData {
     pub(crate) flags: u32,
     // Only Some if we overrode anything
-    pub(crate) blocks: Option<Vec<u32>>,
+    pub(crate) blocks: Option<Box<[u32; 5832]>>,
     // May only be used for debugging, still TBD. Small enough to keep for now
     pub(crate) version: usize,
 }
@@ -668,7 +668,7 @@ impl BlockRenderer {
         let mut flags = FLAG_HASHTABLE_PRESENT;
 
         let blocks = if block_ids.iter().any(|x| x.0 > max_block_id) {
-            Some(block_ids.iter().map(|x| x.0.min(max_block_id)).collect())
+            Some(Box::new(block_ids.map(|x| x.0.min(max_block_id))))
         } else {
             None
         };

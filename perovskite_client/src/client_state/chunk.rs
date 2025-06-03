@@ -27,7 +27,7 @@ use perovskite_core::protocol::game_rpc as rpc_proto;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
-use bytemuck::cast_slice;
+use bytemuck::{cast_slice, must_cast_slice};
 use egui::ahash::{HashMapExt, HashSetExt};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
@@ -63,13 +63,14 @@ pub(crate) trait ChunkDataView {
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData>;
     fn raytrace_data(&self) -> Option<&VkChunkRaytraceData>;
 
-    fn effective_rt_data(&self) -> Option<(&[u32], &[u8])> {
+    fn effective_rt_data(&self) -> Option<(&[u32; 5832], &[u8; 5832])> {
         let rt_blocks = if let Some(rt) = self.raytrace_data() {
             rt.blocks.as_deref()
         } else {
             return None;
         };
-        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()));
+        let chunk =
+            rt_blocks.unwrap_or_else(|| must_cast_slice(self.block_ids()).try_into().unwrap());
         let lights = self.lightmap();
         Some((chunk, lights))
     }
@@ -161,7 +162,7 @@ impl<'a> ChunkDataViewMut<'a> {
         } else {
             return None;
         };
-        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()));
+        let chunk = rt_blocks.unwrap_or_else(|| cast_slice(self.block_ids()).try_into().unwrap());
         let lights = self.lightmap();
         Some((chunk, lights))
     }
@@ -366,8 +367,8 @@ impl ClientChunk {
     ) -> Result<MeshResult> {
         let mut data = self.chunk_data_mut();
         let new_rt_data = renderer.build_raytrace_data(data.block_ids());
-        data.0.raytrace_data = new_rt_data;
         let old_hash = data.0.raytrace_hash;
+        data.0.raytrace_data = new_rt_data;
         data.0.raytrace_hash = hash_rt(data.effective_rt_data());
 
         let data = data.downgrade();
