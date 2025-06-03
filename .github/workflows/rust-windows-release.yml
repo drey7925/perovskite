@@ -18,8 +18,8 @@ jobs:
       run: |
         choco install protoc
         choco install ninja
-        rustup install 1.80
-        cargo +1.80 build --profile maxopt --bin perovskite_client
+        rustup update
+        cargo build --profile maxopt --bin perovskite_client
     - name: Upload the artifacts
       uses: AButler/upload-release-assets@v3.0
       with:
