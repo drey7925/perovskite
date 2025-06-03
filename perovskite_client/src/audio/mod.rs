@@ -281,6 +281,7 @@ impl EngineHandle {
                 }
             };
             lock.entity_filter_extra_gain = if entity_attachment != 0 { 3.0 } else { 1.0 };
+            lock.attached_entity = entity_attachment;
         }
         self.control.enabled.store(true, Ordering::Release);
     }
