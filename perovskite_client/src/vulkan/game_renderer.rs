@@ -48,7 +48,8 @@ use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferExecFuture, CopyBufferInfo, SubpassEndInfo,
+    AutoCommandBufferBuilder, CommandBufferExecFuture, CopyBufferInfo, SubpassBeginInfo,
+    SubpassContents, SubpassEndInfo,
 };
 use vulkano::render_pass::Subpass;
 use vulkano::swapchain::{PresentFuture, SwapchainAcquireFuture};
@@ -367,6 +368,15 @@ impl ActiveGame {
             .draw(&mut command_buf_builder, entity_draw_calls, ())
             .context("Entities pipeline draw failed")?;
 
+        command_buf_builder.next_subpass(
+            SubpassEndInfo {
+                ..SubpassEndInfo::default()
+            },
+            SubpassBeginInfo {
+                contents: SubpassContents::Inline,
+                ..SubpassBeginInfo::default()
+            },
+        )?;
         {
             if let Some(buf) = self.raytrace_data.as_ref() {
                 self.raytraced_pipeline.bind(
@@ -469,8 +479,8 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    subpass: Subpass::from(ctx.ssaa_render_pass.clone(), 0)
-                        .context("SSAA subpass 0 missing")?,
+                    subpass: Subpass::from(ctx.ssaa_render_pass.clone(), 1)
+                        .context("SSAA subpass 1 missing")?,
                     enable_depth_stencil: true,
                     enable_supersampling: true,
                 },
@@ -582,7 +592,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
             &vk_wnd,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: Subpass::from(vk_wnd.ssaa_render_pass.clone(), 0)
+                subpass: Subpass::from(vk_wnd.ssaa_render_pass.clone(), 1)
                     .context("SSAA subpass 0 missing")?,
                 enable_depth_stencil: true,
                 enable_supersampling: true,
@@ -958,6 +968,10 @@ impl GameRenderer {
                     fb_holder.ssaa_framebuffer.clone(),
                     [0.0, 0.0, 0.0, 0.0],
                 )
+                .unwrap();
+            // There are two subpasses in the SSAA render pass
+            command_buf_builder
+                .next_subpass(SubpassEndInfo::default(), SubpassBeginInfo::default())
                 .unwrap();
             command_buf_builder
                 .end_render_pass(SubpassEndInfo {

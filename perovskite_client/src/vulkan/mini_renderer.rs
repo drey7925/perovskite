@@ -1,6 +1,6 @@
 use super::{
     block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
-    make_ssaa_render_pass,
+    make_depth_buffer_and_attachments, make_ssaa_render_pass,
     shaders::{
         cube_geometry::{
             BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
@@ -69,13 +69,14 @@ impl MiniBlockRenderer {
             ctx.depth_format,
         )?;
 
+        let extent = [surface_size[0], surface_size[1], 1];
         let target_image = Image::new(
             ctx.memory_allocator.clone(),
             ImageCreateInfo {
                 image_type: ImageType::Dim2d,
                 format: Format::R8G8B8A8_SRGB,
                 view_formats: vec![Format::R8G8B8A8_SRGB],
-                extent: [surface_size[0], surface_size[1], 1],
+                extent,
                 usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
                 ..Default::default()
             },
@@ -91,25 +92,19 @@ impl MiniBlockRenderer {
         };
         let target_image = ImageView::new(target_image, create_info)?;
 
-        let depth_buffer = ImageView::new_default(Image::new(
+        let (depth_stencil_attachment, depth_only_attachment) = make_depth_buffer_and_attachments(
             ctx.memory_allocator.clone(),
-            ImageCreateInfo {
-                image_type: ImageType::Dim2d,
-                format: ctx.depth_format,
-                view_formats: vec![ctx.depth_format],
-                extent: [surface_size[0], surface_size[1], 1],
-                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-                initial_layout: ImageLayout::Undefined,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-        )?)?;
+            ctx.depth_format,
+            Supersampling::None,
+            extent,
+        )?;
 
         let framebuffer_create_info = FramebufferCreateInfo {
-            attachments: vec![target_image.clone(), depth_buffer.clone()],
+            attachments: vec![
+                target_image.clone(),
+                depth_stencil_attachment,
+                depth_only_attachment,
+            ],
             ..Default::default()
         };
         let framebuffer = Framebuffer::new(render_pass.clone(), framebuffer_create_info)?;

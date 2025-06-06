@@ -248,10 +248,14 @@ impl MainMenu {
                     .collapsible(false)
                     .show(&self.egui_gui.egui_ctx, |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
-                        ui.label(&message);
+                        let message_first_line = match message.split_once("\n") {
+                            Some((first_line, _)) => first_line,
+                            None => message.as_str(),
+                        };
+                        ui.label(message_first_line);
                         ui.collapsing("Details:", |ui| {
                             let mut details = format!(
-                                "{}\n\nCause:\n{}\n\n Backtrace:\n{}",
+                                "\n{}\n\nCause:\n{}\n\n Backtrace:\n{}",
                                 message,
                                 causes.join("\n"),
                                 backtrace
@@ -575,7 +579,6 @@ fn draw_input_settings(
 
                 ui.end_row();
             }
-
         })
 }
 
@@ -590,11 +593,10 @@ fn draw_display_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.add(
                 egui::Checkbox::new(
                     &mut prospective_settings.display.hover_text_on_bottom_panel,
-                    "Enable"
+                    "Enable",
                 ),
             );
             ui.end_row();
-
         });
 }
 
@@ -705,7 +707,7 @@ fn draw_render_settings(
                 .on_hover_text("If set, enables raytracing. Requires a powerful GPU, but does not (currently) require hardware-accelerated raytracing (e.g. RTX/RDNA)");
             ui.add(egui::Checkbox::new(
                 &mut prospective_settings.render.raytracing,
-                "Enabled"
+                "Enabled",
             ));
             ui.end_row();
             ui.label("Raytraced reflections")
@@ -713,9 +715,9 @@ fn draw_render_settings(
             ui.add_enabled(
                 prospective_settings.render.raytracing,
                 egui::Checkbox::new(
-                &mut prospective_settings.render.raytraced_reflections,
-                "Enabled"
-            ));
+                    &mut prospective_settings.render.raytraced_reflections,
+                    "Enabled",
+                ));
             ui.end_row();
             ui.label("On-demand raytracing")
                 .on_hover_text("If enabled, raytracing data is only uploaded for the current area, on demand when [TBD key] is pressed. This may improve usability on older or integrated GPUs that lag during data uploads, allowing raytraced screenshots to be taken, at the expense of realtime raytracing experience.");
@@ -723,7 +725,7 @@ fn draw_render_settings(
                 prospective_settings.render.raytracing,
                 egui::Checkbox::new(
                     &mut prospective_settings.render.on_demand_raytracing,
-                    "Enabled"
+                    "Enabled",
                 ));
             ui.end_row();
             let ssaa_label = ui.label("Supersampling")

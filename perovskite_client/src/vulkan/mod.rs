@@ -47,8 +47,10 @@ use vulkano::command_buffer::{
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::format::NumericFormat;
 use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
+use vulkano::image::view::ImageViewCreateInfo;
 use vulkano::image::{
-    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers, ImageType,
+    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers,
+    ImageSubresourceRange, ImageType,
 };
 use vulkano::memory::allocator::{
     AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter,
@@ -648,6 +650,8 @@ impl VulkanWindow {
                     Some(clear_color.into()),
                     // Supersampled depth buffer
                     Some(self.depth_clear_value()),
+                    // Depth-only view
+                    None,
                 ],
                 render_pass: self.ssaa_render_pass.clone(),
                 ..RenderPassBeginInfo::framebuffer(framebuffer)
@@ -736,19 +740,31 @@ pub(crate) fn make_ssaa_render_pass(
                 load_op: Clear,
                 store_op: Store,
             },
-            depth: {
+            depth_stencil: {
                 format: depth_format,
                 samples: 1,
                 load_op: Clear,
                 store_op: DontCare,
             },
+            depth_only: {
+                format: depth_format,
+                samples: 1,
+                load_op: Load,
+                store_op: DontCare,
+            }
         },
         passes: [
             {
                 color: [color_ssaa],
-                depth_stencil: {depth},
+                depth_stencil: {depth_stencil},
                 input: [],
             },
+            {
+                color: [color_ssaa],
+                // Available for stencil tests, TODO verify this works as expected
+                depth_stencil: {depth_stencil},
+                input: [depth_only],
+            }
         ]
     )
     .context("Renderpass creation failed")
@@ -848,27 +864,14 @@ pub(crate) fn get_framebuffers_with_depth(
         .enumerate()
         .map(|(image_i, image)| -> anyhow::Result<_> {
             let view = ImageView::new_default(image.clone()).unwrap();
-            let ssaa_depth_view = ImageView::new_default(Image::new(
-                allocator.clone(),
-                ImageCreateInfo {
-                    image_type: ImageType::Dim2d,
-                    format: depth_format,
-                    view_formats: vec![depth_format],
-                    // TODO make adjustable
-                    extent: [
-                        image.extent()[0] * supersampling.to_int(),
-                        image.extent()[1] * supersampling.to_int(),
-                        1,
-                    ],
-                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-                    initial_layout: ImageLayout::Undefined,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                    ..Default::default()
-                },
-            )?)?;
+            let image_extent = image.extent();
+            let (ssaa_depth_stencil_view, ssaa_depth_only_view) =
+                make_depth_buffer_and_attachments(
+                    allocator.clone(),
+                    depth_format,
+                    supersampling,
+                    image_extent,
+                )?;
             // Now build the blit path
             let blit_path = if supersampling == Supersampling::None {
                 // The blit path is trivial - just the original image
@@ -897,8 +900,8 @@ pub(crate) fn get_framebuffers_with_depth(
                             format: image.format(),
                             view_formats: vec![image.format()],
                             extent: [
-                                image.extent()[0] * multiplier,
-                                image.extent()[1] * multiplier,
+                                image_extent[0] * multiplier,
+                                image_extent[1] * multiplier,
                                 1,
                             ],
                             usage,
@@ -923,7 +926,11 @@ pub(crate) fn get_framebuffers_with_depth(
             let ssaa_framebuffer = Framebuffer::new(
                 ssaa_renderpass.clone(),
                 FramebufferCreateInfo {
-                    attachments: vec![ssaa_color_view, ssaa_depth_view],
+                    attachments: vec![
+                        ssaa_color_view,
+                        ssaa_depth_stencil_view,
+                        ssaa_depth_only_view,
+                    ],
                     ..Default::default()
                 },
             )?;
@@ -944,6 +951,47 @@ pub(crate) fn get_framebuffers_with_depth(
             })
         })
         .collect::<Result<Vec<_>>>()
+}
+
+pub(crate) fn make_depth_buffer_and_attachments(
+    allocator: Arc<VkAllocator>,
+    depth_format: Format,
+    supersampling: Supersampling,
+    image_extent: [u32; 3],
+) -> Result<(Arc<ImageView>, Arc<ImageView>)> {
+    let depth_stencil_buffer = Image::new(
+        allocator,
+        ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: depth_format,
+            view_formats: vec![depth_format],
+            extent: [
+                image_extent[0] * supersampling.to_int(),
+                image_extent[1] * supersampling.to_int(),
+                1,
+            ],
+            usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT
+                | ImageUsage::INPUT_ATTACHMENT
+                | ImageUsage::TRANSIENT_ATTACHMENT,
+            initial_layout: ImageLayout::Undefined,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+    )?;
+    let ssaa_depth_stencil_view = ImageView::new_default(depth_stencil_buffer.clone())?;
+    let depth_only_create_info = ImageViewCreateInfo {
+        subresource_range: ImageSubresourceRange {
+            aspects: ImageAspects::DEPTH,
+            ..depth_stencil_buffer.subresource_range()
+        },
+        ..ImageViewCreateInfo::from_image(&depth_stencil_buffer)
+    };
+    let ssaa_depth_only_view =
+        ImageView::new(depth_stencil_buffer.clone(), depth_only_create_info)?;
+    Ok((ssaa_depth_stencil_view, ssaa_depth_only_view))
 }
 
 pub(crate) struct Texture2DHolder {
