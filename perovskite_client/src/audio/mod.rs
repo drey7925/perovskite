@@ -870,6 +870,7 @@ impl EngineState {
         let entity = match &entity.entity {
             Some(x) => x,
             None => {
+                eprintln!("Entity absent");
                 return;
             }
         };
@@ -891,7 +892,10 @@ impl EngineState {
         }
         let current_move = match entity.current_move() {
             Some(x) => x,
-            None => return,
+            None => {
+                eprintln!("Entity absent");
+                return;
+            }
         };
 
         // We make a bold assumption: The audio buffer is small enough that we can assume that the

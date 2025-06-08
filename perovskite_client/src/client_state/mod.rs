@@ -762,6 +762,10 @@ pub(crate) struct ClientState {
     pub(crate) want_server_perf: AtomicBool,
     pub(crate) render_distance: AtomicU32,
 }
+
+const PROJ_NEAR: f64 = 0.05;
+const PROJ_FAR: f64 = 10000.;
+
 impl ClientState {
     pub(crate) fn new(
         settings: Arc<ArcSwap<GameSettings>>,
@@ -950,8 +954,8 @@ impl ClientState {
         let projection = cgmath::perspective(
             Deg(self.settings.load().render.fov_degrees),
             aspect_ratio,
-            0.05,
-            10000.,
+            PROJ_NEAR,
+            PROJ_FAR,
         );
         let view_proj_matrix = (projection * coordinate_correction * rotation)
             .cast()

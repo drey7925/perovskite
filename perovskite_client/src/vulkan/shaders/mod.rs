@@ -149,14 +149,6 @@ pub(crate) mod frag_lighting {
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
     void main() {
-
-        // While developing raytracing, stencil out half the scene
-        vec2 pix = gl_FragCoord.xy / 8.0;
-        int ix = int(pix.x) % 2;
-        int iy = int(pix.y) % 2;
-        if ((ix ^ iy) != 0) {
-            discard;
-        }
         vec4 color = texture(tex, uv_texcoord);
         f_color = vec4((brightness + global_brightness.r) * color.r,
                        (brightness + global_brightness.g) * color.g,
@@ -181,6 +173,8 @@ pub(crate) mod frag_lighting_sparse {
     layout(location = 0) out vec4 f_color;
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
+    layout (constant_id = 0) const bool DEBUG_INVERT_RASTER_TRANSPARENT = true;
+
     void main() {
         vec2 pix = gl_FragCoord.xy / 8.0;
         vec4 color = texture(tex, uv_texcoord);
@@ -188,6 +182,7 @@ pub(crate) mod frag_lighting_sparse {
                        (brightness + global_brightness.g) * color.g,
                        (brightness + global_brightness.b) * color.b,
                        color.a);
+
         f_color.xyz = 1.0 - f_color.xyz;
         if (f_color.a < 0.5) {
             discard;

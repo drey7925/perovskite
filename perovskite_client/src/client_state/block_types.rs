@@ -8,6 +8,7 @@ use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
     BlockTypeDef, CubeRenderInfo, CubeRenderMode, CubeVariantEffect,
 };
+use perovskite_core::protocol::render::TextureReference;
 use rustc_hash::FxHashMap;
 
 pub(crate) struct ClientBlockTypeManager {
@@ -114,14 +115,30 @@ impl ClientBlockTypeManager {
                 }
                 None | Some(RenderInfo::Empty(_)) => { /* pass */ }
                 Some(RenderInfo::PlantLike(_)) => {
+                    // present but fallback: write it into the buffer, but don't let it get used
+                    // for primary rays
                     raytrace_present.set(id.index(), true);
-                    transparent_render_blocks.set(id.index(), true);
-                }
-                Some(RenderInfo::AxisAlignedBoxes(_)) => {
-                    raytrace_present.set(id.index(), true);
+                    // TODO: Remove this once we can render plants properly in primary rays
+                    raytrace_fallback_render_blocks.set(id.index(), true);
                     raytrace_heavy.set(id.index(), true);
                     transparent_render_blocks.set(id.index(), true);
                 }
+                Some(RenderInfo::AxisAlignedBoxes(_)) => {
+                    raytrace_present.set(id.index(), false);
+                    raytrace_heavy.set(id.index(), false);
+                    // set to fallback while raytracer can't do AABB
+                    raytrace_fallback_render_blocks.set(id.index(), true);
+                    transparent_render_blocks.set(id.index(), true);
+                }
+            }
+
+            if def
+                .render_info
+                .as_ref()
+                .is_some_and(has_any_dynamic_textures)
+            {
+                raytrace_present.set(id.index(), false);
+                raytrace_fallback_render_blocks.set(id.index(), true);
             }
 
             let is_transparent = match &def.render_info {
@@ -149,13 +166,6 @@ impl ClientBlockTypeManager {
             if is_translucent {
                 translucent_render_blocks.set(id.index(), true);
                 raytrace_heavy.set(id.index(), true);
-            }
-
-            // TODO: Add logic to determine which blocks should be raytrace_fallback
-            let is_raytrace_fallback = false; //todo!();
-
-            if is_raytrace_fallback {
-                raytrace_fallback_render_blocks.set(id.index(), true);
             }
 
             if let Some(sound_id) = NonZeroU32::new(def.sound_id) {
@@ -334,4 +344,32 @@ impl ClientBlockTypeManager {
     pub(crate) fn block_defs(&self) -> &[Option<BlockTypeDef>] {
         &self.block_defs
     }
+}
+
+fn has_any_dynamic_textures(ri: &RenderInfo) -> bool {
+    match ri {
+        RenderInfo::Empty(_) => false,
+        RenderInfo::Cube(cube) => {
+            has_dynamic_texture(&cube.tex_right)
+                || has_dynamic_texture(&cube.tex_left)
+                || has_dynamic_texture(&cube.tex_top)
+                || has_dynamic_texture(&cube.tex_bottom)
+                || has_dynamic_texture(&cube.tex_front)
+                || has_dynamic_texture(&cube.tex_back)
+        }
+        RenderInfo::PlantLike(plant) => has_dynamic_texture(&plant.tex),
+        RenderInfo::AxisAlignedBoxes(aabbs) => aabbs.boxes.iter().any(|aabb| {
+            has_dynamic_texture(&aabb.tex_right)
+                || has_dynamic_texture(&aabb.tex_left)
+                || has_dynamic_texture(&aabb.tex_top)
+                || has_dynamic_texture(&aabb.tex_bottom)
+                || has_dynamic_texture(&aabb.tex_front)
+                || has_dynamic_texture(&aabb.tex_back)
+        }),
+    }
+}
+
+fn has_dynamic_texture(tex: &Option<TextureReference>) -> bool {
+    tex.as_ref()
+        .is_some_and(|x| x.crop.is_some_and(|x| x.dynamic.is_some()))
 }

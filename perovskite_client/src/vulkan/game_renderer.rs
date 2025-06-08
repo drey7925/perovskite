@@ -292,66 +292,69 @@ impl ActiveGame {
         );
 
         if !self.cube_draw_calls.is_empty() {
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    scene_state,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Opaque,
-                )
-                .context("Opaque pipeline bind failed")?;
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Opaque,
-                )
-                .context("Opaque pipeline draw failed")?;
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    scene_state,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Transparent,
-                )
-                .context("Transparent pipeline bind failed")?;
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Transparent,
-                )
-                .context("Transparent pipeline draw failed")?;
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    scene_state,
-                    &mut command_buf_builder,
-                    BlockRenderPass::Translucent,
-                )
-                .context("Translucent bind failed")?;
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::Translucent,
-                )
-                .context("Translucent pipeline draw failed")?;
-            self.cube_pipeline
-                .bind(
-                    ctx,
-                    scene_state,
-                    &mut command_buf_builder,
-                    BlockRenderPass::RayTraceFallback,
-                )
-                .context("RayTraceFallback bind failed")?;
-            self.cube_pipeline
-                .draw(
-                    &mut command_buf_builder,
-                    &mut self.cube_draw_calls,
-                    BlockRenderPass::RayTraceFallback,
-                )
-                .context("RayTraceFallback pipeline draw failed")?;
+            if self.raytrace_data.is_none() {
+                self.cube_pipeline
+                    .bind(
+                        ctx,
+                        scene_state,
+                        &mut command_buf_builder,
+                        BlockRenderPass::Opaque,
+                    )
+                    .context("Opaque pipeline bind failed")?;
+                self.cube_pipeline
+                    .draw(
+                        &mut command_buf_builder,
+                        &mut self.cube_draw_calls,
+                        BlockRenderPass::Opaque,
+                    )
+                    .context("Opaque pipeline draw failed")?;
+                self.cube_pipeline
+                    .bind(
+                        ctx,
+                        scene_state,
+                        &mut command_buf_builder,
+                        BlockRenderPass::Transparent,
+                    )
+                    .context("Transparent pipeline bind failed")?;
+                self.cube_pipeline
+                    .draw(
+                        &mut command_buf_builder,
+                        &mut self.cube_draw_calls,
+                        BlockRenderPass::Transparent,
+                    )
+                    .context("Transparent pipeline draw failed")?;
+                self.cube_pipeline
+                    .bind(
+                        ctx,
+                        scene_state,
+                        &mut command_buf_builder,
+                        BlockRenderPass::Translucent,
+                    )
+                    .context("Translucent bind failed")?;
+                self.cube_pipeline
+                    .draw(
+                        &mut command_buf_builder,
+                        &mut self.cube_draw_calls,
+                        BlockRenderPass::Translucent,
+                    )
+                    .context("Translucent pipeline draw failed")?;
+            } else {
+                self.cube_pipeline
+                    .bind(
+                        ctx,
+                        scene_state,
+                        &mut command_buf_builder,
+                        BlockRenderPass::RaytraceFallback,
+                    )
+                    .context("RaytraceFallback bind failed")?;
+                self.cube_pipeline
+                    .draw(
+                        &mut command_buf_builder,
+                        &mut self.cube_draw_calls,
+                        BlockRenderPass::RaytraceFallback,
+                    )
+                    .context("RaytraceFallback pipeline draw failed")?;
+            }
         }
         let entity_draw_calls = {
             let lock = self.client_state.entities.lock();
@@ -385,6 +388,7 @@ impl ActiveGame {
                         scene_state,
                         data: buf.data.clone(),
                         header: buf.header.clone(),
+                        depth_view: framebuffer.ssaa_framebuffer.attachments()[2].clone(),
                         player_pos: player_position,
                         render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
                     },

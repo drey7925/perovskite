@@ -479,12 +479,12 @@ impl BlockRenderer {
 
 impl BlockRenderer {
     pub(crate) async fn new(
-        block_defs: Arc<ClientBlockTypeManager>,
+        block_type_manager: Arc<ClientBlockTypeManager>,
         cache_manager: &mut CacheManager,
         ctx: Arc<VulkanContext>,
     ) -> Result<BlockRenderer> {
         let mut all_texture_names = HashSet::new();
-        for def in block_defs.all_block_defs() {
+        for def in block_type_manager.all_block_defs() {
             let mut insert_if_present = |tex: &Option<TextureReference>| {
                 if let Some(tex) = tex {
                     all_texture_names.insert(tex.texture_name.clone());
@@ -577,7 +577,7 @@ impl BlockRenderer {
             .collect();
 
         let simple_block_tex_coords = SimpleTexCoordCache {
-            blocks: block_defs
+            blocks: block_type_manager
                 .block_defs()
                 .iter()
                 .map(|x| {
@@ -585,6 +585,7 @@ impl BlockRenderer {
                         build_simple_cache_entry(
                             x,
                             &texture_coords,
+                            &block_type_manager,
                             texture_atlas.width() as f32,
                             texture_atlas.height() as f32,
                         )
@@ -595,7 +596,7 @@ impl BlockRenderer {
         let raytrace_control_ssbo = simple_block_tex_coords.build_ssbo(&ctx)?;
 
         let axis_aligned_box_blocks = AxisAlignedBoxBlocksCache {
-            blocks: block_defs
+            blocks: block_type_manager
                 .block_defs()
                 .iter()
                 .map(|x| {
@@ -619,7 +620,7 @@ impl BlockRenderer {
         let fake_entity_rect: RectF32 = (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into();
         let atlas_dims = texture_atlas.dimensions();
         Ok(BlockRenderer {
-            block_defs,
+            block_defs: block_type_manager,
             texture_atlas,
             selection_box_tex_coord: selection_rect.div(atlas_dims),
             fallback_tex_coord: fallback_rect.div(atlas_dims),
@@ -755,10 +756,7 @@ impl BlockRenderer {
             raytrace_fallback: self.mesh_chunk_subpass(
                 chunk_data,
                 |block| self.block_defs.is_raytrace_fallback_render(block),
-                |block, neighbor| {
-                    // TODO: Add proper logic for raytrace_fallback face suppression
-                    todo!()
-                },
+                |_, _| false,
                 &RAYTRACE_FALLBACK_RECLAIMER,
             ),
         })
@@ -1231,6 +1229,7 @@ fn build_axis_aligned_box_cache_entry(
 fn build_simple_cache_entry(
     block_def: &BlockTypeDef,
     texture_coords: &FxHashMap<String, Rect>,
+    block_type_manager: &ClientBlockTypeManager,
     w: f32,
     h: f32,
 ) -> Option<SimpleTexCoordEntry> {
@@ -1240,6 +1239,9 @@ fn build_simple_cache_entry(
             if render_info.variant_effect() == CubeVariantEffect::RotateNesw {
                 flags |= 2;
             }
+            if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
+                flags |= 4;
+            }
             let coords = [
                 get_texture(texture_coords, render_info.tex_right.as_ref(), w, h),
                 get_texture(texture_coords, render_info.tex_left.as_ref(), w, h),
@@ -1248,12 +1250,7 @@ fn build_simple_cache_entry(
                 get_texture(texture_coords, render_info.tex_back.as_ref(), w, h),
                 get_texture(texture_coords, render_info.tex_front.as_ref(), w, h),
             ];
-            if coords
-                .iter()
-                .any(|x| matches!(x, MaybeDynamicRect::Dynamic(_)))
-            {
-                flags |= 4;
-            }
+
             Some(SimpleTexCoordEntry {
                 shader_flags: flags,
                 coords,

@@ -127,7 +127,7 @@ pub(crate) enum BlockRenderPass {
     Opaque,
     Transparent,
     Translucent,
-    RayTraceFallback,
+    RaytraceFallback,
 }
 
 impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWrapper {
@@ -142,13 +142,13 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Opaque => span!("draw opaque"),
             BlockRenderPass::Transparent => span!("draw transparent"),
             BlockRenderPass::Translucent => span!("draw translucent"),
-            BlockRenderPass::RayTraceFallback => span!("draw raytrace_fallback"),
+            BlockRenderPass::RaytraceFallback => span!("draw raytrace_fallback"),
         };
         let pipeline = match pass {
             BlockRenderPass::Opaque => self.solid_pipeline.clone(),
             BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
             BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
-            BlockRenderPass::RayTraceFallback => self.raytrace_fallback_pipeline.clone(),
+            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_pipeline.clone(),
         };
         // TODO: why are we binding the pipeline in here?
         let layout = pipeline.layout().clone();
@@ -159,7 +159,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
                 BlockRenderPass::Opaque => call.models.opaque.take(),
                 BlockRenderPass::Transparent => call.models.transparent.take(),
                 BlockRenderPass::Translucent => call.models.translucent.take(),
-                BlockRenderPass::RayTraceFallback => call.models.raytrace_fallback.take(),
+                BlockRenderPass::RaytraceFallback => call.models.raytrace_fallback.take(),
             };
             if let Some(pass_data) = pass_data {
                 effective_calls += 1;
@@ -196,7 +196,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Translucent => {
                 plot!("translucent_rate", draw_rate);
             }
-            BlockRenderPass::RayTraceFallback => {
+            BlockRenderPass::RaytraceFallback => {
                 plot!("raytrace_fallback_rate", draw_rate);
             }
         };
@@ -214,13 +214,13 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Opaque => span!("bind opaque"),
             BlockRenderPass::Transparent => span!("bind transparent"),
             BlockRenderPass::Translucent => span!("bind translucent"),
-            BlockRenderPass::RayTraceFallback => span!("bind raytrace_fallback"),
+            BlockRenderPass::RaytraceFallback => span!("bind raytrace_fallback"),
         };
         let pipeline = match pass {
             BlockRenderPass::Opaque => self.solid_pipeline.clone(),
             BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
             BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
-            BlockRenderPass::RayTraceFallback => self.raytrace_fallback_pipeline.clone(),
+            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_pipeline.clone(),
         };
         let layout = pipeline.layout().clone();
         command_buf_builder.bind_pipeline_graphics(pipeline)?;
@@ -259,7 +259,7 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Opaque => self.solid_descriptor.clone(),
             BlockRenderPass::Transparent => self.sparse_descriptor.clone(),
             BlockRenderPass::Translucent => self.translucent_descriptor.clone(),
-            BlockRenderPass::RayTraceFallback => self.raytrace_fallback_descriptor.clone(),
+            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_descriptor.clone(),
         };
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,

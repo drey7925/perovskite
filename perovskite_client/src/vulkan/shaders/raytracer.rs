@@ -11,6 +11,7 @@ use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
+use vulkano::image::view::ImageView;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
@@ -57,6 +58,7 @@ pub(crate) struct RaytracingPerFrameConfig {
     pub(crate) scene_state: SceneState,
     pub(crate) data: Subbuffer<[u32]>,
     pub(crate) header: Subbuffer<ChunkMapHeader>,
+    pub(crate) depth_view: Arc<ImageView>,
     pub(crate) player_pos: Vector3<f64>,
     pub(crate) render_distance: u32,
 }
@@ -162,6 +164,7 @@ impl PipelineWrapper<(), RaytracingPerFrameConfig> for RaytracedPipelineWrapper 
                 WriteDescriptorSet::buffer(0, uniform_buffer),
                 WriteDescriptorSet::buffer(1, per_frame_config.header),
                 WriteDescriptorSet::buffer(2, per_frame_config.data),
+                WriteDescriptorSet::image_view(3, per_frame_config.depth_view),
             ],
             [],
         )?;

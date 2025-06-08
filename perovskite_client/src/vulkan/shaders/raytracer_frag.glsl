@@ -3,7 +3,7 @@
 
 layout(location = 0) in vec4 global_coord_facedir;
 layout(location = 0) out vec4 f_color;
-
+layout(input_attachment_index = 0, set = 1, binding = 3) uniform subpassInput f_depth_in;
 layout (constant_id = 0) const bool SPECULAR = true;
 layout (constant_id = 1) const bool FUZZY_SHADOWS = true;
 
@@ -338,6 +338,7 @@ vec2 t_range(vec3 start, vec3 dir) {
 }
 
 vec4 sample_simple(HitInfo info, uint idx) {
+    // TODO: variant-based rotation
     vec2 tl = cube_info[idx].tex[info.face].top_left;
     vec2 wh = cube_info[idx].tex[info.face].width_height;
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
@@ -355,7 +356,6 @@ float random (vec2 st, float f) {
 
 
 void main() {
-    gl_FragDepth = 1.0;
     vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
     int ix3 = int(pix3.x);
     int iy3 = int(pix3.y);
@@ -466,7 +466,7 @@ void main() {
     vec3 facedir = normalize(global_coord_facedir.xyz);
 
     vec3 facedir_world = vec3(facedir.x, -facedir.y, facedir.z);
-
+    float prev_depth = subpassLoad(f_depth_in).r;
 
     // All raster geometry, as well as non-rendering calcs, assume that blocks have
     // their *centers* at integer coordinates.
@@ -509,52 +509,54 @@ void main() {
         }
         // traverse_space will put valid data into info iff it returns true
         uint idx = info.block_id >> 12;
-        if (idx >= max_cube_info_idx) {
-            // TODO proper fallback
-            idx = 1;
+        uint info_flags = cube_info[idx].flags;
+        vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
+        vec4 rpos = vec4((hit_pos - fine_pos) * 16.0, 1.0) * vec4(1, -1, 1, 1);
+        vec4 transformed = forward_vp_matrix * rpos;
+        if (clamp(transformed.z / transformed.w, 0, 1) > prev_depth) {
+            return;
         }
-        if ((cube_info[idx].flags & 1) != 0) {
-            // TODO: cube rotation :(
-            vec4 rgba = sample_simple(info, idx);
-            float alpha_contrib = (1 - f_color.a) * rgba.a;
-            f_color.rgb += alpha_contrib * rgba.rgb;
-            f_color.a += alpha_contrib;
 
-            vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
-            if (f_color.a > 0.99) {
-                vec4 rpos = vec4((hit_pos - fine_pos) * 16.0, 1.0) * vec4(1, -1, 1, 1);
-                rpos *= (1.0 + random(gl_FragCoord.xy, 12345.6) / 100.0);
-                vec4 transformed = forward_vp_matrix * rpos;
-                gl_FragDepth = clamp(transformed.z / transformed.w, 0, 1);
-                break;
-            }
+        // skip fallback blocks
+        if (info_flags != 0) {
+            if ((info_flags & 4u) != 4) {
+                vec4 rgba = sample_simple(info, idx);
+                float alpha_contrib = (1 - f_color.a) * rgba.a;
+                f_color.rgb += alpha_contrib * rgba.rgb;
+                f_color.a += alpha_contrib;
 
-            // TODO proper specular from the block, for now hardcode glass/water
-            if (SPECULAR) {
-                if ((info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
-                    vec3 new_dir;
-                    vec3 normal = decode_normal(info.face);
-                    if (FUZZY_SHADOWS && info.block_id != 0x7000) {
-                        vec3 tangent = normalize(cross(facedir_world, normal));
-                        vec3 bitangent = cross(normal, tangent);
-                        mat3 ntb = mat3(normal, tangent, bitangent);
-                        vec3 mul = vec3(
-                        0, 0.03 * (random(hit_pos.xz, 43758.5453123) - 0.5), 0.01 * random(hit_pos.xz, 43758.5453123)
-                        );
 
-                        new_dir = normalize(facedir_world * face_reflectors[info.face] + (ntb * mul));
+                // TODO proper specular from the block, for now hardcode glass/water
+                if (SPECULAR) {
+                    if ((info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
+                        vec3 new_dir;
+                        vec3 normal = decode_normal(info.face);
+                        if (FUZZY_SHADOWS && info.block_id != 0x7000) {
+                            vec3 tangent = normalize(cross(facedir_world, normal));
+                            vec3 bitangent = cross(normal, tangent);
+                            mat3 ntb = mat3(normal, tangent, bitangent);
+                            vec3 mul = vec3(
+                            0, 0.03 * (random(hit_pos.xz, 43758.5453123) - 0.5), 0.01 * random(hit_pos.xz, 43758.5453123)
+                            );
+
+                            new_dir = normalize(facedir_world * face_reflectors[info.face] + (ntb * mul));
+                        }
+                        else {
+                            new_dir = facedir_world * face_reflectors[info.face];
+                        }
+                        float cos_theta = dot(normal, new_dir);
+                        float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
+                        if (fresnel >= length(spec_dir)) {
+                            spec_block = info.block_id;
+                            spec_start = hit_pos;
+                            // stash the fresnel blend factor into spec_dir's magnitude to save a register
+                            spec_dir = new_dir * fresnel;
+                        }
                     }
-                    else {
-                        new_dir = facedir_world * face_reflectors[info.face];
-                    }
-                    float cos_theta = dot(normal, new_dir);
-                    float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
-                    if (fresnel >= length(spec_dir)) {
-                        spec_block = info.block_id;
-                        spec_start = hit_pos;
-                        // stash the fresnel blend factor into spec_dir's magnitude to save a register
-                        spec_dir = new_dir * fresnel;
-                    }
+                }
+
+                if (f_color.a > 0.99) {
+                    break;
                 }
             }
         }
@@ -593,13 +595,14 @@ void main() {
     // we just had a specular, so t0 is 0 and start is just spec_start;
     g1 = spec_start + (spec_dir * t_min_max.y);
     vec4 spec_rgba = vec4(0);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         if (traverse_space(spec_start, g1, info)) {
             // traverse_space will fill info w/ valid data iff it returns true
             uint idx = info.block_id >> 12;
             if (idx >= max_cube_info_idx) {
-                // TODO proper fallback
-                idx = 1;
+                // CPU-side code should fix this and we should never enter this branch
+                f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                return;
             }
             if ((cube_info[idx].flags & 1) != 0) {
                 vec4 sampled = sample_simple(info, idx);
