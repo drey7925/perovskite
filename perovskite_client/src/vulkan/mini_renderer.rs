@@ -11,7 +11,7 @@ use super::{
 };
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
-use crate::vulkan::shaders::VkBufferGpu;
+use crate::vulkan::shaders::{LiveRenderConfig, VkBufferGpu};
 use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
@@ -119,7 +119,13 @@ impl MiniBlockRenderer {
             viewport,
             render_pass.clone(),
             atlas_texture,
-            Supersampling::None,
+            &LiveRenderConfig {
+                supersampling: Supersampling::None,
+                raytracing: false,
+                raytracing_reflections: false,
+                render_distance: 1,
+                raytracer_debug: false,
+            },
         )?;
         let download_buffer = Buffer::new_slice(
             ctx.clone_allocator(),

@@ -6,6 +6,7 @@ layout(location = 0) out vec4 f_color;
 layout(input_attachment_index = 0, set = 1, binding = 3) uniform subpassInput f_depth_in;
 layout (constant_id = 0) const bool SPECULAR = true;
 layout (constant_id = 1) const bool FUZZY_SHADOWS = true;
+layout (constant_id = 2) const bool RAYTRACE_DEBUG = false;
 
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"
@@ -153,7 +154,7 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
             offset = g.x * 324 + g.y + g.z * 18;
             block_id = chunks[base + offset];
         } else {
-            block_id = 0;
+            block_id = 0xffffffff;
         }
         uint n_face;
         if (sgns.x != 0 && (sgns.y == 0 || r.x <= r.y) && (sgns.z == 0 || r.x <= r.z)) {
@@ -185,12 +186,15 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
             n_face = 4 + gpd.z;
         }
 
-        if (block_id != 0 && block_id != info.block_id) {
+        if (block_id != 0 && block_id != info.block_id && block_id != 0xffffffff) {
             info.block_id = block_id;
             uint l_offset = 343+(offset) + face_backoffs_offset[info.face];
             uint raw_light = chunks[light_base + (l_offset / 4)];
             info.light_data = (raw_light >> (8 * (l_offset & 3u)));
             return true;
+        }
+        if (block_id != 0xffffffff) {
+            info.block_id = block_id;
         }
         info.face = n_face;
         if (should_break) {
@@ -356,113 +360,105 @@ float random (vec2 st, float f) {
 
 
 void main() {
-    vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
-    int ix3 = int(pix3.x);
-    int iy3 = int(pix3.y);
+    if (RAYTRACE_DEBUG) {
+        vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
+        int ix3 = int(pix3.x);
+        int iy3 = int(pix3.y);
 
-    if (iy3 == 1) {
-        if (ix3 <= 160 && ix3 >= 1) {
-            int idx = ix3 - 1;
-            int idx0 = idx >> 5;
-            uint dbg_data;
-            if (idx0 == 0) {
-                dbg_data = n_minus_one;
+        if (iy3 == 1) {
+            if (ix3 <= 160 && ix3 >= 1) {
+                int idx = ix3 - 1;
+                int idx0 = idx >> 5;
+                uint dbg_data;
+                if (idx0 == 0) {
+                    dbg_data = n_minus_one;
+                }
+                if (idx0 == 1) {
+                    dbg_data = mxc;
+                }
+                if (idx0 == 2) {
+                    dbg_data = k.x;
+                }
+                if (idx0 == 3) {
+                    dbg_data = k.y;
+                }
+                if (idx0 == 4) {
+                    dbg_data = k.z;
+                }
+                uint idx1 = uint(idx & 31);
+                uint bit = dbg_data & (1u << idx1);
+                if (bit != 0) {
+                    f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                    return;
+                } else {
+                    f_color = vec4(0.0, 0.0, 0.0, 1.0);
+                    return;
+                }
             }
-            if (idx0 == 1) {
-                dbg_data = mxc;
+        }
+        if (iy3 == 2) {
+            if (ix3 <= 160 && ix3 >= 1) {
+                int idx = ix3 - 1;
+                int idx0 = idx >> 5;
+                if (idx0 == 0) {
+                    f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                    return;
+                } else if (idx0 ==1) {
+                    f_color = vec4(1.0, 1.0, 0.0, 1.0);
+                    return;
+                } else if (idx0 ==2) {
+                    f_color = vec4(0.0, 1.0, 0.0, 1.0);
+                    return;
+                } else if (idx0 ==3) {
+                    f_color = vec4(0.0, 0.0, 1.0, 1.0);
+                    return;
+                } else if (idx0 ==4) {
+                    f_color = vec4(1.0, 1.0, 0.0, 1.0);
+                    return;
+                }
             }
-            if (idx0 == 2) {
-                dbg_data = k.x;
+        }
+
+        if (iy3 == 3) {
+            if (ix3 <= 160 && ix3 >= 1) {
+                int idx = ix3 - 1;
+                if ((idx % 2) == 0) {
+                    f_color = vec4(0.2, 1.0, 0.4, 1.0);
+                    return;
+                }
+                else {
+                    f_color = vec4(1.0, 1.0, 0.0, 1.0);
+                    return;
+                }
             }
-            if (idx0 == 3) {
-                dbg_data = k.y;
-            }
-            if (idx0 == 4) {
-                dbg_data = k.z;
-            }
-            uint idx1 = uint(idx & 31);
-            uint bit = dbg_data & (1u << idx1);
-            if (bit != 0) {
-                f_color = vec4(1.0, 0.0, 0.0, 1.0);
-                return;
-            } else {
-                f_color = vec4(0.0, 0.0, 0.0, 1.0);
-                return;
+        }
+        vec2 pix_fine = gl_FragCoord.xy / (2 * supersampling);
+        int ixp = int(pix_fine.x);
+        int iyp = int(pix_fine.y) - 64;
+        uint rows = (n_minus_one + 1) / 1024;
+        if (iyp >= 0 && iyp < rows) {
+            if (ixp < 1024) {
+                uint slot = iyp * 1024 + ixp;
+                uint slot_base = slot * 4;
+
+                if ((chunks[slot_base] & 1) == 0) {
+                    f_color = vec4(0, 0, 0, 1);
+                    return;
+                }
+                uvec3 putative = uvec3(chunks[slot_base + 1], chunks[slot_base + 2], chunks[slot_base + 3]);
+                uvec3 products = putative * k;
+                uint sum = products.x + products.y + products.z;
+                uint try_slot = (sum % 1610612741) & n_minus_one;
+                if (try_slot == slot) {
+                    f_color = vec4(0, 1, 0, 1);
+                    return;
+                } else {
+                    f_color = vec4(1, 1, 0, 1);
+                    return;
+                }
             }
         }
     }
-    if (iy3 == 2) {
-        if (ix3 <= 160 && ix3 >= 1) {
-            int idx = ix3 - 1;
-            int idx0 = idx >> 5;
-            if (idx0 == 0) {
-                f_color = vec4(1.0, 0.0, 0.0, 1.0);
-                return;
-            } else if (idx0 ==1) {
-                f_color = vec4(1.0, 1.0, 0.0, 1.0);
-                return;
-            } else if (idx0 ==2) {
-                f_color = vec4(0.0, 1.0, 0.0, 1.0);
-                return;
-            } else if (idx0 ==3) {
-                f_color = vec4(0.0, 0.0, 1.0, 1.0);
-                return;
-            } else if (idx0 ==4) {
-                f_color = vec4(1.0, 1.0, 0.0, 1.0);
-                return;
-            }
-        }
-    }
-
-    if (iy3 == 3) {
-        if (ix3 <= 160 && ix3 >= 1) {
-            int idx = ix3 - 1;
-            if ((idx % 2) == 0) {
-                f_color = vec4(0.2, 1.0, 0.4, 1.0);
-                return;
-            }
-            else {
-                f_color = vec4(1.0, 1.0, 0.0, 1.0);
-                return;
-            }
-        }
-    }
-    vec2 pix_fine = gl_FragCoord.xy / (2 * supersampling);
-    int ixp = int(pix_fine.x);
-    int iyp = int(pix_fine.y) - 64;
-    uint rows = (n_minus_one + 1) / 1024;
-    if (iyp >= 0 && iyp < rows) {
-        if (ixp < 1024) {
-            uint slot = iyp * 1024 + ixp;
-            uint slot_base = slot * 4;
-
-            if ((chunks[slot_base] & 1) == 0) {
-                f_color = vec4(0, 0, 0, 1);
-                return;
-            }
-            uvec3 putative = uvec3(chunks[slot_base + 1], chunks[slot_base + 2], chunks[slot_base + 3]);
-            uvec3 products = putative * k;
-            uint sum = products.x + products.y + products.z;
-            uint try_slot = (sum % 1610612741) & n_minus_one;
-            if (try_slot == slot) {
-                f_color = vec4(0, 1, 0, 1);
-                return;
-            } else {
-                f_color = vec4(1, 1, 0, 1);
-                return;
-            }
-        }
-    }
-
-
-    vec2 pix2 = gl_FragCoord.xy / (2.0 * supersampling);
-    int ix2 = int(pix2.x) % 2;
-    int iy2 = int(pix2.y) % 2;
-
-    //    if ((ix2 ^ iy2) == 0) {
-    //        // Complementary to the control on the raster code
-    //        discard;
-    //    }
     vec3 facedir = normalize(global_coord_facedir.xyz);
 
     vec3 facedir_world = vec3(facedir.x, -facedir.y, facedir.z);
@@ -475,11 +471,7 @@ void main() {
     // The Y axis orientation has been flipped in the calculation of facedir_world.
     // This is fixed on the CPU to save some registers.
     vec2 t_min_max = t_range(fine_pos, facedir_world);
-    //
-    //    if ((ix2 ^ iy2) == 0) {
-    //        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
-    //        return;
-    //    }
+
     if (t_min_max.x > t_min_max.y) {
         discard;
     }

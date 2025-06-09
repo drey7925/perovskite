@@ -182,8 +182,9 @@ pub(crate) mod frag_lighting_sparse {
                        (brightness + global_brightness.g) * color.g,
                        (brightness + global_brightness.b) * color.b,
                        color.a);
-
-        f_color.xyz = 1.0 - f_color.xyz;
+        if (DEBUG_INVERT_RASTER_TRANSPARENT) {
+            f_color.xyz = 1.0 - f_color.xyz;
+        }
         if (f_color.a < 0.5) {
             discard;
         } else {
@@ -269,6 +270,7 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) raytracing: bool,
     pub(crate) raytracing_reflections: bool,
     pub(crate) render_distance: u32,
+    pub(crate) raytracer_debug: bool,
 }
 
 pub(crate) trait PipelineProvider

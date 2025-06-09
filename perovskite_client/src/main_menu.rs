@@ -728,6 +728,15 @@ fn draw_render_settings(
                     "Enabled",
                 ));
             ui.end_row();
+            ui.label("Raytracer debugging")
+                .on_hover_text("If enabled, inverts colors on non-raytraced geometry and shows low-level details about the BVH directly in the output. Only applicable if raytracing is enabled.");
+            ui.add_enabled(
+                prospective_settings.render.raytracing,
+                egui::Checkbox::new(
+                    &mut prospective_settings.render.raytracer_debug,
+                    "Enabled",
+                ));
+            ui.end_row();
             let ssaa_label = ui.label("Supersampling")
                 .on_hover_text("Smooths edges of geometry and textures, at the expense of performance.");
             egui::ComboBox::from_id_salt(ssaa_label.id)

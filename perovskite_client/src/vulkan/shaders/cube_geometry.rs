@@ -15,6 +15,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::shaders::{
+    vert_3d::{self, UniformData},
+    LiveRenderConfig, PipelineProvider, PipelineWrapper,
+};
 use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
     shaders::{frag_lighting, vert_3d::ModelMatrix},
@@ -23,6 +27,7 @@ use crate::vulkan::{
 use anyhow::{ensure, Context, Result};
 use cgmath::{Angle, Matrix4, Rad};
 use smallvec::smallvec;
+use std::collections::HashMap;
 use std::{sync::Arc, time::Instant};
 use tracy_client::{plot, span};
 use vulkano::descriptor_set::DescriptorSet;
@@ -38,6 +43,7 @@ use vulkano::pipeline::graphics::viewport::Scissor;
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::shader::SpecializationConstant;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     descriptor_set::WriteDescriptorSet,
@@ -57,11 +63,6 @@ use vulkano::{
     render_pass::{RenderPass, Subpass},
     shader::ShaderModule,
     DeviceSize,
-};
-
-use crate::vulkan::shaders::{
-    vert_3d::{self, UniformData},
-    LiveRenderConfig, PipelineProvider, PipelineWrapper,
 };
 
 use super::{frag_lighting_sparse, SceneState};
@@ -152,7 +153,6 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
         };
         // TODO: why are we binding the pipeline in here?
         let layout = pipeline.layout().clone();
-        builder.bind_pipeline_graphics(pipeline)?;
         let mut effective_calls = 0;
         for call in draw_calls.iter_mut() {
             let pass_data = match pass {
@@ -296,7 +296,7 @@ impl CubePipelineProvider {
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
         tex: &Texture2DHolder,
-        supersampling: Supersampling,
+        config: &LiveRenderConfig,
     ) -> Result<CubePipelineWrapper> {
         let vs = self
             .vs_cube
@@ -308,6 +308,10 @@ impl CubePipelineProvider {
             .context("Missing fragment shader")?;
         let fs_sparse = self
             .fs_sparse
+            .specialize(HashMap::from_iter([(
+                0,
+                SpecializationConstant::Bool(config.raytracer_debug),
+            )]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let vertex_input_state = CubeGeometryVertex::per_vertex().definition(&vs)?;
@@ -345,15 +349,15 @@ impl CubePipelineProvider {
                     offset: [0.0, 0.0],
                     depth_range: 0.0..=1.0,
                     extent: [
-                        viewport.extent[0] * supersampling.to_float(),
-                        viewport.extent[1] * supersampling.to_float()
+                        viewport.extent[0] * config.supersampling.to_float(),
+                        viewport.extent[1] * config.supersampling.to_float()
                     ],
                 }],
                 scissors: smallvec![Scissor {
                     offset: [0, 0],
                     extent: [
-                        viewport.extent[0] as u32 * supersampling.to_int(),
-                        viewport.extent[1] as u32 * supersampling.to_int()
+                        viewport.extent[0] as u32 * config.supersampling.to_int(),
+                        viewport.extent[1] as u32 * config.supersampling.to_int()
                     ],
                 }],
                 ..Default::default()
@@ -377,9 +381,7 @@ impl CubePipelineProvider {
             ..GraphicsPipelineCreateInfo::layout(layout_solid.clone())
         };
 
-        // This should use the derivative pipeline mechanism, but vulkano doesn't seem to be
-        // validating it properly
-        // See https://stackoverflow.com/a/59312390/1424875 as well
+        // https://stackoverflow.com/a/59312390: No derivative pipelines
         let sparse_pipeline_info = GraphicsPipelineCreateInfo {
             // This pipeline just needs a shader swap, but can use the same depth test
             stages: stages_sparse,
@@ -449,7 +451,7 @@ impl PipelineProvider for CubePipelineProvider {
             wnd.viewport.clone(),
             wnd.ssaa_render_pass.clone(),
             config,
-            global_config.supersampling,
+            global_config,
         )
     }
 }

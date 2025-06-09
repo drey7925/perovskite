@@ -208,7 +208,7 @@ impl PipelineProvider for RaytracedPipelineProvider {
                 ),
                 (
                     2,
-                    SpecializationConstant::U32(global_config.render_distance),
+                    SpecializationConstant::Bool(global_config.raytracer_debug),
                 ),
             ]))?
             .entry_point("main")
