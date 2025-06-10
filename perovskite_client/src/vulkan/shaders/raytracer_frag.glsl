@@ -64,6 +64,12 @@ vec3(1, -1, 1), vec3(1, -1, 1),
 vec3(1, 1, -1), vec3(1, 1, -1),
 };
 
+const vec3 debug_face_colors[] = {
+vec3(1, 0, 0), vec3(1, 1, 0),
+vec3(0, 1, 0), vec3(0, 1, 1),
+vec3(0, 0, 1), vec3(1, 0, 1),
+};
+
 uint phash(uvec3 coord, uvec3 k, uint n_minus_one) {
     uvec3 products = coord * k;
     uint sum = products.x + products.y + products.z;
@@ -186,7 +192,10 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
             n_face = 4 + gpd.z;
         }
 
-        if (block_id != 0 && block_id != info.block_id && block_id != 0xffffffff) {
+        if ((block_id != 0)
+                && ((block_id & 0xfffff000u) != (info.block_id & 0xfffff000u))
+                && (block_id != 0xffffffff)
+                && ((cube_info[block_id >> 12].flags & 4u) == 0)) {
             info.block_id = block_id;
             uint l_offset = 343+(offset) + face_backoffs_offset[info.face];
             uint raw_light = chunks[light_base + (l_offset / 4)];
@@ -230,7 +239,6 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
     vec3 slope = g1 - g0;
     ivec3 g1idx = ivec3(floor(g1));
     ivec3 sgns = sign(g1idx - g0idx);
-    info.face = 0;
     ivec3 g = g0idx;
     uvec3 gpd = uvec3(
     (g1idx.x > g0idx.x ? 1 : 0),
@@ -249,11 +257,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
     derr *= sgns;
     uint slot_base;
     uint try_slot;
-    for (uint i = 0; i < 60; i++) {
-        vec3 r = abs(err);
-
-        info.start_cc = gfrac;
-        bool should_break = g == g1idx;
+    for (uint i = 0; i < render_distance; i++) {
         uvec3 chk = uvec3(g + coarse_pos);
         // Hide latency by interleaving map lookup with next-chunk calc
         // We do this by doing the first lookup now, and hoping that we have a prefetched cacheline
@@ -265,6 +269,11 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
         uint try_slot = (sum % 1610612741) & n_minus_one;
         uint slot_base = try_slot * 4;
         uint slot_flag = chunks[slot_base];
+
+        vec3 r = abs(err);
+
+        info.start_cc = gfrac;
+        bool should_break = g == g1idx;
 
         uint n_face;
         if (sgns.x != 0 && (sgns.y == 0 || r.x <= r.y) && (sgns.z == 0 || r.x <= r.z)) {
@@ -293,6 +302,8 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             err.z += derr.z;
             gfrac.z -= sgns.z;
             n_face = 4 + gpd.z;
+        } else {
+            return false;
         }
 
         uint slot = 0xffffffff;
@@ -346,7 +357,13 @@ vec4 sample_simple(HitInfo info, uint idx) {
     vec2 tl = cube_info[idx].tex[info.face].top_left;
     vec2 wh = cube_info[idx].tex[info.face].width_height;
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
+
     vec4 tex_color = texture(tex, tl + (uv * wh));
+
+    // For debugging
+    // allow seeing some of the texture, plus avoid the sampler disappearing from the final shader program
+    //vec4 tex_color = vec4(debug_face_colors[info.face], 1.0) + 0.05 * texture(tex, tl + (uv * wh));
+
     float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.light_data, 4, 4)];
     float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(info.face)));
     // TODO: Do a ray query to the sun instead
@@ -403,16 +420,16 @@ void main() {
                 if (idx0 == 0) {
                     f_color = vec4(1.0, 0.0, 0.0, 1.0);
                     return;
-                } else if (idx0 ==1) {
+                } else if (idx0 == 1) {
                     f_color = vec4(1.0, 1.0, 0.0, 1.0);
                     return;
-                } else if (idx0 ==2) {
+                } else if (idx0 == 2) {
                     f_color = vec4(0.0, 1.0, 0.0, 1.0);
                     return;
-                } else if (idx0 ==3) {
+                } else if (idx0 == 3) {
                     f_color = vec4(0.0, 0.0, 1.0, 1.0);
                     return;
-                } else if (idx0 ==4) {
+                } else if (idx0 == 4) {
                     f_color = vec4(1.0, 1.0, 0.0, 1.0);
                     return;
                 }
@@ -458,7 +475,8 @@ void main() {
                 }
             }
         }
-    }
+    } // if (RAYTRACE_DEBUG)
+
     vec3 facedir = normalize(global_coord_facedir.xyz);
 
     vec3 facedir_world = vec3(facedir.x, -facedir.y, facedir.z);
@@ -486,7 +504,7 @@ void main() {
     ivec3(0),
     vec3(0),
     vec3(0),
-    0,
+    initial_block_id,
     0,
     0,
     };
@@ -602,6 +620,9 @@ void main() {
                 spec_rgba.rgb += alpha_contrib * sampled.rgb;
                 spec_rgba.a += alpha_contrib;
             }
+
+            vec3 midpoint = (info.start_cc + info.end_cc) / 2;
+            spec_start = (vec3(info.hit_block) + midpoint) / 16.0;
         }
     }
 

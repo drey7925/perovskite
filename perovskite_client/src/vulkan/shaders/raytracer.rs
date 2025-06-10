@@ -139,6 +139,7 @@ impl PipelineWrapper<(), RaytracingPerFrameConfig> for RaytracedPipelineWrapper 
             ]
             .into(),
             render_distance: per_frame_config.render_distance,
+            initial_block_id: per_frame_config.scene_state.player_pos_block,
         };
         let per_frame_set_layout = layout
             .set_layouts()

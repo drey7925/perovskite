@@ -32,6 +32,7 @@ layout(set = 1, binding = 0) uniform RaytracingPerFrameData {
     uint max_cube_info_idx;
     vec3 global_brightness_color;
     uint render_distance;
+    uint initial_block_id;
 };
 layout(set = 1, binding = 1) uniform ChunkMapHeader {
     uint n_minus_one;

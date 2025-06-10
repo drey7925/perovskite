@@ -30,6 +30,9 @@ use super::{
     ChunkManagerView, ClientBlockTypeManager, ClientState,
 };
 use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
+use crate::client_state::chunk::ChunkDataView;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
+use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::audio::SoundSource;
 use perovskite_core::protocol::blocks::CubeVariantEffect;
 use tracy_client::{plot, span};
@@ -170,7 +173,7 @@ impl PhysicsState {
         _aspect_ratio: f64,
         delta: Duration,
         tick: u64,
-    ) -> (Vector3<f64>, Vector3<f64>, (f64, f64)) {
+    ) -> (Vector3<f64>, Vector3<f64>, (f64, f64), BlockId) {
         let mut input = client_state.input.lock();
         if input.take_just_pressed(BoundAction::TogglePhysics) {
             self.physics_mode = self.physics_mode.next(self.can_fly, self.can_noclip);
@@ -190,16 +193,36 @@ impl PhysicsState {
         self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
         self.target_el = Deg((self.target_el.0 - (y)).clamp(-90.0, 90.0));
 
+        let chunks = client_state.chunks.read_lock();
         self.update_smooth_angles(delta);
         match self.physics_mode {
-            PhysicsMode::Standard => self.update_standard(&mut input, delta, client_state, tick),
-            PhysicsMode::FlyingCollisions => {
-                self.update_flying(&mut input, delta, true, client_state)
+            PhysicsMode::Standard => {
+                self.update_standard(&mut input, delta, client_state, &chunks, tick)
             }
-            PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
+            PhysicsMode::FlyingCollisions => {
+                self.update_flying(&mut input, delta, true, client_state, &chunks)
+            }
+            PhysicsMode::Noclip => {
+                self.update_flying(&mut input, delta, false, client_state, &chunks)
+            }
         }
         let adjusted_for_bump = vec3(self.pos.x, self.pos.y - self.bump_decay, self.pos.z);
-        (adjusted_for_bump, self.last_velocity, self.angle())
+
+        let current_block = BlockCoordinate::try_from(adjusted_for_bump).ok();
+        let block_id = current_block
+            .and_then(|coord| {
+                let chunk = coord.chunk();
+                let chunk = chunks.get(&chunk);
+                chunk.map(|chunk| chunk.chunk_data().get_block(coord.offset()))
+            })
+            .unwrap_or(AIR_ID);
+
+        (
+            adjusted_for_bump,
+            self.last_velocity,
+            self.angle(),
+            block_id,
+        )
     }
 
     fn update_standard(
@@ -208,11 +231,11 @@ impl PhysicsState {
         // todo handle long deltas without falling through the ground
         delta: Duration,
         client_state: &ClientState,
+        chunks: &ChunkManagerView,
         tick: u64,
     ) {
         let _span = span!("physics_standard");
 
-        let chunks = client_state.chunks.read_lock();
         let block_types = &client_state.block_types;
 
         // The block that the player's foot is in
@@ -322,7 +345,7 @@ impl PhysicsState {
         mut new_pos: Vector3<f64>,
         bump_height: f64,
         target: Vector3<f64>,
-        chunks: ChunkManagerView<'_>,
+        chunks: &ChunkManagerView<'_>,
         block_types: &Arc<ClientBlockTypeManager>,
         delta_secs: f64,
     ) -> Vector3<f64> {
@@ -453,6 +476,7 @@ impl PhysicsState {
         delta: Duration,
         collisions: bool,
         client_state: &ClientState,
+        chunks: &ChunkManagerView,
     ) {
         let mut velocity = self.apply_movement_input(input, FLY_SPEED);
         if input.is_pressed(BoundAction::Jump) {
@@ -463,14 +487,13 @@ impl PhysicsState {
         let target_pos = self.pos + velocity * delta.as_secs_f64();
 
         if collisions {
-            let chunks = client_state.chunks.read_lock();
             let block_types = &client_state.block_types;
             let new_pos = clamp_collisions_loop(self.pos, target_pos, &chunks, block_types);
             self.pos = self.update_with_bumping(
                 new_pos,
                 TRAVERSABLE_BUMP_HEIGHT_LANDED,
                 target_pos,
-                chunks,
+                &chunks,
                 block_types,
                 delta.as_secs_f64(),
             );

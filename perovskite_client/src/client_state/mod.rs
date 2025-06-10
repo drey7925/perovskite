@@ -913,7 +913,7 @@ impl ClientState {
             delta
         };
         let mut entity_attachment = 0;
-        let (mut player_position, player_velocity, (az, el)) = self
+        let (mut player_position, player_velocity, (az, el), current_block) = self
             .physics_state
             .lock()
             .update_and_get(self, aspect_ratio, Duration::from_nanos(delta), tick);
@@ -978,6 +978,7 @@ impl ClientState {
                 clear_color: [0., 0., 0., 1.],
                 global_light_color: lighting.into(),
                 sun_direction,
+                player_pos_block: current_block.0,
             },
             player_position,
             tool_state,

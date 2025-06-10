@@ -300,6 +300,7 @@ pub(crate) struct SceneState {
     // TODO: This doesn't do anything because the background is rendered by the sky shader
     pub(crate) clear_color: [f32; 4],
     pub(crate) sun_direction: Vector3<f32>,
+    pub(crate) player_pos_block: u32,
 }
 
 #[derive(Clone, PartialEq)]
