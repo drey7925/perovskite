@@ -74,7 +74,7 @@ impl PipelineWrapper<(), RaytracingPerFrameConfig> for RaytracedPipelineWrapper 
     ) -> anyhow::Result<()> {
         unsafe {
             // Safety: TODO
-            builder.draw(6, 1, 0, 0)?;
+            builder.draw(3, 1, 0, 0)?;
         }
         Ok(())
     }
