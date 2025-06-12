@@ -354,8 +354,8 @@ vec2 t_range(vec3 start, vec3 dir) {
 
 vec4 sample_simple(HitInfo info, uint idx) {
     // TODO: variant-based rotation
-    vec2 tl = cube_info[idx].tex[info.face].diffuse_top_left;
-    vec2 wh = cube_info[idx].tex[info.face].diffuse_width_height;
+    vec2 tl = cube_info[idx].tex_diffuse[info.face].top_left;
+    vec2 wh = cube_info[idx].tex_diffuse[info.face].width_height;
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
 
     vec4 tex_color = texture(tex, tl + (uv * wh));

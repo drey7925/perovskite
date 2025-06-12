@@ -85,9 +85,9 @@ use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
 
 pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
-use crate::client_state::settings::{GameSettings, Supersampling};
-
 use self::util::select_physical_device;
+use crate::client_state::settings::{GameSettings, Supersampling};
+use crate::vulkan::shaders::raytracer::TexRef;
 
 pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
 
@@ -1160,6 +1160,15 @@ impl From<Rect> for RectF32 {
 impl From<&Rect> for RectF32 {
     fn from(rect: &Rect) -> Self {
         (*rect).into()
+    }
+}
+impl From<RectF32> for TexRef {
+    fn from(value: RectF32) -> Self {
+        TexRef {
+            // reorder here to avoid extra swizzles in the shader
+            top_left: [value.l, value.t],
+            width_height: [value.w, value.h],
+        }
     }
 }
 

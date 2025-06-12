@@ -401,22 +401,44 @@ fn get_selector_shift(bits: u32) -> u32 {
     1 << trailing_zeros
 }
 
+#[inline]
 fn get_texture(
     texture_coords: &FxHashMap<String, Rect>,
     tex: Option<&TextureReference>,
     width: f32,
     height: f32,
-) -> MaybeDynamicRect {
-    let rect = tex
-        .and_then(|tex| texture_coords.get(&tex.diffuse).copied())
-        .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
+) -> PbrData {
+    let crop = tex.and_then(|tex| tex.crop.as_ref());
+
+    let diffuse = mm(
+        tex.and_then(|tex| texture_coords.get(&tex.diffuse).copied())
+            .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()),
+        crop,
+        width,
+        height,
+    );
+    let rt_specular = mm(
+        tex.and_then(|tex| texture_coords.get(&tex.rt_specular).copied())
+            .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()),
+        crop,
+        width,
+        height,
+    );
+
+    PbrData {
+        diffuse,
+        rt_specular,
+    }
+}
+
+fn mm(mut rect: Rect, crop: Option<&TextureCrop>, width: f32, height: f32) -> MaybeDynamicRect {
     let mut rect_f = RectF32::new(
         rect.x as f32 / width,
         rect.y as f32 / height,
         rect.w as f32 / width,
         rect.h as f32 / height,
     );
-    if let Some(crop) = tex.and_then(|tex| tex.crop.as_ref()) {
+    if let Some(crop) = crop {
         rect_f = crop_texture(crop, rect_f);
         if let Some(dynamic) = crop.dynamic.as_ref() {
             let x_selector_shift_factor = get_selector_shift(dynamic.x_selector_bits);
@@ -596,7 +618,24 @@ impl BlockRenderer {
                 })
                 .collect(),
         };
-        let raytrace_control_ssbo = simple_block_tex_coords.build_ssbo(&ctx)?;
+        let iterator = block_type_manager
+            .block_defs()
+            .iter()
+            .map(|x| match x.as_ref() {
+                None => SimpleCubeInfo {
+                    flags: 0.into(),
+                    tex_diffuse: [TexRef::default(); 6],
+                },
+                Some(x) => build_ssbo_entry(
+                    &x,
+                    &texture_coords,
+                    &block_type_manager,
+                    texture_atlas.width() as f32,
+                    texture_atlas.height() as f32,
+                ),
+            });
+        let raytrace_control_ssbo =
+            ctx.iter_to_device_via_staging(iterator, BufferUsage::STORAGE_BUFFER)?;
 
         let axis_aligned_box_blocks = AxisAlignedBoxBlocksCache {
             blocks: block_type_manager
@@ -1189,21 +1228,21 @@ fn build_axis_aligned_box_cache_entry(
 
             // plantlike overrides box-like
             let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
-                CachedAabbTextures::Plantlike(get_texture(
-                    texture_coords,
-                    Some(plantlike),
-                    atlas_w,
-                    atlas_h,
-                ))
+                CachedAabbTextures::Plantlike(
+                    get_texture(texture_coords, Some(plantlike), atlas_w, atlas_h).diffuse,
+                )
             } else {
-                CachedAabbTextures::Prism([
-                    get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_left.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_top.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_bottom.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_back.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_front.as_ref(), atlas_w, atlas_h),
-                ])
+                CachedAabbTextures::Prism(
+                    [
+                        get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
+                        get_texture(texture_coords, aa_box.tex_left.as_ref(), atlas_w, atlas_h),
+                        get_texture(texture_coords, aa_box.tex_top.as_ref(), atlas_w, atlas_h),
+                        get_texture(texture_coords, aa_box.tex_bottom.as_ref(), atlas_w, atlas_h),
+                        get_texture(texture_coords, aa_box.tex_back.as_ref(), atlas_w, atlas_h),
+                        get_texture(texture_coords, aa_box.tex_front.as_ref(), atlas_w, atlas_h),
+                    ]
+                    .map(|x| x.diffuse),
+                )
             };
             if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
                 log::warn!(
@@ -1252,28 +1291,73 @@ fn build_simple_cache_entry(
             if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
                 flags |= FLAG_BLOCK_FALLBACK;
             }
-            let coords = [
-                get_texture(texture_coords, render_info.tex_right.as_ref(), w, h),
-                get_texture(texture_coords, render_info.tex_left.as_ref(), w, h),
-                get_texture(texture_coords, render_info.tex_top.as_ref(), w, h),
-                get_texture(texture_coords, render_info.tex_bottom.as_ref(), w, h),
-                get_texture(texture_coords, render_info.tex_back.as_ref(), w, h),
-                get_texture(texture_coords, render_info.tex_front.as_ref(), w, h),
-            ];
+            let coords = get_cube_coords(texture_coords, w, h, render_info).map(|x| x.diffuse);
 
-            Some(SimpleTexCoordEntry {
-                shader_flags: flags,
-                coords,
-            })
+            Some(SimpleTexCoordEntry { coords })
         }
         Some(RenderInfo::PlantLike(render_info)) => {
             let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
             Some(SimpleTexCoordEntry {
-                shader_flags: 1 | 4,
-                coords: [coords; 6],
+                coords: [coords.diffuse; 6],
             })
         }
         _ => None,
+    }
+}
+
+#[inline]
+fn get_cube_coords(
+    tex_coords: &FxHashMap<String, Rect>,
+    w: f32,
+    h: f32,
+    render_info: &CubeRenderInfo,
+) -> [PbrData; 6] {
+    [
+        get_texture(tex_coords, render_info.tex_right.as_ref(), w, h),
+        get_texture(tex_coords, render_info.tex_left.as_ref(), w, h),
+        get_texture(tex_coords, render_info.tex_top.as_ref(), w, h),
+        get_texture(tex_coords, render_info.tex_bottom.as_ref(), w, h),
+        get_texture(tex_coords, render_info.tex_back.as_ref(), w, h),
+        get_texture(tex_coords, render_info.tex_front.as_ref(), w, h),
+    ]
+}
+
+fn build_ssbo_entry(
+    block_def: &BlockTypeDef,
+    texture_coords: &FxHashMap<String, Rect>,
+    block_type_manager: &ClientBlockTypeManager,
+    w: f32,
+    h: f32,
+) -> SimpleCubeInfo {
+    use rt_flags::*;
+    match &block_def.render_info {
+        Some(RenderInfo::Cube(render_info)) => {
+            let mut flags = FLAG_BLOCK_PRESENT;
+            if render_info.variant_effect() == CubeVariantEffect::RotateNesw {
+                flags |= FLAG_BLOCK_ROTATE_NESW;
+            }
+            if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
+                flags |= FLAG_BLOCK_FALLBACK;
+            }
+            let pbr_data = get_cube_coords(texture_coords, w, h, render_info);
+
+            SimpleCubeInfo {
+                flags: flags.into(),
+                tex_diffuse: pbr_data.map(|rect| rect.diffuse.rect(0).into()),
+            }
+        }
+        Some(RenderInfo::PlantLike(render_info)) => {
+            let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
+            SimpleCubeInfo {
+                flags: (1 | 4).into(),
+                tex_diffuse: [coords.diffuse.rect(0).into(); 6],
+            }
+        }
+        _ => SimpleCubeInfo {
+            // This is the default, but written explicitly to better highlight the exact value
+            flags: 0.into(),
+            tex_diffuse: [TexRef::default(); 6],
+        },
     }
 }
 
@@ -1377,6 +1461,11 @@ fn build_liquid_cube_extents(
     }
 }
 
+struct PbrData {
+    diffuse: MaybeDynamicRect,
+    rt_specular: MaybeDynamicRect,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum MaybeDynamicRect {
     Static(RectF32),
@@ -1392,44 +1481,11 @@ impl MaybeDynamicRect {
 }
 
 struct SimpleTexCoordEntry {
-    shader_flags: u32,
     coords: [MaybeDynamicRect; 6],
 }
 
 struct SimpleTexCoordCache {
     blocks: Vec<Option<SimpleTexCoordEntry>>,
-}
-
-impl SimpleTexCoordCache {
-    pub(crate) fn build_ssbo(&self, ctx: &VulkanContext) -> Result<Subbuffer<[SimpleCubeInfo]>> {
-        let iterator = self.blocks.iter().map(|x| {
-            match x.as_ref() {
-                None => SimpleCubeInfo {
-                    flags: 0.into(),
-                    tex: [TexRef {
-                        diffuse_top_left: [0.0, 0.0],
-                        diffuse_width_height: [0.0, 0.0],
-                    }; 6],
-                },
-                Some(x) => {
-                    SimpleCubeInfo {
-                        flags: x.shader_flags.into(),
-                        tex: x.coords.map(|rect| {
-                            // Temporary/transitional
-                            let coords = rect.rect(0);
-                            TexRef {
-                                // reorder here to avoid extra swizzles in the shader
-                                diffuse_top_left: [coords.l, coords.t],
-                                diffuse_width_height: [coords.w, coords.h],
-                            }
-                        }),
-                    }
-                }
-            }
-        });
-        let buf = ctx.iter_to_device_via_staging(iterator, BufferUsage::STORAGE_BUFFER)?;
-        Ok(buf)
-    }
 }
 
 impl SimpleTexCoordCache {

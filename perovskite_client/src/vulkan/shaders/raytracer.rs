@@ -16,7 +16,7 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
 };
-use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
+use vulkano::pipeline::graphics::depth_stencil::{DepthState, DepthStencilState};
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, RasterizationState};
@@ -44,7 +44,7 @@ vulkano_shaders::shader! {
     },
     vulkan_version: "1.3",
     spirv_version: "1.3",
-    custom_derives: [Debug, Clone, Copy]
+    custom_derives: [Debug, Clone, Copy, Default]
 }
 
 pub(crate) struct RaytracedPipelineWrapper {

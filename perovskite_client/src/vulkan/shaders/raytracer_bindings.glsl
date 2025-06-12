@@ -1,13 +1,13 @@
 struct TexRef {
-    vec2 diffuse_top_left;
-    vec2 diffuse_width_height;
+    vec2 top_left;
+    vec2 width_height;
 };
 
 const uint FLAGS_FOO = 0;
 
 struct SimpleCubeInfo {
     uint flags;
-    TexRef tex[6];
+    TexRef tex_diffuse[6];
 };
 
 layout(set = 0, binding = 0) uniform sampler2D tex;
