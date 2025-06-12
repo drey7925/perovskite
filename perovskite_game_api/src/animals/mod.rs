@@ -158,9 +158,8 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
             ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "animals:duck".to_string(),
                 display_name: "Duck".to_string(),
-                inventory_texture: Some(DUCK_INV_TEX.into()),
+                appearance: DUCK_INV_TEX.into(),
                 groups: vec![],
-                block_apperance: "".to_string(),
                 interaction_rules: vec![InteractionRule {
                     block_group: vec![DEFAULT_LIQUID.to_string()],
                     dig_behavior: Some(DigBehavior::Undiggable(Empty {})),

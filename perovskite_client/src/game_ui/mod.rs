@@ -9,9 +9,6 @@ use parking_lot::Mutex;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
-use anyhow::{bail, Error, Result};
-use arc_swap::ArcSwap;
-
 use crate::client_state::settings::GameSettings;
 use crate::{
     cache::CacheManager,
@@ -21,6 +18,9 @@ use crate::{
         VulkanContext,
     },
 };
+use anyhow::{bail, Error, Result};
+use arc_swap::ArcSwap;
+use perovskite_core::protocol::items::item_def::Appearance;
 
 use self::{egui_ui::EguiUi, hud::GameHud};
 
@@ -73,19 +73,17 @@ async fn build_texture_atlas(
     let mut all_texture_names = HashSet::new();
     let mut all_rendered_blocks = HashSet::new();
     for def in item_defs.all_item_defs() {
-        if !def.block_apperance.is_empty() {
-            all_rendered_blocks.insert(def.block_apperance.clone());
-        } else if let Some(tex) = &def.inventory_texture {
-            all_texture_names.insert(tex.texture_name.clone());
+        match &def.appearance {
+            None => {}
+            Some(Appearance::InventoryTexture(inv_tex)) => {
+                all_texture_names.insert(inv_tex.clone());
+            }
+            Some(Appearance::BlockApperance(block_name)) => {
+                all_rendered_blocks.insert(block_name.clone());
+            }
         }
     }
     let all_rendered_blocks = all_rendered_blocks.into_iter().collect::<Vec<_>>();
-
-    let all_texture_names = item_defs
-        .all_item_defs()
-        .flat_map(|x| &x.inventory_texture)
-        .map(|x| x.texture_name.clone())
-        .collect::<HashSet<_>>();
 
     let mut simple_textures = HashMap::new();
     let rendered_block_textures = Arc::new(Mutex::new(HashMap::new()));
@@ -250,25 +248,29 @@ async fn build_texture_atlas(
     let mut texture_coords = HashMap::new();
 
     for item in item_defs.all_item_defs() {
-        if !item.block_apperance.is_empty() {
-            texture_coords.insert(
-                item.short_name.clone(),
-                texture_packer
-                    .get_frame(&("rendered_block:".to_string() + &item.block_apperance))
-                    .map(|x| x.frame)
-                    .unwrap_or(fallback_rect),
-            );
-        } else if let Some(tex) = &item.inventory_texture {
-            texture_coords.insert(
-                item.short_name.clone(),
-                texture_packer
-                    .get_frame(&("simple:".to_string() + &tex.texture_name))
-                    .map(|x| x.frame)
-                    .unwrap_or(fallback_rect),
-            );
-        } else {
-            texture_coords.insert(item.short_name.clone(), fallback_rect);
-        };
+        match &item.appearance {
+            Some(Appearance::InventoryTexture(inv_tex)) => {
+                texture_coords.insert(
+                    item.short_name.clone(),
+                    texture_packer
+                        .get_frame(&("simple:".to_string() + &inv_tex))
+                        .map(|x| x.frame)
+                        .unwrap_or(fallback_rect),
+                );
+            }
+            Some(Appearance::BlockApperance(block_name)) => {
+                texture_coords.insert(
+                    item.short_name.clone(),
+                    texture_packer
+                        .get_frame(&("rendered_block:".to_string() + &block_name))
+                        .map(|x| x.frame)
+                        .unwrap_or(fallback_rect),
+                );
+            }
+            None => {
+                texture_coords.insert(item.short_name.clone(), fallback_rect);
+            }
+        }
     }
 
     for (key, value) in texture_packer.get_frames().iter() {

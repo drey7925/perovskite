@@ -458,7 +458,7 @@ impl ItemManager {
             proto: proto::ItemDef {
                 short_name: NO_TOOL.to_string(),
                 display_name: "No Tool (you should never see this)".to_string(),
-                inventory_texture: None,
+                appearance: None,
                 groups: vec![],
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: None,

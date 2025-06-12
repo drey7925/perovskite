@@ -270,7 +270,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
 }
 
 fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
-    use crate::game_builder::{BlockName, TextureName};
+    use crate::game_builder::{BlockName, OwnedTextureName};
 
     let base_on_image = image::load_from_memory(include_bytes!("textures/lamp_on_base.png"))?;
     let base_off_image = image::load_from_memory(include_bytes!("textures/lamp_off_base.png"))?;
@@ -288,10 +288,12 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
         let orb_colorized_on = color.colorize_to_png_with_mask(&orb_on_image, &orb_mask)?;
         let orb_colorized_off = color.colorize_to_png_with_mask(&orb_off_image, &orb_mask)?;
 
-        let on_texture = TextureName(format!("circuits:lamp_{}_on", color.as_string()));
-        let off_texture = TextureName(format!("circuits:lamp_{}_off", color.as_string()));
-        let orb_on_texture = TextureName(format!("circuits:lamp_{}_orb_on", color.as_string()));
-        let orb_off_texture = TextureName(format!("circuits:lamp_{}_orb_off", color.as_string()));
+        let on_texture = OwnedTextureName(format!("circuits:lamp_{}_on", color.as_string()));
+        let off_texture = OwnedTextureName(format!("circuits:lamp_{}_off", color.as_string()));
+        let orb_on_texture =
+            OwnedTextureName(format!("circuits:lamp_{}_orb_on", color.as_string()));
+        let orb_off_texture =
+            OwnedTextureName(format!("circuits:lamp_{}_orb_off", color.as_string()));
 
         builder.register_texture_bytes(&on_texture, &colorized_on)?;
         builder.register_texture_bytes(&off_texture, &colorized_off)?;
@@ -334,7 +336,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
             )?;
         }
 
-        fn orb_aabb(tex: &TextureName) -> AxisAlignedBoxesAppearanceBuilder {
+        fn orb_aabb(tex: &OwnedTextureName) -> AxisAlignedBoxesAppearanceBuilder {
             AxisAlignedBoxesAppearanceBuilder::new()
                 .add_box(
                     AaBoxProperties::new_plantlike(tex, RotationMode::None),

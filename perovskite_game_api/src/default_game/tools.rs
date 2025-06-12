@@ -75,10 +75,7 @@ pub(crate) fn register_tool(
     let item = Item::default_with_proto(items_proto::ItemDef {
         short_name: name.clone(),
         display_name: display_name.into(),
-        inventory_texture: Some(TextureReference {
-            texture_name: texture.0.to_string(),
-            crop: None,
-        }),
+        appearance: texture.into(),
         groups: vec![TOOL_WEAR.to_string()],
         interaction_rules: vec![
             InteractionRule {
@@ -98,7 +95,6 @@ pub(crate) fn register_tool(
             },
         ],
         quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
-        block_apperance: "".to_string(),
         sort_key,
     });
     game_builder.inner.items_mut().register_item(item)?;
@@ -136,10 +132,7 @@ fn register_superuser_pickaxe(
         ..Item::default_with_proto(items_proto::ItemDef {
             short_name: name.into(),
             display_name: display_name.into(),
-            inventory_texture: Some(TextureReference {
-                texture_name: texture.0.to_string(),
-                crop: None,
-            }),
+            appearance: texture.into(),
             groups: vec![TOOL_WEAR.to_string()],
             interaction_rules: vec![
                 InteractionRule {
@@ -159,7 +152,6 @@ fn register_superuser_pickaxe(
                 },
             ],
             quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),
-            block_apperance: "".to_string(),
             sort_key: "default:tools:pickaxes:superuser".to_string(),
         })
     };

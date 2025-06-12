@@ -19,9 +19,14 @@ syntax = "proto3";
 package perovskite.protocol.render;
 
 message TextureReference {
-    string texture_name = 1;
-    // Only supported for rendering blocks, not supported in inventory or popups yet
+    // The diffuse texture + only texture for basic rendering
+    string diffuse = 1;
+    // Only supported for rendering blocks, not supported in inventory or popups yet. Applies to ALL textures in this
+    // object
     TextureCrop crop = 2;
+    // Specular component. Alpha channel controls blend between fresnel vs constant specular: 0 = fresnel, 1 = constant
+    // There is no requirement for this alpha to be the same as diffuse alpha
+    string rt_specular = 3;
 }
 
 // If set, the texture will be cropped to the given coordinates.
@@ -43,7 +48,7 @@ message DynamicCrop {
     // with 0 leftmost in the texture
     uint32 x_cells = 2;
     // Do the same thing with these fields to get the vertical grid cell
-    // (0 is topmost, TODO check)
+    // (0 is topmost)
     uint32 y_selector_bits = 3;
     uint32 y_cells = 4;
     // If variant AND this is nonzero, flip the selected grid cell horizontally

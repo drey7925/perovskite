@@ -35,7 +35,7 @@ impl EntityRenderer {
             if let Some(appearance) = &def.appearance {
                 for mesh in &appearance.custom_mesh {
                     if let Some(tex) = &mesh.texture {
-                        all_texture_names.insert(tex.texture_name.clone());
+                        all_texture_names.insert(tex.diffuse.clone());
                     }
                 }
             }
@@ -142,7 +142,7 @@ impl EntityRenderer {
             let tex_rectangle: RectF32 = mesh
                 .texture
                 .as_ref()
-                .and_then(|x| texture_coords.get(&x.texture_name))
+                .and_then(|x| texture_coords.get(&x.diffuse))
                 .unwrap_or_else(|| texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap())
                 .into();
             let tex_rectangle = tex_rectangle.div(atlas_dims);

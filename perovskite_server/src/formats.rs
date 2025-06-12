@@ -5,7 +5,8 @@ pub fn load_obj_mesh(obj_data: &[u8], texture: impl Into<String>) -> Result<Cust
     let object: obj::Obj<obj::TexturedVertex, u32> = obj::load_obj(obj_data)?;
     let mut mesh = CustomMesh::default();
     mesh.texture = Some(TextureReference {
-        texture_name: texture.into(),
+        diffuse: texture.into(),
+        rt_specular: String::new(),
         crop: None,
     });
     for vertex in object.vertices {

@@ -179,7 +179,8 @@ impl CacheManager {
     ) -> Option<()> {
         if let Some(tex) = tex {
             hasher.update(b"tex_ref:");
-            hasher.update(self.get_file_hash(&tex.texture_name)?);
+            hasher.update(self.get_file_hash(&tex.diffuse)?);
+            // We ignore the specular texture since it's not used in the block renderer
             hasher.update(b":");
             if let Some(crop) = &tex.crop {
                 hasher.update(crop.top.to_le_bytes());

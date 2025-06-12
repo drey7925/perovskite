@@ -136,7 +136,7 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
                 Err(e) => Err(Status::internal(e.to_string())),
             },
             None => Err(Status::not_found(format!(
-                "{} unimplemented",
+                "media item `{}` missing",
                 &req.get_ref().media_name
             ))),
         }
@@ -164,8 +164,8 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
     }
 }
 
-pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 7;
-pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 7;
+pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 8;
+pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 8;
 async fn game_stream_impl(
     game_state: Arc<GameState>,
     mut inbound_rx: Streaming<StreamToServer>,

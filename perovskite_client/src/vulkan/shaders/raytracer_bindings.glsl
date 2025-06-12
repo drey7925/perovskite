@@ -1,6 +1,6 @@
 struct TexRef {
-    vec2 top_left;
-    vec2 width_height;
+    vec2 diffuse_top_left;
+    vec2 diffuse_width_height;
 };
 
 const uint FLAGS_FOO = 0;

@@ -327,9 +327,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
             ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "carts:minecart".to_string(),
                 display_name: "High-speed minecart".to_string(),
-                inventory_texture: Some(cart_tex.into()),
+                appearance: cart_tex.into(),
                 groups: vec![],
-                block_apperance: "".to_string(),
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
                 sort_key: "carts:cart".to_string(),

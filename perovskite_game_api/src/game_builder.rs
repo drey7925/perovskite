@@ -42,43 +42,70 @@ use itertools::Itertools;
 
 /// Type-safe newtype wrapper for a texture name
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct TextureName(pub String);
+pub struct OwnedTextureName(pub String);
 
 /// Type-safe newtype wrapper for a texture name
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StaticTextureName(pub &'static str);
 
+trait TextureName {
+    fn name(&self) -> &str;
+}
+impl TextureName for OwnedTextureName {
+    fn name(&self) -> &str {
+        &self.0
+    }
+}
+impl TextureName for StaticTextureName {
+    fn name(&self) -> &str {
+        self.0
+    }
+}
+impl From<OwnedTextureName> for Option<Appearance> {
+    fn from(value: OwnedTextureName) -> Self {
+        Some(Appearance::InventoryTexture(value.name().to_string()))
+    }
+}
+impl From<StaticTextureName> for Option<Appearance> {
+    fn from(value: StaticTextureName) -> Self {
+        Some(Appearance::InventoryTexture(value.name().to_string()))
+    }
+}
+
 impl From<StaticTextureName> for TextureReference {
     fn from(value: StaticTextureName) -> Self {
         TextureReference {
-            texture_name: value.0.to_string(),
+            diffuse: value.0.to_string(),
+            rt_specular: String::new(),
             crop: None,
         }
     }
 }
-impl From<TextureName> for TextureReference {
-    fn from(value: TextureName) -> Self {
+impl From<OwnedTextureName> for TextureReference {
+    fn from(value: OwnedTextureName) -> Self {
         TextureReference {
-            texture_name: value.0,
+            diffuse: value.0,
+            rt_specular: String::new(),
             crop: None,
         }
     }
 }
-impl From<&TextureName> for TextureReference {
-    fn from(value: &TextureName) -> Self {
+impl From<&OwnedTextureName> for TextureReference {
+    fn from(value: &OwnedTextureName) -> Self {
         TextureReference {
-            texture_name: value.0.to_string(),
+            diffuse: value.0.to_string(),
+            rt_specular: String::new(),
             crop: None,
         }
     }
 }
-impl From<StaticTextureName> for TextureName {
+impl From<StaticTextureName> for OwnedTextureName {
     fn from(value: StaticTextureName) -> Self {
-        TextureName(value.0.to_string())
+        OwnedTextureName(value.0.to_string())
     }
 }
-impl From<&TextureName> for TextureName {
-    fn from(value: &TextureName) -> Self {
+impl From<&OwnedTextureName> for OwnedTextureName {
+    fn from(value: &OwnedTextureName) -> Self {
         value.clone()
     }
 }
@@ -365,7 +392,7 @@ impl GameBuilder {
         &mut self,
         short_name: impl Into<ItemName>,
         display_name: impl Into<String>,
-        texture: impl Into<TextureReference>,
+        texture: impl TextureName,
         groups: Vec<String>,
         sort_key: impl Into<String>,
     ) -> Result<()> {
@@ -374,13 +401,12 @@ impl GameBuilder {
             .register_item(Item::default_with_proto(ItemDef {
                 short_name: short_name.into().0.to_string(),
                 display_name: display_name.into(),
-                inventory_texture: Some(texture.into()),
+                appearance: Some(Appearance::InventoryTexture(texture.name().to_string())),
                 groups,
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(
                     perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
                 ),
-                block_apperance: "".to_string(),
                 sort_key: sort_key.into(),
             }))
     }
@@ -405,7 +431,7 @@ impl GameBuilder {
     /// if it is a duplicate
     pub fn register_texture_file(
         &mut self,
-        tex_name: impl Into<TextureName>,
+        tex_name: impl Into<OwnedTextureName>,
         file_path: impl AsRef<Path>,
     ) -> Result<()> {
         self.inner
@@ -419,7 +445,7 @@ impl GameBuilder {
     /// if it is a duplicate
     pub fn register_texture_bytes(
         &mut self,
-        tex_name: impl Into<TextureName>,
+        tex_name: impl Into<OwnedTextureName>,
         data: &[u8],
     ) -> Result<()> {
         self.inner
@@ -452,7 +478,7 @@ impl GameBuilder {
 ///
 /// This macro takes the following parameters:
 /// * Mutable reference to [GameBuilder]
-/// * Texture name ([TextureName] object)
+/// * Texture name ([OwnedTextureName] object)
 /// * File name (string literal)
 #[macro_export]
 macro_rules! include_texture_bytes {
@@ -461,6 +487,7 @@ macro_rules! include_texture_bytes {
     };
 }
 pub use include_texture_bytes;
+use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_server::media::SoundKey;
 
 pub const DEFAULT_FOOTSTEP_SOUND_NAME: &str = "default:footstep.wav";

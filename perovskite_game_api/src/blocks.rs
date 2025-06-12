@@ -19,6 +19,7 @@ use std::time::Duration;
 use anyhow::Result;
 use itertools::Itertools;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
+use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     constants::{
@@ -237,11 +238,10 @@ impl BlockBuilder {
             ..Item::default_with_proto(ItemDef {
                 short_name: name.clone(),
                 display_name: name.clone(),
-                inventory_texture: None,
+                appearance: Some(Appearance::BlockApperance(name.clone())),
                 groups: vec![],
                 interaction_rules: default_item_interaction_rules(),
                 quantity_type: Some(QuantityType::Stack(256)),
-                block_apperance: name.clone(),
                 sort_key: "".to_string(),
             })
         };
@@ -444,8 +444,7 @@ impl BlockBuilder {
     }
     /// Sets the texture shown for this block's item in the inventory.
     pub fn set_inventory_texture(mut self, texture: impl Into<TextureReference>) -> Self {
-        self.item.proto.block_apperance = "".to_string();
-        self.item.proto.inventory_texture = Some(texture.into());
+        self.item.proto.appearance = Some(Appearance::InventoryTexture(texture.into().diffuse));
         self
     }
     /// Convenience method that sets this block to a simple appearance as a cube with the same texture on all faces,
@@ -783,9 +782,10 @@ impl Default for PlantLikeAppearanceBuilder {
 
 pub use protocol::render::TextureCrop;
 
-fn make_texture_ref(tex_name: String) -> Option<TextureReference> {
+fn make_texture_ref(diffuse: String) -> Option<TextureReference> {
     Some(TextureReference {
-        texture_name: tex_name,
+        diffuse,
+        rt_specular: String::new(),
         crop: None,
     })
 }
@@ -1370,7 +1370,6 @@ impl AxisAlignedBoxesAppearanceBuilder {
     ) -> TextureReference {
         match crop_mode {
             TextureCropping::AutoCrop => TextureReference {
-                texture_name: tex.texture_name,
                 crop: Some(TextureCrop {
                     left: extents_u.0,
                     right: extents_u.1,
@@ -1378,11 +1377,9 @@ impl AxisAlignedBoxesAppearanceBuilder {
                     bottom: extents_v.1,
                     dynamic: None,
                 }),
+                ..tex
             },
-            TextureCropping::NoCrop => TextureReference {
-                texture_name: tex.texture_name,
-                crop: None,
-            },
+            TextureCropping::NoCrop => TextureReference { crop: None, ..tex },
         }
     }
 }

@@ -29,13 +29,15 @@ message ItemDef {
   string short_name = 2;
   // In-game display name, e.g. "Diamond pickaxe"
   string display_name = 3;
-  // Texture to show in the inventory. Ignored if block_apperance is set
-  perovskite.protocol.render.TextureReference inventory_texture = 4;
   // Groups for this item. This is NOT the same as the groups that this item
   // can dig; see InteractionRule for that
   repeated string groups = 5;
-  // If set, disregard inventory_texture and render this block instead.
-  string block_apperance = 6;
+  oneof appearance {
+    // Texture to show in the inventory. Ignored if block_apperance is set
+    string inventory_texture = 4;
+    // If set, disregard inventory_texture and render this block instead.
+    string block_apperance = 6;
+  }
 
   // Optional oneof. If unset, item neither stacks nor wears out
   oneof quantity_type {

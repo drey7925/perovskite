@@ -737,11 +737,10 @@ fn default_item() -> ItemDef {
     ItemDef {
         short_name: String::new(),
         display_name: String::new(),
-        inventory_texture: None,
+        appearance: None,
         groups: vec![],
         interaction_rules: rules,
         quantity_type: None,
-        block_apperance: "".to_string(),
         // Sort key is irrelevant
         sort_key: String::new(),
     }

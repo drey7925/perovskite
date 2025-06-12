@@ -1191,9 +1191,8 @@ pub(crate) fn register_tracks(
         ..Item::default_with_proto(protocol::items::ItemDef {
             short_name: "carts:rail_curve".to_string(),
             display_name: "Curved rail".to_string(),
-            inventory_texture: Some(CURVED_RAIL_ITEM_TEX.into()),
+            appearance: CURVED_RAIL_ITEM_TEX.into(),
             groups: vec![],
-            block_apperance: String::new(),
             interaction_rules: default_item_interaction_rules(),
             quantity_type: Some(QuantityType::Stack(256)),
             sort_key: "carts:rail_curve".to_string(),

@@ -449,7 +449,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
         .register_item(Item::default_with_proto(protocol::items::ItemDef {
             short_name: "default:tnt_actor_tool".to_string(),
             display_name: "TNT actor tool (you should not see this)".to_string(),
-            inventory_texture: Some(TNT_TEXTURE.into()),
+            appearance: TNT_TEXTURE.into(),
             groups: vec![HIDDEN_FROM_CREATIVE.into()],
             interaction_rules: vec![InteractionRule {
                 block_group: vec![],
@@ -461,7 +461,6 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
                 ),
             }],
             quantity_type: None,
-            block_apperance: "".to_string(),
             sort_key: "default:internal:tnt_actor_tool".to_string(),
         }))?;
 
@@ -829,11 +828,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         ..Item::default_with_proto(ItemDef {
             short_name: SNOWBALL.0.to_string(),
             display_name: "Snowball".to_string(),
-            inventory_texture: Some(SNOWBALL_TEXTURE.into()),
+            appearance: SNOWBALL_TEXTURE.into(),
             groups: vec![],
             interaction_rules: default_item_interaction_rules(),
             quantity_type: Some(protocol::items::item_def::QuantityType::Stack(256)),
-            block_apperance: String::new(),
             sort_key: "default:snowball".into(),
         })
     })?;

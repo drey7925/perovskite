@@ -354,8 +354,8 @@ vec2 t_range(vec3 start, vec3 dir) {
 
 vec4 sample_simple(HitInfo info, uint idx) {
     // TODO: variant-based rotation
-    vec2 tl = cube_info[idx].tex[info.face].top_left;
-    vec2 wh = cube_info[idx].tex[info.face].width_height;
+    vec2 tl = cube_info[idx].tex[info.face].diffuse_top_left;
+    vec2 wh = cube_info[idx].tex[info.face].diffuse_width_height;
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
 
     vec4 tex_color = texture(tex, tl + (uv * wh));
@@ -594,11 +594,7 @@ void main() {
     float fresnel = length(spec_dir);
     spec_dir = normalize(spec_dir);
     t_min_max = t_range(spec_start, normalize(spec_dir));
-    //
-    //    if ((ix2 ^ iy2) == 0) {
-    //        f_color = vec4(t_min_max.x / 30, t_min_max.y / 30, 0.0, 1.0);
-    //        return;
-    //    }
+
     if (t_min_max.x > t_min_max.y) {
         return;
     }

@@ -46,9 +46,8 @@ pub(crate) fn register_track_tool(
         ..Item::default_with_proto(items_proto::ItemDef {
             short_name: "carts:track_tool".to_string(),
             display_name: "Track placement tool".to_string(),
-            inventory_texture: Some(TRACK_TOOL_TEXTURE.into()),
+            appearance: TRACK_TOOL_TEXTURE.into(),
             groups: vec![],
-            block_apperance: "".to_string(),
             interaction_rules: default_item_interaction_rules(),
             quantity_type: None,
             sort_key: "carts:track_tool".to_string(),

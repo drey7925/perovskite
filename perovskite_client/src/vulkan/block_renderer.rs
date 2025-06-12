@@ -408,7 +408,7 @@ fn get_texture(
     height: f32,
 ) -> MaybeDynamicRect {
     let rect = tex
-        .and_then(|tex| texture_coords.get(&tex.texture_name).copied())
+        .and_then(|tex| texture_coords.get(&tex.diffuse).copied())
         .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap());
     let mut rect_f = RectF32::new(
         rect.x as f32 / width,
@@ -487,7 +487,10 @@ impl BlockRenderer {
         for def in block_type_manager.all_block_defs() {
             let mut insert_if_present = |tex: &Option<TextureReference>| {
                 if let Some(tex) = tex {
-                    all_texture_names.insert(tex.texture_name.clone());
+                    all_texture_names.insert(tex.diffuse.clone());
+                    if !tex.rt_specular.is_empty() {
+                        all_texture_names.insert(tex.rt_specular.clone());
+                    }
                 }
             };
             match &def.render_info {
@@ -1226,6 +1229,12 @@ fn build_axis_aligned_box_cache_entry(
     }
 }
 
+pub(crate) mod rt_flags {
+    pub(crate) const FLAG_BLOCK_PRESENT: u32 = 1;
+    pub(crate) const FLAG_BLOCK_ROTATE_NESW: u32 = 2;
+    pub(crate) const FLAG_BLOCK_FALLBACK: u32 = 4;
+}
+
 fn build_simple_cache_entry(
     block_def: &BlockTypeDef,
     texture_coords: &FxHashMap<String, Rect>,
@@ -1233,14 +1242,15 @@ fn build_simple_cache_entry(
     w: f32,
     h: f32,
 ) -> Option<SimpleTexCoordEntry> {
+    use rt_flags::*;
     match &block_def.render_info {
         Some(RenderInfo::Cube(render_info)) => {
-            let mut flags = 1;
+            let mut flags = FLAG_BLOCK_PRESENT;
             if render_info.variant_effect() == CubeVariantEffect::RotateNesw {
-                flags |= 2;
+                flags |= FLAG_BLOCK_ROTATE_NESW;
             }
             if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
-                flags |= 4;
+                flags |= FLAG_BLOCK_FALLBACK;
             }
             let coords = [
                 get_texture(texture_coords, render_info.tex_right.as_ref(), w, h),
@@ -1397,8 +1407,8 @@ impl SimpleTexCoordCache {
                 None => SimpleCubeInfo {
                     flags: 0.into(),
                     tex: [TexRef {
-                        top_left: [0.0, 0.0],
-                        width_height: [0.0, 0.0],
+                        diffuse_top_left: [0.0, 0.0],
+                        diffuse_width_height: [0.0, 0.0],
                     }; 6],
                 },
                 Some(x) => {
@@ -1409,8 +1419,8 @@ impl SimpleTexCoordCache {
                             let coords = rect.rect(0);
                             TexRef {
                                 // reorder here to avoid extra swizzles in the shader
-                                top_left: [coords.l, coords.t],
-                                width_height: [coords.w, coords.h],
+                                diffuse_top_left: [coords.l, coords.t],
+                                diffuse_width_height: [coords.w, coords.h],
                             }
                         }),
                     }
@@ -1467,7 +1477,8 @@ impl AxisAlignedBoxBlocksCache {
 
 pub(crate) fn fallback_texture() -> Option<TextureReference> {
     Some(TextureReference {
-        texture_name: FALLBACK_UNKNOWN_TEXTURE.to_string(),
+        diffuse: FALLBACK_UNKNOWN_TEXTURE.to_string(),
+        rt_specular: String::new(),
         crop: None,
     })
 }
@@ -1912,16 +1923,4 @@ fn get_brightnesses(encoded_brightness: u8, brightness_bias: f32) -> (u8, u8) {
         (global_brightness * 255.0) as u8,
         (brightness * 255.0) as u8,
     )
-}
-
-trait TexRefHelper {
-    fn tex_name(&self) -> &str;
-}
-impl TexRefHelper for Option<TextureReference> {
-    fn tex_name(&self) -> &str {
-        match self {
-            Some(x) => &x.texture_name,
-            None => FALLBACK_UNKNOWN_TEXTURE,
-        }
-    }
 }

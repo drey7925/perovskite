@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use crate::game_builder::{
-    BlockName, GameBuilder, ItemName, StaticBlockName, StaticTextureName, TextureName,
+    BlockName, GameBuilder, ItemName, OwnedTextureName, StaticBlockName, StaticTextureName,
 };
 use anyhow::{ensure, Result};
 use image::Rgba;
@@ -217,16 +217,16 @@ pub trait Colorize {
     fn colorize(&self, color: Color) -> Self::Output;
 }
 
-impl Colorize for TextureName {
-    type Output = TextureName;
+impl Colorize for OwnedTextureName {
+    type Output = OwnedTextureName;
     fn colorize(&self, color: Color) -> Self::Output {
-        TextureName(format!("{}_{}", self.0, color.as_string()))
+        OwnedTextureName(format!("{}_{}", self.0, color.as_string()))
     }
 }
 impl Colorize for StaticTextureName {
-    type Output = TextureName;
+    type Output = OwnedTextureName;
     fn colorize(&self, color: Color) -> Self::Output {
-        TextureName(format!("{}_{}", self.0, color.as_string()))
+        OwnedTextureName(format!("{}_{}", self.0, color.as_string()))
     }
 }
 impl Colorize for BlockName {
@@ -247,7 +247,7 @@ pub fn register_dyes(game_builder: &mut GameBuilder) -> Result<()> {
     for color in ALL_COLORS {
         let item_name = color.dye_item_name();
         let texture_bytes = color.colorize_to_png(&base_texture)?;
-        let texture_name = TextureName(format!("colors:dye_{}.png", color.as_string()));
+        let texture_name = OwnedTextureName(format!("colors:dye_{}.png", color.as_string()));
         let display_name = format!("{} dye", color.as_display_string());
         game_builder.register_texture_bytes(&texture_name, &texture_bytes)?;
         game_builder.register_basic_item(
