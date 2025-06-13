@@ -3,11 +3,16 @@ struct TexRef {
     vec2 width_height;
 };
 
+struct FaceTex {
+    TexRef diffuse;
+    TexRef specular;
+};
+
 const uint FLAGS_FOO = 0;
 
 struct SimpleCubeInfo {
     uint flags;
-    TexRef tex_diffuse[6];
+    FaceTex tex[6];
 };
 
 layout(set = 0, binding = 0) uniform sampler2D tex;

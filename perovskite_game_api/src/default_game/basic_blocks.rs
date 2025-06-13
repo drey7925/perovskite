@@ -38,6 +38,7 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::items::ItemDef;
+use perovskite_core::protocol::render::TextureReference;
 use perovskite_core::{
     constants::{
         block_groups::{self, DEFAULT_LIQUID, TOOL_REQUIRED},
@@ -114,6 +115,7 @@ const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:deser
 const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
 const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
 const WATER_TEXTURE: StaticTextureName = StaticTextureName("default:water");
+const RT_SPECULAR_TEST: StaticTextureName = StaticTextureName("default:rt_specular_test");
 
 const TORCH_TEXTURE: StaticTextureName = StaticTextureName("default:torch");
 const TNT_TEXTURE: StaticTextureName = StaticTextureName("default:tnt");
@@ -547,6 +549,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
+    include_texture_bytes!(
+        game_builder,
+        RT_SPECULAR_TEST,
+        "textures/raytrace_specular_test.png"
+    )?;
 
     include_texture_bytes!(game_builder, TORCH_TEXTURE, "textures/torch.png")?;
 
@@ -911,7 +918,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .add_item_group("testonly_wet")
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
-                .set_single_texture(WATER_TEXTURE)
+                .set_single_texture(TextureReference {
+                    diffuse: WATER_TEXTURE.0.to_string(),
+                    crop: None,
+                    rt_specular: RT_SPECULAR_TEST.0.to_string(),
+                })
                 .set_liquid_shape()
                 .set_needs_translucency(),
         )

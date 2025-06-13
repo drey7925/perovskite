@@ -32,7 +32,7 @@ use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
 use anyhow::{Error, Result};
-
+use image::{DynamicImage, RgbImage, RgbaImage};
 use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
@@ -47,7 +47,7 @@ use crate::client_state::chunk::{
 use crate::client_state::ClientState;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
-use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
+use crate::vulkan::shaders::raytracer::{FaceTex, SimpleCubeInfo, TexRef};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
@@ -410,20 +410,22 @@ fn get_texture(
 ) -> PbrData {
     let crop = tex.and_then(|tex| tex.crop.as_ref());
 
-    let diffuse = mm(
+    let diffuse = make_maybe_dynamic(
         tex.and_then(|tex| texture_coords.get(&tex.diffuse).copied())
             .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()),
         crop,
         width,
         height,
     );
-    let rt_specular = mm(
-        tex.and_then(|tex| texture_coords.get(&tex.rt_specular).copied())
-            .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()),
-        crop,
-        width,
-        height,
-    );
+    let rt_specular = tex.and_then(|tex| {
+        if tex.rt_specular.is_empty() {
+            None
+        } else {
+            Some(texture_coords.get(&tex.rt_specular).copied())
+                .unwrap_or_else(|| Some(*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()))
+                .map(|x| make_maybe_dynamic(x, crop, width, height))
+        }
+    });
 
     PbrData {
         diffuse,
@@ -431,7 +433,12 @@ fn get_texture(
     }
 }
 
-fn mm(mut rect: Rect, crop: Option<&TextureCrop>, width: f32, height: f32) -> MaybeDynamicRect {
+fn make_maybe_dynamic(
+    mut rect: Rect,
+    crop: Option<&TextureCrop>,
+    width: f32,
+    height: f32,
+) -> MaybeDynamicRect {
     let mut rect_f = RectF32::new(
         rect.x as f32 / width,
         rect.y as f32 / height,
@@ -498,6 +505,8 @@ impl BlockRenderer {
         self.raytrace_control_ssbo.clone()
     }
 }
+
+const BLACK_PIXEL: &'static str = "builtin:black_pixel";
 
 impl BlockRenderer {
     pub(crate) async fn new(
@@ -593,6 +602,12 @@ impl BlockRenderer {
                 .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
         }
 
+        let mut image = RgbaImage::new(1, 1);
+        image.put_pixel(0, 0, image::Rgba([0, 0, 0, 1]));
+        texture_packer
+            .pack_own(BLACK_PIXEL.to_string(), DynamicImage::ImageRgba8(image))
+            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
+
         let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
             .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
         let texture_coords: FxHashMap<String, Rect> = texture_packer
@@ -624,7 +639,7 @@ impl BlockRenderer {
             .map(|x| match x.as_ref() {
                 None => SimpleCubeInfo {
                     flags: 0.into(),
-                    tex_diffuse: [TexRef::default(); 6],
+                    tex: [FaceTex::default(); 6],
                 },
                 Some(x) => build_ssbo_entry(
                     &x,
@@ -1272,6 +1287,7 @@ pub(crate) mod rt_flags {
     pub(crate) const FLAG_BLOCK_PRESENT: u32 = 1;
     pub(crate) const FLAG_BLOCK_ROTATE_NESW: u32 = 2;
     pub(crate) const FLAG_BLOCK_FALLBACK: u32 = 4;
+    pub(crate) const FLAG_BLOCK_HAS_SPECULAR: u32 = 8;
 }
 
 fn build_simple_cache_entry(
@@ -1341,22 +1357,26 @@ fn build_ssbo_entry(
             }
             let pbr_data = get_cube_coords(texture_coords, w, h, render_info);
 
+            if pbr_data.iter().any(|x| x.rt_specular.is_some()) {
+                flags |= FLAG_BLOCK_HAS_SPECULAR;
+            }
+
             SimpleCubeInfo {
                 flags: flags.into(),
-                tex_diffuse: pbr_data.map(|rect| rect.diffuse.rect(0).into()),
+                tex: pbr_data.map(PbrData::build_face_tex),
             }
         }
         Some(RenderInfo::PlantLike(render_info)) => {
             let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
             SimpleCubeInfo {
                 flags: (1 | 4).into(),
-                tex_diffuse: [coords.diffuse.rect(0).into(); 6],
+                tex: [coords.build_face_tex(); 6],
             }
         }
         _ => SimpleCubeInfo {
             // This is the default, but written explicitly to better highlight the exact value
             flags: 0.into(),
-            tex_diffuse: [TexRef::default(); 6],
+            tex: [FaceTex::default(); 6],
         },
     }
 }
@@ -1463,7 +1483,18 @@ fn build_liquid_cube_extents(
 
 struct PbrData {
     diffuse: MaybeDynamicRect,
-    rt_specular: MaybeDynamicRect,
+    rt_specular: Option<MaybeDynamicRect>,
+}
+impl PbrData {
+    fn build_face_tex(self) -> FaceTex {
+        FaceTex {
+            diffuse: self.diffuse.rect(0).into(),
+            specular: self
+                .rt_specular
+                .map(|x| x.rect(0).into())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

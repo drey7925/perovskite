@@ -352,13 +352,29 @@ vec2 t_range(vec3 start, vec3 dir) {
     );
 }
 
-vec4 sample_simple(HitInfo info, uint idx) {
+struct SampleResult {
+    vec4 diffuse;
+    vec4 specular;
+};
+
+SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     // TODO: variant-based rotation
-    vec2 tl = cube_info[idx].tex_diffuse[info.face].top_left;
-    vec2 wh = cube_info[idx].tex_diffuse[info.face].width_height;
+    vec2 tl = cube_info[idx].tex[info.face].diffuse.top_left;
+    vec2 wh = cube_info[idx].tex[info.face].diffuse.width_height;
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
 
-    vec4 tex_color = texture(tex, tl + (uv * wh));
+    vec4 diffuse = texture(tex, tl + (uv * wh));
+    vec4 specular = vec4(0);
+
+    if (SPECULAR) {
+        if (want_spec && ((cube_info[idx].flags & 8) != 0)) {
+            tl = cube_info[idx].tex[info.face].specular.top_left;
+            wh = cube_info[idx].tex[info.face].specular.width_height;
+            uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
+
+            specular = texture(tex, tl + (uv * wh));
+        }
+    }
 
     // For debugging
     // allow seeing some of the texture, plus avoid the sampler disappearing from the final shader program
@@ -368,7 +384,12 @@ vec4 sample_simple(HitInfo info, uint idx) {
     float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(info.face)));
     // TODO: Do a ray query to the sun instead
     vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
-    return vec4((brightness_table[bitfieldExtract(info.light_data, 0, 4)] + global_light) * tex_color.rgb, tex_color.a);
+    vec4 final_diffuse = vec4((brightness_table[bitfieldExtract(info.light_data, 0, 4)] + global_light) * diffuse.rgb, diffuse.a);
+
+    return SampleResult(
+    final_diffuse,
+    specular
+    );
 }
 
 float random (vec2 st, float f) {
@@ -511,6 +532,7 @@ void main() {
 
     uint spec_block = 0;
     vec3 spec_start;
+    vec3 spec_color = vec3(0);
     vec3 spec_dir = vec3(0);
 
     for (;;) {
@@ -530,15 +552,15 @@ void main() {
         // skip fallback blocks
         if (info_flags != 0) {
             if ((info_flags & 4u) != 4) {
-                vec4 rgba = sample_simple(info, idx);
-                float alpha_contrib = (1 - f_color.a) * rgba.a;
-                f_color.rgb += alpha_contrib * rgba.rgb;
+                SampleResult result = sample_simple(info, idx, SPECULAR);
+                float alpha_contrib = (1 - f_color.a) * result.diffuse.a;
+                f_color.rgb += alpha_contrib * result.diffuse.rgb;
                 f_color.a += alpha_contrib;
 
 
                 // TODO proper specular from the block, for now hardcode glass/water
                 if (SPECULAR) {
-                    if ((info.block_id == 0x7000 || ((info.block_id & ~0xfffu) == 0x8000))) {
+                    if (length(result.specular.rgb) > 0.1) {
                         vec3 new_dir;
                         vec3 normal = decode_normal(info.face);
                         if (FUZZY_SHADOWS && info.block_id != 0x7000) {
@@ -556,11 +578,12 @@ void main() {
                         }
                         float cos_theta = dot(normal, new_dir);
                         float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
-                        if (fresnel >= length(spec_dir)) {
+                        float final_fresnel = mix(fresnel, 1.0, result.specular.a);
+                        if (final_fresnel * length(result.specular.rgb) >= length(spec_color)) {
                             spec_block = info.block_id;
                             spec_start = hit_pos;
-                            // stash the fresnel blend factor into spec_dir's magnitude to save a register
-                            spec_dir = new_dir * fresnel;
+                            spec_dir = new_dir;
+                            spec_color = final_fresnel * result.specular.rgb;
                         }
                     }
                 }
@@ -611,7 +634,7 @@ void main() {
                 return;
             }
             if ((cube_info[idx].flags & 1) != 0) {
-                vec4 sampled = sample_simple(info, idx);
+                vec4 sampled = sample_simple(info, idx, false).diffuse;
                 float alpha_contrib = sampled.a * (1 - spec_rgba.a);
                 spec_rgba.rgb += alpha_contrib * sampled.rgb;
                 spec_rgba.a += alpha_contrib;
@@ -625,6 +648,6 @@ void main() {
     if (spec_rgba.a < 0.99) {
         spec_rgba += (1 - spec_rgba.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
     }
-    f_color.rgb += fresnel * spec_rgba.rgb * spec_rgba.a;
+    f_color.rgb += spec_color * spec_rgba.rgb * spec_rgba.a;
 
 }
