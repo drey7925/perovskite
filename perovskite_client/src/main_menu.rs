@@ -61,7 +61,7 @@ impl MainMenu {
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_graphics_queue(),
-            Subpass::from(ctx.post_blit_render_pass(), 0)
+            Subpass::from(ctx.non_depth_render_pass(), 0)
                 .context("Could not find subpass 0")
                 .unwrap(),
             ctx.swapchain().image_format(),

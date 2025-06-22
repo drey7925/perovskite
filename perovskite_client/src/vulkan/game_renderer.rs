@@ -198,9 +198,9 @@ impl ActiveGame {
             None
         };
 
-        ctx.start_ssaa_render_pass(
+        ctx.start_raster_render_pass(
             &mut command_buf_builder,
-            framebuffer.ssaa_attachments.clone(),
+            &framebuffer,
             scene_state.clear_color,
         )?;
 
@@ -350,15 +350,6 @@ impl ActiveGame {
             )
             .context("Entities pipeline draw failed")?;
 
-        command_buf_builder.next_subpass(
-            SubpassEndInfo {
-                ..SubpassEndInfo::default()
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..SubpassBeginInfo::default()
-            },
-        )?;
         {
             if let Some(buf) = self.raytrace_data.as_ref() {
                 self.raytraced_pipeline.draw_rt_primary(
@@ -367,7 +358,7 @@ impl ActiveGame {
                         scene_state,
                         data: buf.data.clone(),
                         header: buf.header.clone(),
-                        depth_view: framebuffer.ssaa_attachments.attachments()[2].clone(),
+                        depth_view: framebuffer.rt_primary_framebuffer.attachments()[1].clone(),
                         deferred_buffers: framebuffer
                             .deferred_specular_buffers
                             .clone()
@@ -379,6 +370,17 @@ impl ActiveGame {
                 )?;
             }
         }
+
+        command_buf_builder.end_render_pass(SubpassEndInfo {
+            ..Default::default()
+        })?;
+
+        ctx.start_non_depth_render_pass(
+            &mut command_buf_builder,
+            framebuffer.pre_blit_nondepth_framebuffer.clone(),
+            SubpassContents::Inline,
+        )?;
+
         self.flat_pipeline
             .bind(ctx, &mut command_buf_builder)
             .context("Flat pipeline bind failed")?;
@@ -399,13 +401,14 @@ impl ActiveGame {
         command_buf_builder.end_render_pass(SubpassEndInfo {
             ..Default::default()
         })?;
-        // With the render pass done, blit to the final framebuffer
+
         framebuffer
             .blit_supersampling(&mut command_buf_builder)
             .context("Supersampling blit failed")?;
-        ctx.start_post_blit_render_pass(
+        ctx.start_non_depth_render_pass(
             &mut command_buf_builder,
             framebuffer.post_blit_framebuffer.clone(),
+            SubpassContents::SecondaryCommandBuffers,
         )
         .context("Start post-blit render pass failed")?;
 
@@ -462,9 +465,9 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    subpass: Subpass::from(ctx.ssaa_render_pass.clone(), 1)
-                        .context("SSAA subpass 1 missing")?,
-                    enable_depth_stencil: true,
+                    subpass: Subpass::from(ctx.non_depth_render_pass.clone(), 0)
+                        .context("nondepth renderpass 1 missing")?,
+                    enable_depth_stencil: false,
                     enable_supersampling: true,
                 },
                 &global_config,
@@ -575,9 +578,9 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
             &vk_wnd,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: Subpass::from(vk_wnd.ssaa_render_pass.clone(), 1)
-                    .context("SSAA subpass 0 missing")?,
-                enable_depth_stencil: true,
+                subpass: Subpass::from(vk_wnd.non_depth_render_pass.clone(), 0)
+                    .context("non-depth renderpass missing")?,
+                enable_depth_stencil: false,
                 enable_supersampling: true,
             },
             &global_render_config,
@@ -945,30 +948,32 @@ impl GameRenderer {
             let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
             // we're not in the active game, allow the IME
             self.ctx.window.set_ime_allowed(true);
+
+            // self.ctx
+            //     .start_ssaa_raster_render_pass(
+            //         &mut command_buf_builder,
+            //         &fb_holder,
+            //         [0.0, 0.0, 0.0, 0.0],
+            //     )
+            //     .unwrap();
+            // // There are two subpasses in the SSAA render pass
+            // command_buf_builder
+            //     .next_subpass(SubpassEndInfo::default(), SubpassBeginInfo::default())
+            //     .unwrap();
+            // command_buf_builder
+            //     .end_render_pass(SubpassEndInfo {
+            //         ..Default::default()
+            //     })
+            //     .unwrap();
+            // // With the render pass done, blit to the final framebuffer
+            // fb_holder
+            //     .blit_supersampling(&mut command_buf_builder)
+            //     .unwrap();
             self.ctx
-                .start_ssaa_render_pass(
-                    &mut command_buf_builder,
-                    fb_holder.ssaa_attachments.clone(),
-                    [0.0, 0.0, 0.0, 0.0],
-                )
-                .unwrap();
-            // There are two subpasses in the SSAA render pass
-            command_buf_builder
-                .next_subpass(SubpassEndInfo::default(), SubpassBeginInfo::default())
-                .unwrap();
-            command_buf_builder
-                .end_render_pass(SubpassEndInfo {
-                    ..Default::default()
-                })
-                .unwrap();
-            // With the render pass done, blit to the final framebuffer
-            fb_holder
-                .blit_supersampling(&mut command_buf_builder)
-                .unwrap();
-            self.ctx
-                .start_post_blit_render_pass(
+                .start_non_depth_render_pass(
                     &mut command_buf_builder,
                     fb_holder.post_blit_framebuffer.clone(),
+                    SubpassContents::SecondaryCommandBuffers,
                 )
                 .unwrap();
 

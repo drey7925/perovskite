@@ -357,7 +357,8 @@ impl RaytracedPipelineProvider {
                 }),
 
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.ssaa_render_pass.clone(), 1).context("Missing subpass")?,
+                    Subpass::from(ctx.rt_primary_render_pass.clone(), 0)
+                        .context("Missing subpass")?,
                 )),
                 ..GraphicsPipelineCreateInfo::layout(layout)
             })

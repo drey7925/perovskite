@@ -268,7 +268,7 @@ impl EntityPipelineProvider {
         self.build_pipeline(
             &wnd.vk_ctx,
             wnd.viewport.clone(),
-            wnd.ssaa_render_pass.clone(),
+            wnd.raster_render_pass.clone(),
             config,
             global_config.supersampling,
         )

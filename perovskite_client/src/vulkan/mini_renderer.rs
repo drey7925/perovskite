@@ -1,6 +1,6 @@
 use super::{
     block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
-    make_depth_buffer_and_attachments, make_ssaa_render_pass,
+    make_depth_buffer_and_attachments, make_raster_render_pass,
     shaders::cube_geometry::{
         BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
     },
@@ -60,7 +60,7 @@ impl MiniBlockRenderer {
         atlas_texture: &Texture2DHolder,
     ) -> Result<Self> {
         // All compliant GPUs should be able to render to R8G8B8A8_SRGB
-        let render_pass = make_ssaa_render_pass(
+        let render_pass = make_raster_render_pass(
             ctx.vk_device.clone(),
             Format::R8G8B8A8_SRGB,
             ctx.depth_stencil_format,
@@ -89,7 +89,7 @@ impl MiniBlockRenderer {
         };
         let target_image = ImageView::new(target_image, create_info)?;
 
-        let (depth_stencil_attachment, depth_only_attachment) = make_depth_buffer_and_attachments(
+        let (depth_stencil_attachment, _depth_only_attachment) = make_depth_buffer_and_attachments(
             ctx.memory_allocator.clone(),
             ctx.depth_stencil_format,
             Supersampling::None,
@@ -97,11 +97,7 @@ impl MiniBlockRenderer {
         )?;
 
         let framebuffer_create_info = FramebufferCreateInfo {
-            attachments: vec![
-                target_image.clone(),
-                depth_stencil_attachment,
-                depth_only_attachment,
-            ],
+            attachments: vec![target_image.clone(), depth_stencil_attachment],
             ..Default::default()
         };
         let framebuffer = Framebuffer::new(render_pass.clone(), framebuffer_create_info)?;

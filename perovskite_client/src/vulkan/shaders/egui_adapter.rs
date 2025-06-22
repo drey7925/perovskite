@@ -61,7 +61,7 @@ impl EguiAdapter {
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.graphics_queue.clone(),
-            Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+            Subpass::from(ctx.non_depth_render_pass.clone(), 0)
                 .context("Could not find subpass 0")?,
             ctx.swapchain.image_format(),
             config,
@@ -82,7 +82,7 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: atlas.as_ref(),
-                subpass: Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                subpass: Subpass::from(ctx.non_depth_render_pass.clone(), 0)
                     .context("Post-blit subpass 0 missing")?,
                 enable_depth_stencil: false,
                 enable_supersampling: false,
@@ -140,7 +140,7 @@ impl EguiAdapter {
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
                     render_pass: Some(
-                        Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                        Subpass::from(ctx.non_depth_render_pass.clone(), 0)
                             .with_context(|| "Render subpass 0 not found")?
                             .into(),
                     ),
@@ -162,7 +162,7 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: self.atlas.as_ref(),
-                subpass: Subpass::from(ctx.post_blit_render_pass.clone(), 0)
+                subpass: Subpass::from(ctx.non_depth_render_pass.clone(), 0)
                     .context("Post-blit subpass 0 missing")?,
                 enable_depth_stencil: false,
                 enable_supersampling: false,
