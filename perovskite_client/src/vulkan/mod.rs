@@ -49,7 +49,7 @@ use vulkano::format::NumericFormat;
 use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
 use vulkano::image::view::ImageViewCreateInfo;
 use vulkano::image::{
-    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers,
+    AllocateImageError, Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers,
     ImageSubresourceRange, ImageType,
 };
 use vulkano::memory::allocator::{
@@ -88,6 +88,7 @@ pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 use self::util::select_physical_device;
 use crate::client_state::settings::{GameSettings, Supersampling};
 use crate::vulkan::shaders::raytracer::TexRef;
+use crate::vulkan::shaders::LiveRenderConfig;
 
 pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
 
@@ -101,7 +102,7 @@ pub(crate) struct VulkanContext {
     /// The format of the image buffer used for rendering to *screen*. Render-to-texture always uses R8G8B8A8_SRGB
     color_format: Format,
     /// The format of the depth buffer used for rendering to *screen*. Probed at startup, and used for both render-to-screen and render-to-texture
-    depth_format: Format,
+    depth_stencil_format: Format,
 
     swapchain_len: usize,
     /// For settings, all GPUs detected on this machine
@@ -147,7 +148,11 @@ impl VulkanContext {
     }
 
     pub(crate) fn depth_clear_value(&self) -> ClearValue {
-        if self.depth_format.aspects().contains(ImageAspects::STENCIL) {
+        if self
+            .depth_stencil_format
+            .aspects()
+            .contains(ImageAspects::STENCIL)
+        {
             ClearValue::DepthStencil((1.0, 0))
         } else {
             ClearValue::Depth(1.0)
@@ -424,7 +429,7 @@ impl VulkanWindow {
                 &settings.load().render.preferred_gpu,
             )?;
 
-        let supersampling = settings.load().render.supersampling;
+        let render_config = settings.load().render.build_global_config();
 
         let queue_create_infos = if graphics_family_index == transfer_family_index {
             vec![QueueCreateInfo {
@@ -502,10 +507,10 @@ impl VulkanWindow {
         };
         let swapchain_len = swapchain_images.len();
 
-        let depth_format = find_best_depth_format(&physical_device)?;
+        let depth_stencil_format = find_best_depth_format(&physical_device)?;
 
         let ssaa_render_pass =
-            make_ssaa_render_pass(vk_device.clone(), color_format, depth_format)?;
+            make_ssaa_render_pass(vk_device.clone(), color_format, depth_stencil_format)?;
         let post_blit_render_pass = make_post_blit_render_pass(vk_device.clone(), color_format)?;
 
         // Copied from vulkano source - they implement it only for the freelist allocator, but we
@@ -570,8 +575,8 @@ impl VulkanWindow {
             memory_allocator.clone(),
             ssaa_render_pass.clone(),
             post_blit_render_pass.clone(),
-            depth_format,
-            supersampling,
+            depth_stencil_format,
+            render_config,
         )?;
         let all_gpus = instance
             .enumerate_physical_devices()
@@ -588,7 +593,7 @@ impl VulkanWindow {
                 command_buffer_allocator,
                 descriptor_set_allocator,
                 color_format,
-                depth_format,
+                depth_stencil_format,
                 all_gpus,
                 swapchain_len,
                 max_draw_indexed_index_value: physical_device
@@ -610,7 +615,7 @@ impl VulkanWindow {
     fn recreate_swapchain(
         &mut self,
         size: PhysicalSize<u32>,
-        supersampling: Supersampling,
+        config: LiveRenderConfig,
     ) -> Result<()> {
         let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
@@ -631,8 +636,8 @@ impl VulkanWindow {
             self.memory_allocator.clone(),
             self.ssaa_render_pass.clone(),
             self.post_blit_render_pass.clone(),
-            self.depth_format,
-            supersampling,
+            self.depth_stencil_format,
+            config,
         )?;
         Ok(())
     }
@@ -701,13 +706,7 @@ impl VulkanWindow {
 }
 
 fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
-    const FORMATS_TO_TRY: [Format; 5] = [
-        Format::X8_D24_UNORM_PACK32,
-        Format::D32_SFLOAT,
-        Format::D24_UNORM_S8_UINT,
-        Format::D32_SFLOAT_S8_UINT,
-        Format::D16_UNORM,
-    ];
+    const FORMATS_TO_TRY: [Format; 2] = [Format::D24_UNORM_S8_UINT, Format::D32_SFLOAT_S8_UINT];
     for format in FORMATS_TO_TRY {
         if physical_device
             .format_properties(format)?
@@ -715,11 +714,6 @@ fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
             .contains(FormatFeatures::DEPTH_STENCIL_ATTACHMENT)
         {
             log::info!("Depth format found: {format:?}");
-            if format == Format::D16_UNORM {
-                warn!("Depth format D16_UNORM may have low precision and cause visual glitches");
-                warn!("According to the vulkan spec, at least one of the other formats should be supported by any compliant GPU.");
-                warn!("Please reach out to the devs with details about your GPU.");
-            }
             return Ok(format);
         }
     }
@@ -813,10 +807,23 @@ fn find_best_format(
 }
 
 #[derive(Clone)]
+pub(crate) struct DeferredSpecularBuffers {
+    // R8G8B8A8_UNORM. We have three components, RGB isn't a supported type, so we use RGBA.
+    // Not clear what alpha can be used for in general; for now alpha = 0.0 will prevent any
+    // specular raytracing from occurring (i.e. it's a validity bit)
+    specular_strength: Arc<ImageView>,
+    // The direction of the ray, corresponding to spec_ray_dir
+    // R32G32B32A32_SFLOAT - this would naturally be R32G32B32, but that's not well-supported.
+    // Note that the ray origin is derived based on the depth buffer.
+    specular_ray_dir: Arc<ImageView>,
+}
+
+#[derive(Clone)]
 pub(crate) struct FramebufferHolder {
     image_i: usize,
     supersampling: Supersampling,
-    ssaa_framebuffer: Arc<Framebuffer>,
+    ssaa_attachments: Arc<Framebuffer>,
+    deferred_specular_buffers: Option<DeferredSpecularBuffers>,
     // Vector starting with the source and ending with the target. It may be a singleton, but must
     // not be empty.
     blit_path: Vec<Arc<Image>>,
@@ -839,25 +846,13 @@ impl FramebufferHolder {
     }
 }
 
-// Helper to get framebuffers for swapchain images
-// Modified from a sample function from the vulkano examples.
-//
-// Vulkano examples are under copyright:
-// Copyright (c) 2017 The vulkano developers
-// Licensed under the Apache License, Version 2.0
-// <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT
-// license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
-// at your option. All files in the project carrying such
-// notice may not be copied, modified, or distributed except
-// according to those terms.
 pub(crate) fn get_framebuffers_with_depth(
     images: &[Arc<Image>],
     allocator: Arc<VkAllocator>,
     ssaa_renderpass: Arc<RenderPass>,
     post_blit_renderpass: Arc<RenderPass>,
     depth_format: Format,
-    supersampling: Supersampling,
+    config: LiveRenderConfig,
 ) -> Result<Vec<FramebufferHolder>> {
     images
         .iter()
@@ -869,19 +864,19 @@ pub(crate) fn get_framebuffers_with_depth(
                 make_depth_buffer_and_attachments(
                     allocator.clone(),
                     depth_format,
-                    supersampling,
+                    config.supersampling,
                     image_extent,
                 )?;
             // Now build the blit path
-            let blit_path = if supersampling == Supersampling::None {
+            let blit_path = if config.supersampling == Supersampling::None {
                 // The blit path is trivial - just the original image
                 // In fact, we do no blitting here - see the implementation of FramebufferHolder
                 vec![image.clone()]
             } else {
                 let mut blit_path = vec![];
-                let mut multiplier = supersampling.to_int();
+                let mut multiplier = config.supersampling.to_int();
 
-                for i in 0..supersampling.blit_steps() {
+                for i in 0..config.supersampling.blit_steps() {
                     let usage = if i == 0 {
                         // First image: We render to it, and we blit from it
                         ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
@@ -942,10 +937,33 @@ pub(crate) fn get_framebuffers_with_depth(
                 },
             )?;
 
+            let deferred_specular_buffers = if config.raytracing {
+                let extent = [
+                    image_extent[0] * config.supersampling.to_int(),
+                    image_extent[1] * config.supersampling.to_int(),
+                    1,
+                ];
+                Some(DeferredSpecularBuffers {
+                    specular_strength: make_storage_image_view(
+                        allocator.clone(),
+                        extent,
+                        Format::R8G8B8A8_UNORM,
+                    )?,
+                    specular_ray_dir: make_storage_image_view(
+                        allocator.clone(),
+                        extent,
+                        Format::R32G32B32A32_SFLOAT,
+                    )?,
+                })
+            } else {
+                None
+            };
+
             Ok(FramebufferHolder {
                 image_i,
-                supersampling,
-                ssaa_framebuffer,
+                supersampling: config.supersampling,
+                ssaa_attachments: ssaa_framebuffer,
+                deferred_specular_buffers,
                 blit_path,
                 post_blit_framebuffer,
             })
@@ -953,9 +971,33 @@ pub(crate) fn get_framebuffers_with_depth(
         .collect::<Result<Vec<_>>>()
 }
 
+fn make_storage_image_view(
+    allocator: Arc<VkAllocator>,
+    extent: [u32; 3],
+    format: Format,
+) -> Result<Arc<ImageView>> {
+    let image = Image::new(
+        allocator.clone(),
+        ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format,
+            view_formats: vec![format],
+            extent,
+            usage: ImageUsage::STORAGE,
+            initial_layout: ImageLayout::Undefined,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+    )?;
+    Ok(ImageView::new_default(image)?)
+}
+
 pub(crate) fn make_depth_buffer_and_attachments(
     allocator: Arc<VkAllocator>,
-    depth_format: Format,
+    depth_stencil_format: Format,
     supersampling: Supersampling,
     image_extent: [u32; 3],
 ) -> Result<(Arc<ImageView>, Arc<ImageView>)> {
@@ -963,8 +1005,8 @@ pub(crate) fn make_depth_buffer_and_attachments(
         allocator,
         ImageCreateInfo {
             image_type: ImageType::Dim2d,
-            format: depth_format,
-            view_formats: vec![depth_format],
+            format: depth_stencil_format,
+            view_formats: vec![depth_stencil_format],
             extent: [
                 image_extent[0] * supersampling.to_int(),
                 image_extent[1] * supersampling.to_int(),

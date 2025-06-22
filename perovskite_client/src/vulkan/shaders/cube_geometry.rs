@@ -17,7 +17,7 @@
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
-    LiveRenderConfig, PipelineProvider, PipelineWrapper,
+    LiveRenderConfig,
 };
 use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
@@ -131,11 +131,16 @@ pub(crate) enum BlockRenderPass {
     RaytraceFallback,
 }
 
-impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWrapper {
-    type PassIdentifier = BlockRenderPass;
-    fn draw<L>(
+impl CubePipelineWrapper {
+    /// Binds and draws the specified cube drawing pass. Drawing commands are *consumed* from the
+    /// provided CubeGeometryDrawCalls (i.e., after calling this with BlockRenderPass::Opaque, all
+    /// the elements in CubeGeometryDrawCall will have their opaque draw calls taken away (if
+    /// they were present to begin with)
+    pub(crate) fn draw<L>(
         &mut self,
+        ctx: &VulkanContext,
         builder: &mut CommandBufferBuilder<L>,
+        per_frame_config: SceneState,
         draw_calls: &mut [CubeGeometryDrawCall],
         pass: BlockRenderPass,
     ) -> Result<()> {
@@ -151,8 +156,52 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
             BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
             BlockRenderPass::RaytraceFallback => self.raytrace_fallback_pipeline.clone(),
         };
-        // TODO: why are we binding the pipeline in here?
         let layout = pipeline.layout().clone();
+        builder.bind_pipeline_graphics(pipeline)?;
+        let per_frame_set_layout = layout
+            .set_layouts()
+            .get(1)
+            .with_context(|| "Sky layout missing set 1")?;
+
+        let uniform_buffer = Buffer::from_data(
+            ctx.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                    | MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            UniformData {
+                vp_matrix: per_frame_config.vp_matrix.into(),
+                plant_wave_vector: self.get_plant_wave_vector().into(),
+                global_brightness_color: per_frame_config.global_light_color.into(),
+                global_light_direction: per_frame_config.sun_direction.into(),
+            },
+        )?;
+
+        let per_frame_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            per_frame_set_layout.clone(),
+            [WriteDescriptorSet::buffer(0, uniform_buffer)],
+            [],
+        )?;
+
+        let descriptor = match pass {
+            BlockRenderPass::Opaque => self.solid_descriptor.clone(),
+            BlockRenderPass::Transparent => self.sparse_descriptor.clone(),
+            BlockRenderPass::Translucent => self.translucent_descriptor.clone(),
+            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_descriptor.clone(),
+        };
+        builder.bind_descriptor_sets(
+            vulkano::pipeline::PipelineBindPoint::Graphics,
+            layout.clone(),
+            0,
+            vec![descriptor, per_frame_set],
+        )?;
+
         let mut effective_calls = 0;
         for call in draw_calls.iter_mut() {
             let pass_data = match pass {
@@ -200,74 +249,6 @@ impl PipelineWrapper<&mut [CubeGeometryDrawCall], SceneState> for CubePipelineWr
                 plot!("raytrace_fallback_rate", draw_rate);
             }
         };
-        Ok(())
-    }
-
-    fn bind<L>(
-        &mut self,
-        ctx: &VulkanContext,
-        per_frame_config: SceneState,
-        command_buf_builder: &mut CommandBufferBuilder<L>,
-        pass: BlockRenderPass,
-    ) -> Result<()> {
-        let _span = match pass {
-            BlockRenderPass::Opaque => span!("bind opaque"),
-            BlockRenderPass::Transparent => span!("bind transparent"),
-            BlockRenderPass::Translucent => span!("bind translucent"),
-            BlockRenderPass::RaytraceFallback => span!("bind raytrace_fallback"),
-        };
-        let pipeline = match pass {
-            BlockRenderPass::Opaque => self.solid_pipeline.clone(),
-            BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
-            BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
-            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_pipeline.clone(),
-        };
-        let layout = pipeline.layout().clone();
-        command_buf_builder.bind_pipeline_graphics(pipeline)?;
-        let per_frame_set_layout = layout
-            .set_layouts()
-            .get(1)
-            .with_context(|| "Sky layout missing set 1")?;
-
-        let uniform_buffer = Buffer::from_data(
-            ctx.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
-                    | MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-            UniformData {
-                vp_matrix: per_frame_config.vp_matrix.into(),
-                plant_wave_vector: self.get_plant_wave_vector().into(),
-                global_brightness_color: per_frame_config.global_light_color.into(),
-                global_light_direction: per_frame_config.sun_direction.into(),
-            },
-        )?;
-
-        let per_frame_set = DescriptorSet::new(
-            ctx.descriptor_set_allocator.clone(),
-            per_frame_set_layout.clone(),
-            [WriteDescriptorSet::buffer(0, uniform_buffer)],
-            [],
-        )?;
-
-        let descriptor = match pass {
-            BlockRenderPass::Opaque => self.solid_descriptor.clone(),
-            BlockRenderPass::Transparent => self.sparse_descriptor.clone(),
-            BlockRenderPass::Translucent => self.translucent_descriptor.clone(),
-            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_descriptor.clone(),
-        };
-        command_buf_builder.bind_descriptor_sets(
-            vulkano::pipeline::PipelineBindPoint::Graphics,
-            layout,
-            0,
-            vec![descriptor, per_frame_set],
-        )?;
-
         Ok(())
     }
 }
@@ -435,13 +416,8 @@ impl CubePipelineProvider {
         })
     }
 }
-impl PipelineProvider for CubePipelineProvider {
-    type DrawCall<'a> = &'a mut [CubeGeometryDrawCall];
-
-    type PerPipelineConfig<'a> = &'a Texture2DHolder;
-    type PerFrameConfig = SceneState;
-    type PipelineWrapperImpl = CubePipelineWrapper;
-    fn make_pipeline(
+impl CubePipelineProvider {
+    pub(crate) fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
         config: &Texture2DHolder,

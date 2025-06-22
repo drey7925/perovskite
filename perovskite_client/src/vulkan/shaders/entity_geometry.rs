@@ -59,7 +59,7 @@ use vulkano::{
 
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
-    LiveRenderConfig, PipelineProvider, PipelineWrapper, VkBufferGpu,
+    LiveRenderConfig, VkBufferGpu,
 };
 
 use super::{frag_lighting_sparse, SceneState};
@@ -91,42 +91,18 @@ pub(crate) struct EntityPipelineWrapper {
     descriptor: Arc<DescriptorSet>,
 }
 
-impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipelineWrapper {
-    type PassIdentifier = ();
-    fn draw<L>(
-        &mut self,
-        builder: &mut CommandBufferBuilder<L>,
-        draw_calls: Vec<EntityGeometryDrawCall>,
-        _pass: (),
-    ) -> Result<()> {
-        let _span = span!("draw entities");
-        let pipeline = self.pipeline.clone();
-        let layout = pipeline.layout().clone();
-        builder.bind_pipeline_graphics(pipeline)?;
-        for call in draw_calls.into_iter() {
-            let push_data: ModelMatrix = call.model_matrix.into();
-            builder
-                .push_constants(layout.clone(), 0, push_data)?
-                .bind_vertex_buffers(0, call.model.vtx.clone())?
-                .bind_index_buffer(call.model.idx.clone())?;
-            unsafe {
-                // TODO this needs validation
-                builder.draw_indexed(call.model.idx.len().try_into()?, 1, 0, 0, 0)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn bind<L>(
+impl EntityPipelineWrapper {
+    pub(crate) fn draw<L>(
         &mut self,
         ctx: &VulkanContext,
+        builder: &mut CommandBufferBuilder<L>,
         per_frame_config: SceneState,
-        command_buf_builder: &mut CommandBufferBuilder<L>,
-        _pass: (),
+        draw_calls: Vec<EntityGeometryDrawCall>,
     ) -> Result<()> {
-        let _span = span!("bind entities");
-        let layout = self.pipeline.layout().clone();
+        let _span = span!("draw entities");
+
+        let pipeline = self.pipeline.clone();
+        let layout = pipeline.layout().clone();
 
         let per_frame_set_layout = layout
             .set_layouts()
@@ -160,12 +136,25 @@ impl PipelineWrapper<Vec<EntityGeometryDrawCall>, SceneState> for EntityPipeline
         )?;
 
         let descriptor = self.descriptor.clone();
-        command_buf_builder.bind_descriptor_sets(
+        builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
-            layout,
+            layout.clone(),
             0,
             vec![descriptor, per_frame_set],
         )?;
+
+        builder.bind_pipeline_graphics(pipeline)?;
+        for call in draw_calls.into_iter() {
+            let push_data: ModelMatrix = call.model_matrix.into();
+            builder
+                .push_constants(layout.clone(), 0, push_data)?
+                .bind_vertex_buffers(0, call.model.vtx.clone())?
+                .bind_index_buffer(call.model.idx.clone())?;
+            unsafe {
+                // TODO this needs validation
+                builder.draw_indexed(call.model.idx.len().try_into()?, 1, 0, 0, 0)?;
+            }
+        }
 
         Ok(())
     }
@@ -269,8 +258,8 @@ impl EntityPipelineProvider {
         })
     }
 }
-impl PipelineProvider for EntityPipelineProvider {
-    fn make_pipeline(
+impl EntityPipelineProvider {
+    pub(crate) fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
         config: &Texture2DHolder,
@@ -284,9 +273,4 @@ impl PipelineProvider for EntityPipelineProvider {
             global_config.supersampling,
         )
     }
-
-    type DrawCall<'a> = Vec<EntityGeometryDrawCall>;
-    type PerFrameConfig = SceneState;
-    type PipelineWrapperImpl = EntityPipelineWrapper;
-    type PerPipelineConfig<'a> = &'a Texture2DHolder;
 }

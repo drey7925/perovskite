@@ -28,7 +28,7 @@ use super::{
     shaders::{
         cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
         egui_adapter::EguiAdapter,
-        entity_geometry, flat_texture, PipelineProvider, PipelineWrapper,
+        entity_geometry, flat_texture,
     },
     FramebufferHolder, VulkanContext, VulkanWindow,
 };
@@ -36,7 +36,9 @@ use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
-use crate::vulkan::shaders::raytracer::{ChunkMapHeader, RaytracingPerFrameConfig};
+use crate::vulkan::shaders::raytracer::{
+    ChunkMapHeader, RaytracingBindings, RaytracingPerFrameData,
+};
 use crate::vulkan::shaders::{raytracer, sky, LiveRenderConfig};
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
@@ -198,13 +200,12 @@ impl ActiveGame {
 
         ctx.start_ssaa_render_pass(
             &mut command_buf_builder,
-            framebuffer.ssaa_framebuffer.clone(),
+            framebuffer.ssaa_attachments.clone(),
             scene_state.clear_color,
         )?;
 
         self.sky_pipeline
-            .bind(ctx, scene_state, &mut command_buf_builder, ())?;
-        self.sky_pipeline.draw(&mut command_buf_builder, (), ())?;
+            .bind_and_draw(ctx, scene_state, &mut command_buf_builder)?;
 
         self.cube_draw_calls.clear();
 
@@ -294,62 +295,38 @@ impl ActiveGame {
         if !self.cube_draw_calls.is_empty() {
             if self.raytrace_data.is_none() {
                 self.cube_pipeline
-                    .bind(
-                        ctx,
-                        scene_state,
-                        &mut command_buf_builder,
-                        BlockRenderPass::Opaque,
-                    )
-                    .context("Opaque pipeline bind failed")?;
-                self.cube_pipeline
                     .draw(
+                        ctx,
                         &mut command_buf_builder,
+                        scene_state,
                         &mut self.cube_draw_calls,
                         BlockRenderPass::Opaque,
                     )
                     .context("Opaque pipeline draw failed")?;
                 self.cube_pipeline
-                    .bind(
-                        ctx,
-                        scene_state,
-                        &mut command_buf_builder,
-                        BlockRenderPass::Transparent,
-                    )
-                    .context("Transparent pipeline bind failed")?;
-                self.cube_pipeline
                     .draw(
+                        ctx,
                         &mut command_buf_builder,
+                        scene_state,
                         &mut self.cube_draw_calls,
                         BlockRenderPass::Transparent,
                     )
                     .context("Transparent pipeline draw failed")?;
                 self.cube_pipeline
-                    .bind(
-                        ctx,
-                        scene_state,
-                        &mut command_buf_builder,
-                        BlockRenderPass::Translucent,
-                    )
-                    .context("Translucent bind failed")?;
-                self.cube_pipeline
                     .draw(
+                        ctx,
                         &mut command_buf_builder,
+                        scene_state,
                         &mut self.cube_draw_calls,
                         BlockRenderPass::Translucent,
                     )
                     .context("Translucent pipeline draw failed")?;
             } else {
                 self.cube_pipeline
-                    .bind(
-                        ctx,
-                        scene_state,
-                        &mut command_buf_builder,
-                        BlockRenderPass::RaytraceFallback,
-                    )
-                    .context("RaytraceFallback bind failed")?;
-                self.cube_pipeline
                     .draw(
+                        ctx,
                         &mut command_buf_builder,
+                        scene_state,
                         &mut self.cube_draw_calls,
                         BlockRenderPass::RaytraceFallback,
                     )
@@ -365,10 +342,12 @@ impl ActiveGame {
             )
         };
         self.entities_pipeline
-            .bind(ctx, scene_state, &mut command_buf_builder, ())
-            .context("Entities pipeline bind failed")?;
-        self.entities_pipeline
-            .draw(&mut command_buf_builder, entity_draw_calls, ())
+            .draw(
+                ctx,
+                &mut command_buf_builder,
+                scene_state,
+                entity_draw_calls,
+            )
             .context("Entities pipeline draw failed")?;
 
         command_buf_builder.next_subpass(
@@ -382,25 +361,26 @@ impl ActiveGame {
         )?;
         {
             if let Some(buf) = self.raytrace_data.as_ref() {
-                self.raytraced_pipeline.bind(
+                self.raytraced_pipeline.draw_rt_primary(
                     ctx,
-                    RaytracingPerFrameConfig {
+                    RaytracingBindings {
                         scene_state,
                         data: buf.data.clone(),
                         header: buf.header.clone(),
-                        depth_view: framebuffer.ssaa_framebuffer.attachments()[2].clone(),
+                        depth_view: framebuffer.ssaa_attachments.attachments()[2].clone(),
+                        deferred_buffers: framebuffer
+                            .deferred_specular_buffers
+                            .clone()
+                            .context("Missing deferred buffers but trying to raytrace")?,
                         player_pos: player_position,
                         render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
                     },
                     &mut command_buf_builder,
-                    (),
                 )?;
-                self.raytraced_pipeline
-                    .draw(&mut command_buf_builder, (), ())?;
             }
         }
         self.flat_pipeline
-            .bind(ctx, (), &mut command_buf_builder, ())
+            .bind(ctx, &mut command_buf_builder)
             .context("Flat pipeline bind failed")?;
         // HUD update-and-render must happen after the frame state is completed, since other layers
         // (especially tool controller) may want to consume input at higher priority than HUD
@@ -413,7 +393,6 @@ impl ActiveGame {
                     .lock()
                     .update_and_render(ctx, &self.client_state)
                     .context("HUD update-and-render failed")?,
-                (),
             )
             .context("Flat pipeline draw failed")?;
 
@@ -491,7 +470,7 @@ impl ActiveGame {
                 &global_config,
             )?
         };
-        self.sky_pipeline = self.sky_provider.make_pipeline(ctx, (), &global_config)?;
+        self.sky_pipeline = self.sky_provider.make_pipeline(ctx, &global_config)?;
         self.raytraced_pipeline = self.raytraced_provider.make_pipeline(
             ctx,
             &self.client_state.block_renderer,
@@ -606,7 +585,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
     };
 
     let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;
-    let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, (), &global_render_config)?;
+    let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, &global_render_config)?;
     let raytraced_provider = raytracer::RaytracedPipelineProvider::new(vk_wnd.vk_device.clone())?;
     let raytraced_pipeline = raytraced_provider.make_pipeline(
         &vk_wnd,
@@ -893,7 +872,7 @@ impl GameRenderer {
 
             self.need_swapchain_recreate = false;
             self.ctx
-                .recreate_swapchain(size, self.settings.load().render.supersampling)
+                .recreate_swapchain(size, self.settings.load().render.build_global_config())
                 .unwrap();
             self.ctx.viewport.extent = size.into();
             if let GameStateMutRef::Active(game) = game_lock.as_mut() {
@@ -969,7 +948,7 @@ impl GameRenderer {
             self.ctx
                 .start_ssaa_render_pass(
                     &mut command_buf_builder,
-                    fb_holder.ssaa_framebuffer.clone(),
+                    fb_holder.ssaa_attachments.clone(),
                     [0.0, 0.0, 0.0, 0.0],
                 )
                 .unwrap();

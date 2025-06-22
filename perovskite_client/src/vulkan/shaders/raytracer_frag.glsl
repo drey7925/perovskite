@@ -1,12 +1,47 @@
 #version 460
 // #extension GL_KHR_shader_subgroup_vote: enable
 
-layout(location = 0) in vec4 global_coord_facedir;
+layout(location = 0) in vec3 facedir_world_in;
 layout(location = 0) out vec4 f_color;
-layout(input_attachment_index = 0, set = 1, binding = 3) uniform subpassInput f_depth_in;
+
 layout (constant_id = 0) const bool SPECULAR = true;
 layout (constant_id = 1) const bool FUZZY_SHADOWS = true;
 layout (constant_id = 2) const bool RAYTRACE_DEBUG = false;
+
+struct TexRef {
+    vec2 top_left;
+    vec2 width_height;
+};
+
+struct FaceTex {
+    TexRef diffuse;
+    TexRef specular;
+};
+
+struct SimpleCubeInfo {
+    uint flags;
+    FaceTex tex[6];
+};
+
+layout(set = 0, binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 1) readonly buffer RaytraceControl {
+    SimpleCubeInfo cube_info[];
+};
+
+
+layout(set = 1, binding = 1) uniform ChunkMapHeader {
+    uint n_minus_one;
+    uint mxc;
+    uvec3 k;
+    ivec3 min_chunk;
+    ivec3 max_chunk;
+};
+layout(set = 1, binding = 2) readonly buffer chunk_map {
+    uint chunks[];
+};
+layout(input_attachment_index = 0, set = 1, binding = 3) uniform subpassInput f_depth_in;
+layout (set = 1, binding = 4, rgba8) uniform restrict image2D deferred_specular_color;
+layout (set = 1, binding = 5, rgba32f) uniform restrict image2D deferred_specular_ray_dir;
 
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"
@@ -98,8 +133,7 @@ struct HitInfo {
     vec3 start_cc;
     vec3 end_cc;
     uint block_id;
-    uint face;
-    uint light_data;
+    uint face_light;
 };
 
 // Raytraces through a single chunk, returns true if hit, false if no hit.
@@ -193,19 +227,19 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
         }
 
         if ((block_id != 0)
-                && ((block_id & 0xfffff000u) != (info.block_id & 0xfffff000u))
-                && (block_id != 0xffffffff)
-                && ((cube_info[block_id >> 12].flags & 4u) == 0)) {
+        && ((block_id & 0xfffff000u) != (info.block_id & 0xfffff000u))
+        && (block_id != 0xffffffff)
+        && ((cube_info[block_id >> 12].flags & 4u) == 0)) {
             info.block_id = block_id;
-            uint l_offset = 343+(offset) + face_backoffs_offset[info.face];
-            uint raw_light = chunks[light_base + (l_offset / 4)];
-            info.light_data = (raw_light >> (8 * (l_offset & 3u)));
+            uint l_offset = 343+(offset) + face_backoffs_offset[info.face_light & 7u];
+            uint raw_light = chunks[light_base + (l_offset / 4)] >> (8 * (l_offset & 3u));
+            info.face_light |= (raw_light << 8);
             return true;
         }
         if (block_id != 0xffffffff) {
             info.block_id = block_id;
         }
-        info.face = n_face;
+        info.face_light = n_face;
         if (should_break) {
             return false;
         }
@@ -327,7 +361,7 @@ bool traverse_space(vec3 g0, vec3 g1, inout HitInfo info) {
             info.hit_block += 16 * (ivec3(chk) - coarse_pos);
             return true;
         }
-        info.face = n_face;
+        info.face_light = n_face;
 
         if (should_break) {
             return false;
@@ -358,19 +392,21 @@ struct SampleResult {
 };
 
 SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
+    uint face = info.face_light & 7u;
+
     // TODO: variant-based rotation
-    vec2 tl = cube_info[idx].tex[info.face].diffuse.top_left;
-    vec2 wh = cube_info[idx].tex[info.face].diffuse.width_height;
-    vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
+    vec2 tl = cube_info[idx].tex[face].diffuse.top_left;
+    vec2 wh = cube_info[idx].tex[face].diffuse.width_height;
+    vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[face];
 
     vec4 diffuse = texture(tex, tl + (uv * wh));
     vec4 specular = vec4(0);
 
     if (SPECULAR) {
         if (want_spec && ((cube_info[idx].flags & 8) != 0)) {
-            tl = cube_info[idx].tex[info.face].specular.top_left;
-            wh = cube_info[idx].tex[info.face].specular.width_height;
-            uv = vec4(info.start_cc, 1) * face_swizzlers[info.face];
+            tl = cube_info[idx].tex[face].specular.top_left;
+            wh = cube_info[idx].tex[face].specular.width_height;
+            uv = vec4(info.start_cc, 1) * face_swizzlers[face];
 
             specular = texture(tex, tl + (uv * wh));
         }
@@ -380,11 +416,11 @@ SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     // allow seeing some of the texture, plus avoid the sampler disappearing from the final shader program
     //vec4 tex_color = vec4(debug_face_colors[info.face], 1.0) + 0.05 * texture(tex, tl + (uv * wh));
 
-    float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.light_data, 4, 4)];
-    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(info.face)));
+    float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.face_light, 12, 4)];
+    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(face)));
     // TODO: Do a ray query to the sun instead
     vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
-    vec4 final_diffuse = vec4((brightness_table[bitfieldExtract(info.light_data, 0, 4)] + global_light) * diffuse.rgb, diffuse.a);
+    vec4 final_diffuse = vec4((brightness_table[bitfieldExtract(info.face_light, 8, 4)] + global_light) * diffuse.rgb, diffuse.a);
 
     return SampleResult(
     final_diffuse,
@@ -398,6 +434,7 @@ float random (vec2 st, float f) {
 
 
 void main() {
+    imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(0));
     if (RAYTRACE_DEBUG) {
         vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
         int ix3 = int(pix3.x);
@@ -496,11 +533,8 @@ void main() {
                 }
             }
         }
-    } // if (RAYTRACE_DEBUG)
-
-    vec3 facedir = normalize(global_coord_facedir.xyz);
-
-    vec3 facedir_world = vec3(facedir.x, -facedir.y, facedir.z);
+    }// if (RAYTRACE_DEBUG)
+    vec3 facedir_world = normalize(facedir_world_in);
     float prev_depth = subpassLoad(f_depth_in).r;
 
     // All raster geometry, as well as non-rendering calcs, assume that blocks have
@@ -518,30 +552,24 @@ void main() {
     vec3 g0 = fine_pos + (t_min_max.x * facedir_world);
     vec3 g1 = fine_pos + (t_min_max.y * facedir_world);
 
-    uint hops_remaining = 5;
     f_color = vec4(0);
+    float strongest_specular = 0;
+    uint prev_block = initial_block_id;
+    for (int i = 0; i < 5; i++) {
+        HitInfo info = {
+        ivec3(0),
+        vec3(0),
+        vec3(0),
+        prev_block,
+        0,
+        };
 
-    HitInfo info = {
-    ivec3(0),
-    vec3(0),
-    vec3(0),
-    initial_block_id,
-    0,
-    0,
-    };
-
-    uint spec_block = 0;
-    vec3 spec_start;
-    vec3 spec_color = vec3(0);
-    vec3 spec_dir = vec3(0);
-
-    for (;;) {
         if (!traverse_space(g0, g1, info)) {
-            break;
+            return;
         }
         // traverse_space will put valid data into info iff it returns true
-        uint idx = info.block_id >> 12;
-        uint info_flags = cube_info[idx].flags;
+        prev_block = info.block_id;
+        uint info_flags = cube_info[prev_block >> 12].flags;
         vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
         vec4 rpos = vec4((hit_pos - fine_pos) * 16.0, 1.0) * vec4(1, -1, 1, 1);
         vec4 transformed = forward_vp_matrix * rpos;
@@ -552,7 +580,7 @@ void main() {
         // skip fallback blocks
         if (info_flags != 0) {
             if ((info_flags & 4u) != 4) {
-                SampleResult result = sample_simple(info, idx, SPECULAR);
+                SampleResult result = sample_simple(info, prev_block >> 12, SPECULAR);
                 float alpha_contrib = (1 - f_color.a) * result.diffuse.a;
                 f_color.rgb += alpha_contrib * result.diffuse.rgb;
                 f_color.a += alpha_contrib;
@@ -560,10 +588,10 @@ void main() {
 
                 // TODO proper specular from the block, for now hardcode glass/water
                 if (SPECULAR) {
-                    if (length(result.specular.rgb) > 0.1) {
+                    if (length(result.specular.rgb) > 0.01) {
                         vec3 new_dir;
-                        vec3 normal = decode_normal(info.face);
-                        if (FUZZY_SHADOWS && info.block_id != 0x7000) {
+                        vec3 normal = decode_normal(info.face_light & 7u);
+                        if (FUZZY_SHADOWS) {
                             vec3 tangent = normalize(cross(facedir_world, normal));
                             vec3 bitangent = cross(normal, tangent);
                             mat3 ntb = mat3(normal, tangent, bitangent);
@@ -571,19 +599,18 @@ void main() {
                             0, 0.03 * (random(hit_pos.xz, 43758.5453123) - 0.5), 0.01 * random(hit_pos.xz, 43758.5453123)
                             );
 
-                            new_dir = normalize(facedir_world * face_reflectors[info.face] + (ntb * mul));
+                            new_dir = normalize(facedir_world * face_reflectors[info.face_light & 7u] + (ntb * mul));
                         }
                         else {
-                            new_dir = facedir_world * face_reflectors[info.face];
+                            new_dir = facedir_world * face_reflectors[info.face_light & 7u];
                         }
                         float cos_theta = dot(normal, new_dir);
                         float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
-                        float final_fresnel = mix(fresnel, 1.0, result.specular.a);
-                        if (final_fresnel * length(result.specular.rgb) >= length(spec_color)) {
-                            spec_block = info.block_id;
-                            spec_start = hit_pos;
-                            spec_dir = new_dir;
-                            spec_color = final_fresnel * result.specular.rgb;
+                        vec3 final_mix = mix(fresnel, 1.0, result.diffuse.a) * result.specular.rgb;
+                        if (length(final_mix) >= strongest_specular) {
+                            imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(final_mix, 1.0));
+                            strongest_specular = length(final_mix);
+                            imageStore(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy), vec4(new_dir, 1.0));
                         }
                     }
                 }
@@ -593,61 +620,59 @@ void main() {
                 }
             }
         }
-        if (hops_remaining == 0) {
-            break;
-        }
-        hops_remaining--;
-        vec3 midpoint = (info.start_cc + info.end_cc) / 2;
-        vec3 new_pos = (vec3(info.hit_block) + midpoint) / 16.0;
-        if (length(new_pos - g0) > t_min_max.y) {
-            break;
-        }
-
-        g0 = new_pos;
+        info.start_cc = mix(info.start_cc, info.end_cc, 0.5);
+        g0 = (vec3(info.hit_block) + info.start_cc) / 16.0;
     }
     if (!SPECULAR) {
         return;
     }
-    if (spec_block == 0) {
-        return;
-    }
-    info.block_id = spec_block;
-    info.face = 0;
 
-    float fresnel = length(spec_dir);
-    spec_dir = normalize(spec_dir);
-    t_min_max = t_range(spec_start, normalize(spec_dir));
-
-    if (t_min_max.x > t_min_max.y) {
-        return;
-    }
-    // we just had a specular, so t0 is 0 and start is just spec_start;
-    g1 = spec_start + (spec_dir * t_min_max.y);
-    vec4 spec_rgba = vec4(0);
-    for (int i = 0; i < 3; i++) {
-        if (traverse_space(spec_start, g1, info)) {
-            // traverse_space will fill info w/ valid data iff it returns true
-            uint idx = info.block_id >> 12;
-            if (idx >= max_cube_info_idx) {
-                // CPU-side code should fix this and we should never enter this branch
-                f_color = vec4(1.0, 0.0, 0.0, 1.0);
-                return;
-            }
-            if ((cube_info[idx].flags & 1) != 0) {
-                vec4 sampled = sample_simple(info, idx, false).diffuse;
-                float alpha_contrib = sampled.a * (1 - spec_rgba.a);
-                spec_rgba.rgb += alpha_contrib * sampled.rgb;
-                spec_rgba.a += alpha_contrib;
-            }
-
-            vec3 midpoint = (info.start_cc + info.end_cc) / 2;
-            spec_start = (vec3(info.hit_block) + midpoint) / 16.0;
-        }
-    }
-
-    if (spec_rgba.a < 0.99) {
-        spec_rgba += (1 - spec_rgba.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
-    }
-    f_color.rgb += spec_color * spec_rgba.rgb * spec_rgba.a;
+    //    if (spec_block == 0) {
+    //        return;
+    //    }
+    //
+    //    float fresnel = length(spec_dir);
+    //    spec_dir = normalize(spec_dir);
+    //    vec3 spec_start_vec = spec_start * facedir_world + fine_pos;
+    //    t_min_max = t_range(spec_start_vec, normalize(spec_dir));
+    //
+    //    if (t_min_max.x > t_min_max.y) {
+    //        return;
+    //    }
+    //    // we just had a specular, so t0 is 0 and start is just spec_start;
+    //    g1 = spec_start_vec + (spec_dir * t_min_max.y);
+    //    vec4 spec_rgba = vec4(0);
+    //    for (int i = 0; i < 3; i++) {
+    //        HitInfo info = {
+    //        ivec3(0),
+    //        vec3(0),
+    //        vec3(0),
+    //        spec_block,
+    //        0,
+    //        };
+    //        if (traverse_space(spec_start_vec, g1, info)) {
+    //            // traverse_space will fill info w/ valid data iff it returns true
+    //            uint idx = info.block_id >> 12;
+    //            if (idx >= max_cube_info_idx) {
+    //                // CPU-side code should fix this and we should never enter this branch
+    //                f_color = vec4(1.0, 0.0, 0.0, 1.0);
+    //                return;
+    //            }
+    //            if ((cube_info[idx].flags & 1) != 0) {
+    //                vec4 sampled = sample_simple(info, idx, false).diffuse;
+    //                float alpha_contrib = sampled.a * (1 - spec_rgba.a);
+    //                spec_rgba.rgb += alpha_contrib * sampled.rgb;
+    //                spec_rgba.a += alpha_contrib;
+    //            }
+    //
+    //            vec3 midpoint = (info.start_cc + info.end_cc) / 2;
+    //            spec_start = length((vec3(info.hit_block) + midpoint) / 16.0 - fine_pos);
+    //        }
+    //    }
+    //
+    //    if (spec_rgba.a < 0.99) {
+    //        spec_rgba += (1 - spec_rgba.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
+    //    }
+    //    f_color.rgb += spec_color * spec_rgba.rgb * spec_rgba.a;
 
 }

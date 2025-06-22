@@ -24,9 +24,11 @@ message TextureReference {
     // Only supported for rendering blocks, not supported in inventory or popups yet. Applies to ALL textures in this
     // object
     TextureCrop crop = 2;
-    // Specular component. Alpha channel controls blend between fresnel vs constant specular: 0 = fresnel, 1 = constant
-    // There is no requirement for this alpha to be the same as diffuse alpha
+  // Specular component. *Diffuse*'s alpha channel controls blend between fresnel vs constant specular: 0 = fresnel,
+  // 1 = constant
     string rt_specular = 3;
+  // Normal-map component. R = tangent, G = bitangent, B = normal. Tangent point right in texture space, bitangent
+  // points down in texture space.
 }
 
 // If set, the texture will be cropped to the given coordinates.

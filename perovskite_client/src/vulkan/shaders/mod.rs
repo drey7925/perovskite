@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{CommandBufferBuilder, VkAllocator, VulkanContext, VulkanWindow};
+use super::VkAllocator;
 use crate::client_state::settings::Supersampling;
 use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
@@ -246,51 +246,12 @@ pub(crate) mod frag_simple {
     }
 }
 
-pub(crate) trait PipelineWrapper<T, U> {
-    type PassIdentifier;
-    /// Actually draw. The pipeline must have been bound using bind.
-    fn draw<L>(
-        &mut self,
-        builder: &mut CommandBufferBuilder<L>,
-        draw_calls: T,
-        pass: Self::PassIdentifier,
-    ) -> Result<()>;
-    /// Bind the pipeline. Must be called each frame before draw
-    fn bind<L>(
-        &mut self,
-        ctx: &VulkanContext,
-        per_frame_config: U,
-        command_buf_builder: &mut CommandBufferBuilder<L>,
-        pass: Self::PassIdentifier,
-    ) -> Result<()>;
-}
-
 pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
     pub(crate) raytracing: bool,
     pub(crate) raytracing_reflections: bool,
     pub(crate) render_distance: u32,
     pub(crate) raytracer_debug: bool,
-}
-
-pub(crate) trait PipelineProvider
-where
-    Self: Sized,
-{
-    type DrawCall<'a>
-    where
-        Self: 'a;
-    type PerPipelineConfig<'a>
-    where
-        Self: 'a;
-    type PerFrameConfig;
-    type PipelineWrapperImpl: for<'a> PipelineWrapper<Self::DrawCall<'a>, Self::PerFrameConfig>;
-    fn make_pipeline(
-        &self,
-        ctx: &VulkanWindow,
-        config: Self::PerPipelineConfig<'_>,
-        global_config: &LiveRenderConfig,
-    ) -> Result<Self::PipelineWrapperImpl>;
 }
 
 #[derive(Debug, Clone, Copy)]

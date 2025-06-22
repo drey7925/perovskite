@@ -1,5 +1,5 @@
 use crate::client_state::settings::Supersampling;
-use crate::vulkan::shaders::{LiveRenderConfig, PipelineProvider, PipelineWrapper, SceneState};
+use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
 use crate::vulkan::{CommandBufferBuilder, VulkanContext, VulkanWindow};
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, SquareMatrix};
@@ -71,28 +71,12 @@ pub(crate) struct SkyPipelineWrapper {
     supersampling: Supersampling,
 }
 
-impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
-    type PassIdentifier = ();
-
-    fn draw<L>(
-        &mut self,
-        builder: &mut CommandBufferBuilder<L>,
-        _draw_calls: (),
-        _pass: Self::PassIdentifier,
-    ) -> anyhow::Result<()> {
-        unsafe {
-            // Safety: TODO
-            builder.draw(6, 1, 0, 0)?;
-        }
-        Ok(())
-    }
-
-    fn bind<L>(
+impl SkyPipelineWrapper {
+    pub(crate) fn bind_and_draw<L>(
         &mut self,
         ctx: &VulkanContext,
         per_frame_config: SceneState,
         command_buf_builder: &mut CommandBufferBuilder<L>,
-        _pass: Self::PassIdentifier,
     ) -> anyhow::Result<()> {
         command_buf_builder.bind_pipeline_graphics(self.pipeline.clone())?;
         let layout = self.pipeline.layout().clone();
@@ -139,6 +123,11 @@ impl PipelineWrapper<(), SceneState> for SkyPipelineWrapper {
             0,
             vec![per_frame_set],
         )?;
+
+        unsafe {
+            // Safety: TODO
+            command_buf_builder.draw(6, 1, 0, 0)?;
+        }
         Ok(())
     }
 }
@@ -148,18 +137,12 @@ pub(crate) struct SkyPipelineProvider {
     vs: Arc<ShaderModule>,
     fs: Arc<ShaderModule>,
 }
-impl PipelineProvider for SkyPipelineProvider {
-    type DrawCall<'a> = ();
-    type PerPipelineConfig<'a> = ();
-    type PerFrameConfig = SceneState;
-    type PipelineWrapperImpl = SkyPipelineWrapper;
-
-    fn make_pipeline(
+impl SkyPipelineProvider {
+    pub(crate) fn make_pipeline(
         &self,
         ctx: &VulkanWindow,
-        _config: Self::PerPipelineConfig<'_>,
         global_config: &LiveRenderConfig,
-    ) -> anyhow::Result<Self::PipelineWrapperImpl> {
+    ) -> anyhow::Result<SkyPipelineWrapper> {
         let vs = self
             .vs
             .entry_point("main")

@@ -51,11 +51,9 @@ use vulkano::{
 };
 
 use crate::vulkan::{
-    shaders::{vert_2d, PipelineProvider, PipelineWrapper},
+    shaders::{frag_simple, vert_2d, vert_2d::UniformData, LiveRenderConfig},
     CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
 };
-
-use super::{frag_simple, vert_2d::UniformData, LiveRenderConfig};
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
 #[repr(C)]
@@ -167,13 +165,11 @@ pub(crate) struct FlatTexPipelineWrapper {
     buffer: Subbuffer<UniformData>,
     texture_descriptor_set: Arc<DescriptorSet>,
 }
-impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapper {
-    type PassIdentifier = ();
-    fn draw<L>(
+impl FlatTexPipelineWrapper {
+    pub(crate) fn draw<L>(
         &mut self,
         builder: &mut CommandBufferBuilder<L>,
-        calls: &'a [FlatTextureDrawCall],
-        _pass: (),
+        calls: &[FlatTextureDrawCall],
     ) -> Result<()> {
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone())?;
@@ -186,12 +182,10 @@ impl<'a> PipelineWrapper<&'a [FlatTextureDrawCall], ()> for FlatTexPipelineWrapp
         Ok(())
     }
 
-    fn bind<L>(
+    pub(crate) fn bind<L>(
         &mut self,
         ctx: &VulkanContext,
-        _per_frame_config: (),
         command_buf_builder: &mut CommandBufferBuilder<L>,
-        _pass: (),
     ) -> Result<()> {
         let layout = self.pipeline.layout().clone();
         let per_frame_set_layout = layout
@@ -234,19 +228,13 @@ pub(crate) struct FlatPipelineConfig<'a> {
     pub(crate) enable_supersampling: bool,
 }
 
-impl PipelineProvider for FlatTexPipelineProvider {
-    type DrawCall<'a> = &'a [FlatTextureDrawCall];
-    // texture atlas, subpass number
-    type PerPipelineConfig<'a> = FlatPipelineConfig<'a>;
-    type PerFrameConfig = ();
-    type PipelineWrapperImpl = FlatTexPipelineWrapper;
-
-    fn make_pipeline(
+impl FlatTexPipelineProvider {
+    pub(crate) fn make_pipeline(
         &self,
         ctx: &VulkanWindow,
         config: FlatPipelineConfig<'_>,
         global_config: &LiveRenderConfig,
-    ) -> Result<Self::PipelineWrapperImpl> {
+    ) -> Result<FlatTexPipelineWrapper> {
         let FlatPipelineConfig {
             atlas,
             subpass,

@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::sync::Arc;
 
 use egui::TextureId;
@@ -19,7 +18,7 @@ use crate::{
 
 use super::{
     flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
-    LiveRenderConfig, PipelineProvider, PipelineWrapper,
+    LiveRenderConfig,
 };
 use crate::client_state::settings::Supersampling;
 use crate::client_state::tool_controller::ToolState;
@@ -149,9 +148,9 @@ impl EguiAdapter {
                 },
             )?;
             self.flat_overlay_pipeline
-                .bind(ctx, (), &mut secondary_builder, ())?;
+                .bind(ctx, &mut secondary_builder)?;
             self.flat_overlay_pipeline
-                .draw(&mut secondary_builder, &[draw_call], ())?;
+                .draw(&mut secondary_builder, &[draw_call])?;
             builder.execute_commands(secondary_builder.build()?)?;
         }
 

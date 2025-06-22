@@ -1,11 +1,8 @@
 use super::{
     block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
     make_depth_buffer_and_attachments, make_ssaa_render_pass,
-    shaders::{
-        cube_geometry::{
-            BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
-        },
-        PipelineWrapper,
+    shaders::cube_geometry::{
+        BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
     },
     Texture2DHolder, VulkanContext,
 };
@@ -66,7 +63,7 @@ impl MiniBlockRenderer {
         let render_pass = make_ssaa_render_pass(
             ctx.vk_device.clone(),
             Format::R8G8B8A8_SRGB,
-            ctx.depth_format,
+            ctx.depth_stencil_format,
         )?;
 
         let extent = [surface_size[0], surface_size[1], 1];
@@ -94,7 +91,7 @@ impl MiniBlockRenderer {
 
         let (depth_stencil_attachment, depth_only_attachment) = make_depth_buffer_and_attachments(
             ctx.memory_allocator.clone(),
-            ctx.depth_format,
+            ctx.depth_stencil_format,
             Supersampling::None,
             extent,
         )?;
@@ -199,12 +196,6 @@ impl MiniBlockRenderer {
         let pass = VkBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
 
         if let Some(pass) = pass {
-            self.cube_pipeline.bind(
-                &self.ctx,
-                *SCENE_STATE,
-                &mut commands,
-                BlockRenderPass::Transparent,
-            )?;
             let draw_call = CubeGeometryDrawCall {
                 models: VkChunkVertexDataGpu {
                     opaque: None,
@@ -215,7 +206,9 @@ impl MiniBlockRenderer {
                 model_matrix: Matrix4::identity(),
             };
             self.cube_pipeline.draw(
+                &self.ctx,
                 &mut commands,
+                *SCENE_STATE,
                 &mut [draw_call],
                 BlockRenderPass::Transparent,
             )?;
