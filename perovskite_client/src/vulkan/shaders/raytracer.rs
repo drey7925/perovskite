@@ -1,7 +1,9 @@
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
-use crate::vulkan::{CommandBufferBuilder, DeferredSpecularBuffers, VulkanContext, VulkanWindow};
+use crate::vulkan::{
+    CommandBufferBuilder, DeferredSpecularBuffers, FramebufferHolder, VulkanContext, VulkanWindow,
+};
 use anyhow::Context;
 use cgmath::{vec3, SquareMatrix, Vector3};
 use perovskite_core::coordinates::BlockCoordinate;
@@ -9,6 +11,7 @@ use smallvec::smallvec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::command_buffer::{PrimaryAutoCommandBuffer, SubpassEndInfo};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::image::view::ImageView;
@@ -30,7 +33,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
     GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
 };
-use vulkano::render_pass::Subpass;
+use vulkano::render_pass::{Framebuffer, Subpass};
 use vulkano::shader::{ShaderModule, SpecializationConstant};
 
 vulkano_shaders::shader! {
@@ -84,6 +87,10 @@ vulkano_shaders::shader! {
                 }
             "
         },
+        deferred_specular_frag: {
+            ty: "fragment",
+            path: "src/vulkan/shaders/raytracer_deferred_specular_frag.glsl"
+        },
     },
     custom_derives: [Debug, Clone, Copy, Default]
 }
@@ -98,11 +105,11 @@ pub(crate) struct RaytracedPipelineWrapper {
 }
 
 impl RaytracedPipelineWrapper {
-    pub(crate) fn draw_rt_primary<L>(
+    pub(crate) fn run_raytracing_renderpasses(
         &mut self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         per_frame_config: RaytracingBindings,
-        command_buf_builder: &mut CommandBufferBuilder<L>,
+        command_buf_builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) -> anyhow::Result<()> {
         let clamped = vec3(
             per_frame_config
@@ -175,6 +182,13 @@ impl RaytracedPipelineWrapper {
             },
             per_frame_data,
         )?;
+
+        let deferred_buffers = per_frame_config
+            .framebuffer
+            .deferred_specular_buffers
+            .clone()
+            .context("Missing deferred buffers but trying to raytrace")?;
+
         let per_frame_set_primary = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
             primary_pfs_layout.clone(),
@@ -182,17 +196,19 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::buffer(0, uniform_buffer.clone()),
                 WriteDescriptorSet::buffer(1, per_frame_config.header),
                 WriteDescriptorSet::buffer(2, per_frame_config.data),
-                WriteDescriptorSet::image_view(3, per_frame_config.depth_view),
                 WriteDescriptorSet::image_view(
-                    4,
-                    per_frame_config.deferred_buffers.specular_strength.clone(),
+                    3,
+                    per_frame_config.framebuffer.depth_only_view.clone(),
                 ),
-                WriteDescriptorSet::image_view(
-                    5,
-                    per_frame_config.deferred_buffers.specular_ray_dir,
-                ),
+                WriteDescriptorSet::image_view(4, deferred_buffers.specular_strength.clone()),
+                WriteDescriptorSet::image_view(5, deferred_buffers.specular_ray_dir),
             ],
             [],
+        )?;
+
+        ctx.start_color_write_depth_read_render_pass(
+            command_buf_builder,
+            per_frame_config.framebuffer,
         )?;
         command_buf_builder.bind_pipeline_graphics(self.primary_pipeline.clone())?;
 
@@ -200,59 +216,78 @@ impl RaytracedPipelineWrapper {
             vulkano::pipeline::PipelineBindPoint::Graphics,
             primary_layout,
             0,
-            vec![self.long_term_descriptor_set.clone(), per_frame_set_primary],
+            vec![
+                self.long_term_descriptor_set.clone(),
+                per_frame_set_primary.clone(),
+            ],
         )?;
         unsafe {
             // Safety: TODO
             command_buf_builder.draw(3, 1, 0, 0)?;
         }
-        //
-        // let mark_layout = self.mark_stencil_pipeline.layout().clone();
-        // let mark_pfs_layout = mark_layout
-        //     .set_layouts()
-        //     .get(0)
-        //     .with_context(|| "Raytraced mark-stencil layout missing set 0")?;
-        //
-        // let per_frame_set_mark = DescriptorSet::new(
-        //     ctx.descriptor_set_allocator.clone(),
-        //     mark_pfs_layout.clone(),
-        //     [
-        //         WriteDescriptorSet::image_view(
-        //             0,
-        //             per_frame_config.deferred_buffers.specular_strength,
-        //         ),
-        //     ],
-        //     [],
-        // )?;
-        // command_buf_builder.bind_pipeline_graphics(self.mark_stencil_pipeline.clone())?;
-        //
-        // command_buf_builder.bind_descriptor_sets(
-        //     vulkano::pipeline::PipelineBindPoint::Graphics,
-        //     mark_layout,
-        //     0,
-        //     vec![per_frame_set_mark],
-        // )?;
-        // unsafe {
-        //     // Safety: TODO
-        //     command_buf_builder.draw(3, 1, 0, 0)?;
-        // }
-        //
-        // command_buf_builder.bind_pipeline_graphics(self.deferred_specular_pipeline.clone())?;
-        //
-        // unsafe {
-        //     // Safety: TODO
-        //     command_buf_builder.draw(3, 1, 0, 0)?;
-        // }
+        command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
+        ctx.start_color_depth_render_pass(command_buf_builder, per_frame_config.framebuffer)?;
+        let mark_layout = self.mark_stencil_pipeline.layout().clone();
+        let mark_pfs_layout = mark_layout
+            .set_layouts()
+            .get(0)
+            .with_context(|| "Raytraced mark-stencil layout missing set 0")?;
+
+        let per_frame_set_mark = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            mark_pfs_layout.clone(),
+            [WriteDescriptorSet::image_view(
+                0,
+                deferred_buffers.specular_strength,
+            )],
+            [],
+        )?;
+        command_buf_builder.bind_pipeline_graphics(self.mark_stencil_pipeline.clone())?;
+
+        command_buf_builder.bind_descriptor_sets(
+            vulkano::pipeline::PipelineBindPoint::Graphics,
+            mark_layout,
+            0,
+            vec![per_frame_set_mark],
+        )?;
+        unsafe {
+            // Safety: TODO
+            command_buf_builder.draw(3, 1, 0, 0)?;
+        }
+        command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
+        ctx.start_color_double_attached_depth_render_pass(
+            command_buf_builder,
+            per_frame_config.framebuffer,
+        )?;
+        command_buf_builder.bind_pipeline_graphics(self.deferred_specular_pipeline.clone())?;
+        command_buf_builder.bind_descriptor_sets(
+            vulkano::pipeline::PipelineBindPoint::Graphics,
+            self.deferred_specular_pipeline.layout().clone(),
+            0,
+            vec![
+                self.long_term_descriptor_set.clone(),
+                per_frame_set_primary.clone(),
+            ],
+        )?;
+        unsafe {
+            // Safety: TODO
+            command_buf_builder.draw(3, 1, 0, 0)?;
+        }
+
+        command_buf_builder.end_render_pass(SubpassEndInfo {
+            ..Default::default()
+        })?;
         Ok(())
     }
 }
 
-pub(crate) struct RaytracingBindings {
+pub(crate) struct RaytracingBindings<'a> {
     pub(crate) scene_state: SceneState,
     pub(crate) data: Subbuffer<[u32]>,
     pub(crate) header: Subbuffer<ChunkMapHeader>,
-    pub(crate) depth_view: Arc<ImageView>,
-    pub(crate) deferred_buffers: DeferredSpecularBuffers,
+    pub(crate) framebuffer: &'a FramebufferHolder,
     pub(crate) player_pos: Vector3<f64>,
     pub(crate) render_distance: u32,
 }
@@ -303,7 +338,7 @@ impl RaytracedPipelineProvider {
             .entry_point("main")
             .context("Missing fragment shader")?;
         let stages_primary = smallvec![
-            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_primary),
         ];
         let stages_mark_stencil = smallvec![
@@ -311,7 +346,7 @@ impl RaytracedPipelineProvider {
             PipelineShaderStageCreateInfo::new(fs_mark_stencil),
         ];
         let stages_deferred_specular = smallvec![
-            PipelineShaderStageCreateInfo::new(vs_trivial),
+            PipelineShaderStageCreateInfo::new(vs),
             PipelineShaderStageCreateInfo::new(fs_deferred_specular),
         ];
         let layout = |stages| {
@@ -461,7 +496,7 @@ impl RaytracedPipelineProvider {
                 }),
 
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.color_depth_render_pass.clone(), 0)
+                    Subpass::from(ctx.color_double_attached_depth_render_pass.clone(), 0)
                         .context("Missing subpass")?,
                 )),
                 ..base_pipeline_info(layout_deferred)?
@@ -504,7 +539,7 @@ impl RaytracedPipelineProvider {
             vs_trivial: load_trivial_vtx(device.clone())?,
             fs_primary: load_raytraced_frag(device.clone())?,
             fs_mark: load_mark_stencil_frag(device.clone())?,
-            fs_deferred: load_wip_deferred_specular(device.clone())?,
+            fs_deferred: load_deferred_specular_frag(device.clone())?,
             device,
         })
     }

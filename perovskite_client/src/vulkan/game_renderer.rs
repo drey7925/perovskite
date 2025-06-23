@@ -353,29 +353,20 @@ impl ActiveGame {
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
         {
-            ctx.start_color_write_depth_read_render_pass(&mut command_buf_builder, framebuffer)?;
             if let Some(buf) = self.raytrace_data.as_ref() {
-                self.raytraced_pipeline.draw_rt_primary(
+                self.raytraced_pipeline.run_raytracing_renderpasses(
                     ctx,
                     RaytracingBindings {
                         scene_state,
                         data: buf.data.clone(),
                         header: buf.header.clone(),
-                        depth_view: framebuffer.depth_only_view.clone(),
-                        deferred_buffers: framebuffer
-                            .deferred_specular_buffers
-                            .clone()
-                            .context("Missing deferred buffers but trying to raytrace")?,
+                        framebuffer,
                         player_pos: player_position,
                         render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
                     },
                     &mut command_buf_builder,
                 )?;
             }
-
-            command_buf_builder.end_render_pass(SubpassEndInfo {
-                ..Default::default()
-            })?;
         }
 
         ctx.start_color_only_render_pass(
