@@ -355,11 +355,6 @@ impl RaytracedPipelineProvider {
                     }],
                     ..Default::default()
                 }),
-
-                subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.rt_primary_render_pass.clone(), 0)
-                        .context("Missing subpass")?,
-                )),
                 ..GraphicsPipelineCreateInfo::layout(layout)
             })
         };
@@ -369,12 +364,7 @@ impl RaytracedPipelineProvider {
             None,
             GraphicsPipelineCreateInfo {
                 stages: stages_primary,
-                depth_stencil_state: Some(DepthStencilState {
-                    depth: None,
-                    depth_bounds: None,
-                    stencil: None,
-                    ..Default::default()
-                }),
+                depth_stencil_state: None,
                 color_blend_state: Some(ColorBlendState {
                     attachments: vec![ColorBlendAttachmentState {
                         blend: Some(AttachmentBlend::alpha()),
@@ -383,6 +373,10 @@ impl RaytracedPipelineProvider {
                     }],
                     ..Default::default()
                 }),
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(ctx.write_color_read_depth_render_pass.clone(), 0)
+                        .context("Missing subpass")?,
+                )),
                 ..base_pipeline_info(layout_primary.clone())?
             },
         )?;
@@ -423,6 +417,11 @@ impl RaytracedPipelineProvider {
                     }],
                     ..Default::default()
                 }),
+
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(ctx.color_depth_render_pass.clone(), 0)
+                        .context("Missing subpass")?,
+                )),
                 ..base_pipeline_info(layout_mark)?
             },
         )?;
@@ -460,6 +459,11 @@ impl RaytracedPipelineProvider {
                     }],
                     ..Default::default()
                 }),
+
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(ctx.color_depth_render_pass.clone(), 0)
+                        .context("Missing subpass")?,
+                )),
                 ..base_pipeline_info(layout_deferred)?
             },
         )?;

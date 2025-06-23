@@ -208,7 +208,8 @@ impl SkyPipelineProvider {
                 ..Default::default()
             }),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(ctx.raster_render_pass.clone(), 0).context("Missing subpass")?,
+                Subpass::from(ctx.clear_color_depth_render_pass.clone(), 0)
+                    .context("Missing subpass")?,
             )),
             ..GraphicsPipelineCreateInfo::layout(layout.clone())
         };

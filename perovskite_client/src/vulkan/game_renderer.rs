@@ -198,7 +198,7 @@ impl ActiveGame {
             None
         };
 
-        ctx.start_raster_render_pass(
+        ctx.start_raster_render_pass_and_clear(
             &mut command_buf_builder,
             &framebuffer,
             scene_state.clear_color,
@@ -350,7 +350,10 @@ impl ActiveGame {
             )
             .context("Entities pipeline draw failed")?;
 
+        command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
         {
+            ctx.start_color_write_depth_read_render_pass(&mut command_buf_builder, framebuffer)?;
             if let Some(buf) = self.raytrace_data.as_ref() {
                 self.raytraced_pipeline.draw_rt_primary(
                     ctx,
@@ -358,7 +361,7 @@ impl ActiveGame {
                         scene_state,
                         data: buf.data.clone(),
                         header: buf.header.clone(),
-                        depth_view: framebuffer.rt_primary_framebuffer.attachments()[1].clone(),
+                        depth_view: framebuffer.depth_only_view.clone(),
                         deferred_buffers: framebuffer
                             .deferred_specular_buffers
                             .clone()
@@ -369,15 +372,16 @@ impl ActiveGame {
                     &mut command_buf_builder,
                 )?;
             }
+
+            command_buf_builder.end_render_pass(SubpassEndInfo {
+                ..Default::default()
+            })?;
         }
 
-        command_buf_builder.end_render_pass(SubpassEndInfo {
-            ..Default::default()
-        })?;
-
-        ctx.start_non_depth_render_pass(
+        ctx.start_color_only_render_pass(
             &mut command_buf_builder,
-            framebuffer.pre_blit_nondepth_framebuffer.clone(),
+            true,
+            framebuffer,
             SubpassContents::Inline,
         )?;
 
@@ -405,9 +409,10 @@ impl ActiveGame {
         framebuffer
             .blit_supersampling(&mut command_buf_builder)
             .context("Supersampling blit failed")?;
-        ctx.start_non_depth_render_pass(
+        ctx.start_color_only_render_pass(
             &mut command_buf_builder,
-            framebuffer.post_blit_framebuffer.clone(),
+            false,
+            framebuffer,
             SubpassContents::SecondaryCommandBuffers,
         )
         .context("Start post-blit render pass failed")?;
@@ -465,7 +470,7 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    subpass: Subpass::from(ctx.non_depth_render_pass.clone(), 0)
+                    subpass: Subpass::from(ctx.color_only_render_pass.clone(), 0)
                         .context("nondepth renderpass 1 missing")?,
                     enable_depth_stencil: false,
                     enable_supersampling: true,
@@ -578,7 +583,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
             &vk_wnd,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: Subpass::from(vk_wnd.non_depth_render_pass.clone(), 0)
+                subpass: Subpass::from(vk_wnd.color_only_render_pass.clone(), 0)
                     .context("non-depth renderpass missing")?,
                 enable_depth_stencil: false,
                 enable_supersampling: true,
@@ -970,9 +975,10 @@ impl GameRenderer {
             //     .blit_supersampling(&mut command_buf_builder)
             //     .unwrap();
             self.ctx
-                .start_non_depth_render_pass(
+                .start_color_only_render_pass(
                     &mut command_buf_builder,
-                    fb_holder.post_blit_framebuffer.clone(),
+                    false,
+                    fb_holder,
                     SubpassContents::SecondaryCommandBuffers,
                 )
                 .unwrap();

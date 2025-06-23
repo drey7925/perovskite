@@ -425,7 +425,7 @@ impl CubePipelineProvider {
     ) -> Result<CubePipelineWrapper> {
         self.build_pipeline(
             wnd.viewport.clone(),
-            wnd.raster_render_pass.clone(),
+            wnd.clear_color_depth_render_pass.clone(),
             config,
             global_config,
         )

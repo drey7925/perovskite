@@ -1,6 +1,6 @@
 use super::{
     block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
-    make_depth_buffer_and_attachments, make_raster_render_pass,
+    make_clearing_raster_render_pass, make_depth_buffer_and_attachments,
     shaders::cube_geometry::{
         BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
     },
@@ -60,7 +60,7 @@ impl MiniBlockRenderer {
         atlas_texture: &Texture2DHolder,
     ) -> Result<Self> {
         // All compliant GPUs should be able to render to R8G8B8A8_SRGB
-        let render_pass = make_raster_render_pass(
+        let render_pass = make_clearing_raster_render_pass(
             ctx.vk_device.clone(),
             Format::R8G8B8A8_SRGB,
             ctx.depth_stencil_format,
