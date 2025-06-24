@@ -36,11 +36,13 @@ layout(set = 1, binding = 1) uniform ChunkMapHeader {
 layout(set = 1, binding = 2) readonly buffer chunk_map {
     uint chunks[];
 };
-layout(input_attachment_index = 0, set = 1, binding = 3) uniform subpassInput f_depth_in;
+
 // Each shader derived from this common file should declare its own storage image bindings
 // with the appropriate binding indices and readonly/writeonly
-//layout (set = 1, binding = 4, rgba8) uniform restrict image2D deferred_specular_color;
-//layout (set = 1, binding = 5, rgba32f) uniform restrict image2D deferred_specular_ray_dir;
+
+//layout (set = 1, binding = 3, rgba8) uniform restrict image2D deferred_specular_color;
+//layout (set = 1, binding = 4, rgba32f) uniform restrict image2D deferred_specular_ray_dir;
+//layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInput f_depth_in;
 
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"

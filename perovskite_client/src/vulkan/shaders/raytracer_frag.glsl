@@ -1,8 +1,9 @@
 #version 460
 #include "raytracer_frag_common.glsl"
 
-layout (set = 1, binding = 4, rgba8) uniform restrict writeonly image2D deferred_specular_color;
-layout (set = 1, binding = 5, rgba32ui) uniform restrict writeonly uimage2D deferred_specular_ray_dir;
+layout (set = 1, binding = 3, rgba8) uniform restrict writeonly image2D deferred_specular_color;
+layout (set = 1, binding = 4, rgba32ui) uniform restrict writeonly uimage2D deferred_specular_ray_dir;
+layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInput f_depth_in;
 
 void main() {
     imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(0));
@@ -170,7 +171,7 @@ void main() {
                             0, 0.03 * (random(hit_pos.xz, 43758.5453123) - 0.5), 0.01 * random(hit_pos.xz, 43758.5453123)
                             );
 
-                            new_dir = normalize(facedir_world * face_reflectors[info.face_light & 7u] + (ntb * mul));
+                            new_dir = facedir_world * face_reflectors[info.face_light & 7u] + (ntb * mul);
                         }
                         else {
                             new_dir = facedir_world * face_reflectors[info.face_light & 7u];
@@ -180,6 +181,7 @@ void main() {
                         vec3 final_mix = mix(fresnel, 1.0, result.diffuse.a) * result.specular.rgb;
                         if (length(final_mix) >= strongest_specular) {
                             imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(final_mix, 1.0));
+                            new_dir = normalize(new_dir) * length(hit_pos - fine_pos);
                             imageStore(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy), uvec4(floatBitsToUint(new_dir), info.block_id));
                             strongest_specular = length(final_mix);
                         }

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{PrimaryAutoCommandBuffer, SubpassEndInfo};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{CopyDescriptorSet, DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::image::view::ImageView;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
@@ -194,16 +194,33 @@ impl RaytracedPipelineWrapper {
             primary_pfs_layout.clone(),
             [
                 WriteDescriptorSet::buffer(0, uniform_buffer.clone()),
-                WriteDescriptorSet::buffer(1, per_frame_config.header),
-                WriteDescriptorSet::buffer(2, per_frame_config.data),
+                WriteDescriptorSet::buffer(1, per_frame_config.header.clone()),
+                WriteDescriptorSet::buffer(2, per_frame_config.data.clone()),
+                WriteDescriptorSet::image_view(3, deferred_buffers.specular_strength.clone()),
+                WriteDescriptorSet::image_view(4, deferred_buffers.specular_ray_dir.clone()),
                 WriteDescriptorSet::image_view(
-                    3,
+                    5,
                     per_frame_config.framebuffer.depth_only_view.clone(),
                 ),
-                WriteDescriptorSet::image_view(4, deferred_buffers.specular_strength.clone()),
-                WriteDescriptorSet::image_view(5, deferred_buffers.specular_ray_dir),
             ],
             [],
+        )?;
+
+        let per_frame_set_secondary = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            self.deferred_specular_pipeline
+                .layout()
+                .set_layouts()
+                .get(1)
+                .context("Deferred specular pipeline missing set 1")?
+                .clone(),
+            [],
+            (0..5).map(|i| CopyDescriptorSet {
+                src_binding: i as u32,
+                dst_binding: i as u32,
+                descriptor_count: 1,
+                ..CopyDescriptorSet::new(per_frame_set_primary.clone())
+            }),
         )?;
 
         ctx.start_color_write_depth_read_render_pass(
@@ -257,10 +274,7 @@ impl RaytracedPipelineWrapper {
         }
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
-        ctx.start_color_double_attached_depth_render_pass(
-            command_buf_builder,
-            per_frame_config.framebuffer,
-        )?;
+        ctx.start_color_depth_render_pass(command_buf_builder, per_frame_config.framebuffer)?;
         command_buf_builder.bind_pipeline_graphics(self.deferred_specular_pipeline.clone())?;
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
@@ -268,7 +282,7 @@ impl RaytracedPipelineWrapper {
             0,
             vec![
                 self.long_term_descriptor_set.clone(),
-                per_frame_set_primary.clone(),
+                per_frame_set_secondary,
             ],
         )?;
         unsafe {
@@ -496,7 +510,7 @@ impl RaytracedPipelineProvider {
                 }),
 
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.color_double_attached_depth_render_pass.clone(), 0)
+                    Subpass::from(ctx.color_depth_render_pass.clone(), 0)
                         .context("Missing subpass")?,
                 )),
                 ..base_pipeline_info(layout_deferred)?
