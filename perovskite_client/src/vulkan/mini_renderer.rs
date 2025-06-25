@@ -118,6 +118,7 @@ impl MiniBlockRenderer {
                 raytracing_reflections: false,
                 render_distance: 1,
                 raytracer_debug: false,
+                raytracing_specular_downsampling: 1,
             },
         )?;
         let download_buffer = Buffer::new_slice(

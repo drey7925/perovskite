@@ -3,7 +3,9 @@
 
 layout (set = 1, binding = 3, rgba8) uniform restrict writeonly image2D deferred_specular_color;
 layout (set = 1, binding = 4, rgba32ui) uniform restrict writeonly uimage2D deferred_specular_ray_dir;
+
 layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInput f_depth_in;
+layout(location = 0) out vec4 f_color;
 
 void main() {
     imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(0));

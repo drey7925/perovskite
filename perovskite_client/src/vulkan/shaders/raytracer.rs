@@ -1,9 +1,7 @@
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
-use crate::vulkan::{
-    CommandBufferBuilder, DeferredSpecularBuffers, FramebufferHolder, VulkanContext, VulkanWindow,
-};
+use crate::vulkan::{CommandBufferBuilder, FramebufferHolder, VulkanWindow};
 use anyhow::Context;
 use cgmath::{vec3, SquareMatrix, Vector3};
 use perovskite_core::coordinates::BlockCoordinate;
@@ -11,10 +9,9 @@ use smallvec::smallvec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::{PrimaryAutoCommandBuffer, SubpassEndInfo};
+use vulkano::command_buffer::{PrimaryAutoCommandBuffer, SubpassContents, SubpassEndInfo};
 use vulkano::descriptor_set::{CopyDescriptorSet, DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
-use vulkano::image::view::ImageView;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
@@ -33,7 +30,7 @@ use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
     GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
 };
-use vulkano::render_pass::{Framebuffer, Subpass};
+use vulkano::render_pass::Subpass;
 use vulkano::shader::{ShaderModule, SpecializationConstant};
 
 vulkano_shaders::shader! {
@@ -62,34 +59,17 @@ vulkano_shaders::shader! {
                     gl_Position = vec4(vertices[gl_VertexIndex], 0.5, 1.0);
                 }"
         },
-        mark_stencil_frag: {
+        mask_specular_stencil_frag: {
             ty: "fragment",
-            src: r"
-                #version 460
-                layout (set = 0, binding = 0, rgba8) uniform restrict image2D deferred_specular_color;
-
-                void main() {
-                    vec4 spec_color = imageLoad(deferred_specular_color, ivec2(gl_FragCoord.xy));
-                    if (spec_color.a < 0.5) {
-                        discard;
-                    }
-                }
-            "
-        },
-        wip_deferred_specular: {
-            ty: "fragment",
-            src: r"
-                #version 460
-                layout(location = 0) out vec4 f_color;
-
-                void main() {
-                    f_color = vec4(1.0, 0.0, 0.0, 0.5);
-                }
-            "
+            path: "src/vulkan/shaders/mask_specular_stencil_frag.glsl",
         },
         deferred_specular_frag: {
             ty: "fragment",
             path: "src/vulkan/shaders/raytracer_deferred_specular_frag.glsl"
+        },
+        blend_frag: {
+            ty: "fragment",
+            path: "src/vulkan/shaders/raytracer_blend_frag.glsl"
         },
     },
     custom_derives: [Debug, Clone, Copy, Default]
@@ -97,8 +77,9 @@ vulkano_shaders::shader! {
 
 pub(crate) struct RaytracedPipelineWrapper {
     primary_pipeline: Arc<GraphicsPipeline>,
-    mark_stencil_pipeline: Arc<GraphicsPipeline>,
+    mask_specular_stencil_pipeline: Arc<GraphicsPipeline>,
     deferred_specular_pipeline: Arc<GraphicsPipeline>,
+    blend_pipeline: Arc<GraphicsPipeline>,
     long_term_descriptor_set: Arc<DescriptorSet>,
     supersampling: Supersampling,
     raytrace_control_ssbo_len: u32,
@@ -214,8 +195,11 @@ impl RaytracedPipelineWrapper {
                 .get(1)
                 .context("Deferred specular pipeline missing set 1")?
                 .clone(),
-            [],
-            (0..5).map(|i| CopyDescriptorSet {
+            [WriteDescriptorSet::image_view(
+                5,
+                deferred_buffers.specular_raw_color.clone(),
+            )],
+            [0, 1, 2, 4].map(|i| CopyDescriptorSet {
                 src_binding: i as u32,
                 dst_binding: i as u32,
                 descriptor_count: 1,
@@ -244,37 +228,40 @@ impl RaytracedPipelineWrapper {
         }
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
-        ctx.start_color_depth_render_pass(command_buf_builder, per_frame_config.framebuffer)?;
-        let mark_layout = self.mark_stencil_pipeline.layout().clone();
-        let mark_pfs_layout = mark_layout
+        // Prepare the (downsampled) mask
+        ctx.start_deferred_specular_depth_only_render_pass_and_clear(
+            command_buf_builder,
+            per_frame_config.framebuffer,
+        )?;
+        let mask_specular_layout = self.mask_specular_stencil_pipeline.layout().clone();
+        let mask_specular_pfs_layout = mask_specular_layout
             .set_layouts()
             .get(0)
-            .with_context(|| "Raytraced mark-stencil layout missing set 0")?;
+            .with_context(|| "Raytraced mask_specular-stencil layout missing set 0")?;
 
-        let per_frame_set_mark = DescriptorSet::new(
+        let per_frame_set_mask_specular = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
-            mark_pfs_layout.clone(),
+            mask_specular_pfs_layout.clone(),
             [WriteDescriptorSet::image_view(
                 0,
-                deferred_buffers.specular_strength,
+                deferred_buffers.specular_strength.clone(),
             )],
             [],
         )?;
-        command_buf_builder.bind_pipeline_graphics(self.mark_stencil_pipeline.clone())?;
+        command_buf_builder.bind_pipeline_graphics(self.mask_specular_stencil_pipeline.clone())?;
 
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
-            mark_layout,
+            mask_specular_layout,
             0,
-            vec![per_frame_set_mark],
+            vec![per_frame_set_mask_specular],
         )?;
         unsafe {
             // Safety: TODO
             command_buf_builder.draw(3, 1, 0, 0)?;
         }
-        command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
-        ctx.start_color_depth_render_pass(command_buf_builder, per_frame_config.framebuffer)?;
+        // Render downsampled specular
         command_buf_builder.bind_pipeline_graphics(self.deferred_specular_pipeline.clone())?;
         command_buf_builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
@@ -289,7 +276,44 @@ impl RaytracedPipelineWrapper {
             // Safety: TODO
             command_buf_builder.draw(3, 1, 0, 0)?;
         }
+        command_buf_builder.end_render_pass(SubpassEndInfo {
+            ..Default::default()
+        })?;
 
+        ctx.start_color_only_render_pass(
+            command_buf_builder,
+            true,
+            per_frame_config.framebuffer,
+            SubpassContents::Inline,
+        )?;
+        // Then blend the specular data back onto the main render target
+        let blend_layout = self.blend_pipeline.layout().clone();
+        let blend_pfs_layout = blend_layout
+            .set_layouts()
+            .get(0)
+            .with_context(|| "Raytraced mask_specular-stencil layout missing set 0")?;
+
+        let per_frame_set_blend = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            blend_pfs_layout.clone(),
+            [
+                WriteDescriptorSet::image_view(0, deferred_buffers.specular_strength),
+                WriteDescriptorSet::image_view(1, deferred_buffers.specular_ray_dir),
+                WriteDescriptorSet::image_view(2, deferred_buffers.specular_raw_color),
+            ],
+            [],
+        )?;
+        command_buf_builder.bind_pipeline_graphics(self.blend_pipeline.clone())?;
+        command_buf_builder.bind_descriptor_sets(
+            vulkano::pipeline::PipelineBindPoint::Graphics,
+            blend_layout,
+            0,
+            vec![per_frame_set_blend],
+        )?;
+        unsafe {
+            // Safety: TODO
+            command_buf_builder.draw(3, 1, 0, 0)?;
+        }
         command_buf_builder.end_render_pass(SubpassEndInfo {
             ..Default::default()
         })?;
@@ -311,8 +335,9 @@ pub(crate) struct RaytracedPipelineProvider {
     vs_rt: Arc<ShaderModule>,
     vs_trivial: Arc<ShaderModule>,
     fs_primary: Arc<ShaderModule>,
-    fs_mark: Arc<ShaderModule>,
+    fs_mask_specular: Arc<ShaderModule>,
     fs_deferred: Arc<ShaderModule>,
+    fs_blend: Arc<ShaderModule>,
 }
 impl RaytracedPipelineProvider {
     pub(crate) fn make_pipeline(
@@ -329,39 +354,55 @@ impl RaytracedPipelineProvider {
             .vs_trivial
             .entry_point("main")
             .context("Missing vertex shader")?;
+        let spec_constants = HashMap::from_iter([
+            (
+                0,
+                SpecializationConstant::Bool(global_config.raytracing_reflections),
+            ),
+            (
+                2,
+                SpecializationConstant::Bool(global_config.raytracer_debug),
+            ),
+            (
+                3,
+                SpecializationConstant::U32(global_config.raytracing_specular_downsampling),
+            ),
+        ]);
         let fs_primary = self
             .fs_primary
-            .specialize(HashMap::from_iter([
-                (
-                    0,
-                    SpecializationConstant::Bool(global_config.raytracing_reflections),
-                ),
-                (
-                    2,
-                    SpecializationConstant::Bool(global_config.raytracer_debug),
-                ),
-            ]))?
+            .specialize(spec_constants.clone())?
             .entry_point("main")
-            .context("Missing fragment shader")?;
-        let fs_mark_stencil = self
-            .fs_mark
+            .context("Missing fragment shader (rt primary)")?;
+        let fs_mask_specular_stencil = self
+            .fs_mask_specular
+            .specialize(spec_constants.clone())?
             .entry_point("main")
-            .context("Missing fragment shader")?;
+            .context("Missing fragment shader (rt mask)")?;
         let fs_deferred_specular = self
             .fs_deferred
+            .specialize(spec_constants.clone())?
             .entry_point("main")
-            .context("Missing fragment shader")?;
+            .context("Missing fragment shader (rt specular)")?;
+        let fs_blend = self
+            .fs_blend
+            .specialize(spec_constants.clone())?
+            .entry_point("main")
+            .context("Missing fragment shader (rt blend)")?;
         let stages_primary = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_primary),
         ];
-        let stages_mark_stencil = smallvec![
+        let stages_mask_specular_stencil = smallvec![
             PipelineShaderStageCreateInfo::new(vs_trivial.clone()),
-            PipelineShaderStageCreateInfo::new(fs_mark_stencil),
+            PipelineShaderStageCreateInfo::new(fs_mask_specular_stencil),
         ];
         let stages_deferred_specular = smallvec![
-            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_deferred_specular),
+        ];
+        let stages_blend = smallvec![
+            PipelineShaderStageCreateInfo::new(vs_trivial.clone()),
+            PipelineShaderStageCreateInfo::new(fs_blend),
         ];
         let layout = |stages| {
             Ok::<_, anyhow::Error>(PipelineLayout::new(
@@ -372,8 +413,50 @@ impl RaytracedPipelineProvider {
         };
 
         let layout_primary = layout(&stages_primary)?;
-        let layout_mark = layout(&stages_mark_stencil)?;
+        let layout_mask_specular = layout(&stages_mask_specular_stencil)?;
         let layout_deferred = layout(&stages_deferred_specular)?;
+        let layout_blend = layout(&stages_blend)?;
+
+        let full_viewport_state = Some(ViewportState {
+            viewports: smallvec![Viewport {
+                offset: [0.0, 0.0],
+                depth_range: 0.0..=1.0,
+                extent: [
+                    ctx.viewport.extent[0] * global_config.supersampling.to_float(),
+                    ctx.viewport.extent[1] * global_config.supersampling.to_float()
+                ],
+            }],
+            scissors: smallvec![Scissor {
+                offset: [0, 0],
+                extent: [
+                    ctx.viewport.extent[0] as u32 * global_config.supersampling.to_int(),
+                    ctx.viewport.extent[1] as u32 * global_config.supersampling.to_int()
+                ],
+            }],
+            ..Default::default()
+        });
+        let deferred_viewport_state = Some(ViewportState {
+            viewports: smallvec![Viewport {
+                offset: [0.0, 0.0],
+                depth_range: 0.0..=1.0,
+                extent: [
+                    ctx.viewport.extent[0] * global_config.supersampling.to_float()
+                        / (global_config.raytracing_specular_downsampling as f32),
+                    ctx.viewport.extent[1] * global_config.supersampling.to_float()
+                        / (global_config.raytracing_specular_downsampling as f32)
+                ],
+            }],
+            scissors: smallvec![Scissor {
+                offset: [0, 0],
+                extent: [
+                    ctx.viewport.extent[0] as u32 * global_config.supersampling.to_int()
+                        / global_config.raytracing_specular_downsampling,
+                    ctx.viewport.extent[1] as u32 * global_config.supersampling.to_int()
+                        / global_config.raytracing_specular_downsampling
+                ],
+            }],
+            ..Default::default()
+        });
 
         let base_pipeline_info = |layout| {
             Ok::<_, anyhow::Error>(GraphicsPipelineCreateInfo {
@@ -386,24 +469,6 @@ impl RaytracedPipelineProvider {
                     ..Default::default()
                 }),
                 multisample_state: Some(MultisampleState::default()),
-                viewport_state: Some(ViewportState {
-                    viewports: smallvec![Viewport {
-                        offset: [0.0, 0.0],
-                        depth_range: 0.0..=1.0,
-                        extent: [
-                            ctx.viewport.extent[0] * global_config.supersampling.to_float(),
-                            ctx.viewport.extent[1] * global_config.supersampling.to_float()
-                        ],
-                    }],
-                    scissors: smallvec![Scissor {
-                        offset: [0, 0],
-                        extent: [
-                            ctx.viewport.extent[0] as u32 * global_config.supersampling.to_int(),
-                            ctx.viewport.extent[1] as u32 * global_config.supersampling.to_int()
-                        ],
-                    }],
-                    ..Default::default()
-                }),
                 ..GraphicsPipelineCreateInfo::layout(layout)
             })
         };
@@ -426,16 +491,17 @@ impl RaytracedPipelineProvider {
                     Subpass::from(ctx.write_color_read_depth_render_pass.clone(), 0)
                         .context("Missing subpass")?,
                 )),
+                viewport_state: full_viewport_state.clone(),
                 ..base_pipeline_info(layout_primary.clone())?
             },
         )?;
 
-        let mark_stencil_config = StencilOpState {
+        let mask_specular_stencil_config = StencilOpState {
             ops: StencilOps {
                 fail_op: StencilOp::Keep,
                 pass_op: StencilOp::Replace,
                 depth_fail_op: StencilOp::Keep,
-                // Always accept stencil _entering_ the mark stencil stage.
+                // Always accept stencil _entering_ the mask_specular stencil stage.
                 compare_op: CompareOp::Always,
             },
             compare_mask: u32::MAX,
@@ -443,35 +509,28 @@ impl RaytracedPipelineProvider {
             // and write 1 if we pass
             reference: 1,
         };
-        let mark_stencil_pipeline = GraphicsPipeline::new(
+        let mask_specular_stencil_pipeline = GraphicsPipeline::new(
             self.device.clone(),
             None,
             GraphicsPipelineCreateInfo {
-                stages: stages_mark_stencil,
+                stages: stages_mask_specular_stencil,
                 depth_stencil_state: Some(DepthStencilState {
                     depth: None,
                     depth_bounds: None,
                     stencil: Some(StencilState {
-                        front: mark_stencil_config,
-                        back: mark_stencil_config,
+                        front: mask_specular_stencil_config,
+                        back: mask_specular_stencil_config,
                     }),
                     ..Default::default()
                 }),
-                color_blend_state: Some(ColorBlendState {
-                    attachments: vec![ColorBlendAttachmentState {
-                        blend: Some(AttachmentBlend::ignore_source()),
-                        color_write_mask: ColorComponents::empty(),
-                        // requires an extension that isn't universal, so we disable in other ways
-                        color_write_enable: true,
-                    }],
-                    ..Default::default()
-                }),
+                color_blend_state: None,
 
+                viewport_state: deferred_viewport_state.clone(),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.color_depth_render_pass.clone(), 0)
+                    Subpass::from(ctx.depth_stencil_only_render_pass.clone(), 0)
                         .context("Missing subpass")?,
                 )),
-                ..base_pipeline_info(layout_mark)?
+                ..base_pipeline_info(layout_mask_specular)?
             },
         )?;
         let deferred_specular_stencil = StencilOpState {
@@ -500,6 +559,21 @@ impl RaytracedPipelineProvider {
                     }),
                     ..Default::default()
                 }),
+                color_blend_state: None,
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(ctx.depth_stencil_only_render_pass.clone(), 0)
+                        .context("Missing subpass")?,
+                )),
+                viewport_state: deferred_viewport_state.clone(),
+                ..base_pipeline_info(layout_deferred)?
+            },
+        )?;
+        let blend_pipeline = GraphicsPipeline::new(
+            self.device.clone(),
+            None,
+            GraphicsPipelineCreateInfo {
+                stages: stages_blend,
+                depth_stencil_state: None,
                 color_blend_state: Some(ColorBlendState {
                     attachments: vec![ColorBlendAttachmentState {
                         blend: Some(AttachmentBlend::additive()),
@@ -510,12 +584,14 @@ impl RaytracedPipelineProvider {
                 }),
 
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.color_depth_render_pass.clone(), 0)
+                    Subpass::from(ctx.color_only_render_pass.clone(), 0)
                         .context("Missing subpass")?,
                 )),
-                ..base_pipeline_info(layout_deferred)?
+                viewport_state: full_viewport_state.clone(),
+                ..base_pipeline_info(layout_blend)?
             },
         )?;
+
         let raytrace_control_ssbo = frame_data.raytrace_control_ssbo();
         let raytrace_control_ssbo_len = raytrace_control_ssbo
             .len()
@@ -537,8 +613,9 @@ impl RaytracedPipelineProvider {
 
         Ok(RaytracedPipelineWrapper {
             primary_pipeline,
-            mark_stencil_pipeline,
+            mask_specular_stencil_pipeline,
             deferred_specular_pipeline,
+            blend_pipeline,
             long_term_descriptor_set: descriptor_set,
             supersampling: global_config.supersampling,
             raytrace_control_ssbo_len,
@@ -552,8 +629,9 @@ impl RaytracedPipelineProvider {
             vs_rt: load_raytraced_vtx(device.clone())?,
             vs_trivial: load_trivial_vtx(device.clone())?,
             fs_primary: load_raytraced_frag(device.clone())?,
-            fs_mark: load_mark_stencil_frag(device.clone())?,
+            fs_mask_specular: load_mask_specular_stencil_frag(device.clone())?,
             fs_deferred: load_deferred_specular_frag(device.clone())?,
+            fs_blend: load_blend_frag(device.clone())?,
             device,
         })
     }

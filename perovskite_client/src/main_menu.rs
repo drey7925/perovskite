@@ -737,6 +737,17 @@ fn draw_render_settings(
                     "Enabled",
                 ));
             ui.end_row();
+            ui.label("Specular downsampling")
+                .on_hover_text("Specular reflection downsampling factor. Higher values improve performance at the expense of visual quality. Only applicable if raytracing is enabled.");
+            ui.add_enabled(
+                prospective_settings.render.raytracing,
+                egui::Slider::new(
+                    &mut prospective_settings.render.raytracing_specular_downsampling,
+                    1..=4,
+                )
+                    .suffix("x"),
+            );
+            ui.end_row();
             let ssaa_label = ui.label("Supersampling")
                 .on_hover_text("Smooths edges of geometry and textures, at the expense of performance.");
             egui::ComboBox::from_id_salt(ssaa_label.id)

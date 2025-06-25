@@ -252,6 +252,7 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) raytracing_reflections: bool,
     pub(crate) render_distance: u32,
     pub(crate) raytracer_debug: bool,
+    pub(crate) raytracing_specular_downsampling: u32,
 }
 
 #[derive(Debug, Clone, Copy)]

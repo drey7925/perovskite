@@ -1,9 +1,6 @@
 layout(location = 0) in vec3 facedir_world_in;
-layout(location = 0) out vec4 f_color;
 
-layout (constant_id = 0) const bool SPECULAR = true;
-layout (constant_id = 1) const bool FUZZY_SHADOWS = true;
-layout (constant_id = 2) const bool RAYTRACE_DEBUG = false;
+#include "raytracer_spec_constants.glsl"
 
 struct TexRef {
     vec2 top_left;

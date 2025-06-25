@@ -1,14 +1,14 @@
 #version 460
 #include "raytracer_frag_common.glsl"
 
-layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
+//layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
 layout (set = 1, binding = 4, rgba32ui) uniform restrict readonly uimage2D deferred_specular_ray_dir;
+layout (set = 1, binding = 5, rgba8) uniform restrict writeonly image2D specular_result;
 
 void main() {
-    vec3 spec_color = imageLoad(deferred_specular_color, ivec2(gl_FragCoord.xy)).rgb;
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
 
-    f_color = vec4(0.0, 0.0, 0.0, 1.0);
+    vec4 f_color = vec4(0.0, 0.0, 0.0, 1.0);
     vec3 spec_dir = uintBitsToFloat(spec_ray_dir.rgb);
     uint spec_block = spec_ray_dir.a;
     vec3 g0 = normalize(facedir_world_in) * length(spec_dir) + fine_pos;
@@ -54,6 +54,6 @@ void main() {
     if (spec_rgba.a < 0.99) {
         spec_rgba += (1 - spec_rgba.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
     }
-    f_color.rgb += spec_color * spec_rgba.rgb * spec_rgba.a;
-
+    f_color.rgb = spec_rgba.rgb * spec_rgba.a;
+    imageStore(specular_result, ivec2(gl_FragCoord.xy), f_color);
 }

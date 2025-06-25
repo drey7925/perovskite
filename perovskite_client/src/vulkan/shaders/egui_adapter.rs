@@ -95,6 +95,7 @@ impl EguiAdapter {
                 raytracer_debug: false,
                 // irrelevant for this pipeline
                 render_distance: 0,
+                raytracing_specular_downsampling: 1,
             },
         )?;
 
@@ -173,6 +174,7 @@ impl EguiAdapter {
                 raytracing_reflections: false,
                 render_distance: 0,
                 raytracer_debug: false,
+                raytracing_specular_downsampling: 1,
             },
         )?;
         Ok(())

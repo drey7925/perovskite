@@ -26,6 +26,7 @@ pub(crate) mod raytrace_buffer;
 
 use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwap;
+use clap::error::ContextKind::Usage;
 use image::GenericImageView;
 use log::warn;
 use parking_lot::Mutex;
@@ -35,7 +36,6 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use std::{ops::Deref, sync::Arc};
-
 use texture_packer::Rect;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -56,6 +56,7 @@ use vulkano::memory::allocator::{
     AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter,
 };
 use vulkano::memory::{MemoryProperties, MemoryPropertyFlags};
+use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
 use vulkano::swapchain::{ColorSpace, Surface};
 use vulkano::{
     command_buffer::{
@@ -351,8 +352,8 @@ pub(crate) struct VulkanWindow {
     clear_color_depth_render_pass: Arc<RenderPass>,
     color_depth_render_pass: Arc<RenderPass>,
     write_color_read_depth_render_pass: Arc<RenderPass>,
-    color_double_attached_depth_render_pass: Arc<RenderPass>,
     color_only_render_pass: Arc<RenderPass>,
+    depth_stencil_only_render_pass: Arc<RenderPass>,
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<Image>>,
     framebuffers: Vec<FramebufferHolder>,
@@ -581,20 +582,18 @@ impl VulkanWindow {
             color_format,
             depth_stencil_format,
         )?;
-        let color_double_attached_depth_render_pass = make_color_double_attached_depth_render_pass(
-            vk_device.clone(),
-            color_format,
-            depth_stencil_format,
-        )?;
-        let color_only_render_pass = make_non_depth_renderpass(vk_device.clone(), color_format)?;
+        let color_only_render_pass = make_color_only_renderpass(vk_device.clone(), color_format)?;
+        let depth_stencil_only_render_pass =
+            make_depth_only_renderpass(vk_device.clone(), depth_stencil_format)?;
 
         let framebuffers = get_framebuffers_with_depth(
             &swapchain_images,
             memory_allocator.clone(),
             clear_color_depth_render_pass.clone(),
             write_color_read_depth_render_pass.clone(),
-            color_double_attached_depth_render_pass.clone(),
             color_only_render_pass.clone(),
+            depth_stencil_only_render_pass.clone(),
+            color_format,
             depth_stencil_format,
             render_config,
         )?;
@@ -624,8 +623,8 @@ impl VulkanWindow {
             clear_color_depth_render_pass,
             color_depth_render_pass,
             write_color_read_depth_render_pass,
-            color_double_attached_depth_render_pass,
             color_only_render_pass,
+            depth_stencil_only_render_pass,
             swapchain,
             swapchain_images,
             framebuffers,
@@ -659,8 +658,9 @@ impl VulkanWindow {
             self.memory_allocator.clone(),
             self.clear_color_depth_render_pass.clone(),
             self.write_color_read_depth_render_pass.clone(),
-            self.color_double_attached_depth_render_pass.clone(),
             self.color_only_render_pass.clone(),
+            self.depth_stencil_only_render_pass.clone(),
+            self.color_format,
             self.depth_stencil_format,
             config,
         )?;
@@ -691,6 +691,37 @@ impl VulkanWindow {
         )?;
         Ok(())
     }
+    //
+    // fn start_deferred_specular_render_pass_and_clear(
+    //     &self,
+    //     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    //     framebuffer: &FramebufferHolder,
+    // ) -> Result<()> {
+    //     builder.begin_render_pass(
+    //         RenderPassBeginInfo {
+    //             clear_values: vec![
+    //                 // Supersampled color buffer
+    //                 Some(ClearValue::Float([0.0; 4])),
+    //                 // Supersampled depth buffer
+    //                 Some(self.depth_clear_value()),
+    //             ],
+    //             render_pass: self.depth_stencil_only_render_pass.clone(),
+    //             ..RenderPassBeginInfo::framebuffer(
+    //                 framebuffer
+    //                     .deferred_specular_buffers
+    //                     .as_ref()
+    //                     .context("Missing deferred specular buffers")?
+    //                     .specular_framebuffer
+    //                     .clone(),
+    //             )
+    //         },
+    //         SubpassBeginInfo {
+    //             contents: SubpassContents::Inline,
+    //             ..Default::default()
+    //         },
+    //     )?;
+    //     Ok(())
+    // }
 
     fn start_color_depth_render_pass(
         &self,
@@ -730,27 +761,6 @@ impl VulkanWindow {
         Ok(())
     }
 
-    fn start_color_double_attached_depth_render_pass(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffer: &FramebufferHolder,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![None, None, None],
-                render_pass: self.color_double_attached_depth_render_pass.clone(),
-                ..RenderPassBeginInfo::framebuffer(
-                    framebuffer.color_double_attached_depth_pre_blit.clone(),
-                )
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-
     fn start_color_only_render_pass(
         &self,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
@@ -772,6 +782,32 @@ impl VulkanWindow {
             },
             SubpassBeginInfo {
                 contents,
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    fn start_deferred_specular_depth_only_render_pass_and_clear(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer: &FramebufferHolder,
+    ) -> Result<()> {
+        builder.begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values: vec![Some(self.depth_clear_value())],
+                render_pass: self.depth_stencil_only_render_pass.clone(),
+                ..RenderPassBeginInfo::framebuffer(
+                    framebuffer
+                        .deferred_specular_buffers
+                        .as_ref()
+                        .context("Missing deferred specular buffers")?
+                        .specular_framebuffer
+                        .clone(),
+                )
+            },
+            SubpassBeginInfo {
+                contents: SubpassContents::Inline,
                 ..Default::default()
             },
         )?;
@@ -903,45 +939,7 @@ pub(crate) fn make_write_color_read_depth_render_pass(
     .context("Renderpass creation failed")
 }
 
-pub(crate) fn make_color_double_attached_depth_render_pass(
-    vk_device: Arc<Device>,
-    output_format: Format,
-    depth_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            color_ssaa: {
-                format: output_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-            depth_stencil: {
-                format: depth_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-            depth_only_view: {
-                format: depth_format,
-                samples: 1,
-                load_op: Load,
-                store_op: DontCare,
-            },
-        },
-        passes: [
-            {
-                color: [color_ssaa],
-                depth_stencil: {depth_stencil},
-                input: [depth_only_view],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
-}
-
-fn make_non_depth_renderpass(
+fn make_color_only_renderpass(
     vk_device: Arc<Device>,
     output_format: Format,
 ) -> Result<Arc<RenderPass>> {
@@ -959,6 +957,31 @@ fn make_non_depth_renderpass(
             {
                 color: [color],
                 depth_stencil: {},
+                input: [],
+            },
+        ]
+    )
+    .context("Renderpass creation failed")
+}
+
+fn make_depth_only_renderpass(
+    vk_device: Arc<Device>,
+    depth_format: Format,
+) -> Result<Arc<RenderPass>> {
+    vulkano::ordered_passes_renderpass!(
+        vk_device,
+        attachments: {
+            depth: {
+                format: depth_format,
+                samples: 1,
+                load_op: Clear,
+                store_op: Store,
+            },
+        },
+        passes: [
+            {
+                color: [],
+                depth_stencil: {depth},
                 input: [],
             },
         ]
@@ -988,13 +1011,26 @@ pub(crate) struct DeferredSpecularBuffers {
     // R8G8B8A8_UNORM. We have three components, RGB isn't a supported type, so we use RGBA.
     // Not clear what alpha can be used for in general; for now alpha = 0.0 will prevent any
     // specular raytracing from occurring (i.e. it's a validity bit, but we can reclaim it at the
-    // cost of VRAM BW and use specular_ray_dir.alpha instead)
+    // cost of VRAM BW and use specular_ray_dir.alpha instead). Always uses main target resolution
+    // storage image usage
     specular_strength: Arc<ImageView>,
     // The direction of the ray, corresponding to spec_ray_dir
     // R32G32B32A32_UINT - this would naturally be R32G32B32, but that's not well-supported.
     // Note that the ray origin is derived based on the depth buffer.
     // r/g/b are x/y/z reinterpreted as uint32, alpha is the block id
+    // Always uses main target resolution
+    // storage image usage
     specular_ray_dir: Arc<ImageView>,
+    // The actual computed color, in R8G8B8U8_UNORM. Smaller resolution; raytracer will render to
+    // this when doing the deferred specular pass
+    // Is a storage
+    specular_raw_color: Arc<ImageView>,
+    // Native depth type (we really only need the stencil but VK_FORMAT_S8_UINT isn't guaranteed, so
+    // we use the standard depth type for now). Smaller resolution
+    // depth attachment usage
+    specular_stencil: Arc<ImageView>,
+    // A depth/stencil only framebuffer
+    specular_framebuffer: Arc<Framebuffer>,
 }
 
 #[derive(Clone)]
@@ -1003,7 +1039,6 @@ pub(crate) struct FramebufferHolder {
     supersampling: Supersampling,
     color_depth_stencil_pre_blit: Arc<Framebuffer>,
     color_read_depth_pre_blit: Arc<Framebuffer>,
-    color_double_attached_depth_pre_blit: Arc<Framebuffer>,
     color_only_pre_blit: Arc<Framebuffer>,
     deferred_specular_buffers: Option<DeferredSpecularBuffers>,
     // Vector starting with the source and ending with the target. It may be a singleton, but must
@@ -1034,8 +1069,9 @@ pub(crate) fn get_framebuffers_with_depth(
     allocator: Arc<VkAllocator>,
     raster_render_pass: Arc<RenderPass>,
     write_color_read_depth_render_pass: Arc<RenderPass>,
-    color_double_attached_read_depth_render_pass: Arc<RenderPass>,
     color_only_render_pass: Arc<RenderPass>,
+    depth_stencil_only_render_pass: Arc<RenderPass>,
+    color_format: Format,
     depth_format: Format,
     config: LiveRenderConfig,
 ) -> Result<Vec<FramebufferHolder>> {
@@ -1117,17 +1153,6 @@ pub(crate) fn get_framebuffers_with_depth(
                     ..Default::default()
                 },
             )?;
-            let color_double_attached_depth_pre_blit = Framebuffer::new(
-                color_double_attached_read_depth_render_pass.clone(),
-                FramebufferCreateInfo {
-                    attachments: vec![
-                        color_view.clone(),
-                        depth_stencil_view,
-                        depth_only_view.clone(),
-                    ],
-                    ..Default::default()
-                },
-            )?;
 
             let color_only_pre_blit = Framebuffer::new(
                 color_only_render_pass.clone(),
@@ -1151,17 +1176,48 @@ pub(crate) fn get_framebuffers_with_depth(
                     image_extent[1] * config.supersampling.to_int(),
                     1,
                 ];
+                let downsampled_extent = [
+                    image_extent[0] * config.supersampling.to_int()
+                        / config.raytracing_specular_downsampling,
+                    image_extent[1] * config.supersampling.to_int()
+                        / config.raytracing_specular_downsampling,
+                    1,
+                ];
+
+                let specular_raw_color = make_image_and_view(
+                    allocator.clone(),
+                    downsampled_extent,
+                    Format::R8G8B8A8_UNORM,
+                    ImageUsage::STORAGE,
+                )?;
+                let specular_stencil = make_image_and_view(
+                    allocator.clone(),
+                    downsampled_extent,
+                    depth_format,
+                    ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                )?;
                 Some(DeferredSpecularBuffers {
-                    specular_strength: make_storage_image_view(
+                    specular_strength: make_image_and_view(
                         allocator.clone(),
                         extent,
                         Format::R8G8B8A8_UNORM,
+                        ImageUsage::STORAGE,
                     )?,
-                    specular_ray_dir: make_storage_image_view(
+                    specular_ray_dir: make_image_and_view(
                         allocator.clone(),
                         extent,
                         Format::R32G32B32A32_UINT,
+                        ImageUsage::STORAGE,
                     )?,
+                    specular_framebuffer: Framebuffer::new(
+                        depth_stencil_only_render_pass.clone(),
+                        FramebufferCreateInfo {
+                            attachments: vec![specular_stencil.clone()],
+                            ..Default::default()
+                        },
+                    )?,
+                    specular_raw_color,
+                    specular_stencil,
                 })
             } else {
                 None
@@ -1172,7 +1228,6 @@ pub(crate) fn get_framebuffers_with_depth(
                 supersampling: config.supersampling,
                 color_read_depth_pre_blit,
                 color_depth_stencil_pre_blit,
-                color_double_attached_depth_pre_blit,
                 color_only_pre_blit,
                 deferred_specular_buffers,
                 blit_path,
@@ -1183,10 +1238,11 @@ pub(crate) fn get_framebuffers_with_depth(
         .collect::<Result<Vec<_>>>()
 }
 
-fn make_storage_image_view(
+fn make_image_and_view(
     allocator: Arc<VkAllocator>,
     extent: [u32; 3],
     format: Format,
+    usage: ImageUsage,
 ) -> Result<Arc<ImageView>> {
     let image = Image::new(
         allocator.clone(),
@@ -1195,7 +1251,7 @@ fn make_storage_image_view(
             format,
             view_formats: vec![format],
             extent,
-            usage: ImageUsage::STORAGE,
+            usage,
             initial_layout: ImageLayout::Undefined,
             ..Default::default()
         },
