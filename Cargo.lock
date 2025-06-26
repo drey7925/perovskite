@@ -1259,6 +1259,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "css-color"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42aaeae719fd78ce501d77c6cdf01f7e96f26bcd5617a4903a1c2b97e388543a"
+
+[[package]]
 name = "ctor"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3541,6 +3547,7 @@ dependencies = [
  "cpal",
  "criterion",
  "crossbeam-channel",
+ "css-color",
  "directories",
  "egui",
  "egui_plot",

@@ -9,6 +9,8 @@ layout(location = 0) out vec4 f_color;
 
 void main() {
     imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(0));
+    imageStore(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy), uvec4(0));
+
     if (RAYTRACE_DEBUG) {
         vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
         int ix3 = int(pix3.x);
@@ -198,9 +200,5 @@ void main() {
         info.start_cc = mix(info.start_cc, info.end_cc, 0.5);
         g0 = (vec3(info.hit_block) + info.start_cc) / 16.0;
     }
-    if (!SPECULAR) {
-        return;
-    }
-
 
 }

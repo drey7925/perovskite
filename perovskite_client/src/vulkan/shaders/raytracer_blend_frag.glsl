@@ -9,7 +9,7 @@ layout(location = 0) out vec4 f_color;
 
 void main() {
     ivec2 max_coord = imageSize(specular_result).xy - ivec2(1, 1);
-    ivec2 coord = clamp(ivec2(gl_FragCoord.xy / SPECULAR_DOWNSAMPLING), ivec2(0, 0), ivec2(max_coord));
+    ivec2 coord = clamp(ivec2(gl_FragCoord.xy) / int(SPECULAR_DOWNSAMPLING), ivec2(0, 0), ivec2(max_coord));
 
     f_color = vec4(0, 0, 0, 0);
     // avoid optimizing out deferred_specular_ray_dir for now

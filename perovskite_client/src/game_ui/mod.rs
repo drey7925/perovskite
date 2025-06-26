@@ -9,10 +9,12 @@ use parking_lot::Mutex;
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
+use self::{egui_ui::EguiUi, hud::GameHud};
 use crate::client_state::settings::GameSettings;
+use crate::media::load_or_generate_image;
 use crate::{
-    cache::CacheManager,
     client_state::items::ClientItemManager,
+    media::CacheManager,
     vulkan::{
         block_renderer::BlockRenderer, mini_renderer::MiniBlockRenderer, Texture2DHolder,
         VulkanContext,
@@ -21,8 +23,6 @@ use crate::{
 use anyhow::{bail, Error, Result};
 use arc_swap::ArcSwap;
 use perovskite_core::protocol::items::item_def::Appearance;
-
-use self::{egui_ui::EguiUi, hud::GameHud};
 
 pub(crate) mod egui_ui;
 pub(crate) mod hud;
@@ -88,7 +88,7 @@ async fn build_texture_atlas(
     let mut simple_textures = HashMap::new();
     let rendered_block_textures = Arc::new(Mutex::new(HashMap::new()));
     for name in all_texture_names {
-        let texture = cache_manager.load_media_by_name(&name).await?;
+        let texture = load_or_generate_image(cache_manager, &name).await?;
         simple_textures.insert(name, texture);
     }
 
@@ -225,8 +225,7 @@ async fn build_texture_atlas(
         pack_tex(
             &mut texture_packer,
             &("simple:".to_string() + &name),
-            ImageImporter::import_from_memory(&texture)
-                .map_err(|x| Error::msg(format!("Texture import failed: {:?}", x)))?,
+            texture,
         )?;
     }
     for (name, texture) in rendered_block_textures.lock().drain() {
@@ -279,7 +278,7 @@ async fn build_texture_atlas(
         }
     }
 
-    let texture_atlas = Arc::new(Texture2DHolder::create(&ctx, &texture_atlas)?);
+    let texture_atlas = Arc::new(Texture2DHolder::from_srgb(&ctx, &texture_atlas)?);
     Ok((texture_atlas, texture_coords))
 }
 

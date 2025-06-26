@@ -1,24 +1,59 @@
 #![allow(unused)]
 
-use anyhow::{bail, Context, Error, Result};
+use anyhow::{anyhow, bail, Context, Error, Result};
 use futures::Future;
-
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    pin::{pin, Pin},
-};
-
-use directories::ProjectDirs;
-use perovskite_core::protocol::{
-    blocks::BlockTypeDef, game_rpc::ListMediaResponse, items::ItemDef, render::TextureReference,
-};
-use sha2::{Digest, Sha256};
 
 use crate::{
     client_state::settings::{clean_path, project_dirs},
     net_client::AsyncMediaLoader,
 };
+use directories::ProjectDirs;
+use image::{DynamicImage, GenericImage};
+use perovskite_core::constants::{
+    GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS, GENERATED_TEXTURE_PREFIX,
+};
+use perovskite_core::protocol::{
+    blocks::BlockTypeDef, game_rpc::ListMediaResponse, items::ItemDef, render::TextureReference,
+};
+use sha2::{Digest, Sha256};
+use std::str::FromStr;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    pin::{pin, Pin},
+};
+use texture_packer::importer::ImageImporter;
+
+fn generate_image(name: &str) -> Result<DynamicImage> {
+    if let Some(css) = name.strip_prefix(GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS) {
+        let mut image = DynamicImage::new_rgba8(1, 1);
+        let color = css_color::Srgb::from_str(css)
+            .map_err(|_| anyhow!(format!("Failed to parse {css} as a CSS color")))?;
+        image.put_pixel(
+            0,
+            0,
+            image::Rgba(
+                [color.red, color.green, color.blue, color.alpha]
+                    .map(|x| ((x * 255.0) as u32).clamp(0, 255) as u8),
+            ),
+        );
+        return Ok(image);
+    }
+    bail!("Unknown generated image directive {name}");
+}
+
+pub(crate) async fn load_or_generate_image(
+    cache_manager: &mut CacheManager,
+    name: &str,
+) -> Result<DynamicImage> {
+    if name.starts_with(GENERATED_TEXTURE_PREFIX) {
+        return tokio::task::block_in_place(|| generate_image(name));
+    }
+
+    let texture = cache_manager.load_media_by_name(&name).await?;
+    ImageImporter::import_from_memory(&texture)
+        .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))
+}
 
 pub(crate) struct CacheManager {
     file_hashes: HashMap<String, [u8; 32]>,

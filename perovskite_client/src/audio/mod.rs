@@ -26,11 +26,11 @@ use seqlock::SeqLock;
 use smallvec::SmallVec;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
-use crate::cache::CacheManager;
 use crate::client_state::entities::GameEntity;
 use crate::client_state::settings::GameSettings;
 use crate::client_state::timekeeper::Timekeeper;
 use crate::client_state::ClientState;
+use crate::media::CacheManager;
 
 // Public for testing
 pub struct EngineHandle {

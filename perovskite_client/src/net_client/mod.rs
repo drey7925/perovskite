@@ -47,11 +47,11 @@ use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::VulkanContext;
 use crate::{
     audio,
-    cache::CacheManager,
     client_state::{
         block_types::ClientBlockTypeManager, items::ClientItemManager, settings::GameSettings,
         timekeeper::Timekeeper, ClientState,
     },
+    media::CacheManager,
     vulkan::{block_renderer::BlockRenderer, entity_renderer::EntityRenderer},
 };
 

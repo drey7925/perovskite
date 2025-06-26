@@ -174,3 +174,11 @@ pub mod permissions {
     /// However, plugins may check eligible permissions for their own purposes if they wish to.
     pub const ELIGIBLE_PREFIX: &str = "eligible:";
 }
+
+/// Prefix for media that are generated on the fly by the client
+///
+/// Currently supported: `generated:solid_css:[A CSS COLOR]`, e.g.
+///   * `generated:solid_css:rgb(0 255 0)` (with embedded spaces)
+///   * `generated:solid_css:lime`
+pub const GENERATED_TEXTURE_PREFIX: &str = "generated:";
+pub const GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS: &str = "generated:solid_css:";

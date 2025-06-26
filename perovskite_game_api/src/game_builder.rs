@@ -48,6 +48,14 @@ pub struct OwnedTextureName(pub String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StaticTextureName(pub &'static str);
 
+impl OwnedTextureName {
+    /// Creates a texture that's a solid color; CSS colors of the form `rgb(0 255 0)` or `orange`
+    /// are accepted.
+    pub fn from_css_color(color: &str) -> OwnedTextureName {
+        OwnedTextureName(GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS.to_string() + color)
+    }
+}
+
 trait TextureName {
     fn name(&self) -> &str;
 }
@@ -487,6 +495,7 @@ macro_rules! include_texture_bytes {
     };
 }
 pub use include_texture_bytes;
+use perovskite_core::constants::GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS;
 use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_server::media::SoundKey;
 

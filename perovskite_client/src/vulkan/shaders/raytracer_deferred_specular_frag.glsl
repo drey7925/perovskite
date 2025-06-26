@@ -20,7 +20,6 @@ void main() {
         f_color = vec4(0.25, 0.0, 0.0, 1.0);
         return;
     }
-    // we just had a specular, so t0 is 0 and start is just spec_start;
     vec3 g1 = g0 + (spec_dir * t_min_max.y);
     vec4 spec_rgba = vec4(0);
     for (int i = 0; i < 3; i++) {

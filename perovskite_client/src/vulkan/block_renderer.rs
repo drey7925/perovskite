@@ -38,13 +38,13 @@ use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 
 use super::{RectF32, VkAllocator};
-use crate::cache::CacheManager;
 use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
     ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim,
     RAYTRACE_FALLBACK_RECLAIMER, SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
 };
 use crate::client_state::ClientState;
+use crate::media::{load_or_generate_image, CacheManager};
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::shaders::raytracer::{FaceTex, SimpleCubeInfo, TexRef};
@@ -553,9 +553,9 @@ impl BlockRenderer {
         }
 
         let mut all_textures = FxHashMap::default();
-        for x in all_texture_names {
-            let texture = cache_manager.load_media_by_name(&x).await?;
-            all_textures.insert(x, texture);
+        for texture_name in all_texture_names {
+            let texture = load_or_generate_image(cache_manager, &texture_name).await?;
+            all_textures.insert(texture_name, texture);
         }
 
         let config = texture_packer::TexturePackerConfig {
@@ -595,8 +595,6 @@ impl BlockRenderer {
             .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
 
         for (name, texture) in all_textures {
-            let texture = ImageImporter::import_from_memory(&texture)
-                .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))?;
             texture_packer
                 .pack_own(name, texture)
                 .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
@@ -669,7 +667,7 @@ impl BlockRenderer {
                 .collect(),
         };
 
-        let texture_atlas = Arc::new(Texture2DHolder::create(ctx.deref(), &texture_atlas)?);
+        let texture_atlas = Arc::new(Texture2DHolder::from_srgb(ctx.deref(), &texture_atlas)?);
 
         let selection_rect: RectF32 = (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into();
         let fallback_rect: RectF32 =
