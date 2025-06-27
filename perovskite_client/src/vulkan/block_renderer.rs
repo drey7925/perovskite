@@ -723,8 +723,19 @@ impl BlockRenderer {
         let max_block_id = ((self.raytrace_control_ssbo.len() as u32) << 12) - 1;
         let mut flags = FLAG_HASHTABLE_PRESENT;
 
-        let blocks = if block_ids.iter().any(|x| x.0 > max_block_id) {
-            Some(Box::new(block_ids.map(|x| x.0.min(max_block_id))))
+        let blocks = if block_ids
+            .iter()
+            .any(|x| x.0 > max_block_id || !self.block_defs.is_raytrace_present(*x))
+        {
+            Some(Box::new(block_ids.map(|x| {
+                if x.0 > max_block_id {
+                    0
+                } else if !self.block_defs.is_raytrace_present(x) {
+                    0
+                } else {
+                    x.0
+                }
+            })))
         } else {
             None
         };

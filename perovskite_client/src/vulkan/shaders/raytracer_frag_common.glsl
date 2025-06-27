@@ -227,7 +227,7 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
         if ((block_id != 0)
         && ((block_id & 0xfffff000u) != (info.block_id & 0xfffff000u))
         && (block_id != 0xffffffff)
-        && ((cube_info[block_id >> 12].flags & 4u) == 0)) {
+        && ((cube_info[block_id >> 12].flags & SKIP_MASK) == 0)) {
             info.block_id = block_id;
             uint l_offset = 343+(offset) + face_backoffs_offset[info.face_light & 7u];
             uint raw_light = chunks[light_base + (l_offset / 4)] >> (8 * (l_offset & 3u));

@@ -1,4 +1,5 @@
 #version 460
+#define SKIP_MASK 4u
 #include "raytracer_frag_common.glsl"
 
 layout (set = 1, binding = 3, rgba8) uniform restrict writeonly image2D deferred_specular_color;
@@ -198,7 +199,7 @@ void main() {
             }
         }
         info.start_cc = mix(info.start_cc, info.end_cc, 0.5);
-        g0 = (vec3(info.hit_block) + info.start_cc) / 16.0;
+        g0 = (vec3(info.hit_block) + info.end_cc) / 16.0;
     }
 
 }

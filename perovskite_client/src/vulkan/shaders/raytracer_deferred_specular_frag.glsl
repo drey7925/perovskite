@@ -1,4 +1,5 @@
 #version 460
+#define SKIP_MASK 0u
 #include "raytracer_frag_common.glsl"
 
 //layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
