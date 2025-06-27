@@ -79,6 +79,7 @@ pub const DESERT_SAND: StaticBlockName = StaticBlockName("default:desert_sand");
 
 /// Transparent glass.
 pub const GLASS: StaticBlockName = StaticBlockName("default:glass");
+pub const GLASS_DICHROIC: StaticBlockName = StaticBlockName("default:glass_dichroic");
 
 /// Torch
 pub const TORCH: StaticBlockName = StaticBlockName("default:torch");
@@ -114,6 +115,8 @@ const CLAY_TEXTURE: StaticTextureName = StaticTextureName("default:clay");
 const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:desert_stone");
 const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
 const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
+const GLASS_DICHROIC_TEXTURE: StaticTextureName = StaticTextureName("default:_glass_dichroic");
+
 const WATER_TEXTURE: StaticTextureName = StaticTextureName("default:water");
 const RT_SPECULAR_TEST: StaticTextureName = StaticTextureName("default:rt_specular_test");
 
@@ -547,6 +550,11 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     )?;
 
     include_texture_bytes!(game_builder, GLASS_TEXTURE, "textures/glass.png")?;
+    include_texture_bytes!(
+        game_builder,
+        GLASS_DICHROIC_TEXTURE,
+        "textures/glass_dichroic.png"
+    )?;
 
     include_texture_bytes!(game_builder, WATER_TEXTURE, "textures/water.png")?;
     include_texture_bytes!(
@@ -911,6 +919,21 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_allow_light_propagation(true)
             .set_display_name("Glass"),
+    )?;
+
+    let _glass_dichroic = game_builder.add_block(
+        BlockBuilder::new(GLASS_DICHROIC)
+            .add_block_group(BRITTLE)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(TextureReference {
+                        rt_specular: OwnedTextureName::from_css_color("#ffff00").0,
+                        ..TextureReference::from(GLASS_DICHROIC_TEXTURE)
+                    })
+                    .set_needs_transparency(),
+            )
+            .set_allow_light_propagation(true)
+            .set_display_name("Dichroic Glass"),
     )?;
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
