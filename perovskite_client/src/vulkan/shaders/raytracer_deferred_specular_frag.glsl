@@ -31,23 +31,27 @@ void main() {
         spec_block,
         0,
         };
-        if (traverse_space(g0, g1, info)) {
-            // traverse_space will fill info w/ valid data iff it returns true
-            uint idx = info.block_id >> 12;
-            if (idx >= max_cube_info_idx) {
-                // CPU-side code should fix this and we should never enter this branch
-                f_color = vec4(1.0, 0.0, 0.0, 1.0);
-                return;
-            }
-            if ((cube_info[idx].flags & 1) != 0) {
-                vec4 sampled = sample_simple(info, idx, false).diffuse;
-                float alpha_contrib = sampled.a * (1 - spec_rgba.a);
-                spec_rgba.rgb += alpha_contrib * sampled.rgb;
-                spec_rgba.a += alpha_contrib;
-            }
-
-            vec3 midpoint = (info.start_cc + info.end_cc) / 2;
-            g0 = (vec3(info.hit_block) + midpoint) / 16.0 - fine_pos;
+        if (!traverse_space(g0, g1, info)) {
+            break;
+        }
+        // traverse_space will fill info w/ valid data iff it returns true
+        uint idx = info.block_id >> 12;
+        if (idx >= max_cube_info_idx) {
+            // CPU-side code should fix this and we should never enter this branch
+            f_color = vec4(1.0, 0.0, 0.0, 1.0);
+            return;
+        }
+        if ((cube_info[idx].flags & 1) != 0) {
+            vec4 sampled = sample_simple(info, idx, false).diffuse;
+            float alpha_contrib = sampled.a * (1 - spec_rgba.a);
+            spec_rgba.rgb += alpha_contrib * sampled.rgb;
+            spec_rgba.a += alpha_contrib;
+        }
+        spec_block = info.block_id;
+        vec3 midpoint = (info.start_cc + info.end_cc) / 2;
+        g0 = (vec3(info.hit_block) + midpoint) / 16.0;
+        if (spec_rgba.a > 0.75) {
+            break;
         }
     }
 
