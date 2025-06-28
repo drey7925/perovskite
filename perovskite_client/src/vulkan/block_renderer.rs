@@ -1214,13 +1214,14 @@ impl BlockRenderer {
                 }
             }
         };
+        let buffer = VkBufferGpu::<CubeGeometryVertex> { vtx, idx };
         Ok(Some(CubeGeometryDrawCall {
             model_matrix,
             models: VkChunkVertexDataGpu {
                 opaque: None,
-                transparent: Some(VkBufferGpu::<CubeGeometryVertex> { vtx, idx }),
+                transparent: Some(buffer.clone()),
                 translucent: None,
-                raytrace_fallback: None,
+                raytrace_fallback: Some(buffer),
             },
         }))
     }

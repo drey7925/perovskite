@@ -10,10 +10,10 @@ void main() {
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
 
     vec4 f_color = vec4(0.0, 0.0, 0.0, 1.0);
-    vec3 spec_dir = uintBitsToFloat(spec_ray_dir.rgb);
+    vec3 spec_dir_len = uintBitsToFloat(spec_ray_dir.rgb);
     uint spec_block = spec_ray_dir.a;
-    vec3 g0 = normalize(facedir_world_in) * length(spec_dir) + fine_pos;
-    spec_dir = normalize(spec_dir);
+    vec3 spec_dir = normalize(spec_dir_len);
+    vec3 g0 = normalize(facedir_world_in) * length(spec_dir_len) + fine_pos - 0.001 * (spec_dir);
 
     vec2 t_min_max = t_range(g0, spec_dir);
 
@@ -39,13 +39,14 @@ void main() {
         if (idx >= max_cube_info_idx) {
             // CPU-side code should fix this and we should never enter this branch
             f_color = vec4(1.0, 0.0, 0.0, 1.0);
-            return;
+            break;
         }
         if ((cube_info[idx].flags & 1) != 0) {
             vec4 sampled = sample_simple(info, idx, false).diffuse;
             float alpha_contrib = sampled.a * (1 - spec_rgba.a);
             spec_rgba.rgb += alpha_contrib * sampled.rgb;
             spec_rgba.a += alpha_contrib;
+            //spec_rgba = vec4(info.start_cc, 1.0);
         }
         spec_block = info.block_id;
         vec3 midpoint = (info.start_cc + info.end_cc) / 2;

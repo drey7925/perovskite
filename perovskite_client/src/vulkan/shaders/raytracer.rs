@@ -145,7 +145,9 @@ impl RaytracedPipelineWrapper {
                 per_frame_config.scene_state.sun_direction.z,
             ]
             .into(),
-            render_distance: per_frame_config.render_distance,
+            // Add 2 to allow for a bit of jank between chunkloader distance
+            // and renderer distance
+            render_distance: per_frame_config.render_distance + 2,
             initial_block_id: per_frame_config.scene_state.player_pos_block,
         };
 
