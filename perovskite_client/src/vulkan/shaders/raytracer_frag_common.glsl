@@ -7,18 +7,14 @@ struct TexRef {
     vec2 width_height;
 };
 
-struct FaceTex {
-    TexRef diffuse;
-    TexRef specular;
-};
-
 struct SimpleCubeInfo {
     uint flags;
-    FaceTex tex[6];
+    TexRef tex[6];
 };
 
-layout(set = 0, binding = 0) uniform sampler2D tex;
-layout(set = 0, binding = 1) readonly buffer RaytraceControl {
+layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
+layout(set = 0, binding = 1) uniform sampler2D specular_tex;
+layout(set = 0, binding = 2) readonly buffer RaytraceControl {
     SimpleCubeInfo cube_info[];
 };
 
@@ -393,26 +389,23 @@ SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     uint face = info.face_light & 7u;
 
     // TODO: variant-based rotation
-    vec2 tl = cube_info[idx].tex[face].diffuse.top_left;
-    vec2 wh = cube_info[idx].tex[face].diffuse.width_height;
+    vec2 tl = cube_info[idx].tex[face].top_left;
+    vec2 wh = cube_info[idx].tex[face].width_height;
     vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[face];
+    vec2 texel = tl + (uv * wh);
 
-    vec4 diffuse = texture(tex, tl + (uv * wh));
+    vec4 diffuse = texture(diffuse_tex, texel);
     vec4 specular = vec4(0);
 
     if (SPECULAR) {
-        if (want_spec && ((cube_info[idx].flags & 8) != 0)) {
-            tl = cube_info[idx].tex[face].specular.top_left;
-            wh = cube_info[idx].tex[face].specular.width_height;
-            uv = vec4(info.start_cc, 1) * face_swizzlers[face];
-
-            specular = texture(tex, tl + (uv * wh));
+        if (want_spec) {
+            specular = texture(specular_tex, texel);
         }
     }
 
     // For debugging
     // allow seeing some of the texture, plus avoid the sampler disappearing from the final shader program
-    //vec4 tex_color = vec4(debug_face_colors[info.face], 1.0) + 0.05 * texture(tex, tl + (uv * wh));
+    //vec4 tex_color = vec4(debug_face_colors[info.face], 1.0) + 0.05 * texture(tex, texel);
 
     float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.face_light, 12, 4)];
     float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(face)));

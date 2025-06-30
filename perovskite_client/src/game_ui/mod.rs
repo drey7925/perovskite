@@ -6,7 +6,6 @@ use std::{
 
 use image::{DynamicImage, RgbImage};
 use parking_lot::Mutex;
-use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
 use self::{egui_ui::EguiUi, hud::GameHud};
@@ -225,7 +224,7 @@ async fn build_texture_atlas(
         pack_tex(
             &mut texture_packer,
             &("simple:".to_string() + &name),
-            texture,
+            DynamicImage::ImageRgba8(texture),
         )?;
     }
     for (name, texture) in rendered_block_textures.lock().drain() {
@@ -237,7 +236,7 @@ async fn build_texture_atlas(
     }
 
     let fallback_rect = texture_packer
-        .get_frame(&String::from(FALLBACK_UNKNOWN_TEXTURE))
+        .get_frame(&String::from(UNKNOWN_TEXTURE))
         .unwrap()
         .frame;
 
@@ -278,7 +277,10 @@ async fn build_texture_atlas(
         }
     }
 
-    let texture_atlas = Arc::new(Texture2DHolder::from_srgb(&ctx, &texture_atlas)?);
+    let texture_atlas = Arc::new(Texture2DHolder::from_srgb(
+        &ctx,
+        texture_atlas.into_rgba8(),
+    )?);
     Ok((texture_atlas, texture_coords))
 }
 

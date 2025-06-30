@@ -15,14 +15,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
 use cgmath::num_traits::Num;
 use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-
-use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
 use perovskite_core::protocol::blocks::{
@@ -45,9 +44,10 @@ use crate::client_state::chunk::{
 };
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
+use crate::vulkan::atlas::{NamedTextureKey, TextureAtlas, TextureKey};
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
-use crate::vulkan::shaders::raytracer::{FaceTex, SimpleCubeInfo, TexRef};
+use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
 use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
@@ -55,9 +55,6 @@ use perovskite_core::protocol::game_rpc::EntityTarget;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-
-const SELECTION_RECTANGLE: &str = "builtin:selection_rectangle";
-const TESTONLY_ENTITY: &str = "builtin:testonly_entity";
 
 /// Given in game world coordinates (Y is up)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
@@ -403,34 +400,20 @@ fn get_selector_shift(bits: u32) -> u32 {
 
 #[inline]
 fn get_texture(
-    texture_coords: &FxHashMap<String, Rect>,
+    texture_coords: &FxHashMap<TextureKey, Rect>,
     tex: Option<&TextureReference>,
     width: f32,
     height: f32,
-) -> PbrData {
+) -> MaybeDynamicRect {
     let crop = tex.and_then(|tex| tex.crop.as_ref());
 
-    let diffuse = make_maybe_dynamic(
-        tex.and_then(|tex| texture_coords.get(&tex.diffuse).copied())
-            .unwrap_or_else(|| *texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()),
+    make_maybe_dynamic(
+        tex.and_then(|tex| texture_coords.get(&TextureKey::from(tex)).copied())
+            .unwrap_or_else(|| *texture_coords.get(&TextureKey::FallbackUnknownTex).unwrap()),
         crop,
         width,
         height,
-    );
-    let rt_specular = tex.and_then(|tex| {
-        if tex.rt_specular.is_empty() {
-            None
-        } else {
-            Some(texture_coords.get(&tex.rt_specular).copied())
-                .unwrap_or_else(|| Some(*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()))
-                .map(|x| make_maybe_dynamic(x, crop, width, height))
-        }
-    });
-
-    PbrData {
-        diffuse,
-        rt_specular,
-    }
+    )
 }
 
 fn make_maybe_dynamic(
@@ -490,12 +473,11 @@ fn crop_texture(crop: &TextureCrop, r: RectF32) -> RectF32 {
 /// for the game.
 pub(crate) struct BlockRenderer {
     block_defs: Arc<ClientBlockTypeManager>,
-    texture_atlas: Arc<Texture2DHolder>,
+    texture_atlas: TextureAtlas,
     selection_box_tex_coord: RectF32,
     fallback_tex_coord: RectF32,
     simple_block_tex_coords: SimpleTexCoordCache,
     axis_aligned_box_blocks: AxisAlignedBoxBlocksCache,
-    fake_entity_tex_coords: RectF32,
     vk_ctx: Arc<VulkanContext>,
     raytrace_control_ssbo: Subbuffer<[SimpleCubeInfo]>,
 }
@@ -514,14 +496,16 @@ impl BlockRenderer {
         cache_manager: &mut CacheManager,
         ctx: Arc<VulkanContext>,
     ) -> Result<BlockRenderer> {
-        let mut all_texture_names = HashSet::new();
+        let mut fetch_textures = HashSet::new();
+        let mut pack_textures: HashSet<TextureKey> = HashSet::new();
         for def in block_type_manager.all_block_defs() {
             let mut insert_if_present = |tex: &Option<TextureReference>| {
                 if let Some(tex) = tex {
-                    all_texture_names.insert(tex.diffuse.clone());
+                    fetch_textures.insert(tex.diffuse.clone());
                     if !tex.rt_specular.is_empty() {
-                        all_texture_names.insert(tex.rt_specular.clone());
+                        fetch_textures.insert(tex.rt_specular.clone());
                     }
+                    pack_textures.insert(tex.into());
                 }
             };
             match &def.render_info {
@@ -552,68 +536,13 @@ impl BlockRenderer {
             }
         }
 
-        let mut all_textures = FxHashMap::default();
-        for texture_name in all_texture_names {
+        let mut fetched_textures = FxHashMap::default();
+        for texture_name in fetch_textures {
             let texture = load_or_generate_image(cache_manager, &texture_name).await?;
-            all_textures.insert(texture_name, texture);
+            fetched_textures.insert(texture_name, texture);
         }
 
-        let config = texture_packer::TexturePackerConfig {
-            // todo break these out into config
-            allow_rotation: false,
-            max_width: 4096,
-            max_height: 4096,
-            border_padding: 2,
-            texture_padding: 2,
-            texture_extrusion: 2,
-            trim: false,
-            texture_outlines: false,
-            force_max_dimensions: false,
-        };
-        let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
-        // TODO move these files to a sensible location
-        texture_packer
-            .pack_own(
-                String::from(FALLBACK_UNKNOWN_TEXTURE),
-                ImageImporter::import_from_memory(include_bytes!("block_unknown.png")).unwrap(),
-            )
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-        texture_packer
-            .pack_own(
-                String::from(SELECTION_RECTANGLE),
-                ImageImporter::import_from_memory(include_bytes!("selection.png")).unwrap(),
-            )
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-        texture_packer
-            .pack_own(
-                String::from(TESTONLY_ENTITY),
-                ImageImporter::import_from_memory(include_bytes!("temporary_player_entity.png"))
-                    .unwrap(),
-            )
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-        for (name, texture) in all_textures {
-            texture_packer
-                .pack_own(name, texture)
-                .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-        }
-
-        let mut image = RgbaImage::new(1, 1);
-        image.put_pixel(0, 0, image::Rgba([0, 0, 0, 1]));
-        texture_packer
-            .pack_own(BLACK_PIXEL.to_string(), DynamicImage::ImageRgba8(image))
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-        let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
-            .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
-        let texture_coords: FxHashMap<String, Rect> = texture_packer
-            .get_frames()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.frame))
-            .collect();
-
+        let texture_atlas = TextureAtlas::new(&ctx, pack_textures, fetched_textures)?;
         let simple_block_tex_coords = SimpleTexCoordCache {
             blocks: block_type_manager
                 .block_defs()
@@ -622,10 +551,10 @@ impl BlockRenderer {
                     x.as_ref().and_then(|x| {
                         build_simple_cache_entry(
                             x,
-                            &texture_coords,
+                            &texture_atlas.texel_coords,
                             &block_type_manager,
-                            texture_atlas.width() as f32,
-                            texture_atlas.height() as f32,
+                            texture_atlas.width as f32,
+                            texture_atlas.height as f32,
                         )
                     })
                 })
@@ -637,14 +566,14 @@ impl BlockRenderer {
             .map(|x| match x.as_ref() {
                 None => SimpleCubeInfo {
                     flags: 0.into(),
-                    tex: [FaceTex::default(); 6],
+                    tex: [TexRef::default(); 6],
                 },
                 Some(x) => build_ssbo_entry(
                     &x,
-                    &texture_coords,
+                    &texture_atlas.texel_coords,
                     &block_type_manager,
-                    texture_atlas.width() as f32,
-                    texture_atlas.height() as f32,
+                    texture_atlas.width as f32,
+                    texture_atlas.height as f32,
                 ),
             });
         let raytrace_control_ssbo =
@@ -658,28 +587,31 @@ impl BlockRenderer {
                     x.as_ref().and_then(|x| {
                         build_axis_aligned_box_cache_entry(
                             x,
-                            &texture_coords,
-                            texture_atlas.width() as f32,
-                            texture_atlas.height() as f32,
+                            &texture_atlas.texel_coords,
+                            texture_atlas.width as f32,
+                            texture_atlas.height as f32,
                         )
                     })
                 })
                 .collect(),
         };
 
-        let texture_atlas = Arc::new(Texture2DHolder::from_srgb(ctx.deref(), &texture_atlas)?);
-
-        let selection_rect: RectF32 = (*texture_coords.get(SELECTION_RECTANGLE).unwrap()).into();
-        let fallback_rect: RectF32 =
-            (*texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap()).into();
-        let fake_entity_rect: RectF32 = (*texture_coords.get(TESTONLY_ENTITY).unwrap()).into();
-        let atlas_dims = texture_atlas.dimensions();
+        let selection_rect: RectF32 = texture_atlas
+            .texel_coords
+            .get(&TextureKey::SelectionRectangle)
+            .unwrap()
+            .into();
+        let fallback_rect: RectF32 = texture_atlas
+            .texel_coords
+            .get(&TextureKey::SelectionRectangle)
+            .unwrap()
+            .into();
+        let atlas_dims = (texture_atlas.width, texture_atlas.height);
         Ok(BlockRenderer {
             block_defs: block_type_manager,
             texture_atlas,
             selection_box_tex_coord: selection_rect.div(atlas_dims),
             fallback_tex_coord: fallback_rect.div(atlas_dims),
-            fake_entity_tex_coords: fake_entity_rect.div(atlas_dims),
             simple_block_tex_coords,
             axis_aligned_box_blocks,
             raytrace_control_ssbo,
@@ -691,7 +623,7 @@ impl BlockRenderer {
         &self.block_defs
     }
 
-    pub(crate) fn atlas(&self) -> &Texture2DHolder {
+    pub(crate) fn atlas(&self) -> &TextureAtlas {
         &self.texture_atlas
     }
 
@@ -1225,17 +1157,11 @@ impl BlockRenderer {
             },
         }))
     }
-
-    // TODO stop relying on the block renderer to render entities, or clean up
-    // responsibility
-    pub(crate) fn fake_entity_tex_coords(&self) -> RectF32 {
-        self.fake_entity_tex_coords
-    }
 }
 
 fn build_axis_aligned_box_cache_entry(
     x: &BlockTypeDef,
-    texture_coords: &FxHashMap<String, Rect>,
+    texture_coords: &FxHashMap<TextureKey, Rect>,
     atlas_w: f32,
     atlas_h: f32,
 ) -> Option<Box<[CachedAxisAlignedBox]>> {
@@ -1253,21 +1179,21 @@ fn build_axis_aligned_box_cache_entry(
 
             // plantlike overrides box-like
             let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
-                CachedAabbTextures::Plantlike(
-                    get_texture(texture_coords, Some(plantlike), atlas_w, atlas_h).diffuse,
-                )
+                CachedAabbTextures::Plantlike(get_texture(
+                    texture_coords,
+                    Some(plantlike),
+                    atlas_w,
+                    atlas_h,
+                ))
             } else {
-                CachedAabbTextures::Prism(
-                    [
-                        get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
-                        get_texture(texture_coords, aa_box.tex_left.as_ref(), atlas_w, atlas_h),
-                        get_texture(texture_coords, aa_box.tex_top.as_ref(), atlas_w, atlas_h),
-                        get_texture(texture_coords, aa_box.tex_bottom.as_ref(), atlas_w, atlas_h),
-                        get_texture(texture_coords, aa_box.tex_back.as_ref(), atlas_w, atlas_h),
-                        get_texture(texture_coords, aa_box.tex_front.as_ref(), atlas_w, atlas_h),
-                    ]
-                    .map(|x| x.diffuse),
-                )
+                CachedAabbTextures::Prism([
+                    get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_left.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_top.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_bottom.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_back.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_front.as_ref(), atlas_w, atlas_h),
+                ])
             };
             if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
                 log::warn!(
@@ -1297,12 +1223,11 @@ pub(crate) mod rt_flags {
     pub(crate) const FLAG_BLOCK_PRESENT: u32 = 1;
     pub(crate) const FLAG_BLOCK_ROTATE_NESW: u32 = 2;
     pub(crate) const FLAG_BLOCK_FALLBACK: u32 = 4;
-    pub(crate) const FLAG_BLOCK_HAS_SPECULAR: u32 = 8;
 }
 
 fn build_simple_cache_entry(
     block_def: &BlockTypeDef,
-    texture_coords: &FxHashMap<String, Rect>,
+    texture_coords: &FxHashMap<TextureKey, Rect>,
     block_type_manager: &ClientBlockTypeManager,
     w: f32,
     h: f32,
@@ -1317,27 +1242,24 @@ fn build_simple_cache_entry(
             if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
                 flags |= FLAG_BLOCK_FALLBACK;
             }
-            let coords = get_cube_coords(texture_coords, w, h, render_info).map(|x| x.diffuse);
-
-            Some(SimpleTexCoordEntry { coords })
-        }
-        Some(RenderInfo::PlantLike(render_info)) => {
-            let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
             Some(SimpleTexCoordEntry {
-                coords: [coords.diffuse; 6],
+                coords: get_cube_coords(texture_coords, w, h, render_info),
             })
         }
+        Some(RenderInfo::PlantLike(render_info)) => Some(SimpleTexCoordEntry {
+            coords: [get_texture(texture_coords, render_info.tex.as_ref(), w, h); 6],
+        }),
         _ => None,
     }
 }
 
 #[inline]
 fn get_cube_coords(
-    tex_coords: &FxHashMap<String, Rect>,
+    tex_coords: &FxHashMap<TextureKey, Rect>,
     w: f32,
     h: f32,
     render_info: &CubeRenderInfo,
-) -> [PbrData; 6] {
+) -> [MaybeDynamicRect; 6] {
     [
         get_texture(tex_coords, render_info.tex_right.as_ref(), w, h),
         get_texture(tex_coords, render_info.tex_left.as_ref(), w, h),
@@ -1350,7 +1272,7 @@ fn get_cube_coords(
 
 fn build_ssbo_entry(
     block_def: &BlockTypeDef,
-    texture_coords: &FxHashMap<String, Rect>,
+    texture_coords: &FxHashMap<TextureKey, Rect>,
     block_type_manager: &ClientBlockTypeManager,
     w: f32,
     h: f32,
@@ -1365,28 +1287,23 @@ fn build_ssbo_entry(
             if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
                 flags |= FLAG_BLOCK_FALLBACK;
             }
-            let pbr_data = get_cube_coords(texture_coords, w, h, render_info);
-
-            if pbr_data.iter().any(|x| x.rt_specular.is_some()) {
-                flags |= FLAG_BLOCK_HAS_SPECULAR;
-            }
-
+            let coords = get_cube_coords(texture_coords, w, h, render_info);
             SimpleCubeInfo {
                 flags: flags.into(),
-                tex: pbr_data.map(PbrData::build_face_tex),
+                tex: coords.map(|x| x.rect(0).into()),
             }
         }
         Some(RenderInfo::PlantLike(render_info)) => {
             let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
             SimpleCubeInfo {
                 flags: (1 | 4).into(),
-                tex: [coords.build_face_tex(); 6],
+                tex: [coords.rect(0).into(); 6],
             }
         }
         _ => SimpleCubeInfo {
             // This is the default, but written explicitly to better highlight the exact value
             flags: 0.into(),
-            tex: [FaceTex::default(); 6],
+            tex: [TexRef::default(); 6],
         },
     }
 }
@@ -1491,22 +1408,6 @@ fn build_liquid_cube_extents(
     }
 }
 
-struct PbrData {
-    diffuse: MaybeDynamicRect,
-    rt_specular: Option<MaybeDynamicRect>,
-}
-impl PbrData {
-    fn build_face_tex(self) -> FaceTex {
-        FaceTex {
-            diffuse: self.diffuse.rect(0).into(),
-            specular: self
-                .rt_specular
-                .map(|x| x.rect(0).into())
-                .unwrap_or_default(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 enum MaybeDynamicRect {
     Static(RectF32),
@@ -1570,14 +1471,6 @@ impl AxisAlignedBoxBlocksCache {
     fn get(&self, block_id: BlockId) -> Option<&[CachedAxisAlignedBox]> {
         self.blocks.get(block_id.index()).and_then(|x| x.as_deref())
     }
-}
-
-pub(crate) fn fallback_texture() -> Option<TextureReference> {
-    Some(TextureReference {
-        diffuse: FALLBACK_UNKNOWN_TEXTURE.to_string(),
-        rt_specular: String::new(),
-        crop: None,
-    })
 }
 
 const GLOBAL_BRIGHTNESS_TABLE_RAW: [f32; 16] = [

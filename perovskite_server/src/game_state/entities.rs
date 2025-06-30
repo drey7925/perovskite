@@ -6,7 +6,6 @@ use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use perovskite_core::{
     block_id::BlockId,
-    constants::textures::FALLBACK_UNKNOWN_TEXTURE,
     coordinates::BlockCoordinate,
     protocol::{
         self,
@@ -42,6 +41,7 @@ use crate::{
     database::database_engine::{GameDatabase, KeySpace},
     formats, run_handler, CachelineAligned,
 };
+use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use rustc_hash::FxHashMap;
 use thiserror::Error;

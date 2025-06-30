@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::{media::CacheManager, vulkan::RectF32};
-use perovskite_core::{constants::textures::FALLBACK_UNKNOWN_TEXTURE, protocol::entities as proto};
+use perovskite_core::protocol::entities as proto;
 use rustc_hash::{FxHashMap, FxHashSet};
 use texture_packer::{importer::ImageImporter, Rect};
 
@@ -11,6 +11,7 @@ use crate::vulkan::shaders::entity_geometry::EntityVertex;
 use crate::vulkan::shaders::VkBufferGpu;
 use anyhow::{bail, ensure, Error, Result};
 use cgmath::{Matrix3, Rad, Vector3, Zero};
+use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
 /// Manages the entity definitions and their respective meshes
 ///
@@ -94,7 +95,7 @@ impl EntityRenderer {
         // Entity classes may not be contgious or ordered; hence a hashmap for now
         let mut all_meshes = FxHashMap::default();
         let mut singleton_gpu_buffers = FxHashMap::default();
-        let texture_atlas = Arc::new(Texture2DHolder::from_srgb(ctx, &texture_atlas)?);
+        let texture_atlas = Arc::new(Texture2DHolder::from_srgb(ctx, texture_atlas.into_rgba8())?);
         for def in entity_defs {
             if let Some(appearance) = def.appearance {
                 let mesh = EntityRenderer::pre_render(

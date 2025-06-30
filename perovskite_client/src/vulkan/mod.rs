@@ -21,6 +21,7 @@ pub(crate) mod mini_renderer;
 pub(crate) mod shaders;
 pub(crate) mod util;
 // Public for benchmarking
+mod atlas;
 pub mod gpu_chunk_table;
 pub(crate) mod raytrace_buffer;
 
@@ -1347,22 +1348,18 @@ impl Texture2DHolder {
     /// The image should be in SRGB.
     pub(crate) fn from_srgb(
         ctx: &VulkanContext,
-        image: &image::DynamicImage,
+        image: image::RgbaImage,
     ) -> Result<Texture2DHolder> {
-        let img_rgba = image
-            .as_rgba8()
-            .with_context(|| "rgba8 buffer was empty")?
-            .clone()
-            .into_vec();
-
         let dimensions = image.dimensions();
+        let img_rgba = image.into_vec();
+
         let image = Image::new(
             ctx.memory_allocator.clone(),
             ImageCreateInfo {
                 image_type: ImageType::Dim2d,
                 format: Format::R8G8B8A8_SRGB,
                 view_formats: vec![Format::R8G8B8A8_SRGB],
-                extent: [image.width(), image.height(), 1],
+                extent: [dimensions.0, dimensions.1, 1],
                 usage: ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
                 ..Default::default()
             },

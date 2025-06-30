@@ -7,6 +7,7 @@ use super::{
     Texture2DHolder, VulkanContext,
 };
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
 use crate::vulkan::shaders::{LiveRenderConfig, VkBufferGpu};
 use crate::{
@@ -57,7 +58,7 @@ impl MiniBlockRenderer {
     pub(crate) fn new(
         ctx: Arc<VulkanContext>,
         surface_size: [u32; 2],
-        atlas_texture: &Texture2DHolder,
+        atlas_texture: &TextureAtlas,
     ) -> Result<Self> {
         // All compliant GPUs should be able to render to R8G8B8A8_SRGB
         let render_pass = make_clearing_raster_render_pass(
@@ -109,6 +110,7 @@ impl MiniBlockRenderer {
 
         let cube_provider = CubePipelineProvider::new(ctx.vk_device.clone())?;
         let cube_pipeline = cube_provider.build_pipeline(
+            &ctx,
             viewport,
             render_pass.clone(),
             atlas_texture,

@@ -14,7 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use super::{frag_lighting_sparse, SceneState};
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
     LiveRenderConfig,
@@ -65,8 +67,6 @@ use vulkano::{
     DeviceSize,
 };
 
-use super::{frag_lighting_sparse, SceneState};
-
 #[derive(BufferContents, Vertex, Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub(crate) struct CubeGeometryVertex {
@@ -105,10 +105,7 @@ pub(crate) struct CubePipelineWrapper {
     sparse_pipeline: Arc<GraphicsPipeline>,
     translucent_pipeline: Arc<GraphicsPipeline>,
     raytrace_fallback_pipeline: Arc<GraphicsPipeline>,
-    solid_descriptor: Arc<DescriptorSet>,
-    sparse_descriptor: Arc<DescriptorSet>,
-    translucent_descriptor: Arc<DescriptorSet>,
-    raytrace_fallback_descriptor: Arc<DescriptorSet>,
+    atlas_descriptor_set: Arc<DescriptorSet>,
     start_time: Instant,
     max_draw_indexed_index_value: u32,
 }
@@ -189,17 +186,11 @@ impl CubePipelineWrapper {
             [],
         )?;
 
-        let descriptor = match pass {
-            BlockRenderPass::Opaque => self.solid_descriptor.clone(),
-            BlockRenderPass::Transparent => self.sparse_descriptor.clone(),
-            BlockRenderPass::Translucent => self.translucent_descriptor.clone(),
-            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_descriptor.clone(),
-        };
         builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout.clone(),
             0,
-            vec![descriptor, per_frame_set],
+            vec![self.atlas_descriptor_set.clone(), per_frame_set],
         )?;
 
         let mut effective_calls = 0;
@@ -274,9 +265,10 @@ impl CubePipelineProvider {
 
     pub(crate) fn build_pipeline(
         &self,
+        ctx: &VulkanContext,
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
-        tex: &Texture2DHolder,
+        tex: &TextureAtlas,
         config: &LiveRenderConfig,
     ) -> Result<CubePipelineWrapper> {
         let vs = self
@@ -389,24 +381,26 @@ impl CubePipelineProvider {
         let translucent_pipeline =
             GraphicsPipeline::new(self.device.clone(), None, translucent_pipeline_info)?;
 
-        let solid_descriptor = tex.descriptor_set(&solid_pipeline, 0, 0)?;
-        let sparse_descriptor = tex.descriptor_set(&sparse_pipeline, 0, 0)?;
-        let translucent_descriptor = tex.descriptor_set(&translucent_pipeline, 0, 0)?;
+        let layout = solid_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .with_context(|| "descriptor set 0 missing")?;
+        let atlas_descriptor_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [tex.diffuse.write_descriptor_set(0)],
+            [],
+        )?;
 
-        // TODO: Implement raytrace_fallback pipeline construction
         let raytrace_fallback_pipeline =
             GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
-        // TODO: Implement raytrace_fallback descriptor construction
-        let raytrace_fallback_descriptor = tex.descriptor_set(&raytrace_fallback_pipeline, 0, 0)?;
         Ok(CubePipelineWrapper {
             solid_pipeline,
             sparse_pipeline,
             translucent_pipeline,
             raytrace_fallback_pipeline,
-            solid_descriptor,
-            sparse_descriptor,
-            translucent_descriptor,
-            raytrace_fallback_descriptor,
+            atlas_descriptor_set,
             start_time: Instant::now(),
             max_draw_indexed_index_value: self
                 .device
@@ -420,10 +414,11 @@ impl CubePipelineProvider {
     pub(crate) fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
-        config: &Texture2DHolder,
+        config: &TextureAtlas,
         global_config: &LiveRenderConfig,
     ) -> Result<CubePipelineWrapper> {
         self.build_pipeline(
+            wnd.context(),
             wnd.viewport.clone(),
             wnd.clear_color_depth_render_pass.clone(),
             config,

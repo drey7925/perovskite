@@ -56,7 +56,7 @@ use winit::event::{DeviceEvent, Event, WindowEvent};
 use crate::client_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
-use crate::vulkan::block_renderer::{fallback_texture, BlockRenderer};
+use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::entity_renderer::EntityRenderer;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
@@ -1067,12 +1067,12 @@ pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {
     blocks_proto::BlockTypeDef {
         render_info: Some(blocks_proto::block_type_def::RenderInfo::Cube(
             blocks_proto::CubeRenderInfo {
-                tex_left: fallback_texture(),
-                tex_right: fallback_texture(),
-                tex_top: fallback_texture(),
-                tex_bottom: fallback_texture(),
-                tex_front: fallback_texture(),
-                tex_back: fallback_texture(),
+                tex_left: None,
+                tex_right: None,
+                tex_top: None,
+                tex_bottom: None,
+                tex_front: None,
+                tex_back: None,
                 render_mode: blocks_proto::CubeRenderMode::SolidOpaque.into(),
                 variant_effect: CubeVariantEffect::None.into(),
             },

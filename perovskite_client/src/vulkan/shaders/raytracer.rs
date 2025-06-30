@@ -630,8 +630,9 @@ impl RaytracedPipelineProvider {
                 .with_context(|| "descriptor set missing")?
                 .clone(),
             [
-                frame_data.atlas().write_descriptor_set(0),
-                WriteDescriptorSet::buffer(1, raytrace_control_ssbo),
+                frame_data.atlas().diffuse.write_descriptor_set(0),
+                frame_data.atlas().specular.write_descriptor_set(1),
+                WriteDescriptorSet::buffer(2, raytrace_control_ssbo),
             ],
             [],
         )?;

@@ -8,7 +8,7 @@ use crate::{
     net_client::AsyncMediaLoader,
 };
 use directories::ProjectDirs;
-use image::{DynamicImage, GenericImage};
+use image::{DynamicImage, GenericImage, RgbaImage};
 use perovskite_core::constants::{
     GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS, GENERATED_TEXTURE_PREFIX,
 };
@@ -24,9 +24,9 @@ use std::{
 };
 use texture_packer::importer::ImageImporter;
 
-fn generate_image(name: &str) -> Result<DynamicImage> {
+fn generate_image(name: &str) -> Result<RgbaImage> {
     if let Some(css) = name.strip_prefix(GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS) {
-        let mut image = DynamicImage::new_rgba8(1, 1);
+        let mut image = RgbaImage::new(1, 1);
         let color = css_color::Srgb::from_str(css)
             .map_err(|_| anyhow!(format!("Failed to parse {css} as a CSS color")))?;
         image.put_pixel(
@@ -45,14 +45,15 @@ fn generate_image(name: &str) -> Result<DynamicImage> {
 pub(crate) async fn load_or_generate_image(
     cache_manager: &mut CacheManager,
     name: &str,
-) -> Result<DynamicImage> {
+) -> Result<RgbaImage> {
     if name.starts_with(GENERATED_TEXTURE_PREFIX) {
         return tokio::task::block_in_place(|| generate_image(name));
     }
 
     let texture = cache_manager.load_media_by_name(&name).await?;
-    ImageImporter::import_from_memory(&texture)
-        .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))
+    let image = ImageImporter::import_from_memory(&texture)
+        .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))?;
+    Ok(image.into_rgba8())
 }
 
 pub(crate) struct CacheManager {
