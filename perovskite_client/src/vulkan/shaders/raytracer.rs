@@ -100,15 +100,15 @@ impl RaytracedPipelineWrapper {
             per_frame_config
                 .player_pos
                 .x
-                .clamp(u32::MIN as f64, u32::MAX as f64),
+                .clamp(i32::MIN as f64, i32::MAX as f64),
             per_frame_config
                 .player_pos
                 .y
-                .clamp(u32::MIN as f64, u32::MAX as f64),
+                .clamp(i32::MIN as f64, i32::MAX as f64),
             per_frame_config
                 .player_pos
                 .z
-                .clamp(u32::MIN as f64, u32::MAX as f64),
+                .clamp(i32::MIN as f64, i32::MAX as f64),
         );
 
         let player_chunk = BlockCoordinate::try_from(clamped)?.chunk();
