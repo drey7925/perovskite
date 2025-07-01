@@ -7,6 +7,7 @@ pub fn load_obj_mesh(obj_data: &[u8], texture: impl Into<String>) -> Result<Cust
     mesh.texture = Some(TextureReference {
         diffuse: texture.into(),
         rt_specular: String::new(),
+        emissive: String::new(),
         crop: None,
     });
     for vertex in object.vertices {

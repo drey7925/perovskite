@@ -787,6 +787,7 @@ fn make_texture_ref(diffuse: String) -> Option<TextureReference> {
         diffuse,
         rt_specular: String::new(),
         crop: None,
+        emissive: String::new(),
     })
 }
 

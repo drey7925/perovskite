@@ -48,6 +48,38 @@ pub struct OwnedTextureName(pub String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StaticTextureName(pub &'static str);
 
+pub trait TextureRefExt {
+    /// Makes this texture shiny/reflective. Note that the *diffuse* texture's alpha controls some
+    /// shininess behavior: alpha = 0 applies a Fresnel effect where reflections are stronger at
+    /// shallow/grazing angles. Alpha = 1 applies constant reflectivity regardless of incident
+    /// angle; intermediate values blend between them.
+    ///
+    /// Alpha channel of *this* texture is still TBD
+    fn with_specular(self, tex: impl TextureName) -> TextureReference;
+
+    /// Makes this texture emit strong light. Note that this is only used for screen-space effects
+    /// and direct shiny hits when the user has raytracing enabled. This is tone-mapped in some
+    /// TBD manner; setting R, G, or B to the max value may be rather bright.
+    ///
+    /// The meaning of the alpha channel in *this* function is still TBD
+    fn with_emissive(self, tex: impl TextureName) -> TextureReference;
+}
+impl TextureRefExt for TextureReference {
+    fn with_specular(self, tex: impl TextureName) -> TextureReference {
+        TextureReference {
+            rt_specular: tex.name().to_string(),
+            ..self
+        }
+    }
+
+    fn with_emissive(self, tex: impl TextureName) -> TextureReference {
+        TextureReference {
+            emissive: tex.name().to_string(),
+            ..self
+        }
+    }
+}
+
 impl OwnedTextureName {
     /// Creates a texture that's a solid color; CSS colors of the form `rgb(0 255 0)` or `orange`
     /// are accepted.
@@ -86,6 +118,7 @@ impl From<StaticTextureName> for TextureReference {
             diffuse: value.0.to_string(),
             rt_specular: String::new(),
             crop: None,
+            emissive: String::new(),
         }
     }
 }
@@ -95,6 +128,7 @@ impl From<OwnedTextureName> for TextureReference {
             diffuse: value.0,
             rt_specular: String::new(),
             crop: None,
+            emissive: String::new(),
         }
     }
 }
@@ -104,6 +138,7 @@ impl From<&OwnedTextureName> for TextureReference {
             diffuse: value.0.to_string(),
             rt_specular: String::new(),
             crop: None,
+            emissive: String::new(),
         }
     }
 }

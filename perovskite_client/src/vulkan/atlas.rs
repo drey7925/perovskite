@@ -50,6 +50,16 @@ impl TextureKey {
         }
     }
 
+    fn emissive<'a>(&self, textures: &'a FxHashMap<String, RgbaImage>) -> Option<&'a RgbaImage> {
+        match self {
+            TextureKey::Named(key) => key
+                .specular
+                .as_ref()
+                .map(|x| textures.get(x).unwrap_or(&UNKNOWN_TEX)),
+            _ => None,
+        }
+    }
+
     fn size(&self, textures: &FxHashMap<String, RgbaImage>) -> Result<(u32, u32)> {
         let diffuse_size = self
             .diffuse(&textures)
@@ -59,8 +69,12 @@ impl TextureKey {
             .specular(&textures)
             .map(|x| (x.width(), x.height()))
             .unwrap_or((1, 1));
-        let max_x = u32::max(diffuse_size.0, specular_size.0);
-        let max_y = u32::max(diffuse_size.1, specular_size.1);
+        let emissive_size = self
+            .emissive(&textures)
+            .map(|x| (x.width(), x.height()))
+            .unwrap_or((1, 1));
+        let max_x = diffuse_size.0.max(specular_size.0).max(emissive_size.0);
+        let max_y = diffuse_size.1.max(specular_size.1).max(emissive_size.1);
 
         if max_x % diffuse_size.0 != 0 {
             bail!("{self:?}: Target width of {max_x} pixels not divisible by diffuse texture width {}", diffuse_size.0);
@@ -74,7 +88,12 @@ impl TextureKey {
         if max_y % specular_size.1 != 0 {
             bail!("{self:?}: Target height of {max_y} pixels not divisible by specular texture height {}", diffuse_size.0);
         }
-
+        if max_x % emissive_size.0 != 0 {
+            bail!("{self:?}: Target width of {max_x} pixels not divisible by emissive texture width {}", diffuse_size.0);
+        }
+        if max_y % emissive_size.1 != 0 {
+            bail!("{self:?}: Target height of {max_y} pixels not divisible by emissive texture height {}", diffuse_size.0);
+        }
         Ok((max_x, max_y))
     }
 }
@@ -83,13 +102,15 @@ impl TextureKey {
 pub(crate) struct NamedTextureKey {
     pub(crate) diffuse: Option<String>,
     pub(crate) specular: Option<String>,
+    pub(crate) emissive: Option<String>,
 }
 impl Debug for NamedTextureKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
-            "[{:?} / {:?}]",
+            "[{:?} / {:?} / {:?}]",
             self.diffuse.as_ref().map(String::as_str).unwrap_or(""),
-            self.specular.as_ref().map(String::as_str).unwrap_or("")
+            self.specular.as_ref().map(String::as_str).unwrap_or(""),
+            self.emissive.as_ref().map(String::as_str).unwrap_or(""),
         ))
     }
 }
@@ -110,6 +131,7 @@ impl From<&TextureReference> for NamedTextureKey {
         Self {
             diffuse: if_nonempty(value.diffuse.as_ref()),
             specular: if_nonempty(value.rt_specular.as_ref()),
+            emissive: if_nonempty(value.rt_specular.as_ref()),
         }
     }
 }
@@ -119,6 +141,7 @@ pub(crate) struct TextureAtlas {
     pub(crate) height: u32,
     pub(crate) diffuse: Texture2DHolder,
     pub(crate) specular: Texture2DHolder,
+    pub(crate) emissive: Texture2DHolder,
     pub(crate) texel_coords: FxHashMap<TextureKey, texture_packer::Rect>,
 }
 impl TextureAtlas {
@@ -167,17 +190,26 @@ impl TextureAtlas {
             .collect();
 
         let mut specular_image = RgbaImage::new(diffuse_image.width(), diffuse_image.height());
+        let mut emissive_image = RgbaImage::new(diffuse_image.width(), diffuse_image.height());
         for (key, rect) in &texel_coords {
             let target_size = key.size(&textures)?;
+            assert_eq!(rect.w, target_size.0);
+            assert_eq!(rect.h, target_size.1);
             let specular = key
                 .specular(&textures)
                 .map(|x| {
                     image::imageops::resize(x, target_size.0, target_size.1, FilterType::Nearest)
                 })
                 .unwrap_or(make_blank(target_size.0, target_size.1));
-            assert_eq!(rect.w, target_size.0);
-            assert_eq!(rect.h, target_size.1);
             specular_image.copy_from(&specular, rect.x, rect.y)?;
+
+            let emissive = key
+                .specular(&textures)
+                .map(|x| {
+                    image::imageops::resize(x, target_size.0, target_size.1, FilterType::Nearest)
+                })
+                .unwrap_or(make_blank(target_size.0, target_size.1));
+            emissive_image.copy_from(&emissive, rect.x, rect.y)?;
         }
 
         Ok(TextureAtlas {
@@ -185,6 +217,7 @@ impl TextureAtlas {
             height: diffuse_image.height(),
             diffuse: Texture2DHolder::from_srgb(ctx, diffuse_image.into_rgba8())?,
             specular: Texture2DHolder::from_srgb(ctx, specular_image)?,
+            emissive: Texture2DHolder::from_srgb(ctx, emissive_image)?,
             texel_coords,
         })
     }

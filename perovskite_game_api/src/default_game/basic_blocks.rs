@@ -23,7 +23,9 @@ use super::{
 };
 use crate::default_game::chest::register_chest;
 use crate::default_game::signs::register_sign;
-use crate::game_builder::{OwnedTextureName, GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME};
+use crate::game_builder::{
+    OwnedTextureName, TextureRefExt, GRASS_FOOTSTEP_SOUND_NAME, SNOW_FOOTSTEP_SOUND_NAME,
+};
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
@@ -941,13 +943,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .add_item_group("testonly_wet")
         .set_cube_appearance(
             CubeAppearanceBuilder::new()
-                .set_single_texture(TextureReference {
-                    diffuse: WATER_TEXTURE.0.to_string(),
-                    crop: None,
-                    rt_specular: OwnedTextureName::from_css_color("rgb(180 180 180)")
-                        .0
-                        .to_string(),
-                })
+                .set_single_texture(
+                    TextureReference::from(WATER_TEXTURE)
+                        .with_specular(OwnedTextureName::from_css_color("rgb(140 140 140)")),
+                )
                 .set_liquid_shape()
                 .set_needs_translucency(),
         )
