@@ -2,6 +2,9 @@ layout(location = 0) in vec3 facedir_world_in;
 
 #include "raytracer_spec_constants.glsl"
 
+// Performance note: It is tempting to optimize this shader to use float16. It produces some small artifacts, but
+// furthermore it actually causes a small performance loss (at least on Ampere) despite SM occupancy increasing.
+
 struct TexRef {
     vec2 top_left;
     vec2 width_height;
