@@ -9,13 +9,31 @@ layout(location = 0) out vec4 f_color;
 
 void main() {
     ivec2 max_coord = imageSize(specular_result).xy - ivec2(1, 1);
-    ivec2 coord = clamp(ivec2(gl_FragCoord.xy) / int(SPECULAR_DOWNSAMPLING), ivec2(0, 0), ivec2(max_coord));
-
+    ivec2 frag_coord = ivec2(gl_FragCoord.xy);
     f_color = vec4(0, 0, 0, 0);
-    // avoid optimizing out deferred_specular_ray_dir for now
-    if (imageLoad(deferred_specular_ray_dir, coord).a == 0xffffffff) {
-        f_color.x += 0.0001;
+
+    vec4 sum = vec4(0);
+    float total_weight = 0;
+
+    ivec2 base = (ivec2(gl_FragCoord.xy) / int(SPECULAR_DOWNSAMPLING));
+    uvec4 dsrd_ideal = imageLoad(deferred_specular_ray_dir, frag_coord);
+    vec3 dsrd_ideal_f = uintBitsToFloat(dsrd_ideal.rgb);
+    for (int i = 0; i <= 1; i++) {
+        for (int j = 0; j <= 1; j++) {
+            ivec2 ds_coord = clamp(base + ivec2(i, j), ivec2(0, 0), ivec2(max_coord));
+            vec4 spec_color = imageLoad(specular_result, ds_coord);
+            ivec2 ideal_frag_coord = ds_coord * int(SPECULAR_DOWNSAMPLING) + (int(SPECULAR_DOWNSAMPLING) / 2);
+            uvec4 dsrd = imageLoad(deferred_specular_ray_dir, ideal_frag_coord);
+            vec3 dsrd_f = uintBitsToFloat(dsrd.rgb);
+
+
+            uint distance = abs(frag_coord.x - ideal_frag_coord.x) + abs(frag_coord.y - ideal_frag_coord.y);
+
+            float weight = 1.0 / (length(dsrd_f - dsrd_ideal_f) + distance / 10 + 0.0001);
+            sum += weight * spec_color;
+            total_weight += weight;
+        }
     }
 
-    f_color += imageLoad(specular_result, coord) * imageLoad(deferred_specular_color, ivec2(gl_FragCoord.xy));
+    f_color += (sum / total_weight) * imageLoad(deferred_specular_color, frag_coord);
 }
