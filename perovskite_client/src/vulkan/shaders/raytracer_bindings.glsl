@@ -7,7 +7,6 @@ layout(set = 1, binding = 0) uniform RaytracingPerFrameData {
     ivec3 coarse_pos;
     // in unit of chunks
     vec3 fine_pos;
-// Will be re-enabled once we have sky
     vec3 sun_direction;
 // Used for dither, only during development
     float supersampling;

@@ -2,15 +2,29 @@
 #define SKIP_MASK 4u
 #include "raytracer_frag_common.glsl"
 
-layout (set = 1, binding = 3, rgba8) uniform restrict writeonly image2D deferred_specular_color;
-layout (set = 1, binding = 4, rgba32ui) uniform restrict writeonly uimage2D deferred_specular_ray_dir;
+layout (set = 1, binding = 3, rgba8) uniform coherent restrict writeonly image2D deferred_specular_color;
+layout (set = 1, binding = 4, rgba32ui) uniform coherent restrict writeonly uimage2D deferred_specular_ray_dir;
 
 layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInput f_depth_in;
+layout (set = 1, binding = 6, rg32f) uniform coherent restrict writeonly image2D deferred_shadow_out;
 layout(location = 0) out vec4 f_color;
 
 void main() {
     imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(0));
     imageStore(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy), uvec4(0));
+
+    float prev_depth = subpassLoad(f_depth_in).r;
+    vec4 ndc_depth = vec4(pos_ndc_xy, prev_depth, 1.0);
+    vec4 fdw_raw = (inverse_vp_matrix * ndc_depth);
+    fdw_raw /= fdw_raw.w;
+    vec3 facedir_world_in = fdw_raw.xyz  * vec3(1.0, -1.0, 1.0);
+    float old_distance = length(facedir_world_in) / 16.0;
+    if (prev_depth == 1.0) {
+        // Effectively large enough to be a sentinel
+        old_distance = 1e30;
+    }
+
+    imageStore(deferred_shadow_out, ivec2(gl_FragCoord.xy), vec4(old_distance, 0, 0, 0));
 
     if (RAYTRACE_DEBUG) {
         vec2 pix3 = gl_FragCoord.xy / (16.0 * supersampling);
@@ -112,7 +126,6 @@ void main() {
         }
     }// if (RAYTRACE_DEBUG)
     vec3 facedir_world = normalize(facedir_world_in);
-    float prev_depth = subpassLoad(f_depth_in).r;
 
     // All raster geometry, as well as non-rendering calcs, assume that blocks have
     // their *centers* at integer coordinates.
@@ -121,7 +134,7 @@ void main() {
     // The Y axis orientation has been flipped in the calculation of facedir_world.
     // This is fixed on the CPU to save some registers.
     vec2 t_min_max = t_range(fine_pos, facedir_world);
-
+    t_min_max.y = min(t_min_max.y, old_distance);
     if (t_min_max.x > t_min_max.y) {
         discard;
     }
@@ -131,6 +144,7 @@ void main() {
 
     f_color = vec4(0);
     float strongest_specular = 0;
+    float strongest_alpha = 0;
     uint prev_block = initial_block_id;
     for (int i = 0; i < 5; i++) {
         HitInfo info = {
@@ -148,9 +162,7 @@ void main() {
         prev_block = info.block_id;
         uint info_flags = cube_info[prev_block >> 12].flags;
         vec3 hit_pos = (vec3(info.hit_block) + info.start_cc) / 16.0;
-        vec4 rpos = vec4((hit_pos - fine_pos) * 16.0, 1.0) * vec4(1, -1, 1, 1);
-        vec4 transformed = forward_vp_matrix * rpos;
-        if (clamp(transformed.z / transformed.w, 0, 1) > prev_depth) {
+        if (length(hit_pos - fine_pos) > old_distance) {
             return;
         }
 
@@ -161,7 +173,9 @@ void main() {
                 float alpha_contrib = (1 - f_color.a) * result.diffuse.a;
                 f_color.rgb += alpha_contrib * result.diffuse.rgb;
                 f_color.a += alpha_contrib;
-
+                if (alpha_contrib > strongest_alpha) {
+                    imageStore(deferred_shadow_out, ivec2(gl_FragCoord.xy), vec4(length(hit_pos - fine_pos), result.global_light_contrib, 0, 0));
+                }
 
                 // TODO proper specular from the block, for now hardcode glass/water
                 if (SPECULAR) {
@@ -185,6 +199,7 @@ void main() {
                         float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
                         vec3 final_mix = mix(fresnel, 1.0, result.diffuse.a) * result.specular.rgb;
                         if (length(final_mix) >= strongest_specular) {
+                            memoryBarrierImage();
                             imageStore(deferred_specular_color, ivec2(gl_FragCoord.xy), vec4(final_mix, 1.0));
                             new_dir = normalize(new_dir) * length(hit_pos - fine_pos);
                             imageStore(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy), uvec4(floatBitsToUint(new_dir), info.block_id));

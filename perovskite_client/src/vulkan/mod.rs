@@ -502,7 +502,9 @@ impl VulkanWindow {
                     min_image_count: image_count,
                     image_format,
                     image_extent: window.inner_size().into(),
-                    image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+                    image_usage: ImageUsage::COLOR_ATTACHMENT
+                        | ImageUsage::TRANSFER_SRC
+                        | ImageUsage::TRANSFER_DST,
                     composite_alpha,
                     image_color_space: color_space,
                     ..Default::default()
@@ -773,7 +775,7 @@ impl VulkanWindow {
                 render_pass: self.depth_stencil_only_render_pass.clone(),
                 ..RenderPassBeginInfo::framebuffer(
                     framebuffer
-                        .deferred_specular_buffers
+                        .raytrace_buffers
                         .as_ref()
                         .context("Missing deferred specular buffers")?
                         .specular_framebuffer
@@ -799,7 +801,7 @@ impl VulkanWindow {
                 render_pass: self.depth_stencil_only_clearing_render_pass.clone(),
                 ..RenderPassBeginInfo::framebuffer(
                     framebuffer
-                        .deferred_specular_buffers
+                        .raytrace_buffers
                         .as_ref()
                         .context("Missing deferred specular buffers")?
                         .specular_framebuffer
@@ -1032,7 +1034,10 @@ fn find_best_format(
 }
 
 #[derive(Clone)]
-pub(crate) struct DeferredSpecularBuffers {
+pub(crate) struct RaytraceBuffers {
+    // R8G8B8A8_UNORM.
+    main_color: Arc<ImageView>,
+
     // R8G8B8A8_UNORM. We have three components, RGB isn't a supported type, so we use RGBA.
     // Not clear what alpha can be used for in general; for now alpha = 0.0 will prevent any
     // specular raytracing from occurring (i.e. it's a validity bit, but we can reclaim it at the
@@ -1046,6 +1051,15 @@ pub(crate) struct DeferredSpecularBuffers {
     // Always uses main target resolution
     // storage image usage
     specular_ray_dir: Arc<ImageView>,
+    // R: Distance (in chunks) to the main hit point. Sorta like a depth buffer but doesn't use 0..1
+    //      ranged depth.
+    // G: How much of light does sunlight actually contribute?
+    // R32G32_SFLOAT.
+    // Always uses main target resolution
+    // storage image usage
+    shadow_in: Arc<ImageView>,
+    // R8_UNORM. How much the sun is occluded/visible
+    shadow_out: Arc<ImageView>,
     // Direction of the ray, but cleaned up for each downsampled pixel. `mask_specular_stencil_frag`
     // prepares this.
     specular_ray_dir_downsampled: Arc<ImageView>,
@@ -1068,7 +1082,8 @@ pub(crate) struct FramebufferHolder {
     color_depth_stencil_pre_blit: Arc<Framebuffer>,
     color_read_depth_pre_blit: Arc<Framebuffer>,
     color_only_pre_blit: Arc<Framebuffer>,
-    deferred_specular_buffers: Option<DeferredSpecularBuffers>,
+    raster_color_view: Arc<ImageView>,
+    raytrace_buffers: Option<RaytraceBuffers>,
     // Vector starting with the source and ending with the target. It may be a singleton, but must
     // not be empty.
     blit_path: Vec<Arc<Image>>,
@@ -1185,7 +1200,7 @@ pub(crate) fn get_framebuffers_with_depth(
             let color_only_pre_blit = Framebuffer::new(
                 color_only_render_pass.clone(),
                 FramebufferCreateInfo {
-                    attachments: vec![color_view],
+                    attachments: vec![color_view.clone()],
                     ..Default::default()
                 },
             )?;
@@ -1198,7 +1213,7 @@ pub(crate) fn get_framebuffers_with_depth(
                 },
             )?;
 
-            let deferred_specular_buffers = if config.raytracing {
+            let raytrace_buffers = if config.raytracing {
                 let extent = [
                     image_extent[0] * config.supersampling.to_int(),
                     image_extent[1] * config.supersampling.to_int(),
@@ -1224,7 +1239,13 @@ pub(crate) fn get_framebuffers_with_depth(
                     depth_format,
                     ImageUsage::DEPTH_STENCIL_ATTACHMENT,
                 )?;
-                Some(DeferredSpecularBuffers {
+                Some(RaytraceBuffers {
+                    main_color: make_image_and_view(
+                        allocator.clone(),
+                        extent,
+                        Format::R8G8B8A8_UNORM,
+                        ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
+                    )?,
                     specular_strength: make_image_and_view(
                         allocator.clone(),
                         extent,
@@ -1241,6 +1262,18 @@ pub(crate) fn get_framebuffers_with_depth(
                         allocator.clone(),
                         downsampled_extent,
                         Format::R32G32B32A32_UINT,
+                        ImageUsage::STORAGE,
+                    )?,
+                    shadow_in: make_image_and_view(
+                        allocator.clone(),
+                        extent,
+                        Format::R32G32_SFLOAT,
+                        ImageUsage::STORAGE,
+                    )?,
+                    shadow_out: make_image_and_view(
+                        allocator.clone(),
+                        downsampled_extent,
+                        Format::R8_UNORM,
                         ImageUsage::STORAGE,
                     )?,
                     specular_framebuffer: Framebuffer::new(
@@ -1263,7 +1296,8 @@ pub(crate) fn get_framebuffers_with_depth(
                 color_read_depth_pre_blit,
                 color_depth_stencil_pre_blit,
                 color_only_pre_blit,
-                deferred_specular_buffers,
+                raytrace_buffers,
+                raster_color_view: color_view,
                 blit_path,
                 color_only_post_blit,
                 depth_only_view,

@@ -1,5 +1,4 @@
-layout(location = 0) in vec3 facedir_world_in;
-
+layout(location = 0) in vec2 pos_ndc_xy;
 #include "raytracer_spec_constants.glsl"
 
 // Performance note: It is tempting to optimize this shader to use float16. It produces some small artifacts, but
@@ -386,6 +385,7 @@ vec2 t_range(vec3 start, vec3 dir) {
 struct SampleResult {
     vec4 diffuse;
     vec4 specular;
+    float global_light_contrib;
 };
 
 SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
@@ -411,14 +411,16 @@ SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     //vec4 tex_color = vec4(debug_face_colors[info.face], 1.0) + 0.05 * texture(tex, texel);
 
     float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.face_light, 12, 4)];
+    float brightness_contribution = (brightness_table[bitfieldExtract(info.face_light, 8, 4)]);
     float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(face)));
     // TODO: Do a ray query to the sun instead
     vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
-    vec4 final_diffuse = vec4((brightness_table[bitfieldExtract(info.face_light, 8, 4)] + global_light) * diffuse.rgb, diffuse.a);
+    vec4 final_diffuse = vec4((brightness_contribution + global_light) * diffuse.rgb, diffuse.a);
 
     return SampleResult(
     final_diffuse,
-    specular
+    specular,
+    global_brightness_contribution / (brightness_contribution + global_brightness_contribution)
     );
 }
 

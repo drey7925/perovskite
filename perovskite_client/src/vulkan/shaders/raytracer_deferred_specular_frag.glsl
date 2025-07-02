@@ -2,12 +2,13 @@
 #define SKIP_MASK 0u
 #include "raytracer_frag_common.glsl"
 
-//layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
-layout (set = 1, binding = 4, rgba32ui) uniform restrict readonly uimage2D deferred_specular_ray_dir;
-layout (set = 1, binding = 5, rgba8) uniform restrict writeonly image2D specular_result;
+layout (set = 1, binding = 3, rgba32ui) uniform restrict readonly uimage2D deferred_specular_ray_dir;
+layout (set = 1, binding = 4, rgba8) uniform restrict writeonly image2D specular_result;
 
 void main() {
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
+    vec4 ndc_depth = vec4(pos_ndc_xy, 0.5, 1.0);
+    vec3 facedir_world_in = (inverse_vp_matrix * ndc_depth).xyz  * vec3(1.0, -1.0, 1.0);
 
     vec4 f_color = vec4(0.0, 0.0, 0.0, 1.0);
     vec3 spec_dir_len = uintBitsToFloat(spec_ray_dir.rgb);

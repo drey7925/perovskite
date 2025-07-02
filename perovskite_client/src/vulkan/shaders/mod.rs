@@ -173,7 +173,7 @@ pub(crate) mod frag_lighting_sparse {
     layout(location = 0) out vec4 f_color;
     layout(set = 0, binding = 0) uniform sampler2D tex;
 
-    layout (constant_id = 0) const bool DEBUG_INVERT_RASTER_TRANSPARENT = true;
+    layout (constant_id = 0) const bool DEBUG_INVERT_RASTER_TRANSPARENT = false;
 
     void main() {
         vec2 pix = gl_FragCoord.xy / 8.0;
