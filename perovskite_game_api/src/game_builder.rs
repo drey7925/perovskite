@@ -168,6 +168,11 @@ impl From<StaticBlockName> for BlockName {
         BlockName(value.0.to_string())
     }
 }
+impl From<&'static str> for BlockName {
+    fn from(value: &'static str) -> Self {
+        BlockName(value.to_string())
+    }
+}
 
 /// Type-safe newtype wrapper for a const/static item name
 

@@ -388,13 +388,34 @@ struct SampleResult {
     vec4 specular;
 };
 
+const mat2x2 rotations[] = {
+mat2x2(vec2(1, 0), vec2(0, 1)),
+mat2x2(vec2(0, -1), vec2(1, 0)),
+mat2x2(vec2(-1, 0), vec2(0, -1)),
+mat2x2(vec2(0, 1), vec2(-1, 0)),
+};
+const uint face_remaps[6][4] = {
+{ 0, 4, 1, 5 },
+{ 1, 5, 0, 4 },
+{ 2, 2, 2, 2 },
+{ 3, 3, 3, 3 },
+{ 4, 1, 5, 0 },
+{ 5, 0, 4, 1 },
+};
+
 SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     uint face = info.face_light & 7u;
+    vec3 start_cc = info.start_cc;
 
-    // TODO: variant-based rotation
+    if ((cube_info[idx].flags & 2u) != 0) {
+        uint variant = info.block_id & 3u;
+        start_cc.xz = ((start_cc.xz - 0.5) * rotations[variant]) + 0.5;
+        face = face_remaps[face][variant];
+    }
+
     vec2 tl = cube_info[idx].tex[face].top_left;
     vec2 wh = cube_info[idx].tex[face].width_height;
-    vec2 uv = vec4(info.start_cc, 1) * face_swizzlers[face];
+    vec2 uv = vec4(start_cc, 1) * face_swizzlers[face];
     vec2 texel = tl + (uv * wh);
 
     vec4 diffuse = texture(diffuse_tex, texel);

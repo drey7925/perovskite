@@ -937,6 +937,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_allow_light_propagation(true)
             .set_display_name("Dichroic Glass"),
     )?;
+
     let mut water_builder = BlockBuilder::new(WATER)
         .add_block_group(DEFAULT_LIQUID)
         .set_trivially_replaceable(true)
@@ -1028,6 +1029,24 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     make_slab(game_builder, &limestone_light, true)?;
 
     register_test_audio_block(game_builder)?;
+
+    let _rotation_test_block = game_builder.add_block(
+        BlockBuilder::new("default:render_rotation_test")
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_individual_textures(
+                        StaticTextureName("carts:speedpost1"),
+                        StaticTextureName("carts:speedpost2"),
+                        StaticTextureName("carts:speedpost3"),
+                        StaticTextureName("default:water"),
+                        StaticTextureName("default:tnt"),
+                        StaticTextureName("default:gold_pickaxe"),
+                    )
+                    .set_rotate_laterally(),
+            )
+            .set_allow_light_propagation(true)
+            .set_display_name("Dichroic Glass"),
+    )?;
 
     Ok(())
 }
