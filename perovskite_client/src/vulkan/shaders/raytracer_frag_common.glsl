@@ -43,30 +43,30 @@ layout(set = 1, binding = 2) readonly buffer chunk_map {
 #include "raytracer_bindings.glsl"
 #include "sky.glsl"
 
-const mat2x4 face_swizzlers[] = {
+const mat2x3 face_swizzlers[] = {
 // X+
-mat2x4(
-vec4(0, 0, 1, 0), vec4(0, -1, 0, 1)
+mat2x3(
+vec3(0, 0, 1), vec3(0, -1, 0)
 ),
 // X-
-mat2x4(
-vec4(0, 0, -1, 1), vec4(0, -1, 0, 1)
+mat2x3(
+vec3(0, 0, -1), vec3(0, -1, 0)
 ),
 // Y+
-mat2x4(
-vec4(-1, 0, 0, 1), vec4(0, 0, 1, 0)
+mat2x3(
+vec3(-1, 0, 0), vec3(0, 0, 1)
 ),
 // Y-
-mat2x4(
-vec4(1, 0, 0, 0), vec4(0, 0, 1, 0)
+mat2x3(
+vec3(1, 0, 0), vec3(0, 0, 1)
 ),
 // Z+
-mat2x4(
-vec4(-1, 0, 0, 1), vec4(0, -1, 0, 1)
+mat2x3(
+vec3(-1, 0, 0), vec3(0, -1, 0)
 ),
 // Z-
-mat2x4(
-vec4(1, 0, 0, 0), vec4(0, -1, 0, 1)
+mat2x3(
+vec3(1, 0, 0), vec3(0, -1, 0)
 ),
 };
 
@@ -415,7 +415,7 @@ SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
 
     vec2 tl = cube_info[idx].tex[face].top_left;
     vec2 wh = cube_info[idx].tex[face].width_height;
-    vec2 uv = vec4(start_cc, 1) * face_swizzlers[face];
+    vec2 uv = ((start_cc - 0.5) * face_swizzlers[face]) + 0.5;
     vec2 texel = tl + (uv * wh);
 
     vec4 diffuse = texture(diffuse_tex, texel);
