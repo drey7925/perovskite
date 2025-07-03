@@ -422,6 +422,11 @@ impl VulkanWindow {
             ..DeviceExtensions::empty()
         };
         let device_features = DeviceFeatures {
+            // 99.1% of reports on vulkan.gpuinfo.org support this.
+            // Apple Silicon, weirdly, does not. If ever ported to Apple,
+            // the raytracer and any future shaders that write to storage images
+            // should be converted to compute shaders and/or gated behind this feature
+            fragment_stores_and_atomics: true,
             ..DeviceFeatures::empty()
         };
 
@@ -1141,7 +1146,6 @@ pub(crate) fn get_framebuffers_with_depth(
                         ImageCreateInfo {
                             image_type: ImageType::Dim2d,
                             format: final_image.format(),
-                            view_formats: vec![final_image.format()],
                             extent: [
                                 image_extent[0] * multiplier,
                                 image_extent[1] * multiplier,
@@ -1283,7 +1287,6 @@ fn make_image_and_view(
         ImageCreateInfo {
             image_type: ImageType::Dim2d,
             format,
-            view_formats: vec![format],
             extent,
             usage,
             initial_layout: ImageLayout::Undefined,
@@ -1308,15 +1311,12 @@ pub(crate) fn make_depth_buffer_and_attachments(
         ImageCreateInfo {
             image_type: ImageType::Dim2d,
             format: depth_stencil_format,
-            view_formats: vec![depth_stencil_format],
             extent: [
                 image_extent[0] * supersampling.to_int(),
                 image_extent[1] * supersampling.to_int(),
                 1,
             ],
-            usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT
-                | ImageUsage::INPUT_ATTACHMENT
-                | ImageUsage::TRANSIENT_ATTACHMENT,
+            usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT,
             initial_layout: ImageLayout::Undefined,
             ..Default::default()
         },
@@ -1358,7 +1358,6 @@ impl Texture2DHolder {
             ImageCreateInfo {
                 image_type: ImageType::Dim2d,
                 format: Format::R8G8B8A8_SRGB,
-                view_formats: vec![Format::R8G8B8A8_SRGB],
                 extent: [dimensions.0, dimensions.1, 1],
                 usage: ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
                 ..Default::default()

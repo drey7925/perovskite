@@ -73,7 +73,6 @@ impl MiniBlockRenderer {
             ImageCreateInfo {
                 image_type: ImageType::Dim2d,
                 format: Format::R8G8B8A8_SRGB,
-                view_formats: vec![Format::R8G8B8A8_SRGB],
                 extent,
                 usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
                 ..Default::default()
