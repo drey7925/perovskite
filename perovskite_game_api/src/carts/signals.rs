@@ -138,12 +138,14 @@ use crate::circuits::{
     BlockConnectivity, BusMessage, CircuitBlockBuilder, CircuitBlockCallbacks,
     CircuitBlockProperties, CircuitGameBuilder,
 };
+use crate::game_builder::TextureRefExt;
 use crate::{
     blocks::{AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, StaticBlockName, StaticTextureName},
     include_texture_bytes,
 };
 use anyhow::{bail, Context, Result};
+use perovskite_core::protocol::render::TextureReference;
 use perovskite_server::game_state::client_ui::TextFieldBuilder;
 
 pub(crate) const SIGNAL_BLOCK: StaticBlockName = StaticBlockName("carts:signal");
@@ -153,6 +155,9 @@ const SIGNAL_BLOCK_TEX_OFF: StaticTextureName = StaticTextureName("carts:signal_
 const SIGNAL_BLOCK_TEX_OFF_ENHANCED: StaticTextureName =
     StaticTextureName("carts:signal_block_off_enhanced");
 const SIGNAL_BLOCK_TEX_ON: StaticTextureName = StaticTextureName("carts:signal_block_on");
+const SIGNAL_BLOCK_TEX_ON_EMISSIVE: StaticTextureName =
+    StaticTextureName("carts:signal_block_on_emissive");
+
 const SIGNAL_SIDE_TOP_TEX: StaticTextureName = StaticTextureName("carts:signal_side_top");
 
 // Note that the two low bits of the signal variant are used for the direction it's facing
@@ -191,6 +196,12 @@ pub(crate) fn register_signal_blocks(
         "textures/signal_off_blue.png"
     )?;
     include_texture_bytes!(game_builder, SIGNAL_BLOCK_TEX_ON, "textures/signal_on.png")?;
+    include_texture_bytes!(
+        game_builder,
+        SIGNAL_BLOCK_TEX_ON_EMISSIVE,
+        "textures/signal_on_emissive.png"
+    )?;
+
     include_texture_bytes!(
         game_builder,
         SIGNAL_SIDE_TOP_TEX,
@@ -311,6 +322,8 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
     const FRONT_TEXTURE: StaticTextureName = StaticTextureName("carts:starting_signal_front");
     const BACK_TEXTURE: StaticTextureName = StaticTextureName("carts:starting_signal_back");
     const BACK_ON_TEXTURE: StaticTextureName = StaticTextureName("carts:starting_signal_back_on");
+    const BACK_ON_EMISSIVE_TEXTURE: StaticTextureName =
+        StaticTextureName("carts:starting_signal_back_on_emissive");
     const BLOCK_NAME: StaticBlockName = StaticBlockName("carts:starting_signal");
     include_texture_bytes!(
         game_builder,
@@ -327,6 +340,11 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
         BACK_ON_TEXTURE,
         "textures/signal_orange_back_on.png"
     )?;
+    include_texture_bytes!(
+        game_builder,
+        BACK_ON_EMISSIVE_TEXTURE,
+        "textures/signal_orange_back_on_emissive.png"
+    )?;
     let signal_off_box = AaBoxProperties::new(
         SIGNAL_SIDE_TOP_TEX,
         SIGNAL_SIDE_TOP_TEX,
@@ -342,8 +360,8 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
         SIGNAL_SIDE_TOP_TEX,
         SIGNAL_SIDE_TOP_TEX,
         SIGNAL_SIDE_TOP_TEX,
-        SIGNAL_BLOCK_TEX_ON,
-        BACK_ON_TEXTURE,
+        TextureReference::from(SIGNAL_BLOCK_TEX_ON).with_emissive(SIGNAL_BLOCK_TEX_ON_EMISSIVE),
+        TextureReference::from(BACK_ON_TEXTURE).with_emissive(BACK_ON_EMISSIVE_TEXTURE),
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
     );
@@ -419,7 +437,6 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
                     ),
             )
             .set_allow_light_propagation(true)
-            .set_light_emission(8)
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
                 bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
@@ -469,7 +486,7 @@ fn register_single_signal(
         SIGNAL_SIDE_TOP_TEX,
         SIGNAL_SIDE_TOP_TEX,
         SIGNAL_SIDE_TOP_TEX,
-        SIGNAL_BLOCK_TEX_ON,
+        TextureReference::from(SIGNAL_BLOCK_TEX_ON).with_emissive(SIGNAL_BLOCK_TEX_ON_EMISSIVE),
         SIGNAL_SIDE_TOP_TEX,
         crate::blocks::TextureCropping::AutoCrop,
         crate::blocks::RotationMode::RotateHorizontally,
@@ -528,7 +545,6 @@ fn register_single_signal(
                     ),
             )
             .set_allow_light_propagation(true)
-            .set_light_emission(8)
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
                 bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));

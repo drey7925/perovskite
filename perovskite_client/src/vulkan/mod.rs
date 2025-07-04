@@ -681,13 +681,12 @@ impl VulkanWindow {
         &self,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         framebuffer: &FramebufferHolder,
-        clear_color: [f32; 4],
     ) -> Result<()> {
         builder.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![
                     // Supersampled color buffer
-                    Some(clear_color.into()),
+                    Some([0.0; 4].into()),
                     // Supersampled depth buffer
                     Some(self.depth_clear_value()),
                 ],

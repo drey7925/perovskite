@@ -22,6 +22,7 @@ use crate::vulkan::{
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
 use smallvec::smallvec;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracy_client::span;
 use vulkano::buffer::BufferContents;
@@ -58,11 +59,12 @@ use vulkano::{
 };
 
 use crate::vulkan::shaders::{
+    frag_lighting,
     vert_3d::{self, UniformData},
     LiveRenderConfig, VkBufferGpu,
 };
 
-use super::{frag_lighting_sparse, SceneState};
+use super::SceneState;
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
@@ -168,7 +170,7 @@ pub(crate) struct EntityPipelineProvider {
 impl EntityPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<EntityPipelineProvider> {
         let vs_entity = vert_3d::load_entity_tentative(device.clone())?;
-        let fs = frag_lighting_sparse::load(device.clone())?;
+        let fs = frag_lighting::load(device.clone())?;
         Ok(EntityPipelineProvider {
             device,
             vs_entity,
@@ -190,6 +192,7 @@ impl EntityPipelineProvider {
             .context("Missing vertex shader")?;
         let fs_sparse = self
             .fs_sparse
+            .specialize(HashMap::from_iter([(0, false.into()), (1, false.into())]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let vertex_input_state = EntityVertex::per_vertex().definition(&vs)?;

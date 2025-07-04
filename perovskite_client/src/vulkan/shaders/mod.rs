@@ -56,9 +56,10 @@ pub(crate) mod vert_3d {
                 };
 
                 layout(location = 0) out vec2 uv_texcoord_out;
-                layout(location = 1) out float brightness_out;
-                layout(location = 2) out vec3 global_brightness_out;
-
+                layout(location = 1) flat out float brightness_out;
+                layout(location = 2) flat out vec3 global_brightness_out;
+                layout(location = 3) flat out vec3 world_normal_out;
+                layout(location = 4) out vec3 world_pos_out;
 
 
                 vec3 decode_normal(uint index) {
@@ -83,10 +84,15 @@ pub(crate) mod vert_3d {
                     float wave_x = wave_horizontal * plant_wave_vector.x;
                     float wave_z = wave_horizontal * plant_wave_vector.y;
                     vec3 position_with_wave = vec3(position.x + wave_x, position.y, position.z + wave_z);
-                    gl_Position = vp_matrix * model_matrix * vec4(position_with_wave, 1.0);
+                    vec4 world_pos = model_matrix * vec4(position_with_wave, 1.0);
+                    world_pos_out = world_pos.xyz / world_pos.w;
+                    gl_Position = vp_matrix * world_pos;
+
                     uv_texcoord_out = uv_texcoord;
                     brightness_out = brightness;
-                    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, decode_normal(normal)));
+
+                    world_normal_out = decode_normal(normal);
+                    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, world_normal_out));
                     global_brightness_out = global_brightness_color * global_brightness_contribution * gbc_adjustment;
                 }
             "
@@ -111,11 +117,15 @@ pub(crate) mod vert_3d {
                 };
 
                 layout(location = 0) out vec2 uv_texcoord_out;
-                layout(location = 1) out float brightness_out;
-                layout(location = 2) out vec3 global_brightness_out;
+                layout(location = 1) flat out float brightness_out;
+                layout(location = 2) flat out vec3 global_brightness_out;
+                layout(location = 3) flat out vec3 world_normal_out;
+                layout(location = 4) out vec3 world_pos_out;
 
                 void main() {
-                    gl_Position = vp_matrix * model_matrix * vec4(position, 1.0);
+                    vec4 world_pos = model_matrix * vec4(position, 1.0);
+                    world_pos_out = world_pos.xyz / world_pos.w;
+                    gl_Position = vp_matrix * world_pos;
                     uv_texcoord_out = uv_texcoord;
                     brightness_out = 1.0;
                     global_brightness_out = vec3(0.0, 0.0, 0.0);
@@ -134,7 +144,6 @@ pub(crate) mod vert_3d {
     }
 }
 
-// Fragment shader(s) that use lighting data
 pub(crate) mod frag_lighting {
     vulkano_shaders::shader! {
     ty: "fragment",
@@ -144,51 +153,37 @@ pub(crate) mod frag_lighting {
     layout(location = 0) in vec2 uv_texcoord;
     layout(location = 1) flat in float brightness;
     layout(location = 2) flat in vec3 global_brightness;
+    layout(location = 3) flat in vec3 world_normal;
+    layout(location = 4) in vec3 world_pos;
 
     layout(location = 0) out vec4 f_color;
-    layout(set = 0, binding = 0) uniform sampler2D tex;
+    layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
+    layout(set = 0, binding = 1) uniform sampler2D emissive_tex;
 
-    void main() {
-        vec4 color = texture(tex, uv_texcoord);
-        f_color = vec4((brightness + global_brightness.r) * color.r,
-                       (brightness + global_brightness.g) * color.g,
-                       (brightness + global_brightness.b) * color.b,
-                       color.a);
-    }
-    "
-    }
-}
-// Fragment shader(s) that use lighting data and does a discard based on alpha
-// Alpha=0 and alpha=1 are supported, behavior is undefined for other values.
-pub(crate) mod frag_lighting_sparse {
-    vulkano_shaders::shader! {
-    ty: "fragment",
-    src: r"
-    #version 460
-
-    layout(location = 0) in vec2 uv_texcoord;
-    layout(location = 1) flat in float brightness;
-    layout(location = 2) flat in vec3 global_brightness;
-
-    layout(location = 0) out vec4 f_color;
-    layout(set = 0, binding = 0) uniform sampler2D tex;
-
-    layout (constant_id = 0) const bool DEBUG_INVERT_RASTER_TRANSPARENT = true;
+    layout (constant_id = 0) const bool SPARSE = true;
+    layout (constant_id = 1) const bool DEBUG_INVERT_RASTER_TRANSPARENT = true;
 
     void main() {
         vec2 pix = gl_FragCoord.xy / 8.0;
-        vec4 color = texture(tex, uv_texcoord);
-        f_color = vec4((brightness + global_brightness.r) * color.r,
-                       (brightness + global_brightness.g) * color.g,
-                       (brightness + global_brightness.b) * color.b,
-                       color.a);
+        vec4 diffuse = texture(diffuse_tex, uv_texcoord);
+        vec4 emissive = texture(emissive_tex, uv_texcoord);
+
+        float normal_pos_dot = abs(dot(normalize(world_normal), normalize(world_pos)));
+
+        f_color = vec4((brightness + global_brightness) * diffuse.rgb, diffuse.a);
+        float emissive_anisotropy_power = mix(10.0, 0.001, emissive.a);
+        f_color.rgb += pow(normal_pos_dot, emissive_anisotropy_power) * emissive.rgb;
+
         if (DEBUG_INVERT_RASTER_TRANSPARENT) {
-            f_color.xyz = 1.0 - f_color.xyz;
+            f_color.rgb = 1.0 - f_color.rgb;
         }
-        if (f_color.a < 0.5) {
-            discard;
-        } else {
-            f_color.a = 1.0;
+
+        if (SPARSE) {
+            if (f_color.a < 0.5) {
+                discard;
+            } else {
+                f_color.a = 1.0;
+            }
         }
     }
     "

@@ -61,7 +61,7 @@ pub trait TextureRefExt {
     /// and direct shiny hits when the user has raytracing enabled. This is tone-mapped in some
     /// TBD manner; setting R, G, or B to the max value may be rather bright.
     ///
-    /// The meaning of the alpha channel in *this* function is still TBD
+    /// The meaning of the alpha channel in *this* texture is still TBD
     fn with_emissive(self, tex: impl TextureName) -> TextureReference;
 }
 impl TextureRefExt for TextureReference {

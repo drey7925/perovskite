@@ -198,11 +198,7 @@ impl ActiveGame {
             None
         };
 
-        ctx.start_raster_render_pass_and_clear(
-            &mut command_buf_builder,
-            &framebuffer,
-            scene_state.clear_color,
-        )?;
+        ctx.start_raster_render_pass_and_clear(&mut command_buf_builder, &framebuffer)?;
 
         self.sky_pipeline
             .bind_and_draw(ctx, scene_state, &mut command_buf_builder)?;

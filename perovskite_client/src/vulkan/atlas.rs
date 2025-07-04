@@ -53,7 +53,7 @@ impl TextureKey {
     fn emissive<'a>(&self, textures: &'a FxHashMap<String, RgbaImage>) -> Option<&'a RgbaImage> {
         match self {
             TextureKey::Named(key) => key
-                .specular
+                .emissive
                 .as_ref()
                 .map(|x| textures.get(x).unwrap_or(&UNKNOWN_TEX)),
             _ => None,
@@ -131,7 +131,7 @@ impl From<&TextureReference> for NamedTextureKey {
         Self {
             diffuse: if_nonempty(value.diffuse.as_ref()),
             specular: if_nonempty(value.rt_specular.as_ref()),
-            emissive: if_nonempty(value.rt_specular.as_ref()),
+            emissive: if_nonempty(value.emissive.as_ref()),
         }
     }
 }
@@ -204,7 +204,7 @@ impl TextureAtlas {
             specular_image.copy_from(&specular, rect.x, rect.y)?;
 
             let emissive = key
-                .specular(&textures)
+                .emissive(&textures)
                 .map(|x| {
                     image::imageops::resize(x, target_size.0, target_size.1, FilterType::Nearest)
                 })

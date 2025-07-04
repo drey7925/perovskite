@@ -505,6 +505,9 @@ impl BlockRenderer {
                     if !tex.rt_specular.is_empty() {
                         fetch_textures.insert(tex.rt_specular.clone());
                     }
+                    if !tex.emissive.is_empty() {
+                        fetch_textures.insert(tex.emissive.clone());
+                    }
                     pack_textures.insert(tex.into());
                 }
             };

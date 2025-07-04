@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{frag_lighting_sparse, SceneState};
+use super::SceneState;
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::{
@@ -247,19 +247,16 @@ impl CubePipelineWrapper {
 pub(crate) struct CubePipelineProvider {
     device: Arc<Device>,
     vs_cube: Arc<ShaderModule>,
-    fs_solid: Arc<ShaderModule>,
-    fs_sparse: Arc<ShaderModule>,
+    fs: Arc<ShaderModule>,
 }
 impl CubePipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<CubePipelineProvider> {
         let vs_cube = vert_3d::load_cube_geometry(device.clone())?;
-        let fs_solid = frag_lighting::load(device.clone())?;
-        let fs_sparse = frag_lighting_sparse::load(device.clone())?;
+        let fs = frag_lighting::load(device.clone())?;
         Ok(CubePipelineProvider {
             device,
             vs_cube,
-            fs_solid,
-            fs_sparse,
+            fs,
         })
     }
 
@@ -276,15 +273,19 @@ impl CubePipelineProvider {
             .entry_point("main")
             .context("Missing vertex shader")?;
         let fs_solid = self
-            .fs_solid
+            .fs
+            .specialize(HashMap::from_iter([
+                (0, false.into()),
+                (1, config.raytracer_debug.into()),
+            ]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let fs_sparse = self
-            .fs_sparse
-            .specialize(HashMap::from_iter([(
-                0,
-                SpecializationConstant::Bool(config.raytracer_debug),
-            )]))?
+            .fs
+            .specialize(HashMap::from_iter([
+                (0, true.into()),
+                (1, config.raytracer_debug.into()),
+            ]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let vertex_input_state = CubeGeometryVertex::per_vertex().definition(&vs)?;
@@ -341,8 +342,7 @@ impl CubePipelineProvider {
             }),
             color_blend_state: Some(ColorBlendState {
                 attachments: vec![ColorBlendAttachmentState {
-                    // TODO: Why does the solid pass need alpha blending?
-                    blend: Some(AttachmentBlend::alpha()),
+                    blend: None,
                     color_write_mask: ColorComponents::all(),
                     color_write_enable: true,
                 }],
@@ -389,7 +389,10 @@ impl CubePipelineProvider {
         let atlas_descriptor_set = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
             layout.clone(),
-            [tex.diffuse.write_descriptor_set(0)],
+            [
+                tex.diffuse.write_descriptor_set(0),
+                tex.emissive.write_descriptor_set(1),
+            ],
             [],
         )?;
 
