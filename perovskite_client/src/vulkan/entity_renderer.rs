@@ -4,21 +4,22 @@ use std::sync::Arc;
 use crate::{media::CacheManager, vulkan::RectF32};
 use perovskite_core::protocol::entities as proto;
 use rustc_hash::{FxHashMap, FxHashSet};
-use texture_packer::{importer::ImageImporter, Rect};
+use texture_packer::Rect;
 
-use super::{Texture2DHolder, VkAllocator, VulkanContext};
+use super::{VkAllocator, VulkanContext};
+use crate::media::load_or_generate_image;
+use crate::vulkan::atlas::{TextureAtlas, TextureKey};
 use crate::vulkan::shaders::entity_geometry::EntityVertex;
 use crate::vulkan::shaders::VkBufferGpu;
-use anyhow::{bail, ensure, Error, Result};
+use anyhow::{bail, ensure, Result};
 use cgmath::{Matrix3, Rad, Vector3, Zero};
-use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 
 /// Manages the entity definitions and their respective meshes
 ///
 /// Does not hold the actual state of the entities being sent to the display adapter;
 /// that state is in EntityState.
 pub(crate) struct EntityRenderer {
-    texture_atlas: Arc<Texture2DHolder>,
+    texture_atlas: TextureAtlas,
     allocator: Arc<VkAllocator>,
     mesh_definitions: FxHashMap<u32, EntityMesh>,
     /// These include buffers that render a single entity. Later on, as we add various accelerated and
@@ -32,76 +33,41 @@ impl EntityRenderer {
         ctx: &VulkanContext,
     ) -> Result<EntityRenderer> {
         let mut all_texture_names = FxHashSet::default();
+
+        let mut pack_textures = FxHashSet::default();
         for def in &entity_defs {
             if let Some(appearance) = &def.appearance {
                 for mesh in &appearance.custom_mesh {
                     if let Some(tex) = &mesh.texture {
+                        pack_textures.insert(TextureKey::from(tex));
                         all_texture_names.insert(tex.diffuse.clone());
+                        if !tex.rt_specular.is_empty() {
+                            all_texture_names.insert(tex.rt_specular.clone());
+                        }
+                        if !tex.emissive.is_empty() {
+                            all_texture_names.insert(tex.emissive.clone());
+                        }
                     }
                 }
             }
         }
 
-        let mut all_textures = FxHashMap::default();
+        let mut fetched_textures = FxHashMap::default();
         for x in all_texture_names {
-            let texture = cache_manager.load_media_by_name(&x).await?;
-            all_textures.insert(x, texture);
+            let texture = load_or_generate_image(cache_manager, &x).await?;
+            fetched_textures.insert(x, texture);
         }
-
-        let config = texture_packer::TexturePackerConfig {
-            // todo break these out into config
-            allow_rotation: false,
-            max_width: 4096,
-            max_height: 4096,
-            border_padding: 2,
-            texture_padding: 2,
-            texture_extrusion: 2,
-            trim: false,
-            texture_outlines: false,
-            force_max_dimensions: false,
-        };
-        let mut texture_packer = texture_packer::TexturePacker::new_skyline(config);
-        // TODO move these files to a sensible location
-        texture_packer
-            .pack_own(
-                String::from(FALLBACK_UNKNOWN_TEXTURE),
-                ImageImporter::import_from_memory(include_bytes!("block_unknown.png")).unwrap(),
-            )
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-        texture_packer
-            .pack_own(
-                String::from(TESTONLY_ENTITY),
-                ImageImporter::import_from_memory(include_bytes!("temporary_player_entity.png"))
-                    .unwrap(),
-            )
-            .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-
-        for (name, texture) in all_textures {
-            let texture = ImageImporter::import_from_memory(&texture)
-                .map_err(|e| Error::msg(format!("Texture import failed: {:?}", e)))?;
-            texture_packer
-                .pack_own(name, texture)
-                .map_err(|x| Error::msg(format!("Texture pack failed: {:?}", x)))?;
-        }
-
-        let texture_atlas = texture_packer::exporter::ImageExporter::export(&texture_packer, None)
-            .map_err(|x| Error::msg(format!("Texture atlas export failed: {:?}", x)))?;
-        let texture_coords: FxHashMap<String, Rect> = texture_packer
-            .get_frames()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.frame))
-            .collect();
-
-        // Entity classes may not be contgious or ordered; hence a hashmap for now
+        let texture_atlas = TextureAtlas::new(&ctx, pack_textures, fetched_textures)?;
+        // Entity classes may not be contiguous or ordered; hence a hashmap for now
         let mut all_meshes = FxHashMap::default();
         let mut singleton_gpu_buffers = FxHashMap::default();
-        let texture_atlas = Arc::new(Texture2DHolder::from_srgb(ctx, texture_atlas.into_rgba8())?);
+
         for def in entity_defs {
             if let Some(appearance) = def.appearance {
                 let mesh = EntityRenderer::pre_render(
                     appearance,
-                    &texture_coords,
-                    texture_atlas.dimensions(),
+                    &texture_atlas.texel_coords,
+                    (texture_atlas.width, texture_atlas.height),
                     def.short_name,
                 )?;
                 let singleton_buffer =
@@ -119,14 +85,14 @@ impl EntityRenderer {
         })
     }
 
-    pub(crate) fn atlas(&self) -> &Texture2DHolder {
+    pub(crate) fn atlas(&self) -> &TextureAtlas {
         &self.texture_atlas
     }
 
     /// Convert from the network mesh to a vulkan renderable mesh
     fn pre_render(
         appearance: proto::EntityAppearance,
-        texture_coords: &FxHashMap<String, Rect>,
+        texture_coords: &FxHashMap<TextureKey, Rect>,
         atlas_dims: (u32, u32),
         name: String,
     ) -> Result<EntityMesh> {
@@ -143,8 +109,8 @@ impl EntityRenderer {
             let tex_rectangle: RectF32 = mesh
                 .texture
                 .as_ref()
-                .and_then(|x| texture_coords.get(&x.diffuse))
-                .unwrap_or_else(|| texture_coords.get(FALLBACK_UNKNOWN_TEXTURE).unwrap())
+                .and_then(|x| texture_coords.get(&TextureKey::from(x)))
+                .unwrap_or_else(|| texture_coords.get(&TextureKey::FallbackUnknownTex).unwrap())
                 .into();
             let tex_rectangle = tex_rectangle.div(atlas_dims);
             let vertices_len = mesh.x.len();
@@ -246,7 +212,5 @@ pub(crate) struct EntityMesh {
     // under normal circumstances?
     pub(crate) def: proto::EntityAppearance,
 }
-
-const TESTONLY_ENTITY: &str = "builtin:temporary_player_entity";
 
 struct EntityRendererState {}

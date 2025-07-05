@@ -7,10 +7,13 @@ layout (set = 1, binding = 4, rgba32ui) uniform restrict readonly uimage2D defer
 layout (set = 1, binding = 5, rgba16f) uniform restrict writeonly image2D specular_result;
 
 void main() {
+    imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(0, 1, 0, 1));
+    memoryBarrierImage();
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
     uint spec_block = spec_ray_dir.a;
     if (spec_block == 0) {
-        imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(1, 1, 1, 1));
+        imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(1, 0, 0, 1));
+        memoryBarrierImage();
         return;
     }
     vec4 f_color = vec4(0.0, 0.0, 0.0, 1.0);
@@ -21,8 +24,8 @@ void main() {
     vec2 t_min_max = t_range(g0, spec_dir);
 
     if (t_min_max.x > t_min_max.y) {
-        f_color = vec4(0.25, 0.0, 0.0, 1.0);
-        return;
+        imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(0, 1, 1, 1));
+        memoryBarrierImage();
     }
     vec3 g1 = g0 + (spec_dir * t_min_max.y);
     vec4 spec_rgba = vec4(0);

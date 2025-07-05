@@ -21,6 +21,8 @@ layout(location = 4) out vec3 world_pos_out;
 
 void main() {
     vec4 world_pos = model_matrix * vec4(position, 1.0);
+    vec4 world_normal = model_matrix * vec4(normal, 0.0);
+    world_normal_out = normalize(world_normal.xyz);
     world_pos_out = world_pos.xyz / world_pos.w;
     gl_Position = vp_matrix * world_pos;
     uv_texcoord_out = uv_texcoord;

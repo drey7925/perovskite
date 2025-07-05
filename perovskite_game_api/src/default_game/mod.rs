@@ -270,8 +270,10 @@ impl DefaultGameBuilder for GameBuilder {
     }
 }
 
+const PLAYER_UV_TEX: StaticTextureName = StaticTextureName("default:player_uv");
+
 fn register_player_entity(builder: &mut GameBuilder) -> Result<EntityClassId> {
-    let player_tex = StaticTextureName("default:player_uv");
+    let player_tex = PLAYER_UV_TEX;
     include_texture_bytes!(builder, player_tex, "textures/player.png")?;
     builder.inner.entities_mut().register(EntityDef {
         move_queue_type: game_state::entities::MoveQueueType::SingleMove,
@@ -296,6 +298,6 @@ pub mod game_settings;
 const PLAYER_MESH_BYTES: &[u8] = include_bytes!("player.obj");
 lazy_static::lazy_static! {
     static ref PLAYER_MESH: CustomMesh = {
-        perovskite_server::formats::load_obj_mesh(PLAYER_MESH_BYTES, "default:player_uv").unwrap()
+        perovskite_server::formats::load_obj_mesh(PLAYER_MESH_BYTES, PLAYER_UV_TEX).unwrap()
     };
 }

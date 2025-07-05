@@ -85,7 +85,8 @@ pub(crate) mod frag_lighting {
 
         f_color = vec4((brightness + global_brightness) * diffuse.rgb, diffuse.a);
         float emissive_anisotropy_power = mix(10.0, 0.001, emissive.a);
-        f_color.rgb += pow(normal_pos_dot, emissive_anisotropy_power) * emissive.rgb;
+        float anisotropic_multiplier = pow(normal_pos_dot, emissive_anisotropy_power);
+        f_color.rgb += anisotropic_multiplier * emissive.rgb;
 
         if (DEBUG_INVERT_RASTER_TRANSPARENT) {
             f_color.rgb = 1.0 - f_color.rgb;
@@ -189,8 +190,6 @@ impl LiveRenderConfig {
 pub(crate) struct SceneState {
     pub(crate) vp_matrix: Matrix4<f32>,
     pub(crate) global_light_color: [f32; 3],
-    // TODO: This doesn't do anything because the background is rendered by the sky shader
-    pub(crate) clear_color: [f32; 4],
     pub(crate) sun_direction: Vector3<f32>,
     pub(crate) player_pos_block: u32,
 }

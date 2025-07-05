@@ -43,6 +43,7 @@ use crate::{
 };
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;
 use perovskite_core::protocol::game_rpc::EntityTarget;
+use perovskite_core::protocol::render::TextureReference;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -3036,7 +3037,12 @@ fn make_unknown_entity_appearance() -> EntityDef {
         client_info: EntityAppearance {
             custom_mesh: vec![formats::load_obj_mesh(
                 UNKNOWN_ENTITY_MESH,
-                FALLBACK_UNKNOWN_TEXTURE,
+                TextureReference {
+                    diffuse: FALLBACK_UNKNOWN_TEXTURE.to_string(),
+                    crop: None,
+                    rt_specular: "".to_string(),
+                    emissive: "".to_string(),
+                },
             )
             .unwrap()],
             attachment_offset: vec3(0.0, 0.0, 0.0).try_into().ok(),

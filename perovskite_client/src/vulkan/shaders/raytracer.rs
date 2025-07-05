@@ -551,7 +551,7 @@ impl RaytracedPipelineProvider {
                 pass_op: StencilOp::Keep,
                 depth_fail_op: StencilOp::Keep,
                 // Only accept stencil=1 fragments for deferred specular
-                compare_op: CompareOp::Always,
+                compare_op: CompareOp::Equal,
             },
             compare_mask: u32::MAX,
             write_mask: u32::MAX,

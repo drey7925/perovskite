@@ -15,6 +15,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::atlas::TextureAtlas;
+use crate::vulkan::shaders::{
+    frag_lighting,
+    vert_3d::{self, UniformData},
+    LiveRenderConfig, VkBufferGpu,
+};
 use crate::vulkan::{
     shaders::vert_3d::ModelMatrix, CommandBufferBuilder, Texture2DHolder, VulkanContext,
     VulkanWindow,
@@ -56,12 +62,6 @@ use vulkano::{
     },
     render_pass::{RenderPass, Subpass},
     shader::ShaderModule,
-};
-
-use crate::vulkan::shaders::{
-    frag_lighting,
-    vert_3d::{self, UniformData},
-    LiveRenderConfig, VkBufferGpu,
 };
 
 use super::SceneState;
@@ -180,10 +180,10 @@ impl EntityPipelineProvider {
 
     pub(crate) fn build_pipeline(
         &self,
-        _ctx: &VulkanContext,
+        ctx: &VulkanContext,
         viewport: Viewport,
         render_pass: Arc<RenderPass>,
-        tex: &Texture2DHolder,
+        atlas: &TextureAtlas,
         supersampling: Supersampling,
     ) -> Result<EntityPipelineWrapper> {
         let vs = self
@@ -254,7 +254,20 @@ impl EntityPipelineProvider {
         };
         let pipeline = GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
 
-        let solid_descriptor = tex.descriptor_set(&pipeline, 0, 0)?;
+        let solid_descriptor = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            pipeline
+                .layout()
+                .set_layouts()
+                .get(0)
+                .context("Entity pipeline missing descriptor set 0")?
+                .clone(),
+            [
+                atlas.diffuse.write_descriptor_set(0),
+                atlas.emissive.write_descriptor_set(1),
+            ],
+            [],
+        )?;
         Ok(EntityPipelineWrapper {
             pipeline,
             descriptor: solid_descriptor,
@@ -265,14 +278,14 @@ impl EntityPipelineProvider {
     pub(crate) fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
-        config: &Texture2DHolder,
+        atlas: &TextureAtlas,
         global_config: &LiveRenderConfig,
     ) -> Result<EntityPipelineWrapper> {
         self.build_pipeline(
             &wnd.vk_ctx,
             wnd.viewport.clone(),
             wnd.renderpasses.color_depth.clone(),
-            config,
+            atlas,
             global_config.supersampling,
         )
     }

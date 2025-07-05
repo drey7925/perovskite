@@ -975,7 +975,6 @@ impl ClientState {
         FrameState {
             scene_state: SceneState {
                 vp_matrix: view_proj_matrix,
-                clear_color: [0., 0., 0., 1.],
                 global_light_color: lighting.into(),
                 sun_direction,
                 player_pos_block: current_block.0,

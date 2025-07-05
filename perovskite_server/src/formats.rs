@@ -1,15 +1,10 @@
 use anyhow::Result;
 use perovskite_core::protocol::render::{CustomMesh, TextureReference};
 
-pub fn load_obj_mesh(obj_data: &[u8], texture: impl Into<String>) -> Result<CustomMesh> {
+pub fn load_obj_mesh(obj_data: &[u8], texture: impl Into<TextureReference>) -> Result<CustomMesh> {
     let object: obj::Obj<obj::TexturedVertex, u32> = obj::load_obj(obj_data)?;
     let mut mesh = CustomMesh::default();
-    mesh.texture = Some(TextureReference {
-        diffuse: texture.into(),
-        rt_specular: String::new(),
-        emissive: String::new(),
-        crop: None,
-    });
+    mesh.texture = Some(texture.into());
     for vertex in object.vertices {
         mesh.x.push(vertex.position[2]);
         // We need vulkan's coordinate system, with Y going down
@@ -18,9 +13,9 @@ pub fn load_obj_mesh(obj_data: &[u8], texture: impl Into<String>) -> Result<Cust
         mesh.u.push(vertex.texture[0]);
         // OBJ and vulkan have opposite UV Y coordinates
         mesh.v.push(1.0 - vertex.texture[1]);
-        mesh.nx.push(vertex.normal[0]);
-        mesh.ny.push(vertex.normal[1]);
-        mesh.nz.push(vertex.normal[2]);
+        mesh.nx.push(vertex.normal[2]);
+        mesh.ny.push(-vertex.normal[1]);
+        mesh.nz.push(vertex.normal[0]);
     }
     mesh.indices = object.indices;
     Ok(mesh)

@@ -126,8 +126,9 @@ impl EntityHandlers for DuckHandlers {
     // TODO...
 }
 
+const DUCK_UV: StaticTextureName = StaticTextureName("animals:duck_uv");
+
 pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
-    const DUCK_UV: StaticTextureName = StaticTextureName("animals:duck_uv");
     const DUCK_INV_TEX: StaticTextureName = StaticTextureName("animals:duck_inv");
     include_texture_bytes!(game_builder, DUCK_UV, "textures/duck_uv.png")?;
     include_texture_bytes!(game_builder, DUCK_INV_TEX, "textures/testonly_duck.png")?;
@@ -213,6 +214,6 @@ fn place_duck(
 const DUCK_MESH_BYTES: &[u8] = include_bytes!("duck.obj");
 lazy_static::lazy_static! {
     static ref DUCK_MESH: CustomMesh = {
-        perovskite_server::formats::load_obj_mesh(DUCK_MESH_BYTES, "animals:duck_uv").unwrap()
+        perovskite_server::formats::load_obj_mesh(DUCK_MESH_BYTES, DUCK_UV).unwrap()
     };
 }

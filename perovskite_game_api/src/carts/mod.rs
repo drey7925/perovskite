@@ -1,15 +1,16 @@
+// This is a temporary implementation used while developing the entity system
+use anyhow::{bail, Context, Result};
 use std::pin::Pin;
 use std::time::Duration;
 use std::{
     collections::{BinaryHeap, VecDeque},
     time::Instant,
 };
-// This is a temporary implementation used while developing the entity system
-use anyhow::{bail, Context, Result};
 
 use self::{interlocking::InterlockingStep, signals::automatic_signal_acquire, tracks::ScanState};
 use crate::carts::util::AsyncRefcount;
 use crate::default_game::block_groups::BRITTLE;
+use crate::game_builder::TextureRefExt;
 use crate::{
     blocks::{variants::rotate_nesw_azimuth_to_variant, BlockBuilder, CubeAppearanceBuilder},
     game_builder::{GameBuilderExtension, StaticBlockName, StaticTextureName},
@@ -18,8 +19,9 @@ use crate::{
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
 use perovskite_core::protocol::blocks::InteractKeyOption;
-use perovskite_core::protocol::entities::TurbulenceAudioModel;
+use perovskite_core::protocol::entities::{EntityAppearance, TurbulenceAudioModel};
 use perovskite_core::protocol::game_rpc::EntityTarget;
+use perovskite_core::protocol::render::TextureReference;
 use perovskite_core::{
     block_id::BlockId,
     chat::{ChatMessage, SERVER_ERROR_COLOR, SERVER_MESSAGE_COLOR},
@@ -133,7 +135,7 @@ impl Default for CartsGameBuilderExtension {
 const CART_MESH_BYTES: &[u8] = include_bytes!("minecart.obj");
 lazy_static::lazy_static! {
     static ref CART_MESH: CustomMesh = {
-        perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, "carts:minecart_uv").unwrap()
+        perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, TextureReference::from(CART_UV_TEX).with_emissive(CART_UV_TEX_EMISSIVE)).unwrap()
     };
 }
 
@@ -184,6 +186,9 @@ impl EntityHandlers for CartHandlers {
     }
 }
 
+const CART_UV_TEX: StaticTextureName = StaticTextureName("carts:minecart_uv");
+const CART_UV_TEX_EMISSIVE: StaticTextureName = StaticTextureName("carts:minecart_uv_emissive");
+
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     crate::circuits::register_circuits(game_builder)?;
     let rail_tex = StaticTextureName("carts:rail");
@@ -215,8 +220,12 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
     let cart_tex = StaticTextureName("carts:cart_temp");
     include_texture_bytes!(game_builder, cart_tex, "textures/testonly_cart.png")?;
 
-    let cart_uv_tex = StaticTextureName("carts:minecart_uv");
-    include_texture_bytes!(game_builder, cart_uv_tex, "textures/cart_uv.png")?;
+    include_texture_bytes!(game_builder, CART_UV_TEX, "textures/cart_uv.png")?;
+    include_texture_bytes!(
+        game_builder,
+        CART_UV_TEX_EMISSIVE,
+        "textures/cart_uv_emissive.png"
+    )?;
 
     // TODO update the speedposts
     let speedpost1 = game_builder.add_block(

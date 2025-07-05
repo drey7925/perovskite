@@ -123,7 +123,7 @@ void main() {
     vec2 t_min_max = t_range(fine_pos, facedir_world);
 
     if (t_min_max.x > t_min_max.y) {
-        discard;
+        return;
     }
 
     vec3 g0 = fine_pos + (t_min_max.x * facedir_world);

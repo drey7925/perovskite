@@ -262,7 +262,6 @@ lazy_static::lazy_static! {
         let vp_matrix = projection * translation * rotation * coord_system_conversion;
         SceneState {
             vp_matrix,
-            clear_color: [0.0, 0.0, 0.0, 0.0],
             global_light_color: [0.0, 0.0, 0.0],
             sun_direction: vec3(0., 0., 0.),
             player_pos_block: 0,

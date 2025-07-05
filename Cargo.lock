@@ -3578,7 +3578,7 @@ dependencies = [
  "splines",
  "texture_packer",
  "textwrap",
-    "tinyvec",
+ "tinyvec",
  "tokio",
  "tokio-stream",
  "tokio-util",

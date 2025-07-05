@@ -8,7 +8,7 @@ layout (set = 0, binding = 2, rgba32ui) uniform restrict writeonly uimage2D defe
 void main() {
     ivec2 max_coord = imageSize(deferred_specular_color).xy - ivec2(1, 1);
 
-    uint best_distance = SPECULAR_DOWNSAMPLING + 1;
+    uint best_distance = SPECULAR_DOWNSAMPLING + 10;
     uvec4 best_dsrd = uvec4(0);
     bool keep = false;
     ivec2 base = (ivec2(gl_FragCoord.xy) * int(SPECULAR_DOWNSAMPLING));
@@ -18,7 +18,7 @@ void main() {
             vec4 spec_color = imageLoad(deferred_specular_color, coord);
             uvec4 dsrd = imageLoad(deferred_specular_ray_dir, coord);
             uint distance = abs(i - int(SPECULAR_DOWNSAMPLING) / 2) + abs(j - int(SPECULAR_DOWNSAMPLING / 2));
-            if (dsrd.a != 0 && distance < best_distance) {
+            if ((dsrd.a != 0) && (distance < best_distance)) {
                 best_dsrd = dsrd;
                 best_distance = distance;
             }
@@ -27,9 +27,9 @@ void main() {
             }
         }
     }
+    imageStore(deferred_specular_ray_dir_out, ivec2(gl_FragCoord.xy), best_dsrd);
 
     if (!keep) {
         discard;
     }
-    imageStore(deferred_specular_ray_dir_out, ivec2(gl_FragCoord.xy), best_dsrd);
 }
