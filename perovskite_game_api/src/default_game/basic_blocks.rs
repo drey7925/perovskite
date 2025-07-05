@@ -946,7 +946,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             CubeAppearanceBuilder::new()
                 .set_single_texture(
                     TextureReference::from(WATER_TEXTURE)
-                        .with_specular(OwnedTextureName::from_css_color("rgb(140 140 140)")),
+                        .with_specular(OwnedTextureName::from_css_color("rgb(70 70 70)")),
                 )
                 .set_liquid_shape()
                 .set_needs_translucency(),

@@ -5,6 +5,7 @@ use crate::vulkan::shaders::LiveRenderConfig;
 use anyhow::{Context, Result};
 use perovskite_core::protocol::audio::SoundSource;
 use serde::{Deserialize, Serialize};
+use vulkano::format::Format;
 
 const SETTINGS_RON_FILE: &str = "settings.ron";
 
@@ -49,6 +50,7 @@ pub(crate) struct RenderSettings {
     pub(crate) scale_inventories_with_high_dpi: bool,
     pub(crate) fov_degrees: f64,
     pub(crate) supersampling: Supersampling,
+    pub(crate) hdr: bool,
     pub(crate) render_distance: u32,
     pub(crate) raytracing: bool,
     pub(crate) raytraced_reflections: bool,
@@ -66,6 +68,7 @@ impl RenderSettings {
             render_distance: self.render_distance,
             raytracer_debug: self.raytracer_debug,
             raytracing_specular_downsampling: self.raytracing_specular_downsampling,
+            hdr: self.hdr,
         }
     }
 }
@@ -88,6 +91,7 @@ impl Default for RenderSettings {
             on_demand_raytracing: false,
             raytracer_debug: false,
             raytracing_specular_downsampling: 2,
+            hdr: true,
         }
     }
 }

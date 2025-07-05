@@ -61,7 +61,7 @@ impl MainMenu {
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_graphics_queue(),
-            Subpass::from(ctx.color_only_render_pass(), 0)
+            Subpass::from(ctx.ui_renderpass(), 0)
                 .context("Could not find subpass 0")
                 .unwrap(),
             ctx.swapchain().image_format(),
@@ -702,6 +702,13 @@ fn draw_render_settings(
                 )
                     .suffix(" chunks"),
             );
+            ui.end_row();
+            ui.label("HDR")
+                .on_hover_text("HDR effects (lens flares, light bloom)");
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.render.hdr,
+                "Enabled",
+            ));
             ui.end_row();
             ui.label("Raytracing")
                 .on_hover_text("If set, enables raytracing. Requires a powerful GPU, but does not (currently) require hardware-accelerated raytracing (e.g. RTX/RDNA)");

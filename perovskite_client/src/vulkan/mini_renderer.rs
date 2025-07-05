@@ -113,14 +113,7 @@ impl MiniBlockRenderer {
             viewport,
             render_pass.clone(),
             atlas_texture,
-            &LiveRenderConfig {
-                supersampling: Supersampling::None,
-                raytracing: false,
-                raytracing_reflections: false,
-                render_distance: 1,
-                raytracer_debug: false,
-                raytracing_specular_downsampling: 1,
-            },
+            &LiveRenderConfig::DUMMY,
         )?;
         let download_buffer = Buffer::new_slice(
             ctx.clone_allocator(),

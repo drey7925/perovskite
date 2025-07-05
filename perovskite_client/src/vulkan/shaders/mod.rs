@@ -20,6 +20,7 @@ use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::format::Format;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 pub(crate) mod cube_geometry;
@@ -34,103 +35,15 @@ pub(crate) mod vert_3d {
     vulkano_shaders::shader! {
         shaders: {
             cube_geometry: {
-            ty: "vertex",
-            src: r"
-            #version 460
-                layout(location = 0) in vec3 position;
-                layout(location = 2) in vec2 uv_texcoord;
-                layout(location = 1) in uint normal;
-                layout(location = 3) in float brightness;
-                layout(location = 4) in float global_brightness_contribution;
-                layout(location = 5) in float wave_horizontal;
-
-                layout(set = 1, binding = 0) uniform UniformData { 
-                    mat4 vp_matrix;
-                    vec2 plant_wave_vector;
-                    vec3 global_brightness_color;
-                    vec3 global_light_direction;
-                };
-                // 64 bytes of push constants :(
-                layout(push_constant) uniform ModelMatrix {
-                    mat4 model_matrix;
-                };
-
-                layout(location = 0) out vec2 uv_texcoord_out;
-                layout(location = 1) flat out float brightness_out;
-                layout(location = 2) flat out vec3 global_brightness_out;
-                layout(location = 3) flat out vec3 world_normal_out;
-                layout(location = 4) out vec3 world_pos_out;
-
-
-                vec3 decode_normal(uint index) {
-                     const float sqrt_half = sqrt(0.5);
-                     // Matches CubeFace in BlockRenderer
-                     const vec3 normals[10] = vec3[](
-                        vec3(1.0, 0.0, 0.0),
-                        vec3(-1.0, 0.0, 0.0),
-                        // Warning: CubeFace Y+ then Y- is in world coords, not Vk coords
-                        vec3(0.0, -1.0, 0.0),
-                        vec3(0.0, 1.0, 0.0),
-                        vec3(0.0, 0.0, 1.0),
-                        vec3(0.0, 0.0, -1.0),
-                        vec3(sqrt_half, 0.0, sqrt_half),
-                        vec3(sqrt_half, 0.0, -sqrt_half),
-                        vec3(-sqrt_half, 0.0, sqrt_half),
-                        vec3(-sqrt_half, 0.0, -sqrt_half)
-                    );
-                    return normals[index];
-                }
-                void main() {
-                    float wave_x = wave_horizontal * plant_wave_vector.x;
-                    float wave_z = wave_horizontal * plant_wave_vector.y;
-                    vec3 position_with_wave = vec3(position.x + wave_x, position.y, position.z + wave_z);
-                    vec4 world_pos = model_matrix * vec4(position_with_wave, 1.0);
-                    world_pos_out = world_pos.xyz / world_pos.w;
-                    gl_Position = vp_matrix * world_pos;
-
-                    uv_texcoord_out = uv_texcoord;
-                    brightness_out = brightness;
-
-                    world_normal_out = decode_normal(normal);
-                    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, world_normal_out));
-                    global_brightness_out = global_brightness_color * global_brightness_contribution * gbc_adjustment;
-                }
-            "
+                ty: "vertex",
+                path: "src/vulkan/shaders/cube_geometry_vtx.glsl"
             },
             // WIP entity shader - essentially just a simple transform-and-shade pipeline. At some
             // point, this should be re-structured to better scale entity rendering (e.g. doing move
             // calcs on the GPU for batches of entities)
             entity_tentative: {
-            ty: "vertex",
-            src: r"#version 460
-                layout(location = 0) in vec3 position;
-                layout(location = 1) in vec3 normal;
-                layout(location = 2) in vec2 uv_texcoord;
-                // TODO: bring back entity lighting at some later point
-
-                layout(set = 1, binding = 0) uniform EntityUniformData {
-                    mat4 vp_matrix;
-                };
-                // 64 bytes of push constants :(
-                layout(push_constant) uniform ModelMatrix {
-                    mat4 model_matrix;
-                };
-
-                layout(location = 0) out vec2 uv_texcoord_out;
-                layout(location = 1) flat out float brightness_out;
-                layout(location = 2) flat out vec3 global_brightness_out;
-                layout(location = 3) flat out vec3 world_normal_out;
-                layout(location = 4) out vec3 world_pos_out;
-
-                void main() {
-                    vec4 world_pos = model_matrix * vec4(position, 1.0);
-                    world_pos_out = world_pos.xyz / world_pos.w;
-                    gl_Position = vp_matrix * world_pos;
-                    uv_texcoord_out = uv_texcoord;
-                    brightness_out = 1.0;
-                    global_brightness_out = vec3(0.0, 0.0, 0.0);
-                }
-            "
+                ty: "vertex",
+                path: "src/vulkan/shaders/entity_vert.glsl"
             },
         }
     }
@@ -241,13 +154,35 @@ pub(crate) mod frag_simple {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
+    pub(crate) hdr: bool,
     pub(crate) raytracing: bool,
     pub(crate) raytracing_reflections: bool,
     pub(crate) render_distance: u32,
     pub(crate) raytracer_debug: bool,
     pub(crate) raytracing_specular_downsampling: u32,
+}
+
+impl LiveRenderConfig {
+    pub(crate) const DUMMY: LiveRenderConfig = LiveRenderConfig {
+        supersampling: Supersampling::None,
+        hdr: false,
+        raytracing: false,
+        raytracing_reflections: false,
+        render_distance: 1,
+        raytracer_debug: false,
+        raytracing_specular_downsampling: 1,
+    };
+
+    pub(crate) fn render_format(&self) -> Format {
+        if self.hdr {
+            Format::R16G16B16A16_SFLOAT
+        } else {
+            Format::R8G8B8A8_SRGB
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

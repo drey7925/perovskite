@@ -9,13 +9,9 @@ use smallvec::smallvec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::{
-    ClearColorImageInfo, PrimaryAutoCommandBuffer, SubpassContents, SubpassEndInfo,
-};
+use vulkano::command_buffer::{PrimaryAutoCommandBuffer, SubpassContents, SubpassEndInfo};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
-use vulkano::format::ClearColorValue;
-use vulkano::image::ImageLayout;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
@@ -145,9 +141,8 @@ impl RaytracedPipelineWrapper {
                 per_frame_config.scene_state.sun_direction.z,
             ]
             .into(),
-            // Add 2 to allow for a bit of jank between chunkloader distance
-            // and renderer distance
-            render_distance: per_frame_config.render_distance + 2,
+            // Add 5 to allow for a bit of jank between chunkloader distance and renderer distance
+            render_distance: per_frame_config.render_distance + 5,
             initial_block_id: per_frame_config.scene_state.player_pos_block,
         };
 
@@ -172,7 +167,7 @@ impl RaytracedPipelineWrapper {
 
         let deferred_buffers = per_frame_config
             .framebuffer
-            .deferred_specular_buffers
+            .raytrace_buffers
             .clone()
             .context("Missing deferred buffers but trying to raytrace")?;
 
@@ -213,12 +208,6 @@ impl RaytracedPipelineWrapper {
             ],
             [],
         )?;
-
-        command_buf_builder.clear_color_image(ClearColorImageInfo {
-            image_layout: ImageLayout::TransferDstOptimal,
-            clear_value: ClearColorValue::Float([1.0, 0.0, 0.0, 1.0].into()),
-            ..ClearColorImageInfo::image(deferred_buffers.specular_raw_color.image().clone())
-        })?;
 
         ctx.start_color_write_depth_read_render_pass(
             command_buf_builder,
@@ -280,7 +269,6 @@ impl RaytracedPipelineWrapper {
 
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
-        // Prepare the (downsampled) mask
         ctx.start_deferred_specular_depth_only_render_pass(
             command_buf_builder,
             per_frame_config.framebuffer,
@@ -305,9 +293,8 @@ impl RaytracedPipelineWrapper {
             ..Default::default()
         })?;
 
-        ctx.start_color_only_render_pass(
+        ctx.start_pre_blit_color_only_render_pass(
             command_buf_builder,
-            true,
             per_frame_config.framebuffer,
             SubpassContents::Inline,
         )?;
@@ -513,7 +500,7 @@ impl RaytracedPipelineProvider {
                     ..Default::default()
                 }),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.write_color_read_depth_render_pass.clone(), 0)
+                    Subpass::from(ctx.renderpasses.write_color_read_depth.clone(), 0)
                         .context("Missing subpass")?,
                 )),
                 viewport_state: full_viewport_state.clone(),
@@ -552,7 +539,7 @@ impl RaytracedPipelineProvider {
 
                 viewport_state: deferred_viewport_state.clone(),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.depth_stencil_only_clearing_render_pass.clone(), 0)
+                    Subpass::from(ctx.renderpasses.depth_stencil_clear.clone(), 0)
                         .context("Missing subpass")?,
                 )),
                 ..base_pipeline_info(layout_mask_specular)?
@@ -564,7 +551,7 @@ impl RaytracedPipelineProvider {
                 pass_op: StencilOp::Keep,
                 depth_fail_op: StencilOp::Keep,
                 // Only accept stencil=1 fragments for deferred specular
-                compare_op: CompareOp::Equal,
+                compare_op: CompareOp::Always,
             },
             compare_mask: u32::MAX,
             write_mask: u32::MAX,
@@ -586,7 +573,7 @@ impl RaytracedPipelineProvider {
                 }),
                 color_blend_state: None,
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.depth_stencil_only_clearing_render_pass.clone(), 0)
+                    Subpass::from(ctx.renderpasses.depth_stencil_clear.clone(), 0)
                         .context("Missing subpass")?,
                 )),
                 viewport_state: deferred_viewport_state.clone(),
@@ -609,8 +596,7 @@ impl RaytracedPipelineProvider {
                 }),
 
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(ctx.color_only_render_pass.clone(), 0)
-                        .context("Missing subpass")?,
+                    Subpass::from(ctx.renderpasses.color.clone(), 0).context("Missing subpass")?,
                 )),
                 viewport_state: full_viewport_state.clone(),
                 ..base_pipeline_info(layout_blend)?

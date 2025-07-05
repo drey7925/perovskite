@@ -10,7 +10,7 @@ use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
-    AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
+    ColorBlendAttachmentState, ColorBlendState, ColorComponents,
 };
 use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
@@ -201,14 +201,14 @@ impl SkyPipelineProvider {
             }),
             color_blend_state: Some(ColorBlendState {
                 attachments: vec![ColorBlendAttachmentState {
-                    blend: Some(AttachmentBlend::alpha()),
+                    blend: None,
                     color_write_mask: ColorComponents::all(),
                     color_write_enable: true,
                 }],
                 ..Default::default()
             }),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(ctx.clear_color_depth_render_pass.clone(), 0)
+                Subpass::from(ctx.renderpasses.color_depth_clear.clone(), 0)
                     .context("Missing subpass")?,
             )),
             ..GraphicsPipelineCreateInfo::layout(layout.clone())

@@ -3578,6 +3578,7 @@ dependencies = [
  "splines",
  "texture_packer",
  "textwrap",
+    "tinyvec",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -5264,9 +5265,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.6.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87cc5ceb3875bb20c2890005a4e226a4651264a5c75edb2421b52861a0a0cb50"
+checksum = "09b3661f17e86524eccd4371ab0429194e0d7c008abb45f7a7495b1719463c71"
 dependencies = [
  "tinyvec_macros",
 ]

@@ -25,7 +25,7 @@ mod atlas;
 pub mod gpu_chunk_table;
 pub(crate) mod raytrace_buffer;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Error, Result};
 use arc_swap::ArcSwap;
 use clap::error::ContextKind::Usage;
 use image::GenericImageView;
@@ -43,7 +43,7 @@ use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Sub
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
 use vulkano::command_buffer::{
     BlitImageInfo, BufferImageCopy, CommandBufferUsage, CopyBufferInfo, CopyBufferToImageInfo,
-    SubpassBeginInfo,
+    CopyImageInfo, SubpassBeginInfo,
 };
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::format::NumericFormat;
@@ -58,6 +58,7 @@ use vulkano::memory::allocator::{
 };
 use vulkano::memory::{MemoryProperties, MemoryPropertyFlags};
 use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
+use vulkano::render_pass::{RenderPassCreateInfo, SubpassDescription};
 use vulkano::swapchain::{ColorSpace, Surface};
 use vulkano::{
     command_buffer::{
@@ -350,12 +351,7 @@ impl VulkanContext {
 
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
-    clear_color_depth_render_pass: Arc<RenderPass>,
-    color_depth_render_pass: Arc<RenderPass>,
-    write_color_read_depth_render_pass: Arc<RenderPass>,
-    color_only_render_pass: Arc<RenderPass>,
-    depth_stencil_only_clearing_render_pass: Arc<RenderPass>,
-    depth_stencil_only_render_pass: Arc<RenderPass>,
+    renderpasses: RenderpassHolder,
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<Image>>,
     framebuffers: Vec<FramebufferHolder>,
@@ -479,7 +475,7 @@ impl VulkanWindow {
             transfer_queue = queues.next().with_context(|| "expected a transfer queue")?;
         }
 
-        let (swapchain, swapchain_images, color_format) = {
+        let (swapchain, swapchain_images, swapchain_color_format) = {
             let caps = physical_device
                 .surface_capabilities(&surface, Default::default())
                 .expect("failed to get surface capabilities");
@@ -577,38 +573,21 @@ impl VulkanWindow {
             Default::default(),
         ));
 
-        let clear_color_depth_render_pass = make_clearing_raster_render_pass(
+        let renderpasses = RenderpassHolder::new(
             vk_device.clone(),
-            color_format,
+            render_config.render_format(),
             depth_stencil_format,
+            swapchain_color_format,
         )?;
-        let color_depth_render_pass =
-            make_color_depth_render_pass(vk_device.clone(), color_format, depth_stencil_format)?;
-        let write_color_read_depth_render_pass = make_write_color_read_depth_render_pass(
-            vk_device.clone(),
-            color_format,
-            depth_stencil_format,
-        )?;
-        let color_only_render_pass = make_color_only_renderpass(vk_device.clone(), color_format)?;
-        let depth_stencil_only_render_pass =
-            make_depth_only_renderpass(vk_device.clone(), depth_stencil_format)?;
-        let depth_stencil_only_clearing_render_pass =
-            make_depth_only_clearing_renderpass(vk_device.clone(), depth_stencil_format)?;
 
         let framebuffers = get_framebuffers_with_depth(
             &swapchain_images,
             memory_allocator.clone(),
-            clear_color_depth_render_pass.clone(),
-            write_color_read_depth_render_pass.clone(),
-            color_only_render_pass.clone(),
-            depth_stencil_only_clearing_render_pass.clone(),
-            color_format,
-            depth_stencil_format,
+            &renderpasses,
             render_config,
         )?;
         let all_gpus = instance
-            .enumerate_physical_devices()
-            .unwrap()
+            .enumerate_physical_devices()?
             .map(|x| x.properties().device_name.clone())
             .collect::<Vec<String>>();
 
@@ -620,7 +599,7 @@ impl VulkanWindow {
                 memory_allocator,
                 command_buffer_allocator,
                 descriptor_set_allocator,
-                color_format,
+                color_format: swapchain_color_format,
                 depth_stencil_format,
                 all_gpus,
                 swapchain_len,
@@ -629,12 +608,7 @@ impl VulkanWindow {
                     .max_draw_indexed_index_value,
                 reclaim_u32: BufferReclaim::new(),
             }),
-            clear_color_depth_render_pass,
-            color_depth_render_pass,
-            write_color_read_depth_render_pass,
-            color_only_render_pass,
-            depth_stencil_only_render_pass,
-            depth_stencil_only_clearing_render_pass,
+            renderpasses,
             swapchain,
             swapchain_images,
             framebuffers,
@@ -661,17 +635,24 @@ impl VulkanWindow {
             }
             Err(Validated::ValidationError(e)) => return Err(anyhow::Error::from(e)),
         };
+
+        if self.renderpasses.render_format != config.render_format()
+            || self.renderpasses.swapchain_format != new_swapchain.image_format()
+        {
+            self.renderpasses = RenderpassHolder::new(
+                self.vk_device.clone(),
+                config.render_format(),
+                self.depth_stencil_format,
+                new_swapchain.image_format(),
+            )?;
+        }
+
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images.clone();
         self.framebuffers = get_framebuffers_with_depth(
             &new_images,
             self.memory_allocator.clone(),
-            self.clear_color_depth_render_pass.clone(),
-            self.write_color_read_depth_render_pass.clone(),
-            self.color_only_render_pass.clone(),
-            self.depth_stencil_only_clearing_render_pass.clone(),
-            self.color_format,
-            self.depth_stencil_format,
+            &self.renderpasses,
             config,
         )?;
         Ok(())
@@ -690,7 +671,7 @@ impl VulkanWindow {
                     // Supersampled depth buffer
                     Some(self.depth_clear_value()),
                 ],
-                render_pass: self.clear_color_depth_render_pass.clone(),
+                render_pass: self.renderpasses.color_depth_clear.clone(),
                 ..RenderPassBeginInfo::framebuffer(framebuffer.color_depth_stencil_pre_blit.clone())
             },
             SubpassBeginInfo {
@@ -709,7 +690,7 @@ impl VulkanWindow {
         builder.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![None, None],
-                render_pass: self.color_depth_render_pass.clone(),
+                render_pass: self.renderpasses.color_depth.clone(),
                 ..RenderPassBeginInfo::framebuffer(framebuffer.color_depth_stencil_pre_blit.clone())
             },
             SubpassBeginInfo {
@@ -728,7 +709,7 @@ impl VulkanWindow {
         builder.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![None, None],
-                render_pass: self.write_color_read_depth_render_pass.clone(),
+                render_pass: self.renderpasses.write_color_read_depth.clone(),
                 ..RenderPassBeginInfo::framebuffer(framebuffer.color_read_depth_pre_blit.clone())
             },
             SubpassBeginInfo {
@@ -738,25 +719,36 @@ impl VulkanWindow {
         )?;
         Ok(())
     }
-
-    fn start_color_only_render_pass(
+    fn start_pre_blit_color_only_render_pass(
         &self,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        is_pre_blit: bool,
         framebuffers: &FramebufferHolder,
         contents: SubpassContents,
     ) -> Result<()> {
-        let framebuffer = if is_pre_blit {
-            framebuffers.color_only_pre_blit.clone()
-        } else {
-            framebuffers.color_only_post_blit.clone()
-        };
-
         builder.begin_render_pass(
             RenderPassBeginInfo {
-                render_pass: self.color_only_render_pass.clone(),
+                render_pass: self.renderpasses.color.clone(),
                 clear_values: vec![None],
-                ..RenderPassBeginInfo::framebuffer(framebuffer)
+                ..RenderPassBeginInfo::framebuffer(framebuffers.color_only_pre_blit.clone())
+            },
+            SubpassBeginInfo {
+                contents,
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+    fn start_post_blit_color_only_render_pass(
+        &self,
+        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffers: &FramebufferHolder,
+        contents: SubpassContents,
+    ) -> Result<()> {
+        builder.begin_render_pass(
+            RenderPassBeginInfo {
+                render_pass: self.renderpasses.color_post_blit.clone(),
+                clear_values: vec![None],
+                ..RenderPassBeginInfo::framebuffer(framebuffers.color_only_post_blit.clone())
             },
             SubpassBeginInfo {
                 contents,
@@ -774,10 +766,10 @@ impl VulkanWindow {
         builder.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![None],
-                render_pass: self.depth_stencil_only_render_pass.clone(),
+                render_pass: self.renderpasses.depth_stencil.clone(),
                 ..RenderPassBeginInfo::framebuffer(
                     framebuffer
-                        .deferred_specular_buffers
+                        .raytrace_buffers
                         .as_ref()
                         .context("Missing deferred specular buffers")?
                         .specular_framebuffer
@@ -800,10 +792,10 @@ impl VulkanWindow {
         builder.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![Some(self.depth_clear_value())],
-                render_pass: self.depth_stencil_only_clearing_render_pass.clone(),
+                render_pass: self.renderpasses.depth_stencil_clear.clone(),
                 ..RenderPassBeginInfo::framebuffer(
                     framebuffer
-                        .deferred_specular_buffers
+                        .raytrace_buffers
                         .as_ref()
                         .context("Missing deferred specular buffers")?
                         .specular_framebuffer
@@ -827,8 +819,8 @@ impl VulkanWindow {
         self.swapchain.as_ref()
     }
 
-    pub(crate) fn color_only_render_pass(&self) -> Arc<RenderPass> {
-        self.color_only_render_pass.clone()
+    pub(crate) fn ui_renderpass(&self) -> Arc<RenderPass> {
+        self.renderpasses.color_post_blit.clone()
     }
 }
 
@@ -1018,25 +1010,19 @@ fn make_depth_only_clearing_renderpass(
     .context("Renderpass creation failed")
 }
 
-fn find_best_format(
-    formats: Vec<(Format, vulkano::swapchain::ColorSpace)>,
-) -> Result<(Format, vulkano::swapchain::ColorSpace)> {
-    // todo get an HDR format
-    // This requires enabling ext_swapchain_colorspace and also getting shaders to do
-    // srgb conversions if applicable
-
+fn find_best_format(formats: Vec<(Format, ColorSpace)>) -> Result<(Format, ColorSpace)> {
     formats
         .iter()
         .find(|(format, space)| {
             *space == ColorSpace::SrgbNonLinear
                 && format.numeric_format_color() == Some(NumericFormat::SRGB)
         })
-        .cloned()
+        .copied()
         .with_context(|| "Could not find an image format")
 }
 
 #[derive(Clone)]
-pub(crate) struct DeferredSpecularBuffers {
+pub(crate) struct RaytraceBuffers {
     // R8G8B8A8_UNORM. We have three components, RGB isn't a supported type, so we use RGBA.
     // Not clear what alpha can be used for in general; for now alpha = 0.0 will prevent any
     // specular raytracing from occurring (i.e. it's a validity bit, but we can reclaim it at the
@@ -1053,7 +1039,7 @@ pub(crate) struct DeferredSpecularBuffers {
     // Direction of the ray, but cleaned up for each downsampled pixel. `mask_specular_stencil_frag`
     // prepares this.
     specular_ray_dir_downsampled: Arc<ImageView>,
-    // The actual computed color, in R8G8B8U8_UNORM. Smaller resolution; raytracer will render to
+    // The actual computed color, in R16G16B16A16_SFLOAT. Smaller resolution; raytracer will render to
     // this when doing the deferred specular pass
     // Is a storage | transfer_dst
     specular_raw_color: Arc<ImageView>,
@@ -1065,17 +1051,97 @@ pub(crate) struct DeferredSpecularBuffers {
     specular_framebuffer: Arc<Framebuffer>,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum FramebufferImage {
+    MainColor,
+    MainDepth,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct RenderPassId {}
+
+#[derive(Clone)]
+struct RenderpassHolder {
+    vk_device: Arc<Device>,
+    render_format: Format,
+    depth_format: Format,
+    swapchain_format: Format,
+    color: Arc<RenderPass>,
+    color_post_blit: Arc<RenderPass>,
+    color_depth: Arc<RenderPass>,
+    color_depth_clear: Arc<RenderPass>,
+    depth_stencil: Arc<RenderPass>,
+    depth_stencil_clear: Arc<RenderPass>,
+    write_color_read_depth: Arc<RenderPass>,
+}
+impl RenderpassHolder {
+    fn new(
+        vk_device: Arc<Device>,
+        render_format: Format,
+        depth_format: Format,
+        swapchain_format: Format,
+    ) -> Result<Self> {
+        let render_pass = RenderPass::new(
+            vk_device.clone(),
+            RenderPassCreateInfo {
+                subpasses: vec![SubpassDescription::default()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let color = make_color_only_renderpass(vk_device.clone(), render_format)?;
+        let color_post_blit = make_color_only_renderpass(vk_device.clone(), swapchain_format)?;
+        let color_depth = dbg!(make_color_depth_render_pass(
+            vk_device.clone(),
+            render_format,
+            depth_format
+        )?);
+        let color_depth_clear = dbg!(make_clearing_raster_render_pass(
+            vk_device.clone(),
+            render_format,
+            depth_format
+        )?);
+        let depth_stencil = make_depth_only_renderpass(vk_device.clone(), depth_format)?;
+        let depth_stencil_clear =
+            make_depth_only_clearing_renderpass(vk_device.clone(), depth_format)?;
+        let write_color_read_depth = dbg!(make_write_color_read_depth_render_pass(
+            vk_device.clone(),
+            render_format,
+            depth_format,
+        )?);
+        Ok(RenderpassHolder {
+            vk_device,
+            render_format,
+            depth_format,
+            swapchain_format,
+            color,
+            color_post_blit,
+            color_depth,
+            color_depth_clear,
+            depth_stencil,
+            depth_stencil_clear,
+            write_color_read_depth,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct FramebufferHolder {
     image_i: usize,
-    supersampling: Supersampling,
+    config: LiveRenderConfig,
     color_depth_stencil_pre_blit: Arc<Framebuffer>,
     color_read_depth_pre_blit: Arc<Framebuffer>,
     color_only_pre_blit: Arc<Framebuffer>,
-    deferred_specular_buffers: Option<DeferredSpecularBuffers>,
-    // Vector starting with the source and ending with the target. It may be a singleton, but must
-    // not be empty.
+    raytrace_buffers: Option<RaytraceBuffers>,
+    /// Vector starting with the source and ending with the target. It may be a singleton, but must
+    /// not be empty.
     blit_path: Vec<Arc<Image>>,
+    /// The swapchain image that we'll present. UIs render directly to this.
+    /// If config.hdr is true, the renderer will need to blit from the last step of the blit path
+    /// into this image. Otherwise, the last step of the blit path _is_ the swapchain image;
+    /// blit_supersampling takes care of this
+    swapchain_image: Arc<Image>,
     color_only_post_blit: Arc<Framebuffer>,
     depth_only_view: Arc<ImageView>,
 }
@@ -1091,6 +1157,13 @@ impl FramebufferHolder {
                 ..BlitImageInfo::images(self.blit_path[i].clone(), self.blit_path[i + 1].clone())
             })?;
         }
+        command_buf_builder.blit_image(BlitImageInfo {
+            filter: Filter::Nearest,
+            ..BlitImageInfo::images(
+                self.blit_path.last().unwrap().clone(),
+                self.swapchain_image.clone(),
+            )
+        })?;
 
         Ok(())
     }
@@ -1099,180 +1172,198 @@ impl FramebufferHolder {
 pub(crate) fn get_framebuffers_with_depth(
     images: &[Arc<Image>],
     allocator: Arc<VkAllocator>,
-    raster_render_pass: Arc<RenderPass>,
-    write_color_read_depth_render_pass: Arc<RenderPass>,
-    color_only_render_pass: Arc<RenderPass>,
-    depth_stencil_only_render_pass: Arc<RenderPass>,
-    color_format: Format,
-    depth_format: Format,
+    renderpasses: &RenderpassHolder,
     config: LiveRenderConfig,
 ) -> Result<Vec<FramebufferHolder>> {
     images
         .iter()
         .enumerate()
-        .map(|(image_i, final_image)| -> anyhow::Result<_> {
-            let final_image_view = ImageView::new_default(final_image.clone()).unwrap();
-            let image_extent = final_image.extent();
-            let (depth_stencil_view, depth_only_view) = make_depth_buffer_and_attachments(
-                allocator.clone(),
-                depth_format,
-                config.supersampling,
-                image_extent,
-            )?;
-            // Now build the blit path
-            let blit_path = if config.supersampling == Supersampling::None {
-                // The blit path is trivial - just the original image
-                // In fact, we do no blitting here - see the implementation of FramebufferHolder
-                vec![final_image.clone()]
-            } else {
-                let mut blit_path = vec![];
-                let mut multiplier = config.supersampling.to_int();
-
-                for i in 0..config.supersampling.blit_steps() {
-                    let usage = if i == 0 {
-                        // First image: We render to it, and we blit from it
-                        ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
-                    } else {
-                        // Intermediate image: We blit into it, and we blit from it
-                        ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
-                    };
-                    log::debug!(
-                        "Creating blit path image {i} with usage {usage:?}, {multiplier}x samples"
-                    );
-
-                    let buffer = Image::new(
-                        allocator.clone(),
-                        ImageCreateInfo {
-                            image_type: ImageType::Dim2d,
-                            format: final_image.format(),
-                            extent: [
-                                image_extent[0] * multiplier,
-                                image_extent[1] * multiplier,
-                                1,
-                            ],
-                            usage,
-                            initial_layout: ImageLayout::Undefined,
-                            ..Default::default()
-                        },
-                        AllocationCreateInfo {
-                            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                            ..Default::default()
-                        },
-                    )?;
-                    blit_path.push(buffer);
-                    multiplier /= 2;
-                }
-                blit_path.push(final_image.clone());
-                blit_path
-            };
-
-            // We always render into the first image in the blit path
-            let color_view = ImageView::new_default(blit_path[0].clone())?;
-
-            let color_depth_stencil_pre_blit = Framebuffer::new(
-                raster_render_pass.clone(),
-                FramebufferCreateInfo {
-                    attachments: vec![color_view.clone(), depth_stencil_view.clone()],
-                    ..Default::default()
-                },
-            )?;
-
-            let color_read_depth_pre_blit = Framebuffer::new(
-                write_color_read_depth_render_pass.clone(),
-                FramebufferCreateInfo {
-                    attachments: vec![color_view.clone(), depth_only_view.clone()],
-                    ..Default::default()
-                },
-            )?;
-
-            let color_only_pre_blit = Framebuffer::new(
-                color_only_render_pass.clone(),
-                FramebufferCreateInfo {
-                    attachments: vec![color_view],
-                    ..Default::default()
-                },
-            )?;
-
-            let color_only_post_blit = Framebuffer::new(
-                color_only_render_pass.clone(),
-                FramebufferCreateInfo {
-                    attachments: vec![final_image_view],
-                    ..Default::default()
-                },
-            )?;
-
-            let deferred_specular_buffers = if config.raytracing {
-                let extent = [
-                    image_extent[0] * config.supersampling.to_int(),
-                    image_extent[1] * config.supersampling.to_int(),
-                    1,
-                ];
-                let downsampled_extent = [
-                    image_extent[0] * config.supersampling.to_int()
-                        / config.raytracing_specular_downsampling,
-                    image_extent[1] * config.supersampling.to_int()
-                        / config.raytracing_specular_downsampling,
-                    1,
-                ];
-
-                let specular_raw_color = make_image_and_view(
-                    allocator.clone(),
-                    downsampled_extent,
-                    Format::R8G8B8A8_UNORM,
-                    ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
-                )?;
-                let specular_stencil = make_image_and_view(
-                    allocator.clone(),
-                    downsampled_extent,
-                    depth_format,
-                    ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-                )?;
-                Some(DeferredSpecularBuffers {
-                    specular_strength: make_image_and_view(
-                        allocator.clone(),
-                        extent,
-                        Format::R8G8B8A8_UNORM,
-                        ImageUsage::STORAGE,
-                    )?,
-                    specular_ray_dir: make_image_and_view(
-                        allocator.clone(),
-                        extent,
-                        Format::R32G32B32A32_UINT,
-                        ImageUsage::STORAGE,
-                    )?,
-                    specular_ray_dir_downsampled: make_image_and_view(
-                        allocator.clone(),
-                        downsampled_extent,
-                        Format::R32G32B32A32_UINT,
-                        ImageUsage::STORAGE,
-                    )?,
-                    specular_framebuffer: Framebuffer::new(
-                        depth_stencil_only_render_pass.clone(),
-                        FramebufferCreateInfo {
-                            attachments: vec![specular_stencil.clone()],
-                            ..Default::default()
-                        },
-                    )?,
-                    specular_raw_color,
-                    specular_stencil,
-                })
-            } else {
-                None
-            };
-
-            Ok(FramebufferHolder {
-                image_i,
-                supersampling: config.supersampling,
-                color_read_depth_pre_blit,
-                color_depth_stencil_pre_blit,
-                color_only_pre_blit,
-                deferred_specular_buffers,
-                blit_path,
-                color_only_post_blit,
-                depth_only_view,
-            })
+        .map(|(image_i, swapchain_image)| -> anyhow::Result<_> {
+            make_framebuffer_holder(&allocator, renderpasses, config, image_i, swapchain_image)
         })
         .collect::<Result<Vec<_>>>()
+}
+
+fn make_framebuffer_holder(
+    allocator: &Arc<VkAllocator>,
+    renderpasses: &RenderpassHolder,
+    config: LiveRenderConfig,
+    image_i: usize,
+    swapchain_image: &Arc<Image>,
+) -> Result<FramebufferHolder> {
+    let swapchain_view = ImageView::new_default(swapchain_image.clone()).unwrap();
+    let image_extent = swapchain_image.extent();
+    let (depth_stencil_view, depth_only_view) = make_depth_buffer_and_attachments(
+        allocator.clone(),
+        renderpasses.depth_format,
+        config.supersampling,
+        image_extent,
+    )?;
+
+    let mut blit_path = vec![];
+    let mut multiplier = config.supersampling.to_int();
+
+    let last_image_usage = if config.supersampling == Supersampling::None {
+        ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
+    } else {
+        ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
+    };
+
+    for i in 0..config.supersampling.blit_steps() {
+        let usage = if i == 0 {
+            // First image: We render to it, and we blit from it
+            ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
+        } else {
+            // Intermediate image: We blit into it, and we blit from it
+            ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
+        };
+        log::debug!("Creating blit path image {i} with usage {usage:?}, {multiplier}x samples");
+
+        let buffer = Image::new(
+            allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: config.render_format(),
+                extent: [
+                    image_extent[0] * multiplier,
+                    image_extent[1] * multiplier,
+                    1,
+                ],
+                usage,
+                initial_layout: ImageLayout::Undefined,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?;
+        blit_path.push(buffer);
+        multiplier /= 2;
+    }
+    blit_path.push(Image::new(
+        allocator.clone(),
+        ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: config.render_format(),
+            extent: [image_extent[0], image_extent[1], 1],
+            usage: last_image_usage,
+            initial_layout: ImageLayout::Undefined,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+    )?);
+
+    // We always render into the first image in the blit path
+    let color_view = ImageView::new_default(blit_path[0].clone())?;
+
+    let color_depth_stencil_pre_blit = Framebuffer::new(
+        renderpasses.color_depth.clone(),
+        FramebufferCreateInfo {
+            attachments: vec![color_view.clone(), depth_stencil_view.clone()],
+            ..Default::default()
+        },
+    )?;
+
+    let color_read_depth_pre_blit = Framebuffer::new(
+        renderpasses.write_color_read_depth.clone(),
+        FramebufferCreateInfo {
+            attachments: vec![color_view.clone(), depth_only_view.clone()],
+            ..Default::default()
+        },
+    )?;
+
+    let color_only_pre_blit = Framebuffer::new(
+        renderpasses.color.clone(),
+        FramebufferCreateInfo {
+            attachments: vec![color_view],
+            ..Default::default()
+        },
+    )?;
+
+    let color_only_post_blit = Framebuffer::new(
+        renderpasses.color_post_blit.clone(),
+        FramebufferCreateInfo {
+            attachments: vec![swapchain_view],
+            ..Default::default()
+        },
+    )?;
+
+    let raytrace_buffers = if config.raytracing {
+        let extent = [
+            image_extent[0] * config.supersampling.to_int(),
+            image_extent[1] * config.supersampling.to_int(),
+            1,
+        ];
+        let downsampled_extent = [
+            image_extent[0] * config.supersampling.to_int()
+                / config.raytracing_specular_downsampling,
+            image_extent[1] * config.supersampling.to_int()
+                / config.raytracing_specular_downsampling,
+            1,
+        ];
+
+        let specular_raw_color = make_image_and_view(
+            allocator.clone(),
+            downsampled_extent,
+            // Always rgba16
+            Format::R16G16B16A16_SFLOAT,
+            ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
+        )?;
+        let specular_stencil = make_image_and_view(
+            allocator.clone(),
+            downsampled_extent,
+            renderpasses.depth_format,
+            ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+        )?;
+        Some(RaytraceBuffers {
+            specular_strength: make_image_and_view(
+                allocator.clone(),
+                extent,
+                Format::R8G8B8A8_UNORM,
+                ImageUsage::STORAGE,
+            )?,
+            specular_ray_dir: make_image_and_view(
+                allocator.clone(),
+                extent,
+                Format::R32G32B32A32_UINT,
+                ImageUsage::STORAGE,
+            )?,
+            specular_ray_dir_downsampled: make_image_and_view(
+                allocator.clone(),
+                downsampled_extent,
+                Format::R32G32B32A32_UINT,
+                ImageUsage::STORAGE,
+            )?,
+            specular_framebuffer: Framebuffer::new(
+                renderpasses.depth_stencil.clone(),
+                FramebufferCreateInfo {
+                    attachments: vec![specular_stencil.clone()],
+                    ..Default::default()
+                },
+            )?,
+            specular_raw_color,
+            specular_stencil,
+        })
+    } else {
+        None
+    };
+
+    Ok(FramebufferHolder {
+        image_i,
+        config,
+        color_read_depth_pre_blit,
+        color_depth_stencil_pre_blit,
+        color_only_pre_blit,
+        raytrace_buffers,
+        blit_path,
+        swapchain_image: swapchain_image.clone(),
+        color_only_post_blit,
+        depth_only_view,
+    })
 }
 
 fn make_image_and_view(

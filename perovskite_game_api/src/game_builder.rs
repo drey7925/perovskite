@@ -88,7 +88,7 @@ impl OwnedTextureName {
     }
 }
 
-trait TextureName {
+pub trait TextureName {
     fn name(&self) -> &str;
 }
 impl TextureName for OwnedTextureName {

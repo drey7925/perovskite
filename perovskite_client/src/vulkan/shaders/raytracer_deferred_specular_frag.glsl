@@ -4,14 +4,17 @@
 
 //layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
 layout (set = 1, binding = 4, rgba32ui) uniform restrict readonly uimage2D deferred_specular_ray_dir;
-layout (set = 1, binding = 5, rgba8) uniform restrict writeonly image2D specular_result;
+layout (set = 1, binding = 5, rgba16f) uniform restrict writeonly image2D specular_result;
 
 void main() {
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
-
+    uint spec_block = spec_ray_dir.a;
+    if (spec_block == 0) {
+        imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(1, 1, 1, 1));
+        return;
+    }
     vec4 f_color = vec4(0.0, 0.0, 0.0, 1.0);
     vec3 spec_dir_len = uintBitsToFloat(spec_ray_dir.rgb);
-    uint spec_block = spec_ray_dir.a;
     vec3 spec_dir = normalize(spec_dir_len);
     vec3 g0 = normalize(facedir_world_in) * length(spec_dir_len) + fine_pos - 0.001 * (spec_dir);
 

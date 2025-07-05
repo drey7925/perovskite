@@ -61,6 +61,7 @@ atomicbox = "0.4.0"
 crossbeam-channel = "0.5.15"
 bytemuck = { version = "1.23.0", features = ["must_cast", "min_const_generics"] }
 css-color = "0.2.8"
+tinyvec = "1.9.0"
 
 [features]
 default = []

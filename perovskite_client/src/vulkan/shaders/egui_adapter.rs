@@ -20,7 +20,6 @@ use super::{
     flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
     LiveRenderConfig,
 };
-use crate::client_state::settings::Supersampling;
 use crate::client_state::tool_controller::ToolState;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
@@ -61,7 +60,7 @@ impl EguiAdapter {
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.graphics_queue.clone(),
-            Subpass::from(ctx.color_only_render_pass.clone(), 0)
+            Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
                 .context("Could not find subpass 0")?,
             ctx.swapchain.image_format(),
             config,
@@ -82,21 +81,11 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: atlas.as_ref(),
-                subpass: Subpass::from(ctx.color_only_render_pass.clone(), 0)
+                subpass: Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
                     .context("Post-blit subpass 0 missing")?,
-                enable_depth_stencil: false,
-                enable_supersampling: false,
+                pre_blit: false,
             },
-            &LiveRenderConfig {
-                supersampling: Supersampling::None,
-                // irrelevant for this pipeline
-                raytracing: false,
-                raytracing_reflections: false,
-                raytracer_debug: false,
-                // irrelevant for this pipeline
-                render_distance: 0,
-                raytracing_specular_downsampling: 1,
-            },
+            &LiveRenderConfig::DUMMY,
         )?;
 
         set_up_fonts(&mut gui_adapter.egui_ctx);
@@ -141,7 +130,7 @@ impl EguiAdapter {
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
                     render_pass: Some(
-                        Subpass::from(ctx.color_only_render_pass.clone(), 0)
+                        Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
                             .with_context(|| "Render subpass 0 not found")?
                             .into(),
                     ),
@@ -163,19 +152,11 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: self.atlas.as_ref(),
-                subpass: Subpass::from(ctx.color_only_render_pass.clone(), 0)
+                subpass: Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
                     .context("Post-blit subpass 0 missing")?,
-                enable_depth_stencil: false,
-                enable_supersampling: false,
+                pre_blit: false,
             },
-            &LiveRenderConfig {
-                supersampling: Supersampling::None,
-                raytracing: false,
-                raytracing_reflections: false,
-                render_distance: 0,
-                raytracer_debug: false,
-                raytracing_specular_downsampling: 1,
-            },
+            &LiveRenderConfig::DUMMY,
         )?;
         Ok(())
     }

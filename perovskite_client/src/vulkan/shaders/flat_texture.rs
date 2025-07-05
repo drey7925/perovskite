@@ -224,8 +224,7 @@ pub(crate) struct FlatPipelineConfig<'a> {
     pub(crate) atlas: &'a Texture2DHolder,
     // Used to specialize for pre- vs post-blit usages
     pub(crate) subpass: Subpass,
-    pub(crate) enable_depth_stencil: bool,
-    pub(crate) enable_supersampling: bool,
+    pub(crate) pre_blit: bool,
 }
 
 impl FlatTexPipelineProvider {
@@ -238,8 +237,7 @@ impl FlatTexPipelineProvider {
         let FlatPipelineConfig {
             atlas,
             subpass,
-            enable_depth_stencil,
-            enable_supersampling,
+            pre_blit: enable_supersampling,
         } = config;
 
         let supersampling = if enable_supersampling {
@@ -266,17 +264,6 @@ impl FlatTexPipelineProvider {
             PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
                 .into_pipeline_layout_create_info(self.device.clone())?,
         )?;
-        let depth_stencil_state = if !enable_depth_stencil {
-            None
-        } else {
-            Some(DepthStencilState {
-                depth: Some(DepthState {
-                    write_enable: false,
-                    compare_op: CompareOp::Always,
-                }),
-                ..Default::default()
-            })
-        };
 
         let pipeline = GraphicsPipeline::new(
             self.device.clone(),
@@ -309,7 +296,7 @@ impl FlatTexPipelineProvider {
                     }],
                     ..Default::default()
                 }),
-                depth_stencil_state,
+                depth_stencil_state: None,
                 color_blend_state: Some(ColorBlendState {
                     attachments: vec![ColorBlendAttachmentState {
                         blend: Some(AttachmentBlend::alpha()),

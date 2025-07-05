@@ -423,7 +423,7 @@ impl CubePipelineProvider {
         self.build_pipeline(
             wnd.context(),
             wnd.viewport.clone(),
-            wnd.clear_color_depth_render_pass.clone(),
+            wnd.renderpasses.color_depth_clear.clone(),
             config,
             global_config,
         )

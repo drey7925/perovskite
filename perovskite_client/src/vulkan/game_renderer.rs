@@ -364,10 +364,8 @@ impl ActiveGame {
                 )?;
             }
         }
-
-        ctx.start_color_only_render_pass(
+        ctx.start_pre_blit_color_only_render_pass(
             &mut command_buf_builder,
-            true,
             framebuffer,
             SubpassContents::Inline,
         )?;
@@ -396,9 +394,9 @@ impl ActiveGame {
         framebuffer
             .blit_supersampling(&mut command_buf_builder)
             .context("Supersampling blit failed")?;
-        ctx.start_color_only_render_pass(
+
+        ctx.start_post_blit_color_only_render_pass(
             &mut command_buf_builder,
-            false,
             framebuffer,
             SubpassContents::SecondaryCommandBuffers,
         )
@@ -457,10 +455,9 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    subpass: Subpass::from(ctx.color_only_render_pass.clone(), 0)
+                    subpass: Subpass::from(ctx.renderpasses.color.clone(), 0)
                         .context("nondepth renderpass 1 missing")?,
-                    enable_depth_stencil: false,
-                    enable_supersampling: true,
+                    pre_blit: true,
                 },
                 &global_config,
             )?
@@ -570,10 +567,9 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
             &vk_wnd,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: Subpass::from(vk_wnd.color_only_render_pass.clone(), 0)
+                subpass: Subpass::from(vk_wnd.renderpasses.color.clone(), 0)
                     .context("non-depth renderpass missing")?,
-                enable_depth_stencil: false,
-                enable_supersampling: true,
+                pre_blit: true,
             },
             &global_render_config,
         )?
@@ -941,30 +937,9 @@ impl GameRenderer {
             // we're not in the active game, allow the IME
             self.ctx.window.set_ime_allowed(true);
 
-            // self.ctx
-            //     .start_ssaa_raster_render_pass(
-            //         &mut command_buf_builder,
-            //         &fb_holder,
-            //         [0.0, 0.0, 0.0, 0.0],
-            //     )
-            //     .unwrap();
-            // // There are two subpasses in the SSAA render pass
-            // command_buf_builder
-            //     .next_subpass(SubpassEndInfo::default(), SubpassBeginInfo::default())
-            //     .unwrap();
-            // command_buf_builder
-            //     .end_render_pass(SubpassEndInfo {
-            //         ..Default::default()
-            //     })
-            //     .unwrap();
-            // // With the render pass done, blit to the final framebuffer
-            // fb_holder
-            //     .blit_supersampling(&mut command_buf_builder)
-            //     .unwrap();
             self.ctx
-                .start_color_only_render_pass(
+                .start_post_blit_color_only_render_pass(
                     &mut command_buf_builder,
-                    false,
                     fb_holder,
                     SubpassContents::SecondaryCommandBuffers,
                 )
