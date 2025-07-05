@@ -373,6 +373,14 @@ impl CubePipelineProvider {
                 stencil: Default::default(),
                 ..Default::default()
             }),
+            color_blend_state: Some(ColorBlendState {
+                attachments: vec![ColorBlendAttachmentState {
+                    blend: Some(AttachmentBlend::alpha()),
+                    color_write_mask: ColorComponents::all(),
+                    color_write_enable: true,
+                }],
+                ..Default::default()
+            }),
             ..solid_pipeline_info.clone()
         };
         let solid_pipeline = GraphicsPipeline::new(self.device.clone(), None, solid_pipeline_info)?;
