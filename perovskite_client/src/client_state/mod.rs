@@ -43,6 +43,7 @@ use perovskite_core::time::TimeState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{
@@ -769,6 +770,7 @@ const PROJ_FAR: f64 = 10000.;
 impl ClientState {
     pub(crate) fn new(
         settings: Arc<ArcSwap<GameSettings>>,
+        shutdown: CancellationToken,
         block_types: Arc<ClientBlockTypeManager>,
         chunks: ChunkManager,
         items: Arc<ClientItemManager>,
@@ -791,7 +793,7 @@ impl ClientState {
             chunks,
             inventories: Mutex::new(InventoryViewManager::new()),
             tool_controller: Mutex::new(ToolController::new()),
-            shutdown: tokio_util::sync::CancellationToken::new(),
+            shutdown,
             actions: action_sender,
             light_cycle: Arc::new(Mutex::new(LightCycle::new(TimeState::new(
                 Duration::from_secs(24 * 60),

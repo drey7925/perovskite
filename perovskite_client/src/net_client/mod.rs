@@ -38,6 +38,7 @@ use rand::rngs::{OsRng, ThreadRng};
 use tokio::sync::{mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::ClientTlsConfig;
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
@@ -84,6 +85,7 @@ pub(crate) async fn connect_game(
     settings: Arc<ArcSwap<GameSettings>>,
     vk_ctx: Arc<VulkanContext>,
     progress: &mut watch::Sender<(f32, String)>,
+    cancel: CancellationToken,
 ) -> Result<Arc<ClientState>> {
     progress.send((1.0 / TOTAL_STEPS, "Connecting to server...".to_string()))?;
     log::info!("Connecting to {}...", &server_addr);
@@ -216,6 +218,9 @@ pub(crate) async fn connect_game(
 
     let client_state = Arc::new(ClientState::new(
         settings,
+        // Do not allow cancellation within the client state itself (e.g. from a crash) to cancel
+        // the token representing the user's attempt to make a connection
+        cancel.child_token(),
         block_types,
         chunks,
         items,

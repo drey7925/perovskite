@@ -81,6 +81,25 @@ impl CubeFace {
     fn repr(&self) -> u8 {
         *self as u8
     }
+
+    #[inline(always)]
+    fn rotate_y(&self, variant: u16) -> CubeFace {
+        let idx = (variant % 4) as usize;
+
+        const LUT: [[usize; 4]; 10] = [
+            [0, 4, 1, 5],
+            [1, 5, 0, 4],
+            [2, 2, 2, 2],
+            [3, 3, 3, 3],
+            [4, 1, 5, 0],
+            [5, 0, 4, 1],
+            [6, 8, 9, 7],
+            [7, 6, 8, 9],
+            [8, 9, 7, 6],
+            [9, 7, 6, 8],
+        ];
+        CUBE_EXTENTS_FACE_ORDER[LUT[self.index()][idx]]
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -160,7 +179,7 @@ const DEFAULT_FACE_NORMALS: [(i8, i8, i8); 10] = [
 pub struct CubeExtents {
     pub vertices: [Vector3<f32>; 8],
     /// Given in the same order as the first six members of [`CubeFace`].
-    pub normals: [(i8, i8, i8); 10],
+    pub adjacency: [(i8, i8, i8); 10],
     pub force: [bool; 6],
 }
 impl CubeExtents {
@@ -176,18 +195,18 @@ impl CubeExtents {
                 vec3(x.1, y.1, z.0),
                 vec3(x.1, y.1, z.1),
             ],
-            normals: DEFAULT_FACE_NORMALS,
+            adjacency: DEFAULT_FACE_NORMALS,
             force: [false; 6],
         }
     }
 
     pub fn rotate_y(self, variant: u16) -> CubeExtents {
         let mut vertices = self.vertices;
-        let mut normals = self.normals;
+        let mut adjacency = self.adjacency;
         for vtx in &mut vertices {
             *vtx = Vector3::from(rotate_y((vtx.x, vtx.y, vtx.z), variant));
         }
-        for neighbor in &mut normals {
+        for neighbor in &mut adjacency {
             *neighbor = rotate_y(*neighbor, variant);
         }
         /*    XPlus,
@@ -229,7 +248,7 @@ impl CubeExtents {
 
         Self {
             vertices,
-            normals,
+            adjacency,
             force: force_swizzled,
         }
     }
@@ -866,7 +885,16 @@ impl BlockRenderer {
     ) where
         F: Fn(BlockId, BlockId) -> bool,
     {
-        let e = get_cube_extents(render_info, id, chunk_data, offset);
+        let (e, rotator) = match render_info.variant_effect() {
+            CubeVariantEffect::None => (FULL_CUBE_EXTENTS, 0),
+            CubeVariantEffect::RotateNesw => {
+                (FULL_CUBE_EXTENTS.rotate_y(id.variant()), id.variant())
+            }
+            CubeVariantEffect::Liquid => (build_liquid_cube_extents(chunk_data, offset, id), 0),
+            CubeVariantEffect::CubeVariantHeight => {
+                (cube_variant_height_unblended(id.variant()), 0)
+            }
+        };
 
         let pos = vec3(offset.x.into(), offset.y.into(), offset.z.into());
 
@@ -876,6 +904,7 @@ impl BlockRenderer {
             .unwrap_or([self.fallback_tex_coord; 6]);
         self.emit_single_cube_impl(
             e,
+            rotator,
             offset,
             suppress_face_when,
             id,
@@ -887,10 +916,11 @@ impl BlockRenderer {
         );
     }
 
-    // made crate-visible for the sake of entities
-    pub(crate) fn emit_single_cube_impl<F>(
+    #[inline]
+    fn emit_single_cube_impl<F>(
         &self,
         e: CubeExtents,
+        rotator: u16,
         offset: ChunkOffset,
         suppress_face_when: F,
         id: BlockId,
@@ -903,7 +933,7 @@ impl BlockRenderer {
         F: Fn(BlockId, BlockId) -> bool,
     {
         for i in 0..6 {
-            let (n_x, n_y, n_z) = e.normals[i];
+            let (n_x, n_y, n_z) = e.adjacency[i];
             let neighbor_index = (
                 offset.x as i8 + n_x,
                 offset.y as i8 + n_y,
@@ -915,41 +945,15 @@ impl BlockRenderer {
                     pos,
                     textures[i],
                     CUBE_EXTENTS_FACE_ORDER[i],
+                    CUBE_EXTENTS_FACE_ORDER[i].rotate_y(4 - (rotator & 3)),
                     vtx,
                     idx,
                     e,
                     0,
                     chunk_data.lightmap()[neighbor_index],
                     0,
-                    CUBE_FACE_BRIGHTNESS_BIASES[i],
                 );
             }
-        }
-    }
-
-    // made crate-visible for the sake of entities
-    pub(crate) fn emit_single_cube_simple(
-        &self,
-        e: CubeExtents,
-        pos: Vector3<f32>,
-        textures: [RectF32; 6],
-        vtx: &mut Vec<CubeGeometryVertex>,
-        idx: &mut Vec<u32>,
-    ) {
-        for i in 0..6 {
-            emit_cube_face_vk(
-                pos,
-                textures[i],
-                CUBE_EXTENTS_FACE_ORDER[i],
-                vtx,
-                idx,
-                e,
-                // TODO proper brightness for entities
-                0xf0,
-                0x00,
-                0,
-                CUBE_FACE_BRIGHTNESS_BIASES[i],
-            );
         }
     }
 
@@ -976,13 +980,13 @@ impl BlockRenderer {
                 pos,
                 tex,
                 face,
+                face,
                 vtx,
                 idx,
                 e,
                 chunk_data.lightmap()[offset.as_extended_index()],
                 0x00,
                 (plantlike_render_info.wave_effect_scale * 255.0).clamp(0.0, 255.0) as u8,
-                1.0,
             );
         }
     }
@@ -1011,14 +1015,16 @@ impl BlockRenderer {
                 continue;
             }
             let mut e = aabb.extents;
-            match aabb.rotation {
-                AabbRotation::None => (),
-                AabbRotation::Nesw => e = e.rotate_y(id.variant() % 4),
-            }
+
+            let rotation = match aabb.rotation {
+                AabbRotation::None => 0,
+                AabbRotation::Nesw => id.variant() % 4,
+            };
+            e = e.rotate_y(rotation);
             match aabb.textures {
                 CachedAabbTextures::Prism(textures) => {
                     for i in 0..6 {
-                        let (n_x, n_y, n_z) = e.normals[i];
+                        let (n_x, n_y, n_z) = e.adjacency[i];
                         let neighbor_index = (
                             offset.x as i8 + n_x,
                             offset.y as i8 + n_y,
@@ -1030,13 +1036,13 @@ impl BlockRenderer {
                             pos,
                             textures[i].rect(id.variant()),
                             CUBE_EXTENTS_FACE_ORDER[i],
+                            CUBE_EXTENTS_FACE_ORDER[i].rotate_y(rotation),
                             vtx,
                             idx,
                             e,
                             chunk_data.lightmap()[neighbor_index],
                             chunk_data.lightmap()[offset.as_extended_index()],
                             0,
-                            CUBE_FACE_BRIGHTNESS_BIASES[i],
                         );
                     }
                 }
@@ -1046,13 +1052,13 @@ impl BlockRenderer {
                             pos,
                             plantlike.rect(id.variant()),
                             PLANTLIKE_FACE_ORDER[i],
+                            PLANTLIKE_FACE_ORDER[i].rotate_y(rotation),
                             vtx,
                             idx,
                             e,
                             chunk_data.lightmap()[offset.as_extended_index()],
                             0x00,
                             0,
-                            1.0,
                         );
                     }
                 }
@@ -1081,7 +1087,7 @@ impl BlockRenderer {
 
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
-                vk_pos, frame, face, &mut vtx, &mut idx, e, 0x0f, 0x00, 0, 1.0,
+                vk_pos, frame, face, face, &mut vtx, &mut idx, e, 0x0f, 0x00, 0,
             );
         }
 
@@ -1312,22 +1318,6 @@ fn build_ssbo_entry(
 }
 
 const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5));
-#[inline]
-fn get_cube_extents(
-    render_info: &CubeRenderInfo,
-    id: BlockId,
-    chunk_data: &impl ChunkDataView,
-    offset: ChunkOffset,
-) -> CubeExtents {
-    match render_info.variant_effect() {
-        blocks_proto::CubeVariantEffect::None => FULL_CUBE_EXTENTS,
-        blocks_proto::CubeVariantEffect::RotateNesw => FULL_CUBE_EXTENTS.rotate_y(id.variant()),
-        blocks_proto::CubeVariantEffect::Liquid => {
-            build_liquid_cube_extents(chunk_data, offset, id)
-        }
-        CubeVariantEffect::CubeVariantHeight => cube_variant_height_unblended(id.variant()),
-    }
-}
 
 fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
     let y_max = variant_to_height(variant);
@@ -1342,7 +1332,7 @@ fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
             vec3(0.5, 0.5, -0.5),
             vec3(0.5, 0.5, 0.5),
         ],
-        normals: DEFAULT_FACE_NORMALS,
+        adjacency: DEFAULT_FACE_NORMALS,
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
     }
@@ -1405,7 +1395,7 @@ fn build_liquid_cube_extents(
             vec3(0.5, 0.5, -0.5),
             vec3(0.5, 0.5, 0.5),
         ],
-        normals: DEFAULT_FACE_NORMALS,
+        adjacency: DEFAULT_FACE_NORMALS,
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
     }
@@ -1484,7 +1474,9 @@ const BRIGHTNESS_TABLE_RAW: [f32; 16] = [
     0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
     0.875, 0.9375, 1.00,
 ];
-const CUBE_FACE_BRIGHTNESS_BIASES: [f32; 6] = [0.975, 0.975, 1.05, 0.95, 0.975, 0.975];
+const CUBE_FACE_BRIGHTNESS_BIASES: [f32; 10] = [
+    0.975, 0.975, 1.05, 0.95, 0.975, 0.975, 0.975, 0.975, 0.975, 0.975,
+];
 
 lazy_static::lazy_static! {
     static ref GLOBAL_BRIGHTNESS_TABLE: [f32; 16] = {
@@ -1519,18 +1511,26 @@ fn make_cgv(
 ///    coord: The center of the overall cube, in world space, with y-axis up (opposite Vulkan)
 ///     This is the center of the cube body, not the current face.
 ///    frame: The texture of the face.
+///    source_face: The face, as referencing into CubeExtents
+///    dest_face: The physical direction this face will be oriented. Currently only used for normals
+///      and some lighting tweaks
+///    vert_buf, idx_buf: The buffers to append to
+///    e: The actual cube extents
+///    encoded_brightness(_2): The brightnesses that will contribute to this face's effective
+///         brightness; these two are max'd elementwise
+///    horizontal_wave: The strength of how much this face will wave at the top, 0-255
 #[inline]
 pub(crate) fn emit_cube_face_vk(
     coord: Vector3<f32>,
     frame: RectF32,
-    face: CubeFace,
+    source_face: CubeFace,
+    dest_face: CubeFace,
     vert_buf: &mut Vec<CubeGeometryVertex>,
     idx_buf: &mut Vec<u32>,
     e: CubeExtents,
     encoded_brightness: u8,
     encoded_brightness_2: u8,
     horizontal_wave: u8,
-    brightness_bias: f32,
 ) {
     // Flip the coordinate system to Vulkan
     let coord = vec3(coord.x, -coord.y, coord.z);
@@ -1538,13 +1538,12 @@ pub(crate) fn emit_cube_face_vk(
     let r = frame.right();
     let t = frame.top();
     let b = frame.bottom();
-    // todo handle rotating textures (both in the texture ref and here)
-    // Possibly at the caller?
     let tl = Vector2::new(l, t);
     let bl = Vector2::new(l, b);
     let tr = Vector2::new(r, t);
     let br = Vector2::new(r, b);
 
+    let brightness_bias = CUBE_FACE_BRIGHTNESS_BIASES[dest_face.index()];
     let (global_brightness_1, brightness_1) = get_brightnesses(encoded_brightness, brightness_bias);
     let (global_brightness_2, brightness_2) =
         get_brightnesses(encoded_brightness_2, brightness_bias);
@@ -1552,8 +1551,8 @@ pub(crate) fn emit_cube_face_vk(
     let brightness = brightness_1.max(brightness_2);
     let global_brightness = global_brightness_1.max(global_brightness_2);
 
-    let normal = face.repr();
-    let vertices = match face {
+    let normal = dest_face.repr();
+    let vertices = match source_face {
         CubeFace::ZMinus => [
             make_cgv(
                 coord + e.vertices[0],

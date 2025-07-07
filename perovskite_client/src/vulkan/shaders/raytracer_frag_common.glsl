@@ -405,6 +405,7 @@ const uint face_remaps[6][4] = {
 
 SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     uint face = info.face_light & 7u;
+    uint norm_face = face;
     vec3 start_cc = info.start_cc;
 
     if ((cube_info[idx].flags & 2u) != 0) {
@@ -432,7 +433,7 @@ SampleResult sample_simple(HitInfo info, uint idx, bool want_spec) {
     //vec4 tex_color = vec4(debug_face_colors[info.face], 1.0) + 0.05 * texture(tex, texel);
 
     float global_brightness_contribution = global_brightness_table[bitfieldExtract(info.face_light, 12, 4)];
-    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(face)));
+    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(sun_direction, decode_normal(norm_face)));
     // TODO: Do a ray query to the sun instead
     vec3 global_light = global_brightness_color * global_brightness_contribution * gbc_adjustment;
     vec4 final_diffuse = vec4((brightness_table[bitfieldExtract(info.face_light, 8, 4)] + global_light) * diffuse.rgb, diffuse.a);

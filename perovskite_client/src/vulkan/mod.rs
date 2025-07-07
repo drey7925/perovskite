@@ -97,7 +97,9 @@ pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
 use self::util::select_physical_device;
 use crate::client_state::settings::{GameSettings, Supersampling};
-use crate::vulkan::shaders::raytracer::TexRef;
+use crate::vulkan::shaders::raytracer::{
+    TexRef, RAYTRACING_REQUIRED_EXTENSIONS, RAYTRACING_REQUIRED_FEATURES,
+};
 use crate::vulkan::shaders::LiveRenderConfig;
 
 pub(crate) type VkAllocator = GenericMemoryAllocator<BuddyAllocator>;
@@ -120,6 +122,8 @@ pub(crate) struct VulkanContext {
     max_draw_indexed_index_value: u32,
 
     reclaim_u32: BufferReclaim<u32>,
+
+    raytracing_supported: bool,
 }
 
 impl VulkanContext {
@@ -143,8 +147,20 @@ impl VulkanContext {
         self.transfer_queue.clone()
     }
 
+    pub(crate) fn current_gpu_name(&self) -> &str {
+        self.vk_device
+            .physical_device()
+            .properties()
+            .device_name
+            .as_ref()
+    }
+
     pub(crate) fn all_gpus(&self) -> &[String] {
         &self.all_gpus
+    }
+
+    pub(crate) fn raytracing_supported(&self) -> bool {
+        self.raytracing_supported
     }
 
     pub(crate) fn swapchain_format(&self) -> Format {
@@ -554,7 +570,7 @@ impl VulkanWindow {
                 application_version: Version {
                     major: 0,
                     minor: 1,
-                    patch: 0,
+                    patch: 2,
                 },
                 ..Default::default()
             },
@@ -572,18 +588,13 @@ impl VulkanWindow {
             depth_range: 0.0..=1.0,
         };
 
-        let device_extensions = DeviceExtensions {
+        let mandatory_extensions = DeviceExtensions {
             khr_swapchain: true,
+            khr_storage_buffer_storage_class: true,
             ..DeviceExtensions::empty()
         };
-        let device_features = DeviceFeatures {
-            // 99.1% of reports on vulkan.gpuinfo.org support this.
-            // Apple Silicon, weirdly, does not. If ever ported to Apple,
-            // the raytracer and any future shaders that write to storage images
-            // should be converted to compute shaders and/or gated behind this feature
-            fragment_stores_and_atomics: true,
-            ..DeviceFeatures::empty()
-        };
+        // For now, no features are mandatory
+        let mandatory_features = DeviceFeatures::empty();
 
         let all_gpus = instance
             .enumerate_physical_devices()?
@@ -594,8 +605,8 @@ impl VulkanWindow {
             select_physical_device(
                 &instance,
                 &surface,
-                &device_extensions,
-                &device_features,
+                &mandatory_extensions,
+                &mandatory_features,
                 &settings.load().render.preferred_gpu,
             )?;
 
@@ -617,12 +628,27 @@ impl VulkanWindow {
             ]
         };
 
+        let mut enabled_extensions = mandatory_extensions;
+        let mut enabled_features = mandatory_features;
+        let mut raytracing_supported = false;
+        if physical_device
+            .supported_features()
+            .contains(&RAYTRACING_REQUIRED_FEATURES)
+            && physical_device
+                .supported_extensions()
+                .contains(&RAYTRACING_REQUIRED_EXTENSIONS)
+        {
+            enabled_extensions |= RAYTRACING_REQUIRED_EXTENSIONS;
+            enabled_features |= RAYTRACING_REQUIRED_FEATURES;
+            raytracing_supported = true;
+        }
+
         let (vk_device, mut queues) = Device::new(
             physical_device.clone(),
             DeviceCreateInfo {
                 queue_create_infos,
-                enabled_extensions: device_extensions,
-                enabled_features: device_features,
+                enabled_extensions,
+                enabled_features,
                 ..Default::default()
             },
         )?;
@@ -748,6 +774,7 @@ impl VulkanWindow {
             swapchain_len,
             max_draw_indexed_index_value: physical_device.properties().max_draw_indexed_index_value,
             reclaim_u32: BufferReclaim::new(),
+            raytracing_supported,
         });
         let render_config = settings.load().render.build_global_config(&vk_ctx);
 

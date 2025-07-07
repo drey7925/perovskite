@@ -14,7 +14,7 @@ use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{PrimaryAutoCommandBuffer, SubpassContents, SubpassEndInfo};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::device::Device;
+use vulkano::device::{Device, DeviceExtensions, DeviceFeatures};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
@@ -90,7 +90,7 @@ pub(crate) struct RaytracedPipelineWrapper {
 
 impl RaytracedPipelineWrapper {
     pub(crate) fn run_raytracing_renderpasses(
-        &mut self,
+        &self,
         ctx: &VulkanWindow,
         per_frame_config: RaytracingBindings,
         command_buf_builder: &mut CommandBufferBuilder<PrimaryAutoCommandBuffer>,
@@ -182,18 +182,6 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::buffer(2, per_frame_config.data.clone()),
                 WriteDescriptorSet::image_view(
                     3,
-                    framebuffer
-                        .get_image(FramebufferImage::RtSpecStrength)
-                        .context("Failed to get RtSpecStrength image")?,
-                ),
-                WriteDescriptorSet::image_view(
-                    4,
-                    framebuffer
-                        .get_image(FramebufferImage::RtSpecRayDir)
-                        .context("Failed to get RtSpecRayDir image")?,
-                ),
-                WriteDescriptorSet::image_view(
-                    5,
                     framebuffer
                         .get_image(FramebufferImage::MainDepthStencilDepthOnly)
                         .context("Failed to get MainDepthStencilDepthOnly image")?,
@@ -441,8 +429,12 @@ pub(crate) struct RaytracingBindings<'a> {
     pub(crate) render_distance: u32,
 }
 
-const RT_PRIMARY: FramebufferAndLoadOpId<1, 1> = FramebufferAndLoadOpId {
-    color_attachments: [(FramebufferImage::MainColor, LoadOp::Load)],
+const RT_PRIMARY: FramebufferAndLoadOpId<3, 1> = FramebufferAndLoadOpId {
+    color_attachments: [
+        (FramebufferImage::MainColor, LoadOp::Load),
+        (FramebufferImage::RtSpecStrength, LoadOp::DontCare),
+        (FramebufferImage::RtSpecRayDir, LoadOp::DontCare),
+    ],
     depth_stencil_attachment: None,
     input_attachments: [(FramebufferImage::MainDepthStencilDepthOnly, LoadOp::Load)],
 };
@@ -625,11 +617,23 @@ impl RaytracedPipelineProvider {
                 stages: stages_primary,
                 depth_stencil_state: None,
                 color_blend_state: Some(ColorBlendState {
-                    attachments: vec![ColorBlendAttachmentState {
-                        blend: Some(AttachmentBlend::alpha()),
-                        color_write_mask: ColorComponents::all(),
-                        color_write_enable: true,
-                    }],
+                    attachments: vec![
+                        ColorBlendAttachmentState {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                        ColorBlendAttachmentState {
+                            blend: None,
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                        ColorBlendAttachmentState {
+                            blend: None,
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                    ],
                     ..Default::default()
                 }),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
@@ -813,3 +817,16 @@ impl RaytracedPipelineProvider {
         })
     }
 }
+
+pub(crate) const RAYTRACING_REQUIRED_FEATURES: DeviceFeatures = DeviceFeatures {
+    // Definitely required for raytracing
+    independent_blend: true,
+    // TODO ditch this requirement so that the raytracer can (nominally) run on Apple Silicon
+    fragment_stores_and_atomics: true,
+    ..DeviceFeatures::empty()
+};
+
+pub(crate) const RAYTRACING_REQUIRED_EXTENSIONS: DeviceExtensions = DeviceExtensions {
+    khr_storage_buffer_storage_class: true,
+    ..DeviceExtensions::empty()
+};

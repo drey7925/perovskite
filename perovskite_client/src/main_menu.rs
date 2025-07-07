@@ -18,9 +18,11 @@ use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
 use egui::epaint::color;
 use egui::{
-    CollapsingHeader, Color32, FontId, InnerResponse, Layout, ProgressBar, RichText, TextEdit, Ui,
+    CollapsingHeader, Color32, FontId, InnerResponse, Key, Layout, ProgressBar, RichText, TextEdit,
+    Ui, WidgetText,
 };
 use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
 use vulkano::command_buffer::SubpassContents;
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::event_loop::ActiveEventLoop;
@@ -232,14 +234,17 @@ impl MainMenu {
             GameState::MainMenu => {}
             GameState::Connecting(state) => {
                 let progress = state.progress.borrow();
-                let (progress_fraction, state) = progress.deref();
+                let (progress_fraction, state_str) = progress.deref();
                 egui::Window::new("Connecting...").collapsible(false).show(
                     &self.egui_gui.egui_ctx,
                     |ui| {
                         ui.visuals_mut().override_text_color = Some(Color32::WHITE);
-                        ui.label(state);
+                        ui.label(state_str);
                         ui.add(ProgressBar::new(*progress_fraction));
-                        // TODO cancel button
+                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            state.cancellation.cancel();
+                        }
                     },
                 );
             }
@@ -273,7 +278,7 @@ impl MainMenu {
                             }
                         });
                         if ui.button("OK").clicked()
-                            || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Escape))
                         {
                             *game_state = GameState::MainMenu;
                         }
@@ -438,10 +443,13 @@ fn make_connection(
 ) -> (ConnectionState, ConnectionSettings) {
     let progress = watch::channel((0.0, "Starting connection...".to_string()));
     let result = oneshot::channel();
+    let cancellation = CancellationToken::new();
 
     let state = ConnectionState {
         progress: progress.1,
         result: result.1,
+        cancellation: cancellation.clone(),
+        drop_guard: Some(cancellation.clone().drop_guard()),
     };
     let settings = ConnectionSettings {
         host,
@@ -450,6 +458,7 @@ fn make_connection(
         register,
         progress: progress.0,
         result: result.0,
+        cancellation,
     };
     (state, settings)
 }
@@ -509,7 +518,6 @@ pub(crate) fn draw_settings_menu(
                 settings.store(Arc::new(prospective_settings.clone()));
                 if let Err(e) = prospective_settings.save_to_disk() {
                     log::error!("Failure saving settings: {}", e);
-                    // TODO show error popup
                 }
                 result = ControlFlow::Break(());
             }
@@ -647,8 +655,15 @@ fn draw_render_settings(
             // );
             // ui.end_row();
 
-            let gpu_label = ui.label("Preferred GPU")
-                .on_hover_text("The GPU to use, if available.");
+            let mut preferred_gpu_label = RichText::new("Preferred GPU");
+            let mut gpu_hover_text = "The GPU to use, if available";
+            if (!prospective_settings.render.preferred_gpu.is_empty()) && (prospective_settings.render.preferred_gpu != vk_ctx.current_gpu_name()) {
+                preferred_gpu_label = preferred_gpu_label.italics();
+                gpu_hover_text = "The GPU to use, if available. Changes apply after program restart (login/logout is not enough)";
+            }
+
+            let gpu_label = ui.label(preferred_gpu_label)
+                .on_hover_text(gpu_hover_text);
             let selected_gpu =
                 if prospective_settings.render.preferred_gpu.is_empty() {
                     "Select..."
@@ -713,8 +728,19 @@ fn draw_render_settings(
                 "Enabled",
             ));
             ui.end_row();
-            ui.label("Raytracing")
-                .on_hover_text("If set, enables raytracing. Requires a powerful GPU, but does not (currently) require hardware-accelerated raytracing (e.g. RTX/RDNA)");
+
+            let raytracing_label = if vk_ctx.raytracing_supported() {
+                RichText::new("Raytracing")
+            } else {
+                RichText::new("Raytracing").strikethrough()
+            };
+            let raytracing_hover_text = if vk_ctx.raytracing_supported() {
+                "If set, enables raytracing. A powerful GPU is recommended; does not (currently) require hardware-accelerated raytracing (e.g. RTX/RDNA2)"
+            } else {
+                "If set, raytracing would be enabled - However this GPU is missing basic GPU features required for the raytracer (this has nothing to do with RTX/RDNA2 raytracing)"
+            };
+            ui.label(raytracing_label)
+                .on_hover_text(raytracing_hover_text);
             ui.add(egui::Checkbox::new(
                 &mut prospective_settings.render.raytracing,
                 "Enabled",

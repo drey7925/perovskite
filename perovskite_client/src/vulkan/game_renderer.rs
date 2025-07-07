@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use anyhow::{anyhow, Context, Result};
 
 use arc_swap::ArcSwap;
 use cgmath::{vec3, InnerSpace};
+use futures::channel::oneshot::Cancellation;
 use log::info;
 
 use super::{
@@ -49,6 +51,7 @@ use crate::{
 use parking_lot::Mutex;
 use tinyvec::array_vec;
 use tokio::sync::{oneshot, watch};
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tracy_client::{plot, span, Client};
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{
@@ -87,8 +90,8 @@ pub(crate) struct ActiveGame {
     sky_provider: sky::SkyPipelineProvider,
     sky_pipeline: sky::SkyPipelineWrapper,
 
-    raytraced_provider: raytracer::RaytracedPipelineProvider,
-    raytraced_pipeline: raytracer::RaytracedPipelineWrapper,
+    raytraced_provider: Option<raytracer::RaytracedPipelineProvider>,
+    raytraced_pipeline: Option<raytracer::RaytracedPipelineWrapper>,
 
     egui_adapter: Option<EguiAdapter>,
 
@@ -140,7 +143,9 @@ impl ActiveGame {
         ctx.window.set_ime_allowed(ime_enabled);
 
         ctx.reclaim_u32.unsequester(framebuffer.image_i);
-        let prework_buffer = if self.client_state.settings.load().render.raytracing {
+        let prework_buffer = if ctx.raytracing_supported
+            && self.client_state.settings.load().render.raytracing
+        {
             let RtFrameData {
                 new_buffer,
                 update_steps,
@@ -361,18 +366,24 @@ impl ActiveGame {
 
         {
             if let Some(buf) = self.raytrace_data.as_ref() {
-                self.raytraced_pipeline.run_raytracing_renderpasses(
-                    ctx,
-                    RaytracingBindings {
-                        scene_state,
-                        data: buf.data.clone(),
-                        header: buf.header.clone(),
-                        framebuffer,
-                        player_pos: player_position,
-                        render_distance: self.client_state.render_distance.load(Ordering::Relaxed),
-                    },
-                    &mut command_buf_builder,
-                )?;
+                self.raytraced_pipeline
+                    .as_ref()
+                    .context("Missing raytracing pipeline; is raytracing unsupported?")?
+                    .run_raytracing_renderpasses(
+                        ctx,
+                        RaytracingBindings {
+                            scene_state,
+                            data: buf.data.clone(),
+                            header: buf.header.clone(),
+                            framebuffer,
+                            player_pos: player_position,
+                            render_distance: self
+                                .client_state
+                                .render_distance
+                                .load(Ordering::Relaxed),
+                        },
+                        &mut command_buf_builder,
+                    )?;
             }
         }
 
@@ -482,11 +493,13 @@ impl ActiveGame {
             )?
         };
         self.sky_pipeline = self.sky_provider.make_pipeline(ctx, &global_config)?;
-        self.raytraced_pipeline = self.raytraced_provider.make_pipeline(
-            ctx,
-            &self.client_state.block_renderer,
-            &global_config,
-        )?;
+        if let Some(provider) = self.raytraced_provider.as_ref() {
+            self.raytraced_pipeline = Some(provider.make_pipeline(
+                ctx,
+                &self.client_state.block_renderer,
+                &global_config,
+            )?);
+        }
         self.egui_adapter
             .as_mut()
             .context("Missing egui adapter")?
@@ -497,7 +510,9 @@ impl ActiveGame {
 
 pub(crate) struct ConnectionState {
     pub(crate) progress: watch::Receiver<(f32, String)>,
-    pub(crate) result: oneshot::Receiver<Result<Arc<ClientState>>>,
+    pub(crate) result: oneshot::Receiver<Result<Option<Arc<ClientState>>>>,
+    pub(crate) cancellation: CancellationToken,
+    pub(crate) drop_guard: Option<DropGuard>,
 }
 
 pub(crate) enum GameState {
@@ -518,11 +533,32 @@ impl GameState {
     fn update_if_connected(&mut self, ctx: &VulkanWindow, event_loop: &ActiveEventLoop) {
         if let GameState::Connecting(state) = self {
             match state.result.try_recv() {
-                Ok(Ok(client_state)) => {
-                    let mut game = match make_active_game(ctx, client_state) {
-                        Ok(game) => game,
-                        Err(e) => {
+                Ok(Ok(Some(client_state))) => {
+                    let mut game = match catch_unwind(AssertUnwindSafe(|| {
+                        make_active_game(ctx, client_state)
+                    })) {
+                        Ok(Ok(game)) => {
+                            match state.drop_guard.take() {
+                                Some(x) => {
+                                    x.disarm();
+                                }
+                                None => {
+                                    log::error!("Expected a DropGuard in connection state but didn't find one");
+                                }
+                            }
+                            game
+                        }
+                        Ok(Err(e)) => {
                             *self = GameState::Error(e);
+                            return;
+                        }
+                        Err(payload) => {
+                            let desc = payload
+                                .downcast_ref::<&str>()
+                                .map(|s| s.to_string())
+                                .or_else(|| payload.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| "Box<dyn Any>".to_string());
+                            *self = GameState::Error(anyhow!("Game setup panicked: {desc}"));
                             return;
                         }
                     };
@@ -535,6 +571,10 @@ impl GameState {
                         }
                         Err(x) => *self = GameState::Error(x),
                     };
+                }
+                Ok(Ok(None)) => {
+                    // Connection cancelled
+                    *self = GameState::MainMenu;
                 }
                 Ok(Err(e)) => {
                     *self = GameState::Error(e);
@@ -598,12 +638,18 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
 
     let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;
     let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, &global_render_config)?;
-    let raytraced_provider = raytracer::RaytracedPipelineProvider::new(vk_wnd.vk_device.clone())?;
-    let raytraced_pipeline = raytraced_provider.make_pipeline(
-        &vk_wnd,
-        &client_state.block_renderer,
-        &global_render_config,
-    )?;
+
+    let mut raytraced_provider = None;
+    let mut raytraced_pipeline = None;
+    if vk_wnd.vk_ctx.raytracing_supported {
+        let provider = raytracer::RaytracedPipelineProvider::new(vk_wnd.vk_device.clone())?;
+        raytraced_pipeline = Some(provider.make_pipeline(
+            &vk_wnd,
+            &client_state.block_renderer,
+            &global_render_config,
+        )?);
+        raytraced_provider = Some(provider)
+    }
 
     let game = ActiveGame {
         cube_provider,
@@ -1058,6 +1104,7 @@ impl GameRenderer {
                     connection.pass,
                     connection.register,
                     connection.progress,
+                    connection.cancellation,
                 )
                 .await;
                 match connection.result.send(active_game) {
@@ -1073,6 +1120,7 @@ impl GameRenderer {
 
 impl Drop for ActiveGame {
     fn drop(&mut self) {
+        log::warn!("Dropping ActiveGame");
         self.client_state.shutdown.cancel()
     }
 }
@@ -1084,7 +1132,8 @@ pub(crate) struct ConnectionSettings {
     pub(crate) register: bool,
 
     pub(crate) progress: watch::Sender<(f32, String)>,
-    pub(crate) result: oneshot::Sender<Result<Arc<ClientState>>>,
+    pub(crate) result: oneshot::Sender<Result<Option<Arc<ClientState>>>>,
+    pub(crate) cancellation: CancellationToken,
 }
 
 async fn connect_impl(
@@ -1095,17 +1144,23 @@ async fn connect_impl(
     password: String,
     register: bool,
     mut progress: watch::Sender<(f32, String)>,
-) -> Result<Arc<ClientState>> {
+    cancel: CancellationToken,
+) -> Result<Option<Arc<ClientState>>> {
     progress.send((0.1, format!("Connecting to {}", server_addr)))?;
-    let client_state = net_client::connect_game(
-        server_addr,
-        username,
-        password,
-        register,
-        settings,
-        ctx,
-        &mut progress,
-    )
-    .await?;
-    Ok(client_state)
+    let connect_outcome = cancel
+        .run_until_cancelled(net_client::connect_game(
+            server_addr,
+            username,
+            password,
+            register,
+            settings,
+            ctx,
+            &mut progress,
+            cancel.clone(),
+        ))
+        .await;
+    match connect_outcome {
+        None => Ok(None),
+        Some(maybe_state) => Ok(Some(maybe_state?)),
+    }
 }
