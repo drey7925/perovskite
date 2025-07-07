@@ -16,10 +16,7 @@ use crate::{
     vulkan::{Texture2DHolder, VulkanWindow},
 };
 
-use super::{
-    flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper},
-    LiveRenderConfig,
-};
+use super::flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper};
 use crate::client_state::tool_controller::ToolState;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
@@ -60,8 +57,7 @@ impl EguiAdapter {
             event_loop,
             ctx.swapchain.surface().clone(),
             ctx.graphics_queue.clone(),
-            Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
-                .context("Could not find subpass 0")?,
+            Subpass::from(ctx.ui_renderpass()?, 0).context("Could not find subpass 0")?,
             ctx.swapchain.image_format(),
             config,
         );
@@ -81,11 +77,9 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: atlas.as_ref(),
-                subpass: Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
-                    .context("Post-blit subpass 0 missing")?,
                 pre_blit: false,
             },
-            &LiveRenderConfig::DUMMY,
+            &ctx.renderpasses.config,
         )?;
 
         set_up_fonts(&mut gui_adapter.egui_ctx);
@@ -130,7 +124,7 @@ impl EguiAdapter {
                 vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
                 CommandBufferInheritanceInfo {
                     render_pass: Some(
-                        Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
+                        Subpass::from(ctx.ui_renderpass()?, 0)
                             .with_context(|| "Render subpass 0 not found")?
                             .into(),
                     ),
@@ -152,11 +146,9 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: self.atlas.as_ref(),
-                subpass: Subpass::from(ctx.renderpasses.color_post_blit.clone(), 0)
-                    .context("Post-blit subpass 0 missing")?,
                 pre_blit: false,
             },
-            &LiveRenderConfig::DUMMY,
+            &ctx.renderpasses.config,
         )?;
         Ok(())
     }

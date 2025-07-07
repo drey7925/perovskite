@@ -1,10 +1,9 @@
 use super::{
     block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
-    make_clearing_raster_render_pass, make_depth_buffer_and_attachments,
     shaders::cube_geometry::{
         BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
     },
-    Texture2DHolder, VulkanContext,
+    LoadOp, RenderPassHolder, RenderPassId, Texture2DHolder, VulkanContext,
 };
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
@@ -23,6 +22,7 @@ use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
 use std::sync::Arc;
+use tinyvec::array_vec;
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};
 use vulkano::memory::allocator::MemoryTypeFilter;
@@ -37,6 +37,7 @@ use vulkano::{
         ImageUsage,
     },
     memory::allocator::AllocationCreateInfo,
+    ordered_passes_renderpass,
     pipeline::graphics::viewport::Viewport,
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sync::GpuFuture,
@@ -60,12 +61,12 @@ impl MiniBlockRenderer {
         surface_size: [u32; 2],
         atlas_texture: &TextureAtlas,
     ) -> Result<Self> {
-        // All compliant GPUs should be able to render to R8G8B8A8_SRGB
-        let render_pass = make_clearing_raster_render_pass(
-            ctx.vk_device.clone(),
-            Format::R8G8B8A8_SRGB,
-            ctx.depth_stencil_format,
-        )?;
+        let renderpasses = RenderPassHolder::new(ctx.vk_device.clone(), ctx.non_swapchain_config());
+        let render_pass = renderpasses.get(RenderPassId {
+            color_attachments: array_vec!({ (Format::R8G8B8A8_SRGB, LoadOp::Clear) }),
+            depth_stencil_attachment: Some((ctx.depth_stencil_format, LoadOp::Clear)),
+            input_attachments: array_vec!(),
+        })?;
 
         let extent = [surface_size[0], surface_size[1], 1];
         let target_image = Image::new(
@@ -83,18 +84,22 @@ impl MiniBlockRenderer {
             },
         )?;
 
-        let create_info = ImageViewCreateInfo {
-            usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
-            ..ImageViewCreateInfo::from_image(&target_image)
-        };
-        let target_image = ImageView::new(target_image, create_info)?;
+        let target_image = ImageView::new_default(target_image)?;
 
-        let (depth_stencil_attachment, _depth_only_attachment) = make_depth_buffer_and_attachments(
+        let depth_stencil_attachment = ImageView::new_default(Image::new(
             ctx.memory_allocator.clone(),
-            ctx.depth_stencil_format,
-            Supersampling::None,
-            extent,
-        )?;
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: ctx.depth_stencil_format,
+                extent,
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?)?;
 
         let framebuffer_create_info = FramebufferCreateInfo {
             attachments: vec![target_image.clone(), depth_stencil_attachment],
@@ -113,7 +118,7 @@ impl MiniBlockRenderer {
             viewport,
             render_pass.clone(),
             atlas_texture,
-            &LiveRenderConfig::DUMMY,
+            &ctx.non_swapchain_config(),
         )?;
         let download_buffer = Buffer::new_slice(
             ctx.clone_allocator(),

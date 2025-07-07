@@ -14,13 +14,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use super::VkAllocator;
+use super::{SelectedFormats, VkAllocator};
 use crate::client_state::settings::Supersampling;
 use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::format::Format;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
 pub(crate) mod cube_geometry;
@@ -60,47 +59,7 @@ pub(crate) mod vert_3d {
 pub(crate) mod frag_lighting {
     vulkano_shaders::shader! {
     ty: "fragment",
-    src: r"
-    #version 460
-
-    layout(location = 0) in vec2 uv_texcoord;
-    layout(location = 1) flat in float brightness;
-    layout(location = 2) flat in vec3 global_brightness;
-    layout(location = 3) flat in vec3 world_normal;
-    layout(location = 4) in vec3 world_pos;
-
-    layout(location = 0) out vec4 f_color;
-    layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
-    layout(set = 0, binding = 1) uniform sampler2D emissive_tex;
-
-    layout (constant_id = 0) const bool SPARSE = true;
-    layout (constant_id = 1) const bool DEBUG_INVERT_RASTER_TRANSPARENT = true;
-
-    void main() {
-        vec2 pix = gl_FragCoord.xy / 8.0;
-        vec4 diffuse = texture(diffuse_tex, uv_texcoord);
-        vec4 emissive = texture(emissive_tex, uv_texcoord);
-
-        float normal_pos_dot = abs(dot(normalize(world_normal), normalize(world_pos)));
-
-        f_color = vec4((brightness + global_brightness) * diffuse.rgb, diffuse.a);
-        float emissive_anisotropy_power = mix(10.0, 0.001, emissive.a);
-        float anisotropic_multiplier = pow(normal_pos_dot, emissive_anisotropy_power);
-        f_color.rgb += anisotropic_multiplier * emissive.rgb;
-
-        if (DEBUG_INVERT_RASTER_TRANSPARENT) {
-            f_color.rgb = 1.0 - f_color.rgb;
-        }
-
-        if (SPARSE) {
-            if (f_color.a < 0.5) {
-                discard;
-            } else {
-                f_color.a = 1.0;
-            }
-        }
-    }
-    "
+    path: "src/vulkan/shaders/raster_frag_lighting.glsl",
     }
 }
 // Simple vertex shader for drawing flat textures to the screen
@@ -164,26 +123,8 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) render_distance: u32,
     pub(crate) raytracer_debug: bool,
     pub(crate) raytracing_specular_downsampling: u32,
-}
 
-impl LiveRenderConfig {
-    pub(crate) const DUMMY: LiveRenderConfig = LiveRenderConfig {
-        supersampling: Supersampling::None,
-        hdr: false,
-        raytracing: false,
-        raytracing_reflections: false,
-        render_distance: 1,
-        raytracer_debug: false,
-        raytracing_specular_downsampling: 1,
-    };
-
-    pub(crate) fn render_format(&self) -> Format {
-        if self.hdr {
-            Format::R16G16B16A16_SFLOAT
-        } else {
-            Format::R8G8B8A8_SRGB
-        }
-    }
+    pub(crate) formats: SelectedFormats,
 }
 
 #[derive(Debug, Clone, Copy)]

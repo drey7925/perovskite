@@ -24,13 +24,15 @@ use crate::vulkan::shaders::{
 use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
     shaders::{frag_lighting, vert_3d::ModelMatrix},
-    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
+    CommandBufferBuilder, FramebufferAndLoadOpId, FramebufferImage, LoadOp, Texture2DHolder,
+    VulkanContext, VulkanWindow,
 };
 use anyhow::{ensure, Context, Result};
 use cgmath::{Angle, Matrix4, Rad};
 use smallvec::smallvec;
 use std::collections::HashMap;
 use std::{sync::Arc, time::Instant};
+use tinyvec::array_vec;
 use tracy_client::{plot, span};
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::memory::allocator::MemoryTypeFilter;
@@ -431,7 +433,7 @@ impl CubePipelineProvider {
         self.build_pipeline(
             wnd.context(),
             wnd.viewport.clone(),
-            wnd.renderpasses.color_depth_clear.clone(),
+            wnd.raster_renderpass()?,
             config,
             global_config,
         )

@@ -284,7 +284,7 @@ impl EntityPipelineProvider {
         self.build_pipeline(
             &wnd.vk_ctx,
             wnd.viewport.clone(),
-            wnd.renderpasses.color_depth.clone(),
+            wnd.raster_renderpass()?,
             atlas,
             global_config.supersampling,
         )

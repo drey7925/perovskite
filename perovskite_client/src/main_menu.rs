@@ -4,7 +4,9 @@ use std::{ops::Deref, sync::Arc};
 use crate::client_state::input::{BoundAction, Keybind, KeybindSettings};
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
-use crate::vulkan::VulkanContext;
+use crate::vulkan::{
+    FramebufferAndLoadOpId, FramebufferHolder, FramebufferImage, LoadOp, VulkanContext,
+};
 use crate::{
     client_state::settings::GameSettings,
     vulkan::{
@@ -19,6 +21,7 @@ use egui::{
     CollapsingHeader, Color32, FontId, InnerResponse, Layout, ProgressBar, RichText, TextEdit, Ui,
 };
 use tokio::sync::{oneshot, watch};
+use vulkano::command_buffer::SubpassContents;
 use vulkano::{image::SampleCount, render_pass::Subpass};
 use winit::event_loop::ActiveEventLoop;
 use winit::{event::WindowEvent, event_loop::EventLoop};
@@ -61,7 +64,7 @@ impl MainMenu {
             event_loop,
             ctx.swapchain().surface().clone(),
             ctx.clone_graphics_queue(),
-            Subpass::from(ctx.ui_renderpass(), 0)
+            Subpass::from(ctx.ui_renderpass().unwrap(), 0)
                 .context("Could not find subpass 0")
                 .unwrap(),
             ctx.swapchain().image_format(),

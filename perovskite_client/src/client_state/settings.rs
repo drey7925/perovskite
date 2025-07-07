@@ -2,6 +2,7 @@ use std::{fs::create_dir_all, path::PathBuf};
 
 use super::input::KeybindSettings;
 use crate::vulkan::shaders::LiveRenderConfig;
+use crate::vulkan::{SelectedFormats, VulkanContext, VulkanWindow};
 use anyhow::{Context, Result};
 use perovskite_core::protocol::audio::SoundSource;
 use serde::{Deserialize, Serialize};
@@ -60,7 +61,7 @@ pub(crate) struct RenderSettings {
 }
 
 impl RenderSettings {
-    pub(crate) fn build_global_config(&self) -> LiveRenderConfig {
+    pub(crate) fn build_global_config(&self, ctx: &VulkanContext) -> LiveRenderConfig {
         LiveRenderConfig {
             supersampling: self.supersampling,
             raytracing: self.raytracing,
@@ -69,6 +70,18 @@ impl RenderSettings {
             raytracer_debug: self.raytracer_debug,
             raytracing_specular_downsampling: self.raytracing_specular_downsampling,
             hdr: self.hdr,
+            formats: SelectedFormats {
+                swapchain: ctx.swapchain_format(),
+                color: Self::render_format(self.hdr),
+                depth_stencil: ctx.depth_stencil_format(),
+            },
+        }
+    }
+    pub(crate) fn render_format(hdr: bool) -> Format {
+        if hdr {
+            Format::R16G16B16A16_SFLOAT
+        } else {
+            Format::R8G8B8A8_SRGB
         }
     }
 }

@@ -28,16 +28,20 @@ pub(crate) mod raytrace_buffer;
 use anyhow::{bail, ensure, Context, Error, Result};
 use arc_swap::ArcSwap;
 use clap::error::ContextKind::Usage;
+use enum_map::EnumMap;
 use image::GenericImageView;
 use log::warn;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use smallvec::smallvec;
-use std::collections::btree_map::Entry;
+use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use std::{ops::Deref, sync::Arc};
 use texture_packer::Rect;
+use tinyvec::array_vec;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
@@ -58,7 +62,10 @@ use vulkano::memory::allocator::{
 };
 use vulkano::memory::{MemoryProperties, MemoryPropertyFlags};
 use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
-use vulkano::render_pass::{RenderPassCreateInfo, SubpassDescription};
+use vulkano::render_pass::{
+    AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp,
+    RenderPassCreateInfo, SubpassDescription,
+};
 use vulkano::swapchain::{ColorSpace, Surface};
 use vulkano::{
     command_buffer::{
@@ -103,8 +110,8 @@ pub(crate) struct VulkanContext {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     /// The format of the image buffer used for rendering to *screen*. Render-to-texture always uses R8G8B8A8_SRGB
-    color_format: Format,
-    /// The format of the depth buffer used for rendering to *screen*. Probed at startup, and used for both render-to-screen and render-to-texture
+    swapchain_format: Format,
+    /// Probed at startup
     depth_stencil_format: Format,
 
     swapchain_len: usize,
@@ -112,7 +119,7 @@ pub(crate) struct VulkanContext {
     all_gpus: Vec<String>,
     max_draw_indexed_index_value: u32,
 
-    pub(crate) reclaim_u32: BufferReclaim<u32>,
+    reclaim_u32: BufferReclaim<u32>,
 }
 
 impl VulkanContext {
@@ -138,6 +145,14 @@ impl VulkanContext {
 
     pub(crate) fn all_gpus(&self) -> &[String] {
         &self.all_gpus
+    }
+
+    pub(crate) fn swapchain_format(&self) -> Format {
+        self.swapchain_format
+    }
+
+    pub(crate) fn depth_stencil_format(&self) -> Format {
+        self.depth_stencil_format
     }
 
     fn start_command_buffer(&self) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> {
@@ -347,11 +362,150 @@ impl VulkanContext {
         }
         Ok(())
     }
+
+    /// Constructs a render config suitable for render-to-texture only
+    pub(crate) fn non_swapchain_config(&self) -> LiveRenderConfig {
+        LiveRenderConfig {
+            supersampling: Supersampling::None,
+            hdr: false,
+            raytracing: false,
+            raytracing_reflections: false,
+            render_distance: 1,
+            raytracer_debug: false,
+            raytracing_specular_downsampling: 1,
+
+            formats: SelectedFormats {
+                swapchain: Format::R8G8B8A8_SRGB,
+                color: Format::R8G8B8A8_SRGB,
+                depth_stencil: self.depth_stencil_format,
+            },
+        }
+    }
+}
+
+pub(crate) struct RenderPassHolder {
+    vk_device: Arc<Device>,
+    passes: Mutex<FxHashMap<RenderPassId, Arc<RenderPass>>>,
+    config: LiveRenderConfig,
+}
+
+impl RenderPassHolder {
+    pub(crate) fn get_by_framebuffer_id<const M: usize, const N: usize>(
+        &self,
+        framebuffer_id: FramebufferAndLoadOpId<M, N>,
+    ) -> Result<Arc<RenderPass>> {
+        let renderpass_id = RenderPassId {
+            color_attachments: framebuffer_id
+                .color_attachments
+                .iter()
+                .map(|(image, op)| (image.image_format(&self.config.formats), *op))
+                .collect(),
+            depth_stencil_attachment: framebuffer_id
+                .depth_stencil_attachment
+                .iter()
+                .map(|(image, op)| (image.image_format(&self.config.formats), *op))
+                .next(),
+            input_attachments: framebuffer_id
+                .input_attachments
+                .iter()
+                .map(|(image, op)| (image.image_format(&self.config.formats), *op))
+                .collect(),
+        };
+        self.get(renderpass_id)
+    }
+}
+
+impl RenderPassHolder {
+    pub(crate) fn new(vk_device: Arc<Device>, config: LiveRenderConfig) -> Self {
+        Self {
+            vk_device,
+            config,
+            passes: Mutex::new(FxHashMap::default()),
+        }
+    }
+    pub(crate) fn get(&self, id: RenderPassId) -> Result<Arc<RenderPass>> {
+        match self.passes.lock().entry(id) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => Ok(entry
+                .insert(Self::build_render_pass(id, &self.vk_device)?)
+                .clone()),
+        }
+    }
+
+    fn build_render_pass(id: RenderPassId, vk_device: &Arc<Device>) -> Result<Arc<RenderPass>> {
+        log::debug!("Building render pass: {}", id);
+        let mut attachments = vec![];
+        let mut subpass = SubpassDescription {
+            input_attachments: vec![],
+            color_attachments: vec![],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        };
+
+        for (format, op) in id.color_attachments {
+            let idx = attachments.len();
+            attachments.push(AttachmentDescription {
+                format,
+                load_op: op.to_vulkano(),
+                store_op: AttachmentStoreOp::Store,
+                initial_layout: ImageLayout::ColorAttachmentOptimal,
+                final_layout: ImageLayout::ColorAttachmentOptimal,
+                ..Default::default()
+            });
+            subpass.color_attachments.push(Some(AttachmentReference {
+                attachment: idx as u32,
+                layout: ImageLayout::ColorAttachmentOptimal,
+                ..Default::default()
+            }));
+        }
+        if let Some((format, op)) = id.depth_stencil_attachment {
+            let idx = attachments.len();
+            attachments.push(AttachmentDescription {
+                format,
+                load_op: op.to_vulkano(),
+                store_op: AttachmentStoreOp::Store,
+                initial_layout: ImageLayout::DepthStencilAttachmentOptimal,
+                final_layout: ImageLayout::DepthStencilAttachmentOptimal,
+                ..Default::default()
+            });
+            subpass.depth_stencil_attachment = Some(AttachmentReference {
+                attachment: idx as u32,
+                layout: ImageLayout::DepthStencilAttachmentOptimal,
+                ..Default::default()
+            });
+        }
+
+        for (format, op) in id.input_attachments {
+            let idx = attachments.len();
+            attachments.push(AttachmentDescription {
+                format,
+                load_op: op.to_vulkano(),
+                store_op: AttachmentStoreOp::Store,
+                initial_layout: ImageLayout::ShaderReadOnlyOptimal,
+                final_layout: ImageLayout::ShaderReadOnlyOptimal,
+                ..Default::default()
+            });
+            subpass.input_attachments.push(Some(AttachmentReference {
+                attachment: idx as u32,
+                layout: ImageLayout::ShaderReadOnlyOptimal,
+                ..Default::default()
+            }));
+        }
+
+        let info = RenderPassCreateInfo {
+            attachments,
+            subpasses: vec![subpass],
+            ..Default::default()
+        };
+
+        RenderPass::new(vk_device.clone(), info)
+            .with_context(|| format!("Failed to build renderpass for {id}"))
+    }
 }
 
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
-    renderpasses: RenderpassHolder,
+    renderpasses: RenderPassHolder,
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<Image>>,
     framebuffers: Vec<FramebufferHolder>,
@@ -359,6 +513,7 @@ pub(crate) struct VulkanWindow {
     viewport: Viewport,
     want_recreate: AtomicBool,
 }
+
 impl Deref for VulkanWindow {
     type Target = VulkanContext;
     fn deref(&self) -> &Self::Target {
@@ -378,6 +533,10 @@ impl VulkanWindow {
 
     pub fn clone_context(&self) -> Arc<VulkanContext> {
         self.vk_ctx.clone()
+    }
+
+    pub(crate) fn renderpasses(&self) -> &RenderPassHolder {
+        &self.renderpasses
     }
 
     pub(crate) fn create(
@@ -426,6 +585,11 @@ impl VulkanWindow {
             ..DeviceFeatures::empty()
         };
 
+        let all_gpus = instance
+            .enumerate_physical_devices()?
+            .map(|x| x.properties().device_name.clone())
+            .collect::<Vec<String>>();
+
         let (physical_device, graphics_family_index, transfer_family_index) =
             select_physical_device(
                 &instance,
@@ -434,8 +598,6 @@ impl VulkanWindow {
                 &device_features,
                 &settings.load().render.preferred_gpu,
             )?;
-
-        let render_config = settings.load().render.build_global_config();
 
         let queue_create_infos = if graphics_family_index == transfer_family_index {
             vec![QueueCreateInfo {
@@ -503,7 +665,7 @@ impl VulkanWindow {
                     min_image_count: image_count,
                     image_format,
                     image_extent: window.inner_size().into(),
-                    image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+                    image_usage: FramebufferImage::SwapchainColor.usage(),
                     composite_alpha,
                     image_color_space: color_space,
                     ..Default::default()
@@ -573,41 +735,28 @@ impl VulkanWindow {
             Default::default(),
         ));
 
-        let renderpasses = RenderpassHolder::new(
-            vk_device.clone(),
-            render_config.render_format(),
+        let vk_ctx = Arc::new(VulkanContext {
+            vk_device,
+            graphics_queue,
+            transfer_queue,
+            memory_allocator,
+            command_buffer_allocator,
+            descriptor_set_allocator,
+            swapchain_format: swapchain_color_format,
             depth_stencil_format,
-            swapchain_color_format,
-        )?;
+            all_gpus,
+            swapchain_len,
+            max_draw_indexed_index_value: physical_device.properties().max_draw_indexed_index_value,
+            reclaim_u32: BufferReclaim::new(),
+        });
+        let render_config = settings.load().render.build_global_config(&vk_ctx);
 
-        let framebuffers = get_framebuffers_with_depth(
-            &swapchain_images,
-            memory_allocator.clone(),
-            &renderpasses,
-            render_config,
-        )?;
-        let all_gpus = instance
-            .enumerate_physical_devices()?
-            .map(|x| x.properties().device_name.clone())
-            .collect::<Vec<String>>();
+        let renderpasses = RenderPassHolder::new(vk_ctx.vk_device.clone(), render_config);
 
+        let framebuffers =
+            FramebufferHolder::make_framebuffers(&swapchain_images, vk_ctx.clone(), render_config)?;
         Ok(VulkanWindow {
-            vk_ctx: Arc::new(VulkanContext {
-                vk_device,
-                graphics_queue,
-                transfer_queue,
-                memory_allocator,
-                command_buffer_allocator,
-                descriptor_set_allocator,
-                color_format: swapchain_color_format,
-                depth_stencil_format,
-                all_gpus,
-                swapchain_len,
-                max_draw_indexed_index_value: physical_device
-                    .properties()
-                    .max_draw_indexed_index_value,
-                reclaim_u32: BufferReclaim::new(),
-            }),
+            vk_ctx,
             renderpasses,
             swapchain,
             swapchain_images,
@@ -636,177 +785,11 @@ impl VulkanWindow {
             Err(Validated::ValidationError(e)) => return Err(anyhow::Error::from(e)),
         };
 
-        if self.renderpasses.render_format != config.render_format()
-            || self.renderpasses.swapchain_format != new_swapchain.image_format()
-        {
-            self.renderpasses = RenderpassHolder::new(
-                self.vk_device.clone(),
-                config.render_format(),
-                self.depth_stencil_format,
-                new_swapchain.image_format(),
-            )?;
-        }
-
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images.clone();
-        self.framebuffers = get_framebuffers_with_depth(
-            &new_images,
-            self.memory_allocator.clone(),
-            &self.renderpasses,
-            config,
-        )?;
-        Ok(())
-    }
-
-    fn start_raster_render_pass_and_clear(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffer: &FramebufferHolder,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![
-                    // Supersampled color buffer
-                    Some([0.0; 4].into()),
-                    // Supersampled depth buffer
-                    Some(self.depth_clear_value()),
-                ],
-                render_pass: self.renderpasses.color_depth_clear.clone(),
-                ..RenderPassBeginInfo::framebuffer(framebuffer.color_depth_stencil_pre_blit.clone())
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-
-    fn start_color_depth_render_pass(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffer: &FramebufferHolder,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![None, None],
-                render_pass: self.renderpasses.color_depth.clone(),
-                ..RenderPassBeginInfo::framebuffer(framebuffer.color_depth_stencil_pre_blit.clone())
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-
-    fn start_color_write_depth_read_render_pass(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffer: &FramebufferHolder,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![None, None],
-                render_pass: self.renderpasses.write_color_read_depth.clone(),
-                ..RenderPassBeginInfo::framebuffer(framebuffer.color_read_depth_pre_blit.clone())
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-    fn start_pre_blit_color_only_render_pass(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffers: &FramebufferHolder,
-        contents: SubpassContents,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                render_pass: self.renderpasses.color.clone(),
-                clear_values: vec![None],
-                ..RenderPassBeginInfo::framebuffer(framebuffers.color_only_pre_blit.clone())
-            },
-            SubpassBeginInfo {
-                contents,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-    fn start_post_blit_color_only_render_pass(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffers: &FramebufferHolder,
-        contents: SubpassContents,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                render_pass: self.renderpasses.color_post_blit.clone(),
-                clear_values: vec![None],
-                ..RenderPassBeginInfo::framebuffer(framebuffers.color_only_post_blit.clone())
-            },
-            SubpassBeginInfo {
-                contents,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-
-    fn start_deferred_specular_depth_only_render_pass(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffer: &FramebufferHolder,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![None],
-                render_pass: self.renderpasses.depth_stencil.clone(),
-                ..RenderPassBeginInfo::framebuffer(
-                    framebuffer
-                        .raytrace_buffers
-                        .as_ref()
-                        .context("Missing deferred specular buffers")?
-                        .specular_framebuffer
-                        .clone(),
-                )
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
-        Ok(())
-    }
-
-    fn start_deferred_specular_depth_only_render_pass_and_clear(
-        &self,
-        builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        framebuffer: &FramebufferHolder,
-    ) -> Result<()> {
-        builder.begin_render_pass(
-            RenderPassBeginInfo {
-                clear_values: vec![Some(self.depth_clear_value())],
-                render_pass: self.renderpasses.depth_stencil_clear.clone(),
-                ..RenderPassBeginInfo::framebuffer(
-                    framebuffer
-                        .raytrace_buffers
-                        .as_ref()
-                        .context("Missing deferred specular buffers")?
-                        .specular_framebuffer
-                        .clone(),
-                )
-            },
-            SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            },
-        )?;
+        self.renderpasses.config = config;
+        self.framebuffers =
+            FramebufferHolder::make_framebuffers(&new_images, self.vk_ctx.clone(), config)?;
         Ok(())
     }
 
@@ -819,8 +802,22 @@ impl VulkanWindow {
         self.swapchain.as_ref()
     }
 
-    pub(crate) fn ui_renderpass(&self) -> Arc<RenderPass> {
-        self.renderpasses.color_post_blit.clone()
+    pub(crate) fn ui_renderpass(&self) -> Result<Arc<RenderPass>> {
+        self.renderpasses
+            .get_by_framebuffer_id(FramebufferAndLoadOpId {
+                color_attachments: [(FramebufferImage::SwapchainColor, LoadOp::Load)],
+                depth_stencil_attachment: None,
+                input_attachments: [],
+            })
+    }
+
+    pub(crate) fn raster_renderpass(&self) -> Result<Arc<RenderPass>> {
+        self.renderpasses
+            .get_by_framebuffer_id(FramebufferAndLoadOpId {
+                color_attachments: [(FramebufferImage::MainColor, LoadOp::Load)],
+                depth_stencil_attachment: Some((FramebufferImage::MainDepthStencil, LoadOp::Load)),
+                input_attachments: [],
+            })
     }
 }
 
@@ -837,177 +834,6 @@ fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
         }
     }
     bail!("No depth format found");
-}
-
-pub(crate) fn make_clearing_raster_render_pass(
-    vk_device: Arc<Device>,
-    output_format: Format,
-    depth_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            color_ssaa: {
-                format: output_format,
-                samples: 1,
-                load_op: Clear,
-                store_op: Store,
-            },
-            depth_stencil: {
-                format: depth_format,
-                samples: 1,
-                load_op: Clear,
-                store_op: Store,
-            },
-        },
-        passes: [
-            {
-                color: [color_ssaa],
-                depth_stencil: {depth_stencil},
-                input: [],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
-}
-
-pub(crate) fn make_color_depth_render_pass(
-    vk_device: Arc<Device>,
-    output_format: Format,
-    depth_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            color_ssaa: {
-                format: output_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-            depth_stencil: {
-                format: depth_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-        },
-        passes: [
-            {
-                color: [color_ssaa],
-                depth_stencil: {depth_stencil},
-                input: [],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
-}
-
-pub(crate) fn make_write_color_read_depth_render_pass(
-    vk_device: Arc<Device>,
-    output_format: Format,
-    depth_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            color_ssaa: {
-                format: output_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-            depth_stencil: {
-                format: depth_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-        },
-        passes: [
-            {
-                color: [color_ssaa],
-                depth_stencil: {},
-                input: [depth_stencil],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
-}
-
-fn make_color_only_renderpass(
-    vk_device: Arc<Device>,
-    output_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            color: {
-                format: output_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-        },
-        passes: [
-            {
-                color: [color],
-                depth_stencil: {},
-                input: [],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
-}
-
-fn make_depth_only_renderpass(
-    vk_device: Arc<Device>,
-    depth_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            depth: {
-                format: depth_format,
-                samples: 1,
-                load_op: Load,
-                store_op: Store,
-            },
-        },
-        passes: [
-            {
-                color: [],
-                depth_stencil: {depth},
-                input: [],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
-}
-
-fn make_depth_only_clearing_renderpass(
-    vk_device: Arc<Device>,
-    depth_format: Format,
-) -> Result<Arc<RenderPass>> {
-    vulkano::ordered_passes_renderpass!(
-        vk_device,
-        attachments: {
-            depth: {
-                format: depth_format,
-                samples: 1,
-                load_op: Clear,
-                store_op: Store,
-            },
-        },
-        passes: [
-            {
-                color: [],
-                depth_stencil: {depth},
-                input: [],
-            },
-        ]
-    )
-    .context("Renderpass creation failed")
 }
 
 fn find_best_format(formats: Vec<(Format, ColorSpace)>) -> Result<(Format, ColorSpace)> {
@@ -1051,99 +877,289 @@ pub(crate) struct RaytraceBuffers {
     specular_framebuffer: Arc<Framebuffer>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-enum FramebufferImage {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SelectedFormats {
+    pub(crate) swapchain: Format,
+    pub(crate) color: Format,
+    pub(crate) depth_stencil: Format,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, enum_map::Enum)]
+pub(crate) enum FramebufferImage {
     MainColor,
-    MainDepth,
+    MainDepthStencil,
+    MainDepthStencilDepthOnly,
+    SwapchainColor,
+    RtSpecRawColor,
+    RtSpecStencil,
+    RtSpecStrength,
+    RtSpecRayDir,
+    RtSpecRayDirDownsampled,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-struct RenderPassId {}
+impl FramebufferImage {
+    fn image_format(&self, f: &SelectedFormats) -> Format {
+        match self {
+            FramebufferImage::MainColor => f.color,
+            FramebufferImage::MainDepthStencil => f.depth_stencil,
+            FramebufferImage::MainDepthStencilDepthOnly => f.depth_stencil,
+            FramebufferImage::SwapchainColor => f.swapchain,
+            FramebufferImage::RtSpecRawColor => Format::R16G16B16A16_SFLOAT,
+            FramebufferImage::RtSpecStencil => f.depth_stencil,
+            FramebufferImage::RtSpecStrength => Format::R8G8B8A8_UNORM,
+            FramebufferImage::RtSpecRayDir => Format::R32G32B32A32_UINT,
+            FramebufferImage::RtSpecRayDirDownsampled => Format::R32G32B32A32_UINT,
+        }
+    }
 
-#[derive(Clone)]
-struct RenderpassHolder {
-    vk_device: Arc<Device>,
-    render_format: Format,
-    depth_format: Format,
-    swapchain_format: Format,
-    color: Arc<RenderPass>,
-    color_post_blit: Arc<RenderPass>,
-    color_depth: Arc<RenderPass>,
-    color_depth_clear: Arc<RenderPass>,
-    depth_stencil: Arc<RenderPass>,
-    depth_stencil_clear: Arc<RenderPass>,
-    write_color_read_depth: Arc<RenderPass>,
-}
-impl RenderpassHolder {
-    fn new(
-        vk_device: Arc<Device>,
-        render_format: Format,
-        depth_format: Format,
-        swapchain_format: Format,
-    ) -> Result<Self> {
-        let render_pass = RenderPass::new(
-            vk_device.clone(),
-            RenderPassCreateInfo {
-                subpasses: vec![SubpassDescription::default()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    fn dimension(&self, base_x: u32, base_y: u32, config: LiveRenderConfig) -> (u32, u32) {
+        let supersampling = config.supersampling.to_int();
+        let base = (base_x, base_y);
+        let upsampled = (base_x * supersampling, base_y * supersampling);
+        let rt_deferred = (
+            upsampled.0 / config.raytracing_specular_downsampling,
+            upsampled.1 / config.raytracing_specular_downsampling,
+        );
+        match self {
+            FramebufferImage::MainColor => upsampled,
+            FramebufferImage::MainDepthStencil => upsampled,
+            FramebufferImage::MainDepthStencilDepthOnly => upsampled,
+            FramebufferImage::SwapchainColor => upsampled,
+            FramebufferImage::RtSpecRawColor => rt_deferred,
+            FramebufferImage::RtSpecStencil => rt_deferred,
+            FramebufferImage::RtSpecStrength => upsampled,
+            FramebufferImage::RtSpecRayDir => upsampled,
+            FramebufferImage::RtSpecRayDirDownsampled => rt_deferred,
+        }
+    }
 
-        let color = make_color_only_renderpass(vk_device.clone(), render_format)?;
-        let color_post_blit = make_color_only_renderpass(vk_device.clone(), swapchain_format)?;
-        let color_depth = dbg!(make_color_depth_render_pass(
-            vk_device.clone(),
-            render_format,
-            depth_format
-        )?);
-        let color_depth_clear = dbg!(make_clearing_raster_render_pass(
-            vk_device.clone(),
-            render_format,
-            depth_format
-        )?);
-        let depth_stencil = make_depth_only_renderpass(vk_device.clone(), depth_format)?;
-        let depth_stencil_clear =
-            make_depth_only_clearing_renderpass(vk_device.clone(), depth_format)?;
-        let write_color_read_depth = dbg!(make_write_color_read_depth_render_pass(
-            vk_device.clone(),
-            render_format,
-            depth_format,
-        )?);
-        Ok(RenderpassHolder {
-            vk_device,
-            render_format,
-            depth_format,
-            swapchain_format,
-            color,
-            color_post_blit,
-            color_depth,
-            color_depth_clear,
-            depth_stencil,
-            depth_stencil_clear,
-            write_color_read_depth,
-        })
+    fn abbreviation(&self) -> char {
+        match self {
+            // I give up on trying to use a letter for each attachment
+            // even two letters gets annoying for the raytraced specular stuff, and it's likely
+            // only going to get worse
+            // Have some hanzi/kanji instead
+            FramebufferImage::MainColor => '色',
+            FramebufferImage::MainDepthStencil => '深',
+            FramebufferImage::MainDepthStencilDepthOnly => '半',
+            FramebufferImage::SwapchainColor => '面',
+            FramebufferImage::RtSpecRawColor => '映',
+            FramebufferImage::RtSpecStencil => '切',
+            FramebufferImage::RtSpecStrength => '艶',
+            FramebufferImage::RtSpecRayDir => '方',
+            FramebufferImage::RtSpecRayDirDownsampled => '角',
+        }
+    }
+
+    fn usage(&self) -> ImageUsage {
+        match self {
+            FramebufferImage::MainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+            FramebufferImage::MainDepthStencil => {
+                ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
+            }
+            FramebufferImage::MainDepthStencilDepthOnly => {
+                ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
+            }
+            FramebufferImage::SwapchainColor => {
+                ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST
+            }
+            FramebufferImage::RtSpecRawColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            FramebufferImage::RtSpecStencil => ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            FramebufferImage::RtSpecStrength => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            FramebufferImage::RtSpecRayDir => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            FramebufferImage::RtSpecRayDirDownsampled => {
+                ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE
+            }
+        }
+    }
+
+    pub(crate) fn clear_value(&self) -> ClearValue {
+        const FLOAT: ClearValue = ClearValue::Float([0.0; 4]);
+        const DEPTH_STENCIL: ClearValue = ClearValue::DepthStencil((1.0, 0));
+        const DEPTH: ClearValue = ClearValue::Depth(1.0);
+        const UINT: ClearValue = ClearValue::Uint([0; 4]);
+        match self {
+            FramebufferImage::MainColor => FLOAT,
+            FramebufferImage::MainDepthStencil => DEPTH_STENCIL,
+            FramebufferImage::MainDepthStencilDepthOnly => DEPTH,
+            FramebufferImage::SwapchainColor => FLOAT,
+            FramebufferImage::RtSpecRawColor => FLOAT,
+            FramebufferImage::RtSpecStencil => DEPTH_STENCIL,
+            FramebufferImage::RtSpecStrength => FLOAT,
+            FramebufferImage::RtSpecRayDir => UINT,
+            FramebufferImage::RtSpecRayDirDownsampled => UINT,
+        }
     }
 }
 
-#[derive(Clone)]
+impl Default for FramebufferImage {
+    fn default() -> Self {
+        Self::MainColor
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct FramebufferAndLoadOpId<const M: usize, const N: usize> {
+    pub(crate) color_attachments: [(FramebufferImage, LoadOp); M],
+    pub(crate) depth_stencil_attachment: Option<(FramebufferImage, LoadOp)>,
+    pub(crate) input_attachments: [(FramebufferImage, LoadOp); N],
+}
+impl<const M: usize, const N: usize> FramebufferAndLoadOpId<M, N> {
+    fn framebuffer_id(&self) -> FramebufferId {
+        FramebufferId {
+            color_attachments: self.color_attachments.iter().map(|x| x.0).collect(),
+            depth_stencil_attachment: self.depth_stencil_attachment.map(|x| x.0),
+            input_attachments: self.input_attachments.iter().map(|x| x.0).collect(),
+        }
+    }
+}
+impl<const M: usize, const N: usize> Display for FramebufferAndLoadOpId<M, N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Co:")?;
+        for (attachment, op) in self.color_attachments.iter() {
+            f.write_char(attachment.abbreviation())?;
+            f.write_char(op.op_char())?
+        }
+        if let Some((attachment, op)) = &self.depth_stencil_attachment {
+            f.write_str("/Dp:")?;
+            f.write_char(attachment.abbreviation())?;
+            f.write_char(op.op_char())?
+        }
+        f.write_str("/Rd:")?;
+        for ((attachment, op)) in self.input_attachments.iter() {
+            f.write_char(attachment.abbreviation())?;
+            f.write_char(op.op_char())?
+        }
+        Ok(())
+    }
+}
+
+impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<0, N> {}
+impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<1, N> {}
+impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<2, N> {}
+impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<3, N> {}
+impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<4, N> {}
+impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 0> {}
+impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 1> {}
+impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 2> {}
+impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 3> {}
+impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 4> {}
+
+trait ColorAttachmentsWithinLimits {}
+
+trait InputAttachmentsWithinLimits {}
+
+pub(crate) trait SupportedByVulkanCore {}
+impl<T: ColorAttachmentsWithinLimits + InputAttachmentsWithinLimits + ?Sized> SupportedByVulkanCore
+    for T
+{
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct FramebufferId {
+    color_attachments: tinyvec::ArrayVec<[FramebufferImage; 8]>,
+    depth_stencil_attachment: Option<FramebufferImage>,
+    input_attachments: tinyvec::ArrayVec<[FramebufferImage; 8]>,
+}
+impl Display for FramebufferId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Co:")?;
+        for attachment in self.color_attachments.iter() {
+            f.write_char(attachment.abbreviation())?;
+        }
+        if let Some(attachment) = &self.depth_stencil_attachment {
+            f.write_str("/Dp:")?;
+            f.write_char(attachment.abbreviation())?;
+        }
+        f.write_str("/Rd:")?;
+        for (attachment) in self.input_attachments.iter() {
+            f.write_char(attachment.abbreviation())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum LoadOp {
+    Load,
+    DontCare,
+    Clear,
+}
+impl Default for LoadOp {
+    fn default() -> Self {
+        LoadOp::Load
+    }
+}
+impl LoadOp {
+    fn to_vulkano(&self) -> AttachmentLoadOp {
+        match self {
+            LoadOp::Load => AttachmentLoadOp::Load,
+            LoadOp::Clear => AttachmentLoadOp::Clear,
+            LoadOp::DontCare => AttachmentLoadOp::DontCare,
+        }
+    }
+
+    fn op_char(self) -> char {
+        match self {
+            LoadOp::Load => ' ',
+            LoadOp::Clear => '#',
+            LoadOp::DontCare => '?',
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct RenderPassId {
+    color_attachments: tinyvec::ArrayVec<[(Format, LoadOp); 8]>,
+    depth_stencil_attachment: Option<(Format, LoadOp)>,
+    input_attachments: tinyvec::ArrayVec<[(Format, LoadOp); 4]>,
+}
+impl Display for RenderPassId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn lookup(f: Format) -> &'static str {
+            match f {
+                Format::R8G8B8A8_UNORM => "U08",
+                Format::A2R10G10B10_UNORM_PACK32 => "U10",
+                Format::R16G16B16A16_SFLOAT => "F16",
+                Format::R32G32B32A32_UINT => "I32",
+                Format::D32_SFLOAT => "D32",
+                Format::D32_SFLOAT_S8_UINT => "Z32",
+                Format::D24_UNORM_S8_UINT => "D24",
+                Format::X8_D24_UNORM_PACK32 => "Z24",
+                Format::R8G8B8A8_SRGB => "s08",
+                Format::B8G8R8A8_SRGB => "b08",
+                _ => "???",
+            }
+        }
+
+        f.write_str("Co:")?;
+        for (format, op) in self.color_attachments.iter() {
+            f.write_str(lookup(*format))?;
+            f.write_char(op.op_char())?;
+        }
+        if let Some((format, op)) = &self.depth_stencil_attachment {
+            f.write_str("/Dp:")?;
+            f.write_str(lookup(*format))?;
+            f.write_char(op.op_char())?;
+        }
+        f.write_str("/Rd:")?;
+        for (format, op) in self.input_attachments.iter() {
+            f.write_str(lookup(*format))?;
+            f.write_char(op.op_char())?;
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct FramebufferHolder {
+    ctx: Arc<VulkanContext>,
     image_i: usize,
+    base_extent: [u32; 3],
     config: LiveRenderConfig,
-    color_depth_stencil_pre_blit: Arc<Framebuffer>,
-    color_read_depth_pre_blit: Arc<Framebuffer>,
-    color_only_pre_blit: Arc<Framebuffer>,
-    raytrace_buffers: Option<RaytraceBuffers>,
-    /// Vector starting with the source and ending with the target. It may be a singleton, but must
-    /// not be empty.
+    image_views: Mutex<EnumMap<FramebufferImage, Option<Arc<ImageView>>>>,
+    // All images to blit through
     blit_path: Vec<Arc<Image>>,
-    /// The swapchain image that we'll present. UIs render directly to this.
-    /// If config.hdr is true, the renderer will need to blit from the last step of the blit path
-    /// into this image. Otherwise, the last step of the blit path _is_ the swapchain image;
-    /// blit_supersampling takes care of this
-    swapchain_image: Arc<Image>,
-    color_only_post_blit: Arc<Framebuffer>,
-    depth_only_view: Arc<ImageView>,
+    framebuffers: Mutex<FxHashMap<FramebufferId, Arc<Framebuffer>>>,
 }
 
 impl FramebufferHolder {
@@ -1161,74 +1177,186 @@ impl FramebufferHolder {
             filter: Filter::Nearest,
             ..BlitImageInfo::images(
                 self.blit_path.last().unwrap().clone(),
-                self.swapchain_image.clone(),
+                self.try_get_image(FramebufferImage::SwapchainColor)?
+                    .image()
+                    .clone(),
             )
         })?;
 
         Ok(())
     }
-}
 
-pub(crate) fn get_framebuffers_with_depth(
-    images: &[Arc<Image>],
-    allocator: Arc<VkAllocator>,
-    renderpasses: &RenderpassHolder,
-    config: LiveRenderConfig,
-) -> Result<Vec<FramebufferHolder>> {
-    images
-        .iter()
-        .enumerate()
-        .map(|(image_i, swapchain_image)| -> anyhow::Result<_> {
-            make_framebuffer_holder(&allocator, renderpasses, config, image_i, swapchain_image)
-        })
-        .collect::<Result<Vec<_>>>()
-}
+    pub(crate) fn make_framebuffers(
+        images: &[Arc<Image>],
+        ctx: Arc<VulkanContext>,
+        config: LiveRenderConfig,
+    ) -> Result<Vec<FramebufferHolder>> {
+        images
+            .iter()
+            .enumerate()
+            .map(|(image_i, swapchain_image)| -> anyhow::Result<_> {
+                Self::new(ctx.clone(), config, image_i, swapchain_image)
+            })
+            .collect::<Result<Vec<_>>>()
+    }
 
-fn make_framebuffer_holder(
-    allocator: &Arc<VkAllocator>,
-    renderpasses: &RenderpassHolder,
-    config: LiveRenderConfig,
-    image_i: usize,
-    swapchain_image: &Arc<Image>,
-) -> Result<FramebufferHolder> {
-    let swapchain_view = ImageView::new_default(swapchain_image.clone()).unwrap();
-    let image_extent = swapchain_image.extent();
-    let (depth_stencil_view, depth_only_view) = make_depth_buffer_and_attachments(
-        allocator.clone(),
-        renderpasses.depth_format,
-        config.supersampling,
-        image_extent,
-    )?;
+    /// Returns a framebuffer for the given ID, as well as a renderpass with all color and depth
+    /// attachments set to the specified load op. For custom combinations of load ops, the caller
+    /// must retrieve their own renderpass from the renderpass holder with a manually specified key.
+    pub(crate) fn get_framebuffer<const M: usize, const N: usize>(
+        &self,
+        framebuffer_id: FramebufferAndLoadOpId<M, N>,
+        renderpasses: &RenderPassHolder,
+    ) -> Result<(Arc<Framebuffer>, Arc<RenderPass>)> {
+        let renderpass = renderpasses.get_by_framebuffer_id(framebuffer_id)?;
+        let framebuffer = match self
+            .framebuffers
+            .lock()
+            .entry(framebuffer_id.framebuffer_id())
+        {
+            Entry::Occupied(entry) => Ok::<Arc<Framebuffer>, anyhow::Error>(entry.get().clone()),
+            Entry::Vacant(entry) => Ok(entry
+                .insert(
+                    self.build_framebuffer(framebuffer_id.framebuffer_id(), renderpass.clone())?,
+                )
+                .clone()),
+        }?;
+        Ok((framebuffer, renderpass))
+    }
 
-    let mut blit_path = vec![];
-    let mut multiplier = config.supersampling.to_int();
+    fn build_framebuffer(
+        &self,
+        framebuffer_id: FramebufferId,
+        renderpass: Arc<RenderPass>,
+    ) -> Result<Arc<Framebuffer>> {
+        log::debug!("Building framebuffer {}", framebuffer_id);
+        let mut attachments = vec![];
+        for id in framebuffer_id.color_attachments {
+            attachments.push(self.get_image(id)?);
+        }
+        if let Some(id) = framebuffer_id.depth_stencil_attachment {
+            attachments.push(self.get_image(id)?);
+        }
+        for id in framebuffer_id.input_attachments {
+            attachments.push(self.get_image(id)?);
+        }
 
-    let last_image_usage = if config.supersampling == Supersampling::None {
-        ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
-    } else {
-        ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
-    };
+        Ok(Framebuffer::new(
+            renderpass,
+            FramebufferCreateInfo {
+                attachments,
+                ..Default::default()
+            },
+        )
+        .with_context(|| format!("building framebuffer {}", framebuffer_id))?)
+    }
 
-    for i in 0..config.supersampling.blit_steps() {
-        let usage = if i == 0 {
-            // First image: We render to it, and we blit from it
-            ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
+    fn get_image(&self, id: FramebufferImage) -> Result<Arc<ImageView>> {
+        let mut guard = self.image_views.lock();
+        let entry = &mut guard[id];
+        if let Some(entry) = entry {
+            Ok(entry.clone())
         } else {
-            // Intermediate image: We blit into it, and we blit from it
-            ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
-        };
-        log::debug!("Creating blit path image {i} with usage {usage:?}, {multiplier}x samples");
+            let image = Self::make_image_and_view(&self.ctx, self.base_extent, id, self.config)?;
+            *entry = Some(image.clone());
+            Ok(image)
+        }
+    }
 
-        let buffer = Image::new(
-            allocator.clone(),
+    fn try_get_image(&self, id: FramebufferImage) -> Result<Arc<ImageView>> {
+        let mut guard = self.image_views.lock();
+        if let Some(x) = guard[id].clone() {
+            Ok(x)
+        } else {
+            bail!("image_view doesn't exist for {id:?}");
+        }
+    }
+
+    fn new(
+        ctx: Arc<VulkanContext>,
+        config: LiveRenderConfig,
+        image_i: usize,
+        swapchain_image: &Arc<Image>,
+    ) -> Result<FramebufferHolder> {
+        let mut views = EnumMap::default();
+        let swapchain_view = ImageView::new_default(swapchain_image.clone())?;
+        let base_extent = swapchain_image.extent();
+        let depth_stencil_view = Self::make_image_and_view(
+            &ctx,
+            base_extent,
+            FramebufferImage::MainDepthStencil,
+            config,
+        )?;
+
+        let depth_only_create_info = ImageViewCreateInfo {
+            subresource_range: ImageSubresourceRange {
+                aspects: ImageAspects::DEPTH,
+                ..depth_stencil_view.image().subresource_range()
+            },
+            ..ImageViewCreateInfo::from_image(depth_stencil_view.image())
+        };
+        let depth_only_view =
+            ImageView::new(depth_stencil_view.image().clone(), depth_only_create_info)?;
+        views[FramebufferImage::MainDepthStencil] = Some(depth_stencil_view);
+        views[FramebufferImage::MainDepthStencilDepthOnly] = Some(depth_only_view);
+        views[FramebufferImage::SwapchainColor] = Some(swapchain_view);
+        let main_color =
+            Self::make_image_and_view(&ctx, base_extent, FramebufferImage::MainColor, config)?;
+        views[FramebufferImage::MainColor] = Some(main_color.clone());
+
+        let mut blit_path = vec![];
+        blit_path.push(main_color.image().clone());
+
+        let mut multiplier = config.supersampling.to_int() / 2;
+        for i in 0..config.supersampling.blit_steps() {
+            log::debug!("Creating blit path image {i}, {multiplier}x samples");
+
+            let buffer = Image::new(
+                ctx.clone_allocator(),
+                ImageCreateInfo {
+                    image_type: ImageType::Dim2d,
+                    format: config.formats.color,
+                    extent: [base_extent[0] * multiplier, base_extent[1] * multiplier, 1],
+                    usage: ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST,
+                    initial_layout: ImageLayout::Undefined,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )?;
+            blit_path.push(buffer);
+            multiplier /= 2;
+        }
+
+        Ok(FramebufferHolder {
+            image_i,
+            config,
+            base_extent,
+            ctx,
+            image_views: Mutex::new(views),
+            framebuffers: Mutex::new(FxHashMap::default()),
+            blit_path,
+        })
+    }
+
+    fn make_image_and_view(
+        ctx: &VulkanContext,
+        base_extent: [u32; 3],
+        image_type: FramebufferImage,
+        config: LiveRenderConfig,
+    ) -> Result<Arc<ImageView>> {
+        let format = image_type.image_format(&config.formats);
+        let usage = image_type.usage();
+        let extent = image_type.dimension(base_extent[0], base_extent[1], config);
+        let extent = [extent.0, extent.1, 1];
+        let image = Image::new(
+            ctx.clone_allocator(),
             ImageCreateInfo {
                 image_type: ImageType::Dim2d,
-                format: config.render_format(),
-                extent: [
-                    image_extent[0] * multiplier,
-                    image_extent[1] * multiplier,
-                    1,
-                ],
+                format,
+                extent,
                 usage,
                 initial_layout: ImageLayout::Undefined,
                 ..Default::default()
@@ -1238,193 +1366,46 @@ fn make_framebuffer_holder(
                 ..Default::default()
             },
         )?;
-        blit_path.push(buffer);
-        multiplier /= 2;
+        Ok(ImageView::new_default(image)?)
     }
-    blit_path.push(Image::new(
-        allocator.clone(),
-        ImageCreateInfo {
-            image_type: ImageType::Dim2d,
-            format: config.render_format(),
-            extent: [image_extent[0], image_extent[1], 1],
-            usage: last_image_usage,
-            initial_layout: ImageLayout::Undefined,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-            ..Default::default()
-        },
-    )?);
 
-    // We always render into the first image in the blit path
-    let color_view = ImageView::new_default(blit_path[0].clone())?;
+    pub(crate) fn begin_render_pass<const M: usize, const N: usize>(
+        &self,
+        cmd: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer_and_load_op_id: FramebufferAndLoadOpId<M, N>,
+        renderpasses: &RenderPassHolder,
+        contents: SubpassContents,
+    ) -> Result<()> {
+        let (framebuffer, render_pass) =
+            self.get_framebuffer(framebuffer_and_load_op_id, renderpasses)?;
+        let mut clear_values = Vec::with_capacity(framebuffer.attachments().len());
 
-    let color_depth_stencil_pre_blit = Framebuffer::new(
-        renderpasses.color_depth.clone(),
-        FramebufferCreateInfo {
-            attachments: vec![color_view.clone(), depth_stencil_view.clone()],
-            ..Default::default()
-        },
-    )?;
+        for (image, op) in framebuffer_and_load_op_id
+            .color_attachments
+            .iter()
+            .chain(framebuffer_and_load_op_id.depth_stencil_attachment.iter())
+            .chain(framebuffer_and_load_op_id.input_attachments.iter())
+        {
+            clear_values.push(if *op == LoadOp::Clear {
+                Some(image.clear_value())
+            } else {
+                None
+            });
+        }
 
-    let color_read_depth_pre_blit = Framebuffer::new(
-        renderpasses.write_color_read_depth.clone(),
-        FramebufferCreateInfo {
-            attachments: vec![color_view.clone(), depth_only_view.clone()],
-            ..Default::default()
-        },
-    )?;
-
-    let color_only_pre_blit = Framebuffer::new(
-        renderpasses.color.clone(),
-        FramebufferCreateInfo {
-            attachments: vec![color_view],
-            ..Default::default()
-        },
-    )?;
-
-    let color_only_post_blit = Framebuffer::new(
-        renderpasses.color_post_blit.clone(),
-        FramebufferCreateInfo {
-            attachments: vec![swapchain_view],
-            ..Default::default()
-        },
-    )?;
-
-    let raytrace_buffers = if config.raytracing {
-        let extent = [
-            image_extent[0] * config.supersampling.to_int(),
-            image_extent[1] * config.supersampling.to_int(),
-            1,
-        ];
-        let downsampled_extent = [
-            image_extent[0] * config.supersampling.to_int()
-                / config.raytracing_specular_downsampling,
-            image_extent[1] * config.supersampling.to_int()
-                / config.raytracing_specular_downsampling,
-            1,
-        ];
-
-        let specular_raw_color = make_image_and_view(
-            allocator.clone(),
-            downsampled_extent,
-            // Always rgba16
-            Format::R16G16B16A16_SFLOAT,
-            ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
+        cmd.begin_render_pass(
+            RenderPassBeginInfo {
+                render_pass,
+                clear_values,
+                ..RenderPassBeginInfo::framebuffer(framebuffer)
+            },
+            SubpassBeginInfo {
+                contents,
+                ..Default::default()
+            },
         )?;
-        let specular_stencil = make_image_and_view(
-            allocator.clone(),
-            downsampled_extent,
-            renderpasses.depth_format,
-            ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-        )?;
-        Some(RaytraceBuffers {
-            specular_strength: make_image_and_view(
-                allocator.clone(),
-                extent,
-                Format::R8G8B8A8_UNORM,
-                ImageUsage::STORAGE,
-            )?,
-            specular_ray_dir: make_image_and_view(
-                allocator.clone(),
-                extent,
-                Format::R32G32B32A32_UINT,
-                ImageUsage::STORAGE,
-            )?,
-            specular_ray_dir_downsampled: make_image_and_view(
-                allocator.clone(),
-                downsampled_extent,
-                Format::R32G32B32A32_UINT,
-                ImageUsage::STORAGE,
-            )?,
-            specular_framebuffer: Framebuffer::new(
-                renderpasses.depth_stencil.clone(),
-                FramebufferCreateInfo {
-                    attachments: vec![specular_stencil.clone()],
-                    ..Default::default()
-                },
-            )?,
-            specular_raw_color,
-            specular_stencil,
-        })
-    } else {
-        None
-    };
-
-    Ok(FramebufferHolder {
-        image_i,
-        config,
-        color_read_depth_pre_blit,
-        color_depth_stencil_pre_blit,
-        color_only_pre_blit,
-        raytrace_buffers,
-        blit_path,
-        swapchain_image: swapchain_image.clone(),
-        color_only_post_blit,
-        depth_only_view,
-    })
-}
-
-fn make_image_and_view(
-    allocator: Arc<VkAllocator>,
-    extent: [u32; 3],
-    format: Format,
-    usage: ImageUsage,
-) -> Result<Arc<ImageView>> {
-    let image = Image::new(
-        allocator.clone(),
-        ImageCreateInfo {
-            image_type: ImageType::Dim2d,
-            format,
-            extent,
-            usage,
-            initial_layout: ImageLayout::Undefined,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-            ..Default::default()
-        },
-    )?;
-    Ok(ImageView::new_default(image)?)
-}
-
-pub(crate) fn make_depth_buffer_and_attachments(
-    allocator: Arc<VkAllocator>,
-    depth_stencil_format: Format,
-    supersampling: Supersampling,
-    image_extent: [u32; 3],
-) -> Result<(Arc<ImageView>, Arc<ImageView>)> {
-    let depth_stencil_buffer = Image::new(
-        allocator,
-        ImageCreateInfo {
-            image_type: ImageType::Dim2d,
-            format: depth_stencil_format,
-            extent: [
-                image_extent[0] * supersampling.to_int(),
-                image_extent[1] * supersampling.to_int(),
-                1,
-            ],
-            usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT,
-            initial_layout: ImageLayout::Undefined,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-            ..Default::default()
-        },
-    )?;
-    let depth_stencil_view = ImageView::new_default(depth_stencil_buffer.clone())?;
-    let depth_only_create_info = ImageViewCreateInfo {
-        subresource_range: ImageSubresourceRange {
-            aspects: ImageAspects::DEPTH,
-            ..depth_stencil_buffer.subresource_range()
-        },
-        ..ImageViewCreateInfo::from_image(&depth_stencil_buffer)
-    };
-    let depth_only_view = ImageView::new(depth_stencil_buffer.clone(), depth_only_create_info)?;
-    Ok((depth_stencil_view, depth_only_view))
+        Ok(())
+    }
 }
 
 pub(crate) struct Texture2DHolder {
@@ -1762,6 +1743,7 @@ impl<T> ReclaimBuffersByType<T> {
         }
     }
     fn give_buffer(&mut self, mut buffer: ReclaimableBuffer<T>) {
+        use std::collections::btree_map::Entry;
         match self.by_size_class.entry(buffer.len()) {
             Entry::Vacant(x) => {
                 x.insert(vec![buffer]);

@@ -30,7 +30,8 @@ use super::{
         egui_adapter::EguiAdapter,
         entity_geometry, flat_texture,
     },
-    FramebufferHolder, VulkanContext, VulkanWindow,
+    FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, FramebufferImage, LoadOp,
+    RenderPassId, VulkanContext, VulkanWindow,
 };
 use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
@@ -46,6 +47,7 @@ use crate::{
     net_client,
 };
 use parking_lot::Mutex;
+use tinyvec::array_vec;
 use tokio::sync::{oneshot, watch};
 use tracy_client::{plot, span, Client};
 use vulkano::buffer::Subbuffer;
@@ -198,7 +200,16 @@ impl ActiveGame {
             None
         };
 
-        ctx.start_raster_render_pass_and_clear(&mut command_buf_builder, &framebuffer)?;
+        framebuffer.begin_render_pass(
+            &mut command_buf_builder,
+            FramebufferAndLoadOpId {
+                color_attachments: [(FramebufferImage::MainColor, LoadOp::DontCare)],
+                depth_stencil_attachment: Some((FramebufferImage::MainDepthStencil, LoadOp::Clear)),
+                input_attachments: [],
+            },
+            &ctx.renderpasses,
+            SubpassContents::Inline,
+        )?;
 
         self.sky_pipeline
             .bind_and_draw(ctx, scene_state, &mut command_buf_builder)?;
@@ -364,9 +375,15 @@ impl ActiveGame {
                 )?;
             }
         }
-        ctx.start_pre_blit_color_only_render_pass(
+
+        framebuffer.begin_render_pass(
             &mut command_buf_builder,
-            framebuffer,
+            FramebufferAndLoadOpId {
+                color_attachments: [(FramebufferImage::MainColor, LoadOp::Load)],
+                depth_stencil_attachment: None,
+                input_attachments: [],
+            },
+            &ctx.renderpasses,
             SubpassContents::Inline,
         )?;
 
@@ -395,12 +412,16 @@ impl ActiveGame {
             .blit_supersampling(&mut command_buf_builder)
             .context("Supersampling blit failed")?;
 
-        ctx.start_post_blit_color_only_render_pass(
+        framebuffer.begin_render_pass(
             &mut command_buf_builder,
-            framebuffer,
+            FramebufferAndLoadOpId {
+                color_attachments: [(FramebufferImage::SwapchainColor, LoadOp::DontCare)],
+                depth_stencil_attachment: None,
+                input_attachments: [],
+            },
+            &ctx.renderpasses,
             SubpassContents::SecondaryCommandBuffers,
-        )
-        .context("Start post-blit render pass failed")?;
+        )?;
 
         // Then draw the UI
         self.egui_adapter
@@ -432,13 +453,13 @@ impl ActiveGame {
         Ok((primary, prework))
     }
 
-    fn handle_resize(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
+    fn handle_swapchain_recreate(&mut self, ctx: &mut VulkanWindow) -> Result<()> {
         let global_config = self
             .client_state
             .settings
             .load()
             .render
-            .build_global_config();
+            .build_global_config(&ctx);
         self.cube_pipeline = self.cube_provider.make_pipeline(
             ctx,
             self.client_state.block_renderer.atlas(),
@@ -455,8 +476,6 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    subpass: Subpass::from(ctx.renderpasses.color.clone(), 0)
-                        .context("nondepth renderpass 1 missing")?,
                     pre_blit: true,
                 },
                 &global_config,
@@ -544,7 +563,11 @@ impl GameState {
 }
 
 fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Result<ActiveGame> {
-    let global_render_config = client_state.settings.load().render.build_global_config();
+    let global_render_config = client_state
+        .settings
+        .load()
+        .render
+        .build_global_config(vk_wnd);
 
     let cube_provider = cube_geometry::CubePipelineProvider::new(vk_wnd.vk_device.clone())?;
     let cube_pipeline = cube_provider.make_pipeline(
@@ -567,8 +590,6 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
             &vk_wnd,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                subpass: Subpass::from(vk_wnd.renderpasses.color.clone(), 0)
-                    .context("non-depth renderpass missing")?,
                 pre_blit: true,
             },
             &global_render_config,
@@ -616,7 +637,7 @@ type FutureType = FenceSignalFuture<
 >;
 
 pub struct GameRenderer {
-    ctx: VulkanWindow,
+    vk_wnd: VulkanWindow,
     settings: Arc<ArcSwap<GameSettings>>,
     game: Mutex<GameState>,
 
@@ -644,7 +665,7 @@ impl GameRenderer {
         let frames_in_flight = ctx.swapchain_images.len();
         let fences = vec![None; frames_in_flight];
         Ok(GameRenderer {
-            ctx,
+            vk_wnd: ctx,
             settings,
             game: Mutex::new(GameState::MainMenu),
             main_menu: Mutex::new(main_menu),
@@ -698,7 +719,7 @@ impl ApplicationHandler for GameApplication {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(renderer) = &mut self.renderer {
-            renderer.ctx.window.request_redraw();
+            renderer.vk_wnd.window.request_redraw();
         }
     }
 }
@@ -738,7 +759,7 @@ impl GameRenderer {
         }
 
         let mut game_lock = self.game.lock();
-        game_lock.update_if_connected(&self.ctx, event_loop);
+        game_lock.update_if_connected(&self.vk_wnd, event_loop);
 
         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
             if event == WindowEvent::CloseRequested || event == WindowEvent::Destroyed {
@@ -776,17 +797,18 @@ impl GameRenderer {
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let mut game_lock = self.game.lock();
 
-        game_lock.update_if_connected(&self.ctx, event_loop);
+        game_lock.update_if_connected(&self.vk_wnd, event_loop);
         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-            if self.ctx.want_recreate.swap(false, Ordering::AcqRel) {
+            if self.vk_wnd.want_recreate.swap(false, Ordering::AcqRel) {
                 self.need_swapchain_recreate = true;
             }
 
             let _span = span!("MainEventsCleared");
-            if self.ctx.window.has_focus() && game.client_state.input.lock().is_mouse_captured() {
-                let size = self.ctx.window.inner_size();
+            if self.vk_wnd.window.has_focus() && game.client_state.input.lock().is_mouse_captured()
+            {
+                let size = self.vk_wnd.window.inner_size();
                 match self
-                    .ctx
+                    .vk_wnd
                     .window
                     .set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2))
                 {
@@ -805,7 +827,7 @@ impl GameRenderer {
                 } else {
                     winit::window::CursorGrabMode::Confined
                 };
-                match self.ctx.window.set_cursor_grab(mode) {
+                match self.vk_wnd.window.set_cursor_grab(mode) {
                     Ok(_) => (),
                     Err(e) => {
                         if !self.warned_about_capture_issue {
@@ -816,12 +838,12 @@ impl GameRenderer {
                         }
                     }
                 }
-                self.ctx.window.set_cursor_visible(false);
+                self.vk_wnd.window.set_cursor_visible(false);
             } else {
-                self.ctx.window.set_cursor_visible(true);
+                self.vk_wnd.window.set_cursor_visible(true);
                 // todo this is actually fallible, and some window managers get unhappy
                 match self
-                    .ctx
+                    .vk_wnd
                     .window
                     .set_cursor_grab(winit::window::CursorGrabMode::None)
                 {
@@ -837,16 +859,16 @@ impl GameRenderer {
                 }
             }
         } else {
-            self.ctx
+            self.vk_wnd
                 .window
                 .set_cursor_grab(winit::window::CursorGrabMode::None)
                 .unwrap();
-            self.ctx.window.set_cursor_visible(true);
+            self.vk_wnd.window.set_cursor_visible(true);
         }
 
         if self.need_swapchain_recreate {
             let _span = span!("Recreate swapchain");
-            let size = self.ctx.window.inner_size();
+            let size = self.vk_wnd.window.inner_size();
 
             if size.height == 0 || size.width == 0 {
                 if let GameStateMutRef::Active(game) = game_lock.as_mut() {
@@ -862,12 +884,18 @@ impl GameRenderer {
             }
 
             self.need_swapchain_recreate = false;
-            self.ctx
-                .recreate_swapchain(size, self.settings.load().render.build_global_config())
+            self.vk_wnd
+                .recreate_swapchain(
+                    size,
+                    self.settings
+                        .load()
+                        .render
+                        .build_global_config(&self.vk_wnd),
+                )
                 .unwrap();
-            self.ctx.viewport.extent = size.into();
+            self.vk_wnd.viewport.extent = size.into();
             if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-                if let Err(e) = game.handle_resize(&mut self.ctx) {
+                if let Err(e) = game.handle_swapchain_recreate(&mut self.vk_wnd) {
                     *game_lock = GameState::Error(e)
                 };
             }
@@ -875,7 +903,7 @@ impl GameRenderer {
 
         let _swapchain_span = span!("Acquire swapchain image");
         let (image_i, suboptimal, acquire_future) =
-            match swapchain::acquire_next_image(self.ctx.swapchain.clone(), None) {
+            match swapchain::acquire_next_image(self.vk_wnd.swapchain.clone(), None) {
                 Ok(r) => r,
                 Err(Validated::Error(VulkanError::OutOfDate)) => {
                     info!("Swapchain out of date");
@@ -900,7 +928,7 @@ impl GameRenderer {
         let mut previous_future = match self.fences[self.previous_fence_i].clone() {
             // Create a NowFuture
             None => {
-                let mut now = vulkano::sync::now(self.ctx.vk_device.clone());
+                let mut now = vulkano::sync::now(self.vk_wnd.vk_device.clone());
                 now.cleanup_finished();
                 now.boxed()
             }
@@ -908,14 +936,14 @@ impl GameRenderer {
             Some(fence) => fence.boxed(),
         };
         drop(_swapchain_span);
-        let window_size = self.ctx.window.inner_size();
+        let window_size = self.vk_wnd.window.inner_size();
 
-        let fb_holder = &self.ctx.framebuffers[image_i as usize];
+        let fb_holder = &self.vk_wnd.framebuffers[image_i as usize];
 
         let game_command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut() {
             match game.build_command_buffers(
                 window_size,
-                &self.ctx,
+                &self.vk_wnd,
                 fb_holder,
                 &mut self.input_capture,
             ) {
@@ -933,20 +961,25 @@ impl GameRenderer {
         } else {
             // either we're in the main menu or we got an error building the real
             // game buffers
-            let mut command_buf_builder = self.ctx.start_command_buffer().unwrap();
+            let mut command_buf_builder = self.vk_wnd.start_command_buffer().unwrap();
             // we're not in the active game, allow the IME
-            self.ctx.window.set_ime_allowed(true);
+            self.vk_wnd.window.set_ime_allowed(true);
 
-            self.ctx
-                .start_post_blit_color_only_render_pass(
+            fb_holder
+                .begin_render_pass(
                     &mut command_buf_builder,
-                    fb_holder,
+                    FramebufferAndLoadOpId {
+                        color_attachments: [(FramebufferImage::SwapchainColor, LoadOp::DontCare)],
+                        depth_stencil_attachment: None,
+                        input_attachments: [],
+                    },
+                    &self.vk_wnd.renderpasses(),
                     SubpassContents::SecondaryCommandBuffers,
                 )
                 .unwrap();
 
             if let Some(connection_settings) = self.main_menu.lock().draw(
-                &mut self.ctx,
+                &mut self.vk_wnd,
                 &mut game_lock,
                 &mut command_buf_builder,
                 &mut self.input_capture,
@@ -973,7 +1006,7 @@ impl GameRenderer {
         if let Some(prework) = prework {
             previous_future = Box::new(
                 previous_future
-                    .then_execute(self.ctx.graphics_queue.clone(), prework)
+                    .then_execute(self.vk_wnd.graphics_queue.clone(), prework)
                     .unwrap()
                     .then_signal_fence_and_flush()
                     .unwrap(),
@@ -984,12 +1017,12 @@ impl GameRenderer {
             let _span = span!("submit to Vulkan");
             let future = previous_future
                 .join(acquire_future)
-                .then_execute(self.ctx.graphics_queue.clone(), primary)
+                .then_execute(self.vk_wnd.graphics_queue.clone(), primary)
                 .unwrap()
                 .then_swapchain_present(
-                    self.ctx.graphics_queue.clone(),
+                    self.vk_wnd.graphics_queue.clone(),
                     SwapchainPresentInfo::swapchain_image_index(
-                        self.ctx.swapchain.clone(),
+                        self.vk_wnd.swapchain.clone(),
                         image_i,
                     ),
                 )
@@ -1015,7 +1048,7 @@ impl GameRenderer {
         let game_settings = self.settings.clone();
 
         {
-            let ctx = self.ctx.clone_context();
+            let ctx = self.vk_wnd.clone_context();
             self.rt.spawn(async move {
                 let active_game = connect_impl(
                     ctx,

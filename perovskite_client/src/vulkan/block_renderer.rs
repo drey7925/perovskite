@@ -1081,7 +1081,7 @@ impl BlockRenderer {
 
         for &face in &CUBE_EXTENTS_FACE_ORDER {
             emit_cube_face_vk(
-                vk_pos, frame, face, &mut vtx, &mut idx, e, 0xff, 0x00, 0, 1.0,
+                vk_pos, frame, face, &mut vtx, &mut idx, e, 0x0f, 0x00, 0, 1.0,
             );
         }
 

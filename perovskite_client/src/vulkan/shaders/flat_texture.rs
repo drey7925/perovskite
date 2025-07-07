@@ -20,6 +20,7 @@ use crate::client_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use smallvec::smallvec;
 use texture_packer::Rect;
+use tinyvec::array_vec;
 use tracy_client::span;
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::color_blend::{
@@ -52,7 +53,8 @@ use vulkano::{
 
 use crate::vulkan::{
     shaders::{frag_simple, vert_2d, vert_2d::UniformData, LiveRenderConfig},
-    CommandBufferBuilder, Texture2DHolder, VulkanContext, VulkanWindow,
+    CommandBufferBuilder, FramebufferAndLoadOpId, FramebufferImage, LoadOp, Texture2DHolder,
+    VulkanContext, VulkanWindow,
 };
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
@@ -222,8 +224,6 @@ impl FlatTexPipelineProvider {
 }
 pub(crate) struct FlatPipelineConfig<'a> {
     pub(crate) atlas: &'a Texture2DHolder,
-    // Used to specialize for pre- vs post-blit usages
-    pub(crate) subpass: Subpass,
     pub(crate) pre_blit: bool,
 }
 
@@ -234,13 +234,26 @@ impl FlatTexPipelineProvider {
         config: FlatPipelineConfig<'_>,
         global_config: &LiveRenderConfig,
     ) -> Result<FlatTexPipelineWrapper> {
-        let FlatPipelineConfig {
-            atlas,
-            subpass,
-            pre_blit: enable_supersampling,
-        } = config;
+        let FlatPipelineConfig { atlas, pre_blit } = config;
 
-        let supersampling = if enable_supersampling {
+        let image = if pre_blit {
+            FramebufferImage::MainColor
+        } else {
+            FramebufferImage::SwapchainColor
+        };
+
+        let subpass = Subpass::from(
+            ctx.renderpasses
+                .get_by_framebuffer_id(FramebufferAndLoadOpId {
+                    color_attachments: [(image, LoadOp::Load)],
+                    depth_stencil_attachment: None,
+                    input_attachments: [],
+                })?,
+            0,
+        )
+        .context("subpass 0 missing")?;
+
+        let supersampling = if pre_blit {
             global_config.supersampling
         } else {
             Supersampling::None
