@@ -32,8 +32,8 @@ use super::{
         egui_adapter::EguiAdapter,
         entity_geometry, flat_texture,
     },
-    FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, FramebufferImage, LoadOp,
-    RenderPassId, VulkanContext, VulkanWindow,
+    FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, ImageId, LoadOp, RenderPassId,
+    VulkanContext, VulkanWindow,
 };
 use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
@@ -208,8 +208,8 @@ impl ActiveGame {
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
             FramebufferAndLoadOpId {
-                color_attachments: [(FramebufferImage::MainColor, LoadOp::DontCare)],
-                depth_stencil_attachment: Some((FramebufferImage::MainDepthStencil, LoadOp::Clear)),
+                color_attachments: [(ImageId::MainColor, LoadOp::DontCare)],
+                depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Clear)),
                 input_attachments: [],
             },
             &ctx.renderpasses,
@@ -390,7 +390,7 @@ impl ActiveGame {
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
             FramebufferAndLoadOpId {
-                color_attachments: [(FramebufferImage::MainColor, LoadOp::Load)],
+                color_attachments: [(ImageId::MainColor, LoadOp::Load)],
                 depth_stencil_attachment: None,
                 input_attachments: [],
             },
@@ -426,7 +426,7 @@ impl ActiveGame {
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
             FramebufferAndLoadOpId {
-                color_attachments: [(FramebufferImage::SwapchainColor, LoadOp::DontCare)],
+                color_attachments: [(ImageId::SwapchainColor, LoadOp::DontCare)],
                 depth_stencil_attachment: None,
                 input_attachments: [],
             },
@@ -1015,7 +1015,7 @@ impl GameRenderer {
                 .begin_render_pass(
                     &mut command_buf_builder,
                     FramebufferAndLoadOpId {
-                        color_attachments: [(FramebufferImage::SwapchainColor, LoadOp::DontCare)],
+                        color_attachments: [(ImageId::SwapchainColor, LoadOp::DontCare)],
                         depth_stencil_attachment: None,
                         input_attachments: [],
                     },

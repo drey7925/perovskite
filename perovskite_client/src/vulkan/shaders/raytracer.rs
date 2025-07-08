@@ -2,8 +2,7 @@ use crate::client_state::settings::Supersampling;
 use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
 use crate::vulkan::{
-    CommandBufferBuilder, FramebufferAndLoadOpId, FramebufferHolder, FramebufferImage, LoadOp,
-    VulkanWindow,
+    CommandBufferBuilder, FramebufferAndLoadOpId, FramebufferHolder, ImageId, LoadOp, VulkanWindow,
 };
 use anyhow::Context;
 use cgmath::{vec3, SquareMatrix, Vector3};
@@ -183,7 +182,7 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::image_view(
                     3,
                     framebuffer
-                        .get_image(FramebufferImage::MainDepthStencilDepthOnly)
+                        .get_image(ImageId::MainDepthStencilDepthOnly)
                         .context("Failed to get MainDepthStencilDepthOnly image")?,
                 ),
             ],
@@ -206,13 +205,13 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::image_view(
                     4,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecRayDirDownsampled)
+                        .get_image(ImageId::RtSpecRayDirDownsampled)
                         .context("Failed to get RtSpecRayDirDownsampled image")?,
                 ),
                 WriteDescriptorSet::image_view(
                     5,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecRawColor)
+                        .get_image(ImageId::RtSpecRawColor)
                         .context("Failed to get RtSpecRawColor image")?,
                 ),
             ],
@@ -275,19 +274,19 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::image_view(
                     0,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecStrength)
+                        .get_image(ImageId::RtSpecStrength)
                         .context("Failed to get RtSpecStrength image for mask")?,
                 ),
                 WriteDescriptorSet::image_view(
                     1,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecRayDir)
+                        .get_image(ImageId::RtSpecRayDir)
                         .context("Failed to get RtSpecRayDir image for mask")?,
                 ),
                 WriteDescriptorSet::image_view(
                     2,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecRayDirDownsampled)
+                        .get_image(ImageId::RtSpecRayDirDownsampled)
                         .context("Failed to get RtSpecRayDirDownsampled image for mask")?,
                 ),
             ],
@@ -375,19 +374,19 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::image_view(
                     0,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecStrength)
+                        .get_image(ImageId::RtSpecStrength)
                         .context("Failed to get RtSpecStrength image for blend")?,
                 ),
                 WriteDescriptorSet::image_view(
                     1,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecRayDir)
+                        .get_image(ImageId::RtSpecRayDir)
                         .context("Failed to get RtSpecRayDir image for blend")?,
                 ),
                 WriteDescriptorSet::image_view(
                     2,
                     framebuffer
-                        .get_image(FramebufferImage::RtSpecRawColor)
+                        .get_image(ImageId::RtSpecRawColor)
                         .context("Failed to get RtSpecRawColor image for blend")?,
                 ),
             ],
@@ -431,26 +430,26 @@ pub(crate) struct RaytracingBindings<'a> {
 
 const RT_PRIMARY: FramebufferAndLoadOpId<3, 1> = FramebufferAndLoadOpId {
     color_attachments: [
-        (FramebufferImage::MainColor, LoadOp::Load),
-        (FramebufferImage::RtSpecStrength, LoadOp::DontCare),
-        (FramebufferImage::RtSpecRayDir, LoadOp::DontCare),
+        (ImageId::MainColor, LoadOp::Load),
+        (ImageId::RtSpecStrength, LoadOp::DontCare),
+        (ImageId::RtSpecRayDir, LoadOp::DontCare),
     ],
     depth_stencil_attachment: None,
-    input_attachments: [(FramebufferImage::MainDepthStencilDepthOnly, LoadOp::Load)],
+    input_attachments: [(ImageId::MainDepthStencilDepthOnly, LoadOp::Load)],
 };
 const RT_MASK: FramebufferAndLoadOpId<0, 0> = FramebufferAndLoadOpId {
     color_attachments: [],
-    depth_stencil_attachment: Some((FramebufferImage::RtSpecStencil, LoadOp::Clear)),
+    depth_stencil_attachment: Some((ImageId::RtSpecStencil, LoadOp::Clear)),
     input_attachments: [],
 };
 const RT_DEFERRED: FramebufferAndLoadOpId<0, 0> = FramebufferAndLoadOpId {
     color_attachments: [],
-    depth_stencil_attachment: Some((FramebufferImage::RtSpecStencil, LoadOp::Load)),
+    depth_stencil_attachment: Some((ImageId::RtSpecStencil, LoadOp::Load)),
     input_attachments: [],
 };
 
 const RT_BLEND: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(FramebufferImage::MainColor, LoadOp::Load)],
+    color_attachments: [(ImageId::MainColor, LoadOp::Load)],
     depth_stencil_attachment: None,
     input_attachments: [],
 };

@@ -13,7 +13,7 @@ void main() {
     f_color = vec4(0, 0, 0, 0);
     vec4 ds_color = imageLoad(deferred_specular_color, frag_coord);
     vec4 sum = vec4(0);
-    float total_weight = 0;
+    float total_weight = 0.0001;
 
     ivec2 base = (ivec2(gl_FragCoord.xy) / int(SPECULAR_DOWNSAMPLING));
     uvec4 dsrd_ideal = imageLoad(deferred_specular_ray_dir, frag_coord);
@@ -26,10 +26,12 @@ void main() {
             uvec4 dsrd = imageLoad(deferred_specular_ray_dir, ideal_frag_coord);
             vec3 dsrd_f = uintBitsToFloat(dsrd.rgb);
 
-
             uint distance = abs(frag_coord.x - ideal_frag_coord.x) + abs(frag_coord.y - ideal_frag_coord.y);
 
             float weight = 1.0 / (length(dsrd_f - dsrd_ideal_f) + (distance / 10) + 0.0001);
+            if (dsrd.a == 0) {
+                weight = 0;
+            }
             sum += weight * spec_color;
             total_weight += weight;
         }

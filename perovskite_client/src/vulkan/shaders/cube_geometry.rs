@@ -24,8 +24,8 @@ use crate::vulkan::shaders::{
 use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
     shaders::{frag_lighting, vert_3d::ModelMatrix},
-    CommandBufferBuilder, FramebufferAndLoadOpId, FramebufferImage, LoadOp, Texture2DHolder,
-    VulkanContext, VulkanWindow,
+    CommandBufferBuilder, FramebufferAndLoadOpId, ImageId, LoadOp, Texture2DHolder, VulkanContext,
+    VulkanWindow,
 };
 use anyhow::{ensure, Context, Result};
 use cgmath::{Angle, Matrix4, Rad};

@@ -110,6 +110,8 @@ void main() {
             }
         }
     }// if (RAYTRACE_DEBUG)
+
+    f_color = vec4(0);
     vec3 facedir_world = normalize(facedir_world_in);
     float prev_depth = subpassLoad(f_depth_in).r;
 
@@ -128,7 +130,6 @@ void main() {
     vec3 g0 = fine_pos + (t_min_max.x * facedir_world);
     vec3 g1 = fine_pos + (t_min_max.y * facedir_world);
 
-    f_color = vec4(0);
     float strongest_specular = 0;
     uint prev_block = initial_block_id;
     for (int i = 0; i < 5; i++) {

@@ -93,6 +93,7 @@ pub(crate) mod vert_2d {
     }
 }
 
+mod post_process;
 pub(crate) mod sky;
 
 // Fragment shader(s) that simply render colors directly

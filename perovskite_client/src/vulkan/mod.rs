@@ -691,7 +691,7 @@ impl VulkanWindow {
                     min_image_count: image_count,
                     image_format,
                     image_extent: window.inner_size().into(),
-                    image_usage: FramebufferImage::SwapchainColor.usage(),
+                    image_usage: ImageId::SwapchainColor.usage(),
                     composite_alpha,
                     image_color_space: color_space,
                     ..Default::default()
@@ -832,7 +832,7 @@ impl VulkanWindow {
     pub(crate) fn ui_renderpass(&self) -> Result<Arc<RenderPass>> {
         self.renderpasses
             .get_by_framebuffer_id(FramebufferAndLoadOpId {
-                color_attachments: [(FramebufferImage::SwapchainColor, LoadOp::Load)],
+                color_attachments: [(ImageId::SwapchainColor, LoadOp::Load)],
                 depth_stencil_attachment: None,
                 input_attachments: [],
             })
@@ -841,8 +841,8 @@ impl VulkanWindow {
     pub(crate) fn raster_renderpass(&self) -> Result<Arc<RenderPass>> {
         self.renderpasses
             .get_by_framebuffer_id(FramebufferAndLoadOpId {
-                color_attachments: [(FramebufferImage::MainColor, LoadOp::Load)],
-                depth_stencil_attachment: Some((FramebufferImage::MainDepthStencil, LoadOp::Load)),
+                color_attachments: [(ImageId::MainColor, LoadOp::Load)],
+                depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
                 input_attachments: [],
             })
     }
@@ -912,7 +912,7 @@ pub(crate) struct SelectedFormats {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, enum_map::Enum)]
-pub(crate) enum FramebufferImage {
+pub(crate) enum ImageId {
     MainColor,
     MainDepthStencil,
     MainDepthStencilDepthOnly,
@@ -922,20 +922,22 @@ pub(crate) enum FramebufferImage {
     RtSpecStrength,
     RtSpecRayDir,
     RtSpecRayDirDownsampled,
+    MainColorPostProcessed,
 }
 
-impl FramebufferImage {
+impl ImageId {
     fn image_format(&self, f: &SelectedFormats) -> Format {
         match self {
-            FramebufferImage::MainColor => f.color,
-            FramebufferImage::MainDepthStencil => f.depth_stencil,
-            FramebufferImage::MainDepthStencilDepthOnly => f.depth_stencil,
-            FramebufferImage::SwapchainColor => f.swapchain,
-            FramebufferImage::RtSpecRawColor => Format::R16G16B16A16_SFLOAT,
-            FramebufferImage::RtSpecStencil => f.depth_stencil,
-            FramebufferImage::RtSpecStrength => Format::R8G8B8A8_UNORM,
-            FramebufferImage::RtSpecRayDir => Format::R32G32B32A32_UINT,
-            FramebufferImage::RtSpecRayDirDownsampled => Format::R32G32B32A32_UINT,
+            ImageId::MainColor => f.color,
+            ImageId::MainDepthStencil => f.depth_stencil,
+            ImageId::MainDepthStencilDepthOnly => f.depth_stencil,
+            ImageId::SwapchainColor => f.swapchain,
+            ImageId::RtSpecRawColor => Format::R16G16B16A16_SFLOAT,
+            ImageId::RtSpecStencil => f.depth_stencil,
+            ImageId::RtSpecStrength => Format::R8G8B8A8_UNORM,
+            ImageId::RtSpecRayDir => Format::R32G32B32A32_UINT,
+            ImageId::RtSpecRayDirDownsampled => Format::R32G32B32A32_UINT,
+            ImageId::MainColorPostProcessed => f.color,
         }
     }
 
@@ -948,15 +950,16 @@ impl FramebufferImage {
             upsampled.1 / config.raytracing_specular_downsampling,
         );
         match self {
-            FramebufferImage::MainColor => upsampled,
-            FramebufferImage::MainDepthStencil => upsampled,
-            FramebufferImage::MainDepthStencilDepthOnly => upsampled,
-            FramebufferImage::SwapchainColor => upsampled,
-            FramebufferImage::RtSpecRawColor => rt_deferred,
-            FramebufferImage::RtSpecStencil => rt_deferred,
-            FramebufferImage::RtSpecStrength => upsampled,
-            FramebufferImage::RtSpecRayDir => upsampled,
-            FramebufferImage::RtSpecRayDirDownsampled => rt_deferred,
+            ImageId::MainColor => upsampled,
+            ImageId::MainDepthStencil => upsampled,
+            ImageId::MainDepthStencilDepthOnly => upsampled,
+            ImageId::SwapchainColor => base,
+            ImageId::RtSpecRawColor => rt_deferred,
+            ImageId::RtSpecStencil => rt_deferred,
+            ImageId::RtSpecStrength => upsampled,
+            ImageId::RtSpecRayDir => upsampled,
+            ImageId::RtSpecRayDirDownsampled => rt_deferred,
+            ImageId::MainColorPostProcessed => upsampled,
         }
     }
 
@@ -966,36 +969,36 @@ impl FramebufferImage {
             // even two letters gets annoying for the raytraced specular stuff, and it's likely
             // only going to get worse
             // Have some hanzi/kanji instead
-            FramebufferImage::MainColor => '色',
-            FramebufferImage::MainDepthStencil => '深',
-            FramebufferImage::MainDepthStencilDepthOnly => '半',
-            FramebufferImage::SwapchainColor => '面',
-            FramebufferImage::RtSpecRawColor => '映',
-            FramebufferImage::RtSpecStencil => '切',
-            FramebufferImage::RtSpecStrength => '艶',
-            FramebufferImage::RtSpecRayDir => '方',
-            FramebufferImage::RtSpecRayDirDownsampled => '角',
+            ImageId::MainColor => '色',
+            ImageId::MainDepthStencil => '深',
+            ImageId::MainDepthStencilDepthOnly => '半',
+            ImageId::SwapchainColor => '面',
+            ImageId::RtSpecRawColor => '映',
+            ImageId::RtSpecStencil => '切',
+            ImageId::RtSpecStrength => '艶',
+            ImageId::RtSpecRayDir => '方',
+            ImageId::RtSpecRayDirDownsampled => '角',
+            ImageId::MainColorPostProcessed => '後',
         }
     }
 
     fn usage(&self) -> ImageUsage {
         match self {
-            FramebufferImage::MainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
-            FramebufferImage::MainDepthStencil => {
+            ImageId::MainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+            ImageId::MainDepthStencil => {
                 ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
             }
-            FramebufferImage::MainDepthStencilDepthOnly => {
+            ImageId::MainDepthStencilDepthOnly => {
                 ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
             }
-            FramebufferImage::SwapchainColor => {
-                ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST
-            }
-            FramebufferImage::RtSpecRawColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
-            FramebufferImage::RtSpecStencil => ImageUsage::DEPTH_STENCIL_ATTACHMENT,
-            FramebufferImage::RtSpecStrength => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
-            FramebufferImage::RtSpecRayDir => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
-            FramebufferImage::RtSpecRayDirDownsampled => {
-                ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE
+            ImageId::SwapchainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+            ImageId::RtSpecRawColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            ImageId::RtSpecStencil => ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            ImageId::RtSpecStrength => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            ImageId::RtSpecRayDir => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            ImageId::RtSpecRayDirDownsampled => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            ImageId::MainColorPostProcessed => {
+                ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
             }
         }
     }
@@ -1006,20 +1009,21 @@ impl FramebufferImage {
         const DEPTH: ClearValue = ClearValue::Depth(1.0);
         const UINT: ClearValue = ClearValue::Uint([0; 4]);
         match self {
-            FramebufferImage::MainColor => FLOAT,
-            FramebufferImage::MainDepthStencil => DEPTH_STENCIL,
-            FramebufferImage::MainDepthStencilDepthOnly => DEPTH,
-            FramebufferImage::SwapchainColor => FLOAT,
-            FramebufferImage::RtSpecRawColor => FLOAT,
-            FramebufferImage::RtSpecStencil => DEPTH_STENCIL,
-            FramebufferImage::RtSpecStrength => FLOAT,
-            FramebufferImage::RtSpecRayDir => UINT,
-            FramebufferImage::RtSpecRayDirDownsampled => UINT,
+            ImageId::MainColor => FLOAT,
+            ImageId::MainDepthStencil => DEPTH_STENCIL,
+            ImageId::MainDepthStencilDepthOnly => DEPTH,
+            ImageId::SwapchainColor => FLOAT,
+            ImageId::RtSpecRawColor => FLOAT,
+            ImageId::RtSpecStencil => DEPTH_STENCIL,
+            ImageId::RtSpecStrength => FLOAT,
+            ImageId::RtSpecRayDir => UINT,
+            ImageId::RtSpecRayDirDownsampled => UINT,
+            ImageId::MainColorPostProcessed => FLOAT,
         }
     }
 }
 
-impl Default for FramebufferImage {
+impl Default for ImageId {
     fn default() -> Self {
         Self::MainColor
     }
@@ -1027,9 +1031,9 @@ impl Default for FramebufferImage {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct FramebufferAndLoadOpId<const M: usize, const N: usize> {
-    pub(crate) color_attachments: [(FramebufferImage, LoadOp); M],
-    pub(crate) depth_stencil_attachment: Option<(FramebufferImage, LoadOp)>,
-    pub(crate) input_attachments: [(FramebufferImage, LoadOp); N],
+    pub(crate) color_attachments: [(ImageId, LoadOp); M],
+    pub(crate) depth_stencil_attachment: Option<(ImageId, LoadOp)>,
+    pub(crate) input_attachments: [(ImageId, LoadOp); N],
 }
 impl<const M: usize, const N: usize> FramebufferAndLoadOpId<M, N> {
     fn framebuffer_id(&self) -> FramebufferId {
@@ -1084,9 +1088,9 @@ impl<T: ColorAttachmentsWithinLimits + InputAttachmentsWithinLimits + ?Sized> Su
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct FramebufferId {
-    color_attachments: tinyvec::ArrayVec<[FramebufferImage; 8]>,
-    depth_stencil_attachment: Option<FramebufferImage>,
-    input_attachments: tinyvec::ArrayVec<[FramebufferImage; 8]>,
+    color_attachments: tinyvec::ArrayVec<[ImageId; 8]>,
+    depth_stencil_attachment: Option<ImageId>,
+    input_attachments: tinyvec::ArrayVec<[ImageId; 8]>,
 }
 impl Display for FramebufferId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1183,7 +1187,7 @@ pub(crate) struct FramebufferHolder {
     image_i: usize,
     base_extent: [u32; 3],
     config: LiveRenderConfig,
-    image_views: Mutex<EnumMap<FramebufferImage, Option<Arc<ImageView>>>>,
+    image_views: Mutex<EnumMap<ImageId, Option<Arc<ImageView>>>>,
     // All images to blit through
     blit_path: Vec<Arc<Image>>,
     framebuffers: Mutex<FxHashMap<FramebufferId, Arc<Framebuffer>>>,
@@ -1204,9 +1208,7 @@ impl FramebufferHolder {
             filter: Filter::Nearest,
             ..BlitImageInfo::images(
                 self.blit_path.last().unwrap().clone(),
-                self.try_get_image(FramebufferImage::SwapchainColor)?
-                    .image()
-                    .clone(),
+                self.try_get_image(ImageId::SwapchainColor)?.image().clone(),
             )
         })?;
 
@@ -1278,7 +1280,7 @@ impl FramebufferHolder {
         .with_context(|| format!("building framebuffer {}", framebuffer_id))?)
     }
 
-    fn get_image(&self, id: FramebufferImage) -> Result<Arc<ImageView>> {
+    fn get_image(&self, id: ImageId) -> Result<Arc<ImageView>> {
         let mut guard = self.image_views.lock();
         let entry = &mut guard[id];
         if let Some(entry) = entry {
@@ -1290,7 +1292,7 @@ impl FramebufferHolder {
         }
     }
 
-    fn try_get_image(&self, id: FramebufferImage) -> Result<Arc<ImageView>> {
+    fn try_get_image(&self, id: ImageId) -> Result<Arc<ImageView>> {
         let mut guard = self.image_views.lock();
         if let Some(x) = guard[id].clone() {
             Ok(x)
@@ -1308,12 +1310,8 @@ impl FramebufferHolder {
         let mut views = EnumMap::default();
         let swapchain_view = ImageView::new_default(swapchain_image.clone())?;
         let base_extent = swapchain_image.extent();
-        let depth_stencil_view = Self::make_image_and_view(
-            &ctx,
-            base_extent,
-            FramebufferImage::MainDepthStencil,
-            config,
-        )?;
+        let depth_stencil_view =
+            Self::make_image_and_view(&ctx, base_extent, ImageId::MainDepthStencil, config)?;
 
         let depth_only_create_info = ImageViewCreateInfo {
             subresource_range: ImageSubresourceRange {
@@ -1324,12 +1322,11 @@ impl FramebufferHolder {
         };
         let depth_only_view =
             ImageView::new(depth_stencil_view.image().clone(), depth_only_create_info)?;
-        views[FramebufferImage::MainDepthStencil] = Some(depth_stencil_view);
-        views[FramebufferImage::MainDepthStencilDepthOnly] = Some(depth_only_view);
-        views[FramebufferImage::SwapchainColor] = Some(swapchain_view);
-        let main_color =
-            Self::make_image_and_view(&ctx, base_extent, FramebufferImage::MainColor, config)?;
-        views[FramebufferImage::MainColor] = Some(main_color.clone());
+        views[ImageId::MainDepthStencil] = Some(depth_stencil_view);
+        views[ImageId::MainDepthStencilDepthOnly] = Some(depth_only_view);
+        views[ImageId::SwapchainColor] = Some(swapchain_view);
+        let main_color = Self::make_image_and_view(&ctx, base_extent, ImageId::MainColor, config)?;
+        views[ImageId::MainColor] = Some(main_color.clone());
 
         let mut blit_path = vec![];
         blit_path.push(main_color.image().clone());
@@ -1371,7 +1368,7 @@ impl FramebufferHolder {
     fn make_image_and_view(
         ctx: &VulkanContext,
         base_extent: [u32; 3],
-        image_type: FramebufferImage,
+        image_type: ImageId,
         config: LiveRenderConfig,
     ) -> Result<Arc<ImageView>> {
         let format = image_type.image_format(&config.formats);

@@ -4,9 +4,7 @@ use std::{ops::Deref, sync::Arc};
 use crate::client_state::input::{BoundAction, Keybind, KeybindSettings};
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
-use crate::vulkan::{
-    FramebufferAndLoadOpId, FramebufferHolder, FramebufferImage, LoadOp, VulkanContext,
-};
+use crate::vulkan::{FramebufferAndLoadOpId, FramebufferHolder, ImageId, LoadOp, VulkanContext};
 use crate::{
     client_state::settings::GameSettings,
     vulkan::{

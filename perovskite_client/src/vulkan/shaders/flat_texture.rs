@@ -53,8 +53,8 @@ use vulkano::{
 
 use crate::vulkan::{
     shaders::{frag_simple, vert_2d, vert_2d::UniformData, LiveRenderConfig},
-    CommandBufferBuilder, FramebufferAndLoadOpId, FramebufferImage, LoadOp, Texture2DHolder,
-    VulkanContext, VulkanWindow,
+    CommandBufferBuilder, FramebufferAndLoadOpId, ImageId, LoadOp, Texture2DHolder, VulkanContext,
+    VulkanWindow,
 };
 
 #[derive(BufferContents, Vertex, Copy, Clone, Debug)]
@@ -237,9 +237,9 @@ impl FlatTexPipelineProvider {
         let FlatPipelineConfig { atlas, pre_blit } = config;
 
         let image = if pre_blit {
-            FramebufferImage::MainColor
+            ImageId::MainColor
         } else {
-            FramebufferImage::SwapchainColor
+            ImageId::SwapchainColor
         };
 
         let subpass = Subpass::from(
