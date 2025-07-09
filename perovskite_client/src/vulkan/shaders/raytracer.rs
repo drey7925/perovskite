@@ -55,8 +55,6 @@ vulkano_shaders::shader! {
                 vec2(3.0, -1.0)
                 );
 
-                layout(location = 0) out vec3 facedir_world;
-
                 void main() {
                     gl_Position = vec4(vertices[gl_VertexIndex], 0.5, 1.0);
                 }"

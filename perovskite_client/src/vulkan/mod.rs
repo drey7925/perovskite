@@ -922,7 +922,11 @@ pub(crate) enum ImageId {
     RtSpecStrength,
     RtSpecRayDir,
     RtSpecRayDirDownsampled,
-    MainColorPostProcessed,
+    Blur1,
+    Blur2,
+    Blur3,
+    Blur4,
+    Blur5,
 }
 
 impl ImageId {
@@ -937,7 +941,9 @@ impl ImageId {
             ImageId::RtSpecStrength => Format::R8G8B8A8_UNORM,
             ImageId::RtSpecRayDir => Format::R32G32B32A32_UINT,
             ImageId::RtSpecRayDirDownsampled => Format::R32G32B32A32_UINT,
-            ImageId::MainColorPostProcessed => f.color,
+            ImageId::Blur1 | ImageId::Blur2 | ImageId::Blur3 | ImageId::Blur4 | ImageId::Blur5 => {
+                f.color
+            }
         }
     }
 
@@ -949,6 +955,11 @@ impl ImageId {
             upsampled.0 / config.raytracing_specular_downsampling,
             upsampled.1 / config.raytracing_specular_downsampling,
         );
+        let upsampled_over_2 = (upsampled.0 / 2, upsampled.1 / 2);
+        let upsampled_over_4 = (upsampled.0 / 4, upsampled.1 / 4);
+        let upsampled_over_8 = (upsampled.0 / 8, upsampled.1 / 8);
+        let upsampled_over_16 = (upsampled.0 / 16, upsampled.1 / 16);
+
         match self {
             ImageId::MainColor => upsampled,
             ImageId::MainDepthStencil => upsampled,
@@ -959,32 +970,43 @@ impl ImageId {
             ImageId::RtSpecStrength => upsampled,
             ImageId::RtSpecRayDir => upsampled,
             ImageId::RtSpecRayDirDownsampled => rt_deferred,
-            ImageId::MainColorPostProcessed => upsampled,
+            ImageId::Blur1 => upsampled,
+            ImageId::Blur2 => upsampled_over_2,
+            ImageId::Blur3 => upsampled_over_4,
+            ImageId::Blur4 => upsampled_over_8,
+            ImageId::Blur5 => upsampled_over_16,
         }
     }
 
-    fn abbreviation(&self) -> char {
+    fn abbreviation(&self) -> &'static str {
         match self {
             // I give up on trying to use a letter for each attachment
-            // even two letters gets annoying for the raytraced specular stuff, and it's likely
-            // only going to get worse
-            // Have some hanzi/kanji instead
-            ImageId::MainColor => '色',
-            ImageId::MainDepthStencil => '深',
-            ImageId::MainDepthStencilDepthOnly => '半',
-            ImageId::SwapchainColor => '面',
-            ImageId::RtSpecRawColor => '映',
-            ImageId::RtSpecStencil => '切',
-            ImageId::RtSpecStrength => '艶',
-            ImageId::RtSpecRayDir => '方',
-            ImageId::RtSpecRayDirDownsampled => '角',
-            ImageId::MainColorPostProcessed => '後',
+            // all the raytrace specular buffers get really annoying abbreviations
+            // Have some CJK instead; worthwhile terminals should support them anyway
+            ImageId::MainColor => "色",
+            ImageId::MainDepthStencil => "深",
+            ImageId::MainDepthStencilDepthOnly => "半",
+            ImageId::SwapchainColor => "面",
+            ImageId::RtSpecRawColor => "光映",
+            ImageId::RtSpecStencil => "光切",
+            ImageId::RtSpecStrength => "光艶",
+            ImageId::RtSpecRayDir => "光方",
+            ImageId::RtSpecRayDirDownsampled => "光角",
+            ImageId::Blur1 => "暈一",
+            ImageId::Blur2 => "暈二",
+            ImageId::Blur3 => "暈三",
+            ImageId::Blur4 => "暈四",
+            ImageId::Blur5 => "暈五",
         }
     }
 
     fn usage(&self) -> ImageUsage {
         match self {
-            ImageId::MainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+            ImageId::MainColor => {
+                ImageUsage::COLOR_ATTACHMENT
+                    | ImageUsage::TRANSFER_SRC
+                    | ImageUsage::INPUT_ATTACHMENT
+            }
             ImageId::MainDepthStencil => {
                 ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
             }
@@ -997,8 +1019,8 @@ impl ImageId {
             ImageId::RtSpecStrength => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecRayDir => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecRayDirDownsampled => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
-            ImageId::MainColorPostProcessed => {
-                ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC
+            ImageId::Blur1 | ImageId::Blur2 | ImageId::Blur3 | ImageId::Blur4 | ImageId::Blur5 => {
+                ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED
             }
         }
     }
@@ -1018,7 +1040,29 @@ impl ImageId {
             ImageId::RtSpecStrength => FLOAT,
             ImageId::RtSpecRayDir => UINT,
             ImageId::RtSpecRayDirDownsampled => UINT,
-            ImageId::MainColorPostProcessed => FLOAT,
+            ImageId::Blur1 | ImageId::Blur2 | ImageId::Blur3 | ImageId::Blur4 | ImageId::Blur5 => {
+                FLOAT
+            }
+        }
+    }
+
+    pub(crate) fn viewport_state(
+        &self,
+        viewport: &Viewport,
+        config: LiveRenderConfig,
+    ) -> ViewportState {
+        let (x, y) = self.dimension(viewport.extent[0] as u32, viewport.extent[1] as u32, config);
+        ViewportState {
+            viewports: smallvec![Viewport {
+                offset: [0.0, 0.0],
+                depth_range: 0.0..=1.0,
+                extent: [x as f32, y as f32],
+            }],
+            scissors: smallvec![Scissor {
+                offset: [0, 0],
+                extent: [x, y],
+            }],
+            ..Default::default()
         }
     }
 }
@@ -1048,17 +1092,17 @@ impl<const M: usize, const N: usize> Display for FramebufferAndLoadOpId<M, N> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Co:")?;
         for (attachment, op) in self.color_attachments.iter() {
-            f.write_char(attachment.abbreviation())?;
+            f.write_str(attachment.abbreviation())?;
             f.write_char(op.op_char())?
         }
         if let Some((attachment, op)) = &self.depth_stencil_attachment {
             f.write_str("/Dp:")?;
-            f.write_char(attachment.abbreviation())?;
+            f.write_str(attachment.abbreviation())?;
             f.write_char(op.op_char())?
         }
         f.write_str("/Rd:")?;
         for ((attachment, op)) in self.input_attachments.iter() {
-            f.write_char(attachment.abbreviation())?;
+            f.write_str(attachment.abbreviation())?;
             f.write_char(op.op_char())?
         }
         Ok(())
@@ -1096,15 +1140,15 @@ impl Display for FramebufferId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("Co:")?;
         for attachment in self.color_attachments.iter() {
-            f.write_char(attachment.abbreviation())?;
+            f.write_str(attachment.abbreviation())?;
         }
         if let Some(attachment) = &self.depth_stencil_attachment {
             f.write_str("/Dp:")?;
-            f.write_char(attachment.abbreviation())?;
+            f.write_str(attachment.abbreviation())?;
         }
         f.write_str("/Rd:")?;
         for (attachment) in self.input_attachments.iter() {
-            f.write_char(attachment.abbreviation())?;
+            f.write_str(attachment.abbreviation())?;
         }
         Ok(())
     }
@@ -1182,12 +1226,19 @@ impl Display for RenderPassId {
     }
 }
 
+#[derive(Clone, Copy, Debug, enum_map::Enum)]
+pub(crate) enum SamplerId {
+    Linear(ImageId),
+    Nearest(ImageId),
+}
+
 pub(crate) struct FramebufferHolder {
     ctx: Arc<VulkanContext>,
     image_i: usize,
     base_extent: [u32; 3],
     config: LiveRenderConfig,
     image_views: Mutex<EnumMap<ImageId, Option<Arc<ImageView>>>>,
+    samplers: Mutex<EnumMap<SamplerId, Option<Arc<Sampler>>>>,
     // All images to blit through
     blit_path: Vec<Arc<Image>>,
     framebuffers: Mutex<FxHashMap<FramebufferId, Arc<Framebuffer>>>,
@@ -1361,6 +1412,7 @@ impl FramebufferHolder {
             ctx,
             image_views: Mutex::new(views),
             framebuffers: Mutex::new(FxHashMap::default()),
+            samplers: Mutex::new(EnumMap::default()),
             blit_path,
         })
     }
@@ -1393,9 +1445,9 @@ impl FramebufferHolder {
         Ok(ImageView::new_default(image)?)
     }
 
-    pub(crate) fn begin_render_pass<const M: usize, const N: usize>(
+    pub(crate) fn begin_render_pass<L, const M: usize, const N: usize>(
         &self,
-        cmd: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        cmd: &mut AutoCommandBufferBuilder<L>,
         framebuffer_and_load_op_id: FramebufferAndLoadOpId<M, N>,
         renderpasses: &RenderPassHolder,
         contents: SubpassContents,

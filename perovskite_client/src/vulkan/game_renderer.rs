@@ -30,7 +30,7 @@ use super::{
     shaders::{
         cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
         egui_adapter::EguiAdapter,
-        entity_geometry, flat_texture,
+        entity_geometry, flat_texture, post_process,
     },
     FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, ImageId, LoadOp, RenderPassId,
     VulkanContext, VulkanWindow,
@@ -89,6 +89,9 @@ pub(crate) struct ActiveGame {
 
     sky_provider: sky::SkyPipelineProvider,
     sky_pipeline: sky::SkyPipelineWrapper,
+
+    post_process_provider: post_process::PostProcessingPipelineProvider,
+    post_process_pipeline: post_process::PostProcessingPipelineWrapper,
 
     raytraced_provider: Option<raytracer::RaytracedPipelineProvider>,
     raytraced_pipeline: Option<raytracer::RaytracedPipelineWrapper>,
@@ -387,6 +390,13 @@ impl ActiveGame {
             }
         }
 
+        if ctx.renderpasses.config.hdr {
+            self.post_process_pipeline
+                .bind_and_draw(ctx, framebuffer, &mut command_buf_builder)?;
+        }
+
+        // Unlike most other pipeline holders, the flat pipeline does not manage its own
+        // renderpasses
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
             FramebufferAndLoadOpId {
@@ -493,6 +503,9 @@ impl ActiveGame {
             )?
         };
         self.sky_pipeline = self.sky_provider.make_pipeline(ctx, &global_config)?;
+        self.post_process_pipeline = self
+            .post_process_provider
+            .make_pipeline(ctx, &global_config)?;
         if let Some(provider) = self.raytraced_provider.as_ref() {
             self.raytraced_pipeline = Some(provider.make_pipeline(
                 ctx,
@@ -639,6 +652,11 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
     let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;
     let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, &global_render_config)?;
 
+    let post_process_provider =
+        post_process::PostProcessingPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let post_process_pipeline =
+        post_process_provider.make_pipeline(vk_wnd, &global_render_config)?;
+
     let mut raytraced_provider = None;
     let mut raytraced_pipeline = None;
     if vk_wnd.vk_ctx.raytracing_supported {
@@ -660,6 +678,8 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         entities_pipeline,
         sky_provider,
         sky_pipeline,
+        post_process_provider,
+        post_process_pipeline,
         raytraced_provider,
         raytraced_pipeline,
         client_state,
