@@ -14,7 +14,11 @@ vec4 combine_colors(vec4 diffuse, vec4 emissive, vec3 normal, vec3 pos, float br
     float normal_pos_dot = abs(dot(normalize(normal), normalize(pos)));
 
     emissive = clamp(emissive, vec4(0), vec4(1));
-    emissive.rgb = emissive.rgb / (1.001 - emissive.rgb);
+    float emax = max(max(emissive.r, emissive.g), emissive.b);
+    if (emax > 0.001) {
+        float mul = pow(10, (9*emax-5)) + 2*emax;
+        emissive.rgb = (mul/emax) * emissive.rgb;
+    }
 
     vec4 f_color = vec4((brightness + global_brightness) * diffuse.rgb, diffuse.a);
     float emissive_anisotropy_power = mix(10.0, 0.001, emissive.a);

@@ -52,6 +52,8 @@ pub(crate) struct RenderSettings {
     pub(crate) fov_degrees: f64,
     pub(crate) supersampling: Supersampling,
     pub(crate) hdr: bool,
+    pub(crate) bloom_strength: f32,
+    pub(crate) blur_steps: usize,
     pub(crate) render_distance: u32,
     pub(crate) raytracing: bool,
     pub(crate) raytraced_reflections: bool,
@@ -70,6 +72,8 @@ impl RenderSettings {
             raytracer_debug: self.raytracer_debug,
             raytracing_specular_downsampling: self.raytracing_specular_downsampling,
             hdr: self.hdr,
+            blur_steps: self.blur_steps,
+            bloom_strength: self.bloom_strength,
             formats: SelectedFormats {
                 swapchain: ctx.swapchain_format(),
                 color: Self::render_format(self.hdr),
@@ -105,6 +109,8 @@ impl Default for RenderSettings {
             raytracer_debug: false,
             raytracing_specular_downsampling: 2,
             hdr: true,
+            bloom_strength: 1.0,
+            blur_steps: 5,
         }
     }
 }

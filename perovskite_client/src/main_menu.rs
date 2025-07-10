@@ -726,6 +726,26 @@ fn draw_render_settings(
                 "Enabled",
             ));
             ui.end_row();
+            ui.label("HDR bloom strength")
+                .on_hover_text("Relative strength of the HDR bloom effect.");
+            ui.add_enabled(
+                prospective_settings.render.hdr,
+                egui::Slider::new(
+                    &mut prospective_settings.render.bloom_strength,
+                    0.0..=4.0,
+                ).suffix("x"),
+            );
+            ui.end_row();
+            ui.label("HDR bloom size")
+                .on_hover_text("Relative size of the HDR bloom effect.");
+            ui.add_enabled(
+                prospective_settings.render.hdr,
+                egui::Slider::new(
+                    &mut prospective_settings.render.blur_steps,
+                    1..=16,
+                ),
+            );
+            ui.end_row();
 
             let raytracing_label = if vk_ctx.raytracing_supported() {
                 RichText::new("Raytracing")

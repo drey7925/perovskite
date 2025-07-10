@@ -4,6 +4,7 @@ use crate::vulkan::{
 };
 use anyhow::{Context, Result};
 use smallvec::smallvec;
+use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::command_buffer::{SubpassContents, SubpassEndInfo};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
@@ -23,7 +24,8 @@ use vulkano::pipeline::{
     GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
 };
 use vulkano::render_pass::Subpass;
-use vulkano::shader::ShaderModule;
+use vulkano::shader::{ShaderModule, SpecializationConstant};
+
 vulkano_shaders::shader! {
     shaders: {
         gen_uv: {
@@ -53,11 +55,11 @@ vulkano_shaders::shader! {
             layout(location = 0) in vec2 uv;
             layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput main_color;
             layout(location = 0) out vec4 f_color;
+            layout (constant_id = 0) const float BLOOM_STRENGTH = 1.0;
 
             void main() {
                 f_color = subpassLoad(main_color);
-                //float divisor = max(2.0, length(f_color.xyz)) / 2;
-                f_color.xyz = max((f_color.xyz - 1) / 1000, 0);
+                f_color.xyz = BLOOM_STRENGTH * max((f_color.xyz - 1) / 1000, 0);
             }
             "
         },
@@ -96,8 +98,8 @@ vulkano_shaders::shader! {
             };
             // Adjusted from the original slide deck, center mul optional
             layout (constant_id = 0) const float CENTER_MUL = 0;
-            layout (constant_id = 1) const float CORNER_MUL = 0.125;
-            layout (constant_id = 2) const float EDGE_MUL = 0.0625;
+            layout (constant_id = 1) const float CORNER_MUL = 0.16666666667;
+            layout (constant_id = 2) const float EDGE_MUL = 0.083333333333;
 
             layout(location = 0) in vec2 uv;
             layout(location = 0) out vec4 f_color;
@@ -121,7 +123,7 @@ vulkano_shaders::shader! {
 
 pub(crate) struct PostProcessingPipelineWrapper {
     extractor_pipeline: Arc<GraphicsPipeline>,
-    pipelines: Vec<(Arc<GraphicsPipeline>, PostProcessUniform)>,
+    pipelines: Vec<(PassInfo, Arc<GraphicsPipeline>, PostProcessUniform)>,
     sampler: Arc<Sampler>,
 }
 
@@ -132,6 +134,9 @@ impl PostProcessingPipelineWrapper {
         framebuffer: &FramebufferHolder,
         cmd: &mut CommandBufferBuilder<L>,
     ) -> Result<()> {
+        if ctx.renderpasses.config.bloom_strength == 0.0 {
+            return Ok(());
+        }
         let extractor_pfs = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
             self.extractor_pipeline
@@ -163,9 +168,8 @@ impl PostProcessingPipelineWrapper {
         }
         cmd.end_render_pass(SubpassEndInfo::default())?;
 
-        for (pass, pipeline) in PASSES.iter().zip(self.pipelines.iter()) {
+        for (pass, pipeline, push_constant) in self.pipelines.iter() {
             let (framebuffer_id, _kernel, source_image, _blend) = pass;
-            let (pipeline, push_constant) = pipeline;
 
             let pfs = DescriptorSet::new(
                 ctx.descriptor_set_allocator.clone(),
@@ -209,71 +213,23 @@ impl PostProcessingPipelineWrapper {
 }
 
 const EXTRACTOR: FramebufferAndLoadOpId<1, 1> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur1, LoadOp::DontCare)],
+    color_attachments: [(ImageId::Blur(0), LoadOp::DontCare)],
     depth_stencil_attachment: None,
     input_attachments: [(ImageId::MainColor, LoadOp::Load)],
 };
-const DOWNSAMPLE_1_2: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur2, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const DOWNSAMPLE_2_4: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur3, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const DOWNSAMPLE_4_8: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur4, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const DOWNSAMPLE_8_16: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur5, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const UPSAMPLE_16_8: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur4, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const UPSAMPLE_8_4: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur3, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const UPSAMPLE_4_2: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::Blur2, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-const UPSAMPLE_2_MAIN: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::MainColor, LoadOp::DontCare)],
-    depth_stencil_attachment: None,
-    input_attachments: [],
-};
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum Kernel {
     Down,
     Up,
 }
 
+#[derive(Debug, Clone, Copy)]
 enum Blend {
     None,
     Additive,
 }
 
-const PASSES: [(FramebufferAndLoadOpId<1, 0>, Kernel, ImageId, Blend); 8] = [
-    (DOWNSAMPLE_1_2, Kernel::Down, ImageId::Blur1, Blend::None),
-    (DOWNSAMPLE_2_4, Kernel::Down, ImageId::Blur2, Blend::None),
-    (DOWNSAMPLE_4_8, Kernel::Down, ImageId::Blur3, Blend::None),
-    (DOWNSAMPLE_8_16, Kernel::Down, ImageId::Blur4, Blend::None),
-    (UPSAMPLE_16_8, Kernel::Up, ImageId::Blur5, Blend::None),
-    (UPSAMPLE_8_4, Kernel::Up, ImageId::Blur4, Blend::None),
-    (UPSAMPLE_4_2, Kernel::Up, ImageId::Blur3, Blend::None),
-    (UPSAMPLE_2_MAIN, Kernel::Up, ImageId::Blur2, Blend::Additive),
-];
+type PassInfo = (FramebufferAndLoadOpId<1, 0>, Kernel, ImageId, Blend);
 
 pub(crate) struct PostProcessingPipelineProvider {
     device: Arc<Device>,
@@ -294,6 +250,10 @@ impl PostProcessingPipelineProvider {
             .context("Missing vertex shader")?;
         let fs_extract = self
             .extract_overbright
+            .specialize(HashMap::from_iter([(
+                0,
+                SpecializationConstant::F32(global_config.bloom_strength),
+            )]))?
             .entry_point("main")
             .context("Missing fragment shader: extractor")?;
         let fs_downsample = self
@@ -315,6 +275,43 @@ impl PostProcessingPipelineProvider {
                 .into_pipeline_layout_create_info(self.device.clone())?,
         )?;
 
+        let vp_size = ImageId::MainColor.dimension(
+            ctx.viewport.extent[0] as u32,
+            ctx.viewport.extent[1] as u32,
+            *global_config,
+        );
+        let max_steps = dbg!(u32::min(vp_size.0, vp_size.1).ilog2() - 5);
+
+        let mut passes = vec![];
+        let total_steps = global_config.blur_steps.min(max_steps as usize);
+        for step in 0..total_steps {
+            let input = ImageId::Blur(step as u8);
+            let target = FramebufferAndLoadOpId {
+                color_attachments: [(ImageId::Blur((step + 1) as u8), LoadOp::DontCare)],
+                depth_stencil_attachment: None,
+                input_attachments: [],
+            };
+            passes.push((target, Kernel::Down, input, Blend::None));
+        }
+        for step in 0..total_steps {
+            let input = ImageId::Blur((total_steps - step) as u8);
+            let (color, blend, op) = if step == (total_steps - 1) {
+                (ImageId::MainColor, Blend::Additive, LoadOp::Load)
+            } else {
+                (
+                    ImageId::Blur((total_steps - step - 1) as u8),
+                    Blend::None,
+                    LoadOp::DontCare,
+                )
+            };
+            let target = FramebufferAndLoadOpId {
+                color_attachments: [(color, op)],
+                depth_stencil_attachment: None,
+                input_attachments: [],
+            };
+            passes.push((target, Kernel::Up, input, blend));
+        }
+
         let extractor_pipeline_info = GraphicsPipelineCreateInfo {
             stages: extractor_stages,
             // No bindings or attributes
@@ -335,7 +332,7 @@ impl PostProcessingPipelineProvider {
                 }],
                 ..Default::default()
             }),
-            viewport_state: Some(ImageId::Blur1.viewport_state(&ctx.viewport, *global_config)),
+            viewport_state: Some(ImageId::Blur(0).viewport_state(&ctx.viewport, *global_config)),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
                 Subpass::from(
                     ctx.renderpasses
@@ -353,7 +350,7 @@ impl PostProcessingPipelineProvider {
 
         let mut pipelines = vec![];
 
-        for pass in PASSES {
+        for pass in passes {
             let (framebuffer, kernel, source_image, blend) = pass;
             let fs = match kernel {
                 Kernel::Down => fs_downsample.clone(),
@@ -425,7 +422,7 @@ impl PostProcessingPipelineProvider {
                 ],
             };
 
-            pipelines.push((pipeline, push_constant));
+            pipelines.push((pass, pipeline, push_constant));
         }
 
         Ok(PostProcessingPipelineWrapper {

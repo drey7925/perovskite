@@ -124,6 +124,8 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) render_distance: u32,
     pub(crate) raytracer_debug: bool,
     pub(crate) raytracing_specular_downsampling: u32,
+    pub(crate) blur_steps: usize,
+    pub(crate) bloom_strength: f32,
 
     pub(crate) formats: SelectedFormats,
 }

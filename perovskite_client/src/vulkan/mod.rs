@@ -389,7 +389,8 @@ impl VulkanContext {
             render_distance: 1,
             raytracer_debug: false,
             raytracing_specular_downsampling: 1,
-
+            blur_steps: 0,
+            bloom_strength: 0.0,
             formats: SelectedFormats {
                 swapchain: Format::R8G8B8A8_SRGB,
                 color: Format::R8G8B8A8_SRGB,
@@ -922,11 +923,7 @@ pub(crate) enum ImageId {
     RtSpecStrength,
     RtSpecRayDir,
     RtSpecRayDirDownsampled,
-    Blur1,
-    Blur2,
-    Blur3,
-    Blur4,
-    Blur5,
+    Blur(u8),
 }
 
 impl ImageId {
@@ -941,9 +938,7 @@ impl ImageId {
             ImageId::RtSpecStrength => Format::R8G8B8A8_UNORM,
             ImageId::RtSpecRayDir => Format::R32G32B32A32_UINT,
             ImageId::RtSpecRayDirDownsampled => Format::R32G32B32A32_UINT,
-            ImageId::Blur1 | ImageId::Blur2 | ImageId::Blur3 | ImageId::Blur4 | ImageId::Blur5 => {
-                f.color
-            }
+            ImageId::Blur(_) => f.color,
         }
     }
 
@@ -970,11 +965,7 @@ impl ImageId {
             ImageId::RtSpecStrength => upsampled,
             ImageId::RtSpecRayDir => upsampled,
             ImageId::RtSpecRayDirDownsampled => rt_deferred,
-            ImageId::Blur1 => upsampled,
-            ImageId::Blur2 => upsampled_over_2,
-            ImageId::Blur3 => upsampled_over_4,
-            ImageId::Blur4 => upsampled_over_8,
-            ImageId::Blur5 => upsampled_over_16,
+            ImageId::Blur(n) => (upsampled.0 >> n, upsampled.1 >> n),
         }
     }
 
@@ -992,11 +983,8 @@ impl ImageId {
             ImageId::RtSpecStrength => "光艶",
             ImageId::RtSpecRayDir => "光方",
             ImageId::RtSpecRayDirDownsampled => "光角",
-            ImageId::Blur1 => "暈一",
-            ImageId::Blur2 => "暈二",
-            ImageId::Blur3 => "暈三",
-            ImageId::Blur4 => "暈四",
-            ImageId::Blur5 => "暈五",
+            ImageId::Blur(0) => "暈原",
+            ImageId::Blur(_) => "暈路",
         }
     }
 
@@ -1019,9 +1007,7 @@ impl ImageId {
             ImageId::RtSpecStrength => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecRayDir => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecRayDirDownsampled => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
-            ImageId::Blur1 | ImageId::Blur2 | ImageId::Blur3 | ImageId::Blur4 | ImageId::Blur5 => {
-                ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED
-            }
+            ImageId::Blur(_) => ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
         }
     }
 
@@ -1040,9 +1026,7 @@ impl ImageId {
             ImageId::RtSpecStrength => FLOAT,
             ImageId::RtSpecRayDir => UINT,
             ImageId::RtSpecRayDirDownsampled => UINT,
-            ImageId::Blur1 | ImageId::Blur2 | ImageId::Blur3 | ImageId::Blur4 | ImageId::Blur5 => {
-                FLOAT
-            }
+            ImageId::Blur(_) => FLOAT,
         }
     }
 
