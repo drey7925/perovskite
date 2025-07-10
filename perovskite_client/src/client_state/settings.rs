@@ -53,6 +53,7 @@ pub(crate) struct RenderSettings {
     pub(crate) supersampling: Supersampling,
     pub(crate) hdr: bool,
     pub(crate) bloom_strength: f32,
+    pub(crate) lens_flare_strength: f32,
     pub(crate) blur_steps: usize,
     pub(crate) render_distance: u32,
     pub(crate) raytracing: bool,
@@ -74,6 +75,7 @@ impl RenderSettings {
             hdr: self.hdr,
             blur_steps: self.blur_steps,
             bloom_strength: self.bloom_strength,
+            lens_flare_strength: self.lens_flare_strength,
             formats: SelectedFormats {
                 swapchain: ctx.swapchain_format(),
                 color: Self::render_format(self.hdr),
@@ -110,6 +112,7 @@ impl Default for RenderSettings {
             raytracing_specular_downsampling: 2,
             hdr: true,
             bloom_strength: 1.0,
+            lens_flare_strength: 1.0,
             blur_steps: 5,
         }
     }

@@ -174,12 +174,12 @@ impl EngineHandle {
 
     fn process_pending_frees(&self) {
         if self.freeing_receiver.is_full() {
-            log::info!("Memory reclaim receiver is full; some memory may have leaked");
+            log::warn!("Memory reclaim receiver is full; some memory may have leaked");
         }
         // Approximate because inherently racy
         let len_estimate = self.freeing_receiver.len();
         if len_estimate > 1 {
-            log::info!(
+            log::debug!(
                 "Dropping approximately {} entity audio control blocks",
                 self.freeing_receiver.len()
             );

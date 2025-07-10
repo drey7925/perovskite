@@ -391,6 +391,7 @@ impl VulkanContext {
             raytracing_specular_downsampling: 1,
             blur_steps: 0,
             bloom_strength: 0.0,
+            lens_flare_strength: 0.0,
             formats: SelectedFormats {
                 swapchain: Format::R8G8B8A8_SRGB,
                 color: Format::R8G8B8A8_SRGB,

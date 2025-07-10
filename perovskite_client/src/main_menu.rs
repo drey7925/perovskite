@@ -746,6 +746,16 @@ fn draw_render_settings(
                 ),
             );
             ui.end_row();
+            ui.label("HDR lens flare strength strength")
+                .on_hover_text("Relative strength of lens flares.");
+            ui.add_enabled(
+                prospective_settings.render.hdr,
+                egui::Slider::new(
+                    &mut prospective_settings.render.lens_flare_strength,
+                    0.0..=4.0,
+                ).suffix("x"),
+            );
+            ui.end_row();
 
             let raytracing_label = if vk_ctx.raytracing_supported() {
                 RichText::new("Raytracing")
