@@ -54,6 +54,6 @@ void main() {
     brightness_out = brightness;
 
     world_normal_out = decode_normal(normal);
-    float gbc_adjustment = 0.5 + 0.5 * max(0, dot(global_light_direction, world_normal_out));
+    float gbc_adjustment = 0.5 + 0.5 * max(-0.3, dot(global_light_direction, world_normal_out));
     global_brightness_out = global_brightness_color * global_brightness_contribution * gbc_adjustment;
 }

@@ -26,7 +26,6 @@ use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, RasterizationState};
 use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
 use vulkano::pipeline::graphics::vertex_input::VertexInputState;
-use vulkano::pipeline::graphics::viewport::{Scissor, Viewport, ViewportState};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
@@ -205,12 +204,6 @@ impl RaytracedPipelineWrapper {
                     framebuffer
                         .get_image(ImageId::RtSpecRayDirDownsampled)
                         .context("Failed to get RtSpecRayDirDownsampled image")?,
-                ),
-                WriteDescriptorSet::image_view(
-                    5,
-                    framebuffer
-                        .get_image(ImageId::RtSpecRawColor)
-                        .context("Failed to get RtSpecRawColor image")?,
                 ),
             ],
             [],
@@ -434,8 +427,8 @@ const RT_MASK: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
     depth_stencil_attachment: Some((ImageId::RtSpecStencil, LoadOp::Clear)),
     input_attachments: [],
 };
-const RT_DEFERRED: FramebufferAndLoadOpId<0, 0> = FramebufferAndLoadOpId {
-    color_attachments: [],
+const RT_DEFERRED: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
+    color_attachments: [(ImageId::RtSpecRawColor, LoadOp::Clear)],
     depth_stencil_attachment: Some((ImageId::RtSpecStencil, LoadOp::Load)),
     input_attachments: [],
 };
@@ -545,46 +538,9 @@ impl RaytracedPipelineProvider {
         let layout_blend =
             layout(&stages_blend).context("Failed to create blend pipeline layout")?;
 
-        let full_viewport_state = Some(ViewportState {
-            viewports: smallvec![Viewport {
-                offset: [0.0, 0.0],
-                depth_range: 0.0..=1.0,
-                extent: [
-                    ctx.viewport.extent[0] * global_config.supersampling.to_float(),
-                    ctx.viewport.extent[1] * global_config.supersampling.to_float()
-                ],
-            }],
-            scissors: smallvec![Scissor {
-                offset: [0, 0],
-                extent: [
-                    ctx.viewport.extent[0] as u32 * global_config.supersampling.to_int(),
-                    ctx.viewport.extent[1] as u32 * global_config.supersampling.to_int()
-                ],
-            }],
-            ..Default::default()
-        });
-        let deferred_viewport_state = Some(ViewportState {
-            viewports: smallvec![Viewport {
-                offset: [0.0, 0.0],
-                depth_range: 0.0..=1.0,
-                extent: [
-                    ctx.viewport.extent[0] * global_config.supersampling.to_float()
-                        / (global_config.raytracing_specular_downsampling as f32),
-                    ctx.viewport.extent[1] * global_config.supersampling.to_float()
-                        / (global_config.raytracing_specular_downsampling as f32)
-                ],
-            }],
-            scissors: smallvec![Scissor {
-                offset: [0, 0],
-                extent: [
-                    ctx.viewport.extent[0] as u32 * global_config.supersampling.to_int()
-                        / global_config.raytracing_specular_downsampling,
-                    ctx.viewport.extent[1] as u32 * global_config.supersampling.to_int()
-                        / global_config.raytracing_specular_downsampling
-                ],
-            }],
-            ..Default::default()
-        });
+        let full_viewport_state = ImageId::MainColor.viewport_state(&ctx.viewport, *global_config);
+        let deferred_viewport_state =
+            ImageId::RtSpecRawColor.viewport_state(&ctx.viewport, *global_config);
 
         let base_pipeline_info = |layout| {
             GraphicsPipelineCreateInfo {
@@ -636,7 +592,7 @@ impl RaytracedPipelineProvider {
                     )
                     .context("Missing subpass")?,
                 )),
-                viewport_state: full_viewport_state.clone(),
+                viewport_state: Some(full_viewport_state.clone()),
                 ..base_pipeline_info(layout_primary.clone())
             },
         )
@@ -678,7 +634,7 @@ impl RaytracedPipelineProvider {
                     ..Default::default()
                 }),
 
-                viewport_state: deferred_viewport_state.clone(),
+                viewport_state: Some(deferred_viewport_state.clone()),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
                     Subpass::from(
                         ctx.renderpasses
@@ -718,7 +674,13 @@ impl RaytracedPipelineProvider {
                     }),
                     ..Default::default()
                 }),
-                color_blend_state: None,
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![ColorBlendAttachmentState {
+                        blend: None,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
                     Subpass::from(
                         ctx.renderpasses
@@ -728,7 +690,7 @@ impl RaytracedPipelineProvider {
                     )
                     .context("Missing subpass")?,
                 )),
-                viewport_state: deferred_viewport_state.clone(),
+                viewport_state: Some(deferred_viewport_state.clone()),
                 ..base_pipeline_info(layout_deferred)
             },
         )
@@ -757,7 +719,7 @@ impl RaytracedPipelineProvider {
                     )
                     .context("Missing subpass")?,
                 )),
-                viewport_state: full_viewport_state.clone(),
+                viewport_state: Some(full_viewport_state.clone()),
                 ..base_pipeline_info(layout_blend)
             },
         )

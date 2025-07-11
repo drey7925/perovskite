@@ -951,10 +951,6 @@ impl ImageId {
             upsampled.0 / config.raytracing_specular_downsampling,
             upsampled.1 / config.raytracing_specular_downsampling,
         );
-        let upsampled_over_2 = (upsampled.0 / 2, upsampled.1 / 2);
-        let upsampled_over_4 = (upsampled.0 / 4, upsampled.1 / 4);
-        let upsampled_over_8 = (upsampled.0 / 8, upsampled.1 / 8);
-        let upsampled_over_16 = (upsampled.0 / 16, upsampled.1 / 16);
 
         match self {
             ImageId::MainColor => upsampled,

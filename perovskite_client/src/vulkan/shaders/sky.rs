@@ -1,6 +1,6 @@
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
-use crate::vulkan::{CommandBufferBuilder, VulkanContext, VulkanWindow};
+use crate::vulkan::{CommandBufferBuilder, ImageId, VulkanContext, VulkanWindow};
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, SquareMatrix};
 use smallvec::smallvec;
@@ -18,7 +18,6 @@ use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, RasterizationState};
 use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
 use vulkano::pipeline::graphics::vertex_input::VertexInputState;
-use vulkano::pipeline::graphics::viewport::{Scissor, Viewport, ViewportState};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
@@ -171,24 +170,7 @@ impl SkyPipelineProvider {
                 ..Default::default()
             }),
             multisample_state: Some(MultisampleState::default()),
-            viewport_state: Some(ViewportState {
-                viewports: smallvec![Viewport {
-                    offset: [0.0, 0.0],
-                    depth_range: 0.0..=1.0,
-                    extent: [
-                        ctx.viewport.extent[0] * global_config.supersampling.to_float(),
-                        ctx.viewport.extent[1] * global_config.supersampling.to_float()
-                    ],
-                }],
-                scissors: smallvec![Scissor {
-                    offset: [0, 0],
-                    extent: [
-                        ctx.viewport.extent[0] as u32 * global_config.supersampling.to_int(),
-                        ctx.viewport.extent[1] as u32 * global_config.supersampling.to_int()
-                    ],
-                }],
-                ..Default::default()
-            }),
+            viewport_state: Some(ImageId::MainColor.viewport_state(&ctx.viewport, *global_config)),
             depth_stencil_state: Some(DepthStencilState {
                 depth: Some(DepthState {
                     // No depth test whatsoever

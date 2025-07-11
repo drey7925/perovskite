@@ -4,19 +4,16 @@
 
 //layout (set = 1, binding = 3, rgba8) uniform restrict readonly image2D deferred_specular_color;
 layout (set = 1, binding = 4, rgba32ui) uniform restrict readonly uimage2D deferred_specular_ray_dir;
-layout (set = 1, binding = 5, rgba16f) uniform restrict writeonly image2D specular_result;
+layout (location = 0) out vec4 specular_result;
 
 void main() {
-    imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(0));
+    specular_result = vec4(0);
     memoryBarrierImage();
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
     uint spec_block = spec_ray_dir.a;
     if (spec_block == 0) {
-        imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(0));
-        memoryBarrierImage();
         return;
     }
-    vec4 f_color = vec4(0.0, 0.0, 0.0, 1.0);
     vec3 spec_dir_len = uintBitsToFloat(spec_ray_dir.rgb);
     vec3 spec_dir = normalize(spec_dir_len);
     vec3 g0 = normalize(facedir_world_in) * length(spec_dir_len) + fine_pos - 0.001 * (spec_dir);
@@ -24,11 +21,10 @@ void main() {
     vec2 t_min_max = t_range(g0, spec_dir);
 
     if (t_min_max.x > t_min_max.y) {
-        imageStore(specular_result, ivec2(gl_FragCoord.xy), vec4(0));
-        memoryBarrierImage();
+        return;
     }
     vec3 g1 = g0 + (spec_dir * t_min_max.y);
-    vec4 spec_rgba = vec4(0);
+    specular_result = vec4(0);
     for (int i = 0; i < 3; i++) {
         HitInfo info = {
         ivec3(0),
@@ -44,27 +40,25 @@ void main() {
         uint idx = info.block_id >> 12;
         if (idx >= max_cube_info_idx) {
             // CPU-side code should fix this and we should never enter this branch
-            f_color = vec4(1.0, 0.0, 0.0, 1.0);
+            specular_result = vec4(1.0, 0.0, 0.0, 1.0);
             break;
         }
         if ((cube_info[idx].flags & 1) != 0) {
             vec4 sampled = sample_simple(info, idx, false).diffuse;
-            float alpha_contrib = sampled.a * (1 - spec_rgba.a);
-            spec_rgba.rgb += alpha_contrib * sampled.rgb;
-            spec_rgba.a += alpha_contrib;
-            //spec_rgba = vec4(info.start_cc, 1.0);
+            float alpha_contrib = sampled.a * (1 - specular_result.a);
+            specular_result.rgb += alpha_contrib * sampled.rgb;
+            specular_result.a += alpha_contrib;
         }
         spec_block = info.block_id;
         vec3 midpoint = (info.start_cc + info.end_cc) / 2;
         g0 = (vec3(info.hit_block) + midpoint) / 16.0;
-        if (spec_rgba.a > 0.75) {
+        if (specular_result.a > 0.75) {
             break;
         }
     }
 
-    if (spec_rgba.a < 0.99) {
-        spec_rgba += (1 - spec_rgba.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
+    if (specular_result.a < 0.99) {
+        specular_result += (1 - specular_result.a) * vec4(sky_rgb(spec_dir, sun_direction), 1.0);
     }
-    f_color.rgb = spec_rgba.rgb * spec_rgba.a;
-    imageStore(specular_result, ivec2(gl_FragCoord.xy), f_color);
+    specular_result.rgb = specular_result.rgb * specular_result.a;
 }
