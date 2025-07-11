@@ -540,28 +540,30 @@ fn draw_input_settings(
     prospective_settings: &mut GameSettings,
     input_capture: &mut InputCapture,
 ) -> InnerResponse<()> {
+    const CAMERA_SENSITIVITY_HOVER_TEXT: &str =
+        "How sensitive the camera is. Higher values are more sensitive.";
+    const INVERSE_SCROLL_SENSITIVITY_HOVER_TEXT: &str = "How many pixels of scrolling correspond to one slot in the hotbar. Higher values mean lower sensitivity.";
+
     egui::Grid::new("input_grid")
         .num_columns(4)
         .spacing([40.0, 4.0])
         .striped(true)
         .show(ui, |ui| {
             ui.label("Camera sensitivity")
-                .on_hover_text("How sensitive the camera is. Higher values are more sensitive.");
-            ui.add(
-                egui::Slider::new(
-                    &mut prospective_settings.input.camera_sensitivity,
-                    0.01..=1.0,
-                ),
-            );
+                .on_hover_text(CAMERA_SENSITIVITY_HOVER_TEXT);
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.input.camera_sensitivity,
+                0.01..=1.0,
+            ))
+            .on_hover_text(CAMERA_SENSITIVITY_HOVER_TEXT);
             ui.end_row();
             ui.label("Inverse scroll sensitivity")
-                .on_hover_text("How many pixels of scrolling correspond to one slot in the hotbar. Higher values mean lower sensitivity.");
-            ui.add(
-                egui::Slider::new(
-                    &mut prospective_settings.input.scroll_inverse_sensitivity,
-                    20..=400,
-                )
-            );
+                .on_hover_text(INVERSE_SCROLL_SENSITIVITY_HOVER_TEXT);
+            ui.add(egui::Slider::new(
+                &mut prospective_settings.input.scroll_inverse_sensitivity,
+                20..=400,
+            ))
+            .on_hover_text(INVERSE_SCROLL_SENSITIVITY_HOVER_TEXT);
             ui.end_row();
 
             if let InputCapture::Captured(action, keybind) = input_capture {
@@ -569,7 +571,8 @@ fn draw_input_settings(
                 *input_capture = InputCapture::NotCapturing;
             }
             for action in BoundAction::all_bound_actions() {
-                ui.label(action.user_friendly_name()).on_hover_text(action.tooltip());
+                ui.label(action.user_friendly_name())
+                    .on_hover_text(action.tooltip());
 
                 let button_text = if *input_capture == InputCapture::Capturing(*action) {
                     "...".to_string()
@@ -577,11 +580,15 @@ fn draw_input_settings(
                     prospective_settings.input.get(*action).to_ui_string()
                 };
 
-                if ui.button(button_text).clicked() {
+                if ui
+                    .button(button_text)
+                    .on_hover_text(action.tooltip())
+                    .clicked()
+                {
                     *input_capture = InputCapture::Capturing(*action);
                 }
 
-                if ui.button("Reset").clicked() {
+                if ui.button("Reset").on_hover_text(action.tooltip()).clicked() {
                     let default = KeybindSettings::default().get(*action);
                     prospective_settings.input.set(*action, default);
                 }
@@ -592,19 +599,19 @@ fn draw_input_settings(
 }
 
 fn draw_display_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
+    const HOVER_MENU_ON_BOTTOM_PANEL_HOVER_TEXT: &str = "When checked, the hover menu (interact options, hover text, etc) is on the bottom of the screen. If unchecked, make a popup near the middle of the screen instead.";
     egui::Grid::new("display_grid")
         .num_columns(2)
         .spacing([40.0, 4.0])
         .striped(true)
         .show(ui, |ui| {
             ui.label("Hover menu on bottom panel")
-                .on_hover_text("When checked, the hover menu (interact options, hover text, etc) is on the bottom of the screen. If unchecked, make a popup near the middle of the screen instead.");
-            ui.add(
-                egui::Checkbox::new(
-                    &mut prospective_settings.display.hover_text_on_bottom_panel,
-                    "Enable",
-                ),
-            );
+                .on_hover_text(HOVER_MENU_ON_BOTTOM_PANEL_HOVER_TEXT);
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.display.hover_text_on_bottom_panel,
+                "Enable",
+            ))
+            .on_hover_text(HOVER_MENU_ON_BOTTOM_PANEL_HOVER_TEXT);
             ui.end_row();
         });
 }
@@ -614,24 +621,44 @@ fn draw_render_settings(
     prospective_settings: &mut GameSettings,
     vk_ctx: &VulkanContext,
 ) {
+    const MESH_THREADS_HOVER_TEXT: &str =
+        "Mesh threads convert preprocessed chunk data into 3D meshes that can be rendered.";
+    const PRE_MESH_THREADS_HOVER_TEXT: &str =
+        "Pre-mesh threads compute lighting and prepare neighbor data as input to mesh threads.";
+    const SCALE_INVENTORY_HOVER_TEXT: &str = "When on a high-density display, whether to make inventory tiles larger based on the display's scale.";
+    const FOV_HOVER_TEXT: &str = "The field of view. Higher values give a wider view.";
+    const RENDER_DISTANCE_HOVER_TEXT: &str = "How many chunks away to load and render.";
+    const HDR_HOVER_TEXT: &str = "HDR effects (lens flares, light bloom)";
+    const HDR_BLOOM_STRENGTH_HOVER_TEXT: &str = "Relative strength of the HDR bloom effect.";
+    const HDR_BLOOM_SIZE_HOVER_TEXT: &str = "Relative size of the HDR bloom effect.";
+    const HDR_LENS_FLARE_STRENGTH_HOVER_TEXT: &str = "Relative strength of lens flares.";
+    const RAYTRACED_REFLECTIONS_HOVER_TEXT: &str =
+        "Controls reflections from shiny surfaces. Only applicable if raytracing is enabled";
+    const ON_DEMAND_RAYTRACING_HOVER_TEXT: &str = "If enabled, raytracing data is only uploaded for the current area, on demand when [TBD key] is pressed. This may improve usability on older or integrated GPUs that lag during data uploads, allowing raytraced screenshots to be taken, at the expense of realtime raytracing experience.";
+    const RAYTRACER_DEBUGGING_HOVER_TEXT: &str = "If enabled, inverts colors on non-raytraced geometry and shows low-level details about the BVH directly in the output. Only applicable if raytracing is enabled.";
+    const SPECULAR_DOWNSAMPLING_HOVER_TEXT: &str = "Specular reflection downsampling factor. Higher values improve performance at the expense of visual quality. Only applicable if raytracing is enabled.";
+    const SUPERSAMPLING_HOVER_TEXT: &str =
+        "Smooths edges of geometry and textures, at the expense of performance.";
+
     egui::Grid::new("render_grid")
         .num_columns(2)
         .spacing([40.0, 4.0])
         .striped(true)
         .show(ui, |ui| {
             ui.label("Mesh threads")
-                .on_hover_text("Mesh threads convert preprocessed chunk data into 3D meshes that can be rendered.");
+                .on_hover_text(MESH_THREADS_HOVER_TEXT);
             ui.add(
                 egui::Slider::new(
                     &mut prospective_settings.render.num_mesh_workers,
                     1..=8,
                 )
                     .suffix(" threads"),
-            );
+            )
+                .on_hover_text(MESH_THREADS_HOVER_TEXT);
             ui.end_row();
 
             ui.label("Pre-mesh threads")
-                .on_hover_text("Pre-mesh threads compute lighting and prepare neighbor data as input to mesh threads.");
+                .on_hover_text(PRE_MESH_THREADS_HOVER_TEXT);
             ui.add(
                 egui::Slider::new(
                     &mut prospective_settings
@@ -640,7 +667,8 @@ fn draw_render_settings(
                     1..=8,
                 )
                     .suffix(" threads"),
-            );
+            )
+                .on_hover_text(PRE_MESH_THREADS_HOVER_TEXT);
             ui.end_row();
 
             // TODO: Re-implement the placement guide in a less obtrusive manner
@@ -655,29 +683,24 @@ fn draw_render_settings(
 
             let mut preferred_gpu_label = RichText::new("Preferred GPU");
             let mut gpu_hover_text = "The GPU to use, if available";
-            if (!prospective_settings.render.preferred_gpu.is_empty()) && (prospective_settings.render.preferred_gpu != vk_ctx.current_gpu_name()) {
+            if (!prospective_settings.render.preferred_gpu.is_empty())
+                && (prospective_settings.render.preferred_gpu != vk_ctx.current_gpu_name())
+            {
                 preferred_gpu_label = preferred_gpu_label.italics();
                 gpu_hover_text = "The GPU to use, if available. Changes apply after program restart (login/logout is not enough)";
             }
 
-            let gpu_label = ui.label(preferred_gpu_label)
-                .on_hover_text(gpu_hover_text);
-            let selected_gpu =
-                if prospective_settings.render.preferred_gpu.is_empty() {
-                    "Select..."
-                } else {
-                    &prospective_settings.render.preferred_gpu
-                };
-            let mut preferred_gpu =
-                prospective_settings.render.preferred_gpu.clone();
+            let gpu_label = ui.label(preferred_gpu_label).on_hover_text(gpu_hover_text);
+            let selected_gpu = if prospective_settings.render.preferred_gpu.is_empty() {
+                "Select..."
+            } else {
+                &prospective_settings.render.preferred_gpu
+            };
+            let mut preferred_gpu = prospective_settings.render.preferred_gpu.clone();
             egui::ComboBox::from_id_source(gpu_label.id)
                 .selected_text(selected_gpu)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut preferred_gpu,
-                        String::new(),
-                        "No preference",
-                    );
+                    ui.selectable_value(&mut preferred_gpu, String::new(), "No preference");
                     for gpu in vk_ctx.all_gpus() {
                         ui.selectable_value(
                             &mut preferred_gpu,
@@ -685,76 +708,76 @@ fn draw_render_settings(
                             gpu.to_string(),
                         );
                     }
-                });
+                })
+                .response
+                .on_hover_text(gpu_hover_text);
             prospective_settings.render.preferred_gpu = preferred_gpu;
             ui.end_row();
 
             ui.label("Scale inventory at high DPI")
-                .on_hover_text("When on a high-density display, whether to make inventory tiles larger based on the display's scale.");
+                .on_hover_text(SCALE_INVENTORY_HOVER_TEXT);
             ui.checkbox(
                 &mut prospective_settings
                     .render
                     .scale_inventories_with_high_dpi,
                 "Enable",
-            );
+            )
+                .on_hover_text(SCALE_INVENTORY_HOVER_TEXT);
             ui.end_row();
 
-            ui.label("FOV")
-                .on_hover_text("The field of view. Higher values give a wider view.");
+            ui.label("FOV").on_hover_text(FOV_HOVER_TEXT);
             ui.add(
-                egui::Slider::new(
-                    &mut prospective_settings.render.fov_degrees,
-                    30.0..=170.0,
-                )
+                egui::Slider::new(&mut prospective_settings.render.fov_degrees, 30.0..=170.0)
                     .suffix("°"),
-            );
+            )
+                .on_hover_text(FOV_HOVER_TEXT);
             ui.end_row();
             ui.label("Render distance")
-                .on_hover_text("How many chunks away to load and render.");
+                .on_hover_text(RENDER_DISTANCE_HOVER_TEXT);
             ui.add(
                 egui::Slider::new(
                     &mut prospective_settings.render.render_distance,
                     10..=150,
                 )
                     .suffix(" chunks"),
-            );
+            )
+                .on_hover_text(RENDER_DISTANCE_HOVER_TEXT);
             ui.end_row();
-            ui.label("HDR")
-                .on_hover_text("HDR effects (lens flares, light bloom)");
+            ui.label("HDR").on_hover_text(HDR_HOVER_TEXT);
             ui.add(egui::Checkbox::new(
                 &mut prospective_settings.render.hdr,
                 "Enabled",
-            ));
+            ))
+                .on_hover_text(HDR_HOVER_TEXT);
             ui.end_row();
             ui.label("HDR bloom strength")
-                .on_hover_text("Relative strength of the HDR bloom effect.");
+                .on_hover_text(HDR_BLOOM_STRENGTH_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.hdr,
-                egui::Slider::new(
-                    &mut prospective_settings.render.bloom_strength,
-                    0.0..=4.0,
-                ).suffix("x"),
-            );
+                egui::Slider::new(&mut prospective_settings.render.bloom_strength, 0.0..=4.0)
+                    .suffix("x"),
+            )
+                .on_hover_text(HDR_BLOOM_STRENGTH_HOVER_TEXT);
             ui.end_row();
             ui.label("HDR bloom size")
-                .on_hover_text("Relative size of the HDR bloom effect.");
+                .on_hover_text(HDR_BLOOM_SIZE_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.hdr,
-                egui::Slider::new(
-                    &mut prospective_settings.render.blur_steps,
-                    1..=16,
-                ),
-            );
+                egui::Slider::new(&mut prospective_settings.render.blur_steps, 1..=16),
+            )
+                .on_hover_text(HDR_BLOOM_SIZE_HOVER_TEXT);
             ui.end_row();
             ui.label("HDR lens flare strength strength")
-                .on_hover_text("Relative strength of lens flares.");
+                .on_hover_text(HDR_LENS_FLARE_STRENGTH_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.hdr,
                 egui::Slider::new(
                     &mut prospective_settings.render.lens_flare_strength,
                     0.0..=4.0,
-                ).suffix("x"),
-            );
+                )
+                    .suffix("x"),
+            )
+                .on_hover_text(HDR_LENS_FLARE_STRENGTH_HOVER_TEXT);
             ui.end_row();
 
             let raytracing_label = if vk_ctx.raytracing_supported() {
@@ -772,57 +795,63 @@ fn draw_render_settings(
             ui.add(egui::Checkbox::new(
                 &mut prospective_settings.render.raytracing,
                 "Enabled",
-            ));
+            ))
+                .on_hover_text(raytracing_hover_text);
             ui.end_row();
             ui.label("Raytraced reflections")
-                .on_hover_text("Controls reflections from shiny surfaces. Only applicable if raytracing is enabled");
+                .on_hover_text(RAYTRACED_REFLECTIONS_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.raytracing,
                 egui::Checkbox::new(
                     &mut prospective_settings.render.raytraced_reflections,
                     "Enabled",
-                ));
+                ),
+            )
+                .on_hover_text(RAYTRACED_REFLECTIONS_HOVER_TEXT);
             ui.end_row();
             ui.label("On-demand raytracing")
-                .on_hover_text("If enabled, raytracing data is only uploaded for the current area, on demand when [TBD key] is pressed. This may improve usability on older or integrated GPUs that lag during data uploads, allowing raytraced screenshots to be taken, at the expense of realtime raytracing experience.");
+                .on_hover_text(ON_DEMAND_RAYTRACING_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.raytracing,
                 egui::Checkbox::new(
                     &mut prospective_settings.render.on_demand_raytracing,
                     "Enabled",
-                ));
+                ),
+            )
+                .on_hover_text(ON_DEMAND_RAYTRACING_HOVER_TEXT);
             ui.end_row();
             ui.label("Raytracer debugging")
-                .on_hover_text("If enabled, inverts colors on non-raytraced geometry and shows low-level details about the BVH directly in the output. Only applicable if raytracing is enabled.");
+                .on_hover_text(RAYTRACER_DEBUGGING_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.raytracing,
-                egui::Checkbox::new(
-                    &mut prospective_settings.render.raytracer_debug,
-                    "Enabled",
-                ));
+                egui::Checkbox::new(&mut prospective_settings.render.raytracer_debug, "Enabled"),
+            )
+                .on_hover_text(RAYTRACER_DEBUGGING_HOVER_TEXT);
             ui.end_row();
             ui.label("Specular downsampling")
-                .on_hover_text("Specular reflection downsampling factor. Higher values improve performance at the expense of visual quality. Only applicable if raytracing is enabled.");
+                .on_hover_text(SPECULAR_DOWNSAMPLING_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.raytracing,
                 egui::Slider::new(
-                    &mut prospective_settings.render.raytracing_specular_downsampling,
+                    &mut prospective_settings
+                        .render
+                        .raytracing_specular_downsampling,
                     1..=4,
                 )
                     .suffix("x"),
-            );
+            )
+                .on_hover_text(SPECULAR_DOWNSAMPLING_HOVER_TEXT);
             ui.end_row();
-            let ssaa_label = ui.label("Supersampling")
-                .on_hover_text("Smooths edges of geometry and textures, at the expense of performance.");
+            let ssaa_label = ui
+                .label("Supersampling")
+                .on_hover_text(SUPERSAMPLING_HOVER_TEXT);
             egui::ComboBox::from_id_salt(ssaa_label.id)
-                .selected_text(
-                    match prospective_settings.render.supersampling {
-                        Supersampling::None => "Disabled",
-                        Supersampling::X2 => "x2",
-                        Supersampling::X4 => "x4",
-                        Supersampling::X8 => "x8",
-                    },
-                )
+                .selected_text(match prospective_settings.render.supersampling {
+                    Supersampling::None => "Disabled",
+                    Supersampling::X2 => "x2",
+                    Supersampling::X4 => "x4",
+                    Supersampling::X8 => "x8",
+                })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut prospective_settings.render.supersampling,
@@ -844,12 +873,23 @@ fn draw_render_settings(
                         Supersampling::X8,
                         "x8",
                     );
-                });
+                })
+                .response
+                .on_hover_text(SUPERSAMPLING_HOVER_TEXT);
             ui.end_row();
         });
 }
 
 fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
+    const GLOBAL_VOLUME_HOVER_TEXT: &str = "The overall volume of the game.";
+    const BACKGROUND_VOLUME_HOVER_TEXT: &str =
+        "The volume of background effects (not implemented yet).";
+    const SELF_VOLUME_HOVER_TEXT: &str = "The volume of sounds from your own actions.";
+    const OTHER_PLAYER_VOLUME_HOVER_TEXT: &str = "The volume of sounds from other players.";
+    const WORLD_VOLUME_HOVER_TEXT: &str = "The volume of sounds from the world.";
+    const PREFERRED_OUTPUT_DEVICE_HOVER_TEXT: &str =
+        "The output audio device to use, if available.";
+
     egui::Grid::new("audio_grid")
         .num_columns(2)
         .spacing([40.0, 4.0])
@@ -862,48 +902,53 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ));
             ui.end_row();
             ui.label("Global volume")
-                .on_hover_text("The overall volume of the game.");
+                .on_hover_text(GLOBAL_VOLUME_HOVER_TEXT);
             ui.add(egui::Slider::new(
                 &mut prospective_settings.audio.volumes.global_volume,
                 0.0..=1.0,
-            ));
+            ))
+            .on_hover_text(GLOBAL_VOLUME_HOVER_TEXT);
             ui.end_row();
 
             ui.label("Background volume")
-                .on_hover_text("The volume of background effects (not implemented yet).");
+                .on_hover_text(BACKGROUND_VOLUME_HOVER_TEXT);
             ui.add(egui::Slider::new(
                 &mut prospective_settings.audio.volumes.background_volume,
                 0.0..=1.0,
-            ));
+            ))
+            .on_hover_text(BACKGROUND_VOLUME_HOVER_TEXT);
             ui.end_row();
 
             ui.label("Self volume")
-                .on_hover_text("The volume of sounds from your own actions.");
+                .on_hover_text(SELF_VOLUME_HOVER_TEXT);
             ui.add(egui::Slider::new(
                 &mut prospective_settings.audio.volumes.self_volume,
                 0.0..=1.0,
-            ));
+            ))
+            .on_hover_text(SELF_VOLUME_HOVER_TEXT);
             ui.end_row();
 
             ui.label("Other player volume")
-                .on_hover_text("The volume of sounds from other players.");
+                .on_hover_text(OTHER_PLAYER_VOLUME_HOVER_TEXT);
             ui.add(egui::Slider::new(
                 &mut prospective_settings.audio.volumes.other_players_volume,
                 0.0..=1.0,
-            ));
+            ))
+            .on_hover_text(OTHER_PLAYER_VOLUME_HOVER_TEXT);
             ui.end_row();
 
             ui.label("World volume")
-                .on_hover_text("The volume of sounds from the world.");
+                .on_hover_text(WORLD_VOLUME_HOVER_TEXT);
             ui.add(egui::Slider::new(
                 &mut prospective_settings.audio.volumes.world_volume,
                 0.0..=1.0,
-            ));
+            ))
+            .on_hover_text(WORLD_VOLUME_HOVER_TEXT);
             ui.end_row();
 
             let output_label = ui
                 .label("Preferred output device")
-                .on_hover_text("The output audio device to use, if available.");
+                .on_hover_text(PREFERRED_OUTPUT_DEVICE_HOVER_TEXT);
             let selected_audio_device = if prospective_settings
                 .audio
                 .preferred_output_device
@@ -925,7 +970,9 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
                             device.to_string(),
                         );
                     }
-                });
+                })
+                .response
+                .on_hover_text(PREFERRED_OUTPUT_DEVICE_HOVER_TEXT);
             prospective_settings.audio.preferred_output_device = preferred_device;
             ui.end_row();
         });

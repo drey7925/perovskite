@@ -281,12 +281,6 @@ impl RaytracedPipelineWrapper {
                         .get_image(ImageId::RtSpecRayDir)
                         .context("Failed to get RtSpecRayDir image for mask")?,
                 ),
-                WriteDescriptorSet::image_view(
-                    2,
-                    framebuffer
-                        .get_image(ImageId::RtSpecRayDirDownsampled)
-                        .context("Failed to get RtSpecRayDirDownsampled image for mask")?,
-                ),
             ],
             [],
         )
@@ -435,8 +429,8 @@ const RT_PRIMARY: FramebufferAndLoadOpId<3, 1> = FramebufferAndLoadOpId {
     depth_stencil_attachment: None,
     input_attachments: [(ImageId::MainDepthStencilDepthOnly, LoadOp::Load)],
 };
-const RT_MASK: FramebufferAndLoadOpId<0, 0> = FramebufferAndLoadOpId {
-    color_attachments: [],
+const RT_MASK: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
+    color_attachments: [(ImageId::RtSpecRayDirDownsampled, LoadOp::Clear)],
     depth_stencil_attachment: Some((ImageId::RtSpecStencil, LoadOp::Clear)),
     input_attachments: [],
 };
@@ -675,7 +669,14 @@ impl RaytracedPipelineProvider {
                     }),
                     ..Default::default()
                 }),
-                color_blend_state: None,
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![ColorBlendAttachmentState {
+                        blend: None,
+                        color_write_mask: ColorComponents::all(),
+                        color_write_enable: true,
+                    }],
+                    ..Default::default()
+                }),
 
                 viewport_state: deferred_viewport_state.clone(),
                 subpass: Some(PipelineSubpassType::BeginRenderPass(
