@@ -40,12 +40,13 @@ use crate::vulkan::block_renderer::{
 };
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
-use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
-use crate::vulkan::{VkAllocator, VulkanContext};
+use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
+use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VkAllocator, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
 use prost::Message;
 use rustc_hash::{FxHashMap, FxHasher};
+use tinyvec::tiny_vec;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
     PrimaryCommandBufferAbstract,
@@ -736,14 +737,14 @@ static NEXT_MESH_BATCH_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct MeshBatch {
     id: u64,
-    solid_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
-    solid_idx: Option<Subbuffer<[u32]>>,
-    transparent_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
-    transparent_idx: Option<Subbuffer<[u32]>>,
-    translucent_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
-    translucent_idx: Option<Subbuffer<[u32]>>,
-    raytrace_fallback_vtx: Option<Subbuffer<[CubeGeometryVertex]>>,
-    raytrace_fallback_idx: Option<Subbuffer<[u32]>>,
+    solid_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
+    solid_idx: Option<ReclaimableBuffer<u32>>,
+    transparent_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
+    transparent_idx: Option<ReclaimableBuffer<u32>>,
+    translucent_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
+    translucent_idx: Option<ReclaimableBuffer<u32>>,
+    raytrace_fallback_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
+    raytrace_fallback_idx: Option<ReclaimableBuffer<u32>>,
 
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
     base_position: Vector3<f64>,
@@ -752,8 +753,8 @@ pub(crate) struct MeshBatch {
 impl MeshBatch {
     pub(crate) fn solid_occupancy(&self) -> (usize, usize) {
         (
-            self.solid_vtx.as_ref().map(Subbuffer::len).unwrap_or(0) as usize,
-            self.solid_idx.as_ref().map(Subbuffer::len).unwrap_or(0) as usize,
+            self.solid_vtx.as_deref().map(Subbuffer::len).unwrap_or(0) as usize,
+            self.solid_idx.as_deref().map(Subbuffer::len).unwrap_or(0) as usize,
         )
     }
 }
@@ -788,27 +789,30 @@ impl MeshBatch {
         Some(CubeGeometryDrawCall {
             models: VkChunkVertexDataGpu {
                 opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
-                    Some(VkBufferGpu {
-                        vtx: self.solid_vtx.as_ref().unwrap().clone(),
-                        idx: self.solid_idx.as_ref().unwrap().clone(),
+                    Some(VkDrawBufferGpu {
+                        num_indices: self.solid_idx.as_ref().unwrap().valid_len() as u32,
+                        vtx: self.solid_vtx.as_deref().unwrap().clone(),
+                        idx: self.solid_idx.as_deref().unwrap().clone(),
                     })
                 } else {
                     None
                 },
 
                 transparent: if self.transparent_vtx.is_some() && self.transparent_idx.is_some() {
-                    Some(VkBufferGpu {
-                        vtx: self.transparent_vtx.as_ref().unwrap().clone(),
-                        idx: self.transparent_idx.as_ref().unwrap().clone(),
+                    Some(VkDrawBufferGpu {
+                        num_indices: self.transparent_idx.as_ref().unwrap().valid_len() as u32,
+                        vtx: self.transparent_vtx.as_deref().unwrap().clone(),
+                        idx: self.transparent_idx.as_deref().unwrap().clone(),
                     })
                 } else {
                     None
                 },
 
                 translucent: if self.translucent_vtx.is_some() && self.translucent_idx.is_some() {
-                    Some(VkBufferGpu {
-                        vtx: self.translucent_vtx.as_ref().unwrap().clone(),
-                        idx: self.translucent_idx.as_ref().unwrap().clone(),
+                    Some(VkDrawBufferGpu {
+                        num_indices: self.translucent_idx.as_ref().unwrap().valid_len() as u32,
+                        vtx: self.translucent_vtx.as_deref().unwrap().clone(),
+                        idx: self.translucent_idx.as_deref().unwrap().clone(),
                     })
                 } else {
                     None
@@ -817,9 +821,11 @@ impl MeshBatch {
                 raytrace_fallback: if self.raytrace_fallback_vtx.is_some()
                     && self.raytrace_fallback_idx.is_some()
                 {
-                    Some(VkBufferGpu {
-                        vtx: self.raytrace_fallback_vtx.as_ref().unwrap().clone(),
-                        idx: self.raytrace_fallback_idx.as_ref().unwrap().clone(),
+                    Some(VkDrawBufferGpu {
+                        num_indices: self.raytrace_fallback_idx.as_ref().unwrap().valid_len()
+                            as u32,
+                        vtx: self.raytrace_fallback_vtx.as_deref().unwrap().clone(),
+                        idx: self.raytrace_fallback_idx.as_deref().unwrap().clone(),
                     })
                 } else {
                     None
@@ -952,125 +958,68 @@ impl MeshBatchBuilder {
     }
 
     pub(crate) fn build_and_reset(&mut self, ctx: &VulkanContext) -> Result<MeshBatch> {
-        fn build_buffer<T: Copy + BufferContents>(
-            buf: &[T],
-            allocator: Arc<VkAllocator>,
-            command_buffer_builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-            any_commands: &mut bool,
-            usage: BufferUsage,
-        ) -> Result<Option<Subbuffer<[T]>>> {
-            if buf.is_empty() {
+        let mut any_commands = false;
+
+        let mut cmdbuf = ctx.start_transfer_buffer()?;
+        let mut process_vtx = |x: &[CubeGeometryVertex]| -> anyhow::Result<_> {
+            if x.is_empty() {
                 Ok(None)
             } else {
-                let _span = span!("mesh_batch_builder build buffers");
-                let staging_buffer = Buffer::from_iter(
-                    allocator.clone(),
-                    BufferCreateInfo {
-                        usage: BufferUsage::TRANSFER_SRC,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                            | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    },
-                    buf.iter().copied(),
+                let len = x.len();
+                let target_buffer = ctx.iter_to_device_via_staging_with_reclaim(
+                    x.iter().copied(),
+                    ReclaimType::CubeGeometryVtx,
+                    ctx.cgv_reclaimer().clone(),
+                    BufferReclaim::<CubeGeometryVertex>::size_class(len as DeviceSize),
+                    &mut cmdbuf,
                 )?;
-                let target_buffer = Buffer::new_slice(
-                    allocator,
-                    BufferCreateInfo {
-                        usage: BufferUsage::TRANSFER_DST | usage,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                        ..Default::default()
-                    },
-                    buf.len() as DeviceSize,
-                )?;
-
-                command_buffer_builder.copy_buffer(CopyBufferInfo::buffers(
-                    staging_buffer,
-                    target_buffer.clone(),
-                ))?;
-                *any_commands = true;
-
+                any_commands = true;
                 Ok(Some(target_buffer))
             }
-        }
+        };
+        let solid_vtx = process_vtx(&self.solid_vtx)?;
+        let transparent_vtx = process_vtx(&self.transparent_vtx)?;
+        let translucent_vtx = process_vtx(&self.translucent_vtx)?;
+        let raytrace_fallback_vtx = process_vtx(&self.raytrace_fallback_vtx)?;
 
-        let transfer_queue = ctx.clone_transfer_queue();
-        let mut any_commands = false;
-        let mut command_buffer = AutoCommandBufferBuilder::primary(
-            ctx.command_buffer_allocator(),
-            transfer_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
+        let mut process_idx = |x: &[u32]| -> anyhow::Result<_> {
+            if x.is_empty() {
+                Ok(None)
+            } else {
+                let len = x.len();
+                let target_buffer = ctx.iter_to_device_via_staging_with_reclaim(
+                    x.iter().copied(),
+                    ReclaimType::CubeGeometryIdx,
+                    ctx.u32_reclaimer().clone(),
+                    BufferReclaim::<u32>::size_class(len as DeviceSize),
+                    &mut cmdbuf,
+                )?;
+                any_commands = true;
+                Ok(Some(target_buffer))
+            }
+        };
+
+        let solid_idx = process_idx(&self.solid_idx)?;
+        let transparent_idx = process_idx(&self.transparent_idx)?;
+        let translucent_idx = process_idx(&self.translucent_idx)?;
+        let raytrace_fallback_idx = process_idx(&self.raytrace_fallback_idx)?;
 
         let result = MeshBatch {
             id: self.id,
-            solid_vtx: build_buffer(
-                &self.solid_vtx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::VERTEX_BUFFER,
-            )?,
-            solid_idx: build_buffer(
-                &self.solid_idx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::INDEX_BUFFER,
-            )?,
-            transparent_vtx: build_buffer(
-                &self.transparent_vtx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::VERTEX_BUFFER,
-            )?,
-            transparent_idx: build_buffer(
-                &self.transparent_idx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::INDEX_BUFFER,
-            )?,
-            translucent_vtx: build_buffer(
-                &self.translucent_vtx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::VERTEX_BUFFER,
-            )?,
-            translucent_idx: build_buffer(
-                &self.translucent_idx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::INDEX_BUFFER,
-            )?,
-            raytrace_fallback_vtx: build_buffer(
-                &self.raytrace_fallback_vtx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::VERTEX_BUFFER,
-            )?,
-            raytrace_fallback_idx: build_buffer(
-                &self.raytrace_fallback_idx,
-                ctx.clone_allocator(),
-                &mut command_buffer,
-                &mut any_commands,
-                BufferUsage::INDEX_BUFFER,
-            )?,
+            solid_vtx,
+            solid_idx,
+            transparent_vtx,
+            transparent_idx,
+            translucent_vtx,
+            translucent_idx,
+            raytrace_fallback_vtx,
+            raytrace_fallback_idx,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
         };
 
         if any_commands {
-            command_buffer.build()?.execute(transfer_queue)?.flush()?;
+            ctx.finish_transfer_buffer(cmdbuf)?;
         }
 
         self.reset();

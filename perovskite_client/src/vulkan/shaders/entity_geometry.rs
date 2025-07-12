@@ -19,7 +19,7 @@ use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::{
     frag_lighting,
     vert_3d::{self, UniformData},
-    LiveRenderConfig, VkBufferGpu,
+    LiveRenderConfig, VkDrawBufferGpu,
 };
 use crate::vulkan::{
     shaders::vert_3d::ModelMatrix, CommandBufferBuilder, Texture2DHolder, VulkanContext,
@@ -84,7 +84,7 @@ pub(crate) struct EntityVertex {
 }
 
 pub(crate) struct EntityGeometryDrawCall {
-    pub(crate) model: VkBufferGpu<EntityVertex>,
+    pub(crate) model: VkDrawBufferGpu<EntityVertex>,
     pub(crate) model_matrix: Matrix4<f32>,
 }
 

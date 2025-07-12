@@ -357,7 +357,7 @@ impl PostProcessingPipelineProvider {
             ctx.viewport.extent[1] as u32,
             *global_config,
         );
-        let max_steps = dbg!(u32::min(vp_size.0, vp_size.1).ilog2() - 5);
+        let max_steps = u32::min(vp_size.0, vp_size.1).ilog2() - 5;
 
         let mut passes = vec![];
         let total_steps = global_config.blur_steps.min(max_steps as usize);

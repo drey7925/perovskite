@@ -145,26 +145,28 @@ pub(crate) struct VkBufferCpu<T: BufferContents + Copy> {
     pub(crate) idx: Vec<u32>,
 }
 impl<T: BufferContents + Copy> VkBufferCpu<T> {
-    pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<Option<VkBufferGpu<T>>> {
-        VkBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
+    pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<Option<VkDrawBufferGpu<T>>> {
+        VkDrawBufferGpu::from_buffers(&self.vtx, &self.idx, allocator)
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct VkBufferGpu<T: BufferContents + Copy> {
+pub(crate) struct VkDrawBufferGpu<T: BufferContents + Copy> {
     pub(crate) vtx: Subbuffer<[T]>,
     pub(crate) idx: Subbuffer<[u32]>,
+    pub(crate) num_indices: u32,
 }
-impl<T: BufferContents + Copy> VkBufferGpu<T> {
+impl<T: BufferContents + Copy> VkDrawBufferGpu<T> {
     pub(crate) fn from_buffers(
         vtx: &[T],
         idx: &[u32],
         allocator: Arc<VkAllocator>,
-    ) -> Result<Option<VkBufferGpu<T>>> {
+    ) -> Result<Option<VkDrawBufferGpu<T>>> {
         if vtx.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(VkBufferGpu {
+            Ok(Some(VkDrawBufferGpu {
+                num_indices: idx.len() as u32,
                 vtx: Buffer::from_iter(
                     allocator.clone(),
                     BufferCreateInfo {

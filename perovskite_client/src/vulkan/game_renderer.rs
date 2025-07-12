@@ -35,7 +35,7 @@ use super::{
     FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, ImageId, LoadOp, RenderPassId,
     VulkanContext, VulkanWindow,
 };
-use crate::client_state::input::Keybind;
+use crate::client_state::input::{BoundAction, Keybind};
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
@@ -145,7 +145,7 @@ impl ActiveGame {
         );
         ctx.window.set_ime_allowed(ime_enabled);
 
-        ctx.reclaim_u32.unsequester(framebuffer.image_i);
+        ctx.u32_reclaimer.unsequester(framebuffer.image_i);
         let prework_buffer = if ctx.raytracing_supported
             && self.client_state.settings.load().render.raytracing
         {
@@ -155,7 +155,7 @@ impl ActiveGame {
             } = self.client_state.chunks.raytrace_buffers().acquire(&ctx)?;
             if let Some(new_buffer) = new_buffer {
                 if let Some(old) = self.raytrace_data.replace(new_buffer) {
-                    ctx.reclaim_u32.give_buffer(
+                    ctx.u32_reclaimer.give_buffer(
                         old.data,
                         Some(framebuffer.image_i),
                         Duration::from_secs(5),
@@ -186,7 +186,7 @@ impl ActiveGame {
                                 regions: scatter_gather_list.into_iter().collect(),
                                 ..CopyBufferInfo::buffers(staging_buffer.buffer.clone(), dst_buffer)
                             })?;
-                            ctx.reclaim_u32.give_buffer(
+                            ctx.u32_reclaimer.give_buffer(
                                 staging_buffer,
                                 Some(framebuffer.image_i),
                                 Duration::from_secs(5),
@@ -199,7 +199,7 @@ impl ActiveGame {
             }
         } else {
             if let Some(buf) = self.raytrace_data.take() {
-                ctx.reclaim_u32.give_buffer(
+                ctx.u32_reclaimer.give_buffer(
                     buf.data,
                     Some(framebuffer.image_i),
                     Duration::from_secs(5),
@@ -281,9 +281,6 @@ impl ActiveGame {
             .client_state
             .chunks
             .make_batched_draw_calls(player_position, scene_state.vp_matrix);
-
-        self.cube_draw_calls.extend(batched_calls);
-
         // Sort by expected draw order, closest to farthest
         chunks.sort_unstable_by_key(|(coord, _)| {
             let world_coord = vec3(
@@ -302,10 +299,35 @@ impl ActiveGame {
                     None
                 }
             }));
+        // Put in the batched calls later; they're likely to (but not guaranteed) to be further away
+        self.cube_draw_calls.extend(batched_calls);
         plot!(
             "chunk_rate",
             self.cube_draw_calls.len() as f64 / chunks.len() as f64
         );
+
+        if self
+            .client_state
+            .input
+            .lock()
+            .take_just_pressed(BoundAction::AuxDebugKey)
+        {
+            let mut lengths: Vec<u32> = self
+                .cube_draw_calls
+                .iter()
+                .flat_map(|x| {
+                    [
+                        x.models.opaque.as_ref().map(|x| x.num_indices),
+                        x.models.transparent.as_ref().map(|x| x.num_indices),
+                        x.models.translucent.as_ref().map(|x| x.num_indices),
+                        x.models.raytrace_fallback.as_ref().map(|x| x.num_indices),
+                    ]
+                })
+                .filter_map(|x| x)
+                .collect();
+            lengths.sort_unstable();
+            log::info!("{:?}", lengths);
+        }
 
         if !self.cube_draw_calls.is_empty() {
             if self.raytrace_data.is_none() {

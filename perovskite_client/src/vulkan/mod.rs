@@ -97,6 +97,7 @@ pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
 use self::util::select_physical_device;
 use crate::client_state::settings::{GameSettings, Supersampling};
+use crate::vulkan::shaders::cube_geometry::CubeGeometryVertex;
 use crate::vulkan::shaders::raytracer::{
     TexRef, RAYTRACING_REQUIRED_EXTENSIONS, RAYTRACING_REQUIRED_FEATURES,
 };
@@ -121,7 +122,8 @@ pub(crate) struct VulkanContext {
     all_gpus: Vec<String>,
     max_draw_indexed_index_value: u32,
 
-    reclaim_u32: BufferReclaim<u32>,
+    u32_reclaimer: Arc<BufferReclaim<u32>>,
+    cgv_reclaimer: Arc<BufferReclaim<CubeGeometryVertex>>,
 
     raytracing_supported: bool,
 }
@@ -309,17 +311,72 @@ impl VulkanContext {
         Ok(target_buffer)
     }
 
+    pub(crate) fn iter_to_device_via_staging_with_reclaim_and_flush<T: BufferContents>(
+        &self,
+        data: impl ExactSizeIterator<Item = T>,
+        reclaim_type: ReclaimType,
+        reclaim: Arc<BufferReclaim<T>>,
+        size_class: DeviceSize,
+    ) -> Result<ReclaimableBuffer<T>> {
+        let mut command_buffer = self.start_transfer_buffer()?;
+
+        let target_buffer = self.iter_to_device_via_staging_with_reclaim(
+            data,
+            reclaim_type,
+            reclaim.clone(),
+            size_class,
+            &mut command_buffer,
+        )?;
+        self.finish_transfer_buffer(command_buffer)?;
+        Ok(target_buffer)
+    }
+
+    pub(crate) fn start_transfer_buffer(&self) -> Result<TransferBuffer> {
+        let transfer_queue = self.clone_transfer_queue();
+
+        Ok(TransferBuffer {
+            builder: AutoCommandBufferBuilder::primary(
+                self.command_buffer_allocator(),
+                transfer_queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )?,
+            cleanups: vec![],
+        })
+    }
+
+    pub(crate) fn finish_transfer_buffer(&self, mut buf: TransferBuffer) -> Result<()> {
+        let fut = {
+            let _span = span!("build target buffer future");
+            buf.builder.build()?.execute(self.transfer_queue.clone())?
+        };
+        {
+            let _span = span!("flush target buffer future");
+            fut.flush()?
+        }
+        {
+            let _span = span!("transfer buffer cleanups");
+            for cleanup in buf.cleanups.drain(..) {
+                cleanup();
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn iter_to_device_via_staging_with_reclaim<T: BufferContents>(
         &self,
         data: impl ExactSizeIterator<Item = T>,
         reclaim_type: ReclaimType,
-        reclaim: &BufferReclaim<T>,
+        reclaim: Arc<BufferReclaim<T>>,
         size_class: DeviceSize,
+        command_buffer: &mut TransferBuffer,
     ) -> Result<ReclaimableBuffer<T>> {
-        ensure!(data.len() >= size_class as usize);
-        let staging_buffer = {
+        let data_len = data.len();
+        ensure!(data_len <= size_class as usize);
+        let mut staging_buffer = {
             let _span = span!("build staging buffer");
-            let buf = reclaim.take_or_create(&self, ReclaimType::CpuTransferSrc, size_class)?;
+            let buf =
+                reclaim.take_or_create_slice(&self, ReclaimType::CpuTransferSrc, size_class)?;
             let mut guard = buf.buffer.write()?;
             for (src, dst) in data.zip(guard.iter_mut()) {
                 *dst = src;
@@ -327,32 +384,21 @@ impl VulkanContext {
             drop(guard);
             buf
         };
+        staging_buffer.valid_len = data_len as DeviceSize;
 
-        let target_buffer = {
+        let mut target_buffer = {
             let _span = span!("build target buffer");
-            reclaim.take_or_create(&self, reclaim_type, size_class)?
+            reclaim.take_or_create_slice(&self, reclaim_type, size_class)?
         };
+        target_buffer.valid_len = data_len as DeviceSize;
 
-        let transfer_queue = self.clone_transfer_queue();
-        let mut command_buffer = AutoCommandBufferBuilder::primary(
-            self.command_buffer_allocator(),
-            transfer_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-        command_buffer.copy_buffer(CopyBufferInfo::buffers(
+        command_buffer.builder.copy_buffer(CopyBufferInfo::buffers(
             staging_buffer.buffer.clone(),
             target_buffer.buffer.clone(),
         ))?;
-        let fut = {
-            let _span = span!("build target buffer future");
-            command_buffer.build()?.execute(transfer_queue)?
-        };
-        {
-            let _span = span!("flush target buffer future");
-            fut.flush()?
-        }
-        reclaim.give_buffer(staging_buffer, None, Duration::from_secs(1));
-
+        command_buffer.cleanups.push(Box::new(move || {
+            reclaim.give_buffer(staging_buffer, None, Duration::from_secs(5));
+        }));
         Ok(target_buffer)
     }
 
@@ -399,6 +445,19 @@ impl VulkanContext {
             },
         }
     }
+
+    pub fn cgv_reclaimer(&self) -> &Arc<BufferReclaim<CubeGeometryVertex>> {
+        &self.cgv_reclaimer
+    }
+
+    pub fn u32_reclaimer(&self) -> &Arc<BufferReclaim<u32>> {
+        &self.u32_reclaimer
+    }
+}
+
+pub(crate) struct TransferBuffer {
+    builder: AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    cleanups: Vec<Box<dyn FnOnce()>>,
 }
 
 pub(crate) struct RenderPassHolder {
@@ -775,7 +834,8 @@ impl VulkanWindow {
             all_gpus,
             swapchain_len,
             max_draw_indexed_index_value: physical_device.properties().max_draw_indexed_index_value,
-            reclaim_u32: BufferReclaim::new(),
+            u32_reclaimer: Arc::new(BufferReclaim::new()),
+            cgv_reclaimer: Arc::new(BufferReclaim::new()),
             raytracing_supported,
         });
         let render_config = settings.load().render.build_global_config(&vk_ctx);
@@ -1639,11 +1699,12 @@ impl From<RectF32> for TexRef {
     }
 }
 
-#[repr(usize)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, enum_map::Enum)]
 pub(crate) enum ReclaimType {
-    CpuTransferSrc = 0,
-    GpuSsboTransferDst = 1,
+    CpuTransferSrc,
+    GpuSsboTransferDst,
+    CubeGeometryVtx,
+    CubeGeometryIdx,
 }
 
 impl ReclaimType {
@@ -1657,6 +1718,14 @@ impl ReclaimType {
                 usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
+            ReclaimType::CubeGeometryVtx => BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            ReclaimType::CubeGeometryIdx => BufferCreateInfo {
+                usage: BufferUsage::INDEX_BUFFER | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
         }
     }
     fn allocation_create_info(&self) -> AllocationCreateInfo {
@@ -1666,7 +1735,7 @@ impl ReclaimType {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            ReclaimType::GpuSsboTransferDst => AllocationCreateInfo {
+            _ => AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
@@ -1677,8 +1746,14 @@ impl ReclaimType {
 pub(crate) struct ReclaimableBuffer<T> {
     reclaim_type: ReclaimType,
     buffer: Subbuffer<[T]>,
+    valid_len: DeviceSize,
     expiration: Instant,
     sequester: Option<usize>,
+}
+impl<T> ReclaimableBuffer<T> {
+    pub(crate) fn valid_len(&self) -> DeviceSize {
+        self.valid_len
+    }
 }
 
 impl<T> Deref for ReclaimableBuffer<T> {
@@ -1690,7 +1765,7 @@ impl<T> Deref for ReclaimableBuffer<T> {
 
 struct ReclaimInner<T> {
     pending: Vec<ReclaimableBuffer<T>>,
-    ready: Vec<ReclaimBuffersByType<T>>,
+    ready: enum_map::EnumMap<ReclaimType, ReclaimBuffersByType<T>>,
 }
 
 pub(crate) struct BufferReclaim<T> {
@@ -1698,7 +1773,7 @@ pub(crate) struct BufferReclaim<T> {
 }
 
 impl<T: BufferContents> BufferReclaim<T> {
-    pub(crate) fn take_or_create(
+    pub(crate) fn take_or_create_slice(
         &self,
         ctx: &VulkanContext,
         reclaim_type: ReclaimType,
@@ -1719,14 +1794,22 @@ impl<T: BufferContents> BufferReclaim<T> {
                 // doesn't matter, will be updated when received for reclaim
                 expiration: Instant::now(),
                 sequester: None,
+                valid_len: 0,
             })
         }
     }
+
+    pub(crate) fn size_class(capacity: DeviceSize) -> DeviceSize {
+        let size = size_of::<T>() as DeviceSize;
+        let bytes = capacity * size;
+        bytes.next_power_of_two() / size
+    }
+
     fn new() -> BufferReclaim<T> {
         BufferReclaim {
             inner: Mutex::new(ReclaimInner {
                 pending: vec![],
-                ready: vec![ReclaimBuffersByType::new(), ReclaimBuffersByType::new()],
+                ready: Default::default(),
             }),
         }
     }
@@ -1744,7 +1827,7 @@ impl<T: BufferContents> BufferReclaim<T> {
         if buffer.sequester.is_some() {
             inner.pending.push(buffer);
         } else {
-            inner.ready[buffer.reclaim_type as usize].give_buffer(buffer);
+            inner.ready[buffer.reclaim_type].give_buffer(buffer);
         }
     }
 
@@ -1755,7 +1838,7 @@ impl<T: BufferContents> BufferReclaim<T> {
     ) -> Option<ReclaimableBuffer<T>> {
         let mut inner = self.inner.lock();
         Self::clean_expired(&mut inner);
-        inner.ready[reclaim_type as usize].take_buffer(size)
+        inner.ready[reclaim_type].take_buffer(size)
     }
 
     fn clean_expired(inner: &mut ReclaimInner<T>) {
@@ -1769,7 +1852,7 @@ impl<T: BufferContents> BufferReclaim<T> {
             let candidate = &inner.pending[i];
             if candidate.sequester == Some(frame) {
                 let buffer = inner.pending.swap_remove(i);
-                inner.ready[buffer.reclaim_type as usize].give_buffer(buffer);
+                inner.ready[buffer.reclaim_type].give_buffer(buffer);
             } else {
                 i += 1;
             }
@@ -1820,5 +1903,11 @@ impl<T> ReclaimBuffersByType<T> {
         for class in self.by_size_class.values_mut() {
             clean_expired(now, class);
         }
+    }
+}
+
+impl<T> Default for ReclaimBuffersByType<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }

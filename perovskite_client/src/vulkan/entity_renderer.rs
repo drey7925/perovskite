@@ -10,7 +10,7 @@ use super::{VkAllocator, VulkanContext};
 use crate::media::load_or_generate_image;
 use crate::vulkan::atlas::{TextureAtlas, TextureKey};
 use crate::vulkan::shaders::entity_geometry::EntityVertex;
-use crate::vulkan::shaders::VkBufferGpu;
+use crate::vulkan::shaders::VkDrawBufferGpu;
 use anyhow::{bail, ensure, Result};
 use cgmath::{Matrix3, Rad, Vector3, Zero};
 
@@ -24,7 +24,7 @@ pub(crate) struct EntityRenderer {
     mesh_definitions: FxHashMap<u32, EntityMesh>,
     /// These include buffers that render a single entity. Later on, as we add various accelerated and
     /// instanced rendering, the renderer may build buffers with multiple entities in them.
-    singleton_gpu_buffers: FxHashMap<u32, Option<VkBufferGpu<EntityVertex>>>,
+    singleton_gpu_buffers: FxHashMap<u32, Option<VkDrawBufferGpu<EntityVertex>>>,
 }
 impl EntityRenderer {
     pub(crate) async fn new(
@@ -71,7 +71,7 @@ impl EntityRenderer {
                     def.short_name,
                 )?;
                 let singleton_buffer =
-                    VkBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.clone_allocator())?;
+                    VkDrawBufferGpu::from_buffers(&mesh.vtx, &mesh.idx, ctx.clone_allocator())?;
                 singleton_gpu_buffers.insert(def.entity_class, singleton_buffer);
 
                 all_meshes.insert(def.entity_class, mesh);
@@ -180,7 +180,7 @@ impl EntityRenderer {
         }
     }
 
-    pub(crate) fn get_singleton(&self, class: u32) -> Option<VkBufferGpu<EntityVertex>> {
+    pub(crate) fn get_singleton(&self, class: u32) -> Option<VkDrawBufferGpu<EntityVertex>> {
         self.singleton_gpu_buffers.get(&class).cloned().flatten()
     }
 

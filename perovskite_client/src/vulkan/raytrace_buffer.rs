@@ -150,12 +150,14 @@ impl RaytraceBufferManager {
         };
         let table_control = table[0..(4 * (header.n_minus_one as usize + 1))].to_vec();
         let data_len = table.len() as DeviceSize;
-        let table_gpubuf = self.vk_ctx.iter_to_device_via_staging_with_reclaim(
-            table.into_iter(),
-            ReclaimType::GpuSsboTransferDst,
-            &self.vk_ctx.reclaim_u32,
-            data_len,
-        )?;
+        let table_gpubuf = self
+            .vk_ctx
+            .iter_to_device_via_staging_with_reclaim_and_flush(
+                table.into_iter(),
+                ReclaimType::GpuSsboTransferDst,
+                self.vk_ctx.u32_reclaimer().clone(),
+                data_len,
+            )?;
         let header_gpubuf = Buffer::from_data(
             self.vk_ctx.clone_allocator(),
             BufferCreateInfo {
@@ -391,10 +393,11 @@ impl UpdateBuilder {
         capacity: DeviceSize,
         lookup_data: Option<(ChunkMapHeader, Vec<u32>)>,
     ) -> Result<UpdateBuilder> {
-        let staging_buffer =
-            vk_ctx
-                .reclaim_u32
-                .take_or_create(&vk_ctx, ReclaimType::CpuTransferSrc, capacity)?;
+        let staging_buffer = vk_ctx.u32_reclaimer.take_or_create_slice(
+            &vk_ctx,
+            ReclaimType::CpuTransferSrc,
+            capacity,
+        )?;
         Ok(UpdateBuilder {
             staging_buffer,
             resolved_sg_list: smallvec![],
@@ -434,9 +437,11 @@ impl UpdateBuilder {
         }
         let staging_buffer = std::mem::replace(
             &mut self.staging_buffer,
-            vk_ctx
-                .reclaim_u32
-                .take_or_create(&vk_ctx, ReclaimType::CpuTransferSrc, capacity)?,
+            vk_ctx.u32_reclaimer.take_or_create_slice(
+                &vk_ctx,
+                ReclaimType::CpuTransferSrc,
+                capacity,
+            )?,
         );
         let sg_list = std::mem::replace(&mut self.resolved_sg_list, smallvec![]);
         self.capacity = capacity as usize;

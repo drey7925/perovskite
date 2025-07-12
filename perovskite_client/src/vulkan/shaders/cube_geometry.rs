@@ -222,7 +222,7 @@ impl CubePipelineWrapper {
                     //   - N/A, we don't set PARTIALLY_BOUND
                     // Shader safety: We rely on "Vulkano will validate many of these requirements, but it is only able to do so when the resources involved are statically known."
                     //   - TODO: validate these more closely.
-                    builder.draw_indexed(pass_data.idx.len().try_into()?, 1, 0, 0, 0)?;
+                    builder.draw_indexed(pass_data.num_indices.try_into()?, 1, 0, 0, 0)?;
                 }
             }
         }

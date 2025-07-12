@@ -48,7 +48,7 @@ use crate::vulkan::atlas::{NamedTextureKey, TextureAtlas, TextureKey};
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
 use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
-use crate::vulkan::shaders::{VkBufferCpu, VkBufferGpu};
+use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::EntityTarget;
@@ -329,10 +329,10 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
 
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexDataGpu {
-    pub(crate) opaque: Option<VkBufferGpu<CubeGeometryVertex>>,
-    pub(crate) transparent: Option<VkBufferGpu<CubeGeometryVertex>>,
-    pub(crate) translucent: Option<VkBufferGpu<CubeGeometryVertex>>,
-    pub(crate) raytrace_fallback: Option<VkBufferGpu<CubeGeometryVertex>>,
+    pub(crate) opaque: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
+    pub(crate) transparent: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
+    pub(crate) translucent: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
+    pub(crate) raytrace_fallback: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
@@ -1155,7 +1155,11 @@ impl BlockRenderer {
                 }
             }
         };
-        let buffer = VkBufferGpu::<CubeGeometryVertex> { vtx, idx };
+        let buffer = VkDrawBufferGpu::<CubeGeometryVertex> {
+            num_indices: idx.len() as u32,
+            vtx,
+            idx,
+        };
         Ok(Some(CubeGeometryDrawCall {
             model_matrix,
             models: VkChunkVertexDataGpu {

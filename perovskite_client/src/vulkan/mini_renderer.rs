@@ -8,7 +8,7 @@ use super::{
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
-use crate::vulkan::shaders::{LiveRenderConfig, VkBufferGpu};
+use crate::vulkan::shaders::{LiveRenderConfig, VkDrawBufferGpu};
 use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
@@ -189,7 +189,7 @@ impl MiniBlockRenderer {
                 ..Default::default()
             },
         )?;
-        let pass = VkBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
+        let pass = VkDrawBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
 
         if let Some(pass) = pass {
             let draw_call = CubeGeometryDrawCall {
