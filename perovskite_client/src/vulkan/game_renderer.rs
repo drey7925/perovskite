@@ -412,6 +412,12 @@ impl ActiveGame {
             }
         }
 
+        framebuffer
+            .blit_supersampling(&mut command_buf_builder)
+            .context("Supersampling blit failed")?;
+
+        // Begin work done in final swapchain resolution (i.e., not supersampled), but still
+        // potentially HDR.
         if ctx.renderpasses.config.hdr {
             self.post_process_pipeline
                 .bind_and_draw(ctx, framebuffer, &mut command_buf_builder)?;
@@ -422,7 +428,7 @@ impl ActiveGame {
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
             FramebufferAndLoadOpId {
-                color_attachments: [(ImageId::MainColor, LoadOp::Load)],
+                color_attachments: [(ImageId::MainColorResolved, LoadOp::Load)],
                 depth_stencil_attachment: None,
                 input_attachments: [],
             },
@@ -452,8 +458,8 @@ impl ActiveGame {
         })?;
 
         framebuffer
-            .blit_supersampling(&mut command_buf_builder)
-            .context("Supersampling blit failed")?;
+            .blit_final(&mut command_buf_builder)
+            .context("Final blit to swapchain failed")?;
 
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
@@ -519,7 +525,7 @@ impl ActiveGame {
                 ctx,
                 FlatPipelineConfig {
                     atlas: hud_lock.texture_atlas.as_ref(),
-                    pre_blit: true,
+                    image_id: ImageId::MainColorResolved,
                 },
                 &global_config,
             )?
@@ -665,7 +671,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
             &vk_wnd,
             FlatPipelineConfig {
                 atlas: hud_lock.texture_atlas.as_ref(),
-                pre_blit: true,
+                image_id: ImageId::MainColorResolved,
             },
             &global_render_config,
         )?

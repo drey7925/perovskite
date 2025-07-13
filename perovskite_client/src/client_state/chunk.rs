@@ -234,6 +234,10 @@ impl Drop for ChunkMesh {
             if let Some(raytrace_fallback) = cpu_data.raytrace_fallback {
                 RAYTRACE_FALLBACK_RECLAIMER.put(raytrace_fallback.idx, raytrace_fallback.vtx);
             }
+            if let Some(transparent_with_specular) = cpu_data.transparent_with_specular {
+                TRANSPARENT_WITH_SPECULAR_RECLAIMER
+                    .put(transparent_with_specular.idx, transparent_with_specular.vtx)
+            }
         }
     }
 }
@@ -307,10 +311,12 @@ lazy_static::lazy_static! {
     pub(crate) static ref TRANSPARENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
     pub(crate) static ref TRANSLUCENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
     pub(crate) static ref RAYTRACE_FALLBACK_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
+    pub(crate) static ref TRANSPARENT_WITH_SPECULAR_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
     pub(crate) static ref SOLID_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
     pub(crate) static ref TRANSPARENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
     pub(crate) static ref TRANSLUCENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
     pub(crate) static ref RAYTRACE_FALLBACK_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
+    pub(crate) static ref TRANSPARENT_WITH_SPECULAR_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
 }
 
 impl ClientChunk {
@@ -745,6 +751,8 @@ pub(crate) struct MeshBatch {
     translucent_idx: Option<ReclaimableBuffer<u32>>,
     raytrace_fallback_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
     raytrace_fallback_idx: Option<ReclaimableBuffer<u32>>,
+    transparent_with_specular_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
+    transparent_with_specular_idx: Option<ReclaimableBuffer<u32>>,
 
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
     base_position: Vector3<f64>,
@@ -830,6 +838,30 @@ impl MeshBatch {
                 } else {
                     None
                 },
+
+                transparent_with_specular: if self.transparent_with_specular_vtx.is_some()
+                    && self.transparent_with_specular_idx.is_some()
+                {
+                    Some(VkDrawBufferGpu {
+                        num_indices: self
+                            .transparent_with_specular_idx
+                            .as_ref()
+                            .unwrap()
+                            .valid_len() as u32,
+                        vtx: self
+                            .transparent_with_specular_vtx
+                            .as_deref()
+                            .unwrap()
+                            .clone(),
+                        idx: self
+                            .transparent_with_specular_idx
+                            .as_deref()
+                            .unwrap()
+                            .clone(),
+                    })
+                } else {
+                    None
+                },
             },
             model_matrix: matrix.cast().unwrap(),
         })
@@ -849,6 +881,8 @@ pub(crate) struct MeshBatchBuilder {
     translucent_idx: Vec<u32>,
     raytrace_fallback_vtx: Vec<CubeGeometryVertex>,
     raytrace_fallback_idx: Vec<u32>,
+    transparent_with_specular_vtx: Vec<CubeGeometryVertex>,
+    transparent_with_specular_idx: Vec<u32>,
     base_position: Vector3<f64>,
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
 }
@@ -867,6 +901,10 @@ impl MeshBatchBuilder {
             Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 6000),
             Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 4000),
         ));
+        let (transparent_with_specular_idx, transparent_with_specular_vtx) =
+            TRANSPARENT_WITH_SPECULAR_BATCH_RECLAIMER
+                .take()
+                .unwrap_or((vec![], vec![]));
         MeshBatchBuilder {
             id: next_id(),
             // rough initial estimate, but should be good enough for now
@@ -878,6 +916,8 @@ impl MeshBatchBuilder {
             translucent_idx,
             raytrace_fallback_vtx,
             raytrace_fallback_idx,
+            transparent_with_specular_vtx,
+            transparent_with_specular_idx,
             base_position: Vector3::zero(),
             chunks: smallvec::SmallVec::new(),
         }
@@ -981,6 +1021,7 @@ impl MeshBatchBuilder {
         let transparent_vtx = process_vtx(&self.transparent_vtx)?;
         let translucent_vtx = process_vtx(&self.translucent_vtx)?;
         let raytrace_fallback_vtx = process_vtx(&self.raytrace_fallback_vtx)?;
+        let transparent_with_specular_vtx = process_vtx(&self.transparent_with_specular_vtx)?;
 
         let mut process_idx = |x: &[u32]| -> anyhow::Result<_> {
             if x.is_empty() {
@@ -1003,6 +1044,7 @@ impl MeshBatchBuilder {
         let transparent_idx = process_idx(&self.transparent_idx)?;
         let translucent_idx = process_idx(&self.translucent_idx)?;
         let raytrace_fallback_idx = process_idx(&self.raytrace_fallback_idx)?;
+        let transparent_with_specular_idx = process_idx(&self.transparent_with_specular_idx)?;
 
         let result = MeshBatch {
             id: self.id,
@@ -1014,6 +1056,8 @@ impl MeshBatchBuilder {
             translucent_idx,
             raytrace_fallback_vtx,
             raytrace_fallback_idx,
+            transparent_with_specular_vtx,
+            transparent_with_specular_idx,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
         };

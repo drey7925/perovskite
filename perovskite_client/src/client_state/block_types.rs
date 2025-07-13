@@ -21,6 +21,7 @@ pub(crate) struct ClientBlockTypeManager {
     allow_suppression_same_base_block: bv::BitVec,
     allow_face_suppress_on_exact_match: bv::BitVec,
     transparent_render_blocks: bv::BitVec,
+    transparent_with_specular: bv::BitVec,
     translucent_render_blocks: bv::BitVec,
     raytrace_present: bv::BitVec,
     raytrace_heavy: bv::BitVec,
@@ -53,6 +54,9 @@ impl ClientBlockTypeManager {
 
         let mut transparent_render_blocks = bv::BitVec::new();
         transparent_render_blocks.resize(BlockId(max_id).index() + 1, false);
+
+        let mut transparent_with_specular = bv::BitVec::new();
+        transparent_with_specular.resize(BlockId(max_id).index() + 1, false);
 
         let mut translucent_render_blocks = bv::BitVec::new();
         translucent_render_blocks.resize(BlockId(max_id).index() + 1, false);
@@ -154,6 +158,13 @@ impl ClientBlockTypeManager {
 
             if is_transparent {
                 transparent_render_blocks.set(id.index(), true);
+                if def
+                    .render_info
+                    .as_ref()
+                    .is_some_and(has_any_specular_texture)
+                {
+                    transparent_with_specular.set(id.index(), true);
+                }
             }
 
             let is_translucent = def.render_info.as_ref().is_some_and(|x| match x {
@@ -186,6 +197,7 @@ impl ClientBlockTypeManager {
             allow_suppression_same_base_block,
             allow_face_suppress_on_exact_match,
             transparent_render_blocks,
+            transparent_with_specular,
             translucent_render_blocks,
             raytrace_present,
             raytrace_heavy,
@@ -295,6 +307,15 @@ impl ClientBlockTypeManager {
     }
 
     #[inline]
+    pub(crate) fn is_transparent_with_specular(&self, id: BlockId) -> bool {
+        if id.index() < self.transparent_with_specular.len() {
+            self.transparent_with_specular[id.index()]
+        } else {
+            false
+        }
+    }
+
+    #[inline]
     pub(crate) fn is_translucent_render(&self, id: BlockId) -> bool {
         if id.index() < self.translucent_render_blocks.len() {
             self.translucent_render_blocks[id.index()]
@@ -346,30 +367,45 @@ impl ClientBlockTypeManager {
     }
 }
 
-fn has_any_dynamic_textures(ri: &RenderInfo) -> bool {
+fn has_any_tex_with_predicate(
+    ri: &RenderInfo,
+    predicate: &impl Fn(&Option<TextureReference>) -> bool,
+) -> bool {
     match ri {
         RenderInfo::Empty(_) => false,
         RenderInfo::Cube(cube) => {
-            has_dynamic_texture(&cube.tex_right)
-                || has_dynamic_texture(&cube.tex_left)
-                || has_dynamic_texture(&cube.tex_top)
-                || has_dynamic_texture(&cube.tex_bottom)
-                || has_dynamic_texture(&cube.tex_front)
-                || has_dynamic_texture(&cube.tex_back)
+            predicate(&cube.tex_right)
+                || predicate(&cube.tex_left)
+                || predicate(&cube.tex_top)
+                || predicate(&cube.tex_bottom)
+                || predicate(&cube.tex_front)
+                || predicate(&cube.tex_back)
         }
-        RenderInfo::PlantLike(plant) => has_dynamic_texture(&plant.tex),
+        RenderInfo::PlantLike(plant) => predicate(&plant.tex),
         RenderInfo::AxisAlignedBoxes(aabbs) => aabbs.boxes.iter().any(|aabb| {
-            has_dynamic_texture(&aabb.tex_right)
-                || has_dynamic_texture(&aabb.tex_left)
-                || has_dynamic_texture(&aabb.tex_top)
-                || has_dynamic_texture(&aabb.tex_bottom)
-                || has_dynamic_texture(&aabb.tex_front)
-                || has_dynamic_texture(&aabb.tex_back)
+            predicate(&aabb.tex_right)
+                || predicate(&aabb.tex_left)
+                || predicate(&aabb.tex_top)
+                || predicate(&aabb.tex_bottom)
+                || predicate(&aabb.tex_front)
+                || predicate(&aabb.tex_back)
         }),
     }
+}
+
+fn has_any_dynamic_textures(ri: &RenderInfo) -> bool {
+    has_any_tex_with_predicate(ri, &has_dynamic_texture)
 }
 
 fn has_dynamic_texture(tex: &Option<TextureReference>) -> bool {
     tex.as_ref()
         .is_some_and(|x| x.crop.is_some_and(|x| x.dynamic.is_some()))
+}
+
+fn has_specular_channel(tex: &Option<TextureReference>) -> bool {
+    tex.as_ref().is_some_and(|x| !x.rt_specular.is_empty())
+}
+
+fn has_any_specular_texture(ri: &RenderInfo) -> bool {
+    has_any_tex_with_predicate(ri, &has_specular_channel)
 }

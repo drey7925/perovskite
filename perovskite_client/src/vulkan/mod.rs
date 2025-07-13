@@ -978,6 +978,7 @@ pub(crate) enum ImageId {
     MainColor,
     MainDepthStencil,
     MainDepthStencilDepthOnly,
+    MainColorResolved,
     SwapchainColor,
     RtSpecRawColor,
     RtSpecStencil,
@@ -990,7 +991,7 @@ pub(crate) enum ImageId {
 impl ImageId {
     fn image_format(&self, f: &SelectedFormats) -> Format {
         match self {
-            ImageId::MainColor => f.color,
+            ImageId::MainColor | ImageId::MainColorResolved => f.color,
             ImageId::MainDepthStencil => f.depth_stencil,
             ImageId::MainDepthStencilDepthOnly => f.depth_stencil,
             ImageId::SwapchainColor => f.swapchain,
@@ -1016,13 +1017,14 @@ impl ImageId {
             ImageId::MainColor => upsampled,
             ImageId::MainDepthStencil => upsampled,
             ImageId::MainDepthStencilDepthOnly => upsampled,
+            ImageId::MainColorResolved => base,
             ImageId::SwapchainColor => base,
             ImageId::RtSpecRawColor => rt_deferred,
             ImageId::RtSpecStencil => rt_deferred,
             ImageId::RtSpecStrength => upsampled,
             ImageId::RtSpecRayDir => upsampled,
             ImageId::RtSpecRayDirDownsampled => rt_deferred,
-            ImageId::Blur(n) => (upsampled.0 >> n, upsampled.1 >> n),
+            ImageId::Blur(n) => (base.0 >> n, base.1 >> n),
         }
     }
 
@@ -1034,6 +1036,7 @@ impl ImageId {
             ImageId::MainColor => "色",
             ImageId::MainDepthStencil => "深",
             ImageId::MainDepthStencilDepthOnly => "半",
+            ImageId::MainColorResolved => "小",
             ImageId::SwapchainColor => "面",
             ImageId::RtSpecRawColor => "光映",
             ImageId::RtSpecStencil => "光切",
@@ -1058,6 +1061,9 @@ impl ImageId {
             ImageId::MainDepthStencilDepthOnly => {
                 ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
             }
+            ImageId::MainColorResolved => {
+                ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
+            }
             ImageId::SwapchainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
             ImageId::RtSpecRawColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecStencil => ImageUsage::DEPTH_STENCIL_ATTACHMENT,
@@ -1074,7 +1080,7 @@ impl ImageId {
         const DEPTH: ClearValue = ClearValue::Depth(1.0);
         const UINT: ClearValue = ClearValue::Uint([0; 4]);
         match self {
-            ImageId::MainColor => FLOAT,
+            ImageId::MainColor | ImageId::MainColorResolved => FLOAT,
             ImageId::MainDepthStencil => DEPTH_STENCIL,
             ImageId::MainDepthStencilDepthOnly => DEPTH,
             ImageId::SwapchainColor => FLOAT,
@@ -1296,6 +1302,13 @@ impl FramebufferHolder {
                 ..BlitImageInfo::images(self.blit_path[i].clone(), self.blit_path[i + 1].clone())
             })?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn blit_final(
+        &self,
+        command_buf_builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) -> Result<()> {
         command_buf_builder.blit_image(BlitImageInfo {
             filter: Filter::Nearest,
             ..BlitImageInfo::images(
@@ -1303,7 +1316,6 @@ impl FramebufferHolder {
                 self.try_get_image(ImageId::SwapchainColor)?.image().clone(),
             )
         })?;
-
         Ok(())
     }
 
@@ -1426,14 +1438,17 @@ impl FramebufferHolder {
         let mut multiplier = config.supersampling.to_int() / 2;
         for i in 0..config.supersampling.blit_steps() {
             log::debug!("Creating blit path image {i}, {multiplier}x samples");
-
+            let mut usage = ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST;
+            if i == config.supersampling.blit_steps() - 1 {
+                usage |= ImageUsage::COLOR_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT;
+            }
             let buffer = Image::new(
                 ctx.clone_allocator(),
                 ImageCreateInfo {
                     image_type: ImageType::Dim2d,
                     format: config.formats.color,
                     extent: [base_extent[0] * multiplier, base_extent[1] * multiplier, 1],
-                    usage: ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST,
+                    usage,
                     initial_layout: ImageLayout::Undefined,
                     ..Default::default()
                 },
@@ -1445,6 +1460,12 @@ impl FramebufferHolder {
             blit_path.push(buffer);
             multiplier /= 2;
         }
+        views[ImageId::MainColorResolved] = Some(ImageView::new_default(
+            blit_path
+                .last()
+                .context("Blit path was empty; this should never happen")?
+                .clone(),
+        )?);
 
         Ok(FramebufferHolder {
             image_i,

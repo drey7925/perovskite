@@ -41,6 +41,7 @@ use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
     ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim,
     RAYTRACE_FALLBACK_RECLAIMER, SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
+    TRANSPARENT_WITH_SPECULAR_RECLAIMER,
 };
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
@@ -333,6 +334,7 @@ pub(crate) struct VkChunkVertexDataGpu {
     pub(crate) transparent: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
     pub(crate) translucent: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
     pub(crate) raytrace_fallback: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
+    pub(crate) transparent_with_specular: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataGpu {
     pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
@@ -353,6 +355,7 @@ impl VkChunkVertexDataGpu {
             transparent: None,
             translucent: None,
             raytrace_fallback: None,
+            transparent_with_specular: None,
         }
     }
 }
@@ -373,6 +376,7 @@ pub(crate) struct VkChunkVertexDataCpu {
     pub(crate) transparent: Option<VkBufferCpu<CubeGeometryVertex>>,
     pub(crate) translucent: Option<VkBufferCpu<CubeGeometryVertex>>,
     pub(crate) raytrace_fallback: Option<VkBufferCpu<CubeGeometryVertex>>,
+    pub(crate) transparent_with_specular: Option<VkBufferCpu<CubeGeometryVertex>>,
 }
 impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
@@ -381,27 +385,28 @@ impl VkChunkVertexDataCpu {
             transparent: None,
             translucent: None,
             raytrace_fallback: None,
+            transparent_with_specular: None,
         }
     }
 
     pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<VkChunkVertexDataGpu> {
+        let work = move |x: &VkBufferCpu<CubeGeometryVertex>| x.to_gpu(allocator.clone());
         Ok(VkChunkVertexDataGpu {
-            opaque: match &self.opaque {
-                Some(x) => x.to_gpu(allocator.clone())?,
-                None => None,
-            },
-            transparent: match &self.transparent {
-                Some(x) => x.to_gpu(allocator.clone())?,
-                None => None,
-            },
-            translucent: match &self.translucent {
-                Some(x) => x.to_gpu(allocator.clone())?,
-                None => None,
-            },
-            raytrace_fallback: match &self.raytrace_fallback {
-                Some(x) => x.to_gpu(allocator)?,
-                None => None,
-            },
+            opaque: self.opaque.as_ref().map(&work).transpose()?.flatten(),
+            transparent: self.transparent.as_ref().map(&work).transpose()?.flatten(),
+            translucent: self.translucent.as_ref().map(&work).transpose()?.flatten(),
+            raytrace_fallback: self
+                .raytrace_fallback
+                .as_ref()
+                .map(&work)
+                .transpose()?
+                .flatten(),
+            transparent_with_specular: self
+                .transparent_with_specular
+                .as_ref()
+                .map(&work)
+                .transpose()?
+                .flatten(),
         })
     }
 }
@@ -778,6 +783,15 @@ impl BlockRenderer {
                 |block| self.block_defs.is_raytrace_fallback_render(block),
                 |_, _| false,
                 &RAYTRACE_FALLBACK_RECLAIMER,
+            ),
+            transparent_with_specular: self.mesh_chunk_subpass(
+                chunk_data,
+                |block| self.block_defs.is_transparent_with_specular(block),
+                |block, neighbor| {
+                    block.equals_ignore_variant(neighbor)
+                        || self.block_defs.is_solid_opaque(neighbor)
+                },
+                &TRANSPARENT_WITH_SPECULAR_RECLAIMER,
             ),
         })
     }
@@ -1167,6 +1181,7 @@ impl BlockRenderer {
                 transparent: Some(buffer.clone()),
                 translucent: None,
                 raytrace_fallback: Some(buffer),
+                transparent_with_specular: None,
             },
         }))
     }

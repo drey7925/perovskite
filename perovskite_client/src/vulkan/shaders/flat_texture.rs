@@ -224,7 +224,7 @@ impl FlatTexPipelineProvider {
 }
 pub(crate) struct FlatPipelineConfig<'a> {
     pub(crate) atlas: &'a Texture2DHolder,
-    pub(crate) pre_blit: bool,
+    pub(crate) image_id: ImageId,
 }
 
 impl FlatTexPipelineProvider {
@@ -234,30 +234,18 @@ impl FlatTexPipelineProvider {
         config: FlatPipelineConfig<'_>,
         global_config: &LiveRenderConfig,
     ) -> Result<FlatTexPipelineWrapper> {
-        let FlatPipelineConfig { atlas, pre_blit } = config;
-
-        let image = if pre_blit {
-            ImageId::MainColor
-        } else {
-            ImageId::SwapchainColor
-        };
+        let FlatPipelineConfig { atlas, image_id } = config;
 
         let subpass = Subpass::from(
             ctx.renderpasses
                 .get_by_framebuffer_id(FramebufferAndLoadOpId {
-                    color_attachments: [(image, LoadOp::Load)],
+                    color_attachments: [(image_id, LoadOp::Load)],
                     depth_stencil_attachment: None,
                     input_attachments: [],
                 })?,
             0,
         )
         .context("subpass 0 missing")?;
-
-        let supersampling = if pre_blit {
-            global_config.supersampling
-        } else {
-            Supersampling::None
-        };
 
         let vs = self
             .vs
@@ -291,24 +279,7 @@ impl FlatTexPipelineProvider {
                     ..Default::default()
                 }),
                 multisample_state: Some(MultisampleState::default()),
-                viewport_state: Some(ViewportState {
-                    viewports: smallvec![Viewport {
-                        offset: [0.0, 0.0],
-                        depth_range: 0.0..=1.0,
-                        extent: [
-                            ctx.viewport.extent[0] * supersampling.to_float(),
-                            ctx.viewport.extent[1] * supersampling.to_float()
-                        ],
-                    }],
-                    scissors: smallvec![Scissor {
-                        offset: [0, 0],
-                        extent: [
-                            ctx.viewport.extent[0] as u32 * supersampling.to_int(),
-                            ctx.viewport.extent[1] as u32 * supersampling.to_int()
-                        ],
-                    }],
-                    ..Default::default()
-                }),
+                viewport_state: Some(image_id.viewport_state(&ctx.viewport, *global_config)),
                 depth_stencil_state: None,
                 color_blend_state: Some(ColorBlendState {
                     attachments: vec![ColorBlendAttachmentState {

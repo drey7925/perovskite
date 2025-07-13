@@ -115,12 +115,12 @@ void main() {
     vec3 facedir_world = normalize(facedir_world_in);
     float prev_depth = subpassLoad(f_depth_in).r;
 
+    // There are some fixups done between the raster and raytrace pipelines:
     // All raster geometry, as well as non-rendering calcs, assume that blocks have
     // their *centers* at integer coordinates.
-    // However, we have the *edges* as axis-aligned.
+    // However, we have the *edges* as integer-aligned in this code.
     // Note that this shader works in world space, with Y up throughout.
     // The Y axis orientation has been flipped in the calculation of facedir_world.
-    // This is fixed on the CPU to save some registers.
     vec2 t_min_max = t_range(fine_pos, facedir_world);
 
     if (t_min_max.x > t_min_max.y) {
@@ -162,8 +162,6 @@ void main() {
                 f_color.rgb += alpha_contrib * result.diffuse.rgb;
                 f_color.a += alpha_contrib;
 
-
-                // TODO proper specular from the block, for now hardcode glass/water
                 if (SPECULAR) {
                     if (length(result.specular.rgb) > 0.01) {
                         vec3 new_dir;

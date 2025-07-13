@@ -20,6 +20,7 @@ use super::flat_texture::{FlatTexPipelineProvider, FlatTexPipelineWrapper};
 use crate::client_state::tool_controller::ToolState;
 use crate::main_menu::InputCapture;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
+use crate::vulkan::ImageId;
 use anyhow::{Context, Result};
 use vulkano::image::sampler::{Filter, SamplerCreateInfo};
 use winit::event_loop::ActiveEventLoop;
@@ -77,7 +78,7 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: atlas.as_ref(),
-                pre_blit: false,
+                image_id: ImageId::SwapchainColor,
             },
             &ctx.renderpasses.config,
         )?;
@@ -146,7 +147,7 @@ impl EguiAdapter {
             ctx,
             FlatPipelineConfig {
                 atlas: self.atlas.as_ref(),
-                pre_blit: false,
+                image_id: ImageId::SwapchainColor,
             },
             &ctx.renderpasses.config,
         )?;

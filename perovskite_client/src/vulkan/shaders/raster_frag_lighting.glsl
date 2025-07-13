@@ -9,6 +9,11 @@ layout(location = 3) flat in vec3 world_normal;
 layout(location = 4) in vec3 world_pos;
 
 layout(location = 0) out vec4 f_color;
+#ifdef ENABLE_SPECULAR
+layout(location = 1) out vec4 spec_strength;
+layout(location = 2) out uvec4 spec_dir;
+#endif
+
 layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
 layout(set = 0, binding = 1) uniform sampler2D emissive_tex;
 

@@ -170,7 +170,7 @@ impl PostProcessingPipelineWrapper {
                 .clone(),
             [WriteDescriptorSet::image_view(
                 0,
-                framebuffer.get_image(ImageId::MainColor)?,
+                framebuffer.get_image(ImageId::MainColorResolved)?,
             )],
             [],
         )?;
@@ -272,11 +272,11 @@ impl PostProcessingPipelineWrapper {
 const EXTRACTOR: FramebufferAndLoadOpId<1, 1> = FramebufferAndLoadOpId {
     color_attachments: [(ImageId::Blur(0), LoadOp::DontCare)],
     depth_stencil_attachment: None,
-    input_attachments: [(ImageId::MainColor, LoadOp::Load)],
+    input_attachments: [(ImageId::MainColorResolved, LoadOp::Load)],
 };
 
 const LENS_FLARE: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
-    color_attachments: [(ImageId::MainColor, LoadOp::Load)],
+    color_attachments: [(ImageId::MainColorResolved, LoadOp::Load)],
     depth_stencil_attachment: None,
     input_attachments: [],
 };
@@ -352,7 +352,7 @@ impl PostProcessingPipelineProvider {
                 .into_pipeline_layout_create_info(self.device.clone())?,
         )?;
 
-        let vp_size = ImageId::MainColor.dimension(
+        let vp_size = ImageId::MainColorResolved.dimension(
             ctx.viewport.extent[0] as u32,
             ctx.viewport.extent[1] as u32,
             *global_config,
@@ -373,7 +373,7 @@ impl PostProcessingPipelineProvider {
         for step in 0..total_steps {
             let input = ImageId::Blur((total_steps - step) as u8);
             let (color, blend, op) = if step == (total_steps - 1) {
-                (ImageId::MainColor, Blend::Additive, LoadOp::Load)
+                (ImageId::MainColorResolved, Blend::Additive, LoadOp::Load)
             } else {
                 (
                     ImageId::Blur((total_steps - step - 1) as u8),
@@ -455,7 +455,9 @@ impl PostProcessingPipelineProvider {
                 }],
                 ..Default::default()
             }),
-            viewport_state: Some(ImageId::MainColor.viewport_state(&ctx.viewport, *global_config)),
+            viewport_state: Some(
+                ImageId::MainColorResolved.viewport_state(&ctx.viewport, *global_config),
+            ),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
                 Subpass::from(
                     ctx.renderpasses
