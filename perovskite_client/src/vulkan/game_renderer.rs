@@ -464,7 +464,7 @@ impl ActiveGame {
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
             FramebufferAndLoadOpId {
-                color_attachments: [(ImageId::SwapchainColor, LoadOp::DontCare)],
+                color_attachments: [(ImageId::SwapchainColor, LoadOp::Load)],
                 depth_stencil_attachment: None,
                 input_attachments: [],
             },
