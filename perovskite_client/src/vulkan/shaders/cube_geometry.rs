@@ -412,7 +412,8 @@ impl CubePipelineProvider {
             layout: layout_sparse,
             ..solid_pipeline_info.clone()
         };
-        let translucent_pipeline_info = if config.hybrid_rt && ctx.raytracing_supported {
+        let will_hybrid_rt = config.raytracing && config.hybrid_rt && ctx.raytracing_supported;
+        let translucent_pipeline_info = if will_hybrid_rt {
             let fs_unified = self
                 .fs_unified_specular
                 .specialize(HashMap::from_iter([
@@ -591,7 +592,7 @@ impl CubePipelineProvider {
             }
             None => None,
         };
-        let translucent_atlas_descriptor_set = if config.hybrid_rt && ctx.raytracing_supported {
+        let translucent_atlas_descriptor_set = if will_hybrid_rt {
             let layout = translucent_pipeline
                 .layout()
                 .set_layouts()

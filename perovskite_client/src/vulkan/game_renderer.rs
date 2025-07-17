@@ -319,7 +319,9 @@ impl ActiveGame {
         let cube_uniform = self.cube_pipeline.make_uniform_buffer(ctx, scene_state)?;
 
         // At this point, we are in the Color + Depth renderpass
-        let hybrid_rt_enabled = ctx.renderpasses.config.hybrid_rt && ctx.raytracing_supported;
+        let hybrid_rt_enabled = ctx.renderpasses.config.raytracing
+            && ctx.renderpasses.config.hybrid_rt
+            && ctx.raytracing_supported;
         if self.raytrace_data.is_none() || hybrid_rt_enabled {
             self.cube_pipeline
                 .draw_single_step(
@@ -363,13 +365,7 @@ impl ActiveGame {
             )
             .context("Entities pipeline draw failed")?;
 
-        if ctx.renderpasses.config.raytracing
-            && hybrid_rt_enabled
-            && (self
-                .cube_draw_calls
-                .iter()
-                .any(|x| x.models.draw_buffers[CubeDrawStep::TransparentSpecular].is_some()))
-        {
+        if hybrid_rt_enabled {
             command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
             command_buf_builder.copy_image(CopyImageInfo {
                 ..CopyImageInfo::images(
@@ -384,6 +380,8 @@ impl ActiveGame {
                 )
             })?;
             // If we're doing hybrid RT, switch to the specular + secondary depth renderpass
+            // This has to happen even if we don't have anything to render, since we rely on this
+            // clear for correctness
             framebuffer.begin_render_pass(
                 &mut command_buf_builder,
                 cube_geometry::SPECULAR_FRAMEBUFFER_CLEAR_OUTPUT,
@@ -410,19 +408,6 @@ impl ActiveGame {
             //         EntityDrawStep::Specular,
             //     )
             //     .context("Entities pipeline draw failed")?;
-
-            command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
-
-            framebuffer.begin_render_pass(
-                &mut command_buf_builder,
-                FramebufferAndLoadOpId {
-                    color_attachments: [(ImageId::MainColor, LoadOp::Load)],
-                    depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
-                    input_attachments: [],
-                },
-                &ctx.renderpasses,
-                SubpassContents::Inline,
-            )?;
         }
 
         // At this point, if hybrid RT is off, we're still in the Color + Depth renderpass.

@@ -199,6 +199,7 @@ impl MainMenu {
 
             let settings_button = egui::Button::new("Settings");
             if ui.add(settings_button).clicked() {
+                self.prospective_settings = (**self.settings.load()).clone();
                 self.show_settings_popup = true;
             }
         });
