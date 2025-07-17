@@ -316,6 +316,8 @@ impl ActiveGame {
             )
         };
 
+        let cube_uniform = self.cube_pipeline.make_uniform_buffer(ctx, scene_state)?;
+
         // At this point, we are in the Color + Depth renderpass
         let hybrid_rt_enabled = ctx.renderpasses.config.hybrid_rt && ctx.raytracing_supported;
         if self.raytrace_data.is_none() || hybrid_rt_enabled {
@@ -323,7 +325,7 @@ impl ActiveGame {
                 .draw_single_step(
                     ctx,
                     &mut command_buf_builder,
-                    scene_state,
+                    cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::Opaque,
                 )
@@ -332,7 +334,7 @@ impl ActiveGame {
                 .draw_single_step(
                     ctx,
                     &mut command_buf_builder,
-                    scene_state,
+                    cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::Transparent,
                 )
@@ -342,7 +344,7 @@ impl ActiveGame {
                 .draw_single_step(
                     ctx,
                     &mut command_buf_builder,
-                    scene_state,
+                    cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::RaytraceFallback,
                 )
@@ -393,7 +395,7 @@ impl ActiveGame {
                 .draw_single_step(
                     ctx,
                     &mut command_buf_builder,
-                    scene_state,
+                    cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::TransparentSpecular,
                 )
@@ -443,7 +445,7 @@ impl ActiveGame {
                 .draw_single_step(
                     ctx,
                     &mut command_buf_builder,
-                    scene_state,
+                    cube_uniform.clone(),
                     &mut self.cube_draw_calls,
                     CubeDrawStep::Translucent,
                 )

@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::{sync::Arc, time::Instant};
 use tinyvec::array_vec;
 use tracy_client::{plot, span};
+use vulkano::buffer::Subbuffer;
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::color_blend::{
@@ -135,7 +136,7 @@ impl CubePipelineWrapper {
         &mut self,
         ctx: &VulkanContext,
         builder: &mut CommandBufferBuilder<L>,
-        per_frame_config: SceneState,
+        uniform_buffer: Subbuffer<UniformData>,
         draw_calls: &mut [CubeGeometryDrawCall],
         pass: CubeDrawStep,
     ) -> Result<()> {
@@ -164,25 +165,6 @@ impl CubePipelineWrapper {
             .set_layouts()
             .get(1)
             .with_context(|| "Cube pipeline layout missing set 1")?;
-
-        let uniform_buffer = Buffer::from_data(
-            ctx.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
-                    | MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-            UniformData {
-                vp_matrix: per_frame_config.vp_matrix.into(),
-                plant_wave_vector: self.get_plant_wave_vector().into(),
-                global_brightness_color: per_frame_config.global_light_color.into(),
-                global_light_direction: per_frame_config.sun_direction.into(),
-            },
-        )?;
 
         let per_frame_set = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
@@ -245,6 +227,32 @@ impl CubePipelineWrapper {
         };
         Ok(())
     }
+
+    pub(crate) fn make_uniform_buffer(
+        &self,
+        ctx: &VulkanContext,
+        per_frame_config: SceneState,
+    ) -> Result<Subbuffer<UniformData>> {
+        Buffer::from_data(
+            ctx.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE
+                    | MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            UniformData {
+                vp_matrix: per_frame_config.vp_matrix.into(),
+                plant_wave_vector: self.get_plant_wave_vector().into(),
+                global_brightness_color: per_frame_config.global_light_color.into(),
+                global_light_direction: per_frame_config.sun_direction.into(),
+            },
+        )
+        .context("Failed to create uniform buffer")
+    }
 }
 
 pub(crate) const MAIN_FRAMEBUFFER: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
@@ -279,7 +287,7 @@ pub(crate) const SPECULAR_UNIFIED_FRAMEBUFFER: FramebufferAndLoadOpId<3, 0> =
             (ImageId::RtSpecStrength, LoadOp::Load),
             (ImageId::RtSpecRayDir, LoadOp::Load),
         ],
-        depth_stencil_attachment: Some((ImageId::TransparentWithSpecularDepth, LoadOp::Load)),
+        depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
         input_attachments: [],
     };
 

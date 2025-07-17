@@ -9,6 +9,7 @@ use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
 use crate::vulkan::shaders::cube_geometry::RenderPasses;
+use crate::vulkan::shaders::vert_3d::UniformData;
 use crate::vulkan::shaders::{LiveRenderConfig, VkDrawBufferGpu};
 use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
@@ -56,6 +57,7 @@ pub(crate) struct MiniBlockRenderer {
     target_image: Arc<ImageView>,
     cube_provider: CubePipelineProvider,
     cube_pipeline: CubePipelineWrapper,
+    uniform: Subbuffer<UniformData>,
     download_buffer: Subbuffer<[u8]>,
     fake_chunk: Box<[BlockId; 18 * 18 * 18]>,
 }
@@ -154,6 +156,7 @@ impl MiniBlockRenderer {
                 .checked_mul(4)
                 .context("Surface too big")?,
         )?;
+        let uniform = cube_pipeline.make_uniform_buffer(&ctx, *SCENE_STATE)?;
         Ok(Self {
             ctx,
             surface_size,
@@ -163,6 +166,7 @@ impl MiniBlockRenderer {
             cube_provider,
             cube_pipeline,
             download_buffer,
+            uniform,
             fake_chunk: Box::new([AIR_ID; 18 * 18 * 18]),
         })
     }
@@ -218,7 +222,7 @@ impl MiniBlockRenderer {
             self.cube_pipeline.draw_single_step(
                 &self.ctx,
                 &mut commands,
-                *SCENE_STATE,
+                self.uniform.clone(),
                 &mut [draw_call],
                 CubeDrawStep::Transparent,
             )?;
