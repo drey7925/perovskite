@@ -31,14 +31,10 @@ vulkano_shaders::shader! {
         ty: "vertex",
         src: r"
             #version 460
-                const vec2 vertices[6] = vec2[](
-                    vec2(-1.0, -1.0),
-                    vec2(-1.0, 1.0),
-                    vec2(1.0, 1.0),
-
-                    vec2(-1.0, -1.0),
-                    vec2(1.0, 1.0),
-                    vec2(1.0, -1.0)
+                const vec2 vertices[3] = vec2[](
+                vec2(-1.0, -1.0),
+                vec2(-1.0, 3.0),
+                vec2(3.0, -1.0)
                 );
 
                 layout(set = 0, binding = 0) uniform SkyUniformData {
@@ -125,7 +121,7 @@ impl SkyPipelineWrapper {
 
         unsafe {
             // Safety: TODO
-            command_buf_builder.draw(6, 1, 0, 0)?;
+            command_buf_builder.draw(3, 1, 0, 0)?;
         }
         Ok(())
     }

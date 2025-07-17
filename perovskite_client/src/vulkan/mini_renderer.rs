@@ -1,13 +1,14 @@
 use super::{
     block_renderer::{BlockRenderer, VkChunkVertexDataGpu},
     shaders::cube_geometry::{
-        BlockRenderPass, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
+        CubeDrawStep, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
     },
     LoadOp, RenderPassHolder, RenderPassId, Texture2DHolder, VulkanContext,
 };
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
+use crate::vulkan::shaders::cube_geometry::RenderPasses;
 use crate::vulkan::shaders::{LiveRenderConfig, VkDrawBufferGpu};
 use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
@@ -15,17 +16,20 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
+use enum_map::enum_map;
 use image::{DynamicImage, RgbaImage};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
+use smallvec::smallvec;
 use std::sync::Arc;
 use tinyvec::array_vec;
 use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};
 use vulkano::memory::allocator::MemoryTypeFilter;
+use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
@@ -112,11 +116,24 @@ impl MiniBlockRenderer {
             depth_range: 0.0..=1.0,
         };
 
+        let viewport_state = ViewportState {
+            viewports: smallvec![Viewport {
+                offset: [0.0, 0.0],
+                depth_range: 0.0..=1.0,
+                extent: [viewport.extent[0], viewport.extent[1]],
+            }],
+            scissors: smallvec![Scissor {
+                offset: [0, 0],
+                extent: [surface_size[0], surface_size[1]],
+            }],
+            ..Default::default()
+        };
+
         let cube_provider = CubePipelineProvider::new(ctx.vk_device.clone())?;
         let cube_pipeline = cube_provider.build_pipeline(
             &ctx,
-            viewport,
-            render_pass.clone(),
+            viewport_state,
+            RenderPasses::MainOnly(render_pass.clone()),
             atlas_texture,
             &ctx.non_swapchain_config(),
         )?;
@@ -191,23 +208,19 @@ impl MiniBlockRenderer {
         )?;
         let pass = VkDrawBufferGpu::from_buffers(&vtx, &idx, self.ctx.clone_allocator())?;
 
-        if let Some(pass) = pass {
+        if let Some(buffer) = pass {
+            let mut draw_buffers = enum_map! { _ => None };
+            draw_buffers[CubeDrawStep::Opaque] = Some(buffer);
             let draw_call = CubeGeometryDrawCall {
-                models: VkChunkVertexDataGpu {
-                    opaque: None,
-                    transparent: Some(pass),
-                    translucent: None,
-                    raytrace_fallback: None,
-                    transparent_with_specular: None,
-                },
+                models: VkChunkVertexDataGpu { draw_buffers },
                 model_matrix: Matrix4::identity(),
             };
-            self.cube_pipeline.draw(
+            self.cube_pipeline.draw_single_step(
                 &self.ctx,
                 &mut commands,
                 *SCENE_STATE,
                 &mut [draw_call],
-                BlockRenderPass::Transparent,
+                CubeDrawStep::Transparent,
             )?;
         }
         commands.end_render_pass(SubpassEndInfo {

@@ -632,9 +632,8 @@ fn draw_render_settings(
     const HDR_BLOOM_STRENGTH_HOVER_TEXT: &str = "Relative strength of the HDR bloom effect.";
     const HDR_BLOOM_SIZE_HOVER_TEXT: &str = "Relative size of the HDR bloom effect.";
     const HDR_LENS_FLARE_STRENGTH_HOVER_TEXT: &str = "Relative strength of lens flares.";
-    const RAYTRACED_REFLECTIONS_HOVER_TEXT: &str =
-        "Controls reflections from shiny surfaces. Only applicable if raytracing is enabled";
     const ON_DEMAND_RAYTRACING_HOVER_TEXT: &str = "If enabled, raytracing data is only uploaded for the current area, on demand when [TBD key] is pressed. This may improve usability on older or integrated GPUs that lag during data uploads, allowing raytraced screenshots to be taken, at the expense of realtime raytracing experience.";
+    const FORCE_PRIMARY_RAYTRACING_HOVER_TEXT: &str = "If enabled, force the main view of the scene (not just the reflections) to use the raytracer. At the moment, this provides worse performance/quality and is intended for debugging.";
     const RAYTRACER_DEBUGGING_HOVER_TEXT: &str = "If enabled, inverts colors on non-raytraced geometry and shows low-level details about the BVH directly in the output. Only applicable if raytracing is enabled.";
     const SPECULAR_DOWNSAMPLING_HOVER_TEXT: &str = "Specular reflection downsampling factor. Higher values improve performance at the expense of visual quality. Only applicable if raytracing is enabled.";
     const SUPERSAMPLING_HOVER_TEXT: &str =
@@ -798,17 +797,7 @@ fn draw_render_settings(
             ))
                 .on_hover_text(raytracing_hover_text);
             ui.end_row();
-            ui.label("Raytraced reflections")
-                .on_hover_text(RAYTRACED_REFLECTIONS_HOVER_TEXT);
-            ui.add_enabled(
-                prospective_settings.render.raytracing,
-                egui::Checkbox::new(
-                    &mut prospective_settings.render.raytraced_reflections,
-                    "Enabled",
-                ),
-            )
-                .on_hover_text(RAYTRACED_REFLECTIONS_HOVER_TEXT);
-            ui.end_row();
+
             ui.label("On-demand raytracing")
                 .on_hover_text(ON_DEMAND_RAYTRACING_HOVER_TEXT);
             ui.add_enabled(
@@ -819,6 +808,17 @@ fn draw_render_settings(
                 ),
             )
                 .on_hover_text(ON_DEMAND_RAYTRACING_HOVER_TEXT);
+            ui.end_row();
+            ui.label("Force primary raytrace")
+                .on_hover_text(FORCE_PRIMARY_RAYTRACING_HOVER_TEXT);
+            ui.add_enabled(
+                prospective_settings.render.raytracing,
+                egui::Checkbox::new(
+                    &mut prospective_settings.render.force_primary_rt,
+                    "Enabled",
+                ),
+            )
+                .on_hover_text(FORCE_PRIMARY_RAYTRACING_HOVER_TEXT);
             ui.end_row();
             ui.label("Raytracer debugging")
                 .on_hover_text(RAYTRACER_DEBUGGING_HOVER_TEXT);
@@ -836,7 +836,7 @@ fn draw_render_settings(
                     &mut prospective_settings
                         .render
                         .raytracing_specular_downsampling,
-                    1..=4,
+                    1..=8,
                 )
                     .suffix("x"),
             )

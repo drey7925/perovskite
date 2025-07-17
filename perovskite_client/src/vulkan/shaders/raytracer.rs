@@ -210,39 +210,40 @@ impl RaytracedPipelineWrapper {
         )
         .context("Failed to create secondary per-frame descriptor set")?;
 
-        framebuffer
-            .begin_render_pass(
-                command_buf_builder,
-                RT_PRIMARY,
-                &ctx.renderpasses,
-                SubpassContents::Inline,
-            )
-            .context("Failed to begin primary raytracing render pass")?;
-        command_buf_builder
-            .bind_pipeline_graphics(self.primary_pipeline.clone())
-            .context("Failed to bind primary raytracing pipeline")?;
-
-        command_buf_builder
-            .bind_descriptor_sets(
-                vulkano::pipeline::PipelineBindPoint::Graphics,
-                primary_layout,
-                0,
-                vec![
-                    self.long_term_descriptor_set.clone(),
-                    per_frame_set_primary.clone(),
-                ],
-            )
-            .context("Failed to bind descriptor sets for primary raytracing pass")?;
-        unsafe {
-            // Safety: TODO
+        if !ctx.renderpasses.config.hybrid_rt {
+            framebuffer
+                .begin_render_pass(
+                    command_buf_builder,
+                    RT_PRIMARY,
+                    &ctx.renderpasses,
+                    SubpassContents::Inline,
+                )
+                .context("Failed to begin primary raytracing render pass")?;
             command_buf_builder
-                .draw(3, 1, 0, 0)
-                .context("Failed to draw in primary raytracing pass")?;
-        }
-        command_buf_builder
-            .end_render_pass(SubpassEndInfo::default())
-            .context("Failed to end primary raytracing render pass")?;
+                .bind_pipeline_graphics(self.primary_pipeline.clone())
+                .context("Failed to bind primary raytracing pipeline")?;
 
+            command_buf_builder
+                .bind_descriptor_sets(
+                    vulkano::pipeline::PipelineBindPoint::Graphics,
+                    primary_layout,
+                    0,
+                    vec![
+                        self.long_term_descriptor_set.clone(),
+                        per_frame_set_primary.clone(),
+                    ],
+                )
+                .context("Failed to bind descriptor sets for primary raytracing pass")?;
+            unsafe {
+                // Safety: TODO
+                command_buf_builder
+                    .draw(3, 1, 0, 0)
+                    .context("Failed to draw in primary raytracing pass")?;
+            }
+            command_buf_builder
+                .end_render_pass(SubpassEndInfo::default())
+                .context("Failed to end primary raytracing render pass")?;
+        }
         // Prepare the (downsampled) mask
         framebuffer
             .begin_render_pass(
@@ -464,10 +465,7 @@ impl RaytracedPipelineProvider {
             "Missing vertex shader (coordinate-free fullscreen primitive vertex shader)",
         )?;
         let spec_constants = HashMap::from_iter([
-            (
-                0,
-                SpecializationConstant::Bool(global_config.raytracing_reflections),
-            ),
+            (0, SpecializationConstant::Bool(true)),
             (
                 2,
                 SpecializationConstant::Bool(global_config.raytracer_debug),

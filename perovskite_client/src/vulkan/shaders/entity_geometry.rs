@@ -17,7 +17,7 @@
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::{
-    frag_lighting,
+    frag_lighting_basic_color,
     vert_3d::{self, UniformData},
     LiveRenderConfig, VkDrawBufferGpu,
 };
@@ -89,8 +89,13 @@ pub(crate) struct EntityGeometryDrawCall {
 }
 
 pub(crate) struct EntityPipelineWrapper {
-    pipeline: Arc<GraphicsPipeline>,
+    main_pipeline: Arc<GraphicsPipeline>,
     descriptor: Arc<DescriptorSet>,
+}
+
+pub(crate) enum EntityDrawStep {
+    Color,
+    Specular,
 }
 
 impl EntityPipelineWrapper {
@@ -99,11 +104,15 @@ impl EntityPipelineWrapper {
         ctx: &VulkanContext,
         builder: &mut CommandBufferBuilder<L>,
         per_frame_config: SceneState,
-        draw_calls: Vec<EntityGeometryDrawCall>,
+        draw_calls: &[EntityGeometryDrawCall],
+        step: EntityDrawStep,
     ) -> Result<()> {
         let _span = span!("draw entities");
 
-        let pipeline = self.pipeline.clone();
+        let pipeline = match step {
+            EntityDrawStep::Color => self.main_pipeline.clone(),
+            EntityDrawStep::Specular => todo!(), // self.specular_pipeline.clone(),
+        };
         let layout = pipeline.layout().clone();
 
         let per_frame_set_layout = layout
@@ -146,7 +155,7 @@ impl EntityPipelineWrapper {
         )?;
 
         builder.bind_pipeline_graphics(pipeline)?;
-        for call in draw_calls.into_iter() {
+        for call in draw_calls.iter() {
             let push_data: ModelMatrix = call.model_matrix.into();
             builder
                 .push_constants(layout.clone(), 0, push_data)?
@@ -170,7 +179,7 @@ pub(crate) struct EntityPipelineProvider {
 impl EntityPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<EntityPipelineProvider> {
         let vs_entity = vert_3d::load_entity_tentative(device.clone())?;
-        let fs = frag_lighting::load(device.clone())?;
+        let fs = frag_lighting_basic_color::load(device.clone())?;
         Ok(EntityPipelineProvider {
             device,
             vs_entity,
@@ -269,7 +278,7 @@ impl EntityPipelineProvider {
             [],
         )?;
         Ok(EntityPipelineWrapper {
-            pipeline,
+            main_pipeline: pipeline,
             descriptor: solid_descriptor,
         })
     }

@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
+use enum_map::{enum_map, Enum, EnumMap};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
 use perovskite_core::lighting::Lightfield;
 use perovskite_core::protocol::game_rpc as rpc_proto;
@@ -39,7 +40,9 @@ use crate::vulkan::block_renderer::{
     BlockRenderer, VkChunkRaytraceData, VkChunkVertexDataCpu, VkChunkVertexDataGpu,
 };
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
-use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::shaders::cube_geometry::{
+    CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
+};
 use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
 use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VkAllocator, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
@@ -222,21 +225,11 @@ struct ChunkMesh {
 impl Drop for ChunkMesh {
     fn drop(&mut self) {
         if let Some(cpu_data) = self.solo_cpu.take() {
-            if let Some(solid) = cpu_data.opaque {
-                SOLID_RECLAIMER.put(solid.idx, solid.vtx);
-            }
-            if let Some(transparent) = cpu_data.transparent {
-                TRANSPARENT_RECLAIMER.put(transparent.idx, transparent.vtx);
-            }
-            if let Some(translucent) = cpu_data.translucent {
-                TRANSLUCENT_RECLAIMER.put(translucent.idx, translucent.vtx);
-            }
-            if let Some(raytrace_fallback) = cpu_data.raytrace_fallback {
-                RAYTRACE_FALLBACK_RECLAIMER.put(raytrace_fallback.idx, raytrace_fallback.vtx);
-            }
-            if let Some(transparent_with_specular) = cpu_data.transparent_with_specular {
-                TRANSPARENT_WITH_SPECULAR_RECLAIMER
-                    .put(transparent_with_specular.idx, transparent_with_specular.vtx)
+            for (reclaimer, buffer) in RECLAIMERS.values().zip(cpu_data.draw_buffers.into_values())
+            {
+                if let Some(buffer) = buffer {
+                    reclaimer.put(buffer.idx, buffer.vtx);
+                }
             }
         }
     }
@@ -307,16 +300,9 @@ impl MeshVectorReclaim {
 // argument for making these global as well. In any case they need to be lock-free MPMC anyway for
 // concurrency reasons, so shared references are OK anyway
 lazy_static::lazy_static! {
-    pub(crate) static ref SOLID_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
-    pub(crate) static ref TRANSPARENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
-    pub(crate) static ref TRANSLUCENT_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
-    pub(crate) static ref RAYTRACE_FALLBACK_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
-    pub(crate) static ref TRANSPARENT_WITH_SPECULAR_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(4096);
-    pub(crate) static ref SOLID_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
-    pub(crate) static ref TRANSPARENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
-    pub(crate) static ref TRANSLUCENT_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
-    pub(crate) static ref RAYTRACE_FALLBACK_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
-    pub(crate) static ref TRANSPARENT_WITH_SPECULAR_BATCH_RECLAIMER: MeshVectorReclaim = MeshVectorReclaim::new(128);
+    pub(crate) static ref RECLAIMERS: EnumMap<CubeDrawStep, MeshVectorReclaim> = enum_map! {
+        _ => MeshVectorReclaim::new(4096),
+    };
 }
 
 impl ClientChunk {
@@ -414,10 +400,7 @@ impl ClientChunk {
             ChunkRenderState::ReadyToRender => Some(renderer.mesh_chunk(&data)?),
             ChunkRenderState::AuditNoRender => {
                 let result = renderer.mesh_chunk(&data)?;
-                if result.opaque.is_some()
-                    || result.transparent.is_some()
-                    || result.translucent.is_some()
-                {
+                if result.draw_buffers.values().any(|x| x.is_some()) {
                     log::warn!("Failed no-render audit for {:?}", self.coord);
                 }
                 Some(result)
@@ -743,16 +726,8 @@ static NEXT_MESH_BATCH_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct MeshBatch {
     id: u64,
-    solid_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
-    solid_idx: Option<ReclaimableBuffer<u32>>,
-    transparent_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
-    transparent_idx: Option<ReclaimableBuffer<u32>>,
-    translucent_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
-    translucent_idx: Option<ReclaimableBuffer<u32>>,
-    raytrace_fallback_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
-    raytrace_fallback_idx: Option<ReclaimableBuffer<u32>>,
-    transparent_with_specular_vtx: Option<ReclaimableBuffer<CubeGeometryVertex>>,
-    transparent_with_specular_idx: Option<ReclaimableBuffer<u32>>,
+    vertex_buffers: EnumMap<CubeDrawStep, Option<ReclaimableBuffer<CubeGeometryVertex>>>,
+    index_buffers: EnumMap<CubeDrawStep, Option<ReclaimableBuffer<u32>>>,
 
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
     base_position: Vector3<f64>,
@@ -761,8 +736,14 @@ pub(crate) struct MeshBatch {
 impl MeshBatch {
     pub(crate) fn solid_occupancy(&self) -> (usize, usize) {
         (
-            self.solid_vtx.as_deref().map(Subbuffer::len).unwrap_or(0) as usize,
-            self.solid_idx.as_deref().map(Subbuffer::len).unwrap_or(0) as usize,
+            self.vertex_buffers[CubeDrawStep::Opaque]
+                .as_deref()
+                .map(Subbuffer::len)
+                .unwrap_or(0) as usize,
+            self.index_buffers[CubeDrawStep::Opaque]
+                .as_deref()
+                .map(Subbuffer::len)
+                .unwrap_or(0) as usize,
         )
     }
 }
@@ -796,71 +777,18 @@ impl MeshBatch {
 
         Some(CubeGeometryDrawCall {
             models: VkChunkVertexDataGpu {
-                opaque: if self.solid_vtx.is_some() && self.solid_idx.is_some() {
-                    Some(VkDrawBufferGpu {
-                        num_indices: self.solid_idx.as_ref().unwrap().valid_len() as u32,
-                        vtx: self.solid_vtx.as_deref().unwrap().clone(),
-                        idx: self.solid_idx.as_deref().unwrap().clone(),
-                    })
-                } else {
-                    None
-                },
-
-                transparent: if self.transparent_vtx.is_some() && self.transparent_idx.is_some() {
-                    Some(VkDrawBufferGpu {
-                        num_indices: self.transparent_idx.as_ref().unwrap().valid_len() as u32,
-                        vtx: self.transparent_vtx.as_deref().unwrap().clone(),
-                        idx: self.transparent_idx.as_deref().unwrap().clone(),
-                    })
-                } else {
-                    None
-                },
-
-                translucent: if self.translucent_vtx.is_some() && self.translucent_idx.is_some() {
-                    Some(VkDrawBufferGpu {
-                        num_indices: self.translucent_idx.as_ref().unwrap().valid_len() as u32,
-                        vtx: self.translucent_vtx.as_deref().unwrap().clone(),
-                        idx: self.translucent_idx.as_deref().unwrap().clone(),
-                    })
-                } else {
-                    None
-                },
-
-                raytrace_fallback: if self.raytrace_fallback_vtx.is_some()
-                    && self.raytrace_fallback_idx.is_some()
-                {
-                    Some(VkDrawBufferGpu {
-                        num_indices: self.raytrace_fallback_idx.as_ref().unwrap().valid_len()
-                            as u32,
-                        vtx: self.raytrace_fallback_vtx.as_deref().unwrap().clone(),
-                        idx: self.raytrace_fallback_idx.as_deref().unwrap().clone(),
-                    })
-                } else {
-                    None
-                },
-
-                transparent_with_specular: if self.transparent_with_specular_vtx.is_some()
-                    && self.transparent_with_specular_idx.is_some()
-                {
-                    Some(VkDrawBufferGpu {
-                        num_indices: self
-                            .transparent_with_specular_idx
-                            .as_ref()
-                            .unwrap()
-                            .valid_len() as u32,
-                        vtx: self
-                            .transparent_with_specular_vtx
-                            .as_deref()
-                            .unwrap()
-                            .clone(),
-                        idx: self
-                            .transparent_with_specular_idx
-                            .as_deref()
-                            .unwrap()
-                            .clone(),
-                    })
-                } else {
-                    None
+                draw_buffers: enum_map! {
+                    step => {
+                        if self.vertex_buffers[step].is_some() && self.index_buffers[step].is_some() {
+                            Some(VkDrawBufferGpu {
+                                num_indices: self.index_buffers[step].as_ref().unwrap().valid_len() as u32,
+                                vtx: self.vertex_buffers[step].as_deref().unwrap().clone(),
+                                idx: self.index_buffers[step].as_deref().unwrap().clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
                 },
             },
             model_matrix: matrix.cast().unwrap(),
@@ -873,51 +801,21 @@ impl MeshBatch {
 
 pub(crate) struct MeshBatchBuilder {
     id: u64,
-    solid_vtx: Vec<CubeGeometryVertex>,
-    solid_idx: Vec<u32>,
-    transparent_vtx: Vec<CubeGeometryVertex>,
-    transparent_idx: Vec<u32>,
-    translucent_vtx: Vec<CubeGeometryVertex>,
-    translucent_idx: Vec<u32>,
-    raytrace_fallback_vtx: Vec<CubeGeometryVertex>,
-    raytrace_fallback_idx: Vec<u32>,
-    transparent_with_specular_vtx: Vec<CubeGeometryVertex>,
-    transparent_with_specular_idx: Vec<u32>,
+    vertex_buffers: EnumMap<CubeDrawStep, Vec<CubeGeometryVertex>>,
+    index_buffers: EnumMap<CubeDrawStep, Vec<u32>>,
     base_position: Vector3<f64>,
     chunks: smallvec::SmallVec<[ChunkCoordinate; TARGET_BATCH_OCCUPANCY]>,
 }
 impl MeshBatchBuilder {
     pub(crate) fn new() -> MeshBatchBuilder {
-        let (transparent_idx, transparent_vtx) = TRANSPARENT_BATCH_RECLAIMER
-            .take()
-            .unwrap_or((vec![], vec![]));
-        let (translucent_idx, translucent_vtx) = TRANSLUCENT_BATCH_RECLAIMER
-            .take()
-            .unwrap_or((vec![], vec![]));
-        let (raytrace_fallback_idx, raytrace_fallback_vtx) = RAYTRACE_FALLBACK_BATCH_RECLAIMER
-            .take()
-            .unwrap_or((vec![], vec![]));
-        let (solid_idx, solid_vtx) = SOLID_BATCH_RECLAIMER.take().unwrap_or((
-            Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 6000),
-            Vec::with_capacity(TARGET_BATCH_OCCUPANCY * 4000),
-        ));
-        let (transparent_with_specular_idx, transparent_with_specular_vtx) =
-            TRANSPARENT_WITH_SPECULAR_BATCH_RECLAIMER
-                .take()
-                .unwrap_or((vec![], vec![]));
         MeshBatchBuilder {
             id: next_id(),
-            // rough initial estimate, but should be good enough for now
-            solid_vtx,
-            solid_idx,
-            transparent_vtx,
-            transparent_idx,
-            translucent_vtx,
-            translucent_idx,
-            raytrace_fallback_vtx,
-            raytrace_fallback_idx,
-            transparent_with_specular_vtx,
-            transparent_with_specular_idx,
+            vertex_buffers: enum_map! {
+                _ => vec![]
+            },
+            index_buffers: enum_map! {
+                _ => vec![]
+            },
             base_position: Vector3::zero(),
             chunks: smallvec::SmallVec::new(),
         }
@@ -962,37 +860,15 @@ impl MeshBatchBuilder {
         if self.base_position == Vector3::zero() {
             self.base_position = chunk_pos;
         }
-        if let Some(opaque) = cpu.opaque.as_ref() {
-            Self::extend_buffer(
-                opaque,
-                &mut self.solid_vtx,
-                &mut self.solid_idx,
-                (chunk_pos - self.base_position).cast().unwrap(),
-            );
-        }
-        if let Some(transparent) = cpu.transparent.as_ref() {
-            Self::extend_buffer(
-                transparent,
-                &mut self.transparent_vtx,
-                &mut self.transparent_idx,
-                (chunk_pos - self.base_position).cast().unwrap(),
-            );
-        }
-        if let Some(translucent) = cpu.translucent.as_ref() {
-            Self::extend_buffer(
-                translucent,
-                &mut self.translucent_vtx,
-                &mut self.translucent_idx,
-                (chunk_pos - self.base_position).cast().unwrap(),
-            );
-        }
-        if let Some(raytrace_fallback) = cpu.raytrace_fallback.as_ref() {
-            Self::extend_buffer(
-                raytrace_fallback,
-                &mut self.raytrace_fallback_vtx,
-                &mut self.raytrace_fallback_idx,
-                (chunk_pos - self.base_position).cast().unwrap(),
-            );
+        for (step, buffer) in cpu.draw_buffers.iter() {
+            if let Some(buffer) = buffer.as_ref() {
+                Self::extend_buffer(
+                    buffer,
+                    &mut self.vertex_buffers[step],
+                    &mut self.index_buffers[step],
+                    (chunk_pos - self.base_position).cast().unwrap(),
+                );
+            }
         }
         self.chunks.push(coord);
     }
@@ -1017,11 +893,10 @@ impl MeshBatchBuilder {
                 Ok(Some(target_buffer))
             }
         };
-        let solid_vtx = process_vtx(&self.solid_vtx)?;
-        let transparent_vtx = process_vtx(&self.transparent_vtx)?;
-        let translucent_vtx = process_vtx(&self.translucent_vtx)?;
-        let raytrace_fallback_vtx = process_vtx(&self.raytrace_fallback_vtx)?;
-        let transparent_with_specular_vtx = process_vtx(&self.transparent_with_specular_vtx)?;
+        let mut vertex_buffers = enum_map! { _ => None};
+        for (step, buf) in self.vertex_buffers.iter() {
+            vertex_buffers[step] = process_vtx(buf)?
+        }
 
         let mut process_idx = |x: &[u32]| -> anyhow::Result<_> {
             if x.is_empty() {
@@ -1040,24 +915,15 @@ impl MeshBatchBuilder {
             }
         };
 
-        let solid_idx = process_idx(&self.solid_idx)?;
-        let transparent_idx = process_idx(&self.transparent_idx)?;
-        let translucent_idx = process_idx(&self.translucent_idx)?;
-        let raytrace_fallback_idx = process_idx(&self.raytrace_fallback_idx)?;
-        let transparent_with_specular_idx = process_idx(&self.transparent_with_specular_idx)?;
+        let mut index_buffers = enum_map! { _ => None};
+        for (step, buf) in self.index_buffers.iter() {
+            index_buffers[step] = process_idx(buf)?
+        }
 
         let result = MeshBatch {
             id: self.id,
-            solid_vtx,
-            solid_idx,
-            transparent_vtx,
-            transparent_idx,
-            translucent_vtx,
-            translucent_idx,
-            raytrace_fallback_vtx,
-            raytrace_fallback_idx,
-            transparent_with_specular_vtx,
-            transparent_with_specular_idx,
+            vertex_buffers,
+            index_buffers,
             base_position: self.base_position,
             chunks: self.chunks.clone(),
         };
@@ -1071,14 +937,13 @@ impl MeshBatchBuilder {
     }
 
     pub(crate) fn reset(&mut self) {
-        self.solid_vtx.clear();
-        self.solid_idx.clear();
-        self.transparent_vtx.clear();
-        self.transparent_idx.clear();
-        self.translucent_vtx.clear();
-        self.translucent_idx.clear();
-        self.raytrace_fallback_vtx.clear();
-        self.raytrace_fallback_idx.clear();
+        for buf in self.vertex_buffers.values_mut() {
+            buf.clear();
+        }
+        for buf in self.index_buffers.values_mut() {
+            buf.clear();
+        }
+
         self.chunks.clear();
         self.base_position = Vector3::zero();
         self.id = next_id();

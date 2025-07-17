@@ -31,6 +31,7 @@ use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
 use anyhow::{Error, Result};
+use enum_map::{enum_map, EnumMap};
 use image::{DynamicImage, RgbImage, RgbaImage};
 use rustc_hash::FxHashMap;
 use texture_packer::importer::ImageImporter;
@@ -39,15 +40,15 @@ use texture_packer::Rect;
 use super::{RectF32, VkAllocator};
 use crate::client_state::block_types::ClientBlockTypeManager;
 use crate::client_state::chunk::{
-    ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim,
-    RAYTRACE_FALLBACK_RECLAIMER, SOLID_RECLAIMER, TRANSLUCENT_RECLAIMER, TRANSPARENT_RECLAIMER,
-    TRANSPARENT_WITH_SPECULAR_RECLAIMER,
+    ChunkDataView, ChunkOffsetExt, LockedChunkDataView, MeshVectorReclaim, RECLAIMERS,
 };
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
 use crate::vulkan::atlas::{NamedTextureKey, TextureAtlas, TextureKey};
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
-use crate::vulkan::shaders::cube_geometry::{CubeGeometryDrawCall, CubeGeometryVertex};
+use crate::vulkan::shaders::cube_geometry::{
+    CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
+};
 use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
 use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
 use crate::vulkan::{Texture2DHolder, VulkanContext};
@@ -330,32 +331,18 @@ const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
 
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexDataGpu {
-    pub(crate) opaque: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
-    pub(crate) transparent: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
-    pub(crate) translucent: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
-    pub(crate) raytrace_fallback: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
-    pub(crate) transparent_with_specular: Option<VkDrawBufferGpu<CubeGeometryVertex>>,
+    pub(crate) draw_buffers: EnumMap<CubeDrawStep, Option<VkDrawBufferGpu<CubeGeometryVertex>>>,
 }
 impl VkChunkVertexDataGpu {
-    pub(crate) fn clone_if_nonempty(&self) -> Option<Self> {
-        if self.opaque.is_some()
-            || self.transparent.is_some()
-            || self.translucent.is_some()
-            || self.raytrace_fallback.is_some()
-        {
-            Some(self.clone())
-        } else {
-            None
-        }
-    }
-
     pub(crate) fn empty() -> VkChunkVertexDataGpu {
         VkChunkVertexDataGpu {
-            opaque: None,
-            transparent: None,
-            translucent: None,
-            raytrace_fallback: None,
-            transparent_with_specular: None,
+            draw_buffers: enum_map! {
+                CubeDrawStep::Opaque => None,
+                CubeDrawStep::Transparent => None,
+                CubeDrawStep::TransparentSpecular => None,
+                CubeDrawStep::Translucent => None,
+                CubeDrawStep::RaytraceFallback => None,
+            },
         }
     }
 }
@@ -372,41 +359,27 @@ pub(crate) struct VkChunkRaytraceData {
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
-    pub(crate) opaque: Option<VkBufferCpu<CubeGeometryVertex>>,
-    pub(crate) transparent: Option<VkBufferCpu<CubeGeometryVertex>>,
-    pub(crate) translucent: Option<VkBufferCpu<CubeGeometryVertex>>,
-    pub(crate) raytrace_fallback: Option<VkBufferCpu<CubeGeometryVertex>>,
-    pub(crate) transparent_with_specular: Option<VkBufferCpu<CubeGeometryVertex>>,
+    pub(crate) draw_buffers: EnumMap<CubeDrawStep, Option<VkBufferCpu<CubeGeometryVertex>>>,
 }
 impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
         VkChunkVertexDataCpu {
-            opaque: None,
-            transparent: None,
-            translucent: None,
-            raytrace_fallback: None,
-            transparent_with_specular: None,
+            draw_buffers: enum_map! {
+                CubeDrawStep::Opaque => None,
+                CubeDrawStep::Transparent => None,
+                CubeDrawStep::TransparentSpecular => None,
+                CubeDrawStep::Translucent => None,
+                CubeDrawStep::RaytraceFallback => None,
+            },
         }
     }
 
     pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<VkChunkVertexDataGpu> {
         let work = move |x: &VkBufferCpu<CubeGeometryVertex>| x.to_gpu(allocator.clone());
         Ok(VkChunkVertexDataGpu {
-            opaque: self.opaque.as_ref().map(&work).transpose()?.flatten(),
-            transparent: self.transparent.as_ref().map(&work).transpose()?.flatten(),
-            translucent: self.translucent.as_ref().map(&work).transpose()?.flatten(),
-            raytrace_fallback: self
-                .raytrace_fallback
-                .as_ref()
-                .map(&work)
-                .transpose()?
-                .flatten(),
-            transparent_with_specular: self
-                .transparent_with_specular
-                .as_ref()
-                .map(&work)
-                .transpose()?
-                .flatten(),
+            draw_buffers: enum_map! {
+                step => self.draw_buffers[step].as_ref().map(&work).transpose()?.flatten()
+            },
         })
     }
 }
@@ -741,58 +714,60 @@ impl BlockRenderer {
         }
 
         Ok(VkChunkVertexDataCpu {
-            opaque: self.mesh_chunk_subpass(
-                chunk_data,
-                |id| self.block_types().is_opaque(id),
-                |block, neighbor| {
-                    if self.block_defs.is_solid_opaque(neighbor) {
-                        return true;
-                    }
-                    // Need to be careful here, since the neighbor block isn't a full block.
-                    // If we're OK with suppressing on exact matches and the neighbor matches,
-                    // we're good. Likewise, if we can suppress based on base block, and it matches
-                    (self
-                        .block_defs
-                        .allow_face_suppress_on_same_base_block(block)
-                        && block.equals_ignore_variant(neighbor))
-                        || (self.block_defs.allow_face_suppress_on_exact_match(block)
-                            && block == neighbor)
-                },
-                &SOLID_RECLAIMER,
-            ),
-            transparent: self.mesh_chunk_subpass(
-                chunk_data,
-                |block| self.block_defs.is_transparent_render(block),
-                |block, neighbor| {
-                    block.equals_ignore_variant(neighbor)
-                        || self.block_defs.is_solid_opaque(neighbor)
-                },
-                &TRANSPARENT_RECLAIMER,
-            ),
-            translucent: self.mesh_chunk_subpass(
-                chunk_data,
-                |block| self.block_defs.is_translucent_render(block),
-                |block, neighbor| {
-                    block.equals_ignore_variant(neighbor)
-                        || self.block_defs.is_solid_opaque(neighbor)
-                },
-                &TRANSLUCENT_RECLAIMER,
-            ),
-            raytrace_fallback: self.mesh_chunk_subpass(
-                chunk_data,
-                |block| self.block_defs.is_raytrace_fallback_render(block),
-                |_, _| false,
-                &RAYTRACE_FALLBACK_RECLAIMER,
-            ),
-            transparent_with_specular: self.mesh_chunk_subpass(
-                chunk_data,
-                |block| self.block_defs.is_transparent_with_specular(block),
-                |block, neighbor| {
-                    block.equals_ignore_variant(neighbor)
-                        || self.block_defs.is_solid_opaque(neighbor)
-                },
-                &TRANSPARENT_WITH_SPECULAR_RECLAIMER,
-            ),
+            draw_buffers: enum_map! {
+                CubeDrawStep::Opaque => self.mesh_chunk_subpass(
+                    chunk_data,
+                    |id| self.block_types().is_opaque(id),
+                    |block, neighbor| {
+                        if self.block_defs.is_solid_opaque(neighbor) {
+                            return true;
+                        }
+                        // Need to be careful here, since the neighbor block isn't a full block.
+                        // If we're OK with suppressing on exact matches and the neighbor matches,
+                        // we're good. Likewise, if we can suppress based on base block, and it matches
+                        (self
+                            .block_defs
+                            .allow_face_suppress_on_same_base_block(block)
+                            && block.equals_ignore_variant(neighbor))
+                            || (self.block_defs.allow_face_suppress_on_exact_match(block)
+                                && block == neighbor)
+                    },
+                    &RECLAIMERS[CubeDrawStep::Opaque],
+                ),
+                CubeDrawStep::Transparent => self.mesh_chunk_subpass(
+                    chunk_data,
+                    |block| self.block_defs.is_transparent_render(block),
+                    |block, neighbor| {
+                        block.equals_ignore_variant(neighbor)
+                            || self.block_defs.is_solid_opaque(neighbor)
+                    },
+                    &RECLAIMERS[CubeDrawStep::Transparent],
+                ),
+                CubeDrawStep::Translucent => self.mesh_chunk_subpass(
+                    chunk_data,
+                    |block| self.block_defs.is_translucent_render(block),
+                    |block, neighbor| {
+                        block.equals_ignore_variant(neighbor)
+                            || self.block_defs.is_solid_opaque(neighbor)
+                    },
+                    &RECLAIMERS[CubeDrawStep::Translucent],
+                ),
+                CubeDrawStep::RaytraceFallback => self.mesh_chunk_subpass(
+                    chunk_data,
+                    |block| self.block_defs.is_raytrace_fallback_render(block),
+                    |_, _| false,
+                    &RECLAIMERS[CubeDrawStep::RaytraceFallback],
+                ),
+                CubeDrawStep::TransparentSpecular => self.mesh_chunk_subpass(
+                    chunk_data,
+                    |block| self.block_defs.is_transparent_with_specular(block),
+                    |block, neighbor| {
+                        block.equals_ignore_variant(neighbor)
+                            || self.block_defs.is_solid_opaque(neighbor)
+                    },
+                    &RECLAIMERS[CubeDrawStep::TransparentSpecular],
+                ),
+            },
         })
     }
 
@@ -1177,11 +1152,13 @@ impl BlockRenderer {
         Ok(Some(CubeGeometryDrawCall {
             model_matrix,
             models: VkChunkVertexDataGpu {
-                opaque: None,
-                transparent: Some(buffer.clone()),
-                translucent: None,
-                raytrace_fallback: Some(buffer),
-                transparent_with_specular: None,
+                draw_buffers: enum_map! {
+                    CubeDrawStep::Opaque => None,
+                    CubeDrawStep::Transparent => Some(buffer.clone()),
+                    CubeDrawStep::Translucent => None,
+                    CubeDrawStep::RaytraceFallback => Some(buffer.clone()),
+                    CubeDrawStep::TransparentSpecular => None,
+                },
             },
         }))
     }

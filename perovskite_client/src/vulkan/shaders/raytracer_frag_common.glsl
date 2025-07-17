@@ -222,8 +222,9 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
             gfrac.z -= sgns.z;
             n_face = 4 + gpd.z;
         }
-
-        if ((block_id != 0)
+        if (info.block_id == 0xffffffff) {
+            info.block_id = block_id;
+        } else if ((block_id != 0)
         && ((block_id & 0xfffff000u) != (info.block_id & 0xfffff000u))
         && (block_id != 0xffffffff)
         && ((cube_info[block_id >> 12].flags & SKIP_MASK) == 0)) {
@@ -233,9 +234,9 @@ bool traverse_chunk(uint slot, inout HitInfo info) {
             info.face_light |= (raw_light << 8);
             return true;
         }
-        if (block_id != 0xffffffff) {
-            info.block_id = block_id;
-        }
+        //        if (block_id != 0xffffffff) {
+        //            info.block_id = block_id;
+        //        }
         info.face_light = n_face;
         if (should_break) {
             return false;

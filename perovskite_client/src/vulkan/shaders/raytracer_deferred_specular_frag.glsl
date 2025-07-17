@@ -8,7 +8,6 @@ layout (location = 0) out vec4 specular_result;
 
 void main() {
     specular_result = vec4(0);
-    memoryBarrierImage();
     uvec4 spec_ray_dir = imageLoad(deferred_specular_ray_dir, ivec2(gl_FragCoord.xy));
     uint spec_block = spec_ray_dir.a;
     if (spec_block == 0) {

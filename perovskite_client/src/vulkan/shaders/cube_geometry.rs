@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use super::SceneState;
+use super::{frag_lighting_unified_specular, frag_specular_only, SceneState};
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::{
@@ -23,7 +23,7 @@ use crate::vulkan::shaders::{
 };
 use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
-    shaders::{frag_lighting, vert_3d::ModelMatrix},
+    shaders::{frag_lighting_basic_color, vert_3d::ModelMatrix},
     CommandBufferBuilder, FramebufferAndLoadOpId, ImageId, LoadOp, Texture2DHolder, VulkanContext,
     VulkanWindow,
 };
@@ -41,7 +41,7 @@ use vulkano::pipeline::graphics::color_blend::{
 };
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
-use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
+use vulkano::pipeline::graphics::subpass::{PipelineRenderingCreateInfo, PipelineSubpassType};
 use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
 use vulkano::pipeline::graphics::viewport::Scissor;
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
@@ -102,15 +102,6 @@ pub(crate) struct CubeGeometryDrawCall {
     pub(crate) model_matrix: Matrix4<f32>,
 }
 
-pub(crate) struct CubePipelineWrapper {
-    solid_pipeline: Arc<GraphicsPipeline>,
-    sparse_pipeline: Arc<GraphicsPipeline>,
-    translucent_pipeline: Arc<GraphicsPipeline>,
-    raytrace_fallback_pipeline: Arc<GraphicsPipeline>,
-    atlas_descriptor_set: Arc<DescriptorSet>,
-    start_time: Instant,
-    max_draw_indexed_index_value: u32,
-}
 const PLANT_WAVE_FREQUENCY_HZ: f64 = 0.25;
 impl CubePipelineWrapper {
     fn get_plant_wave_vector(&self) -> [f32; 2] {
@@ -122,11 +113,16 @@ impl CubePipelineWrapper {
 }
 
 /// Which render step we are rendering now.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BlockRenderPass {
+#[derive(Clone, Copy, PartialEq, Eq, enum_map::Enum)]
+pub(crate) enum CubeDrawStep {
     Opaque,
     Transparent,
+    TransparentSpecular,
     Translucent,
+    // There is no TranslucentSpecular; translucent is mostly used for water, and its weirdness
+    // w.r.t. stacked transparency makes it rarely used. Translucent just gets the unified shader
+    // for now, in a single pass.
+    // Transparent specular *actually* requires two passes - its
     RaytraceFallback,
 }
 
@@ -135,32 +131,39 @@ impl CubePipelineWrapper {
     /// provided CubeGeometryDrawCalls (i.e., after calling this with BlockRenderPass::Opaque, all
     /// the elements in CubeGeometryDrawCall will have their opaque draw calls taken away (if
     /// they were present to begin with)
-    pub(crate) fn draw<L>(
+    pub(crate) fn draw_single_step<L>(
         &mut self,
         ctx: &VulkanContext,
         builder: &mut CommandBufferBuilder<L>,
         per_frame_config: SceneState,
         draw_calls: &mut [CubeGeometryDrawCall],
-        pass: BlockRenderPass,
+        pass: CubeDrawStep,
     ) -> Result<()> {
         let _span = match pass {
-            BlockRenderPass::Opaque => span!("draw opaque"),
-            BlockRenderPass::Transparent => span!("draw transparent"),
-            BlockRenderPass::Translucent => span!("draw translucent"),
-            BlockRenderPass::RaytraceFallback => span!("draw raytrace_fallback"),
+            CubeDrawStep::Opaque => span!("draw opaque"),
+            CubeDrawStep::Transparent => span!("draw transparent"),
+            CubeDrawStep::Translucent => span!("draw translucent"),
+            CubeDrawStep::TransparentSpecular => span!("draw transparent w/ specular"),
+            CubeDrawStep::RaytraceFallback => span!("draw raytrace_fallback"),
         };
         let pipeline = match pass {
-            BlockRenderPass::Opaque => self.solid_pipeline.clone(),
-            BlockRenderPass::Transparent => self.sparse_pipeline.clone(),
-            BlockRenderPass::Translucent => self.translucent_pipeline.clone(),
-            BlockRenderPass::RaytraceFallback => self.raytrace_fallback_pipeline.clone(),
+            CubeDrawStep::Opaque => self.solid_pipeline.clone(),
+            CubeDrawStep::Transparent => self.transparent_pipeline.clone(),
+            CubeDrawStep::TransparentSpecular => self.transparent_specular_pipeline.as_ref().context("Missing transparent specular pipeline but trying to render transparent specular")?.clone(),
+            CubeDrawStep::Translucent => self.translucent_pipeline.clone(),
+            CubeDrawStep::RaytraceFallback => self.transparent_pipeline.clone(),
+        };
+        let atlas_descriptor_set = match pass {
+            CubeDrawStep::TransparentSpecular => self.specular_atlas_descriptor_set.as_ref().context("Missing transparent specular descriptor set but trying to render transparent specular")?.clone(),
+            CubeDrawStep::Translucent => self.translucent_atlas_descriptor_set.clone(),
+            _ => self.atlas_descriptor_set.clone()
         };
         let layout = pipeline.layout().clone();
         builder.bind_pipeline_graphics(pipeline)?;
         let per_frame_set_layout = layout
             .set_layouts()
             .get(1)
-            .with_context(|| "Sky layout missing set 1")?;
+            .with_context(|| "Cube pipeline layout missing set 1")?;
 
         let uniform_buffer = Buffer::from_data(
             ctx.memory_allocator.clone(),
@@ -192,17 +195,12 @@ impl CubePipelineWrapper {
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout.clone(),
             0,
-            vec![self.atlas_descriptor_set.clone(), per_frame_set],
+            vec![atlas_descriptor_set, per_frame_set],
         )?;
 
         let mut effective_calls = 0;
         for call in draw_calls.iter_mut() {
-            let pass_data = match pass {
-                BlockRenderPass::Opaque => call.models.opaque.take(),
-                BlockRenderPass::Transparent => call.models.transparent.take(),
-                BlockRenderPass::Translucent => call.models.translucent.take(),
-                BlockRenderPass::RaytraceFallback => call.models.raytrace_fallback.take(),
-            };
+            let pass_data = call.models.draw_buffers[pass].take();
             if let Some(pass_data) = pass_data {
                 effective_calls += 1;
 
@@ -229,16 +227,19 @@ impl CubePipelineWrapper {
         plot!("total_calls", draw_calls.len() as f64);
         let draw_rate = effective_calls as f64 / (draw_calls.len() as f64);
         match pass {
-            BlockRenderPass::Opaque => {
+            CubeDrawStep::Opaque => {
                 plot!("opaque_rate", draw_rate);
             }
-            BlockRenderPass::Transparent => {
+            CubeDrawStep::Transparent => {
                 plot!("transparent_rate", draw_rate);
             }
-            BlockRenderPass::Translucent => {
+            CubeDrawStep::TransparentSpecular => {
+                plot!("transparent_specular_rate", draw_rate);
+            }
+            CubeDrawStep::Translucent => {
                 plot!("translucent_rate", draw_rate);
             }
-            BlockRenderPass::RaytraceFallback => {
+            CubeDrawStep::RaytraceFallback => {
                 plot!("raytrace_fallback_rate", draw_rate);
             }
         };
@@ -246,27 +247,82 @@ impl CubePipelineWrapper {
     }
 }
 
+pub(crate) const MAIN_FRAMEBUFFER: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
+    color_attachments: [(ImageId::MainColor, LoadOp::Load)],
+    depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
+    input_attachments: [],
+};
+
+pub(crate) const SPECULAR_FRAMEBUFFER: FramebufferAndLoadOpId<2, 0> = FramebufferAndLoadOpId {
+    color_attachments: [
+        (ImageId::RtSpecStrength, LoadOp::Load),
+        (ImageId::RtSpecRayDir, LoadOp::Load),
+    ],
+    depth_stencil_attachment: Some((ImageId::TransparentWithSpecularDepth, LoadOp::Load)),
+    input_attachments: [],
+};
+
+pub(crate) const SPECULAR_FRAMEBUFFER_CLEAR_OUTPUT: FramebufferAndLoadOpId<2, 0> =
+    FramebufferAndLoadOpId {
+        color_attachments: [
+            (ImageId::RtSpecStrength, LoadOp::Clear),
+            (ImageId::RtSpecRayDir, LoadOp::Clear),
+        ],
+        depth_stencil_attachment: Some((ImageId::TransparentWithSpecularDepth, LoadOp::Load)),
+        input_attachments: [],
+    };
+
+pub(crate) const SPECULAR_UNIFIED_FRAMEBUFFER: FramebufferAndLoadOpId<3, 0> =
+    FramebufferAndLoadOpId {
+        color_attachments: [
+            (ImageId::MainColor, LoadOp::Load),
+            (ImageId::RtSpecStrength, LoadOp::Load),
+            (ImageId::RtSpecRayDir, LoadOp::Load),
+        ],
+        depth_stencil_attachment: Some((ImageId::TransparentWithSpecularDepth, LoadOp::Load)),
+        input_attachments: [],
+    };
+
 pub(crate) struct CubePipelineProvider {
     device: Arc<Device>,
     vs_cube: Arc<ShaderModule>,
-    fs: Arc<ShaderModule>,
+    fs_basic_color: Arc<ShaderModule>,
+    fs_unified_specular: Arc<ShaderModule>,
+    fs_specular_only: Arc<ShaderModule>,
 }
+
+pub(crate) struct CubePipelineWrapper {
+    solid_pipeline: Arc<GraphicsPipeline>,
+    transparent_pipeline: Arc<GraphicsPipeline>,
+    transparent_specular_pipeline: Option<Arc<GraphicsPipeline>>,
+    translucent_pipeline: Arc<GraphicsPipeline>,
+    atlas_descriptor_set: Arc<DescriptorSet>,
+    specular_atlas_descriptor_set: Option<Arc<DescriptorSet>>,
+    translucent_atlas_descriptor_set: Arc<DescriptorSet>,
+    start_time: Instant,
+    max_draw_indexed_index_value: u32,
+}
+
 impl CubePipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<CubePipelineProvider> {
         let vs_cube = vert_3d::load_cube_geometry(device.clone())?;
-        let fs = frag_lighting::load(device.clone())?;
+        let fs_basic_color = frag_lighting_basic_color::load(device.clone())?;
+        let fs_unified_specular = frag_lighting_unified_specular::load(device.clone())?;
+        let fs_specular_only = frag_specular_only::load(device.clone())?;
         Ok(CubePipelineProvider {
             device,
             vs_cube,
-            fs,
+            fs_basic_color,
+            fs_unified_specular,
+            fs_specular_only,
         })
     }
 
     pub(crate) fn build_pipeline(
         &self,
         ctx: &VulkanContext,
-        viewport: Viewport,
-        render_pass: Arc<RenderPass>,
+        viewport_state: ViewportState,
+        render_passes: RenderPasses,
         tex: &TextureAtlas,
         config: &LiveRenderConfig,
     ) -> Result<CubePipelineWrapper> {
@@ -275,28 +331,30 @@ impl CubePipelineProvider {
             .entry_point("main")
             .context("Missing vertex shader")?;
         let fs_solid = self
-            .fs
+            .fs_basic_color
             .specialize(HashMap::from_iter([
                 (0, false.into()),
                 (1, config.raytracer_debug.into()),
-            ]))?
+            ]))
+            .context("Specializing basic color shader for non-sparse failed")?
             .entry_point("main")
-            .context("Missing fragment shader")?;
+            .context("Missing fragment shader (basic color)")?;
         let fs_sparse = self
-            .fs
+            .fs_basic_color
             .specialize(HashMap::from_iter([
                 (0, true.into()),
                 (1, config.raytracer_debug.into()),
-            ]))?
+            ]))
+            .context("Specializing basic color shader for sparse failed")?
             .entry_point("main")
-            .context("Missing fragment shader")?;
+            .context("Missing fragment shader (basic color + sparse)")?;
         let vertex_input_state = CubeGeometryVertex::per_vertex().definition(&vs)?;
         let stages_solid = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_solid),
         ];
         let stages_sparse = smallvec![
-            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_sparse),
         ];
         let layout_solid = PipelineLayout::new(
@@ -320,24 +378,7 @@ impl CubePipelineProvider {
                 ..Default::default()
             }),
             multisample_state: Some(MultisampleState::default()),
-            viewport_state: Some(ViewportState {
-                viewports: smallvec![Viewport {
-                    offset: [0.0, 0.0],
-                    depth_range: 0.0..=1.0,
-                    extent: [
-                        viewport.extent[0] * config.supersampling.to_float(),
-                        viewport.extent[1] * config.supersampling.to_float()
-                    ],
-                }],
-                scissors: smallvec![Scissor {
-                    offset: [0, 0],
-                    extent: [
-                        viewport.extent[0] as u32 * config.supersampling.to_int(),
-                        viewport.extent[1] as u32 * config.supersampling.to_int()
-                    ],
-                }],
-                ..Default::default()
-            }),
+            viewport_state: Some(viewport_state),
             depth_stencil_state: Some(DepthStencilState {
                 depth: Some(DepthState::simple()),
                 ..Default::default()
@@ -351,7 +392,7 @@ impl CubePipelineProvider {
                 ..Default::default()
             }),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(render_pass.clone(), 0).context("Missing subpass")?,
+                Subpass::from(render_passes.color().clone(), 0).context("Missing subpass")?,
             )),
             ..GraphicsPipelineCreateInfo::layout(layout_solid.clone())
         };
@@ -363,33 +404,150 @@ impl CubePipelineProvider {
             layout: layout_sparse,
             ..solid_pipeline_info.clone()
         };
-        let translucent_pipeline_info = GraphicsPipelineCreateInfo {
-            // This pipeline uses the same solid shader (since we don't want discards as performed
-            // by the sparse pipeline), but it needs to adjust the depth test to read but not write
-            depth_stencil_state: Some(DepthStencilState {
-                depth: Some(DepthState {
-                    compare_op: CompareOp::Less,
-                    write_enable: false,
+        let translucent_pipeline_info = if config.hybrid_rt && ctx.raytracing_supported {
+            let fs_unified = self
+                .fs_unified_specular
+                .specialize(HashMap::from_iter([
+                    (0, false.into()),
+                    (1, config.raytracer_debug.into()),
+                ]))
+                .context("Specializing unified color+specular shader for non-sparse failed")?
+                .entry_point("main")
+                .context("Missing fragment shader (unified color+specular non-sparse)")?;
+            let stages = smallvec![
+                PipelineShaderStageCreateInfo::new(vs.clone()),
+                PipelineShaderStageCreateInfo::new(fs_unified),
+            ];
+            let layout = PipelineLayout::new(
+                self.device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(self.device.clone())?,
+            )?;
+            GraphicsPipelineCreateInfo {
+                // Read but not write
+                depth_stencil_state: Some(DepthStencilState {
+                    depth: Some(DepthState {
+                        compare_op: CompareOp::Less,
+                        write_enable: false,
+                    }),
+                    depth_bounds: Default::default(),
+                    stencil: Default::default(),
+                    ..Default::default()
                 }),
-                depth_bounds: Default::default(),
-                stencil: Default::default(),
-                ..Default::default()
-            }),
-            color_blend_state: Some(ColorBlendState {
-                attachments: vec![ColorBlendAttachmentState {
-                    blend: Some(AttachmentBlend::alpha()),
-                    color_write_mask: ColorComponents::all(),
-                    color_write_enable: true,
-                }],
-                ..Default::default()
-            }),
-            ..solid_pipeline_info.clone()
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![
+                        ColorBlendAttachmentState {
+                            blend: Some(AttachmentBlend::alpha()),
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                        ColorBlendAttachmentState {
+                            blend: None,
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                        ColorBlendAttachmentState {
+                            blend: None,
+                            color_write_mask: ColorComponents::all(),
+                            color_write_enable: true,
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                stages,
+                layout,
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(
+                        render_passes
+                            .unified()
+                            .context("Missing unified renderpass")?
+                            .clone(),
+                        0,
+                    )
+                    .context("Missing subpass")?,
+                )),
+                ..solid_pipeline_info.clone()
+            }
+        } else {
+            GraphicsPipelineCreateInfo {
+                // This pipeline uses the same solid shader (since we don't want discards as performed
+                // by the sparse pipeline), but it needs to adjust the depth test to read but not write
+                depth_stencil_state: Some(DepthStencilState {
+                    depth: Some(DepthState {
+                        compare_op: CompareOp::Less,
+                        write_enable: false,
+                    }),
+                    depth_bounds: Default::default(),
+                    stencil: Default::default(),
+                    ..Default::default()
+                }),
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![ColorBlendAttachmentState {
+                        blend: Some(AttachmentBlend::alpha()),
+                        color_write_mask: ColorComponents::all(),
+                        color_write_enable: true,
+                    }],
+                    ..Default::default()
+                }),
+                ..solid_pipeline_info.clone()
+            }
         };
-        let solid_pipeline = GraphicsPipeline::new(self.device.clone(), None, solid_pipeline_info)?;
+        let solid_pipeline =
+            GraphicsPipeline::new(self.device.clone(), None, solid_pipeline_info.clone())?;
         let sparse_pipeline =
-            GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info.clone())?;
+            GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
         let translucent_pipeline =
             GraphicsPipeline::new(self.device.clone(), None, translucent_pipeline_info)?;
+
+        let transparent_specular_pipeline = match render_passes.specular() {
+            None => None,
+            Some(specular_renderpass) => {
+                let fs_spec_only = self
+                    .fs_specular_only
+                    .entry_point("main")
+                    .context("Missing vertex shader")?;
+                let stages = smallvec![
+                    PipelineShaderStageCreateInfo::new(vs),
+                    PipelineShaderStageCreateInfo::new(fs_spec_only),
+                ];
+                let layout = PipelineLayout::new(
+                    self.device.clone(),
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                        .into_pipeline_layout_create_info(self.device.clone())?,
+                )?;
+
+                let pipeline_info = GraphicsPipelineCreateInfo {
+                    stages,
+                    layout,
+                    subpass: Some(PipelineSubpassType::BeginRenderPass(
+                        Subpass::from(specular_renderpass.clone(), 0)
+                            .context("specular renderpass missing subpass 0")?
+                            .clone(),
+                    )),
+                    color_blend_state: Some(ColorBlendState {
+                        attachments: vec![
+                            ColorBlendAttachmentState {
+                                blend: None,
+                                color_write_mask: ColorComponents::all(),
+                                color_write_enable: true,
+                            },
+                            ColorBlendAttachmentState {
+                                blend: None,
+                                color_write_mask: ColorComponents::all(),
+                                color_write_enable: true,
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                    ..solid_pipeline_info.clone()
+                };
+                Some(GraphicsPipeline::new(
+                    self.device.clone(),
+                    None,
+                    pipeline_info,
+                )?)
+            }
+        };
 
         let layout = solid_pipeline
             .layout()
@@ -405,15 +563,55 @@ impl CubePipelineProvider {
             ],
             [],
         )?;
+        let specular_atlas_descriptor_set = match transparent_specular_pipeline.as_ref() {
+            Some(x) => {
+                let layout = x
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .with_context(|| "descriptor set 0 missing")?;
+                let descriptor_set = DescriptorSet::new(
+                    ctx.descriptor_set_allocator.clone(),
+                    layout.clone(),
+                    [
+                        tex.diffuse.write_descriptor_set(0),
+                        tex.specular.write_descriptor_set(1),
+                    ],
+                    [],
+                )?;
+                Some(descriptor_set)
+            }
+            None => None,
+        };
+        let translucent_atlas_descriptor_set = if config.hybrid_rt && ctx.raytracing_supported {
+            let layout = translucent_pipeline
+                .layout()
+                .set_layouts()
+                .get(0)
+                .with_context(|| "descriptor set 0 missing")?;
+            let descriptor_set = DescriptorSet::new(
+                ctx.descriptor_set_allocator.clone(),
+                layout.clone(),
+                [
+                    tex.diffuse.write_descriptor_set(0),
+                    tex.emissive.write_descriptor_set(1),
+                    tex.specular.write_descriptor_set(2),
+                ],
+                [],
+            )?;
+            descriptor_set
+        } else {
+            atlas_descriptor_set.clone()
+        };
 
-        let raytrace_fallback_pipeline =
-            GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
         Ok(CubePipelineWrapper {
             solid_pipeline,
-            sparse_pipeline,
+            transparent_pipeline: sparse_pipeline,
             translucent_pipeline,
-            raytrace_fallback_pipeline,
+            transparent_specular_pipeline,
             atlas_descriptor_set,
+            specular_atlas_descriptor_set,
+            translucent_atlas_descriptor_set,
             start_time: Instant::now(),
             max_draw_indexed_index_value: self
                 .device
@@ -427,15 +625,52 @@ impl CubePipelineProvider {
     pub(crate) fn make_pipeline(
         &self,
         wnd: &VulkanWindow,
-        config: &TextureAtlas,
+        texture_atlas: &TextureAtlas,
         global_config: &LiveRenderConfig,
     ) -> Result<CubePipelineWrapper> {
+        let rp = if wnd.raytracing_supported {
+            RenderPasses::MainAndSpecular(
+                wnd.renderpasses.get_by_framebuffer_id(MAIN_FRAMEBUFFER)?,
+                wnd.renderpasses
+                    .get_by_framebuffer_id(SPECULAR_FRAMEBUFFER)?,
+                wnd.renderpasses
+                    .get_by_framebuffer_id(SPECULAR_UNIFIED_FRAMEBUFFER)?,
+            )
+        } else {
+            RenderPasses::MainOnly(wnd.renderpasses.get_by_framebuffer_id(MAIN_FRAMEBUFFER)?)
+        };
         self.build_pipeline(
             wnd.context(),
-            wnd.viewport.clone(),
-            wnd.raster_renderpass()?,
-            config,
+            ImageId::MainColor.viewport_state(&wnd.viewport, *global_config),
+            rp,
+            texture_atlas,
             global_config,
         )
+    }
+}
+
+pub(crate) enum RenderPasses {
+    MainOnly(Arc<RenderPass>),
+    MainAndSpecular(Arc<RenderPass>, Arc<RenderPass>, Arc<RenderPass>),
+}
+impl RenderPasses {
+    fn color(&self) -> &Arc<RenderPass> {
+        match self {
+            RenderPasses::MainOnly(x) => x,
+            RenderPasses::MainAndSpecular(x, _, _) => x,
+        }
+    }
+    fn specular(&self) -> Option<&Arc<RenderPass>> {
+        match self {
+            RenderPasses::MainOnly(_) => None,
+            RenderPasses::MainAndSpecular(_, x, _) => Some(x),
+        }
+    }
+
+    fn unified(&self) -> Option<&Arc<RenderPass>> {
+        match self {
+            RenderPasses::MainOnly(_) => None,
+            RenderPasses::MainAndSpecular(_, _, x) => Some(x),
+        }
     }
 }

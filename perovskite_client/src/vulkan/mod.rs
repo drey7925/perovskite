@@ -431,7 +431,7 @@ impl VulkanContext {
             supersampling: Supersampling::None,
             hdr: false,
             raytracing: false,
-            raytracing_reflections: false,
+            hybrid_rt: false,
             render_distance: 1,
             raytracer_debug: false,
             raytracing_specular_downsampling: 1,
@@ -736,7 +736,7 @@ impl VulkanWindow {
                 .context("No supported composite alpha")?;
             let formats = physical_device.surface_formats(&surface, Default::default())?;
             log::info!("Surface available color formats: {formats:?}");
-            let (image_format, color_space) = find_best_format(formats)?;
+            let (image_format, color_space) = best_swapchain_format(formats)?;
             log::info!("Will render to {image_format:?}, {color_space:?}");
             let mut image_count = caps.min_image_count;
             if let Some(max_image_count) = caps.max_image_count {
@@ -925,7 +925,7 @@ fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
     bail!("No depth format found");
 }
 
-fn find_best_format(formats: Vec<(Format, ColorSpace)>) -> Result<(Format, ColorSpace)> {
+fn best_swapchain_format(formats: Vec<(Format, ColorSpace)>) -> Result<(Format, ColorSpace)> {
     formats
         .iter()
         .find(|(format, space)| {
@@ -978,6 +978,11 @@ pub(crate) enum ImageId {
     MainColor,
     MainDepthStencil,
     MainDepthStencilDepthOnly,
+    /// A special depth buffer to allow glass to have separate depth/overdraw control for its
+    /// emission pass: Transparent-but-shiny fragments are discarded in color and don't write to the
+    /// main depth buffer; on the second pass they do write to this depth buffer while emitting
+    /// reflection information into the deferred reflection buffer
+    TransparentWithSpecularDepth,
     MainColorResolved,
     SwapchainColor,
     RtSpecRawColor,
@@ -994,6 +999,7 @@ impl ImageId {
             ImageId::MainColor | ImageId::MainColorResolved => f.color,
             ImageId::MainDepthStencil => f.depth_stencil,
             ImageId::MainDepthStencilDepthOnly => f.depth_stencil,
+            ImageId::TransparentWithSpecularDepth => f.depth_stencil,
             ImageId::SwapchainColor => f.swapchain,
             ImageId::RtSpecRawColor => Format::R16G16B16A16_SFLOAT,
             ImageId::RtSpecStencil => f.depth_stencil,
@@ -1017,6 +1023,7 @@ impl ImageId {
             ImageId::MainColor => upsampled,
             ImageId::MainDepthStencil => upsampled,
             ImageId::MainDepthStencilDepthOnly => upsampled,
+            ImageId::TransparentWithSpecularDepth => upsampled,
             ImageId::MainColorResolved => base,
             ImageId::SwapchainColor => base,
             ImageId::RtSpecRawColor => rt_deferred,
@@ -1036,6 +1043,7 @@ impl ImageId {
             ImageId::MainColor => "色",
             ImageId::MainDepthStencil => "深",
             ImageId::MainDepthStencilDepthOnly => "半",
+            ImageId::TransparentWithSpecularDepth => "玻",
             ImageId::MainColorResolved => "小",
             ImageId::SwapchainColor => "面",
             ImageId::RtSpecRawColor => "光映",
@@ -1056,10 +1064,17 @@ impl ImageId {
                     | ImageUsage::INPUT_ATTACHMENT
             }
             ImageId::MainDepthStencil => {
-                ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
+                ImageUsage::DEPTH_STENCIL_ATTACHMENT
+                    | ImageUsage::INPUT_ATTACHMENT
+                    | ImageUsage::TRANSFER_SRC
             }
             ImageId::MainDepthStencilDepthOnly => {
-                ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT
+                ImageUsage::DEPTH_STENCIL_ATTACHMENT
+                    | ImageUsage::INPUT_ATTACHMENT
+                    | ImageUsage::TRANSFER_SRC
+            }
+            ImageId::TransparentWithSpecularDepth => {
+                ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSFER_DST
             }
             ImageId::MainColorResolved => {
                 ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
@@ -1083,6 +1098,7 @@ impl ImageId {
             ImageId::MainColor | ImageId::MainColorResolved => FLOAT,
             ImageId::MainDepthStencil => DEPTH_STENCIL,
             ImageId::MainDepthStencilDepthOnly => DEPTH,
+            ImageId::TransparentWithSpecularDepth => DEPTH_STENCIL,
             ImageId::SwapchainColor => FLOAT,
             ImageId::RtSpecRawColor => FLOAT,
             ImageId::RtSpecStencil => DEPTH_STENCIL,

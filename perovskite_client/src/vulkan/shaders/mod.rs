@@ -56,12 +56,29 @@ pub(crate) mod vert_3d {
     }
 }
 
-pub(crate) mod frag_lighting {
+pub(crate) mod frag_lighting_basic_color {
     vulkano_shaders::shader! {
-    ty: "fragment",
-    path: "src/vulkan/shaders/raster_frag_lighting.glsl",
+        ty: "fragment",
+        path: "src/vulkan/shaders/raster_frag_lighting.glsl",
+        // https://youtrack.jetbrains.com/issue/RUST-18217/
+        define: [("ENABLE_BASIC_COLOR", "2")]
     }
 }
+pub(crate) mod frag_lighting_unified_specular {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/vulkan/shaders/raster_frag_lighting.glsl",
+        define: [("ENABLE_UNIFIED_SPECULAR", "1")]
+    }
+}
+pub(crate) mod frag_specular_only {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/vulkan/shaders/raster_frag_lighting.glsl",
+        define: [("ENABLE_SPECULAR_ONLY", "1")]
+    }
+}
+
 // Simple vertex shader for drawing flat textures to the screen
 // This shader should be run without a depth test
 pub(crate) mod vert_2d {
@@ -120,7 +137,7 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
     pub(crate) hdr: bool,
     pub(crate) raytracing: bool,
-    pub(crate) raytracing_reflections: bool,
+    pub(crate) hybrid_rt: bool,
     pub(crate) render_distance: u32,
     pub(crate) raytracer_debug: bool,
     pub(crate) raytracing_specular_downsampling: u32,

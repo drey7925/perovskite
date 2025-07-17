@@ -28,7 +28,7 @@ use log::info;
 
 use super::{
     shaders::{
-        cube_geometry::{self, BlockRenderPass, CubeGeometryDrawCall},
+        cube_geometry::{self, CubeDrawStep, CubeGeometryDrawCall},
         egui_adapter::EguiAdapter,
         entity_geometry, flat_texture, post_process,
     },
@@ -38,6 +38,7 @@ use super::{
 use crate::client_state::input::{BoundAction, Keybind};
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
+use crate::vulkan::shaders::entity_geometry::EntityDrawStep;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::vulkan::shaders::raytracer::{
     ChunkMapHeader, RaytracingBindings, RaytracingPerFrameData,
@@ -55,8 +56,8 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tracy_client::{plot, span, Client};
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferExecFuture, CopyBufferInfo, SubpassBeginInfo,
-    SubpassContents, SubpassEndInfo,
+    AutoCommandBufferBuilder, CommandBufferExecFuture, CopyBufferInfo, CopyImageInfo,
+    SubpassBeginInfo, SubpassContents, SubpassEndInfo,
 };
 use vulkano::render_pass::Subpass;
 use vulkano::swapchain::{PresentFuture, SwapchainAcquireFuture};
@@ -306,70 +307,6 @@ impl ActiveGame {
             self.cube_draw_calls.len() as f64 / chunks.len() as f64
         );
 
-        if self
-            .client_state
-            .input
-            .lock()
-            .take_just_pressed(BoundAction::AuxDebugKey)
-        {
-            let mut lengths: Vec<u32> = self
-                .cube_draw_calls
-                .iter()
-                .flat_map(|x| {
-                    [
-                        x.models.opaque.as_ref().map(|x| x.num_indices),
-                        x.models.transparent.as_ref().map(|x| x.num_indices),
-                        x.models.translucent.as_ref().map(|x| x.num_indices),
-                        x.models.raytrace_fallback.as_ref().map(|x| x.num_indices),
-                    ]
-                })
-                .filter_map(|x| x)
-                .collect();
-            lengths.sort_unstable();
-            log::info!("{:?}", lengths);
-        }
-
-        if !self.cube_draw_calls.is_empty() {
-            if self.raytrace_data.is_none() {
-                self.cube_pipeline
-                    .draw(
-                        ctx,
-                        &mut command_buf_builder,
-                        scene_state,
-                        &mut self.cube_draw_calls,
-                        BlockRenderPass::Opaque,
-                    )
-                    .context("Opaque pipeline draw failed")?;
-                self.cube_pipeline
-                    .draw(
-                        ctx,
-                        &mut command_buf_builder,
-                        scene_state,
-                        &mut self.cube_draw_calls,
-                        BlockRenderPass::Transparent,
-                    )
-                    .context("Transparent pipeline draw failed")?;
-                self.cube_pipeline
-                    .draw(
-                        ctx,
-                        &mut command_buf_builder,
-                        scene_state,
-                        &mut self.cube_draw_calls,
-                        BlockRenderPass::Translucent,
-                    )
-                    .context("Translucent pipeline draw failed")?;
-            } else {
-                self.cube_pipeline
-                    .draw(
-                        ctx,
-                        &mut command_buf_builder,
-                        scene_state,
-                        &mut self.cube_draw_calls,
-                        BlockRenderPass::RaytraceFallback,
-                    )
-                    .context("RaytraceFallback pipeline draw failed")?;
-            }
-        }
         let entity_draw_calls = {
             let lock = self.client_state.entities.lock();
             lock.render_calls(
@@ -378,14 +315,140 @@ impl ActiveGame {
                 &self.client_state.entity_renderer,
             )
         };
+
+        // At this point, we are in the Color + Depth renderpass
+        let hybrid_rt_enabled = ctx.renderpasses.config.hybrid_rt && ctx.raytracing_supported;
+        if self.raytrace_data.is_none() || hybrid_rt_enabled {
+            self.cube_pipeline
+                .draw_single_step(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &mut self.cube_draw_calls,
+                    CubeDrawStep::Opaque,
+                )
+                .context("Opaque pipeline draw failed")?;
+            self.cube_pipeline
+                .draw_single_step(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &mut self.cube_draw_calls,
+                    CubeDrawStep::Transparent,
+                )
+                .context("Transparent pipeline draw failed")?;
+        } else {
+            self.cube_pipeline
+                .draw_single_step(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &mut self.cube_draw_calls,
+                    CubeDrawStep::RaytraceFallback,
+                )
+                .context("Transparent pipeline draw failed")?;
+        }
+
+        // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
+        // blocks
         self.entities_pipeline
             .draw(
                 ctx,
                 &mut command_buf_builder,
                 scene_state,
-                entity_draw_calls,
+                &entity_draw_calls,
+                EntityDrawStep::Color,
             )
             .context("Entities pipeline draw failed")?;
+
+        if ctx.renderpasses.config.raytracing
+            && hybrid_rt_enabled
+            && (self
+                .cube_draw_calls
+                .iter()
+                .any(|x| x.models.draw_buffers[CubeDrawStep::TransparentSpecular].is_some()))
+        {
+            command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+            command_buf_builder.copy_image(CopyImageInfo {
+                ..CopyImageInfo::images(
+                    framebuffer
+                        .get_image(ImageId::MainDepthStencil)?
+                        .image()
+                        .clone(),
+                    framebuffer
+                        .get_image(ImageId::TransparentWithSpecularDepth)?
+                        .image()
+                        .clone(),
+                )
+            })?;
+            // If we're doing hybrid RT, switch to the specular + secondary depth renderpass
+            framebuffer.begin_render_pass(
+                &mut command_buf_builder,
+                cube_geometry::SPECULAR_FRAMEBUFFER_CLEAR_OUTPUT,
+                &ctx.renderpasses,
+                SubpassContents::Inline,
+            )?;
+
+            self.cube_pipeline
+                .draw_single_step(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &mut self.cube_draw_calls,
+                    CubeDrawStep::TransparentSpecular,
+                )
+                .context("Transparent pipeline draw failed")?;
+
+            // self.entities_pipeline
+            //     .draw(
+            //         ctx,
+            //         &mut command_buf_builder,
+            //         scene_state,
+            //         &entity_draw_calls,
+            //         EntityDrawStep::Specular,
+            //     )
+            //     .context("Entities pipeline draw failed")?;
+
+            command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
+            framebuffer.begin_render_pass(
+                &mut command_buf_builder,
+                FramebufferAndLoadOpId {
+                    color_attachments: [(ImageId::MainColor, LoadOp::Load)],
+                    depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
+                    input_attachments: [],
+                },
+                &ctx.renderpasses,
+                SubpassContents::Inline,
+            )?;
+        }
+
+        // At this point, if hybrid RT is off, we're still in the Color + Depth renderpass.
+        //   In that case, we're OK to stay in it
+        // If hybrid RT is on, we *may* be in either Color + Depth or Specular + Secondary Depth
+        //   In that case, we now need the unified Color + Specular + Depth renderpass
+        if hybrid_rt_enabled {
+            command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
+            framebuffer.begin_render_pass(
+                &mut command_buf_builder,
+                cube_geometry::SPECULAR_UNIFIED_FRAMEBUFFER,
+                &ctx.renderpasses,
+                SubpassContents::Inline,
+            )?;
+        }
+
+        if self.raytrace_data.is_none() || hybrid_rt_enabled {
+            self.cube_pipeline
+                .draw_single_step(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &mut self.cube_draw_calls,
+                    CubeDrawStep::Translucent,
+                )
+                .context("Translucent pipeline draw failed")?;
+        }
 
         command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 

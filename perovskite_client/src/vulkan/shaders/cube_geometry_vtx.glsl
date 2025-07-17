@@ -52,7 +52,7 @@ void main() {
 
     uv_texcoord_out = uv_texcoord;
     brightness_out = brightness;
-
+    // Guaranteed to be normalized
     world_normal_out = decode_normal(normal);
     float gbc_adjustment = 0.5 + 0.5 * max(-0.3, dot(global_light_direction, world_normal_out));
     global_brightness_out = global_brightness_color * global_brightness_contribution * gbc_adjustment;
