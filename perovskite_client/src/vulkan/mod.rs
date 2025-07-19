@@ -1715,6 +1715,13 @@ impl RectF32 {
             self.h / dimensions.1 as f32,
         )
     }
+
+    fn div_texref(&self, dimensions: (u32, u32)) -> TexRef {
+        TexRef {
+            top_left: [self.l / dimensions.0 as f32, self.t / dimensions.1 as f32],
+            width_height: [self.w / dimensions.0 as f32, self.h / dimensions.1 as f32],
+        }
+    }
 }
 impl From<Rect> for RectF32 {
     fn from(rect: Rect) -> Self {
@@ -1724,15 +1731,6 @@ impl From<Rect> for RectF32 {
 impl From<&Rect> for RectF32 {
     fn from(rect: &Rect) -> Self {
         (*rect).into()
-    }
-}
-impl From<RectF32> for TexRef {
-    fn from(value: RectF32) -> Self {
-        TexRef {
-            // reorder here to avoid extra swizzles in the shader
-            top_left: [value.l, value.t],
-            width_height: [value.w, value.h],
-        }
     }
 }
 

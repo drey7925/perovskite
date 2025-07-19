@@ -1,6 +1,6 @@
 #version 460
 layout(location = 0) in vec3 position;
-layout(location = 2) in vec2 uv_texcoord;
+layout(location = 2) in uvec2 uv_texcoord;
 layout(location = 1) in uint normal;
 layout(location = 3) in float brightness;
 layout(location = 4) in float global_brightness_contribution;
@@ -16,6 +16,8 @@ layout(set = 1, binding = 0) uniform UniformData {
 layout(push_constant) uniform ModelMatrix {
     mat4 model_matrix;
 };
+
+layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
 
 layout(location = 0) out vec2 uv_texcoord_out;
 layout(location = 1) flat out float brightness_out;
@@ -50,7 +52,7 @@ void main() {
     world_pos_out = world_pos.xyz / world_pos.w;
     gl_Position = vp_matrix * world_pos;
 
-    uv_texcoord_out = uv_texcoord;
+    uv_texcoord_out = vec2(uv_texcoord) / vec2(textureSize(diffuse_tex, 0));
     brightness_out = brightness;
     // Guaranteed to be normalized
     world_normal_out = decode_normal(normal);

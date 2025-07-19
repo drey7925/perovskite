@@ -150,6 +150,9 @@ impl TextureAtlas {
         keys: impl IntoIterator<Item = TextureKey>,
         textures: FxHashMap<String, RgbaImage>,
     ) -> Result<Self> {
+        // 4096 listed on https://registry.khronos.org/vulkan/specs/latest/man/html/Required_Limits.html
+        // If increased past 4096, hardware detection is needed. If increased past 65535, vertex
+        // buffer types must be changed
         const ATLAS_DIM: u32 = 4096;
         let config = texture_packer::TexturePackerConfig {
             // todo break these out into config

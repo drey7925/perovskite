@@ -400,8 +400,6 @@ fn get_selector_shift(bits: u32) -> u32 {
 fn get_texture(
     texture_coords: &FxHashMap<TextureKey, Rect>,
     tex: Option<&TextureReference>,
-    width: f32,
-    height: f32,
 ) -> MaybeDynamicRect {
     let crop = tex.and_then(|tex| tex.crop.as_ref());
 
@@ -409,23 +407,11 @@ fn get_texture(
         tex.and_then(|tex| texture_coords.get(&TextureKey::from(tex)).copied())
             .unwrap_or_else(|| *texture_coords.get(&TextureKey::FallbackUnknownTex).unwrap()),
         crop,
-        width,
-        height,
     )
 }
 
-fn make_maybe_dynamic(
-    mut rect: Rect,
-    crop: Option<&TextureCrop>,
-    width: f32,
-    height: f32,
-) -> MaybeDynamicRect {
-    let mut rect_f = RectF32::new(
-        rect.x as f32 / width,
-        rect.y as f32 / height,
-        rect.w as f32 / width,
-        rect.h as f32 / height,
-    );
+fn make_maybe_dynamic(mut rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRect {
+    let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
     if let Some(crop) = crop {
         rect_f = crop_texture(crop, rect_f);
         if let Some(dynamic) = crop.dynamic.as_ref() {
@@ -573,8 +559,8 @@ impl BlockRenderer {
                     &x,
                     &texture_atlas.texel_coords,
                     &block_type_manager,
-                    texture_atlas.width as f32,
-                    texture_atlas.height as f32,
+                    texture_atlas.width,
+                    texture_atlas.height,
                 ),
             });
         let raytrace_control_ssbo =
@@ -586,12 +572,7 @@ impl BlockRenderer {
                 .iter()
                 .map(|x| {
                     x.as_ref().and_then(|x| {
-                        build_axis_aligned_box_cache_entry(
-                            x,
-                            &texture_atlas.texel_coords,
-                            texture_atlas.width as f32,
-                            texture_atlas.height as f32,
-                        )
+                        build_axis_aligned_box_cache_entry(x, &texture_atlas.texel_coords)
                     })
                 })
                 .collect(),
@@ -607,12 +588,11 @@ impl BlockRenderer {
             .get(&TextureKey::SelectionRectangle)
             .unwrap()
             .into();
-        let atlas_dims = (texture_atlas.width, texture_atlas.height);
         Ok(BlockRenderer {
             block_defs: block_type_manager,
             texture_atlas,
-            selection_box_tex_coord: selection_rect.div(atlas_dims),
-            fallback_tex_coord: fallback_rect.div(atlas_dims),
+            selection_box_tex_coord: selection_rect,
+            fallback_tex_coord: fallback_rect,
             simple_block_tex_coords,
             axis_aligned_box_blocks,
             raytrace_control_ssbo,
@@ -1168,8 +1148,6 @@ impl BlockRenderer {
 fn build_axis_aligned_box_cache_entry(
     x: &BlockTypeDef,
     texture_coords: &FxHashMap<TextureKey, Rect>,
-    atlas_w: f32,
-    atlas_h: f32,
 ) -> Option<Box<[CachedAxisAlignedBox]>> {
     if let Some(RenderInfo::AxisAlignedBoxes(aa_boxes)) = &x.render_info {
         let mut result = Vec::new();
@@ -1185,20 +1163,15 @@ fn build_axis_aligned_box_cache_entry(
 
             // plantlike overrides box-like
             let textures = if let Some(plantlike) = aa_box.plant_like_tex.as_ref() {
-                CachedAabbTextures::Plantlike(get_texture(
-                    texture_coords,
-                    Some(plantlike),
-                    atlas_w,
-                    atlas_h,
-                ))
+                CachedAabbTextures::Plantlike(get_texture(texture_coords, Some(plantlike)))
             } else {
                 CachedAabbTextures::Prism([
-                    get_texture(texture_coords, aa_box.tex_right.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_left.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_top.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_bottom.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_back.as_ref(), atlas_w, atlas_h),
-                    get_texture(texture_coords, aa_box.tex_front.as_ref(), atlas_w, atlas_h),
+                    get_texture(texture_coords, aa_box.tex_right.as_ref()),
+                    get_texture(texture_coords, aa_box.tex_left.as_ref()),
+                    get_texture(texture_coords, aa_box.tex_top.as_ref()),
+                    get_texture(texture_coords, aa_box.tex_bottom.as_ref()),
+                    get_texture(texture_coords, aa_box.tex_back.as_ref()),
+                    get_texture(texture_coords, aa_box.tex_front.as_ref()),
                 ])
             };
             if aa_box.variant_mask & 0xfff != aa_box.variant_mask {
@@ -1249,11 +1222,11 @@ fn build_simple_cache_entry(
                 flags |= FLAG_BLOCK_FALLBACK;
             }
             Some(SimpleTexCoordEntry {
-                coords: get_cube_coords(texture_coords, w, h, render_info),
+                coords: get_cube_coords(texture_coords, render_info),
             })
         }
         Some(RenderInfo::PlantLike(render_info)) => Some(SimpleTexCoordEntry {
-            coords: [get_texture(texture_coords, render_info.tex.as_ref(), w, h); 6],
+            coords: [get_texture(texture_coords, render_info.tex.as_ref()); 6],
         }),
         _ => None,
     }
@@ -1262,17 +1235,15 @@ fn build_simple_cache_entry(
 #[inline]
 fn get_cube_coords(
     tex_coords: &FxHashMap<TextureKey, Rect>,
-    w: f32,
-    h: f32,
     render_info: &CubeRenderInfo,
 ) -> [MaybeDynamicRect; 6] {
     [
-        get_texture(tex_coords, render_info.tex_right.as_ref(), w, h),
-        get_texture(tex_coords, render_info.tex_left.as_ref(), w, h),
-        get_texture(tex_coords, render_info.tex_top.as_ref(), w, h),
-        get_texture(tex_coords, render_info.tex_bottom.as_ref(), w, h),
-        get_texture(tex_coords, render_info.tex_back.as_ref(), w, h),
-        get_texture(tex_coords, render_info.tex_front.as_ref(), w, h),
+        get_texture(tex_coords, render_info.tex_right.as_ref()),
+        get_texture(tex_coords, render_info.tex_left.as_ref()),
+        get_texture(tex_coords, render_info.tex_top.as_ref()),
+        get_texture(tex_coords, render_info.tex_bottom.as_ref()),
+        get_texture(tex_coords, render_info.tex_back.as_ref()),
+        get_texture(tex_coords, render_info.tex_front.as_ref()),
     ]
 }
 
@@ -1280,8 +1251,8 @@ fn build_ssbo_entry(
     block_def: &BlockTypeDef,
     texture_coords: &FxHashMap<TextureKey, Rect>,
     block_type_manager: &ClientBlockTypeManager,
-    w: f32,
-    h: f32,
+    w: u32,
+    h: u32,
 ) -> SimpleCubeInfo {
     use rt_flags::*;
     match &block_def.render_info {
@@ -1293,17 +1264,17 @@ fn build_ssbo_entry(
             if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
                 flags |= FLAG_BLOCK_FALLBACK;
             }
-            let coords = get_cube_coords(texture_coords, w, h, render_info);
+            let coords = get_cube_coords(texture_coords, render_info);
             SimpleCubeInfo {
                 flags: flags.into(),
-                tex: coords.map(|x| x.rect(0).into()),
+                tex: coords.map(|x| x.rect(0).div_texref((w, h))),
             }
         }
         Some(RenderInfo::PlantLike(render_info)) => {
-            let coords = get_texture(texture_coords, render_info.tex.as_ref(), w, h);
+            let coords = get_texture(texture_coords, render_info.tex.as_ref());
             SimpleCubeInfo {
                 flags: (1 | 4).into(),
-                tex: [coords.rect(0).into(); 6],
+                tex: [coords.rect(0).div_texref((w, h)); 6],
             }
         }
         _ => SimpleCubeInfo {
@@ -1505,7 +1476,7 @@ fn make_cgv(
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
         normal,
-        uv_texcoord: tex_uv.into(),
+        uv_texcoord: [tex_uv.x.round() as u16, tex_uv.y.round() as u16],
         brightness,
         global_brightness_contribution: global_brightness,
         wave_horizontal,
