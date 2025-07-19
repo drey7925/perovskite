@@ -202,6 +202,7 @@ impl CubeExtents {
         }
     }
 
+    #[inline]
     pub fn rotate_y(self, variant: u16) -> CubeExtents {
         let mut vertices = self.vertices;
         let mut adjacency = self.adjacency;
@@ -1355,30 +1356,38 @@ fn build_liquid_cube_extents(
         }
     };
 
-    let y_xn_zn = variant_to_height(
+    let mut y_xn_zn = variant_to_height(
         variant
             .max(neighbor_variant(offset, -1, 0))
             .max(neighbor_variant(offset, 0, -1))
             .max(neighbor_variant(offset, -1, -1)),
     );
-    let y_xn_zp = variant_to_height(
+    let mut y_xn_zp = variant_to_height(
         variant
             .max(neighbor_variant(offset, -1, 0))
             .max(neighbor_variant(offset, 0, 1))
             .max(neighbor_variant(offset, -1, 1)),
     );
-    let y_xp_zn = variant_to_height(
+    let mut y_xp_zn = variant_to_height(
         variant
             .max(neighbor_variant(offset, 1, 0))
             .max(neighbor_variant(offset, 0, -1))
             .max(neighbor_variant(offset, 1, -1)),
     );
-    let y_xp_zp = variant_to_height(
+    let mut y_xp_zp = variant_to_height(
         variant
             .max(neighbor_variant(offset, 1, 0))
             .max(neighbor_variant(offset, 0, 1))
             .max(neighbor_variant(offset, 1, 1)),
     );
+    let max_xdiff = f32::max(f32::abs(y_xn_zn - y_xp_zn), f32::abs(y_xn_zp - y_xp_zp));
+    let max_zdiff = f32::max(f32::abs(y_xn_zn - y_xn_zp), f32::abs(y_xp_zn - y_xp_zp));
+    let mut rotation = 0;
+    if max_zdiff > max_xdiff {
+        rotation = 1;
+        // Rotate the four values
+        (y_xn_zn, y_xp_zn, y_xp_zp, y_xn_zp) = (y_xn_zp, y_xn_zn, y_xp_zn, y_xp_zp);
+    }
 
     CubeExtents {
         vertices: [
@@ -1395,6 +1404,7 @@ fn build_liquid_cube_extents(
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
     }
+    .rotate_y(rotation)
 }
 
 #[derive(Clone, Copy, Debug)]
