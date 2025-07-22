@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use smallvec::smallvec;
 use std::collections::HashMap;
 use std::sync::Arc;
-use vulkano::command_buffer::{SubpassContents, SubpassEndInfo};
+use vulkano::command_buffer::{CopyImageInfo, SubpassContents, SubpassEndInfo};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
 use vulkano::image::sampler::{
@@ -50,21 +50,21 @@ vulkano_shaders::shader! {
                     uv = uvs[gl_VertexIndex];
                 }"
         },
-        extract_overbright: {
-        ty: "fragment",
-        src: r"
-            #version 460
-            layout(location = 0) in vec2 uv;
-            layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput main_color;
-            layout(location = 0) out vec4 f_color;
-            layout (constant_id = 0) const float BLOOM_STRENGTH = 1.0;
-
-            void main() {
-                f_color = subpassLoad(main_color);
-                f_color.rgb = BLOOM_STRENGTH * max((f_color.rgb - 1) / 1000, 0);
-            }
-            "
-        },
+        // extract_overbright: {
+        // ty: "fragment",
+        // src: r"
+        //     #version 460
+        //     layout(location = 0) in vec2 uv;
+        //     layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput main_color;
+        //     layout(location = 0) out vec4 f_color;
+        //     layout (constant_id = 0) const float BLOOM_STRENGTH = 1.0;
+        //
+        //     void main() {
+        //         f_color = subpassLoad(main_color);
+        //         f_color.rgb = BLOOM_STRENGTH * max((f_color.rgb - 1) / 1000, 0);
+        //     }
+        //     "
+        // },
         // https://community.arm.com/cfs-file/__key/communityserver-blogs-components-weblogfiles/00-00-00-20-66/siggraph2015_2D00_mmg_2D00_marius_2D00_notes.pdf
         downsample: {
         ty: "fragment",
@@ -120,6 +120,39 @@ vulkano_shaders::shader! {
             }
             "
         },
+        upsample_blend: {
+        ty: "fragment",
+        src: r"
+            #version 460
+            // Given w.r.t the input image
+            layout(push_constant) uniform PostProcessUniform {
+                vec2 ht;
+            };
+            // Adjusted from the original slide deck, center mul optional
+            // layout (constant_id = 0) const float CENTER_MUL = 0;
+            layout (constant_id = 1) const float CORNER_MUL = 0.16666666667;
+            layout (constant_id = 2) const float EDGE_MUL = 0.083333333333;
+
+            layout (constant_id = 3) const float BLOOM_STRENGTH = 1.0;
+
+            layout(location = 0) in vec2 uv;
+            layout(location = 0) out vec4 f_color;
+            layout(set = 0, binding = 0) uniform sampler2D src;
+            void main() {
+                vec3 color = vec3(0); //texture(src, uv).rgb * CENTER_MUL;
+                color += texture(src, uv + vec2(ht.x, ht.y)).rgb * CORNER_MUL;
+                color += texture(src, uv + vec2(-ht.x, ht.y)).rgb * CORNER_MUL;
+                color += texture(src, uv + vec2(ht.x, -ht.y)).rgb * CORNER_MUL;
+                color += texture(src, uv + vec2(-ht.x, -ht.y)).rgb * CORNER_MUL;
+                color += texture(src, uv + vec2(2 * ht.x, 0)).rgb * EDGE_MUL;
+                color += texture(src, uv + vec2(-2 * ht.x, 0)).rgb * EDGE_MUL;
+                color += texture(src, uv + vec2(0, 2 * ht.y)).rgb * EDGE_MUL;
+                color += texture(src, uv + vec2(0, -2 * ht.y)).rgb * EDGE_MUL;
+                color = BLOOM_STRENGTH * max((color - 1) / 1000, 0);
+                f_color = vec4(color, 1.0);
+            }
+            "
+        },
         lens_flare: {
         ty: "fragment",
         src: r"
@@ -135,6 +168,7 @@ vulkano_shaders::shader! {
                 f_color.rgb += texture(src, 1.62 - 2.24 * uv).rgb * FACTOR * vec3(0.2, 0.6, 0.6);
                 f_color.rgb += texture(src, 0.9 - 0.8 * uv).rgb * FACTOR * vec3(0.6, 0.9, 0.2);
                 f_color.rgb += texture(src, 0.2 + 0.6 * uv).rgb * FACTOR * vec3(0.6, 0.9, 0.2);
+                f_color.rgb = FACTOR * max((f_color.rgb - 1) / 1000, 0);
             }
             "
         },
@@ -142,7 +176,7 @@ vulkano_shaders::shader! {
 }
 
 pub(crate) struct PostProcessingPipelineWrapper {
-    extractor_pipeline: Arc<GraphicsPipeline>,
+    upsample_blend_pipeline: Arc<GraphicsPipeline>,
     lens_flare_pipeline: Arc<GraphicsPipeline>,
     blur_stages: Vec<(PassInfo, Arc<GraphicsPipeline>, PostProcessUniform)>,
     sampler: Arc<Sampler>,
@@ -160,36 +194,6 @@ impl PostProcessingPipelineWrapper {
         {
             return Ok(());
         }
-        let extractor_pfs = DescriptorSet::new(
-            ctx.descriptor_set_allocator.clone(),
-            self.extractor_pipeline
-                .layout()
-                .set_layouts()
-                .get(0)
-                .with_context(|| "Extractor layout missing set 0")?
-                .clone(),
-            [WriteDescriptorSet::image_view(
-                0,
-                framebuffer.get_image(ImageId::MainColorResolved)?,
-            )],
-            [],
-        )?;
-
-        framebuffer
-            .begin_render_pass(cmd, EXTRACTOR, ctx.renderpasses(), SubpassContents::Inline)
-            .context("Begin extractor renderpass")?;
-        cmd.bind_pipeline_graphics(self.extractor_pipeline.clone())?;
-        cmd.bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            self.extractor_pipeline.layout().clone(),
-            0,
-            vec![extractor_pfs],
-        )?;
-        unsafe {
-            cmd.draw(3, 1, 0, 0)
-                .context("Failed to draw extractor pass")?;
-        }
-        cmd.end_render_pass(SubpassEndInfo::default())?;
 
         let lens_flare_pfs = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
@@ -208,6 +212,14 @@ impl PostProcessingPipelineWrapper {
         )?;
 
         if ctx.renderpasses.config.lens_flare_strength > 0.0 {
+            cmd.copy_image(CopyImageInfo::images(
+                framebuffer
+                    .get_image(ImageId::MainColorResolved)?
+                    .image()
+                    .clone(),
+                framebuffer.get_image(ImageId::Blur(0))?.image().clone(),
+            ))?;
+
             framebuffer
                 .begin_render_pass(cmd, LENS_FLARE, ctx.renderpasses(), SubpassContents::Inline)
                 .context("Begin lens flare renderpass")?;
@@ -285,6 +297,7 @@ const LENS_FLARE: FramebufferAndLoadOpId<1, 0> = FramebufferAndLoadOpId {
 enum Kernel {
     Down,
     Up,
+    UpBlend,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -298,10 +311,10 @@ type PassInfo = (FramebufferAndLoadOpId<1, 0>, Kernel, ImageId, Blend);
 pub(crate) struct PostProcessingPipelineProvider {
     device: Arc<Device>,
     gen_uv: Arc<ShaderModule>,
-    extract_overbright: Arc<ShaderModule>,
     downsample: Arc<ShaderModule>,
     upsample: Arc<ShaderModule>,
     lens_flare: Arc<ShaderModule>,
+    upsample_blend: Arc<ShaderModule>,
 }
 impl PostProcessingPipelineProvider {
     pub(crate) fn make_pipeline(
@@ -313,10 +326,10 @@ impl PostProcessingPipelineProvider {
             .gen_uv
             .entry_point("main")
             .context("Missing vertex shader")?;
-        let fs_extract = self
-            .extract_overbright
+        let fs_upsample_blend = self
+            .upsample_blend
             .specialize(HashMap::from_iter([(
-                0,
+                3,
                 SpecializationConstant::F32(global_config.bloom_strength),
             )]))?
             .entry_point("main")
@@ -333,22 +346,18 @@ impl PostProcessingPipelineProvider {
             .lens_flare
             .specialize(HashMap::from_iter([(
                 0,
-                // compensate for bloom strength (Blur0 is a dual-purpose buffer)
-                SpecializationConstant::F32(
-                    global_config.lens_flare_strength * 0.03
-                        / (global_config.bloom_strength + 0.0000001),
-                ),
+                SpecializationConstant::F32(global_config.lens_flare_strength * 0.1),
             )]))?
             .entry_point("main")
             .context("Missing fragment shader: lens flare")?;
 
-        let extractor_stages = smallvec![
+        let upsample_blend_stages = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
-            PipelineShaderStageCreateInfo::new(fs_extract)
+            PipelineShaderStageCreateInfo::new(fs_upsample_blend.clone())
         ];
-        let extractor_layout = PipelineLayout::new(
+        let upsample_blend_layout = PipelineLayout::new(
             self.device.clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages(&extractor_stages)
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&upsample_blend_stages)
                 .into_pipeline_layout_create_info(self.device.clone())?,
         )?;
 
@@ -362,7 +371,11 @@ impl PostProcessingPipelineProvider {
         let mut passes = vec![];
         let total_steps = global_config.blur_steps.min(max_steps as usize);
         for step in 0..total_steps {
-            let input = ImageId::Blur(step as u8);
+            let input = if step == 0 {
+                ImageId::MainColorResolved
+            } else {
+                ImageId::Blur(step as u8)
+            };
             let target = FramebufferAndLoadOpId {
                 color_attachments: [(ImageId::Blur((step + 1) as u8), LoadOp::DontCare)],
                 depth_stencil_attachment: None,
@@ -372,13 +385,19 @@ impl PostProcessingPipelineProvider {
         }
         for step in 0..total_steps {
             let input = ImageId::Blur((total_steps - step) as u8);
-            let (color, blend, op) = if step == (total_steps - 1) {
-                (ImageId::MainColorResolved, Blend::Additive, LoadOp::Load)
+            let (color, blend, op, kernel) = if step == (total_steps - 1) {
+                (
+                    ImageId::MainColorResolved,
+                    Blend::Additive,
+                    LoadOp::Load,
+                    Kernel::UpBlend,
+                )
             } else {
                 (
                     ImageId::Blur((total_steps - step - 1) as u8),
                     Blend::None,
                     LoadOp::DontCare,
+                    Kernel::Up,
                 )
             };
             let target = FramebufferAndLoadOpId {
@@ -386,11 +405,11 @@ impl PostProcessingPipelineProvider {
                 depth_stencil_attachment: None,
                 input_attachments: [],
             };
-            passes.push((target, Kernel::Up, input, blend));
+            passes.push((target, kernel, input, blend));
         }
 
-        let extractor_pipeline_info = GraphicsPipelineCreateInfo {
-            stages: extractor_stages,
+        let upsample_blend_info = GraphicsPipelineCreateInfo {
+            stages: upsample_blend_stages,
             // No bindings or attributes
             vertex_input_state: Some(VertexInputState::new()),
             input_assembly_state: Some(InputAssemblyState::default()),
@@ -419,10 +438,10 @@ impl PostProcessingPipelineProvider {
                 )
                 .context("Missing subpass")?,
             )),
-            ..GraphicsPipelineCreateInfo::layout(extractor_layout)
+            ..GraphicsPipelineCreateInfo::layout(upsample_blend_layout)
         };
-        let extractor_pipeline =
-            GraphicsPipeline::new(self.device.clone(), None, extractor_pipeline_info)
+        let upsample_blend_pipeline =
+            GraphicsPipeline::new(self.device.clone(), None, upsample_blend_info)
                 .context("Building overbright extractor pipeline")?;
 
         let lens_flare_stages = smallvec![
@@ -479,6 +498,7 @@ impl PostProcessingPipelineProvider {
             let fs = match kernel {
                 Kernel::Down => fs_downsample.clone(),
                 Kernel::Up => fs_upsample.clone(),
+                Kernel::UpBlend => fs_upsample_blend.clone(),
             };
             let blend = match blend {
                 Blend::None => None,
@@ -550,7 +570,7 @@ impl PostProcessingPipelineProvider {
         }
 
         Ok(PostProcessingPipelineWrapper {
-            extractor_pipeline,
+            upsample_blend_pipeline,
             lens_flare_pipeline,
             blur_stages,
             sampler: Sampler::new(
@@ -569,7 +589,7 @@ impl PostProcessingPipelineProvider {
         Ok(Self {
             device: device.clone(),
             gen_uv: load_gen_uv(device.clone())?,
-            extract_overbright: load_extract_overbright(device.clone())?,
+            upsample_blend: load_upsample_blend(device.clone())?,
             downsample: load_downsample(device.clone())?,
             upsample: load_upsample(device.clone())?,
             lens_flare: load_lens_flare(device.clone())?,

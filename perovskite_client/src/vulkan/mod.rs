@@ -1077,7 +1077,10 @@ impl ImageId {
                 ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSFER_DST
             }
             ImageId::MainColorResolved => {
-                ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST
+                ImageUsage::COLOR_ATTACHMENT
+                    | ImageUsage::TRANSFER_SRC
+                    | ImageUsage::TRANSFER_DST
+                    | ImageUsage::SAMPLED
             }
             ImageId::SwapchainColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
             ImageId::RtSpecRawColor => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
@@ -1085,6 +1088,9 @@ impl ImageId {
             ImageId::RtSpecStrength => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecRayDir => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
             ImageId::RtSpecRayDirDownsampled => ImageUsage::COLOR_ATTACHMENT | ImageUsage::STORAGE,
+            ImageId::Blur(0) => {
+                ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST
+            }
             ImageId::Blur(_) => ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
         }
     }
@@ -1456,7 +1462,9 @@ impl FramebufferHolder {
             log::debug!("Creating blit path image {i}, {multiplier}x samples");
             let mut usage = ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST;
             if i == config.supersampling.blit_steps() - 1 {
-                usage |= ImageUsage::COLOR_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT;
+                usage |= ImageUsage::COLOR_ATTACHMENT
+                    | ImageUsage::INPUT_ATTACHMENT
+                    | ImageUsage::SAMPLED;
             }
             let buffer = Image::new(
                 ctx.clone_allocator(),
