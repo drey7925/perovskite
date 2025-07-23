@@ -135,6 +135,9 @@ const DIRT_SNOW_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dir
 
 const SNOWBALL_TEXTURE: StaticTextureName = StaticTextureName("default:snowball");
 
+const REFLECTOR_TEST: StaticBlockName = StaticBlockName("default:reflector_test");
+const REFLECTOR_TEST_LIQUID: StaticBlockName = StaticBlockName("default:reflector_test_liquid");
+
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
     use perovskite_server::game_state::items::ItemStack;
@@ -1046,6 +1049,37 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_allow_light_propagation(true)
             .set_display_name("Dichroic Glass"),
+    )?;
+
+    game_builder.add_block(
+        BlockBuilder::new(REFLECTOR_TEST)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(
+                        TextureReference::from(OwnedTextureName::from_css_color(
+                            "rgb(120 120 120)",
+                        ))
+                        .with_specular(OwnedTextureName::from_css_color("rgb(200 200 200)")),
+                    )
+                    .set_needs_translucency(),
+            )
+            .set_display_name("Reflection test"),
+    )?;
+    game_builder.add_block(
+        BlockBuilder::new(REFLECTOR_TEST_LIQUID)
+            .set_cube_appearance(
+                CubeAppearanceBuilder::new()
+                    .set_single_texture(
+                        TextureReference::from(OwnedTextureName::from_css_color(
+                            "rgb(120 120 120)",
+                        ))
+                        .with_specular(OwnedTextureName::from_css_color("rgb(200 200 200)")),
+                    )
+                    .set_liquid_shape()
+                    .set_needs_translucency(),
+            )
+            .set_liquid_flow(Some(Duration::from_millis(500)))
+            .set_display_name("Reflection test (liquid)"),
     )?;
 
     Ok(())

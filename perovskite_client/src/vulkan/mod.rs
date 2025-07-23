@@ -1062,6 +1062,7 @@ impl ImageId {
                 ImageUsage::COLOR_ATTACHMENT
                     | ImageUsage::TRANSFER_SRC
                     | ImageUsage::INPUT_ATTACHMENT
+                    | ImageUsage::SAMPLED
             }
             ImageId::MainDepthStencil => {
                 ImageUsage::DEPTH_STENCIL_ATTACHMENT

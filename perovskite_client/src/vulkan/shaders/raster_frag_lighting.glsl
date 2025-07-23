@@ -66,6 +66,7 @@ void main() {
     #endif// defined(ENABLE_BASIC_COLOR) || defined(ENABLE_UNIFIED_SPECULAR)
 
     #if defined(ENABLE_SPECULAR_ONLY) || defined(ENABLE_UNIFIED_SPECULAR)
+    spec_dir = uvec4(0);
     vec4 specular = texture(specular_tex, uv_texcoord);
     if (specular.rgb != vec3(0)) {
         float rt_len = (length(world_pos) - 0.05) / 16.0;

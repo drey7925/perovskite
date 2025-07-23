@@ -75,17 +75,17 @@ pub(crate) enum CubeFace {
 }
 impl CubeFace {
     #[inline(always)]
-    fn index(&self) -> usize {
+    const fn index(&self) -> usize {
         *self as usize
     }
 
     #[inline(always)]
-    fn repr(&self) -> u8 {
+    const fn repr(&self) -> u8 {
         *self as u8
     }
 
     #[inline(always)]
-    fn rotate_y(&self, variant: u16) -> CubeFace {
+    const fn rotate_y(&self, variant: u16) -> CubeFace {
         let idx = (variant % 4) as usize;
 
         const LUT: [[usize; 4]; 10] = [
@@ -102,6 +102,30 @@ impl CubeFace {
         ];
         CUBE_EXTENTS_FACE_ORDER[LUT[self.index()][idx]]
     }
+
+    #[inline(always)]
+    const fn default_normal(&self) -> u16 {
+        match self {
+            CubeFace::XPlus => encode_normal(1, 0, 0),
+            CubeFace::XMinus => encode_normal(-1, 0, 0),
+            // flip Y normals for Vulkan convention coordinate system
+            CubeFace::YPlus => encode_normal(0, -1, 0),
+            CubeFace::YMinus => encode_normal(0, 1, 0),
+            CubeFace::ZPlus => encode_normal(0, 0, 1),
+            CubeFace::ZMinus => encode_normal(0, 0, -1),
+            CubeFace::PlantXPlusZPlus => encode_normal(1, 0, 1),
+            CubeFace::PlantXPlusZMinus => encode_normal(1, 0, -1),
+            CubeFace::PlantXMinusZPlus => encode_normal(-1, 0, 1),
+            CubeFace::PlantXMinusZMinus => encode_normal(-1, 0, -1),
+        }
+    }
+}
+
+const fn encode_normal(x: i8, y: i8, z: i8) -> u16 {
+    const fn encode(i: i8) -> u16 {
+        (i & 0x1f) as u16
+    }
+    (encode(x) << 10) | (encode(y) << 5) | (encode(z))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -183,6 +207,7 @@ pub struct CubeExtents {
     /// Given in the same order as the first six members of [`CubeFace`].
     pub adjacency: [(i8, i8, i8); 10],
     pub force: [bool; 6],
+    pub top_normal: u16,
 }
 impl CubeExtents {
     pub const fn new(x: (f32, f32), y: (f32, f32), z: (f32, f32)) -> Self {
@@ -199,7 +224,12 @@ impl CubeExtents {
             ],
             adjacency: DEFAULT_FACE_NORMALS,
             force: [false; 6],
+            top_normal: CubeFace::YPlus.default_normal(),
         }
+    }
+
+    pub fn ypos_normal(self) -> u16 {
+        self.top_normal
     }
 
     #[inline]
@@ -253,6 +283,7 @@ impl CubeExtents {
             vertices,
             adjacency,
             force: force_swizzled,
+            top_normal: self.top_normal,
         }
     }
 
@@ -1303,6 +1334,7 @@ fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
         adjacency: DEFAULT_FACE_NORMALS,
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
+        top_normal: CubeFace::YPlus.default_normal(),
     }
 }
 
@@ -1353,6 +1385,10 @@ fn build_liquid_cube_extents(
     );
     let max_xdiff = f32::max(f32::abs(y_xn_zn - y_xp_zn), f32::abs(y_xn_zp - y_xp_zp));
     let max_zdiff = f32::max(f32::abs(y_xn_zn - y_xn_zp), f32::abs(y_xp_zn - y_xp_zp));
+
+    let nx = ((((y_xn_zn - y_xp_zn) + (y_xn_zp - y_xp_zp)) * -7.5) as i8).clamp(-15, 15);
+    let nz = ((((y_xn_zn - y_xn_zp) + (y_xp_zn - y_xp_zp)) * -7.5) as i8).clamp(-15, 15);
+
     let mut rotation = 0;
     if max_zdiff > max_xdiff {
         rotation = 1;
@@ -1374,6 +1410,7 @@ fn build_liquid_cube_extents(
         adjacency: DEFAULT_FACE_NORMALS,
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
+        top_normal: encode_normal(nx, -16, nz),
     }
     .rotate_y(rotation)
 }
@@ -1467,7 +1504,7 @@ lazy_static::lazy_static! {
 #[inline]
 fn make_cgv(
     coord: Vector3<f32>,
-    normal: u8,
+    normal: u16,
     tex_uv: Vector2<f32>,
     brightness: u8,
     global_brightness: u8,
@@ -1528,7 +1565,7 @@ pub(crate) fn emit_cube_face_vk(
     let brightness = brightness_1.max(brightness_2);
     let global_brightness = global_brightness_1.max(global_brightness_2);
 
-    let normal = dest_face.repr();
+    let normal = dest_face.default_normal();
     let vertices = match source_face {
         CubeFace::ZMinus => [
             make_cgv(
@@ -1705,7 +1742,7 @@ pub(crate) fn emit_cube_face_vk(
         CubeFace::YPlus => [
             make_cgv(
                 coord + e.vertices[4],
-                normal,
+                e.ypos_normal(),
                 tl,
                 brightness,
                 global_brightness,
@@ -1713,7 +1750,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[5],
-                normal,
+                e.ypos_normal(),
                 bl,
                 brightness,
                 global_brightness,
@@ -1721,7 +1758,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[1],
-                normal,
+                e.ypos_normal(),
                 br,
                 brightness,
                 global_brightness,
@@ -1729,7 +1766,7 @@ pub(crate) fn emit_cube_face_vk(
             ),
             make_cgv(
                 coord + e.vertices[0],
-                normal,
+                e.ypos_normal(),
                 tr,
                 brightness,
                 global_brightness,

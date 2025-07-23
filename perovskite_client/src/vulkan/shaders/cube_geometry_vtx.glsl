@@ -1,7 +1,7 @@
 #version 460
 layout(location = 0) in vec3 position;
 layout(location = 2) in uvec2 uv_texcoord;
-layout(location = 1) in uint normal;
+layout(location = 1) in int normal;
 layout(location = 3) in float brightness;
 layout(location = 4) in float global_brightness_contribution;
 layout(location = 5) in float wave_horizontal;
@@ -26,23 +26,9 @@ layout(location = 3) flat out vec3 world_normal_out;
 layout(location = 4) out vec3 world_pos_out;
 
 
-vec3 decode_normal(uint index) {
-    const float sqrt_half = sqrt(0.5);
-    // Matches CubeFace in BlockRenderer
-    const vec3 normals[10] = vec3[](
-    vec3(1.0, 0.0, 0.0),
-    vec3(-1.0, 0.0, 0.0),
-    // Warning: CubeFace Y+ then Y- is in world coords, not Vk coords
-    vec3(0.0, -1.0, 0.0),
-    vec3(0.0, 1.0, 0.0),
-    vec3(0.0, 0.0, 1.0),
-    vec3(0.0, 0.0, -1.0),
-    vec3(sqrt_half, 0.0, sqrt_half),
-    vec3(sqrt_half, 0.0, -sqrt_half),
-    vec3(-sqrt_half, 0.0, sqrt_half),
-    vec3(-sqrt_half, 0.0, -sqrt_half)
-    );
-    return normals[index];
+vec3 decode_normal(int index) {
+    ivec3 components = ivec3(bitfieldExtract(index, 10, 5), bitfieldExtract(index, 5, 5), bitfieldExtract(index, 0, 5));
+    return normalize(vec3(components));
 }
 void main() {
     float wave_x = wave_horizontal * plant_wave_vector.x;

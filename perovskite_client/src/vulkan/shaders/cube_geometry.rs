@@ -82,9 +82,9 @@ pub(crate) struct CubeGeometryVertex {
     #[format(R16G16_UINT)]
     pub(crate) uv_texcoord: [u16; 2],
 
-    /// Normal, given in world space
-    #[format(R8_UINT)]
-    pub(crate) normal: u8,
+    /// Normal, encoded in 15 bits
+    #[format(R16_SINT)]
+    pub(crate) normal: u16,
 
     // The local brightness (from nearby sources, unchanging as the global lighting varies)
     #[format(R8_UNORM)]

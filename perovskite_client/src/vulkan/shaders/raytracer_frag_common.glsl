@@ -377,7 +377,7 @@ vec2 t_range(vec3 start, vec3 dir) {
     vec3 t_for_min = (c_min - start) / dir;
     vec3 t_for_max = (c_max + 1 - start) / dir;
     vec3 t_min = min(t_for_min, t_for_max);
-    vec3 t_max = max(t_for_min, t_for_max);
+    vec3 t_max = max(t_for_min, t_for_max) + 0.5;
     return vec2(
     max(0, max(t_min.x, max(t_min.y, t_min.z))),
     min(render_distance, min(t_max.x, min(t_max.y, t_max.z)))
