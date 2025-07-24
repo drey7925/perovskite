@@ -16,7 +16,8 @@ pub(crate) struct ClientBlockTypeManager {
     fallback_block_def: BlockTypeDef,
     light_propagators: bv::BitVec,
     light_emitters: Vec<u8>,
-    opaque_blocks: bv::BitVec,
+    opaque_nonspecular_blocks: bv::BitVec,
+    opaque_specular_blocks: bv::BitVec,
     solid_opaque_blocks: bv::BitVec,
     allow_suppression_same_base_block: bv::BitVec,
     allow_face_suppress_on_exact_match: bv::BitVec,
@@ -43,8 +44,10 @@ impl ClientBlockTypeManager {
         let mut light_propagators = bv::BitVec::new();
         light_propagators.resize(BlockId(max_id).index() + 1, false);
 
-        let mut opaque_blocks = bv::BitVec::new();
-        opaque_blocks.resize(BlockId(max_id).index() + 1, false);
+        let mut opaque_nonspecular_blocks = bv::BitVec::new();
+        opaque_nonspecular_blocks.resize(BlockId(max_id).index() + 1, false);
+        let mut opaque_specular_blocks = bv::BitVec::new();
+        opaque_specular_blocks.resize(BlockId(max_id).index() + 1, false);
         let mut solid_opaque_blocks = bv::BitVec::new();
         solid_opaque_blocks.resize(BlockId(max_id).index() + 1, false);
         let mut allow_suppression_same_base_block = bv::BitVec::new();
@@ -95,10 +98,14 @@ impl ClientBlockTypeManager {
                 def.light_emission as u8
             };
             match &def.render_info {
-                Some(RenderInfo::Cube(render_info)) => {
+                Some(ori @ RenderInfo::Cube(render_info)) => {
                     raytrace_present.set(id.index(), true);
                     if render_info.render_mode() == CubeRenderMode::SolidOpaque {
-                        opaque_blocks.set(id.index(), true);
+                        if has_any_specular_texture(&ori) {
+                            opaque_specular_blocks.set(id.index(), true);
+                        } else {
+                            opaque_nonspecular_blocks.set(id.index(), true);
+                        }
                         solid_opaque_blocks.set(
                             id.index(),
                             render_info.variant_effect() != CubeVariantEffect::Liquid
@@ -192,7 +199,8 @@ impl ClientBlockTypeManager {
             fallback_block_def: make_fallback_blockdef(),
             light_propagators,
             light_emitters,
-            opaque_blocks,
+            opaque_nonspecular_blocks,
+            opaque_specular_blocks,
             solid_opaque_blocks,
             allow_suppression_same_base_block,
             allow_face_suppress_on_exact_match,
@@ -209,6 +217,29 @@ impl ClientBlockTypeManager {
 
     pub(crate) fn all_block_defs(&self) -> impl Iterator<Item = &BlockTypeDef> {
         self.block_defs.iter().flatten()
+    }
+
+    pub(crate) fn debug_properties(&self, id: BlockId) -> String {
+        let mut result = String::new();
+        for (tag, data) in [
+            ("OpaNS", &self.opaque_nonspecular_blocks),
+            ("OpaSpec", &self.opaque_specular_blocks),
+            ("SldOpa", &self.solid_opaque_blocks),
+            ("光Prop", &self.light_propagators),
+            ("SuppressBaseBlk", &self.allow_suppression_same_base_block),
+            ("SuppressExact", &self.allow_face_suppress_on_exact_match),
+            ("Transparent", &self.transparent_render_blocks),
+            ("TransparSpec", &self.transparent_with_specular),
+            ("Translucent", &self.translucent_render_blocks),
+            ("Rt", &self.raytrace_present),
+            ("RtHvy", &self.raytrace_heavy),
+            ("RtFb", &self.raytrace_fallback_render_blocks),
+        ] {
+            if id.index() < data.len() && data[id.index()] {
+                result += &format!("[{}]", tag);
+            }
+        }
+        result
     }
 
     pub(crate) fn get_fallback_blockdef(&self) -> &BlockTypeDef {
@@ -260,12 +291,21 @@ impl ClientBlockTypeManager {
         }
     }
     #[inline]
-    pub(crate) fn is_opaque(&self, id: BlockId) -> bool {
-        if id.index() < self.opaque_blocks.len() {
-            self.opaque_blocks[id.index()]
+    pub(crate) fn is_opaque_nonspecular(&self, id: BlockId) -> bool {
+        if id.index() < self.opaque_nonspecular_blocks.len() {
+            self.opaque_nonspecular_blocks[id.index()]
         } else {
             // unknown blocks are solid opaque
             true
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_opaque_specular(&self, id: BlockId) -> bool {
+        if id.index() < self.opaque_specular_blocks.len() {
+            self.opaque_specular_blocks[id.index()]
+        } else {
+            false
         }
     }
     #[inline]
@@ -277,6 +317,7 @@ impl ClientBlockTypeManager {
             true
         }
     }
+
     #[inline]
     pub(crate) fn allow_face_suppress_on_same_base_block(&self, id: BlockId) -> bool {
         if id.index() < self.allow_suppression_same_base_block.len() {
@@ -330,7 +371,7 @@ impl ClientBlockTypeManager {
         if id.index() < self.raytrace_present.len() {
             self.raytrace_present[id.index()]
         } else {
-            false
+            true
         }
     }
 

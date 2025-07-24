@@ -769,8 +769,19 @@ impl ToolState {
             ToolTargetWithId::Block(_, id) => client_state
                 .block_types
                 .get_blockdef(*id)
-                .map(|x| format!("Block: {id:x?}: {}", x.short_name))
-                .or_else(|| Some(format!("Block: {id:x?}: ???"))),
+                .map(|x| {
+                    format!(
+                        "Block: {id:x?}: {} {}",
+                        x.short_name,
+                        client_state.block_types.debug_properties(*id)
+                    )
+                })
+                .or_else(|| {
+                    Some(format!(
+                        "Block: {id:x?}: ??? {}",
+                        client_state.block_types.debug_properties(*id)
+                    ))
+                }),
             ToolTargetWithId::Entity(_, class) => client_state
                 .entity_renderer
                 .class_name(*class)

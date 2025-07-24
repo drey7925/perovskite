@@ -214,7 +214,7 @@ impl MiniBlockRenderer {
 
         if let Some(buffer) = pass {
             let mut draw_buffers = enum_map! { _ => None };
-            draw_buffers[CubeDrawStep::Opaque] = Some(buffer);
+            draw_buffers[CubeDrawStep::OpaqueSimple] = Some(buffer);
             let draw_call = CubeGeometryDrawCall {
                 models: VkChunkVertexDataGpu { draw_buffers },
                 model_matrix: Matrix4::identity(),

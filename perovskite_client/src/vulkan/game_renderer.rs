@@ -329,9 +329,53 @@ impl ActiveGame {
                     &mut command_buf_builder,
                     cube_uniform.clone(),
                     &mut self.cube_draw_calls,
-                    CubeDrawStep::Opaque,
+                    CubeDrawStep::OpaqueSimple,
                 )
                 .context("Opaque pipeline draw failed")?;
+
+            if hybrid_rt_enabled {
+                command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
+                // If we're doing hybrid RT, switch to the specular + secondary depth renderpass
+                // This has to happen even if we don't have anything to render, since we rely on this
+                // clear for correctness
+                framebuffer.begin_render_pass(
+                    &mut command_buf_builder,
+                    cube_geometry::UNIFIED_FRAMEBUFFER_CLEAR_SPECULAR,
+                    &ctx.renderpasses,
+                    SubpassContents::Inline,
+                )?;
+
+                self.cube_pipeline
+                    .draw_single_step(
+                        ctx,
+                        &mut command_buf_builder,
+                        cube_uniform.clone(),
+                        &mut self.cube_draw_calls,
+                        CubeDrawStep::OpaqueSpecular,
+                    )
+                    .context("Opaque specular draw failed")?;
+
+                command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+
+                framebuffer.begin_render_pass(
+                    &mut command_buf_builder,
+                    cube_geometry::MAIN_FRAMEBUFFER,
+                    &ctx.renderpasses,
+                    SubpassContents::Inline,
+                )?;
+            } else {
+                self.cube_pipeline
+                    .draw_single_step(
+                        ctx,
+                        &mut command_buf_builder,
+                        cube_uniform.clone(),
+                        &mut self.cube_draw_calls,
+                        CubeDrawStep::OpaqueSpecular,
+                    )
+                    .context("Opaque specular draw failed")?;
+            }
+
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
@@ -379,12 +423,9 @@ impl ActiveGame {
                         .clone(),
                 )
             })?;
-            // If we're doing hybrid RT, switch to the specular + secondary depth renderpass
-            // This has to happen even if we don't have anything to render, since we rely on this
-            // clear for correctness
             framebuffer.begin_render_pass(
                 &mut command_buf_builder,
-                cube_geometry::SPECULAR_FRAMEBUFFER_CLEAR_OUTPUT,
+                cube_geometry::SPECULAR_FRAMEBUFFER,
                 &ctx.renderpasses,
                 SubpassContents::Inline,
             )?;
@@ -419,7 +460,7 @@ impl ActiveGame {
 
             framebuffer.begin_render_pass(
                 &mut command_buf_builder,
-                cube_geometry::SPECULAR_UNIFIED_FRAMEBUFFER,
+                cube_geometry::UNIFIED_FRAMEBUFFER,
                 &ctx.renderpasses,
                 SubpassContents::Inline,
             )?;

@@ -736,11 +736,11 @@ pub(crate) struct MeshBatch {
 impl MeshBatch {
     pub(crate) fn solid_occupancy(&self) -> (usize, usize) {
         (
-            self.vertex_buffers[CubeDrawStep::Opaque]
+            self.vertex_buffers[CubeDrawStep::OpaqueSimple]
                 .as_deref()
                 .map(Subbuffer::len)
                 .unwrap_or(0) as usize,
-            self.index_buffers[CubeDrawStep::Opaque]
+            self.index_buffers[CubeDrawStep::OpaqueSimple]
                 .as_deref()
                 .map(Subbuffer::len)
                 .unwrap_or(0) as usize,

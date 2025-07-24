@@ -1054,14 +1054,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     game_builder.add_block(
         BlockBuilder::new(REFLECTOR_TEST)
             .set_cube_appearance(
-                CubeAppearanceBuilder::new()
-                    .set_single_texture(
-                        TextureReference::from(OwnedTextureName::from_css_color(
-                            "rgb(120 120 120)",
-                        ))
+                CubeAppearanceBuilder::new().set_single_texture(
+                    TextureReference::from(OwnedTextureName::from_css_color("rgb(120 120 120)"))
                         .with_specular(OwnedTextureName::from_css_color("rgb(200 200 200)")),
-                    )
-                    .set_needs_translucency(),
+                ),
             )
             .set_display_name("Reflection test"),
     )?;

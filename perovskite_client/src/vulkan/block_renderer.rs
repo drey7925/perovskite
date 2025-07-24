@@ -369,7 +369,8 @@ impl VkChunkVertexDataGpu {
     pub(crate) fn empty() -> VkChunkVertexDataGpu {
         VkChunkVertexDataGpu {
             draw_buffers: enum_map! {
-                CubeDrawStep::Opaque => None,
+                CubeDrawStep::OpaqueSimple => None,
+                CubeDrawStep::OpaqueSpecular => None,
                 CubeDrawStep::Transparent => None,
                 CubeDrawStep::TransparentSpecular => None,
                 CubeDrawStep::Translucent => None,
@@ -397,11 +398,7 @@ impl VkChunkVertexDataCpu {
     fn empty() -> VkChunkVertexDataCpu {
         VkChunkVertexDataCpu {
             draw_buffers: enum_map! {
-                CubeDrawStep::Opaque => None,
-                CubeDrawStep::Transparent => None,
-                CubeDrawStep::TransparentSpecular => None,
-                CubeDrawStep::Translucent => None,
-                CubeDrawStep::RaytraceFallback => None,
+                _ => None
             },
         }
     }
@@ -727,9 +724,9 @@ impl BlockRenderer {
 
         Ok(VkChunkVertexDataCpu {
             draw_buffers: enum_map! {
-                CubeDrawStep::Opaque => self.mesh_chunk_subpass(
+                CubeDrawStep::OpaqueSimple => self.mesh_chunk_subpass(
                     chunk_data,
-                    |id| self.block_types().is_opaque(id),
+                    |id| self.block_types().is_opaque_nonspecular(id),
                     |block, neighbor| {
                         if self.block_defs.is_solid_opaque(neighbor) {
                             return true;
@@ -744,7 +741,26 @@ impl BlockRenderer {
                             || (self.block_defs.allow_face_suppress_on_exact_match(block)
                                 && block == neighbor)
                     },
-                    &RECLAIMERS[CubeDrawStep::Opaque],
+                    &RECLAIMERS[CubeDrawStep::OpaqueSimple],
+                ),
+                CubeDrawStep::OpaqueSpecular => self.mesh_chunk_subpass(
+                    chunk_data,
+                    |id| self.block_types().is_opaque_specular(id),
+                    |block, neighbor| {
+                        if self.block_defs.is_solid_opaque(neighbor) {
+                            return true;
+                        }
+                        // Need to be careful here, since the neighbor block isn't a full block.
+                        // If we're OK with suppressing on exact matches and the neighbor matches,
+                        // we're good. Likewise, if we can suppress based on base block, and it matches
+                        (self
+                            .block_defs
+                            .allow_face_suppress_on_same_base_block(block)
+                            && block.equals_ignore_variant(neighbor))
+                            || (self.block_defs.allow_face_suppress_on_exact_match(block)
+                                && block == neighbor)
+                    },
+                    &RECLAIMERS[CubeDrawStep::OpaqueSimple],
                 ),
                 CubeDrawStep::Transparent => self.mesh_chunk_subpass(
                     chunk_data,
@@ -1165,7 +1181,8 @@ impl BlockRenderer {
             model_matrix,
             models: VkChunkVertexDataGpu {
                 draw_buffers: enum_map! {
-                    CubeDrawStep::Opaque => None,
+                    CubeDrawStep::OpaqueSimple => None,
+                    CubeDrawStep::OpaqueSpecular => None,
                     CubeDrawStep::Transparent => Some(buffer.clone()),
                     CubeDrawStep::Translucent => None,
                     CubeDrawStep::RaytraceFallback => Some(buffer.clone()),
