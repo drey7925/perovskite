@@ -1071,8 +1071,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                         ))
                         .with_specular(OwnedTextureName::from_css_color("rgb(200 200 200)")),
                     )
-                    .set_liquid_shape()
-                    .set_needs_translucency(),
+                    .set_liquid_shape(),
             )
             .set_liquid_flow(Some(Duration::from_millis(500)))
             .set_display_name("Reflection test (liquid)"),

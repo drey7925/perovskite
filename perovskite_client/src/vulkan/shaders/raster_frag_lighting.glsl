@@ -78,7 +78,7 @@ void main() {
         vec3 mul = vec3(
         0, 0.03 * (random(uv_texcoord, 43758.5453123) - 0.5), 0.01 * random(uv_texcoord, 43758.5453123)
         );
-        reflection += (ntb * mul);
+        //        reflection += (ntb * mul);
         float cos_theta = dot(world_normal, reflection);
         float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
         spec_strength = vec4(mix(fresnel, 1.0, diffuse.a) * specular.rgb, 1.0);

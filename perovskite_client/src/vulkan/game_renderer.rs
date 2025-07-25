@@ -333,6 +333,16 @@ impl ActiveGame {
                 )
                 .context("Opaque pipeline draw failed")?;
 
+            self.cube_pipeline
+                .draw_single_step(
+                    ctx,
+                    &mut command_buf_builder,
+                    cube_uniform.clone(),
+                    &mut self.cube_draw_calls,
+                    CubeDrawStep::Transparent,
+                )
+                .context("Transparent pipeline draw failed")?;
+
             if hybrid_rt_enabled {
                 command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
 
@@ -375,16 +385,6 @@ impl ActiveGame {
                     )
                     .context("Opaque specular draw failed")?;
             }
-
-            self.cube_pipeline
-                .draw_single_step(
-                    ctx,
-                    &mut command_buf_builder,
-                    cube_uniform.clone(),
-                    &mut self.cube_draw_calls,
-                    CubeDrawStep::Transparent,
-                )
-                .context("Transparent pipeline draw failed")?;
         } else {
             self.cube_pipeline
                 .draw_single_step(

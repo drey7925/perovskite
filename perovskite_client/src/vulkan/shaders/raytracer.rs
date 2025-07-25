@@ -372,6 +372,12 @@ impl RaytracedPipelineWrapper {
                 WriteDescriptorSet::image_view(
                     2,
                     framebuffer
+                        .get_image(ImageId::RtSpecRayDirDownsampled)
+                        .context("Failed to get RtSpecRayDirDownsampled image for blend")?,
+                ),
+                WriteDescriptorSet::image_view(
+                    3,
+                    framebuffer
                         .get_image(ImageId::RtSpecRawColor)
                         .context("Failed to get RtSpecRawColor image for blend")?,
                 ),
