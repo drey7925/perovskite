@@ -137,6 +137,7 @@ const SNOWBALL_TEXTURE: StaticTextureName = StaticTextureName("default:snowball"
 
 const REFLECTOR_TEST: StaticBlockName = StaticBlockName("default:reflector_test");
 const REFLECTOR_TEST_LIQUID: StaticBlockName = StaticBlockName("default:reflector_test_liquid");
+const NORMAL_MAP_TEST_TEX: StaticTextureName = StaticTextureName("default_normal_map_test");
 
 pub mod ores {
     use perovskite_core::constants::block_groups::TOOL_REQUIRED;
@@ -1041,7 +1042,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                         StaticTextureName("carts:speedpost1"),
                         StaticTextureName("carts:speedpost2"),
                         StaticTextureName("carts:speedpost3"),
-                        StaticTextureName("default:water"),
+                        StaticTextureName("carts:cart_temp"),
                         StaticTextureName("default:tnt"),
                         StaticTextureName("default:gold_pickaxe"),
                     )
@@ -1051,12 +1052,18 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Dichroic Glass"),
     )?;
 
+    include_texture_bytes!(
+        game_builder,
+        NORMAL_MAP_TEST_TEX,
+        "textures/normal_map_test.png"
+    )?;
     game_builder.add_block(
         BlockBuilder::new(REFLECTOR_TEST)
             .set_cube_appearance(
                 CubeAppearanceBuilder::new().set_single_texture(
                     TextureReference::from(OwnedTextureName::from_css_color("rgb(120 120 120)"))
-                        .with_specular(OwnedTextureName::from_css_color("rgb(200 200 200)")),
+                        .with_specular(OwnedTextureName::from_css_color("rgb(200 200 200)"))
+                        .with_normal_map(NORMAL_MAP_TEST_TEX),
                 ),
             )
             .set_display_name("Reflection test"),

@@ -63,6 +63,13 @@ pub trait TextureRefExt {
     ///
     /// The meaning of the alpha channel in *this* texture is still TBD
     fn with_emissive(self, tex: impl TextureName) -> TextureReference;
+
+    /// Adjusts normals for reflections. Note that this does not necessarily match other
+    /// applications' normal formats.
+    /// R = tangent, G = bitangent, 0.5 is neutral, 0 and 1 point left/right and up/down in texture
+    /// mapped as vector_component = 2 * (texture_component) - 1
+    /// space. Normal component is imputed from the tangent/bitangent components
+    fn with_normal_map(self, tex: impl TextureName) -> TextureReference;
 }
 impl TextureRefExt for TextureReference {
     fn with_specular(self, tex: impl TextureName) -> TextureReference {
@@ -75,6 +82,13 @@ impl TextureRefExt for TextureReference {
     fn with_emissive(self, tex: impl TextureName) -> TextureReference {
         TextureReference {
             emissive: tex.name().to_string(),
+            ..self
+        }
+    }
+
+    fn with_normal_map(self, tex: impl TextureName) -> TextureReference {
+        TextureReference {
+            normal_map: tex.name().to_string(),
             ..self
         }
     }
@@ -119,6 +133,7 @@ impl From<StaticTextureName> for TextureReference {
             rt_specular: String::new(),
             crop: None,
             emissive: String::new(),
+            normal_map: String::new(),
         }
     }
 }
@@ -129,6 +144,7 @@ impl From<OwnedTextureName> for TextureReference {
             rt_specular: String::new(),
             crop: None,
             emissive: String::new(),
+            normal_map: String::new(),
         }
     }
 }
@@ -139,6 +155,7 @@ impl From<&OwnedTextureName> for TextureReference {
             rt_specular: String::new(),
             crop: None,
             emissive: String::new(),
+            normal_map: String::new(),
         }
     }
 }

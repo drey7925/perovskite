@@ -19,21 +19,32 @@ syntax = "proto3";
 package perovskite.protocol.render;
 
 message TextureReference {
-    // The diffuse texture + only texture for basic rendering
+    // The diffuse texture + only texture for basic rendering. Alpha channel controls blending, but RenderInfo must also
+    // be set accordingly to enable alpha blend. Should be an image in sRGB
     string diffuse = 1;
     // Only supported for rendering blocks, not supported in inventory or popups yet. Applies to ALL textures in this
     // object
     TextureCrop crop = 2;
     // Specular component. *Diffuse*'s alpha channel controls blend between fresnel vs constant specular: 0 = fresnel,
-    // 1 = constant
+    // 1 = constant. This image's alpha channel is still TBD. Should be an image in sRGB.
     string rt_specular = 3;
     // Light emission component. *Tone-mapped in some TBD way; Components that are full-value (255 for 8-bit images) are
-    // likely to be extremely bright. Alpha = 0 ->
+    // likely to be extremely bright. Alpha = 0 -> very tightly focused, alpha = 1 -> isotropic.
+    //
+    // Because the tone-mapping is still TBD, it's not yet clear whether it should be sRGB or linear. For now, it's
+    // interpreted as sRGB and then undergoes additional tone mapping.
     string emissive = 4;
-  // Normal-map component. R = tangent, G = bitangent, B = normal. Tangent point right in texture space, bitangent
-  // points down in texture space.
-    // Still TODO
-
+    // Normal-map component. R = tangent, G = bitangent, 0.5 is neutral, 0 and 1 point up/down and left/right in texture
+    // mapped as vector_component = 2 * (texture_component) - 1
+    // space. Normal component is imputed from the tangent/bitangent components (TBD how)
+    // B = TBD. A = TBD.
+    //
+    // Internal detail: the meaning of tangent/bitangent here is opposite that of the shader (for reasons related to
+    // sloped water top face encodings). For texture design, tangent (red channel) runs horizontally in texture space,
+    // while `tangent` inside the engine/shaders is vertical in the texture space.
+    //
+    // Must be LINEAR, not sRGB
+    string normal_map = 5;
 }
 
 // If set, the texture will be cropped to the given coordinates.

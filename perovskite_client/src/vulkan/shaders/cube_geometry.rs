@@ -86,13 +86,14 @@ pub(crate) struct CubeGeometryVertex {
     #[format(R16_SINT)]
     pub(crate) normal: u16,
 
-    // The local brightness (from nearby sources, unchanging as the global lighting varies)
-    #[format(R8_UNORM)]
-    pub(crate) brightness: u8,
+    /// Tangent, using a lookup table. This does not use all 8 bits, at some point they will be
+    /// absorbed into a few of the LSBs
+    #[format(R8_UINT)]
+    pub(crate) tangent: u8,
 
-    // How much the global brightness should affect the brightness of this vertex
-    #[format(R8_UNORM)]
-    pub(crate) global_brightness_contribution: u8,
+    // Encoded brightness
+    #[format(R8_UINT)]
+    pub(crate) brightness: u8,
 
     // How much this vertex should wave with wavy input
     #[format(R8_UNORM)]
@@ -678,6 +679,7 @@ impl CubePipelineProvider {
                     [
                         tex.diffuse.write_descriptor_set(0),
                         tex.specular.write_descriptor_set(1),
+                        tex.normal_map.write_descriptor_set(2),
                     ],
                     [],
                 )?;
@@ -698,6 +700,7 @@ impl CubePipelineProvider {
                     tex.diffuse.write_descriptor_set(0),
                     tex.emissive.write_descriptor_set(1),
                     tex.specular.write_descriptor_set(2),
+                    tex.normal_map.write_descriptor_set(3),
                 ],
                 [],
             )?;

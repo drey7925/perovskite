@@ -7,6 +7,7 @@ layout(location = 1) flat in float brightness;
 layout(location = 2) flat in vec3 global_brightness;
 layout(location = 3) flat in vec3 world_normal;
 layout(location = 4) in vec3 world_pos;
+layout(location = 5) flat in vec3 world_tangent;
 
 #ifdef ENABLE_BASIC_COLOR
 // No specular, discard if SPARSE
@@ -24,6 +25,7 @@ layout(location = 2) out uvec4 spec_dir;
 layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
 layout(set = 0, binding = 1) uniform sampler2D emissive_tex;
 layout(set = 0, binding = 2) uniform sampler2D specular_tex;
+layout(set = 0, binding = 3) uniform sampler2D normal_tex;
 #endif
 
 #ifdef ENABLE_SPECULAR_ONLY
@@ -33,6 +35,7 @@ layout(location = 1) out uvec4 spec_dir;
 // Required to drive the Fresnel term
 layout(set = 0, binding = 0) uniform sampler2D diffuse_tex;
 layout(set = 0, binding = 1) uniform sampler2D specular_tex;
+layout(set = 0, binding = 2) uniform sampler2D normal_tex;
 #endif
 
 layout (constant_id = 0) const bool SPARSE = true;
@@ -68,17 +71,23 @@ void main() {
     #if defined(ENABLE_SPECULAR_ONLY) || defined(ENABLE_UNIFIED_SPECULAR)
     spec_dir = uvec4(0);
     vec4 specular = texture(specular_tex, uv_texcoord);
+
     if (specular.rgb != vec3(0)) {
+        vec2 normal_map = (texture(normal_tex, uv_texcoord).xy - 0.5) * 1.414;
+
         float rt_len = (length(world_pos) - 0.05) / 16.0;
         vec3 incident = normalize(world_pos);
-        vec3 tangent = normalize(cross(world_pos, world_normal));
-        vec3 bitangent = cross(world_normal, tangent);
-        vec3 reflection = reflect(incident, world_normal);
-        mat3 ntb = mat3(world_normal, tangent, bitangent);
-        vec3 mul = vec3(
-        0, 0.03 * (random(uv_texcoord, 43758.5453123) - 0.5), 0.01 * random(uv_texcoord, 43758.5453123)
-        );
-        //        reflection += (ntb * mul);
+        vec3 world_bitangent = cross(world_normal, world_tangent);
+
+        float imputed_normal = sqrt(1 - min(dot(normal_map, normal_map), 1));
+        vec3 mul = vec3(imputed_normal, normal_map.yx);
+
+        mat3 ntb = mat3(world_normal, world_tangent, world_bitangent);
+
+        vec3 mapped_normal = ntb * mul;
+
+        vec3 reflection = reflect(incident, mapped_normal);
+
         float cos_theta = dot(world_normal, reflection);
         float fresnel = min((0.02 + 0.98 * pow(1 - cos_theta, 5)), 1.0);
         spec_strength = vec4(mix(fresnel, 1.0, diffuse.a) * specular.rgb, 1.0);

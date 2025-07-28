@@ -18,6 +18,7 @@ layout(location = 1) flat out float brightness_out;
 layout(location = 2) flat out vec3 global_brightness_out;
 layout(location = 3) flat out vec3 world_normal_out;
 layout(location = 4) out vec3 world_pos_out;
+layout(location = 5) flat out vec3 world_tangent_out;
 
 void main() {
     vec4 world_pos = model_matrix * vec4(position, 1.0);
@@ -28,4 +29,6 @@ void main() {
     uv_texcoord_out = uv_texcoord;
     brightness_out = 1.0;
     global_brightness_out = vec3(0.0, 0.0, 0.0);
+    // TODO
+    world_tangent_out = vec3(0);
 }

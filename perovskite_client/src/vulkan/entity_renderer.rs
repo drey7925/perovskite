@@ -47,6 +47,9 @@ impl EntityRenderer {
                         if !tex.emissive.is_empty() {
                             all_texture_names.insert(tex.emissive.clone());
                         }
+                        if !tex.normal_map.is_empty() {
+                            all_texture_names.insert(tex.normal_map.clone());
+                        }
                     }
                 }
             }

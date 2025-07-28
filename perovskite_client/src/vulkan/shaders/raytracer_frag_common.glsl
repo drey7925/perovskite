@@ -252,7 +252,6 @@ vec3 decode_normal(uint index) {
     vec3(1.0, 0.0, 0.0),
     vec3(-1.0, 0.0, 0.0),
     // Warning: CubeFace Y+ then Y- is in world coords, not Vk coords
-    // This has Vk coords, to match up with the global light direction in Vk coords
     vec3(0.0, 1.0, 0.0),
     vec3(0.0, -1.0, 0.0),
     vec3(0.0, 0.0, 1.0),

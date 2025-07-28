@@ -106,22 +106,22 @@ impl CubeFace {
     #[inline(always)]
     const fn default_normal(&self) -> u16 {
         match self {
-            CubeFace::XPlus => encode_normal(1, 0, 0),
-            CubeFace::XMinus => encode_normal(-1, 0, 0),
+            CubeFace::XPlus => x5y5z5_pack16(1, 0, 0),
+            CubeFace::XMinus => x5y5z5_pack16(-1, 0, 0),
             // flip Y normals for Vulkan convention coordinate system
-            CubeFace::YPlus => encode_normal(0, -1, 0),
-            CubeFace::YMinus => encode_normal(0, 1, 0),
-            CubeFace::ZPlus => encode_normal(0, 0, 1),
-            CubeFace::ZMinus => encode_normal(0, 0, -1),
-            CubeFace::PlantXPlusZPlus => encode_normal(1, 0, 1),
-            CubeFace::PlantXPlusZMinus => encode_normal(1, 0, -1),
-            CubeFace::PlantXMinusZPlus => encode_normal(-1, 0, 1),
-            CubeFace::PlantXMinusZMinus => encode_normal(-1, 0, -1),
+            CubeFace::YPlus => x5y5z5_pack16(0, -1, 0),
+            CubeFace::YMinus => x5y5z5_pack16(0, 1, 0),
+            CubeFace::ZPlus => x5y5z5_pack16(0, 0, 1),
+            CubeFace::ZMinus => x5y5z5_pack16(0, 0, -1),
+            CubeFace::PlantXPlusZPlus => x5y5z5_pack16(1, 0, 1),
+            CubeFace::PlantXPlusZMinus => x5y5z5_pack16(1, 0, -1),
+            CubeFace::PlantXMinusZPlus => x5y5z5_pack16(-1, 0, 1),
+            CubeFace::PlantXMinusZMinus => x5y5z5_pack16(-1, 0, -1),
         }
     }
 }
 
-const fn encode_normal(x: i8, y: i8, z: i8) -> u16 {
+const fn x5y5z5_pack16(x: i8, y: i8, z: i8) -> u16 {
     const fn encode(i: i8) -> u16 {
         (i & 0x1f) as u16
     }
@@ -203,16 +203,17 @@ const DEFAULT_FACE_NORMALS: [(i8, i8, i8); 10] = [
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct CubeExtents {
-    pub vertices: [Vector3<f32>; 8],
+    pub verts: [Vector3<f32>; 8],
     /// Given in the same order as the first six members of [`CubeFace`].
     pub adjacency: [(i8, i8, i8); 10],
     pub force: [bool; 6],
     pub top_normal: u16,
+    pub top_tan: u8,
 }
 impl CubeExtents {
     pub const fn new(x: (f32, f32), y: (f32, f32), z: (f32, f32)) -> Self {
         Self {
-            vertices: [
+            verts: [
                 vec3(x.0, y.0, z.0),
                 vec3(x.0, y.0, z.1),
                 vec3(x.0, y.1, z.0),
@@ -225,16 +226,21 @@ impl CubeExtents {
             adjacency: DEFAULT_FACE_NORMALS,
             force: [false; 6],
             top_normal: CubeFace::YPlus.default_normal(),
+            top_tan: 1,
         }
     }
 
-    pub fn ypos_normal(self) -> u16 {
+    pub fn top_normal(self) -> u16 {
         self.top_normal
+    }
+
+    pub fn top_tan(self) -> u8 {
+        self.top_tan
     }
 
     #[inline]
     pub fn rotate_y(self, variant: u16) -> CubeExtents {
-        let mut vertices = self.vertices;
+        let mut vertices = self.verts;
         let mut adjacency = self.adjacency;
         for vtx in &mut vertices {
             *vtx = Vector3::from(rotate_y((vtx.x, vtx.y, vtx.z), variant));
@@ -280,10 +286,11 @@ impl CubeExtents {
         };
 
         Self {
-            vertices,
+            verts: vertices,
             adjacency,
             force: force_swizzled,
             top_normal: self.top_normal,
+            top_tan: (self.top_tan.saturating_add(variant as u8)) & 3,
         }
     }
 
@@ -294,14 +301,13 @@ impl CubeExtents {
 
     fn warp_top_inplace(&mut self, top_slope_x: f32, top_slope_z: f32) {
         for idx in [0, 1, 4, 5] {
-            self.vertices[idx].y +=
-                top_slope_x * self.vertices[idx].x + top_slope_z * self.vertices[idx].z;
+            self.verts[idx].y += top_slope_x * self.verts[idx].x + top_slope_z * self.verts[idx].z;
         }
     }
     fn warp_bottom_inplace(&mut self, bottom_slope_x: f32, bottom_slope_z: f32) {
         for idx in [2, 3, 6, 7] {
-            self.vertices[idx].y +=
-                bottom_slope_x * self.vertices[idx].x + bottom_slope_z * self.vertices[idx].z;
+            self.verts[idx].y +=
+                bottom_slope_x * self.verts[idx].x + bottom_slope_z * self.verts[idx].z;
         }
     }
 }
@@ -519,6 +525,9 @@ impl BlockRenderer {
                     }
                     if !tex.emissive.is_empty() {
                         fetch_textures.insert(tex.emissive.clone());
+                    }
+                    if !tex.normal_map.is_empty() {
+                        fetch_textures.insert(tex.normal_map.clone());
                     }
                     pack_textures.insert(tex.into());
                 }
@@ -1338,7 +1347,7 @@ const FULL_CUBE_EXTENTS: CubeExtents = CubeExtents::new((-0.5, 0.5), (-0.5, 0.5)
 fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
     let y_max = variant_to_height(variant);
     CubeExtents {
-        vertices: [
+        verts: [
             vec3(-0.5, y_max, -0.5),
             vec3(-0.5, y_max, 0.5),
             vec3(-0.5, 0.5, -0.5),
@@ -1352,6 +1361,7 @@ fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
         top_normal: CubeFace::YPlus.default_normal(),
+        top_tan: todo!(),
     }
 }
 
@@ -1407,14 +1417,16 @@ fn build_liquid_cube_extents(
     let nz = ((((y_xn_zn - y_xn_zp) + (y_xp_zn - y_xp_zp)) * -7.5) as i8).clamp(-15, 15);
 
     let mut rotation = 0;
+    let mut top_tan = 3;
     if max_zdiff > max_xdiff {
         rotation = 1;
+        top_tan = 0;
         // Rotate the four values
         (y_xn_zn, y_xp_zn, y_xp_zp, y_xn_zp) = (y_xn_zp, y_xn_zn, y_xp_zn, y_xp_zp);
     }
 
     CubeExtents {
-        vertices: [
+        verts: [
             vec3(-0.5, y_xn_zn, -0.5),
             vec3(-0.5, y_xn_zp, 0.5),
             vec3(-0.5, 0.5, -0.5),
@@ -1427,7 +1439,8 @@ fn build_liquid_cube_extents(
         adjacency: DEFAULT_FACE_NORMALS,
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
-        top_normal: encode_normal(nx, -16, nz),
+        top_normal: x5y5z5_pack16(nx, -16, nz),
+        top_tan,
     }
     .rotate_y(rotation)
 }
@@ -1522,17 +1535,17 @@ lazy_static::lazy_static! {
 fn make_cgv(
     coord: Vector3<f32>,
     normal: u16,
+    tangent_code: u8,
     tex_uv: Vector2<f32>,
     brightness: u8,
-    global_brightness: u8,
     wave_horizontal: u8,
 ) -> CubeGeometryVertex {
     CubeGeometryVertex {
         position: [coord.x, coord.y, coord.z],
         normal,
+        tangent: tangent_code,
         uv_texcoord: [tex_uv.x.round() as u16, tex_uv.y.round() as u16],
         brightness,
-        global_brightness_contribution: global_brightness,
         wave_horizontal,
     }
 }
@@ -1561,10 +1574,10 @@ pub(crate) fn emit_cube_face_vk(
     e: CubeExtents,
     encoded_brightness: u8,
     encoded_brightness_2: u8,
-    horizontal_wave: u8,
+    wave: u8,
 ) {
     // Flip the coordinate system to Vulkan
-    let coord = vec3(coord.x, -coord.y, coord.z);
+    let c = vec3(coord.x, -coord.y, coord.z);
     let l = frame.left();
     let r = frame.right();
     let t = frame.top();
@@ -1574,357 +1587,71 @@ pub(crate) fn emit_cube_face_vk(
     let tr = Vector2::new(r, t);
     let br = Vector2::new(r, b);
 
-    let brightness_bias = CUBE_FACE_BRIGHTNESS_BIASES[dest_face.index()];
-    let (global_brightness_1, brightness_1) = get_brightnesses(encoded_brightness, brightness_bias);
-    let (global_brightness_2, brightness_2) =
-        get_brightnesses(encoded_brightness_2, brightness_bias);
-
-    let brightness = brightness_1.max(brightness_2);
-    let global_brightness = global_brightness_1.max(global_brightness_2);
-
+    let light = max_brightness(encoded_brightness, encoded_brightness_2);
+    const TAN_Y_DOWN: u8 = 5;
     let normal = dest_face.default_normal();
     let vertices = match source_face {
         CubeFace::ZMinus => [
-            make_cgv(
-                coord + e.vertices[0],
-                normal,
-                tl,
-                brightness,
-                global_brightness.max(global_brightness_2),
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[2],
-                normal,
-                bl,
-                brightness,
-                global_brightness.max(global_brightness_2),
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[6],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[4],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                0,
-            ),
+            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tl, light, 0),
+            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tr, light, 0),
         ],
         CubeFace::ZPlus => [
-            make_cgv(
-                coord + e.vertices[5],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[7],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[3],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[1],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                0,
-            ),
+            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tl, light, 0),
+            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tr, light, 0),
         ],
         CubeFace::XMinus => [
-            make_cgv(
-                coord + e.vertices[1],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[3],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[2],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[0],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                0,
-            ),
+            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tl, light, 0),
+            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tr, light, 0),
         ],
         CubeFace::XPlus => [
-            make_cgv(
-                coord + e.vertices[4],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[6],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[7],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[5],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                0,
-            ),
+            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tl, light, 0),
+            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tr, light, 0),
         ],
         // For Y+ and Y-, the top of the texture is front of the cube (prior to any rotations)
         // Y- is the bottom face (opposite Vulkat takes Y+ vulkan coordinates
         CubeFace::YMinus => [
-            make_cgv(
-                coord + e.vertices[2],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[3],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[7],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[6],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                0,
-            ),
+            make_cgv(c + e.verts[2], normal, e.top_tan(), tl, light, 0),
+            make_cgv(c + e.verts[3], normal, e.top_tan(), bl, light, 0),
+            make_cgv(c + e.verts[7], normal, e.top_tan(), br, light, 0),
+            make_cgv(c + e.verts[6], normal, e.top_tan(), tr, light, 0),
         ],
         CubeFace::YPlus => [
-            make_cgv(
-                coord + e.vertices[4],
-                e.ypos_normal(),
-                tl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[5],
-                e.ypos_normal(),
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[1],
-                e.ypos_normal(),
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[0],
-                e.ypos_normal(),
-                tr,
-                brightness,
-                global_brightness,
-                0,
-            ),
+            make_cgv(c + e.verts[4], e.top_normal(), e.top_tan(), tl, light, 0),
+            make_cgv(c + e.verts[5], e.top_normal(), e.top_tan(), bl, light, 0),
+            make_cgv(c + e.verts[1], e.top_normal(), e.top_tan(), br, light, 0),
+            make_cgv(c + e.verts[0], e.top_normal(), e.top_tan(), tr, light, 0),
         ],
         CubeFace::PlantXMinusZMinus => [
-            make_cgv(
-                coord + e.vertices[1],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
-            make_cgv(
-                coord + e.vertices[3],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[6],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[4],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
+            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tl, light, wave),
+            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tr, light, wave),
         ],
         CubeFace::PlantXPlusZPlus => [
-            make_cgv(
-                coord + e.vertices[4],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
-            make_cgv(
-                coord + e.vertices[6],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[3],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[1],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
+            make_cgv(c + e.verts[4], normal, TAN_Y_DOWN, tl, light, wave),
+            make_cgv(c + e.verts[6], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[3], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[1], normal, TAN_Y_DOWN, tr, light, wave),
         ],
         CubeFace::PlantXMinusZPlus => [
-            make_cgv(
-                coord + e.vertices[5],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
-            make_cgv(
-                coord + e.vertices[7],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[2],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[0],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
+            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tl, light, wave),
+            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tr, light, wave),
         ],
         CubeFace::PlantXPlusZMinus => [
-            make_cgv(
-                coord + e.vertices[0],
-                normal,
-                tl,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
-            make_cgv(
-                coord + e.vertices[2],
-                normal,
-                bl,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[7],
-                normal,
-                br,
-                brightness,
-                global_brightness,
-                0,
-            ),
-            make_cgv(
-                coord + e.vertices[5],
-                normal,
-                tr,
-                brightness,
-                global_brightness,
-                horizontal_wave,
-            ),
+            make_cgv(c + e.verts[0], normal, TAN_Y_DOWN, tl, light, wave),
+            make_cgv(c + e.verts[2], normal, TAN_Y_DOWN, bl, light, 0),
+            make_cgv(c + e.verts[7], normal, TAN_Y_DOWN, br, light, 0),
+            make_cgv(c + e.verts[5], normal, TAN_Y_DOWN, tr, light, wave),
         ],
     };
     let si: u32 = vert_buf.len().try_into().unwrap();
@@ -1936,14 +1663,6 @@ pub(crate) fn emit_cube_face_vk(
 }
 
 #[inline]
-fn get_brightnesses(encoded_brightness: u8, brightness_bias: f32) -> (u8, u8) {
-    let brightness_upper = (encoded_brightness >> 4) as usize;
-    let brightness_lower = (encoded_brightness & 0x0F) as usize;
-
-    let global_brightness = GLOBAL_BRIGHTNESS_TABLE[brightness_upper];
-    let brightness = BRIGHTNESS_TABLE[brightness_lower] * brightness_bias;
-    (
-        (global_brightness * 255.0) as u8,
-        (brightness * 255.0) as u8,
-    )
+fn max_brightness(b1: u8, b2: u8) -> u8 {
+    ((b1 & 0xf).max(b2 & 0xf)) | ((b1 & 0xf0).max(b2 & 0xf0))
 }

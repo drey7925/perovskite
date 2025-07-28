@@ -1578,20 +1578,26 @@ pub(crate) struct Texture2DHolder {
     dimensions: [u32; 2],
 }
 impl Texture2DHolder {
-    /// Creates a texture, uploads it to the device, and returns a TextureHolder
-    /// The image should be in SRGB.
-    pub(crate) fn from_srgb(
+    pub(crate) fn from_image(
         ctx: &VulkanContext,
         image: image::RgbaImage,
-    ) -> Result<Texture2DHolder> {
+        load_format: Format,
+    ) -> Result<Self> {
         let dimensions = image.dimensions();
         let img_rgba = image.into_vec();
+
+        if load_format.components() != [8; 4] {
+            bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose components are not 4x 8-bit")
+        }
+        if load_format.block_extent() != [1, 1, 1] {
+            bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose block extent is not [1, 1, 1]")
+        }
 
         let image = Image::new(
             ctx.memory_allocator.clone(),
             ImageCreateInfo {
                 image_type: ImageType::Dim2d,
-                format: Format::R8G8B8A8_SRGB,
+                format: load_format,
                 extent: [dimensions.0, dimensions.1, 1],
                 usage: ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
                 ..Default::default()
@@ -1654,6 +1660,15 @@ impl Texture2DHolder {
             image_view,
             dimensions: [dimensions.0, dimensions.1],
         })
+    }
+
+    /// Creates a texture, uploads it to the device, and returns a TextureHolder
+    /// The image should be in SRGB R8G8B8A8.
+    pub(crate) fn from_srgb(
+        ctx: &VulkanContext,
+        image: image::RgbaImage,
+    ) -> Result<Texture2DHolder> {
+        Self::from_image(ctx, image, Format::R8G8B8A8_SRGB)
     }
 
     fn descriptor_set(

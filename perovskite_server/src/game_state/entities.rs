@@ -3042,6 +3042,7 @@ fn make_unknown_entity_appearance() -> EntityDef {
                     crop: None,
                     rt_specular: "".to_string(),
                     emissive: "".to_string(),
+                    normal_map: "".to_string(),
                 },
             )
             .unwrap()],
