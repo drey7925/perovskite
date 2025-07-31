@@ -32,11 +32,13 @@ use enum_map::EnumMap;
 use image::GenericImageView;
 use log::warn;
 use parking_lot::Mutex;
+use ron::to_string;
 use rustc_hash::FxHashMap;
 use smallvec::smallvec;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter, Write};
+use std::ffi::{CStr, CString};
+use std::fmt::{Debug, Display, Formatter, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use std::{ops::Deref, sync::Arc};
@@ -80,10 +82,10 @@ use vulkano::{
     },
     format::{ClearValue, Format, FormatFeatures},
     image::{view::ImageView, ImageUsage},
-    instance::{Instance, InstanceCreateInfo},
     memory::allocator::{BuddyAllocator, GenericMemoryAllocator},
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
+    statically_linked_vulkan_loader,
     swapchain::{Swapchain, SwapchainCreateInfo},
     sync::GpuFuture,
     DeviceSize, Validated, Version,
@@ -580,6 +582,23 @@ impl RenderPassHolder {
     }
 }
 
+impl Debug for RenderPassHolder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderPassHolder")
+            .field(
+                "passes",
+                &self
+                    .passes
+                    .lock()
+                    .keys()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
 pub(crate) struct VulkanWindow {
     vk_ctx: Arc<VulkanContext>,
     renderpasses: RenderPassHolder,
@@ -620,24 +639,9 @@ impl VulkanWindow {
         event_loop: &ActiveEventLoop,
         settings: &Arc<ArcSwap<GameSettings>>,
     ) -> Result<VulkanWindow> {
-        let library: Arc<vulkano::VulkanLibrary> =
-            vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
-        let required_extensions = Surface::required_extensions(event_loop)?;
-        let instance = Instance::new(
-            library,
-            InstanceCreateInfo {
-                enabled_extensions: required_extensions,
-                application_name: Some("perovskite".to_string()),
-                application_version: Version {
-                    major: 0,
-                    minor: 1,
-                    patch: 2,
-                },
-                ..Default::default()
-            },
-        )?;
+        let instance = make_instance(event_loop)?;
 
-        let attrs = WindowAttributes::new()
+        let attrs = Window::default_attributes()
             .with_title("Perovskite Game Client")
             .with_min_inner_size(Size::Physical((256, 256).into()));
         let window = Arc::new(event_loop.create_window(attrs)?);
@@ -690,6 +694,12 @@ impl VulkanWindow {
         };
 
         let mut enabled_extensions = mandatory_extensions;
+        if physical_device
+            .supported_extensions()
+            .khr_portability_subset
+        {
+            enabled_extensions.khr_portability_subset = true;
+        }
         let mut enabled_features = mandatory_features;
         let mut raytracing_supported = false;
         if physical_device
@@ -907,6 +917,29 @@ impl VulkanWindow {
                 depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
                 input_attachments: [],
             })
+    }
+
+    pub(crate) fn gpu_debug(&self) -> String {
+        let mut result = String::new();
+        result += &format!("=== Device ===\n {:?}", &self.vk_device);
+        result += &format!(
+            "\n\n=== PhysicalDevice ===\n {:?}",
+            &self.vk_device.physical_device()
+        );
+
+        result += &format!(
+            "\n\n=== Misc VkContext ===\n Graphics QFI: {}, Transfer QFI: {}\nFormats: swapchain {:?} (len {}), depth/stencil {:?}\nmax indexed draw: {}, rt supported: {}\n",
+            self.graphics_queue.queue_family_index(),
+            self.transfer_queue.queue_family_index(),
+            self.swapchain_format,
+            self.swapchain_len,
+            self.depth_stencil_format,
+            self.max_draw_indexed_index_value,
+            self.raytracing_supported
+        );
+        result += &format!("\n\n=== Renderpasses ===\n {:#?}", &self.renderpasses);
+        result += &format!("\n\n=== Framebuffers ===\n {:#?}", &self.framebuffers);
+        result
     }
 }
 
@@ -1571,6 +1604,45 @@ impl FramebufferHolder {
     }
 }
 
+impl Debug for FramebufferHolder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FramebufferHolder")
+            .field("image_i", &self.image_i)
+            .field("base_extent", &self.base_extent)
+            .field(
+                "image_views",
+                &self
+                    .image_views
+                    .lock()
+                    .iter()
+                    .filter(|(x, y)| y.is_some())
+                    .map(|(x, y)| x)
+                    .collect::<Vec<_>>(),
+            )
+            .field(
+                "samplers",
+                &self
+                    .samplers
+                    .lock()
+                    .iter()
+                    .filter(|(x, y)| y.is_some())
+                    .map(|(x, y)| x)
+                    .collect::<Vec<_>>(),
+            )
+            .field("blit_path", &self.blit_path)
+            .field(
+                "framebuffers",
+                &self
+                    .framebuffers
+                    .lock()
+                    .keys()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 pub(crate) struct Texture2DHolder {
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     sampler: Arc<Sampler>,
@@ -1968,5 +2040,93 @@ impl<T> ReclaimBuffersByType<T> {
 impl<T> Default for ReclaimBuffersByType<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(not(feature = "static-mvk"))]
+fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::Instance>, Error> {
+    let library: Arc<vulkano::VulkanLibrary> =
+        vulkano::VulkanLibrary::new().expect("no local Vulkan library/DLL");
+    let required_extensions = Surface::required_extensions(event_loop)?;
+    let instance =
+        vulkano::instance::Instance::new(library, make_instance_create_info(required_extensions))?;
+    Ok(instance)
+}
+
+fn make_instance_create_info(
+    required_extensions: vulkano::instance::InstanceExtensions,
+) -> vulkano::instance::InstanceCreateInfo {
+    vulkano::instance::InstanceCreateInfo {
+        enabled_extensions: required_extensions,
+        application_name: Some("perovskite".to_string()),
+        engine_name: Some("perovskite".to_string()),
+        application_version: Version {
+            major: 0,
+            minor: 1,
+            patch: 2,
+        },
+        engine_version: Version {
+            major: 0,
+            minor: 1,
+            patch: 2,
+        },
+        flags: vulkano::instance::InstanceCreateFlags::ENUMERATE_PORTABILITY,
+        ..Default::default()
+    }
+}
+
+#[cfg(feature = "static-mvk")]
+fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::Instance>, Error> {
+    let library: Arc<vulkano::VulkanLibrary> =
+        vulkano::VulkanLibrary::with_loader(statically_linked_vulkan_loader!())?;
+    let required_extensions = Surface::required_extensions(event_loop)?;
+    let entry = ash_molten::load();
+
+    let vulkano_create_info = make_instance_create_info(Surface::required_extensions(event_loop)?);
+
+    let appinfo = ash::vk::ApplicationInfo::default()
+        .application_name(c"perovskite")
+        .application_version(
+            vulkano_create_info
+                .application_version
+                .try_into()
+                .context("Version out of range")?,
+        )
+        .engine_name(c"perovskite")
+        .engine_version(
+            vulkano_create_info
+                .engine_version
+                .try_into()
+                .context("Version out of range")?,
+        )
+        .api_version(
+            vulkano_create_info
+                .max_api_version
+                .try_into()
+                .context("API version out of range")?,
+        );
+
+    let enabled_extensions: Vec<CString> = required_extensions.into();
+
+    let create_info = ash::vk::InstanceCreateInfo::default()
+        .application_info(&appinfo)
+        .flags(ash::vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR)
+        .enabled_extension_names(
+            enabled_extensions
+                .iter()
+                .map(|extension| extension.as_ptr())
+                .collect(),
+        );
+
+    let instance: &'static mut ash::Instance = Box::leak(Box::new(unsafe {
+        entry.create_instance(&create_info, None)?
+    }));
+
+    unsafe {
+        Ok(vulkano::instance::Instance::from_handle(
+            library,
+            instance.handle(),
+            vulkano_create_info,
+        ))
     }
 }

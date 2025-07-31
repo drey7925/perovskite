@@ -63,6 +63,8 @@ bytemuck = { version = "1.23.0", features = ["must_cast", "min_const_generics"] 
 css-color = "0.2.8"
 tinyvec = "1.9.0"
 enum-map = "2.7.3"
+ash-molten = { version = "0.20.0+1.2.11", optional = true }
+ash = { version = "0.38", optional = true }
 
 [features]
 default = []
@@ -70,6 +72,12 @@ default = []
 tracy = ["tracy-client/enable"]
 # malloc tracing (slow)
 tracy_malloc = ["tracy"]
+
+# macOS only (experimental):
+# static-mvk to statically link a moltenvk implementation
+# static-mvk-prebuilt to download it from the Internet rather than building w/ XCode
+static-mvk = ["ash-molten", "ash"]
+static-mvk-prebuilt = ["static-mvk", "ash-molten/pre-built"]
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }

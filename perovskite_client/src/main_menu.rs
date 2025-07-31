@@ -251,6 +251,7 @@ impl MainMenu {
                 let message = e.to_string();
                 let causes: Vec<_> = e.chain().map(|e| format!("> {e}")).collect();
                 let backtrace = e.backtrace().to_string();
+                let gpu_info = format!("{}", vk_ctx.gpu_debug());
                 egui::Window::new("Connection error")
                     .collapsible(false)
                     .show(&self.egui_gui.egui_ctx, |ui| {
@@ -262,10 +263,11 @@ impl MainMenu {
                         ui.label(message_first_line);
                         ui.collapsing("Details:", |ui| {
                             let mut details = format!(
-                                "\n{}\n\nCause:\n{}\n\n Backtrace:\n{}",
+                                "\n{}\n\nCause:\n{}\n\n Backtrace:\n{}\n\nGPU info:\n{}",
                                 message,
                                 causes.join("\n"),
-                                backtrace
+                                backtrace,
+                                gpu_info
                             );
                             egui::ScrollArea::vertical()
                                 .max_height(320.0)

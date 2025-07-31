@@ -97,20 +97,32 @@ pub(crate) fn select_physical_device(
             {
                 return 0;
             };
-            match p.properties().device_type {
-                PhysicalDeviceType::DiscreteGpu => 1,
-                PhysicalDeviceType::IntegratedGpu => 2,
-                PhysicalDeviceType::VirtualGpu => 3,
-                PhysicalDeviceType::Cpu => 4,
+            let type_score = match p.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 2,
+                PhysicalDeviceType::IntegratedGpu => 4,
+                PhysicalDeviceType::VirtualGpu => 6,
+                PhysicalDeviceType::Cpu => 8,
                 PhysicalDeviceType::Other => {
                     log::warn!(
                         "Unknown GPU type detected for device '{}'",
                         p.properties().device_name
                     );
-                    5
+                    10
                 }
-                _ => 6,
-            }
+                _ => {
+                    log::warn!(
+                        "Novel and unknown GPU type detected for device '{}', please file a bug!",
+                        p.properties().device_name
+                    );
+                    12
+                }
+            };
+            let portability_score = if p.supported_extensions().khr_portability_subset {
+                1
+            } else {
+                0
+            };
+            type_score + portability_score
         })
         .with_context(|| "no device available")?;
     let transfer_queue = selected_gpu
@@ -139,6 +151,9 @@ pub(crate) fn select_physical_device(
         graphics_queue_family_index,
         transfer_queue_family_index
     );
+    if selected_gpu.supported_extensions().khr_portability_subset {
+        log::info!("Selected a portability subset GPU.")
+    }
     Ok((
         selected_gpu,
         graphics_queue_family_index,
