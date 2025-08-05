@@ -335,6 +335,24 @@ pub(crate) struct CubePipelineWrapper {
     max_draw_indexed_index_value: u32,
 }
 
+pub(crate) fn specular_only_blend() -> ColorBlendState {
+    ColorBlendState {
+        attachments: vec![
+            ColorBlendAttachmentState {
+                blend: None,
+                color_write_mask: ColorComponents::all(),
+                color_write_enable: true,
+            },
+            ColorBlendAttachmentState {
+                blend: None,
+                color_write_mask: ColorComponents::all(),
+                color_write_enable: true,
+            },
+        ],
+        ..Default::default()
+    }
+}
+
 impl CubePipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<CubePipelineProvider> {
         let vs_cube = vert_3d::load_cube_geometry(device.clone())?;
@@ -567,21 +585,7 @@ impl CubePipelineProvider {
                             .context("specular renderpass missing subpass 0")?
                             .clone(),
                     )),
-                    color_blend_state: Some(ColorBlendState {
-                        attachments: vec![
-                            ColorBlendAttachmentState {
-                                blend: None,
-                                color_write_mask: ColorComponents::all(),
-                                color_write_enable: true,
-                            },
-                            ColorBlendAttachmentState {
-                                blend: None,
-                                color_write_mask: ColorComponents::all(),
-                                color_write_enable: true,
-                            },
-                        ],
-                        ..Default::default()
-                    }),
+                    color_blend_state: Some(specular_only_blend()),
                     ..solid_pipeline_info.clone()
                 };
                 Some(GraphicsPipeline::new(

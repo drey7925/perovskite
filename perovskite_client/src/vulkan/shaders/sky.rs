@@ -1,6 +1,8 @@
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
-use crate::vulkan::{CommandBufferBuilder, ImageId, VulkanContext, VulkanWindow};
+use crate::vulkan::{
+    CommandBufferBuilder, ImageId, VulkanContext, VulkanWindow, CLEARING_RASTER_FRAMEBUFFER,
+};
 use anyhow::{Context, Result};
 use cgmath::{vec3, ElementWise, SquareMatrix};
 use smallvec::smallvec;
@@ -186,7 +188,12 @@ impl SkyPipelineProvider {
                 ..Default::default()
             }),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(ctx.raster_renderpass()?, 0).context("Missing subpass")?,
+                Subpass::from(
+                    ctx.renderpasses()
+                        .get_by_framebuffer_id(CLEARING_RASTER_FRAMEBUFFER)?,
+                    0,
+                )
+                .context("Missing subpass")?,
             )),
             ..GraphicsPipelineCreateInfo::layout(layout.clone())
         };

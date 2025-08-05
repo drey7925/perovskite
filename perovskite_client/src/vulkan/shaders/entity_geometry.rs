@@ -14,16 +14,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use super::SceneState;
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
+use crate::vulkan::shaders::cube_geometry::{
+    specular_only_blend, MAIN_FRAMEBUFFER, SPECULAR_FRAMEBUFFER,
+};
 use crate::vulkan::shaders::{
-    frag_lighting_basic_color,
+    frag_lighting_basic_color, frag_specular_only,
     vert_3d::{self, UniformData},
     LiveRenderConfig, VkDrawBufferGpu,
 };
 use crate::vulkan::{
-    shaders::vert_3d::ModelMatrix, CommandBufferBuilder, Texture2DHolder, VulkanContext,
-    VulkanWindow,
+    shaders::vert_3d::ModelMatrix, CommandBufferBuilder, ImageId, Texture2DHolder, VulkanContext,
+    VulkanWindow, CLEARING_RASTER_FRAMEBUFFER,
 };
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
@@ -64,8 +68,6 @@ use vulkano::{
     shader::ShaderModule,
 };
 
-use super::SceneState;
-
 #[derive(BufferContents, Vertex, Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub(crate) struct EntityVertex {
@@ -91,6 +93,7 @@ pub(crate) struct EntityGeometryDrawCall {
 pub(crate) struct EntityPipelineWrapper {
     main_pipeline: Arc<GraphicsPipeline>,
     descriptor: Arc<DescriptorSet>,
+    specular: Option<(Arc<GraphicsPipeline>, Arc<DescriptorSet>)>,
 }
 
 pub(crate) enum EntityDrawStep {
@@ -109,9 +112,13 @@ impl EntityPipelineWrapper {
     ) -> Result<()> {
         let _span = span!("draw entities");
 
-        let pipeline = match step {
-            EntityDrawStep::Color => self.main_pipeline.clone(),
-            EntityDrawStep::Specular => todo!(), // self.specular_pipeline.clone(),
+        let (pipeline, descriptor) = match step {
+            EntityDrawStep::Color => (self.main_pipeline.clone(), self.descriptor.clone()),
+            EntityDrawStep::Specular => self
+                .specular
+                .as_ref()
+                .context("Missing specular pipeline but trying to render specular")?
+                .clone(),
         };
         let layout = pipeline.layout().clone();
 
@@ -146,7 +153,6 @@ impl EntityPipelineWrapper {
             [],
         )?;
 
-        let descriptor = self.descriptor.clone();
         builder.bind_descriptor_sets(
             vulkano::pipeline::PipelineBindPoint::Graphics,
             layout.clone(),
@@ -175,26 +181,30 @@ pub(crate) struct EntityPipelineProvider {
     device: Arc<Device>,
     vs_entity: Arc<ShaderModule>,
     fs_sparse: Arc<ShaderModule>,
+    fs_specular: Arc<ShaderModule>,
 }
 impl EntityPipelineProvider {
     pub(crate) fn new(device: Arc<Device>) -> Result<EntityPipelineProvider> {
         let vs_entity = vert_3d::load_entity_tentative(device.clone())?;
-        let fs = frag_lighting_basic_color::load(device.clone())?;
+        let fs_sparse = frag_lighting_basic_color::load(device.clone())?;
+        let fs_specular = frag_specular_only::load(device.clone())?;
         Ok(EntityPipelineProvider {
             device,
             vs_entity,
-            fs_sparse: fs,
+            fs_sparse,
+            fs_specular,
         })
     }
 
     pub(crate) fn build_pipeline(
         &self,
-        ctx: &VulkanContext,
+        ctx: &VulkanWindow,
         viewport: Viewport,
-        render_pass: Arc<RenderPass>,
         atlas: &TextureAtlas,
-        supersampling: Supersampling,
+        config: &LiveRenderConfig,
     ) -> Result<EntityPipelineWrapper> {
+        let will_hybrid_rt = config.raytracing && config.hybrid_rt && ctx.raytracing_supported;
+
         let vs = self
             .vs_entity
             .entry_point("main")
@@ -209,16 +219,15 @@ impl EntityPipelineProvider {
             PipelineShaderStageCreateInfo::new(vs.clone()),
             PipelineShaderStageCreateInfo::new(fs_sparse),
         ];
-        let layout_eparse = PipelineLayout::new(
+        let layout_sparse = PipelineLayout::new(
             self.device.clone(),
             PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_sparse)
                 .into_pipeline_layout_create_info(self.device.clone())?,
         )?;
 
         let sparse_pipeline_info = GraphicsPipelineCreateInfo {
-            flags: PipelineCreateFlags::ALLOW_DERIVATIVES,
             stages: stages_sparse,
-            vertex_input_state: Some(vertex_input_state),
+            vertex_input_state: Some(vertex_input_state.clone()),
             input_assembly_state: Some(InputAssemblyState::default()),
             rasterization_state: Some(RasterizationState {
                 cull_mode: CullMode::Back,
@@ -226,24 +235,7 @@ impl EntityPipelineProvider {
                 ..Default::default()
             }),
             multisample_state: Some(MultisampleState::default()),
-            viewport_state: Some(ViewportState {
-                viewports: smallvec![Viewport {
-                    offset: [0.0, 0.0],
-                    depth_range: 0.0..=1.0,
-                    extent: [
-                        viewport.extent[0] * supersampling.to_float(),
-                        viewport.extent[1] * supersampling.to_float()
-                    ],
-                }],
-                scissors: smallvec![Scissor {
-                    offset: [0, 0],
-                    extent: [
-                        viewport.extent[0] as u32 * supersampling.to_int(),
-                        viewport.extent[1] as u32 * supersampling.to_int()
-                    ],
-                }],
-                ..Default::default()
-            }),
+            viewport_state: Some(ImageId::MainColor.viewport_state(&viewport, *config)),
             depth_stencil_state: Some(DepthStencilState {
                 depth: Some(DepthState::simple()),
                 ..Default::default()
@@ -257,9 +249,10 @@ impl EntityPipelineProvider {
                 ..Default::default()
             }),
             subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(render_pass.clone(), 0).context("Missing subpass")?,
+                Subpass::from(ctx.renderpasses.get_by_framebuffer_id(MAIN_FRAMEBUFFER)?, 0)
+                    .context("Missing subpass")?,
             )),
-            ..GraphicsPipelineCreateInfo::layout(layout_eparse.clone())
+            ..GraphicsPipelineCreateInfo::layout(layout_sparse.clone())
         };
         let pipeline = GraphicsPipeline::new(self.device.clone(), None, sparse_pipeline_info)?;
 
@@ -277,9 +270,77 @@ impl EntityPipelineProvider {
             ],
             [],
         )?;
+
+        let specular_pipeline = if will_hybrid_rt {
+            let stages_specular = smallvec![
+                PipelineShaderStageCreateInfo::new(vs.clone()),
+                PipelineShaderStageCreateInfo::new(
+                    self.fs_specular
+                        .specialize(HashMap::from_iter([(0, false.into()), (1, false.into())]))?
+                        .entry_point("main")
+                        .context("Missing entry point in entity specular shader")?
+                ),
+            ];
+
+            let layout_specular = PipelineLayout::new(
+                self.device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages_specular)
+                    .into_pipeline_layout_create_info(self.device.clone())?,
+            )?;
+
+            let specular_pipeline_info = GraphicsPipelineCreateInfo {
+                stages: stages_specular,
+                vertex_input_state: Some(vertex_input_state),
+                input_assembly_state: Some(InputAssemblyState::default()),
+                rasterization_state: Some(RasterizationState {
+                    cull_mode: CullMode::Back,
+                    front_face: FrontFace::CounterClockwise,
+                    ..Default::default()
+                }),
+                multisample_state: Some(MultisampleState::default()),
+                viewport_state: Some(ImageId::MainColor.viewport_state(&viewport, *config)),
+                depth_stencil_state: Some(DepthStencilState {
+                    depth: Some(DepthState::simple()),
+                    ..Default::default()
+                }),
+                color_blend_state: Some(specular_only_blend()),
+                subpass: Some(PipelineSubpassType::BeginRenderPass(
+                    Subpass::from(
+                        ctx.renderpasses
+                            .get_by_framebuffer_id(SPECULAR_FRAMEBUFFER)?,
+                        0,
+                    )
+                    .context("Missing subpass")?,
+                )),
+                ..GraphicsPipelineCreateInfo::layout(layout_specular)
+            };
+            let pipeline =
+                GraphicsPipeline::new(self.device.clone(), None, specular_pipeline_info)?;
+
+            let specular_descriptor = DescriptorSet::new(
+                ctx.descriptor_set_allocator.clone(),
+                pipeline
+                    .layout()
+                    .set_layouts()
+                    .get(0)
+                    .context("Entity pipeline missing descriptor set 0")?
+                    .clone(),
+                [
+                    atlas.diffuse.write_descriptor_set(0),
+                    atlas.specular.write_descriptor_set(1),
+                    atlas.normal_map.write_descriptor_set(2),
+                ],
+                [],
+            )?;
+            Some((pipeline, specular_descriptor))
+        } else {
+            None
+        };
+
         Ok(EntityPipelineWrapper {
             main_pipeline: pipeline,
             descriptor: solid_descriptor,
+            specular: specular_pipeline,
         })
     }
 }
@@ -290,12 +351,6 @@ impl EntityPipelineProvider {
         atlas: &TextureAtlas,
         global_config: &LiveRenderConfig,
     ) -> Result<EntityPipelineWrapper> {
-        self.build_pipeline(
-            &wnd.vk_ctx,
-            wnd.viewport.clone(),
-            wnd.raster_renderpass()?,
-            atlas,
-            global_config.supersampling,
-        )
+        self.build_pipeline(&wnd, wnd.viewport.clone(), atlas, global_config)
     }
 }

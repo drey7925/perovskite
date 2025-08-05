@@ -5,7 +5,6 @@ use std::{
 };
 
 use image::{DynamicImage, RgbImage};
-use parking_lot::Mutex;
 use texture_packer::{importer::ImageImporter, Rect, TexturePacker};
 
 use self::{egui_ui::EguiUi, hud::GameHud};
@@ -85,80 +84,55 @@ async fn build_texture_atlas(
     let all_rendered_blocks = all_rendered_blocks.into_iter().collect::<Vec<_>>();
 
     let mut simple_textures = HashMap::new();
-    let rendered_block_textures = Arc::new(Mutex::new(HashMap::new()));
+    let mut rendered_block_textures = HashMap::new();
     for name in all_texture_names {
         let texture = load_or_generate_image(cache_manager, &name).await?;
         simple_textures.insert(name, texture);
     }
 
-    let cache_insertions = Arc::new(Mutex::new(Vec::new()));
+    let mut cache_insertions = vec![];
+    let mut needs_render = vec![];
 
-    // We must block in place; the task cannot be made 'static easily.
-    tokio::task::block_in_place(|| {
-        std::thread::scope(|s| {
-            const NUM_MINI_RENDER_THREADS: usize = 4;
-            let mut handles = Vec::with_capacity(NUM_MINI_RENDER_THREADS);
-            for i in 0..NUM_MINI_RENDER_THREADS {
-                let ctx = ctx.clone();
+    for block in all_rendered_blocks {
+        let block_id = match block_renderer.block_types().get_block_by_name(&block) {
+            Some(id) => id,
+            None => continue,
+        };
+        let block_def = match block_renderer.block_types().get_blockdef(block_id) {
+            Some(block_type) => block_type,
+            None => continue,
+        };
 
-                let mut tasks = vec![];
-                for (j, name) in all_rendered_blocks.iter().enumerate() {
-                    if (j % NUM_MINI_RENDER_THREADS) == i {
-                        tasks.push(name);
-                    }
+        let cached_content = cache_manager.try_get_block_appearance(block_def)?;
+        if let Some(content) = cached_content {
+            let imported = match ImageImporter::import_from_memory(&content) {
+                Ok(x) => x,
+                Err(x) => {
+                    bail!("Failed to import block appearance: {:?}", x);
                 }
-                handles.push(s.spawn(|| -> Result<()> {
-                    let mut renderer =
-                        MiniBlockRenderer::new(ctx, [64, 64], block_renderer.atlas())?;
-                    for name in tasks {
-                        let block_id = match block_renderer.block_types().get_block_by_name(name) {
-                            Some(id) => id,
-                            None => continue,
-                        };
-                        let block_def = match block_renderer.block_types().get_blockdef(block_id) {
-                            Some(block_type) => block_type,
-                            None => continue,
-                        };
+            };
+            rendered_block_textures.insert(block, imported);
+        } else {
+            needs_render.push((block_def, block_id));
+        }
+    }
 
-                        let cached_content = cache_manager.try_get_block_appearance(block_def)?;
-                        if let Some(content) = cached_content {
-                            let imported = match ImageImporter::import_from_memory(&content) {
-                                Ok(x) => x,
-                                Err(x) => {
-                                    bail!("Failed to import block appearance: {:?}", x);
-                                }
-                            };
-                            rendered_block_textures.lock().insert(name, imported);
-                            continue;
-                        }
+    if !needs_render.is_empty() {
+        let mut renderer = MiniBlockRenderer::new(ctx.clone(), [64, 64], block_renderer.atlas())?;
+        let block_ids: Vec<_> = needs_render.iter().map(|(_, id)| *id).collect();
+        let images = renderer.render_all(block_renderer, &block_ids)?;
 
-                        let block_tex = renderer.render(block_renderer, block_id, block_def)?;
+        assert_eq!(images.len(), needs_render.len());
 
-                        let mut bytes: Vec<u8> = Vec::new();
-                        block_tex
-                            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
-                        cache_insertions.lock().push((block_def, bytes));
-                        rendered_block_textures.lock().insert(name, block_tex);
-                    }
-                    Ok(())
-                }));
-            }
-            for handle in handles {
-                match handle.join() {
-                    Ok(Ok(())) => {}
-                    Ok(Err(x)) => {
-                        bail!("Mini render thread failed: {:?}", x);
-                    }
-                    Err(x) => {
-                        bail!("Mini render thread panic: {:?}", x);
-                    }
-                };
-            }
-            Ok(())
-        })
-    })?;
+        for ((def, id), image) in needs_render.iter().zip(images) {
+            let mut bytes: Vec<u8> = Vec::new();
+            image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
+            cache_insertions.push((def, bytes));
+            rendered_block_textures.insert(def.short_name.clone(), image);
+        }
+    }
 
-    for (key, value) in cache_insertions.lock().drain(..) {
+    for (key, value) in cache_insertions.drain(..) {
         cache_manager.insert_block_appearance(key, value).await?;
     }
 
@@ -227,7 +201,7 @@ async fn build_texture_atlas(
             DynamicImage::ImageRgba8(texture),
         )?;
     }
-    for (name, texture) in rendered_block_textures.lock().drain() {
+    for (name, texture) in rendered_block_textures.drain() {
         pack_tex(
             &mut texture_packer,
             &("rendered_block:".to_string() + &name),

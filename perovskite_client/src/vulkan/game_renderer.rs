@@ -33,7 +33,7 @@ use super::{
         entity_geometry, flat_texture, post_process,
     },
     FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, ImageId, LoadOp, RenderPassId,
-    VulkanContext, VulkanWindow,
+    VulkanContext, VulkanWindow, CLEARING_RASTER_FRAMEBUFFER,
 };
 use crate::client_state::input::{BoundAction, Keybind};
 use crate::main_menu::InputCapture;
@@ -211,11 +211,7 @@ impl ActiveGame {
 
         framebuffer.begin_render_pass(
             &mut command_buf_builder,
-            FramebufferAndLoadOpId {
-                color_attachments: [(ImageId::MainColor, LoadOp::DontCare)],
-                depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Clear)),
-                input_attachments: [],
-            },
+            CLEARING_RASTER_FRAMEBUFFER,
             &ctx.renderpasses,
             SubpassContents::Inline,
         )?;
@@ -439,7 +435,17 @@ impl ActiveGame {
                     CubeDrawStep::TransparentSpecular,
                 )
                 .context("Transparent pipeline draw failed")?;
-
+            // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
+            // blocks
+            self.entities_pipeline
+                .draw(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &entity_draw_calls,
+                    EntityDrawStep::Specular,
+                )
+                .context("Entities specular pipeline draw failed")?;
             // self.entities_pipeline
             //     .draw(
             //         ctx,

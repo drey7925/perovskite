@@ -910,15 +910,6 @@ impl VulkanWindow {
             })
     }
 
-    pub(crate) fn raster_renderpass(&self) -> Result<Arc<RenderPass>> {
-        self.renderpasses
-            .get_by_framebuffer_id(FramebufferAndLoadOpId {
-                color_attachments: [(ImageId::MainColor, LoadOp::Load)],
-                depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Load)),
-                input_attachments: [],
-            })
-    }
-
     pub(crate) fn gpu_debug(&self) -> String {
         let mut result = String::new();
         result += &format!("=== Device ===\n {:?}", &self.vk_device);
@@ -942,6 +933,13 @@ impl VulkanWindow {
         result
     }
 }
+
+pub(crate) const CLEARING_RASTER_FRAMEBUFFER: FramebufferAndLoadOpId<1, 0> =
+    FramebufferAndLoadOpId {
+        color_attachments: [(ImageId::MainColor, LoadOp::DontCare)],
+        depth_stencil_attachment: Some((ImageId::MainDepthStencil, LoadOp::Clear)),
+        input_attachments: [],
+    };
 
 fn find_best_depth_format(physical_device: &PhysicalDevice) -> Result<Format> {
     const FORMATS_TO_TRY: [Format; 2] = [Format::D24_UNORM_S8_UINT, Format::D32_SFLOAT_S8_UINT];

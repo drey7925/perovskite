@@ -135,7 +135,10 @@ impl Default for CartsGameBuilderExtension {
 const CART_MESH_BYTES: &[u8] = include_bytes!("minecart.obj");
 lazy_static::lazy_static! {
     static ref CART_MESH: CustomMesh = {
-        perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, TextureReference::from(CART_UV_TEX).with_emissive(CART_UV_TEX_EMISSIVE)).unwrap()
+        perovskite_server::formats::load_obj_mesh(CART_MESH_BYTES, TextureReference::from(CART_UV_TEX)
+            .with_emissive(CART_UV_TEX_EMISSIVE)
+            .with_specular(CART_UV_TEX_SPECULAR)
+        ).unwrap()
     };
 }
 
@@ -188,6 +191,7 @@ impl EntityHandlers for CartHandlers {
 
 const CART_UV_TEX: StaticTextureName = StaticTextureName("carts:minecart_uv");
 const CART_UV_TEX_EMISSIVE: StaticTextureName = StaticTextureName("carts:minecart_uv_emissive");
+const CART_UV_TEX_SPECULAR: StaticTextureName = StaticTextureName("carts:minecart_uv_specular");
 
 pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Result<()> {
     crate::circuits::register_circuits(game_builder)?;
@@ -225,6 +229,11 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         game_builder,
         CART_UV_TEX_EMISSIVE,
         "textures/cart_uv_emissive.png"
+    )?;
+    include_texture_bytes!(
+        game_builder,
+        CART_UV_TEX_SPECULAR,
+        "textures/cart_uv_specular.png"
     )?;
 
     // TODO update the speedposts

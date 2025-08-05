@@ -15,7 +15,7 @@ use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
 };
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 use enum_map::enum_map;
 use image::{DynamicImage, RgbaImage};
@@ -25,9 +25,12 @@ use perovskite_core::{
     block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
 };
 use smallvec::smallvec;
+use std::iter;
 use std::sync::Arc;
 use tinyvec::array_vec;
-use vulkano::command_buffer::{SubpassBeginInfo, SubpassEndInfo};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, PrimaryAutoCommandBuffer, SubpassBeginInfo, SubpassEndInfo,
+};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
@@ -49,17 +52,17 @@ use vulkano::{
     DeviceSize,
 };
 
+const BATCH_SIZE: usize = 16;
+
 pub(crate) struct MiniBlockRenderer {
     ctx: Arc<VulkanContext>,
     surface_size: [u32; 2],
     render_pass: Arc<RenderPass>,
-    framebuffer: Arc<Framebuffer>,
-    target_image: Arc<ImageView>,
+    framebuffers: Vec<(Arc<ImageView>, Arc<Framebuffer>, Subbuffer<[u8]>)>,
     cube_provider: CubePipelineProvider,
     cube_pipeline: CubePipelineWrapper,
     uniform: Subbuffer<UniformData>,
-    download_buffer: Subbuffer<[u8]>,
-    fake_chunk: Box<[BlockId; 18 * 18 * 18]>,
+    fake_chunks: Vec<Box<[BlockId; 18 * 18 * 18]>>,
 }
 impl MiniBlockRenderer {
     pub(crate) fn new(
@@ -75,43 +78,76 @@ impl MiniBlockRenderer {
         })?;
 
         let extent = [surface_size[0], surface_size[1], 1];
-        let target_image = Image::new(
-            ctx.memory_allocator.clone(),
-            ImageCreateInfo {
-                image_type: ImageType::Dim2d,
-                format: Format::R8G8B8A8_SRGB,
-                extent,
-                usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-        )?;
 
-        let target_image = ImageView::new_default(target_image)?;
+        let mut target_images = Vec::new();
+        let mut framebuffers = Vec::new();
+        for i in 0..BATCH_SIZE {
+            let target_image = ImageView::new_default(
+                Image::new(
+                    ctx.memory_allocator.clone(),
+                    ImageCreateInfo {
+                        image_type: ImageType::Dim2d,
+                        format: Format::R8G8B8A8_SRGB,
+                        extent,
+                        usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                        ..Default::default()
+                    },
+                )
+                .context("Create RGBA image for mini renderer")?,
+            )
+            .context("Create ImageView for mini renderer")?;
+            target_images.push(target_image.clone());
+            let depth_stencil_attachment = ImageView::new_default(
+                Image::new(
+                    ctx.memory_allocator.clone(),
+                    ImageCreateInfo {
+                        image_type: ImageType::Dim2d,
+                        format: ctx.depth_stencil_format,
+                        extent,
+                        usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                        ..Default::default()
+                    },
+                )
+                .context("Create depth buffer for mini renderer")?,
+            )
+            .context("Create depth buffer imageview for mini renderer")?;
 
-        let depth_stencil_attachment = ImageView::new_default(Image::new(
-            ctx.memory_allocator.clone(),
-            ImageCreateInfo {
-                image_type: ImageType::Dim2d,
-                format: ctx.depth_stencil_format,
-                extent,
-                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+            let framebuffer_create_info = FramebufferCreateInfo {
+                attachments: vec![target_image.clone(), depth_stencil_attachment],
                 ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-        )?)?;
+            };
+            let framebuffer = Framebuffer::new(render_pass.clone(), framebuffer_create_info)?;
 
-        let framebuffer_create_info = FramebufferCreateInfo {
-            attachments: vec![target_image.clone(), depth_stencil_attachment],
-            ..Default::default()
-        };
-        let framebuffer = Framebuffer::new(render_pass.clone(), framebuffer_create_info)?;
+            let download_buffer = Buffer::new_slice(
+                ctx.clone_allocator(),
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_DST,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                        | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                    ..Default::default()
+                },
+                (surface_size[0] as DeviceSize)
+                    .checked_mul(surface_size[1] as DeviceSize)
+                    .context("Surface too big")?
+                    .checked_mul(4)
+                    .context("Surface too big")?,
+            )
+            .context("Create download buffer for mini renderer")?;
+
+            framebuffers.push((target_image, framebuffer, download_buffer));
+        }
+
         let viewport = Viewport {
             offset: [0.0, 0.0],
             extent: [surface_size[0] as f32, surface_size[1] as f32],
@@ -139,55 +175,79 @@ impl MiniBlockRenderer {
             atlas_texture,
             &ctx.non_swapchain_config(),
         )?;
-        let download_buffer = Buffer::new_slice(
-            ctx.clone_allocator(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            (surface_size[0] as DeviceSize)
-                .checked_mul(surface_size[1] as DeviceSize)
-                .context("Surface too big")?
-                .checked_mul(4)
-                .context("Surface too big")?,
-        )?;
         let uniform = cube_pipeline.make_uniform_buffer(&ctx, *SCENE_STATE)?;
         Ok(Self {
             ctx,
             surface_size,
             render_pass,
-            target_image,
-            framebuffer,
+            framebuffers,
             cube_provider,
             cube_pipeline,
-            download_buffer,
             uniform,
-            fake_chunk: Box::new([AIR_ID; 18 * 18 * 18]),
+            fake_chunks: iter::repeat(Box::new([AIR_ID; 18 * 18 * 18]))
+                .take(BATCH_SIZE)
+                .collect(),
         })
     }
 
-    pub(crate) fn render(
+    pub(crate) fn render_all(
         &mut self,
         block_renderer: &BlockRenderer,
+        block_ids: &[BlockId],
+    ) -> Result<Vec<DynamicImage>> {
+        let mut results = vec![];
+        for chunk in block_ids.chunks(BATCH_SIZE) {
+            results.extend(self.render_batch(block_renderer, chunk)?)
+        }
+        Ok(results)
+    }
+
+    fn render_batch(
+        &mut self,
+        block_renderer: &BlockRenderer,
+        block_ids: &[BlockId],
+    ) -> Result<smallvec::SmallVec<[DynamicImage; BATCH_SIZE]>> {
+        let mut commands = self.ctx.start_command_buffer()?;
+        ensure!(block_ids.len() <= BATCH_SIZE);
+
+        for (index, &id) in block_ids.iter().enumerate() {
+            self.render(&mut commands, block_renderer, id, index)?;
+        }
+
+        let commands = commands.build()?;
+        commands.execute(self.ctx.clone_graphics_queue())?.flush()?;
+
+        let mut result = smallvec::SmallVec::new();
+        for i in 0..block_ids.len() {
+            let guard = self.framebuffers[i].2.read()?;
+            let image =
+                RgbaImage::from_raw(self.surface_size[0], self.surface_size[1], guard.to_vec())
+                    .context("Failed to create image")?;
+            result.push(image.into());
+        }
+
+        Ok(result)
+    }
+
+    fn render(
+        &mut self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        block_renderer: &BlockRenderer,
         block_id: BlockId,
-        block_def: &BlockTypeDef,
-    ) -> Result<DynamicImage> {
+        index: usize,
+    ) -> Result<()> {
         let mut vtx = vec![];
         let mut idx = vec![];
 
-        self.fake_chunk[ChunkOffset { x: 0, y: 0, z: 0 }.as_extended_index()] = block_id;
+        let fake_chunk = &mut self.fake_chunks[index];
+        fake_chunk[ChunkOffset { x: 0, y: 0, z: 0 }.as_extended_index()] = block_id;
         let fake_chunk_data = FakeChunkDataView {
-            block_ids: self.fake_chunk.as_ref(),
+            block_ids: fake_chunk.as_ref(),
         };
         let offset = ChunkOffset { x: 0, y: 0, z: 0 };
 
         block_renderer.render_single_block(
-            block_def,
+            block_renderer.block_types().get_blockdef(block_id).unwrap(),
             block_id,
             offset,
             &fake_chunk_data,
@@ -196,14 +256,13 @@ impl MiniBlockRenderer {
             &|_, _| false,
         );
 
-        let mut commands = self.ctx.start_command_buffer()?;
         commands.begin_render_pass(
             RenderPassBeginInfo {
                 clear_values: vec![
                     Some([0.0, 0.0, 0.0, 0.0].into()),
                     Some(self.ctx.depth_clear_value()),
                 ],
-                ..RenderPassBeginInfo::framebuffer(self.framebuffer.clone())
+                ..RenderPassBeginInfo::framebuffer(self.framebuffers[index].1.clone())
             },
             SubpassBeginInfo {
                 contents: SubpassContents::Inline,
@@ -214,14 +273,14 @@ impl MiniBlockRenderer {
 
         if let Some(buffer) = pass {
             let mut draw_buffers = enum_map! { _ => None };
-            draw_buffers[CubeDrawStep::OpaqueSimple] = Some(buffer);
+            draw_buffers[CubeDrawStep::Transparent] = Some(buffer);
             let draw_call = CubeGeometryDrawCall {
                 models: VkChunkVertexDataGpu { draw_buffers },
                 model_matrix: Matrix4::identity(),
             };
             self.cube_pipeline.draw_single_step(
                 &self.ctx,
-                &mut commands,
+                commands,
                 self.uniform.clone(),
                 &mut [draw_call],
                 CubeDrawStep::Transparent,
@@ -231,20 +290,14 @@ impl MiniBlockRenderer {
             ..Default::default()
         })?;
         commands.copy_image_to_buffer(CopyImageToBufferInfo {
-            dst_buffer: self.download_buffer.clone(),
+            dst_buffer: self.framebuffers[index].2.clone(),
             ..CopyImageToBufferInfo::image_buffer(
-                self.target_image.image().clone(),
-                self.download_buffer.clone(),
+                self.framebuffers[index].0.image().clone(),
+                self.framebuffers[index].2.clone(),
             )
         })?;
 
-        let commands = commands.build()?;
-        commands.execute(self.ctx.clone_graphics_queue())?.flush()?;
-
-        let guard = self.download_buffer.read()?;
-        let image = RgbaImage::from_raw(self.surface_size[0], self.surface_size[1], guard.to_vec())
-            .context("Failed to create image")?;
-        Ok(image.into())
+        Ok(())
     }
 }
 

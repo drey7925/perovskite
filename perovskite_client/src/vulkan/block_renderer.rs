@@ -100,7 +100,7 @@ impl CubeFace {
             [8, 9, 7, 6],
             [9, 7, 6, 8],
         ];
-        CUBE_EXTENTS_FACE_ORDER[LUT[self.index()][idx]]
+        UNIFIED_FACE_ORDER[LUT[self.index()][idx]]
     }
 
     #[inline(always)]
@@ -361,6 +361,19 @@ const CUBE_EXTENTS_FACE_ORDER: [CubeFace; 6] = [
     CubeFace::ZMinus,
 ];
 const PLANTLIKE_FACE_ORDER: [CubeFace; 4] = [
+    CubeFace::PlantXPlusZPlus,
+    CubeFace::PlantXPlusZMinus,
+    CubeFace::PlantXMinusZPlus,
+    CubeFace::PlantXMinusZMinus,
+];
+
+const UNIFIED_FACE_ORDER: [CubeFace; 10] = [
+    CubeFace::XPlus,
+    CubeFace::XMinus,
+    CubeFace::YPlus,
+    CubeFace::YMinus,
+    CubeFace::ZPlus,
+    CubeFace::ZMinus,
     CubeFace::PlantXPlusZPlus,
     CubeFace::PlantXPlusZMinus,
     CubeFace::PlantXMinusZPlus,
@@ -1361,7 +1374,7 @@ fn cube_variant_height_unblended(variant: u16) -> CubeExtents {
         // top face should be forced if it's not flush with the bottom of the next block
         force: [false, false, variant < 7, false, false, false],
         top_normal: CubeFace::YPlus.default_normal(),
-        top_tan: todo!(),
+        top_tan: 1,
     }
 }
 
