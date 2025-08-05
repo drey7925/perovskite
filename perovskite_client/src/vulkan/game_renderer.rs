@@ -329,6 +329,40 @@ impl ActiveGame {
                 )
                 .context("Opaque pipeline draw failed")?;
 
+            if hybrid_rt_enabled {
+                command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+                command_buf_builder.copy_image(CopyImageInfo {
+                    ..CopyImageInfo::images(
+                        framebuffer
+                            .get_image(ImageId::MainDepthStencil)?
+                            .image()
+                            .clone(),
+                        framebuffer
+                            .get_image(ImageId::TransparentWithSpecularDepth)?
+                            .image()
+                            .clone(),
+                    )
+                })?;
+                framebuffer.begin_render_pass(
+                    &mut command_buf_builder,
+                    cube_geometry::MAIN_FRAMEBUFFER,
+                    &ctx.renderpasses,
+                    SubpassContents::Inline,
+                )?;
+            }
+
+            // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
+            // blocks
+            self.entities_pipeline
+                .draw(
+                    ctx,
+                    &mut command_buf_builder,
+                    scene_state,
+                    &entity_draw_calls,
+                    EntityDrawStep::Color,
+                )
+                .context("Entities pipeline draw failed")?;
+
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
@@ -393,32 +427,9 @@ impl ActiveGame {
                 .context("Transparent pipeline draw failed")?;
         }
 
-        // Entities use the sparse pipeline and should be sequenced in the same spot as transparent
-        // blocks
-        self.entities_pipeline
-            .draw(
-                ctx,
-                &mut command_buf_builder,
-                scene_state,
-                &entity_draw_calls,
-                EntityDrawStep::Color,
-            )
-            .context("Entities pipeline draw failed")?;
-
         if hybrid_rt_enabled {
             command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
-            command_buf_builder.copy_image(CopyImageInfo {
-                ..CopyImageInfo::images(
-                    framebuffer
-                        .get_image(ImageId::MainDepthStencil)?
-                        .image()
-                        .clone(),
-                    framebuffer
-                        .get_image(ImageId::TransparentWithSpecularDepth)?
-                        .image()
-                        .clone(),
-                )
-            })?;
+
             framebuffer.begin_render_pass(
                 &mut command_buf_builder,
                 cube_geometry::SPECULAR_FRAMEBUFFER,
@@ -446,15 +457,6 @@ impl ActiveGame {
                     EntityDrawStep::Specular,
                 )
                 .context("Entities specular pipeline draw failed")?;
-            // self.entities_pipeline
-            //     .draw(
-            //         ctx,
-            //         &mut command_buf_builder,
-            //         scene_state,
-            //         &entity_draw_calls,
-            //         EntityDrawStep::Specular,
-            //     )
-            //     .context("Entities pipeline draw failed")?;
         }
 
         // At this point, if hybrid RT is off, we're still in the Color + Depth renderpass.
