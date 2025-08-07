@@ -17,7 +17,7 @@ use arc_swap::ArcSwap;
 use egui::epaint::color;
 use egui::{
     CollapsingHeader, Color32, FontId, InnerResponse, Key, Layout, ProgressBar, RichText, TextEdit,
-    Ui, WidgetText,
+    TextureFilter, TextureOptions, Ui, WidgetText,
 };
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -76,6 +76,8 @@ impl MainMenu {
             .text_styles
             .insert(egui::TextStyle::Body, FontId::proportional(16.0));
         egui_gui.egui_ctx.set_style(style);
+        egui_extras::install_image_loaders(&egui_gui.egui_ctx);
+
         let settings_guard = settings.load();
         let mut prospective_settings = (**settings_guard).clone();
         match prospective_settings.audio.fill_audio_devices() {
@@ -201,6 +203,21 @@ impl MainMenu {
             if ui.add(settings_button).clicked() {
                 self.prospective_settings = (**self.settings.load()).clone();
                 self.show_settings_popup = true;
+            }
+
+            if matches!(&game_state, GameState::Connecting(_)) {
+                let source = egui::include_image!("logo_animated.gif");
+                let image = egui::Image::new(source)
+                    .fit_to_original_size(1.0)
+                    .texture_options(TextureOptions {
+                        magnification: TextureFilter::Nearest,
+                        minification: TextureFilter::Linear,
+                        mipmap_mode: None,
+                        ..TextureOptions::default()
+                    });
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT), |ui| {
+                    ui.add(image);
+                });
             }
         });
 

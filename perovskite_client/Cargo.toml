@@ -7,6 +7,7 @@ description = "Multiplayer voxel game written in Rust - Game client"
 authors = ["drey7925 <drey@dreyclimbs.rocks>"]
 repository = "https://github.com/drey7925/perovskite"
 categories = ["games"]
+build = "build.rs"
 
 [dependencies]
 argon2 = "0.5.3"
@@ -16,6 +17,7 @@ clap = { version = "4.3.0", features = ["derive"] }
 perovskite_core = { path = "../perovskite_core", version = "0.1.1" }
 egui = "0.31.1"
 egui_winit_vulkano = "0.28.0"
+egui_extras = { version = "0.31.1", features = ["gif"] }
 env_logger = "0.11.3"
 fps_counter = "3.0.0"
 hex = "0.4.3"
@@ -81,6 +83,9 @@ static-mvk-prebuilt = ["static-mvk", "ash-molten/pre-built"]
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [[bench]]
 name = "audio_bench"
