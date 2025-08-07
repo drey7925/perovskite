@@ -66,10 +66,10 @@ The benefits:
 
 ### Prerequisites
 
-A Rust toolchain is required; on Windows I use the MSVC toolchain for testing, at some recent
-(not necessarily latest) version.
+A Rust toolchain is required; on Windows I use the MSVC toolchain for testing and development.
 
-The minimum Rust version at this time is 1.81 (due to egui).
+The minimum Rust version at this time is 1.85 (due to an indirect edition2024 dependency in the client). This is subject
+to increase at any time.
 
 On Linux, you'll need a handful of packages; Ubuntu/Debian users should
 `apt install protobuf-compiler libasound-dev libdbus-1-dev pkg-config`
