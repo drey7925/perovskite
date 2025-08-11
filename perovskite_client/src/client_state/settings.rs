@@ -61,6 +61,7 @@ pub(crate) struct RenderSettings {
     pub(crate) on_demand_raytracing: bool,
     pub(crate) raytracer_debug: bool,
     pub(crate) raytracing_specular_downsampling: u32,
+    pub(crate) approx_gaussian_blit: bool,
 }
 
 impl RenderSettings {
@@ -76,6 +77,7 @@ impl RenderSettings {
             blur_steps: self.blur_steps,
             bloom_strength: self.bloom_strength,
             lens_flare_strength: self.lens_flare_strength,
+            approx_gaussian_blit: self.approx_gaussian_blit,
             formats: SelectedFormats {
                 swapchain: ctx.swapchain_format(),
                 color: Self::render_format(self.hdr),
@@ -114,6 +116,7 @@ impl Default for RenderSettings {
             bloom_strength: 1.0,
             lens_flare_strength: 1.0,
             blur_steps: 5,
+            approx_gaussian_blit: false,
         }
     }
 }

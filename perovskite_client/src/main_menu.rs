@@ -398,7 +398,14 @@ impl MainMenu {
             ) {
                 ControlFlow::Continue(_) => {}
                 ControlFlow::Break(_) => {
-                    vk_ctx.request_recreate();
+                    if self
+                        .prospective_settings
+                        .render
+                        .build_global_config(&vk_ctx)
+                        != self.settings.load().render.build_global_config(&vk_ctx)
+                    {
+                        vk_ctx.request_recreate();
+                    }
                     self.show_settings_popup = false;
                 }
             };
@@ -658,6 +665,8 @@ fn draw_render_settings(
     const SPECULAR_DOWNSAMPLING_HOVER_TEXT: &str = "Specular reflection downsampling factor. Higher values improve performance at the expense of visual quality. Only applicable if raytracing is enabled.";
     const SUPERSAMPLING_HOVER_TEXT: &str =
         "Smooths edges of geometry and textures, at the expense of performance.";
+    const APPROX_GAUSSIAN_BLIT_HOVER_TEXT: &str =
+        "Uses a more complex kernel to smooth the image when supersampling is enabled. Some glitches and bugs may result.";
 
     egui::Grid::new("render_grid")
         .num_columns(2)
@@ -896,6 +905,18 @@ fn draw_render_settings(
                 })
                 .response
                 .on_hover_text(SUPERSAMPLING_HOVER_TEXT);
+            ui.end_row();
+
+            ui.label("Experimental supersampling kernel")
+                .on_hover_text(APPROX_GAUSSIAN_BLIT_HOVER_TEXT);
+            ui.add_enabled(
+                prospective_settings.render.supersampling != Supersampling::None,
+                egui::Checkbox::new(
+                    &mut prospective_settings.render.approx_gaussian_blit,
+                    "Enabled",
+                ),
+            )
+                .on_hover_text(APPROX_GAUSSIAN_BLIT_HOVER_TEXT);
             ui.end_row();
         });
 }

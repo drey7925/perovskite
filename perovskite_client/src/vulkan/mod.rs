@@ -445,6 +445,7 @@ impl VulkanContext {
                 color: Format::R8G8B8A8_SRGB,
                 depth_stencil: self.depth_stencil_format,
             },
+            approx_gaussian_blit: false,
         }
     }
 
@@ -1022,6 +1023,7 @@ pub(crate) enum ImageId {
     RtSpecRayDir,
     RtSpecRayDirDownsampled,
     Blur(u8),
+    BlitPath(u8),
 }
 
 impl ImageId {
@@ -1038,6 +1040,7 @@ impl ImageId {
             ImageId::RtSpecRayDir => Format::R32G32B32A32_UINT,
             ImageId::RtSpecRayDirDownsampled => Format::R32G32B32A32_UINT,
             ImageId::Blur(_) => f.color,
+            ImageId::BlitPath(_) => f.color,
         }
     }
 
@@ -1063,6 +1066,7 @@ impl ImageId {
             ImageId::RtSpecRayDir => upsampled,
             ImageId::RtSpecRayDirDownsampled => rt_deferred,
             ImageId::Blur(n) => (base.0 >> n, base.1 >> n),
+            ImageId::BlitPath(n) => (upsampled.0 >> (n + 1), upsampled.1 >> (n + 1)),
         }
     }
 
@@ -1084,6 +1088,7 @@ impl ImageId {
             ImageId::RtSpecRayDirDownsampled => "光角",
             ImageId::Blur(0) => "暈原",
             ImageId::Blur(_) => "暈路",
+            ImageId::BlitPath(_) => "縮路",
         }
     }
 
@@ -1124,6 +1129,7 @@ impl ImageId {
                 ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST
             }
             ImageId::Blur(_) => ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
+            ImageId::BlitPath(_) => ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
         }
     }
 
@@ -1144,6 +1150,7 @@ impl ImageId {
             ImageId::RtSpecRayDir => UINT,
             ImageId::RtSpecRayDirDownsampled => UINT,
             ImageId::Blur(_) => FLOAT,
+            ImageId::BlitPath(_) => FLOAT,
         }
     }
 
@@ -1346,7 +1353,7 @@ pub(crate) struct FramebufferHolder {
 }
 
 impl FramebufferHolder {
-    pub(crate) fn blit_supersampling(
+    pub(crate) fn blit_supersampling_non_gaussian(
         &self,
         command_buf_builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) -> Result<()> {
@@ -1492,7 +1499,10 @@ impl FramebufferHolder {
         let mut multiplier = config.supersampling.to_int() / 2;
         for i in 0..config.supersampling.blit_steps() {
             log::debug!("Creating blit path image {i}, {multiplier}x samples");
-            let mut usage = ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST;
+            let mut usage = ImageUsage::TRANSFER_SRC
+                | ImageUsage::TRANSFER_DST
+                | ImageUsage::SAMPLED
+                | ImageUsage::COLOR_ATTACHMENT;
             if i == config.supersampling.blit_steps() - 1 {
                 usage |= ImageUsage::COLOR_ATTACHMENT
                     | ImageUsage::INPUT_ATTACHMENT
@@ -1513,8 +1523,9 @@ impl FramebufferHolder {
                     ..Default::default()
                 },
             )?;
-            blit_path.push(buffer);
+            blit_path.push(buffer.clone());
             multiplier /= 2;
+            views[ImageId::BlitPath(i as u8)] = Some(ImageView::new_default(buffer)?);
         }
         views[ImageId::MainColorResolved] = Some(ImageView::new_default(
             blit_path

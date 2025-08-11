@@ -132,7 +132,7 @@ pub(crate) mod frag_simple {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct LiveRenderConfig {
     pub(crate) supersampling: Supersampling,
     pub(crate) hdr: bool,
@@ -144,6 +144,7 @@ pub(crate) struct LiveRenderConfig {
     pub(crate) blur_steps: usize,
     pub(crate) bloom_strength: f32,
     pub(crate) lens_flare_strength: f32,
+    pub(crate) approx_gaussian_blit: bool,
 
     pub(crate) formats: SelectedFormats,
 }

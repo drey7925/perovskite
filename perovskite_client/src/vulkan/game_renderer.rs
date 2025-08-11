@@ -511,9 +511,17 @@ impl ActiveGame {
             }
         }
 
-        framebuffer
-            .blit_supersampling(&mut command_buf_builder)
-            .context("Supersampling blit failed")?;
+        if ctx.renderpasses.config.approx_gaussian_blit {
+            self.post_process_pipeline.gaussian_blit(
+                &ctx,
+                framebuffer,
+                &mut command_buf_builder,
+            )?;
+        } else {
+            framebuffer
+                .blit_supersampling_non_gaussian(&mut command_buf_builder)
+                .context("Supersampling blit failed")?;
+        }
 
         // Begin work done in final swapchain resolution (i.e., not supersampled), but still
         // potentially HDR.
@@ -1077,19 +1085,19 @@ impl GameRenderer {
             }
 
             self.need_swapchain_recreate = false;
-            self.vk_wnd
-                .recreate_swapchain(
-                    size,
-                    self.settings
-                        .load()
-                        .render
-                        .build_global_config(&self.vk_wnd),
-                )
-                .unwrap();
+            if let Err(e) = self.vk_wnd.recreate_swapchain(
+                size,
+                self.settings
+                    .load()
+                    .render
+                    .build_global_config(&self.vk_wnd),
+            ) {
+                *game_lock = GameState::Error(e);
+            }
             self.vk_wnd.viewport.extent = size.into();
             if let GameStateMutRef::Active(game) = game_lock.as_mut() {
                 if let Err(e) = game.handle_swapchain_recreate(&mut self.vk_wnd) {
-                    *game_lock = GameState::Error(e)
+                    *game_lock = GameState::Error(e);
                 };
             }
         }

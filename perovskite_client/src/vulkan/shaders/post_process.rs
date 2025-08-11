@@ -26,7 +26,7 @@ use vulkano::pipeline::{
     GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
 };
 use vulkano::render_pass::Subpass;
-use vulkano::shader::{ShaderModule, SpecializationConstant};
+use vulkano::shader::{EntryPoint, ShaderModule, SpecializationConstant};
 
 vulkano_shaders::shader! {
     shaders: {
@@ -179,6 +179,7 @@ pub(crate) struct PostProcessingPipelineWrapper {
     upsample_blend_pipeline: Arc<GraphicsPipeline>,
     lens_flare_pipeline: Arc<GraphicsPipeline>,
     blur_stages: Vec<(PassInfo, Arc<GraphicsPipeline>, PostProcessUniform)>,
+    blit_stages: Vec<(PassInfo, Arc<GraphicsPipeline>, PostProcessUniform)>,
     sampler: Arc<Sampler>,
 }
 
@@ -240,43 +241,88 @@ impl PostProcessingPipelineWrapper {
         for (pass, pipeline, push_constant) in self.blur_stages.iter() {
             let (framebuffer_id, _kernel, source_image, _blend) = pass;
 
-            let pfs = DescriptorSet::new(
-                ctx.descriptor_set_allocator.clone(),
-                pipeline
-                    .layout()
-                    .set_layouts()
-                    .get(0)
-                    .with_context(|| "Pipeline layout missing set 0")?
-                    .clone(),
-                [WriteDescriptorSet::image_view_sampler(
-                    0,
-                    framebuffer.get_image(*source_image)?,
-                    self.sampler.clone(),
-                )],
-                [],
-            )?;
-
-            framebuffer.begin_render_pass(
+            self.draw_single_stage(
+                ctx,
+                framebuffer,
                 cmd,
-                *framebuffer_id,
-                ctx.renderpasses(),
-                SubpassContents::Inline,
+                pipeline,
+                push_constant,
+                framebuffer_id,
+                source_image,
             )?;
-
-            cmd.bind_pipeline_graphics(pipeline.clone())?;
-            cmd.bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                pipeline.layout().clone(),
-                0,
-                vec![pfs],
-            )?;
-            cmd.push_constants(pipeline.layout().clone(), 0, *push_constant)?;
-            unsafe {
-                cmd.draw(3, 1, 0, 0).context("Failed to draw blur pass")?;
-            }
-            cmd.end_render_pass(SubpassEndInfo::default())?;
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn gaussian_blit<L>(
+        &mut self,
+        ctx: &VulkanWindow,
+        framebuffer: &FramebufferHolder,
+        cmd: &mut CommandBufferBuilder<L>,
+    ) -> Result<()> {
+        for (pass, pipeline, push_constant) in self.blit_stages.iter() {
+            let (framebuffer_id, _kernel, source_image, _blend) = pass;
+
+            self.draw_single_stage(
+                ctx,
+                framebuffer,
+                cmd,
+                pipeline,
+                push_constant,
+                framebuffer_id,
+                source_image,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn draw_single_stage<L>(
+        &self,
+        ctx: &VulkanWindow,
+        framebuffer: &FramebufferHolder,
+        cmd: &mut CommandBufferBuilder<L>,
+        pipeline: &Arc<GraphicsPipeline>,
+        push_constant: &PostProcessUniform,
+        framebuffer_id: &FramebufferAndLoadOpId<1, 0>,
+        source_image: &ImageId,
+    ) -> Result<()> {
+        let pfs = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            pipeline
+                .layout()
+                .set_layouts()
+                .get(0)
+                .with_context(|| "Pipeline layout missing set 0")?
+                .clone(),
+            [WriteDescriptorSet::image_view_sampler(
+                0,
+                framebuffer.get_image(*source_image)?,
+                self.sampler.clone(),
+            )],
+            [],
+        )?;
+
+        framebuffer.begin_render_pass(
+            cmd,
+            *framebuffer_id,
+            ctx.renderpasses(),
+            SubpassContents::Inline,
+        )?;
+
+        cmd.bind_pipeline_graphics(pipeline.clone())?;
+        cmd.bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            pipeline.layout().clone(),
+            0,
+            vec![pfs],
+        )?;
+        cmd.push_constants(pipeline.layout().clone(), 0, *push_constant)?;
+        unsafe {
+            cmd.draw(3, 1, 0, 0).context("Failed to draw blur pass")?;
+        }
+        cmd.end_render_pass(SubpassEndInfo::default())?;
         Ok(())
     }
 }
@@ -408,6 +454,21 @@ impl PostProcessingPipelineProvider {
             passes.push((target, kernel, input, blend));
         }
 
+        let mut blit_passes = vec![];
+        for step in 0..global_config.supersampling.blit_steps() {
+            let input = if step == 0 {
+                ImageId::MainColor
+            } else {
+                ImageId::BlitPath(step as u8 - 1)
+            };
+            let target = FramebufferAndLoadOpId {
+                color_attachments: [(ImageId::BlitPath(step as u8), LoadOp::DontCare)],
+                depth_stencil_attachment: None,
+                input_attachments: [],
+            };
+            blit_passes.push((target, Kernel::Down, input, Blend::None));
+        }
+
         let upsample_blend_info = GraphicsPipelineCreateInfo {
             stages: upsample_blend_stages,
             // No bindings or attributes
@@ -494,85 +555,47 @@ impl PostProcessingPipelineProvider {
 
         let mut blur_stages = vec![];
         for pass in passes {
-            let (framebuffer, kernel, source_image, blend) = pass;
-            let fs = match kernel {
-                Kernel::Down => fs_downsample.clone(),
-                Kernel::Up => fs_upsample.clone(),
-                Kernel::UpBlend => fs_upsample_blend.clone(),
-            };
-            let blend = match blend {
-                Blend::None => None,
-                Blend::Additive => Some(AttachmentBlend::additive()),
-            };
-            let stages = smallvec![
-                PipelineShaderStageCreateInfo::new(vs.clone()),
-                PipelineShaderStageCreateInfo::new(fs)
-            ];
-            let layout = PipelineLayout::new(
-                self.device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(self.device.clone())?,
+            let (framebuffer, kernel, _source_image, blend) = pass;
+
+            let (pipeline, push_constant) = self.make_pipeline_step(
+                ctx,
+                global_config,
+                &vs,
+                &fs_upsample_blend,
+                &fs_downsample,
+                &fs_upsample,
+                framebuffer,
+                kernel,
+                blend,
             )?;
 
-            let info = GraphicsPipelineCreateInfo {
-                stages,
-                // No bindings or attributes
-                vertex_input_state: Some(VertexInputState::new()),
-                input_assembly_state: Some(InputAssemblyState::default()),
-                rasterization_state: Some(RasterizationState {
-                    cull_mode: CullMode::Back,
-                    front_face: FrontFace::CounterClockwise,
-                    ..Default::default()
-                }),
-                multisample_state: Some(MultisampleState::default()),
-                depth_stencil_state: None,
-                color_blend_state: Some(ColorBlendState {
-                    attachments: vec![ColorBlendAttachmentState {
-                        blend,
-                        color_write_mask: ColorComponents::all(),
-                        color_write_enable: true,
-                    }],
-                    ..Default::default()
-                }),
-                viewport_state: Some(
-                    framebuffer.color_attachments[0]
-                        .0
-                        .viewport_state(&ctx.viewport, *global_config),
-                ),
-                subpass: Some(PipelineSubpassType::BeginRenderPass(
-                    Subpass::from(
-                        ctx.renderpasses
-                            .get_by_framebuffer_id(framebuffer)
-                            .with_context(|| format!("Missing renderpass {framebuffer}"))?,
-                        0,
-                    )
-                    .context("Missing subpass")?,
-                )),
-                ..GraphicsPipelineCreateInfo::layout(layout.clone())
-            };
-            let pipeline = GraphicsPipeline::new(self.device.clone(), None, info)
-                .with_context(|| format!("Building pipeline for {framebuffer}/{kernel:?}"))?;
-
-            let source_image_size = framebuffer.color_attachments[0].0.dimension(
-                ctx.viewport.extent[0] as u32,
-                ctx.viewport.extent[1] as u32,
-                *global_config,
-            );
-
-            let push_constant = PostProcessUniform {
-                ht: [
-                    0.5 / (source_image_size.0 as f32),
-                    0.5 / (source_image_size.1 as f32),
-                ],
-            };
-
             blur_stages.push((pass, pipeline, push_constant));
+        }
+
+        let mut blit_stages = vec![];
+        for pass in blit_passes {
+            let (framebuffer, kernel, _source_image, blend) = pass;
+
+            let (pipeline, push_constant) = self.make_pipeline_step(
+                ctx,
+                global_config,
+                &vs,
+                &fs_upsample_blend,
+                &fs_downsample,
+                &fs_upsample,
+                framebuffer,
+                kernel,
+                blend,
+            )?;
+
+            blit_stages.push((pass, pipeline, push_constant));
         }
 
         Ok(PostProcessingPipelineWrapper {
             upsample_blend_pipeline,
             lens_flare_pipeline,
             blur_stages,
+            blit_stages,
             sampler: Sampler::new(
                 ctx.vk_device.clone(),
                 SamplerCreateInfo {
@@ -585,6 +608,92 @@ impl PostProcessingPipelineProvider {
             )?,
         })
     }
+
+    fn make_pipeline_step(
+        &self,
+        ctx: &VulkanWindow,
+        global_config: &LiveRenderConfig,
+        vs: &EntryPoint,
+        fs_upsample_blend: &EntryPoint,
+        fs_downsample: &EntryPoint,
+        fs_upsample: &EntryPoint,
+        framebuffer: FramebufferAndLoadOpId<1, 0>,
+        kernel: Kernel,
+        blend: Blend,
+    ) -> Result<(Arc<GraphicsPipeline>, PostProcessUniform)> {
+        let fs = match kernel {
+            Kernel::Down => fs_downsample.clone(),
+            Kernel::Up => fs_upsample.clone(),
+            Kernel::UpBlend => fs_upsample_blend.clone(),
+        };
+        let blend = match blend {
+            Blend::None => None,
+            Blend::Additive => Some(AttachmentBlend::additive()),
+        };
+        let stages = smallvec![
+            PipelineShaderStageCreateInfo::new(vs.clone()),
+            PipelineShaderStageCreateInfo::new(fs)
+        ];
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                .into_pipeline_layout_create_info(self.device.clone())?,
+        )?;
+
+        let info = GraphicsPipelineCreateInfo {
+            stages,
+            // No bindings or attributes
+            vertex_input_state: Some(VertexInputState::new()),
+            input_assembly_state: Some(InputAssemblyState::default()),
+            rasterization_state: Some(RasterizationState {
+                cull_mode: CullMode::Back,
+                front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            }),
+            multisample_state: Some(MultisampleState::default()),
+            depth_stencil_state: None,
+            color_blend_state: Some(ColorBlendState {
+                attachments: vec![ColorBlendAttachmentState {
+                    blend,
+                    color_write_mask: ColorComponents::all(),
+                    color_write_enable: true,
+                }],
+                ..Default::default()
+            }),
+            viewport_state: Some(
+                framebuffer.color_attachments[0]
+                    .0
+                    .viewport_state(&ctx.viewport, *global_config),
+            ),
+            subpass: Some(PipelineSubpassType::BeginRenderPass(
+                Subpass::from(
+                    ctx.renderpasses
+                        .get_by_framebuffer_id(framebuffer)
+                        .with_context(|| format!("Missing renderpass {framebuffer}"))?,
+                    0,
+                )
+                .context("Missing subpass")?,
+            )),
+            ..GraphicsPipelineCreateInfo::layout(layout.clone())
+        };
+        let pipeline = GraphicsPipeline::new(self.device.clone(), None, info)
+            .with_context(|| format!("Building pipeline for {framebuffer}/{kernel:?}"))?;
+
+        let source_image_size = framebuffer.color_attachments[0].0.dimension(
+            ctx.viewport.extent[0] as u32,
+            ctx.viewport.extent[1] as u32,
+            *global_config,
+        );
+
+        let push_constant = PostProcessUniform {
+            ht: [
+                0.5 / (source_image_size.0 as f32),
+                0.5 / (source_image_size.1 as f32),
+            ],
+        };
+        Ok((pipeline, push_constant))
+    }
+
     pub(crate) fn new(device: Arc<Device>) -> Result<Self> {
         Ok(Self {
             device: device.clone(),
