@@ -14,7 +14,7 @@ use super::{get_texture, FRAME_UNSELECTED};
 use crate::client_state::items::InventoryViewManager;
 use crate::client_state::settings::GameSettings;
 use crate::client_state::tool_controller::ToolState;
-use crate::client_state::{GameAction, InventoryAction};
+use crate::client_state::{ClientPerformanceMetrics, GameAction, InventoryAction};
 use crate::main_menu::{draw_settings_menu, InputCapture};
 use crate::vulkan::shaders::flat_texture::{FlatTextureDrawBuilder, FlatTextureDrawCall};
 use crate::vulkan::{VulkanContext, VulkanWindow};
@@ -74,6 +74,7 @@ pub(crate) struct EguiUi {
 
     prospective_settings: GameSettings,
     server_perf_records: ServerPerformanceMetrics,
+    client_perf_records: ClientPerformanceMetrics,
 
     status_bar: Option<(Instant, String)>,
 }
@@ -116,6 +117,7 @@ impl EguiUi {
 
             prospective_settings: (**settings.load()).clone(),
             server_perf_records: ServerPerformanceMetrics::default(),
+            client_perf_records: ClientPerformanceMetrics::default(),
             status_bar: None,
         }
     }
@@ -1149,7 +1151,10 @@ impl EguiUi {
     fn get_bars_and_update_records(
         current_data: &Vec<u64>,
         records: &mut Vec<u64>,
+        color: egui::Color32,
     ) -> Vec<egui_plot::Bar> {
+        let color2 = color.gamma_multiply(0.8);
+
         if records.len() < current_data.len() {
             records.resize(current_data.len(), 0);
         }
@@ -1165,7 +1170,7 @@ impl EguiUi {
                 base_offset: None,
                 bar_width: 1.0,
                 stroke: Stroke::NONE,
-                fill: Color32::RED,
+                fill: if i % 2 == 0 { color } else { color2 },
             });
             result.push(egui_plot::Bar {
                 name: "".to_string(),
@@ -1187,12 +1192,13 @@ impl EguiUi {
         data: &Vec<u64>,
         records: &mut Vec<u64>,
         plot_name: &str,
+        color: egui::Color32,
     ) {
         let mut bars = vec![];
-        bars.append(&mut Self::get_bars_and_update_records(data, records));
+        bars.append(&mut Self::get_bars_and_update_records(data, records, color));
         ui.label(
             egui::RichText::new(format!(
-                "{} (chart max={})",
+                "{}\n(chart max={})",
                 title,
                 records.iter().copied().max().unwrap_or(0)
             ))
@@ -1213,7 +1219,8 @@ impl EguiUi {
     }
 
     fn render_perf(&mut self, ctx: &Context, state: &ClientState) {
-        let perf = state.server_perf();
+        let server_perf = state.server_perf();
+        let client_perf = state.client_perf();
 
         egui::TopBottomPanel::bottom("perf_panel")
             .max_height(240.0)
@@ -1226,8 +1233,8 @@ impl EguiUi {
                 ..Default::default()
             })
             .show(ctx, |ui| {
-                if let Some(perf) = perf {
-                    ui.horizontal_top(|ui| {
+                ui.horizontal_top(|ui| {
+                    if let Some(perf) = server_perf {
                         ui.vertical(|ui| {
                             Self::render_perf_chart(
                                 ui,
@@ -1235,6 +1242,7 @@ impl EguiUi {
                                 &perf.mapshard_writeback_len,
                                 &mut self.server_perf_records.mapshard_writeback_len,
                                 "writeback_plot",
+                                Color32::RED,
                             );
                         });
                         ui.vertical(|ui| {
@@ -1244,12 +1252,38 @@ impl EguiUi {
                                 &perf.mapshard_loaded_chunks,
                                 &mut self.server_perf_records.mapshard_loaded_chunks,
                                 "occupancy_plot",
+                                Color32::RED,
                             );
                         });
-                    });
-                } else {
-                    ui.label("No perf data");
-                }
+                    } else {
+                        ui.label("No server perf data");
+                    }
+
+                    if let Some(perf) = client_perf {
+                        ui.vertical(|ui| {
+                            Self::render_perf_chart(
+                                ui,
+                                "Lighting/neighbor queue",
+                                &perf.nprop_queue_lens,
+                                &mut self.client_perf_records.nprop_queue_lens,
+                                "writeback_plot",
+                                Color32::GREEN,
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            Self::render_perf_chart(
+                                ui,
+                                "Mesh queue",
+                                &perf.mesh_queue_lens,
+                                &mut self.client_perf_records.mesh_queue_lens,
+                                "occupancy_plot",
+                                Color32::GREEN,
+                            );
+                        });
+                    } else {
+                        ui.label("No server perf data");
+                    }
+                });
             });
     }
 }

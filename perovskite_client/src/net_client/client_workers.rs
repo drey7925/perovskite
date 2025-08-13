@@ -34,6 +34,7 @@ use crate::audio::{
     SOUND_SQUARELAW_ENABLED,
 };
 use crate::client_state::input::BoundAction;
+use crate::client_state::ClientPerformanceMetrics;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
@@ -129,6 +130,8 @@ pub(crate) async fn make_contexts(
         cancellation,
     });
 
+    tokio::task::spawn(stats_loop(shared_state.clone()));
+
     let inbound = InboundContext {
         inbound_rx: stream,
         shared_state: shared_state.clone(),
@@ -151,6 +154,23 @@ pub(crate) async fn make_contexts(
     };
 
     Ok((inbound, outbound))
+}
+
+async fn stats_loop(shared_state: Arc<SharedState>) {
+    while !shared_state.cancellation.is_cancelled() {
+        tokio::select! {
+            _ = shared_state.cancellation.cancelled() => { break; }
+            _ = shared_state.client_state.want_new_client_perf.notified() => {}
+        }
+        let mut new_state = ClientPerformanceMetrics::default();
+        for nprop in &shared_state.neighbor_propagators {
+            new_state.nprop_queue_lens.push(nprop.queue_len() as u64)
+        }
+        for mesher in &shared_state.mesh_workers {
+            new_state.mesh_queue_lens.push(mesher.queue_len() as u64)
+        }
+        *shared_state.client_state.client_perf.lock() = Some(new_state);
+    }
 }
 
 fn do_raytrace_work(client_state: Arc<ClientState>, cancellation: CancellationToken) -> Result<()> {
@@ -849,10 +869,11 @@ impl InboundContext {
             };
             for &coord in needs_remesh.iter() {
                 if eligible_for_inline(coord) {
-                    self.shared_state
-                        .client_state
-                        .chunks
-                        .cloned_neighbors_fast(coord, &mut self.inline_fcn_scratchpad);
+                    self.shared_state.client_state.chunks.cloned_neighbors_fast(
+                        coord,
+                        &self.shared_state.client_state.block_types,
+                        &mut self.inline_fcn_scratchpad,
+                    );
                     propagate_neighbor_data(
                         &self.shared_state.client_state.block_types,
                         &self.inline_fcn_scratchpad,

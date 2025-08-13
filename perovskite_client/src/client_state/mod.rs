@@ -365,6 +365,7 @@ impl ChunkManager {
     pub(crate) fn cloned_neighbors_fast(
         &self,
         chunk: ChunkCoordinate,
+        block_manager: &ClientBlockTypeManager,
         result: &mut FastChunkNeighbors,
     ) {
         let _ = span!("cloned_neighbors_fast");
@@ -376,6 +377,15 @@ impl ChunkManager {
             let _span = span!("light column read lock");
             self.light_columns.read()
         };
+
+        let center_chunk = chunk_lock.get(&chunk);
+        if center_chunk.is_none_or(|x| x.chunk_data().is_empty_optimization_hint()) {
+            result.outcome = ChunkNeighborOutcome::DontMesh;
+            return;
+        }
+
+        result.center = center_chunk.cloned();
+        result.outcome = ChunkNeighborOutcome::ShouldMesh;
 
         for i in -1..=1 {
             for k in -1..=1 {
@@ -410,7 +420,6 @@ impl ChunkManager {
                 }
             }
         }
-        result.center = chunk_lock.get(&chunk).cloned();
     }
 
     /// If the chunk is present, meshes it. If any geometry was generated, inserts it into
@@ -643,6 +652,13 @@ impl ChunkManager {
 pub(crate) struct ChunkManagerView<'a> {
     guard: RwLockReadGuard<'a, ChunkMap>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkNeighborOutcome {
+    ShouldMesh,
+    DontMesh,
+}
+
 impl<'a> ChunkManagerView<'a> {
     pub(crate) fn get(&'a self, coord: &ChunkCoordinate) -> Option<&'a Arc<ClientChunk>> {
         self.guard.get(coord)
@@ -661,6 +677,7 @@ impl<'a> ChunkManagerView<'a> {
 type ChunkWithEdgesBuffer = (bool, Box<[BlockId; 18 * 18 * 18]>);
 
 pub(crate) struct FastChunkNeighbors {
+    outcome: ChunkNeighborOutcome,
     center: Option<Arc<ClientChunk>>,
     neighbors: [[[ChunkWithEdgesBuffer; 3]; 3]; 3],
     inbound_lights: [[[Lightfield; 3]; 3]; 3],
@@ -688,6 +705,9 @@ impl FastChunkNeighbors {
         self.inbound_lights[(coord_xyz.2 + 1) as usize][(coord_xyz.1 + 1) as usize]
             [(coord_xyz.0 + 1) as usize]
     }
+    pub(crate) fn should_mesh(&self) -> bool {
+        self.outcome == ChunkNeighborOutcome::ShouldMesh
+    }
 }
 
 impl Default for FastChunkNeighbors {
@@ -702,6 +722,7 @@ impl Default for FastChunkNeighbors {
             inbound_lights: std::array::from_fn(|_| {
                 std::array::from_fn(|_| std::array::from_fn(|_| Lightfield::zero()))
             }),
+            outcome: ChunkNeighborOutcome::DontMesh,
         }
     }
 }
@@ -760,7 +781,9 @@ pub(crate) struct ClientState {
     pub(crate) world_audio: Mutex<audio::MapSoundState>,
 
     pub(crate) server_perf: Mutex<Option<ServerPerformanceMetrics>>,
+    pub(crate) client_perf: Mutex<Option<ClientPerformanceMetrics>>,
     pub(crate) want_server_perf: AtomicBool,
+    pub(crate) want_new_client_perf: tokio::sync::Notify,
     pub(crate) render_distance: AtomicU32,
 }
 
@@ -817,7 +840,9 @@ impl ClientState {
             audio,
             world_audio: Mutex::new(MapSoundState::new(audio_clone)),
             server_perf: Mutex::new(None),
+            client_perf: Mutex::new(None),
             want_server_perf: AtomicBool::new(false),
+            want_new_client_perf: tokio::sync::Notify::new(),
             render_distance: AtomicU32::new(settings.load().render.render_distance),
         })
     }
@@ -974,6 +999,8 @@ impl ClientState {
         *self.last_position_weak.lock_write() = ppu;
 
         let (sky, lighting, sun_direction) = self.light_cycle.lock().get_colors();
+
+        self.want_new_client_perf.notify_waiters();
         FrameState {
             scene_state: SceneState {
                 vp_matrix: view_proj_matrix,
@@ -1046,9 +1073,17 @@ impl ClientState {
     pub(crate) fn server_perf(&self) -> Option<ServerPerformanceMetrics> {
         self.server_perf.lock().clone()
     }
+
+    pub(crate) fn client_perf(&self) -> Option<ClientPerformanceMetrics> {
+        self.client_perf.lock().clone()
+    }
 }
 
-struct ClientPerformanceMetrics {}
+#[derive(Default, Debug, Clone)]
+pub(crate) struct ClientPerformanceMetrics {
+    pub(crate) nprop_queue_lens: Vec<u64>,
+    pub(crate) mesh_queue_lens: Vec<u64>,
+}
 
 pub(crate) struct FrameState {
     pub(crate) scene_state: SceneState,

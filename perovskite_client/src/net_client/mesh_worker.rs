@@ -129,9 +129,11 @@ impl NeighborPropagator {
                 let _span = span!("nprop_work");
 
                 for &coord in chunks {
-                    self.client_state
-                        .chunks
-                        .cloned_neighbors_fast(coord, &mut chunk_neighbor_scratchpad);
+                    self.client_state.chunks.cloned_neighbors_fast(
+                        coord,
+                        &self.client_state.block_types,
+                        &mut chunk_neighbor_scratchpad,
+                    );
 
                     let should_mesh = propagate_neighbor_data(
                         &self.client_state.block_types,
@@ -353,6 +355,9 @@ pub(crate) fn propagate_neighbor_data(
     neighbors: &FastChunkNeighbors,
     scratchpad: &mut NeighborPropagationScratchpad,
 ) -> Result<bool> {
+    if !neighbors.should_mesh() {
+        return Ok(false);
+    }
     if let Some(current_chunk) = neighbors.center() {
         let mut current_chunk = current_chunk.chunk_data_mut();
         {
