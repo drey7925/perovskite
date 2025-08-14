@@ -91,15 +91,23 @@ impl TimerInlineCallback for FurnaceTimerCallback {
             }
         };
 
-        let [input_inventory, output_inventory, fuel_inventory] = match extended_data
+        let [input_inventory, output_inventory, fuel_inventory] = extended_data
             .inventories
-            .get_many_mut([FURNACE_INPUT, FURNACE_OUTPUT, FURNACE_FUEL])
-        {
+            .get_many_mut([FURNACE_INPUT, FURNACE_OUTPUT, FURNACE_FUEL]);
+        // If the views were never accessed, these may be empty
+        let input_inventory = match input_inventory {
             Some(x) => x,
-            None => {
-                return Ok(());
-            }
+            None => return Ok(()),
         };
+        let output_inventory = match output_inventory {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+        let fuel_inventory = match fuel_inventory {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+
         let input_stack = &mut input_inventory.contents_mut()[0];
         let output_stack = &mut output_inventory.contents_mut()[0];
         let fuel_stack = &mut fuel_inventory.contents_mut()[0];

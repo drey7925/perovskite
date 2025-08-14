@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_client"
-version = "0.1.1"
+version = "0.2.0-pre1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Game client"
@@ -14,7 +14,7 @@ argon2 = "0.5.3"
 anyhow = { version = "1", features = ["backtrace"] }
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
-perovskite_core = { path = "../perovskite_core", version = "0.1.1" }
+perovskite_core = { path = "../perovskite_core", version = "0.2.0" }
 egui = "0.31.1"
 egui_winit_vulkano = "0.28.0"
 egui_extras = { version = "0.31.1", features = ["gif"] }
@@ -51,14 +51,14 @@ mimalloc = { version = "0.1.46", default-features = false }
 snap = "1.1.0"
 lazy_static = "1.4.0"
 sha2 = "0.10.6"
-splines = { version = "4.2.0", features = ["cgmath"] }
+splines = { version = "5.0.0", features = ["cgmath"] }
 smallvec = "1.13.1"
-cpal = "0.15.3"
+cpal = "0.16.0"
 seqlock = "0.2.0"
-rubato = "0.15.0"
+rubato = "0.16.2"
 hound = "3.5.1"
 egui_plot = "0.31.0"
-audio_thread_priority = "0.33.0"
+audio_thread_priority = "0.34.0"
 atomicbox = "0.4.0"
 crossbeam-channel = "0.5.15"
 bytemuck = { version = "1.23.0", features = ["must_cast", "min_const_generics"] }
@@ -86,6 +86,7 @@ criterion = { version = "0.4", features = ["html_reports"] }
 
 [build-dependencies]
 winresource = "0.1"
+rustc_version = "0.4.1"
 
 [[bench]]
 name = "audio_bench"

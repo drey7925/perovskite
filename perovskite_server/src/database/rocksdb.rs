@@ -32,33 +32,34 @@ impl RocksDbBackend {
         tracing::info!("Opened DB at {:?}", path.as_ref());
         tracing::info!(
             "db stats: \n{}\n{}\ntotal size: {}",
-            db.property_value("rocksdb.stats").unwrap().unwrap(),
-            db.property_value("rocksdb.levelstats").unwrap().unwrap(),
-            db.property_value("rocksdb.total-sst-files-size")
-                .unwrap()
-                .unwrap()
+            db.property_value("rocksdb.stats")?
+                .unwrap_or_else(|| String::from("???")),
+            db.property_value("rocksdb.levelstats")?
+                .unwrap_or_else(|| String::from("???")),
+            db.property_value("rocksdb.total-sst-files-size")?
+                .unwrap_or_else(|| String::from("???"))
         );
         Ok(RocksDbBackend { db })
     }
 }
 impl Drop for RocksDbBackend {
     fn drop(&mut self) {
+        fn safe_unwrap<T>(x: Result<Option<String>, T>) -> String {
+            x.unwrap_or_else(|_| Some(String::from("<Err>")))
+                .unwrap_or_else(|| String::from("???"))
+        }
+
         tracing::info!("Closing DB");
         match self.db.flush() {
             Ok(_) => {}
             Err(e) => tracing::error!("Failed to flush DB: {}", e),
         }
         tracing::info!(
-            "db stats: \n{}\n{}\ntotal size: {}",
-            self.db.property_value("rocksdb.stats").unwrap().unwrap(),
-            self.db
-                .property_value("rocksdb.levelstats")
-                .unwrap()
-                .unwrap(),
-            self.db
-                .property_value("rocksdb.total-sst-files-size")
-                .unwrap()
-                .unwrap()
+            "db stats: \n{}\n{}\ntotal size: {}\nbackground errors: {}",
+            safe_unwrap(self.db.property_value("rocksdb.stats")),
+            safe_unwrap(self.db.property_value("rocksdb.levelstats")),
+            safe_unwrap(self.db.property_value("rocksdb.total-sst-files-size")),
+            safe_unwrap(self.db.property_value("rocksdb.background-errors"))
         );
     }
 }

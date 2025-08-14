@@ -4,12 +4,6 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 fn main() {
-    if env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
-        let mut res = winresource::WindowsResource::new();
-        res.set_icon("src/icon_tentative_0.2.0.ico");
-        res.compile().unwrap();
-    }
-
     let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR");
     let out_path = PathBuf::from(out_dir).join("build_info.txt");
     let mut out_file = BufWriter::new(File::create(&out_path).expect("Create file"));

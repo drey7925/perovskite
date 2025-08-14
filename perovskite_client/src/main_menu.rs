@@ -15,6 +15,8 @@ use crate::{
 use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
 use egui::epaint::color;
+use egui::UiKind::ScrollArea;
+use egui::WidgetType::Label;
 use egui::{
     CollapsingHeader, Color32, FontId, InnerResponse, Key, Layout, ProgressBar, RichText, TextEdit,
     TextureFilter, TextureOptions, Ui, WidgetText,
@@ -536,6 +538,14 @@ pub(crate) fn draw_settings_menu(
                 .show(ui, |ui| {
                     draw_audio_settings(ui, prospective_settings);
                 });
+            CollapsingHeader::new("Build info")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(BUILD_INFO));
+                    if ui.button("Copy to clipboard").clicked() {
+                        ui.ctx().copy_text(BUILD_INFO.to_string());
+                    }
+                });
         });
         ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
             let save_button = egui::Button::new("Save");
@@ -1018,3 +1028,5 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
             ui.end_row();
         });
 }
+
+const BUILD_INFO: &'static str = include_str!(concat!(env!("OUT_DIR"), "/build_info.txt"));

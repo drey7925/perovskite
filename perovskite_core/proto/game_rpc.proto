@@ -409,8 +409,9 @@ message StartAuth {
   // 7 - 2025-04-19 ~ 2025-04-30
   //        * SolidBlockPhysics variant effect
   //        * Client-side ext data v1, only block text without decoration
-  // 8 - 2025-06-10
+  // 8 - 2025-06-10 ~ 2025-08-13
   //        * Refactor TextureReference+friends for raytracing PBR
+  //        * All the other PBR and raytracing related stuff up until 0.2.0
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

@@ -2071,13 +2071,13 @@ fn make_instance_create_info(
         engine_name: Some("perovskite".to_string()),
         application_version: Version {
             major: 0,
-            minor: 1,
-            patch: 2,
+            minor: 2,
+            patch: 0,
         },
         engine_version: Version {
             major: 0,
-            minor: 1,
-            patch: 2,
+            minor: 2,
+            patch: 0,
         },
         flags: vulkano::instance::InstanceCreateFlags::ENUMERATE_PORTABILITY,
         ..Default::default()

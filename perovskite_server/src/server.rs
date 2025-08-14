@@ -26,7 +26,6 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use integer_encoding::VarInt;
-use log::{info, warn};
 use perovskite_core::coordinates::ChunkCoordinate;
 use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
@@ -238,7 +237,7 @@ fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
         Some(x) => match u64::decode_var(&x) {
             Some((val, read)) => {
                 if read != x.len() {
-                    warn!(
+                    tracing::warn!(
                         "Saved startup counter was {} bytes but only {} bytes were decoded (to {:?})",
                         x.len(),
                         read,
@@ -246,9 +245,10 @@ fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
                     )
                 }
                 let next_counter = val + 1;
-                info!(
+                tracing::info!(
                     "Previous startup counter {:?} advanced to {:?}",
-                    val, next_counter
+                    val,
+                    next_counter
                 );
                 db.put(&key, &next_counter.encode_var_vec())?;
                 Ok(next_counter)
@@ -260,7 +260,7 @@ fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
         None => {
             let counter = 1;
             db.put(&key, &counter.encode_var_vec())?;
-            info!("Initialized startup counter to {:?}", counter,);
+            tracing::info!("Initialized startup counter to {:?}", counter,);
             Ok(counter)
         }
     }
@@ -310,6 +310,10 @@ impl ServerBuilder {
     }
 
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
+        tracing::info!(
+            "Build info: {}",
+            include_str!(concat!(env!("OUT_DIR"), "/build_info.txt"))
+        );
         if !Path::exists(&args.data_dir) {
             std::fs::create_dir(&args.data_dir)?;
             tracing::info!("Created new data directory at {:?}", args.data_dir);
