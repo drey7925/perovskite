@@ -27,6 +27,13 @@ fn main() {
             .write_fmt(format_args!("{}={}\n", env, val))
             .expect("write to file");
     }
+    for env in ["GH_BUILD_DATE", "GH_BUILD_ID", "GH_COMMIT", "GH_BRANCH"] {
+        if let Ok(val) = env::var(env) {
+            out_file
+                .write_fmt(format_args!("{}={}\n", env, val))
+                .expect("write to file");
+        }
+    }
     match rustc_version::version_meta() {
         Ok(v) => {
             out_file

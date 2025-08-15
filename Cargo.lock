@@ -3620,7 +3620,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "snap",
- "splines 5.0.0",
+    "splines",
  "texture_packer",
  "textwrap",
  "tinyvec",
@@ -3690,7 +3690,7 @@ dependencies = [
  "serenity",
  "smallvec",
  "smartstring",
- "splines 4.3.0",
+    "splines",
  "tokio",
  "tokio-util",
  "tracing",
@@ -5062,15 +5062,9 @@ dependencies = [
 
 [[package]]
 name = "splines"
-version = "4.3.0"
+version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b71c74502daf438e97dc4eee0265c084cf76701992a4997f94d5b909498ad1d"
-
-[[package]]
-name = "splines"
-version = "5.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b882be9bf6b37258bfba80ed5b5eeccccd6700bfbaca202bbd53e4c13bf3daa7"
+checksum = "3278aafb315f972aa58d958e3f6b8ef60ceb7723bfedfbd00399c73ed0570583"
 dependencies = [
  "cgmath",
 ]
