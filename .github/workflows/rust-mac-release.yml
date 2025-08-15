@@ -21,6 +21,7 @@ jobs:
       - name: Build
         run: |
           brew install protobuf
+          rustup target add aarch64-apple-darwin
           rustup update
           cargo build --target aarch64-apple-darwin --profile maxopt --bin perovskite_client --features static-mvk
           mv target/maxopt/perovskite_client target/maxopt/perovskite_client_arm64
