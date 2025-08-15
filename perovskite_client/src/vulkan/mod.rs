@@ -2086,6 +2086,10 @@ fn make_instance_create_info(
 
 #[cfg(feature = "static-mvk")]
 fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::Instance>, Error> {
+    // These imports are needed by the statically_linked_vulkan_loader macro
+    use std::ffi::c_char;
+    use vulkano::library::Loader;
+
     let library: Arc<vulkano::VulkanLibrary> =
         vulkano::VulkanLibrary::with_loader(statically_linked_vulkan_loader!())?;
     let required_extensions = Surface::required_extensions(event_loop)?;
