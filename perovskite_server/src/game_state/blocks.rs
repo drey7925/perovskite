@@ -18,7 +18,6 @@ use crate::database::database_engine::{GameDatabase, KeySpace};
 use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
 use rustc_hash::FxHashMap;
-use std::time::Instant;
 use std::{
     any::Any,
     borrow::Borrow,

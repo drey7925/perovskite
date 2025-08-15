@@ -4,7 +4,7 @@ use std::{ops::Deref, sync::Arc};
 use crate::client_state::input::{BoundAction, Keybind, KeybindSettings};
 use crate::client_state::settings::Supersampling;
 use crate::vulkan::shaders::egui_adapter::set_up_fonts;
-use crate::vulkan::{FramebufferAndLoadOpId, FramebufferHolder, ImageId, LoadOp, VulkanContext};
+use crate::vulkan::VulkanContext;
 use crate::{
     client_state::settings::GameSettings,
     vulkan::{
@@ -14,19 +14,15 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
-use egui::epaint::color;
-use egui::UiKind::ScrollArea;
-use egui::WidgetType::Label;
 use egui::{
     CollapsingHeader, Color32, FontId, InnerResponse, Key, Layout, ProgressBar, RichText, TextEdit,
-    TextureFilter, TextureOptions, Ui, WidgetText,
+    TextureFilter, TextureOptions, Ui,
 };
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
-use vulkano::command_buffer::SubpassContents;
 use vulkano::{image::SampleCount, render_pass::Subpass};
+use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
-use winit::{event::WindowEvent, event_loop::EventLoop};
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub(crate) enum InputCapture {

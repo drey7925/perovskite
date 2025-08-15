@@ -1,30 +1,21 @@
-use crate::client_state::chunk::{ChunkDataView, ClientChunk};
-use crate::client_state::{ChunkManagerClonedView, ClientState};
-use crate::vulkan::block_renderer::VkChunkRaytraceData;
-use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
+use crate::client_state::ChunkManagerClonedView;
 use crate::vulkan::gpu_chunk_table::{
     build_chunk_hashtable, gpu_table_lookup, CHUNK_LEN, CHUNK_LIGHTS_LEN, CHUNK_LIGHTS_OFFSET,
     CHUNK_STRIDE,
 };
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
-use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VulkanContext};
-use anyhow::{bail, ensure, Result};
-use bytemuck::{cast_slice, Pod};
+use crate::vulkan::{ReclaimType, ReclaimableBuffer, VulkanContext};
+use anyhow::{ensure, Result};
+use bytemuck::cast_slice;
 use parking_lot::{Condvar, Mutex};
 use perovskite_core::coordinates::ChunkCoordinate;
 use rustc_hash::FxHashMap;
 use smallvec::{smallvec, SmallVec};
-use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use std::future::pending;
-use std::ops::Deref;
+use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::BufferCopy;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::DeviceSize;

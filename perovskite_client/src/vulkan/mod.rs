@@ -25,38 +25,34 @@ mod atlas;
 pub mod gpu_chunk_table;
 pub(crate) mod raytrace_buffer;
 
-use anyhow::{anyhow, bail, ensure, Context, Error, Result};
+use anyhow::{bail, ensure, Context, Error, Result};
 use arc_swap::ArcSwap;
-use clap::error::ContextKind::Usage;
 use enum_map::EnumMap;
 use image::GenericImageView;
 use log::warn;
 use parking_lot::Mutex;
-use ron::to_string;
 use rustc_hash::FxHashMap;
 use smallvec::smallvec;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString};
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use std::{ops::Deref, sync::Arc};
 use texture_packer::Rect;
-use tinyvec::array_vec;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocatorCreateInfo;
 use vulkano::command_buffer::{
     BlitImageInfo, BufferImageCopy, CommandBufferUsage, CopyBufferInfo, CopyBufferToImageInfo,
-    CopyImageInfo, SubpassBeginInfo,
+    SubpassBeginInfo,
 };
 use vulkano::descriptor_set::DescriptorSet;
 use vulkano::format::NumericFormat;
 use vulkano::image::sampler::{Filter, Sampler, SamplerCreateInfo};
 use vulkano::image::view::ImageViewCreateInfo;
 use vulkano::image::{
-    AllocateImageError, Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers,
+    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceLayers,
     ImageSubresourceRange, ImageType,
 };
 use vulkano::memory::allocator::{
@@ -85,15 +81,13 @@ use vulkano::{
     memory::allocator::{BuddyAllocator, GenericMemoryAllocator},
     pipeline::{graphics::viewport::Viewport, GraphicsPipeline, Pipeline},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
-    statically_linked_vulkan_loader,
     swapchain::{Swapchain, SwapchainCreateInfo},
     sync::GpuFuture,
     DeviceSize, Validated, Version,
 };
 use winit::dpi::Size;
 use winit::event_loop::ActiveEventLoop;
-use winit::window::WindowAttributes;
-use winit::{dpi::PhysicalSize, event_loop::EventLoop, window::Window};
+use winit::{dpi::PhysicalSize, window::Window};
 
 pub(crate) type CommandBufferBuilder<L> = AutoCommandBufferBuilder<L>;
 
@@ -1209,7 +1203,7 @@ impl<const M: usize, const N: usize> Display for FramebufferAndLoadOpId<M, N> {
             f.write_char(op.op_char())?
         }
         f.write_str("/Rd:")?;
-        for ((attachment, op)) in self.input_attachments.iter() {
+        for (attachment, op) in self.input_attachments.iter() {
             f.write_str(attachment.abbreviation())?;
             f.write_char(op.op_char())?
         }
@@ -1458,7 +1452,7 @@ impl FramebufferHolder {
     }
 
     fn try_get_image(&self, id: ImageId) -> Result<Arc<ImageView>> {
-        let mut guard = self.image_views.lock();
+        let guard = self.image_views.lock();
         if let Some(x) = guard[id].clone() {
             Ok(x)
         } else {
@@ -2022,7 +2016,7 @@ impl<T> ReclaimBuffersByType<T> {
             by_size_class: Default::default(),
         }
     }
-    fn give_buffer(&mut self, mut buffer: ReclaimableBuffer<T>) {
+    fn give_buffer(&mut self, buffer: ReclaimableBuffer<T>) {
         use std::collections::btree_map::Entry;
         match self.by_size_class.entry(buffer.len()) {
             Entry::Vacant(x) => {

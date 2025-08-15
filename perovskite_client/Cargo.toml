@@ -92,6 +92,7 @@ rustc_version = "0.4.1"
 name = "audio_bench"
 harness = false
 
-[[bench]]
-name = "gpu_chunk_bench"
-harness = false
+
+# [[bench]]
+# name = "gpu_chunk_bench"
+# harness = false

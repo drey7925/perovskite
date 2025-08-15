@@ -15,8 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
+use std::fmt::Debug;
 
 use cgmath::num_traits::Num;
 use cgmath::{vec3, ElementWise, Matrix4, Vector2, Vector3, Zero};
@@ -30,11 +29,9 @@ use perovskite_core::protocol::blocks::{
 use perovskite_core::protocol::render::{TextureCrop, TextureReference};
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 
-use anyhow::{Error, Result};
+use anyhow::Result;
 use enum_map::{enum_map, EnumMap};
-use image::{DynamicImage, RgbImage, RgbaImage};
 use rustc_hash::FxHashMap;
-use texture_packer::importer::ImageImporter;
 use texture_packer::Rect;
 
 use super::{RectF32, VkAllocator};
@@ -44,14 +41,14 @@ use crate::client_state::chunk::{
 };
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
-use crate::vulkan::atlas::{NamedTextureKey, TextureAtlas, TextureKey};
+use crate::vulkan::atlas::{TextureAtlas, TextureKey};
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{
     CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
 };
 use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
 use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
-use crate::vulkan::{Texture2DHolder, VulkanContext};
+use crate::vulkan::VulkanContext;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use tracy_client::span;
@@ -457,7 +454,7 @@ fn get_texture(
     )
 }
 
-fn make_maybe_dynamic(mut rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRect {
+fn make_maybe_dynamic(rect: Rect, crop: Option<&TextureCrop>) -> MaybeDynamicRect {
     let mut rect_f = RectF32::new(rect.x as f32, rect.y as f32, rect.w as f32, rect.h as f32);
     if let Some(crop) = crop {
         rect_f = crop_texture(crop, rect_f);

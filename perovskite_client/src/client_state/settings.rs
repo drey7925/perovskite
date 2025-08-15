@@ -2,7 +2,7 @@ use std::{fs::create_dir_all, path::PathBuf};
 
 use super::input::KeybindSettings;
 use crate::vulkan::shaders::LiveRenderConfig;
-use crate::vulkan::{SelectedFormats, VulkanContext, VulkanWindow};
+use crate::vulkan::{SelectedFormats, VulkanContext};
 use anyhow::{Context, Result};
 use perovskite_core::protocol::audio::SoundSource;
 use serde::{Deserialize, Serialize};

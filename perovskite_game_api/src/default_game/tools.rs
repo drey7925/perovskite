@@ -6,10 +6,7 @@ use perovskite_core::{
         block_groups::{DEFAULT_SOLID, INSTANT_DIG},
         item_groups::TOOL_WEAR,
     },
-    protocol::{
-        items::{self as items_proto, interaction_rule::DigBehavior, Empty, InteractionRule},
-        render::TextureReference,
-    },
+    protocol::items::{self as items_proto, interaction_rule::DigBehavior, Empty, InteractionRule},
 };
 use perovskite_server::game_state::items::{Item, ItemInteractionResult};
 

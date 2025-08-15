@@ -23,7 +23,6 @@ use anyhow::{anyhow, Context, Result};
 
 use arc_swap::ArcSwap;
 use cgmath::{vec3, InnerSpace};
-use futures::channel::oneshot::Cancellation;
 use log::info;
 
 use super::{
@@ -32,34 +31,28 @@ use super::{
         egui_adapter::EguiAdapter,
         entity_geometry, flat_texture, post_process,
     },
-    FramebufferAndLoadOpId, FramebufferHolder, FramebufferId, ImageId, LoadOp, RenderPassId,
-    VulkanContext, VulkanWindow, CLEARING_RASTER_FRAMEBUFFER,
+    FramebufferAndLoadOpId, FramebufferHolder, ImageId, LoadOp, VulkanContext, VulkanWindow,
+    CLEARING_RASTER_FRAMEBUFFER,
 };
-use crate::client_state::input::{BoundAction, Keybind};
+use crate::client_state::input::Keybind;
 use crate::main_menu::InputCapture;
 use crate::vulkan::raytrace_buffer::{RaytraceBuffer, RenderThreadAction, RtFrameData};
 use crate::vulkan::shaders::entity_geometry::EntityDrawStep;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
-use crate::vulkan::shaders::raytracer::{
-    ChunkMapHeader, RaytracingBindings, RaytracingPerFrameData,
-};
-use crate::vulkan::shaders::{raytracer, sky, LiveRenderConfig};
+use crate::vulkan::shaders::raytracer::RaytracingBindings;
+use crate::vulkan::shaders::{raytracer, sky};
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
     net_client,
 };
 use parking_lot::Mutex;
-use tinyvec::array_vec;
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracy_client::{plot, span, Client};
-use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferExecFuture, CopyBufferInfo, CopyImageInfo,
-    SubpassBeginInfo, SubpassContents, SubpassEndInfo,
+    CommandBufferExecFuture, CopyBufferInfo, CopyImageInfo, SubpassContents, SubpassEndInfo,
 };
-use vulkano::render_pass::Subpass;
 use vulkano::swapchain::{PresentFuture, SwapchainAcquireFuture};
 use vulkano::sync::future::JoinFuture;
 use vulkano::{
@@ -74,8 +67,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event::WindowEvent,
 };
 
 pub(crate) struct ActiveGame {

@@ -1,17 +1,11 @@
 //! GPU-friendly data structures, mostly used for the new raytracer.
 
-use crate::client_state::chunk::{ChunkDataView, ClientChunk};
+use crate::client_state::chunk::ChunkDataView;
 use crate::client_state::ChunkManagerClonedView;
-use crate::vulkan::gpu_chunk_table::ht_consts::{
-    FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE, OFFSET_K1, OFFSET_K2, OFFSET_K3, OFFSET_MXC,
-    OFFSET_N,
-};
+use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
-use anyhow::Context;
 use perovskite_core::coordinates::ChunkCoordinate;
 use rand::distributions::uniform::SampleRange;
-use rustc_hash::{FxHashMap, FxHashSet};
-use std::ops::Deref;
 
 /// Computes a parametrized hash over the coordinate.
 ///

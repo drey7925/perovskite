@@ -45,14 +45,7 @@ use seqlock::SeqLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryCommandBufferAbstract,
-};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::sync::GpuFuture;
-use vulkano::DeviceSize;
-use winit::event::{DeviceEvent, Event, WindowEvent};
+use winit::event::{DeviceEvent, WindowEvent};
 
 use crate::client_state::chunk::ClientChunk;
 use crate::game_ui::egui_ui::EguiUi;
@@ -1095,7 +1088,6 @@ pub(crate) struct FrameState {
 use crate::audio;
 use crate::audio::MapSoundState;
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
-use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 use perovskite_core::protocol::map::ClientExtendedData;
 

@@ -17,11 +17,10 @@
 use std::hash::{Hash, Hasher};
 use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 use cgmath::{vec3, vec4, ElementWise, Matrix4, Vector3, Vector4, Zero};
-use enum_map::{enum_map, Enum, EnumMap};
+use enum_map::{enum_map, EnumMap};
 use perovskite_core::coordinates::{BlockCoordinate, ChunkOffset};
 use perovskite_core::lighting::Lightfield;
 use perovskite_core::protocol::game_rpc as rpc_proto;
@@ -32,8 +31,7 @@ use bytemuck::{cast_slice, must_cast_slice};
 use egui::ahash::{HashMapExt, HashSetExt};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::buffer::Subbuffer;
 
 use super::block_types::ClientBlockTypeManager;
 use crate::vulkan::block_renderer::{
@@ -44,17 +42,11 @@ use crate::vulkan::shaders::cube_geometry::{
     CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
 };
 use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
-use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VkAllocator, VulkanContext};
+use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
 use prost::Message;
 use rustc_hash::{FxHashMap, FxHasher};
-use tinyvec::tiny_vec;
-use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
-    PrimaryCommandBufferAbstract,
-};
-use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
 
 pub(crate) trait ChunkDataView {

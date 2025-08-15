@@ -12,7 +12,7 @@ use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::protocol::render::{BlockText, TextureReference};
+use perovskite_core::protocol::render::BlockText;
 use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,

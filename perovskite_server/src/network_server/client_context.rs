@@ -26,9 +26,9 @@ use crate::game_state::client_ui::PopupAction;
 use crate::game_state::client_ui::PopupResponse;
 use crate::game_state::entities::IterEntity;
 use crate::game_state::entities::Movement;
+use crate::game_state::event::log_trace;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::event::HandlerContext;
-use crate::game_state::event::{log_trace, WeakPlayerRef};
 use crate::game_state::event::{run_traced, run_traced_sync};
 
 use crate::game_state::event::PlayerInitiator;
@@ -80,7 +80,6 @@ use perovskite_core::util::{LogInspect, TraceBuffer};
 use prost::Message;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_util::sync::CancellationToken;

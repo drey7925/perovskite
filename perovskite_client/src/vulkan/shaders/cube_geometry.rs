@@ -15,7 +15,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{frag_lighting_unified_specular, frag_specular_only, SceneState};
-use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::{
     vert_3d::{self, UniformData},
@@ -24,15 +23,13 @@ use crate::vulkan::shaders::{
 use crate::vulkan::{
     block_renderer::VkChunkVertexDataGpu,
     shaders::{frag_lighting_basic_color, vert_3d::ModelMatrix},
-    CommandBufferBuilder, FramebufferAndLoadOpId, ImageId, LoadOp, Texture2DHolder, VulkanContext,
-    VulkanWindow,
+    CommandBufferBuilder, FramebufferAndLoadOpId, ImageId, LoadOp, VulkanContext, VulkanWindow,
 };
 use anyhow::{ensure, Context, Result};
 use cgmath::{Angle, Matrix4, Rad};
 use smallvec::smallvec;
 use std::collections::HashMap;
 use std::{sync::Arc, time::Instant};
-use tinyvec::array_vec;
 use tracy_client::{plot, span};
 use vulkano::buffer::Subbuffer;
 use vulkano::descriptor_set::DescriptorSet;
@@ -42,13 +39,11 @@ use vulkano::pipeline::graphics::color_blend::{
 };
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
-use vulkano::pipeline::graphics::subpass::{PipelineRenderingCreateInfo, PipelineSubpassType};
+use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
 use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
-use vulkano::pipeline::graphics::viewport::Scissor;
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
-use vulkano::shader::SpecializationConstant;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     descriptor_set::WriteDescriptorSet,
@@ -61,7 +56,7 @@ use vulkano::{
             input_assembly::InputAssemblyState,
             rasterization::RasterizationState,
             vertex_input::Vertex,
-            viewport::{Viewport, ViewportState},
+            viewport::ViewportState,
         },
         GraphicsPipeline, Pipeline,
     },

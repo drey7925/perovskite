@@ -43,7 +43,7 @@ use crate::{
 };
 use log::warn;
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use perovskite_core::protocol::game_rpc::{EntityTarget, PlayerPosition};
+use perovskite_core::protocol::game_rpc::EntityTarget;
 use prost::Message;
 use seqlock::SeqLock;
 use tokio::{select, task::JoinHandle};

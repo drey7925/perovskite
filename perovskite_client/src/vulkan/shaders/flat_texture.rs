@@ -16,22 +16,18 @@
 
 use std::sync::Arc;
 
-use crate::client_state::settings::Supersampling;
 use anyhow::{Context, Result};
 use smallvec::smallvec;
 use texture_packer::Rect;
-use tinyvec::array_vec;
 use tracy_client::span;
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
 };
-use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
 use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
 use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
-use vulkano::pipeline::graphics::viewport::{Scissor, Viewport};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
@@ -42,8 +38,8 @@ use vulkano::{
     memory::allocator::AllocationCreateInfo,
     pipeline::{
         graphics::{
-            depth_stencil::DepthStencilState, input_assembly::InputAssemblyState,
-            rasterization::RasterizationState, vertex_input::Vertex, viewport::ViewportState,
+            input_assembly::InputAssemblyState, rasterization::RasterizationState,
+            vertex_input::Vertex,
         },
         GraphicsPipeline, Pipeline,
     },

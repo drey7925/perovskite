@@ -3,14 +3,13 @@ use super::{
     shaders::cube_geometry::{
         CubeDrawStep, CubeGeometryDrawCall, CubePipelineProvider, CubePipelineWrapper,
     },
-    LoadOp, RenderPassHolder, RenderPassId, Texture2DHolder, VulkanContext,
+    LoadOp, RenderPassHolder, RenderPassId, VulkanContext,
 };
-use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::block_renderer::VkChunkRaytraceData;
 use crate::vulkan::shaders::cube_geometry::RenderPasses;
 use crate::vulkan::shaders::vert_3d::UniformData;
-use crate::vulkan::shaders::{LiveRenderConfig, VkDrawBufferGpu};
+use crate::vulkan::shaders::VkDrawBufferGpu;
 use crate::{
     client_state::chunk::{ChunkDataView, ChunkOffsetExt},
     vulkan::shaders::SceneState,
@@ -21,9 +20,7 @@ use enum_map::enum_map;
 use image::{DynamicImage, RgbaImage};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::protocol::map::ClientExtendedData;
-use perovskite_core::{
-    block_id::BlockId, coordinates::ChunkOffset, protocol::blocks::BlockTypeDef,
-};
+use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 use smallvec::smallvec;
 use std::iter;
 use std::sync::Arc;
@@ -31,7 +28,7 @@ use tinyvec::array_vec;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, PrimaryAutoCommandBuffer, SubpassBeginInfo, SubpassEndInfo,
 };
-use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageType};
+use vulkano::image::{Image, ImageCreateInfo, ImageType};
 use vulkano::memory::allocator::MemoryTypeFilter;
 use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
 use vulkano::{
@@ -40,12 +37,8 @@ use vulkano::{
         CopyImageToBufferInfo, PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassContents,
     },
     format::Format,
-    image::{
-        view::{ImageView, ImageViewCreateInfo},
-        ImageUsage,
-    },
+    image::{view::ImageView, ImageUsage},
     memory::allocator::AllocationCreateInfo,
-    ordered_passes_renderpass,
     pipeline::graphics::viewport::Viewport,
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
     sync::GpuFuture,

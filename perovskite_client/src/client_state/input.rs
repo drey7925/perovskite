@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::settings::GameSettings;
 use rustc_hash::FxHashSet;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use winit::event::{DeviceEvent, ElementState, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::platform::scancode::PhysicalKeyExtScancode;

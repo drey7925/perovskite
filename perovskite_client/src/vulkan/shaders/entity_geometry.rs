@@ -15,7 +15,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::SceneState;
-use crate::client_state::settings::Supersampling;
 use crate::vulkan::atlas::TextureAtlas;
 use crate::vulkan::shaders::cube_geometry::{
     specular_only_blend, MAIN_FRAMEBUFFER, SPECULAR_FRAMEBUFFER,
@@ -26,8 +25,7 @@ use crate::vulkan::shaders::{
     LiveRenderConfig, VkDrawBufferGpu,
 };
 use crate::vulkan::{
-    shaders::vert_3d::ModelMatrix, CommandBufferBuilder, ImageId, Texture2DHolder, VulkanContext,
-    VulkanWindow, CLEARING_RASTER_FRAMEBUFFER,
+    shaders::vert_3d::ModelMatrix, CommandBufferBuilder, ImageId, VulkanContext, VulkanWindow,
 };
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
@@ -44,10 +42,9 @@ use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace};
 use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
 use vulkano::pipeline::graphics::vertex_input::VertexDefinition;
-use vulkano::pipeline::graphics::viewport::Scissor;
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
-use vulkano::pipeline::{PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage},
     descriptor_set::{DescriptorSet, WriteDescriptorSet},
@@ -60,11 +57,11 @@ use vulkano::{
             input_assembly::InputAssemblyState,
             rasterization::RasterizationState,
             vertex_input::Vertex,
-            viewport::{Viewport, ViewportState},
+            viewport::Viewport,
         },
         GraphicsPipeline, Pipeline,
     },
-    render_pass::{RenderPass, Subpass},
+    render_pass::Subpass,
     shader::ShaderModule,
 };
 

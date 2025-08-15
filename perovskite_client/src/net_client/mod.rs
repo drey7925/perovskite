@@ -34,7 +34,7 @@ use perovskite_core::{
         StreamToServer,
     },
 };
-use rand::rngs::{OsRng, ThreadRng};
+use rand::rngs::OsRng;
 use tokio::sync::{mpsc, watch};
 use tokio::task::block_in_place;
 use tokio_stream::wrappers::ReceiverStream;

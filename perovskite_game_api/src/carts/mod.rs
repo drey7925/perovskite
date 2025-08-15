@@ -19,7 +19,7 @@ use crate::{
 use cgmath::{vec3, InnerSpace, Vector3};
 use interlocking::{InterlockingResumeState, InterlockingRoute};
 use perovskite_core::protocol::blocks::InteractKeyOption;
-use perovskite_core::protocol::entities::{EntityAppearance, TurbulenceAudioModel};
+use perovskite_core::protocol::entities::TurbulenceAudioModel;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::protocol::render::TextureReference;
 use perovskite_core::{
