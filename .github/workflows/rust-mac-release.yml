@@ -1,0 +1,32 @@
+name: Experimnental Rust Mac Build ARM
+
+on:
+  release:
+    types: [ created ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Stamp
+        run: |
+          echo "GH_BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+          echo "GH_RUN_ID=macos-13-${{ github.run_number }}" >> $GITHUB_ENV
+          echo "GH_COMMIT=${{ github.sha }}" >> $GITHUB_ENV
+          echo "GH_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+      - name: Build
+        run: |
+          choco install protoc
+          choco install ninja
+          rustup update
+          cargo build --target aarch64-apple-darwin --profile maxopt --bin perovskite_client
+          mv target/maxopt/perovskite_client target/maxopt/perovskite_client_arm64
+      - name: Upload the artifacts
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: "target/maxopt/perovskite_client_arm64"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
