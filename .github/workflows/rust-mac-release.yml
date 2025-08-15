@@ -20,10 +20,9 @@ jobs:
           echo "GH_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
       - name: Build
         run: |
-          choco install protoc
-          choco install ninja
+          brew install protobuf
           rustup update
-          cargo build --target aarch64-apple-darwin --profile maxopt --bin perovskite_client
+          cargo build --target aarch64-apple-darwin --profile maxopt --bin perovskite_client --features static-mvk
           mv target/maxopt/perovskite_client target/maxopt/perovskite_client_arm64
       - name: Upload the artifacts
         uses: AButler/upload-release-assets@v3.0
