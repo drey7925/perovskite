@@ -272,7 +272,7 @@ impl TextureAtlas {
 /// Suitable for specular (no reflection
 fn empty_black(width: u32, height: u32) -> RgbaImage {
     let mut image = RgbaImage::new(width, height);
-    image.pixels_mut().for_each(|(pixel)| {
+    image.pixels_mut().for_each(|pixel| {
         *pixel = Rgba([0, 0, 0, 255]);
     });
     image
@@ -280,7 +280,7 @@ fn empty_black(width: u32, height: u32) -> RgbaImage {
 
 fn empty_normal_map(width: u32, height: u32) -> RgbaImage {
     let mut image = RgbaImage::new(width, height);
-    image.pixels_mut().for_each(|(pixel)| {
+    image.pixels_mut().for_each(|pixel| {
         // neutral tangent, neutral bitangent, other components TBD
         *pixel = Rgba([128, 128, 0, 0]);
     });

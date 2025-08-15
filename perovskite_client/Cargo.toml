@@ -69,7 +69,7 @@ ash-molten = { version = "0.20.0+1.2.11", optional = true }
 ash = { version = "0.38", optional = true }
 
 [features]
-default = []
+default = ["ash"]
 # Performance tracing
 tracy = ["tracy-client/enable"]
 # malloc tracing (slow)

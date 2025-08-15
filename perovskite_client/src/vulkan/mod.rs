@@ -25,7 +25,7 @@ mod atlas;
 pub mod gpu_chunk_table;
 pub(crate) mod raytrace_buffer;
 
-use anyhow::{bail, ensure, Context, Error, Result};
+use anyhow::{anyhow, bail, ensure, Context, Error, Result};
 use arc_swap::ArcSwap;
 use clap::error::ContextKind::Usage;
 use enum_map::EnumMap;
@@ -1255,7 +1255,7 @@ impl Display for FramebufferId {
             f.write_str(attachment.abbreviation())?;
         }
         f.write_str("/Rd:")?;
-        for (attachment) in self.input_attachments.iter() {
+        for attachment in self.input_attachments.iter() {
             f.write_str(attachment.abbreviation())?;
         }
         Ok(())
@@ -2103,33 +2103,33 @@ fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::
             vulkano_create_info
                 .application_version
                 .try_into()
-                .context("Version out of range")?,
+                .map_err(|_| anyhow!("Version out of range"))?,
         )
         .engine_name(c"perovskite")
         .engine_version(
             vulkano_create_info
                 .engine_version
                 .try_into()
-                .context("Version out of range")?,
+                .map_err(|_| anyhow!("Version out of range"))?,
         )
         .api_version(
             vulkano_create_info
                 .max_api_version
+                .unwrap_or(vulkano::Version::HEADER_VERSION)
                 .try_into()
-                .context("API version out of range")?,
+                .map_err(|_| anyhow!("Version out of range"))?,
         );
 
-    let enabled_extensions: Vec<CString> = required_extensions.into();
+    let enabled_extensions: Vec<CString> = (&required_extensions).into();
 
+    let extension_names = enabled_extensions
+        .iter()
+        .map(|extension| extension.as_ptr())
+        .collect::<Vec<_>>();
     let create_info = ash::vk::InstanceCreateInfo::default()
         .application_info(&appinfo)
         .flags(ash::vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR)
-        .enabled_extension_names(
-            enabled_extensions
-                .iter()
-                .map(|extension| extension.as_ptr())
-                .collect(),
-        );
+        .enabled_extension_names(&extension_names);
 
     let instance: &'static mut ash::Instance = Box::leak(Box::new(unsafe {
         entry.create_instance(&create_info, None)?
