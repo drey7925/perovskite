@@ -2080,7 +2080,11 @@ fn make_instance_create_info(
 
 #[cfg(feature = "static-mvk")]
 fn make_instance(event_loop: &ActiveEventLoop) -> Result<Arc<vulkano::instance::Instance>, Error> {
-    // These imports are needed by the statically_linked_vulkan_loader macro
+    use anyhow::anyhow;
+    use std::ffi::CString;
+    use vulkano::statically_linked_vulkan_loader;
+    // These imports are apparently needed by the statically_linked_vulkan_loader macro
+    // (building on the mac runner is a pain so I don't feel like verifying/debugging fully)
     use std::ffi::c_char;
     use vulkano::library::Loader;
 
