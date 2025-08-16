@@ -23,12 +23,10 @@ jobs:
           brew install protobuf
           rustup target add aarch64-apple-darwin
           rustup update
-          cargo build --target aarch64-apple-darwin --bin perovskite_client --features static-mvk
-          ls target
-          ls -R target | grep -A2 -B2 perovskite_client
-          mv target/maxopt/perovskite_client target/maxopt/perovskite_client_arm64
+          cargo build --target aarch64-apple-darwin --profile=maxopt --bin perovskite_client --features static-mvk
+          mv target/aarch64-apple-darwin/maxopt/perovskite_client target/aarch64-apple-darwin/maxopt/perovskite_client_mac_arm64
       - name: Upload the artifacts
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: "target/maxopt/perovskite_client_arm64"
+          files: "target/aarch64-apple-darwin/maxopt/perovskite_client_mac_arm64"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
