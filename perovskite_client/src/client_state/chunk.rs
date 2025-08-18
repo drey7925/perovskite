@@ -946,6 +946,7 @@ pub(crate) trait ChunkOffsetExt {
     fn as_extended_index(&self) -> usize;
 }
 impl ChunkOffsetExt for ChunkOffset {
+    #[inline]
     fn as_extended_index(&self) -> usize {
         // This unusual order matches that in coordinates.rs and is designed to be cache-friendly for
         // vertical iteration, which are commonly used in global lighting.
@@ -953,21 +954,23 @@ impl ChunkOffsetExt for ChunkOffset {
     }
 }
 impl ChunkOffsetExt for (i32, i32, i32) {
+    #[inline]
     fn as_extended_index(&self) -> usize {
         const VALID_RANGE: RangeInclusive<i32> = -1..=16;
-        assert!(VALID_RANGE.contains(&self.0));
-        assert!(VALID_RANGE.contains(&self.1));
-        assert!(VALID_RANGE.contains(&self.2));
+        debug_assert!(VALID_RANGE.contains(&self.0));
+        debug_assert!(VALID_RANGE.contains(&self.1));
+        debug_assert!(VALID_RANGE.contains(&self.2));
         // See comment in ChunkOffsetExt for ChunkOffset
         ((self.0 + 1) as usize) * 18 * 18 + ((self.2 + 1) as usize) * 18 + ((self.1 + 1) as usize)
     }
 }
 impl ChunkOffsetExt for (i8, i8, i8) {
+    #[inline]
     fn as_extended_index(&self) -> usize {
         const VALID_RANGE: RangeInclusive<i8> = -1..=16;
-        assert!(VALID_RANGE.contains(&self.0));
-        assert!(VALID_RANGE.contains(&self.1));
-        assert!(VALID_RANGE.contains(&self.2));
+        debug_assert!(VALID_RANGE.contains(&self.0));
+        debug_assert!(VALID_RANGE.contains(&self.1));
+        debug_assert!(VALID_RANGE.contains(&self.2));
         // See comment in ChunkOffsetExt for ChunkOffset
         ((self.0 + 1) as usize) * 18 * 18 + ((self.2 + 1) as usize) * 18 + ((self.1 + 1) as usize)
     }

@@ -691,6 +691,7 @@ impl FastChunkNeighbors {
     pub(crate) fn center(&self) -> Option<&ClientChunk> {
         self.center.as_deref()
     }
+    #[inline]
     pub(crate) fn inbound_light(&self, coord_xyz: (i32, i32, i32)) -> Lightfield {
         assert!((-1..=1).contains(&coord_xyz.0));
         assert!((-1..=1).contains(&coord_xyz.1));

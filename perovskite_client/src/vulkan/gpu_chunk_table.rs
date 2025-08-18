@@ -13,9 +13,10 @@ use rand::distributions::uniform::SampleRange;
 ///     coord: The coordinate to hash
 ///     k1, k2, k3: Discovered hash parameters
 ///
+#[inline]
 pub fn phash(coord: ChunkCoordinate, k1: u32, k2: u32, k3: u32, n_minus_one: u32) -> u32 {
     let ChunkCoordinate { x, y, z } = coord;
-    assert!((n_minus_one + 1).is_power_of_two());
+    debug_assert!((n_minus_one + 1).is_power_of_two());
     let x = x as u32;
     let y = y as u32;
     let z = z as u32;
