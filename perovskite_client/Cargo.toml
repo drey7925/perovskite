@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_client"
-version = "0.2.0-pre1"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Game client"
