@@ -17,7 +17,7 @@ use perovskite_core::{
 };
 use prost::Message;
 use std::ops::Deref;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     backtrace,
     collections::{hash_map::Entry, HashMap},
@@ -57,6 +57,8 @@ struct SharedState {
     batcher: Arc<MeshBatcher>,
     initial_state_notification: Arc<tokio::sync::Notify>,
     cancellation: CancellationToken,
+
+    latest_rx_tick: AtomicU64,
 }
 impl SharedState {
     async fn send_bugcheck(&self, description: String) -> Result<()> {
@@ -128,6 +130,7 @@ pub(crate) async fn make_contexts(
         initial_state_notification,
         audio_healer,
         cancellation,
+        latest_rx_tick: AtomicU64::new(0),
     });
 
     tokio::task::spawn(stats_loop(shared_state.clone()));
@@ -289,6 +292,10 @@ impl OutboundContext {
                             .shared_state
                             .client_state
                             .render_distance
+                            .load(Ordering::Relaxed),
+                        latest_tick_message: self
+                            .shared_state
+                            .latest_rx_tick
                             .load(Ordering::Relaxed),
                     }),
                     hotbar_slot,
@@ -572,6 +579,13 @@ impl InboundContext {
                 .client_state
                 .timekeeper
                 .update_error(message.tick);
+            let old_tick = self
+                .shared_state
+                .latest_rx_tick
+                .swap(message.tick, Ordering::Relaxed);
+            // It's tempting to check whether old_tick > message.tick. For protocol version 9, this
+            // is actually a wrong check; the server-side prioritizer does interleave messages from
+            // different sources
         }
         *self.shared_state.client_state.server_perf.lock() = message.performance_metrics.clone();
         match &mut message.server_message {

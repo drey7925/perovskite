@@ -1707,8 +1707,8 @@ impl ServerGameMap {
 
                 // Now we downgrade the write lock.
                 // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
-                // they'll get an empty chunk holder and will wait for the condition variable to be signalled
-                // (when that thread waits on the condition variable, it atomically releases the inner lock)
+                // they'll get an empty chunk holder and will wait for the condition variable to be signalled.
+                // When that thread waits on the condition variable, it atomically releases the inner lock.
                 let read_guard = RwLockWriteGuard::downgrade(write_guard);
                 log_trace("get_chunk downgraded write lock");
                 // We had a write lock and downgraded it atomically. No other thread could have removed the entry.

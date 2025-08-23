@@ -59,8 +59,8 @@ use crate::{
 mod client_workers;
 pub(crate) mod mesh_worker;
 
-const MIN_PROTOCOL_VERSION: u32 = 8;
-const MAX_PROTOCOL_VERSION: u32 = 8;
+const MIN_PROTOCOL_VERSION: u32 = 9;
+const MAX_PROTOCOL_VERSION: u32 = 9;
 
 async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channel>> {
     let tls = ClientTlsConfig::new()

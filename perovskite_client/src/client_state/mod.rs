@@ -16,7 +16,7 @@
 
 use std::f64::consts::PI;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 

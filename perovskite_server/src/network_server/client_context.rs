@@ -14,10 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ops::RangeInclusive;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -202,7 +202,7 @@ impl PlayerCoroutinePack {
             }
         })?;
 
-        // No shutdown actions at the moment
+        // No shutdown actions at the moment; this removal is done in player.rs instead
         // let cancellation = self.context.cancellation.clone();
         // crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
         //     cancellation.cancelled().await;
@@ -249,13 +249,13 @@ pub(crate) async fn make_client_contexts(
     let block_events = game_state.game_map().subscribe();
     let inventory_events = game_state.inventory_manager().subscribe();
     let chunk_tracker = Arc::new(ChunkTracker::new());
-    let chunk_aimd = Arc::new(Mutex::new(Aimd {
+    let chunk_aimd = Mutex::new(Aimd {
         val: INITIAL_CHUNKS_PER_UPDATE as f64,
         floor: 0.,
         ceiling: MAX_CHUNKS_PER_UPDATE as f64,
         additive_increase: 64.,
         multiplicative_decrease: 0.5,
-    }));
+    });
     let context = Arc::new(SharedContext {
         game_state: game_state.clone(),
         player_context,
@@ -264,6 +264,7 @@ pub(crate) async fn make_client_contexts(
         effective_protocol_version,
         chunk_aimd,
         enable_performance_metrics: AtomicBool::new(false),
+        net_delay_estimator: Mutex::new(NetworkDelayMonitor::new()),
     });
 
     let inbound_worker = InboundWorker {
@@ -451,14 +452,59 @@ async fn send_all_popups(
     Ok(())
 }
 
-pub struct SharedContext {
+struct NetworkDelayMonitor {
+    unacked: VecDeque<u64>,
+}
+impl NetworkDelayMonitor {
+    fn new() -> Self {
+        Self {
+            unacked: VecDeque::new(),
+        }
+    }
+    fn send(&mut self, tick: u64) {
+        let back = self.unacked.back().copied();
+        if back.is_some_and(|x| x > tick) {
+            tracing::warn!(
+                "NetworkDelayMonitor: Ticks went backwards, {:?} > {}",
+                back,
+                tick
+            )
+        }
+        if back != Some(tick) {
+            self.unacked.push_back(tick);
+        }
+    }
+
+    fn ack(&mut self, ack_tick: u64) {
+        while let Some(tick) = self.unacked.front().copied() {
+            if ack_tick >= tick {
+                self.unacked.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn delay_estimate(&self, tick_now: u64) -> u64 {
+        // Take the earliest message that hasn't been acked yet
+        if let Some(unacked_tick) = self.unacked.front().copied() {
+            tick_now - unacked_tick
+        } else {
+            // Nothing outstanding
+            0
+        }
+    }
+}
+
+pub(crate) struct SharedContext {
     game_state: Arc<GameState>,
     player_context: Arc<PlayerContext>,
     id: usize,
     cancellation: CancellationToken,
     effective_protocol_version: u32,
-    chunk_aimd: Arc<Mutex<Aimd>>,
+    chunk_aimd: Mutex<Aimd>,
     enable_performance_metrics: AtomicBool,
+    net_delay_estimator: Mutex<NetworkDelayMonitor>,
 }
 impl SharedContext {
     fn maybe_get_performance_metrics(&self) -> Option<ServerPerformanceMetrics> {
@@ -586,6 +632,11 @@ impl NetPrioritizer {
                 Some(msg) => msg,
                 None => break,
             };
+            if self.context.effective_protocol_version == 9 {
+                if let Ok(message) = &message {
+                    self.context.net_delay_estimator.lock().send(message.tick)
+                }
+            }
             self.tx.send(message).await?;
         }
         tracing::info!("Prioritized outbound sender exiting");
@@ -1790,12 +1841,38 @@ impl InboundWorker {
                 let mut max_distance = i32::MAX;
 
                 if let Some(pacing) = &update.pacing {
-                    if pacing.pending_chunks < 256 {
-                        self.context.chunk_aimd.lock().increase();
+                    const PACING_DELAY_THRESHOLD: u64 = 250_000_000;
+                    let mut delay_estimator = self.context.net_delay_estimator.lock();
+                    delay_estimator.ack(pacing.latest_tick_message);
+                    let delay = delay_estimator.delay_estimate(self.context.game_state.tick());
+                    let network_backlogged = delay > PACING_DELAY_THRESHOLD;
+
+                    if network_backlogged {
+                        log::info!(
+                            "Network backlogged, delay {}",
+                            delay as f64 / 1_000_000_000.0
+                        );
+                    }
+
+                    if network_backlogged {
+                        let mut lock = self.context.chunk_aimd.lock();
+                        // Take a heavier decrease for network lag as opposed to simple client lag.
+                        // Client can be prioritized in the client while network lag causes severe
+                        // head of line blocking with TCP-based approaches (hoping for QUIC soon)
+                        lock.decrease();
+                        lock.decrease();
                     } else if pacing.pending_chunks > 1024 {
                         self.context.chunk_aimd.lock().decrease();
+                    } else if pacing.pending_chunks < 256 {
+                        self.context.chunk_aimd.lock().increase();
                     }
                     max_distance = pacing.distance_limit as i32
+                } else {
+                    log::warn!("No pacing in message");
+                    self.context
+                        .player_context
+                        .kick_player("Missing lag control signals")
+                        .await?;
                 }
 
                 self.own_positions.send_replace(PositionAndPacing {
