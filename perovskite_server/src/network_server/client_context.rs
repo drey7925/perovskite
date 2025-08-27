@@ -55,7 +55,7 @@ use anyhow::Result;
 use cgmath::Vector3;
 use cgmath::Zero;
 use parking_lot::MutexGuard;
-use perovskite_core::chat::ChatMessage;
+use perovskite_core::chat::{ChatMessage, SERVER_WARNING_COLOR};
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 
@@ -413,6 +413,11 @@ async fn initialize_protocol_state(
         context.player_context.send_chat_message_async(ChatMessage::new_server_message(
             "Your client is out of date and you may not be able to use all server features. Please consider updating.".to_string()
         )).await?;
+    }
+    if context.effective_protocol_version < 9 {
+        context.player_context.send_chat_message_async(ChatMessage::new_server_message(
+            "Client protocol 8: known bug: fast movement and minecarts cause severe lag when playing over the Internet.".to_string()
+        ).with_color(SERVER_WARNING_COLOR)).await?;
     }
     Ok(())
 }
