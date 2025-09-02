@@ -135,7 +135,7 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
             })),
     )?;
     game_builder
-        .builder_extension::<DefaultGameBuilderExtension>()
+        .builder_extension_mut::<DefaultGameBuilderExtension>()
         .crafting_recipes
         .register_recipe(super::recipes::RecipeImpl {
             slots: [
@@ -161,7 +161,7 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
             metadata: (),
         });
     game_builder
-        .builder_extension::<DefaultGameBuilderExtension>()
+        .builder_extension_mut::<DefaultGameBuilderExtension>()
         .crafting_recipes
         .register_recipe(super::recipes::RecipeImpl {
             slots: [

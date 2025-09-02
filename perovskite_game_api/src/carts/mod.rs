@@ -317,7 +317,7 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
 
     let (rail_block_id, rail_slope_1, rail_slopes_8) = tracks::register_tracks(game_builder)?;
 
-    let ext = game_builder.builder_extension::<CartsGameBuilderExtension>();
+    let ext = game_builder.builder_extension_mut::<CartsGameBuilderExtension>();
     ext.rail_block = rail_block_id;
     ext.rail_slope_1 = rail_slope_1;
     ext.rail_slopes_8 = rail_slopes_8;

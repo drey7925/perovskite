@@ -158,7 +158,11 @@ impl Server {
             }
             self.game_state.start_shutdown();
         };
-
+        tracing::info!(
+            "Serving on {:?} with TLS {:?}",
+            self.bind_address,
+            self.tls_config
+        );
         match &self.tls_config {
             LoadedTlsConfig::NoTls => server_builder
                 .add_service(perovskite_service)
@@ -537,6 +541,16 @@ impl ServerBuilder {
 pub enum LoadedTlsConfig {
     NoTls,
     Identity(tonic::transport::Identity),
+}
+
+impl Debug for LoadedTlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadedTlsConfig::NoTls => f.debug_tuple("NoTls").finish(),
+            // Refrain from dumping the private key
+            LoadedTlsConfig::Identity(i) => f.debug_tuple("Identity(...)").field(i).finish(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

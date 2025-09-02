@@ -176,7 +176,7 @@ impl DefaultGameBuilderExtension {
 impl DefaultGameBuilder for GameBuilder {
     fn initialize_default_game(&mut self) -> Result<()> {
         let data_dir = self.data_dir().clone();
-        let ext = self.builder_extension::<DefaultGameBuilderExtension>();
+        let ext = self.builder_extension_mut::<DefaultGameBuilderExtension>();
         if ext.initialized {
             return Ok(());
         }
@@ -197,7 +197,7 @@ impl DefaultGameBuilder for GameBuilder {
 
     /// Returns an Arc for the crafting recipes in this game.
     fn crafting_recipes(&mut self) -> Arc<RecipeBook<9, ()>> {
-        self.builder_extension::<DefaultGameBuilderExtension>()
+        self.builder_extension_mut::<DefaultGameBuilderExtension>()
             .crafting_recipes
             .clone()
     }
@@ -216,11 +216,11 @@ impl DefaultGameBuilder for GameBuilder {
         shapeless: bool,
     ) {
         assert!(
-            self.builder_extension::<DefaultGameBuilderExtension>()
+            self.builder_extension_mut::<DefaultGameBuilderExtension>()
                 .initialized,
             "DefaultGame builder_extension not initialized"
         );
-        self.builder_extension::<DefaultGameBuilderExtension>()
+        self.builder_extension_mut::<DefaultGameBuilderExtension>()
             .crafting_recipes
             .register_recipe(RecipeImpl {
                 slots,
@@ -253,11 +253,11 @@ impl DefaultGameBuilder for GameBuilder {
 
     fn register_smelting_fuel(&mut self, fuel: RecipeSlot, ticks: u32) {
         assert!(
-            self.builder_extension::<DefaultGameBuilderExtension>()
+            self.builder_extension_mut::<DefaultGameBuilderExtension>()
                 .initialized,
             "DefaultGame builder_extension not initialized"
         );
-        self.builder_extension::<DefaultGameBuilderExtension>()
+        self.builder_extension_mut::<DefaultGameBuilderExtension>()
             .smelting_fuels
             .register_recipe(RecipeImpl {
                 slots: [fuel],

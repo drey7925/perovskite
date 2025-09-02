@@ -115,6 +115,11 @@ fn main() {
         use perovskite_game_api::animals;
         animals::register_duck(&mut game).unwrap();
     }
+    #[cfg(feature = "farming")]
+    {
+        use perovskite_game_api::farming;
+        farming::initialize_farming(&mut game).unwrap();
+    }
 
     perovskite_game_api::colors::register_dyes(&mut game).unwrap();
 

@@ -310,11 +310,11 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
 
     let timer_handler = FurnaceTimerCallback {
         recipes: game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .smelting_recipes
             .clone(),
         fuels: game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .smelting_fuels
             .clone(),
         furnace_off_handle: furnace_off_block.id,

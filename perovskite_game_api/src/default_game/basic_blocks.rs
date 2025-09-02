@@ -203,7 +203,7 @@ pub mod ores {
         )?;
 
         game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
                 block: coal_ore.id,
                 noise_cutoff: splines::Spline::from_vec(vec![
@@ -242,7 +242,7 @@ pub mod ores {
         )?;
         // todo clean this up when ore APIs are more mature
         game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .smelting_recipes
             .register_recipe(RecipeImpl {
                 slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
@@ -270,7 +270,7 @@ pub mod ores {
         )?;
 
         game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
                 block: iron_ore.id,
                 // Use the same schedule as coal
@@ -319,7 +319,7 @@ pub mod ores {
         )?;
 
         game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
                 block: diamond_ore.id,
                 noise_cutoff: splines::Spline::from_vec(vec![
@@ -372,7 +372,7 @@ pub mod ores {
         )?;
 
         game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .register_ore(OreDefinition {
                 block: gold_ore.id,
                 // Use the same schedule as coal
@@ -398,7 +398,7 @@ pub mod ores {
             });
 
         game_builder
-            .builder_extension::<DefaultGameBuilderExtension>()
+            .builder_extension_mut::<DefaultGameBuilderExtension>()
             .smelting_recipes
             .register_recipe(RecipeImpl {
                 slots: [RecipeSlot::Exact(GOLD_PIECE.0.to_string())],
@@ -424,7 +424,7 @@ pub(crate) fn register_basic_blocks(game_builder: &mut GameBuilder) -> Result<()
     ores::register_ores(game_builder)?;
 
     game_builder
-        .builder_extension::<DefaultGameBuilderExtension>()
+        .builder_extension_mut::<DefaultGameBuilderExtension>()
         .crafting_recipes
         .register_recipe(super::recipes::RecipeImpl {
             slots: [

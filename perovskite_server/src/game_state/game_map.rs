@@ -2602,8 +2602,8 @@ struct ShardState {
 }
 
 pub trait TimerInlineCallback: Send + Sync {
-    /// Called once for each block on the map that matched the block type configured for the timer
-    /// This may be invoked concurrenty for multiple blocks and multiple chunks.
+    /// Called once for each block on the map that matched the block type configured for the timer.
+    /// This may be invoked concurrently for multiple blocks and multiple chunks.
     ///
     /// Args:
     /// * coordinate: Location of the block this is being called for
@@ -2657,7 +2657,17 @@ pub trait BulkUpdateCallback: Send + Sync {
     ///
     /// Performance tip: Iterating in x/z/y (y on the innermost loop) order is the most cache-friendly order possible.
     ///
-    /// **Warning**: Trying to access the map via ctx can cause deadlocks
+    /// **Warning**: Trying to access the map via ctx can cause deadlocks.
+    ///
+    /// Args:
+    ///     ctx: Context. It is deadlock-prone to access inventories and block inventories. This
+    ///         param might be removed in an upcoming cleanup.
+    ///     chunk_coordinate: The coord of the chunk in question
+    ///     timer_state: Details about the timer being run
+    ///     chunk: The writeable chunk that can be updated. Note that changes made via chunk are
+    ///         not visible in `neighbors`.
+    ///     neighbors: For bulk update with neighbors, this contains neighbor data. This does not
+    ///         show changes made via `chunk`.
     fn bulk_update_callback(
         &self,
         ctx: &HandlerContext<'_>,

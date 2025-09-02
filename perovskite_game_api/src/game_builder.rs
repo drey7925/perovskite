@@ -190,6 +190,11 @@ impl From<&'static str> for BlockName {
         BlockName(value.to_string())
     }
 }
+impl From<&FastBlockName> for BlockName {
+    fn from(value: &FastBlockName) -> Self {
+        BlockName(value.name().to_string())
+    }
+}
 
 /// Type-safe newtype wrapper for a const/static item name
 
@@ -525,7 +530,7 @@ impl GameBuilder {
     /// Returns an extension that holds state for additional functionality or APIs
     /// for a specific plugin (e.g. default_game providing ore generation to other plugins that want
     /// to generate ores) without the core GameBuilder needing to be aware of it *a priori*.
-    pub fn builder_extension<T: GameBuilderExtension + Any + Default + 'static>(
+    pub fn builder_extension_mut<T: GameBuilderExtension + Any + Default + 'static>(
         &mut self,
     ) -> &mut T {
         self.builder_extensions
@@ -554,6 +559,7 @@ macro_rules! include_texture_bytes {
 pub use include_texture_bytes;
 use perovskite_core::constants::GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS;
 use perovskite_core::protocol::items::item_def::Appearance;
+use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::media::SoundKey;
 
 pub const DEFAULT_FOOTSTEP_SOUND_NAME: &str = "default:footstep.wav";

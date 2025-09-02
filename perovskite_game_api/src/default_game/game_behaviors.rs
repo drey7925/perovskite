@@ -27,7 +27,7 @@ pub(crate) fn register_game_behaviors(
     game_builder: &mut GameBuilder,
     player_entity_id: EntityClassId,
 ) -> Result<()> {
-    let extension = game_builder.builder_extension::<DefaultGameBuilderExtension>();
+    let extension = game_builder.builder_extension_mut::<DefaultGameBuilderExtension>();
     let recipe_book = extension.crafting_recipes.clone();
     let spawn_location = extension.settings.spawn_location.into();
     let super_users = extension.settings.super_users.iter().cloned().collect();

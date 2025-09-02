@@ -50,7 +50,7 @@ smartstring = "1.0.1"
 tokio-util = "0.7.14"
 
 [features]
-default = ["default_game", "agriculture", "animals", "circuits", "discord", "carts"]
+default = ["default_game", "farming", "animals", "circuits", "discord", "carts"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
@@ -78,7 +78,7 @@ carts = ["circuits"]
 
 # Provides basic agriculture functionality that other plugins can use. Relies on default_game for
 # dirt and other interactions
-agriculture = ["default_game"]
+farming = ["default_game"]
 
 
 # If enabled, server will detect deadlocks and log them.

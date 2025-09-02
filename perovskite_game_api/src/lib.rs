@@ -24,6 +24,7 @@
 pub mod blocks;
 /// Common constant values useful to game content.
 pub use perovskite_core::constants;
+
 /// Provides functionality to build and start a game and server.
 pub mod game_builder;
 /// Contains utilities for defining items.
@@ -46,7 +47,7 @@ pub mod default_game;
 #[cfg(feature = "circuits")]
 pub mod circuits;
 
-#[cfg(feature = "agriculture")]
+#[cfg(feature = "farming")]
 pub mod farming;
 
 #[cfg(feature = "discord")]

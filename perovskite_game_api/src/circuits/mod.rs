@@ -415,7 +415,7 @@ impl CircuitGameBuilder for GameBuilder {
         callbacks: Box<dyn CircuitBlockCallbacks>,
         properties: CircuitBlockProperties,
     ) -> Result<()> {
-        let ext = self.builder_extension::<CircuitGameBuilderExt>();
+        let ext = self.builder_extension_mut::<CircuitGameBuilderExt>();
         let state = ext
             .resulting_state
             .as_mut()
@@ -445,13 +445,13 @@ impl CircuitGameBuilder for GameBuilder {
 /// - makes other functions in this trait available to plugins that need them
 pub fn register_circuits(builder: &mut GameBuilder) -> Result<()> {
     if builder
-        .builder_extension::<CircuitGameBuilderExt>()
+        .builder_extension_mut::<CircuitGameBuilderExt>()
         .initialized
     {
         return Ok(());
     }
     builder
-        .builder_extension::<CircuitGameBuilderExt>()
+        .builder_extension_mut::<CircuitGameBuilderExt>()
         .initialized = true;
 
     builder
@@ -484,7 +484,7 @@ impl CircuitGameBuilerPrivate for GameBuilder {
         }
 
         let inner = self
-            .builder_extension::<CircuitGameBuilderExt>()
+            .builder_extension_mut::<CircuitGameBuilderExt>()
             .resulting_state
             .as_mut()
             .expect("pre_run already called");

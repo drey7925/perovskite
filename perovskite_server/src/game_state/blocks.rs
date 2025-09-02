@@ -427,6 +427,8 @@ impl<'a> InlineContext<'a> {
     }
 }
 
+const FBN_NOTFOUND_SENTINEL: u32 = u32::MAX - 1;
+
 /// Manages all of the different block types defined in this game world.
 ///
 /// This struct owns all of the [`BlockType`]s that are registered with it;
@@ -677,16 +679,21 @@ impl BlockTypeManager {
     pub fn resolve_name(&self, block_name: &FastBlockName) -> Option<BlockId> {
         let cached = block_name.base_id.load(Ordering::Relaxed);
         if cached == u32::MAX {
-            // Need to fill the cache.
-            // Multiple threads might race, but they should set the same value anyway
-            if let Some(&id) = self.name_to_base_id_map.get(&block_name.name) {
-                block_name.base_id.store(id, Ordering::Relaxed);
-                Some(id.into())
-            } else {
-                None
-            }
+            self.resolve_name_cold(block_name)
         } else {
             Some(cached.into())
+        }
+    }
+
+    #[cold]
+    fn resolve_name_cold(&self, block_name: &FastBlockName) -> Option<BlockId> {
+        // Need to fill the cache.
+        // Multiple threads might race, but they should set the same value anyway
+        if let Some(&id) = self.name_to_base_id_map.get(&block_name.name) {
+            block_name.base_id.store(id, Ordering::Relaxed);
+            Some(id.into())
+        } else {
+            None
         }
     }
 
@@ -951,18 +958,19 @@ impl TryAsHandle for BlockTypeHandle {
         Some(*self)
     }
 }
-/// A representation of the type of a block that may not have been registered yet. This can be passed to
+/// A representation of a block type that may not have been registered yet. This can be passed to
 /// the block manager it came from to try to get back the full block definition.
 ///
 /// This can be used to allow blocks to have circular dependencies on each other through their
 /// respective handlers. See the doc for [`BlockTypeManager`] for details and a motivating example.
 ///
 /// For performance, this struct caches the result of the lookup. The caching logic uses atomics, so
-/// only a non-mutable & reference is needed to use this struct.
+/// only a non-mutable &reference is needed to use this struct.
 ///
 /// There is no protection against accidentally using a FastBlockName with two different block type
 /// managers, if there are somehow two perovskite worlds running in the same process and sharing
 /// objects. However, that should be a rare case.
+#[derive(Debug)]
 pub struct FastBlockName {
     name: String,
     base_id: AtomicU32,
@@ -996,6 +1004,10 @@ impl FastBlockName {
             name: name.into(),
             base_id: AtomicU32::new(u32::MAX),
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 

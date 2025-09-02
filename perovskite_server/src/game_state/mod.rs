@@ -450,6 +450,20 @@ where
     }
 }
 
+/// Marker trait for additional data that a plugin needs to store with the game state.
+/// Use [crate::server::ServerBuilder::add_extension] to register them, and [GameState::extension]
+/// to access them.
+///
+/// There are no particular restrictions on data, other than Send + Sync + 'static; it can contain
+/// interior mutability, it does not need to be serialized or deserialized, etc.
+///
+/// If the GameStateException implementor of one plugin is accessible to another plugin (i.e., via
+/// Rust visibility rules), then it can be used with `GameState::extension` by that other plugin,
+/// hence sharing state from one to another. For example, a basic farming plugin could share state
+/// that additional plugins for extra crops could interact with.
+///
+/// Of course, other plugins can't access private methods/fields, even if they get a reference to
+/// the game state extension
 pub trait GameStateExtension: Send + Sync + 'static {}
 
 fn put_double_meta_value(db: &dyn GameDatabase, name: &[u8], value: f64) -> Result<()> {
