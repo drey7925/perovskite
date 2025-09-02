@@ -60,7 +60,7 @@ impl BulkUpdateCallback for SoilTimerCallback {
                                             if self.allow_downflow && y == 1 {
                                                 // Water cascades down paddies and other downflow-
                                                 // capable types of soil
-                                                best_variant = 4;
+                                                best_variant = 3;
                                             } else {
                                                 best_variant = best_variant
                                                     .max(block.variant().saturating_sub(1).min(4));
