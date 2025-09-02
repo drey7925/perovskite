@@ -66,7 +66,7 @@ impl BulkUpdateCallback for SoilTimerCallback {
                                                     .max(block.variant().saturating_sub(1).min(4));
                                             }
                                         } else if block.equals_ignore_variant(water) {
-                                            best_variant = 4;
+                                            best_variant = 3;
                                         }
                                     }
                                 }
