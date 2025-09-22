@@ -137,7 +137,7 @@ pub(crate) fn register_switches(
                     ),
             )
             .set_allow_light_propagation(true)
-            .set_dropped_item(SWITCH_OFF.0, 1)
+            .set_simple_dropped_item(SWITCH_OFF.0, 1)
             .set_display_name("Switch")
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .add_interact_key_menu_entry("", "Turn off")
@@ -331,7 +331,7 @@ pub(crate) fn register_switches(
                     ),
             )
             .set_allow_light_propagation(true)
-            .set_dropped_item(BUTTON_OFF.0, 1)
+            .set_simple_dropped_item(BUTTON_OFF.0, 1)
             .set_display_name("Button")
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .add_modifier(Box::new(|block| {

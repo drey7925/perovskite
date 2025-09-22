@@ -624,10 +624,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
             ))
-            .set_dropped_item(DIRT.0, 1)
+            .set_simple_dropped_item(DIRT.0, 1)
             .set_footstep_sound(Some(grass_footstep))
             // testonly
-            .set_dropped_item(DIRT.0, 1),
+            .set_simple_dropped_item(DIRT.0, 1),
     )?;
     let stone = game_builder.add_block(
         BlockBuilder::new(STONE)
@@ -678,7 +678,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(GRANULAR)
             .set_cube_single_texture(SILT_DAMP_TEXTURE)
             .set_display_name("Silt (damp)")
-            .set_dropped_item(SILT_DRY.0, 1)
+            .set_simple_dropped_item(SILT_DRY.0, 1)
             .add_modifier(Box::new(|bt| {
                 // TODO tune these, TODO move these into the block builder
                 bt.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
@@ -867,7 +867,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                 DIRT_SNOW_SIDE_TEXTURE,
                 DIRT_SNOW_SIDE_TEXTURE,
             ))
-            .set_dropped_item(DIRT.0, 1)
+            .set_simple_dropped_item(DIRT.0, 1)
             .set_footstep_sound(Some(snow_footstep))
             .set_display_name("Dirt with snow"),
     )?;

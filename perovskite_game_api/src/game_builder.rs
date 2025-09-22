@@ -195,6 +195,16 @@ impl From<&FastBlockName> for BlockName {
         BlockName(value.name().to_string())
     }
 }
+impl From<StaticBlockName> for FastBlockName {
+    fn from(value: StaticBlockName) -> Self {
+        FastBlockName::new(value.0)
+    }
+}
+impl From<&BlockName> for FastBlockName {
+    fn from(value: &BlockName) -> Self {
+        FastBlockName::new(&value.0)
+    }
+}
 
 /// Type-safe newtype wrapper for a const/static item name
 

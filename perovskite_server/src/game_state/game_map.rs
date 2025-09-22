@@ -2683,10 +2683,11 @@ pub trait VerticalNeighborTimerCallback: Send + Sync {
     ///
     /// In particular, this will be called when either upper or lower contains the block type in question.
     ///
-    /// *This is a probabilistic check, and the callback may be called even if a configured block type is not actually
+    /// *This is a probabilistic check, and the callback may be called even if a configured block type is not
     ///    present.*
     ///
     /// Performance tip: Iterating in x/z/y (y on the innermost loop) order is the most cache-friendly order possible.
+    ///
     fn vertical_neighbor_callback(
         &self,
         ctx: &HandlerContext<'_>,

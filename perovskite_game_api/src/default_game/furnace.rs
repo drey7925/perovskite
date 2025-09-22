@@ -297,7 +297,7 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_light_emission(8)
             .set_display_name("Lit furnace (should not see this)")
-            .set_dropped_item(FURNACE.0, 1)
+            .set_simple_dropped_item(FURNACE.0, 1)
             .add_interact_key_menu_entry("", "Open furnace")
             .add_modifier(Box::new(|bt| {
                 bt.interact_key_handler =

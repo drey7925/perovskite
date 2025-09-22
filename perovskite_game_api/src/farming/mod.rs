@@ -1,11 +1,17 @@
+/// Utilities to define plants that can be grown
+pub mod crops;
 mod soil;
 
-use crate::game_builder::{GameBuilder, GameBuilderExtension};
+use crate::farming::crops::{CropDefinition, GrowthStage};
+use crate::game_builder::{GameBuilder, GameBuilderExtension, OwnedTextureName};
 use anyhow::Result;
 use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::game_state::GameStateExtension;
 use perovskite_server::server::ServerBuilder;
+use rand::{thread_rng, Rng};
+use std::time::Duration;
 
+#[derive(Clone)]
 pub struct FarmingGameStateExtension {
     /// Paddy, successfully flooded by the player
     pub paddy_dry: FastBlockName,
@@ -19,7 +25,38 @@ pub struct FarmingGameStateExtension {
 impl GameStateExtension for FarmingGameStateExtension {}
 
 pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
-    soil::register_soil_blocks(builder)
+    soil::register_soil_blocks(builder)?;
+    let ext = builder.builder_extension_mut::<FarmingGameStateExtension>();
+    let soil_blocks = vec![ext.paddy_wet.clone(), ext.soil_wet.clone()];
+    let mut stages = vec![];
+    let mut rng = thread_rng();
+    for _ in 0..32 {
+        stages.push(GrowthStage {
+            dig_effect: None,
+            tap_effect: None,
+            interaction_effects: Default::default(),
+            extra_block_groups: vec![],
+            grow_probability: 0.5,
+            texture_name: OwnedTextureName::from_css_color(&format!(
+                "rgb({} {} {})",
+                rng.gen_range(0..255),
+                rng.gen_range(0..255),
+                rng.gen_range(0..255)
+            )),
+            ..Default::default()
+        })
+    }
+    crops::define_crop(
+        builder,
+        CropDefinition {
+            base_name: "farming:test_crop".to_string(),
+            stages,
+            eligible_soil_blocks: soil_blocks,
+            timer_period: Duration::from_secs(1),
+            ..CropDefinition::default()
+        },
+    )?;
+    Ok(())
 }
 
 impl Default for FarmingGameStateExtension {
@@ -34,5 +71,7 @@ impl Default for FarmingGameStateExtension {
 }
 
 impl GameBuilderExtension for FarmingGameStateExtension {
-    fn pre_run(&mut self, server_builder: &mut ServerBuilder) {}
+    fn pre_run(&mut self, server_builder: &mut ServerBuilder) {
+        server_builder.add_extension(self.clone())
+    }
 }

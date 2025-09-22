@@ -186,7 +186,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
                 CubeAppearanceBuilder::new().set_single_texture(CIRCUITS_ON_TEXTURE),
             )
             .add_item_group(HIDDEN_FROM_CREATIVE)
-            .set_dropped_item(LAMP_OFF_BLOCK.0, 1)
+            .set_simple_dropped_item(LAMP_OFF_BLOCK.0, 1)
             .register_circuit_callbacks(),
     )?;
     let oscillator_off_block = builder.add_block(
@@ -203,7 +203,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
                 (-0.5, -0.1),
                 (-0.2, 0.2),
             ))
-            .set_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
+            .set_simple_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
             .set_display_name("Oscillator")
             .register_circuit_callbacks(),
     )?;
@@ -223,7 +223,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             ))
             .set_display_name("Oscillator (on)")
             .add_item_group(HIDDEN_FROM_CREATIVE)
-            .set_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
+            .set_simple_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
             .register_circuit_callbacks(),
     )?;
     for id in [lamp_off_block.id, lamp_on_block.id] {
@@ -321,7 +321,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_display_name(format!("{} lamp (on)", color.as_display_string()))
                 .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(&on_texture))
                 .add_item_group(HIDDEN_FROM_CREATIVE)
-                .set_dropped_item(&off_block_name.0, 1)
+                .set_simple_dropped_item(&off_block_name.0, 1)
                 .register_circuit_callbacks(),
         )?;
         for id in [off_block.id, on_block.id] {
@@ -371,7 +371,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                 .set_display_name(format!("{} round lamp (on)", color.as_display_string()))
                 .set_axis_aligned_boxes_appearance(orb_aabb(&orb_on_texture))
                 .add_item_group(HIDDEN_FROM_CREATIVE)
-                .set_dropped_item(&orb_off_block_name.0, 1)
+                .set_simple_dropped_item(&orb_off_block_name.0, 1)
                 .register_circuit_callbacks(),
         )?;
         for id in [orb_off_block.id, orb_on_block.id] {

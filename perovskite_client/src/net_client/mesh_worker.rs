@@ -86,7 +86,7 @@ impl NeighborPropagator {
         while !self.shutdown.is_cancelled() {
             // This is duplicated in MeshWorker to allow the two to use different strategies, and also
             // report different span and plot names.
-            // This is really ugly and deadlock-prone. Figure out whether we need this or not.
+            // This is quite ugly and deadlock-prone. Figure out whether we need this or not.
             // The big deadlock risk is if this line happens under the queue lock:
             //   our thread waits for physics_state to unlock
             //   physics_state waits for mapchunks to unlock

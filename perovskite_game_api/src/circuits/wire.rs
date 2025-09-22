@@ -165,7 +165,7 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
             .set_axis_aligned_boxes_appearance(build_wire_aabox(WIRE_TEXTURE_ON))
             .set_display_name("Digital wire")
             .set_inventory_texture(WIRE_TEXTURE_ON)
-            .set_dropped_item(WIRE_BLOCK_OFF.0, 1)
+            .set_simple_dropped_item(WIRE_BLOCK_OFF.0, 1)
             .set_light_emission(2)
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .register_circuit_callbacks(),

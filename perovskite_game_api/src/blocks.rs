@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -71,14 +72,18 @@ pub struct DroppedItemClosureParam {
 
 /// The item obtained when the block is dug.
 /// TODO stabilize item stack and expose a vec<itemstack> option
-enum DroppedItem {
+#[non_exhaustive]
+pub enum DroppedItem {
     None,
     Fixed(String, u32),
     Dynamic(Box<dyn Fn(DroppedItemClosureParam) -> (StaticItemName, u32) + Sync + Send + 'static>),
     NotDiggable,
 }
 impl DroppedItem {
-    fn build_dig_handler_inner<F>(closure: F, _game_builder: &GameBuilder) -> Box<InlineHandler>
+    pub(crate) fn build_dig_handler_inner<F>(
+        closure: F,
+        _game_builder: &GameBuilder,
+    ) -> Box<InlineHandler>
     where
         F: Fn(DroppedItemClosureParam) -> Vec<ItemStack> + Sync + Send + 'static,
     {
@@ -109,7 +114,7 @@ impl DroppedItem {
         })
     }
 
-    fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
+    pub(crate) fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
         match self {
             DroppedItem::None => Self::build_dig_handler_inner(|_| Vec::new(), game_builder),
             DroppedItem::Fixed(item, count) => Self::build_dig_handler_inner(
@@ -299,7 +304,7 @@ impl BlockBuilder {
     /// (`foo:iron_ore_chunk`), an item `foo:iron_ore` will be registered. That item
     /// may be unobtainable without special game admin abilities, but if obtained
     /// it will still place the indicated block.
-    pub fn set_dropped_item(mut self, item_name: &str, count: u32) -> Self {
+    pub fn set_simple_dropped_item(mut self, item_name: &str, count: u32) -> Self {
         self.dropped_item = DroppedItem::Fixed(item_name.into(), count);
         self
     }
@@ -316,11 +321,21 @@ impl BlockBuilder {
     /// This closure takes no arguments. In the future, additional setters may be
     /// added that take closures with parameters to provide more details about the
     /// block being dug; this will be done in a non-API-breaking way.
+    #[deprecated(
+        since = "0.2.1",
+        note = "Construct a DroppedItem instead and pass it to set_dropped_item"
+    )]
     pub fn set_dropped_item_closure(
         mut self,
         closure: impl Fn() -> (StaticItemName, u32) + Send + Sync + 'static,
     ) -> Self {
         self.dropped_item = DroppedItem::Dynamic(Box::new(move |_param| closure()));
+        self
+    }
+
+    /// Sets the item dropped when the block is dug
+    pub fn set_dropped_item(mut self, dropped_item: DroppedItem) -> Self {
+        self.dropped_item = dropped_item;
         self
     }
 

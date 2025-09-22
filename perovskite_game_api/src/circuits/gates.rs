@@ -250,7 +250,7 @@ fn register_gate(
             .set_display_name(gate.description)
             .set_inventory_texture(gate.on_texture)
             .add_item_group(HIDDEN_FROM_CREATIVE)
-            .set_dropped_item(gate.off_name.0, 1)
+            .set_simple_dropped_item(gate.off_name.0, 1)
             .register_circuit_callbacks(),
     )?;
     for block_id in [off_block.id, on_block.id] {

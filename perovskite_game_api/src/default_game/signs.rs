@@ -79,7 +79,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 .set_axis_aligned_boxes_appearance(aa_box)
                 .set_display_name("Wooden Sign")
                 .add_item_group(HIDDEN_FROM_CREATIVE)
-                .set_dropped_item(SIGN_ITEM.0, 1)
+                .set_simple_dropped_item(SIGN_ITEM.0, 1)
                 .set_allow_light_propagation(true)
                 .add_interact_key_menu_entry("", "Set text...")
                 .add_modifier(Box::new(|bt| {

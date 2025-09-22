@@ -1109,7 +1109,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             .add_interact_key_menu_entry("", "Fix and reprogram")
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_inventory_texture(UNBROKEN_TEXTURE)
-            .set_dropped_item(UNBROKEN_NAME.0, 1)
+            .set_simple_dropped_item(UNBROKEN_NAME.0, 1)
             .add_modifier(Box::new(block_modifier.clone())),
     )?;
 
