@@ -185,7 +185,8 @@ impl EguiUi {
                 .iter()
                 .take(self.visible_popups.len() - 1)
             {
-                self.draw_popup(popup, ctx, atlas_texture_id, client_state, false);
+                // Only consider control flow from the last popup
+                let _ = self.draw_popup(popup, ctx, atlas_texture_id, client_state, false);
             }
             let result = self.draw_popup(
                 &self.visible_popups.last().unwrap().clone(),

@@ -720,27 +720,6 @@ impl BlockRenderer {
     ) -> Result<VkChunkVertexDataCpu> {
         let _span = span!("meshing");
 
-        {
-            let _span = span!("shell precheck");
-            let mut all_solid = true;
-            // if all edges have solid blocks, all interior geometry is hidden
-            for x in -1..17 {
-                for z in -1..17 {
-                    for y in -1..17 {
-                        if (x == -1 || x == 16) || (y == -1 || y == 16) || (z == -1 || z == 16) {
-                            let id = chunk_data.block_ids()[(x, y, z).as_extended_index()];
-                            if !self.block_types().is_solid_opaque(id) {
-                                all_solid = false;
-                            }
-                        }
-                    }
-                }
-            }
-            if all_solid {
-                return Ok(VkChunkVertexDataCpu::empty());
-            }
-        }
-
         Ok(VkChunkVertexDataCpu {
             draw_buffers: enum_map! {
                 CubeDrawStep::OpaqueSimple => self.mesh_chunk_subpass(

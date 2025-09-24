@@ -76,11 +76,11 @@ pub(crate) struct LockedChunkDataView<'a>(RwLockReadGuard<'a, ChunkData>);
 
 impl ChunkDataView for LockedChunkDataView<'_> {
     fn is_empty_optimization_hint(&self) -> bool {
-        !self
+        !(self
             .0
             .block_ids
             .as_ref()
-            .is_some_and(|x| x.iter().any(|&v| v != BlockId(0)))
+            .is_some_and(|x| x.iter().any(|&v| v != BlockId(0))))
     }
     fn block_ids(&self) -> &[BlockId; 18 * 18 * 18] {
         self.0.block_ids.as_deref().unwrap_or(&ZERO_CHUNK)
