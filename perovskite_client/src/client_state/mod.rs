@@ -179,7 +179,7 @@ impl ChunkManager {
         ChunkManagerClonedView { data: result }
     }
 
-    pub(crate) fn chunk_lock(&self) -> RwLockWriteGuard<ChunkMap> {
+    pub(crate) fn chunk_lock(&self) -> RwLockWriteGuard<'_, ChunkMap> {
         let _span = span!("Acquire global chunk lock");
         self.chunks.write()
     }
