@@ -689,13 +689,28 @@ impl VulkanWindow {
         };
 
         let mut enabled_extensions = mandatory_extensions;
+        let mut enabled_features = mandatory_features;
         if physical_device
             .supported_extensions()
             .khr_portability_subset
         {
             enabled_extensions.khr_portability_subset = true;
+            // These features aren't mandatory, but are detected by other code at runtime based on
+            // what the device _supports_ - even if the check is gated by device support, we must
+            // still ensure that the feature is _enabled_
+            let desired_portability_features = DeviceFeatures {
+                image_view_format_swizzle: true,
+                ..Default::default()
+            };
+            let detected_portability_features = physical_device
+                .supported_features()
+                .intersection(&desired_portability_features);
+            log::info!(
+                "Detected the following desired portability features: {:?}",
+                detected_portability_features
+            );
+            enabled_features |= detected_portability_features;
         }
-        let mut enabled_features = mandatory_features;
         let mut raytracing_supported = false;
         if physical_device
             .supported_features()
