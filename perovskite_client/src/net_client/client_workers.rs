@@ -26,8 +26,7 @@ use std::{
 };
 
 use super::mesh_worker::{
-    propagate_neighbor_data, MeshBatcher, MeshWorker, NeighborPropagationScratchpad,
-    NeighborPropagator,
+    propagate_neighbor_data, LightScratchpad, MeshBatcher, MeshWorker, NeighborPropagator,
 };
 use crate::audio::{
     EvictedAudioHealer, SimpleSoundControlBlock, SOUND_MOVESPEED_ENABLED, SOUND_PRESENT,
@@ -143,7 +142,7 @@ pub(crate) async fn make_contexts(
         batcher_handle,
 
         snappy_helper: SnappyDecodeHelper::new(),
-        inline_nprop_scratchpad: NeighborPropagationScratchpad::default(),
+        inline_nprop_scratchpad: LightScratchpad::default(),
         inline_fcn_scratchpad: FastChunkNeighbors::default(),
         audio_healer_handle,
         raytrace_worker_handle,
@@ -432,7 +431,7 @@ pub(crate) struct InboundContext {
     batcher_handle: tokio::task::JoinHandle<Result<()>>,
 
     snappy_helper: SnappyDecodeHelper,
-    inline_nprop_scratchpad: NeighborPropagationScratchpad,
+    inline_nprop_scratchpad: LightScratchpad,
     inline_fcn_scratchpad: FastChunkNeighbors,
 
     audio_healer_handle: tokio::task::JoinHandle<Result<()>>,

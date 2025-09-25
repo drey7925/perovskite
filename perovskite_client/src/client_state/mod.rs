@@ -147,7 +147,7 @@ impl ChunkManager {
     }
     /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
     /// but CANNOT be used to insert or remove chunks.
-    pub(crate) fn read_lock(&self) -> ChunkManagerView {
+    pub(crate) fn read_lock(&self) -> ChunkManagerView<'_> {
         let _span = span!("Acquire chunk read lock");
         let guard = self.chunks.read();
         ChunkManagerView { guard }
@@ -388,12 +388,15 @@ impl ChunkManager {
                 for j in -1..=1 {
                     if let Some(delta) = chunk.try_delta(i, j, k) {
                         if let Some(chunk) = chunk_lock.get(&delta) {
-                            result.neighbors[(k + 1) as usize][(j + 1) as usize]
-                                [(i + 1) as usize]
-                                .0 = true;
-                            result.neighbors[(k + 1) as usize][(j + 1) as usize][(i + 1) as usize]
-                                .1
-                                .copy_from_slice(chunk.chunk_data().block_ids());
+                            if i != 0 || j != 0 || k != 0 {
+                                result.neighbors[(k + 1) as usize][(j + 1) as usize]
+                                    [(i + 1) as usize]
+                                    .0 = true;
+                                result.neighbors[(k + 1) as usize][(j + 1) as usize]
+                                    [(i + 1) as usize]
+                                    .1
+                                    .copy_from_slice(chunk.chunk_data().block_ids());
+                            }
                         } else {
                             result.neighbors[(k + 1) as usize][(j + 1) as usize]
                                 [(i + 1) as usize]
@@ -667,7 +670,7 @@ impl<'a> ChunkManagerView<'a> {
     }
 }
 
-type ChunkWithEdgesBuffer = (bool, Box<[BlockId; 18 * 18 * 18]>);
+struct ChunkWithEdgesBuffer(bool, Box<[BlockId; 18 * 18 * 18]>);
 
 pub(crate) struct FastChunkNeighbors {
     outcome: ChunkNeighborOutcome,
@@ -710,7 +713,9 @@ impl Default for FastChunkNeighbors {
             center: None,
             neighbors: std::array::from_fn(|_| {
                 std::array::from_fn(|_| {
-                    std::array::from_fn(|_| (false, Box::new([BlockId(0); 18 * 18 * 18])))
+                    std::array::from_fn(|_| {
+                        ChunkWithEdgesBuffer(false, Box::new([BlockId(0); 18 * 18 * 18]))
+                    })
                 })
             }),
             inbound_lights: std::array::from_fn(|_| {

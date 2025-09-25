@@ -118,7 +118,7 @@ fn target_properties(
     state: &ClientState,
     target: ToolTargetWithId,
     ext: Option<ClientExtendedData>,
-) -> TargetProperties {
+) -> TargetProperties<'_> {
     match target {
         ToolTargetWithId::Block(coord, id) => {
             if let Some(blockdef) = state.block_types.get_blockdef(id) {

@@ -6,9 +6,18 @@ use std::{
     time::Duration,
 };
 
+use crate::client_state::chunk::ChunkDataViewMut;
+use crate::client_state::{
+    block_types::ClientBlockTypeManager, chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors,
+};
 use anyhow::{Context, Result};
 use cgmath::InnerSpace;
 use parking_lot::{Condvar, Mutex};
+use perovskite_core::block_id::BlockId;
+use perovskite_core::lighting::ChunkBuffer;
+pub(crate) use perovskite_core::lighting::{
+    propagate_light, LightScratchpad, Lightfield, NeighborBuffer,
+};
 use perovskite_core::{
     block_id::special_block_defs::UNLOADED_CHUNK_BLOCK_ID,
     coordinates::{ChunkCoordinate, ChunkOffset},
@@ -16,10 +25,6 @@ use perovskite_core::{
 use rustc_hash::FxHashSet;
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
-
-use crate::client_state::{
-    block_types::ClientBlockTypeManager, chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors,
-};
 
 // Responsible for reconciling a chunk with data from other nearby chunks (e.g. lighting, neighbor calculations)
 pub(crate) struct NeighborPropagator {
@@ -68,7 +73,7 @@ impl NeighborPropagator {
 
     pub(crate) fn run_neighbor_propagator(self: Arc<Self>) -> Result<()> {
         tracy_client::set_thread_name!("async_neighbor_propagator");
-        let mut scratchpad = NeighborPropagationScratchpad::default();
+        let mut scratchpad = LightScratchpad::default();
         let mut chunk_neighbor_scratchpad = FastChunkNeighbors::default();
         if self
             .client_state
@@ -331,29 +336,49 @@ pub fn test_div_euclid() {
     }
 }
 
-pub(crate) struct NeighborPropagationScratchpad {
-    light_buffer: Box<[u8; 48 * 48 * 48]>,
-    visit_queue: Vec<(i32, i32, i32, u8)>,
-}
-impl NeighborPropagationScratchpad {
-    fn clear(&mut self) {
-        self.light_buffer.fill(0);
-        self.visit_queue.clear();
+#[derive(Clone, Copy)]
+struct ChunkBuffer18<'a>(&'a [BlockId; 18 * 18 * 18]);
+
+impl ChunkBuffer for ChunkBuffer18<'_> {
+    fn get(&self, offset: ChunkOffset) -> BlockId {
+        self.0[offset.as_extended_index()]
+    }
+
+    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; 16] {
+        let min_offset = ChunkOffset::new(x, 0, z).as_extended_index();
+        let max_offset = min_offset + 16;
+        // https://github.com/rust-lang/rust/issues/90091 would be nice once stabilized
+        self.0[min_offset..max_offset].try_into().unwrap()
     }
 }
-impl Default for NeighborPropagationScratchpad {
-    fn default() -> Self {
-        Self {
-            light_buffer: Box::new([0; 48 * 48 * 48]),
-            visit_queue: Vec::new(),
+
+struct FcnWithCenter<'a> {
+    neighbors: &'a FastChunkNeighbors,
+    center: ChunkBuffer18<'a>,
+}
+impl<'a> NeighborBuffer for FcnWithCenter<'a> {
+    type Chunk<'b>
+        = ChunkBuffer18<'b>
+    where
+        Self: 'b;
+
+    fn get(&self, dx: i32, dy: i32, dz: i32) -> Option<Self::Chunk<'a>> {
+        if dx == 0 && dy == 0 && dz == 0 {
+            Some(self.center)
+        } else {
+            self.neighbors.get((dx, dy, dz)).map(ChunkBuffer18)
         }
+    }
+
+    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> Lightfield {
+        self.neighbors.inbound_light((dx, dy, dz))
     }
 }
 
 pub(crate) fn propagate_neighbor_data(
     block_manager: &ClientBlockTypeManager,
     neighbors: &FastChunkNeighbors,
-    scratchpad: &mut NeighborPropagationScratchpad,
+    scratchpad: &mut LightScratchpad,
 ) -> Result<bool> {
     if !neighbors.should_mesh() {
         return Ok(false);
@@ -369,7 +394,7 @@ pub(crate) fn propagate_neighbor_data(
             }
         }
 
-        let ids = current_chunk
+        let center_ids_mut = current_chunk
             .block_ids_mut()
             .context("Mutable block IDs should be non-empty because the chunk is not all air")?;
 
@@ -399,12 +424,11 @@ pub(crate) fn propagate_neighbor_data(
                                 .as_extended_index()]
                             })
                             .unwrap_or(UNLOADED_CHUNK_BLOCK_ID);
-                        ids[(x, y, z).as_extended_index()] = neighbor;
+                        center_ids_mut[(x, y, z).as_extended_index()] = neighbor;
                     }
                 }
             }
-            if current_chunk
-                .block_ids()
+            if center_ids_mut
                 .iter()
                 .all(|&x| block_manager.is_solid_opaque(x))
             {
@@ -415,188 +439,24 @@ pub(crate) fn propagate_neighbor_data(
 
         {
             let _span = span!("lighting");
-
-            #[inline]
-            fn check_propagation_and_push<F>(
-                queue: &mut Vec<(i32, i32, i32, u8)>,
-                light_buffer: &mut [u8; 48 * 48 * 48],
-                i: i32,
-                j: i32,
-                k: i32,
-                light_level: u8,
-                light_propagation: F,
-            ) where
-                F: Fn(i32, i32, i32) -> bool,
-            {
-                if i < -16 || j < -16 || k < -16 || i >= 32 || j >= 32 || k >= 32 {
-                    return;
-                }
-                if !light_propagation(i, j, k) {
-                    return;
-                }
-                let old_level = light_buffer
-                    [(i + 16) as usize * 48 * 48 + (k + 16) as usize * 48 + (j + 16) as usize];
-                // Take the maximum value of the upper and lower nibbles independently
-                let max_level = ((old_level & 0xf).max(light_level & 0xf))
-                    | (old_level & 0xf0).max(light_level & 0xf0);
-                if max_level == old_level {
-                    return;
-                }
-
-                light_buffer
-                    [(i + 16) as usize * 48 * 48 + (k + 16) as usize * 48 + (j + 16) as usize] =
-                    max_level;
-                let i_dist = (-1 - i).max(i - 16);
-                let j_dist = (-1 - j).max(j - 16);
-                let k_dist = (-1 - k).max(k - 16);
-                let dist = i_dist + j_dist + k_dist;
-                let max_level = (light_level >> 4).max(light_level & 0xf);
-                if dist < (max_level as i32) {
-                    queue.push((i, j, k, light_level));
-                }
-            }
-
-            scratchpad.clear();
-
-            // First, scan through the neighborhood looking for light sources
-            // Indices are reversed in order to achieve better cache locality
-            // x is the minor index, z is intermediate, and y is the major index
-
-            let mut light_propagation_cache: bitvec::BitArr!(for 48*48*48) =
-                bitvec::array::BitArray::ZERO;
-
-            for x_coarse in -1i32..=1 {
-                for z_coarse in -1i32..=1 {
-                    for y_coarse in -1i32..=1 {
-                        let slice = if z_coarse == 0 && y_coarse == 0 && x_coarse == 0 {
-                            // The center chunk is not in the slice cache
-                            Some(current_chunk.block_ids())
-                        } else {
-                            neighbors.get((x_coarse, y_coarse, z_coarse))
-                        };
-
-                        let global_inbound_lights =
-                            neighbors.inbound_light((x_coarse, y_coarse, z_coarse));
-                        if let Some(slice) = slice {
-                            for x_fine in 0i32..16 {
-                                for z_fine in 0i32..16 {
-                                    let x = x_coarse * 16 + x_fine;
-                                    let z = z_coarse * 16 + z_fine;
-                                    let min_index = (x_fine, 0, z_fine).as_extended_index();
-                                    let max_index = min_index + 16;
-                                    let subslice = &slice[min_index..max_index];
-                                    // consider unrolling this loop
-                                    let mut global_light =
-                                        global_inbound_lights.get(x_fine as u8, z_fine as u8);
-                                    for (y_fine, &block_id) in
-                                        subslice.iter().enumerate().rev().take(16)
-                                    {
-                                        let y = y_coarse * 16 + y_fine as i32;
-                                        let propagates_light =
-                                            block_manager.propagates_light(block_id);
-                                        light_propagation_cache.set(
-                                            ((x + 16) * 48 * 48 + (z + 16) * 48 + (y + 16))
-                                                as usize,
-                                            propagates_light,
-                                        );
-                                        let light_emission = block_manager.light_emission(block_id);
-                                        if !propagates_light {
-                                            global_light = false;
-                                        }
-                                        let global_bits = if global_light { 15 << 4 } else { 0 };
-                                        let effective_emission = light_emission | global_bits;
-                                        if effective_emission > 0 {
-                                            check_propagation_and_push(
-                                                &mut scratchpad.visit_queue,
-                                                &mut scratchpad.light_buffer,
-                                                x,
-                                                y,
-                                                z,
-                                                effective_emission,
-                                                |_, _, _| true,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let propagates_light_check = |x: i32, y: i32, z: i32| {
-                light_propagation_cache
-                    [(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
+            let fcn_with_center = FcnWithCenter {
+                neighbors,
+                center: ChunkBuffer18(&*center_ids_mut),
             };
 
-            // Then, while the scratchpad.visit_queue is non-empty, attempt to propagate light
-            while let Some((x, y, z, light_level)) = scratchpad.visit_queue.pop() {
-                let decremented = ((light_level & 0xf).saturating_sub(0x1))
-                    | ((light_level & 0xf0).saturating_sub(0x10));
-                check_propagation_and_push(
-                    &mut scratchpad.visit_queue,
-                    &mut scratchpad.light_buffer,
-                    x - 1,
-                    y,
-                    z,
-                    decremented,
-                    propagates_light_check,
-                );
-                check_propagation_and_push(
-                    &mut scratchpad.visit_queue,
-                    &mut scratchpad.light_buffer,
-                    x + 1,
-                    y,
-                    z,
-                    decremented,
-                    propagates_light_check,
-                );
-                check_propagation_and_push(
-                    &mut scratchpad.visit_queue,
-                    &mut scratchpad.light_buffer,
-                    x,
-                    y - 1,
-                    z,
-                    decremented,
-                    propagates_light_check,
-                );
-                check_propagation_and_push(
-                    &mut scratchpad.visit_queue,
-                    &mut scratchpad.light_buffer,
-                    x,
-                    y + 1,
-                    z,
-                    decremented,
-                    propagates_light_check,
-                );
-                check_propagation_and_push(
-                    &mut scratchpad.visit_queue,
-                    &mut scratchpad.light_buffer,
-                    x,
-                    y,
-                    z - 1,
-                    decremented,
-                    propagates_light_check,
-                );
-                check_propagation_and_push(
-                    &mut scratchpad.visit_queue,
-                    &mut scratchpad.light_buffer,
-                    x,
-                    y,
-                    z + 1,
-                    decremented,
-                    propagates_light_check,
-                );
-            }
+            propagate_light(
+                fcn_with_center,
+                scratchpad,
+                |id| block_manager.propagates_light(id),
+                |id| block_manager.light_emission(id),
+            );
 
             let lightmap = current_chunk.lightmap_mut();
             for x in -1i32..17 {
                 for z in -1i32..17 {
                     for y in -1i32..17 {
                         lightmap[(x, y, z).as_extended_index()] =
-                            scratchpad.light_buffer[(x + 16) as usize * 48 * 48
-                                + (z + 16) as usize * 48
-                                + (y + 16) as usize];
+                            scratchpad.get_packed_u4_u4(x, y, z);
                     }
                 }
             }
