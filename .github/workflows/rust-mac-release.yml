@@ -9,13 +9,13 @@ env:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v3
       - name: Stamp
         run: |
           echo "GH_BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
-          echo "GH_RUN_ID=macos-13-${{ github.run_number }}" >> $GITHUB_ENV
+          echo "GH_RUN_ID=macos-14-${{ github.run_number }}" >> $GITHUB_ENV
           echo "GH_COMMIT=${{ github.sha }}" >> $GITHUB_ENV
           echo "GH_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
       - name: Build
