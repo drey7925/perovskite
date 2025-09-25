@@ -23,6 +23,7 @@ jobs:
           cmake_commit="b4e46db74e74a8c1650b38b1da222284ce1ec5ce"
           tap_name="local/pinned"
           echo "Creating local tap (no git)..."
+          brew uninstall cmake
           brew tap-new --no-git "$tap_name" >/dev/null
           cmake_formula_dir="$(brew --repo "$tap_name")/Formula"
           mkdir -p "$cmake_formula_dir"
