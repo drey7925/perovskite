@@ -16,7 +16,7 @@
 
 use anyhow::Error;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::lighting::{ChunkColumn, Lightfield};
+use perovskite_core::lighting::{ChunkBuffer, ChunkColumn, Lightfield, NeighborBuffer};
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
@@ -63,6 +63,7 @@ use log::{error, info, warn};
 use crate::server::ServerArgs;
 use anyhow::{bail, ensure, Context, Result};
 use arc_swap::ArcSwapOption;
+use bytemuck::cast_slice;
 use integer_encoding::{VarIntReader, VarIntWriter};
 use perovskite_core::protocol::map::ClientExtendedData;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -164,8 +165,6 @@ const _MAX_OFFSET: usize = 16 * 16 * 16;
 /// block-by-block.
 pub struct MapChunk {
     coord: ChunkCoordinate,
-    // TODO: this was exposed for the temporary mapgen API. Lock this down and refactor
-    // more calls similar to mutate_block_atomically
     block_ids: Arc<[AtomicU32; _MAX_OFFSET]>,
     extended_data: Box<FxHashMap<u16, ExtendedData>>,
     dirty: bool,
@@ -1647,7 +1646,7 @@ impl ServerGameMap {
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
-    fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard> {
+    fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'_>> {
         tokio::task::block_in_place(|| {
             log_trace("get_chunk starting");
             let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
@@ -1752,7 +1751,7 @@ impl ServerGameMap {
         &self,
         coord: ChunkCoordinate,
         want_permit: bool,
-    ) -> Option<MapChunkOuterGuard> {
+    ) -> Option<MapChunkOuterGuard<'_>> {
         let shard = shard_id(coord);
         let mut permit = None;
         if want_permit {
@@ -2625,6 +2624,7 @@ pub struct ChunkNeighbors {
     center: BlockCoordinate,
     presence_bitmap: u32,
     blocks: Box<[u32; 48 * 48 * 48]>,
+    lightfields: Box<[Lightfield; 3 * 3 * 3]>,
 }
 impl ChunkNeighbors {
     /// Get the neighbors of a chunk.
@@ -2642,11 +2642,60 @@ impl ChunkNeighbors {
         let cx = dx >> 4;
         let cz = dz >> 4;
         let cy = dy >> 4;
-        if self.presence_bitmap & (1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1))) == 0 {
+        let neighbor_index = Self::neighbor_index(cx, cy, cz);
+        if self.presence_bitmap & (1 << neighbor_index) == 0 {
             return None;
         }
-        let index = ((dx + 16) * 48 * 48) as usize + (dz + 16) as usize * 48 + (dy + 16) as usize;
-        Some(self.blocks[index].into())
+        let base = (16 * 16 * 16) * neighbor_index as usize;
+        let offset = coord.offset().as_index();
+        Some(self.blocks[base + offset].into())
+    }
+
+    fn neighbor_index(cx: i32, cz: i32, cy: i32) -> i32 {
+        (cx + 1) * 9 + (cz + 1) * 3 + (cy + 1)
+    }
+}
+
+struct NeighborChunkProxy<'a> {
+    blocks: &'a [u32; 16 * 16 * 16],
+}
+impl ChunkBuffer for NeighborChunkProxy<'_> {
+    fn get(&self, offset: ChunkOffset) -> BlockId {
+        BlockId(self.blocks[offset.as_index()])
+    }
+
+    fn vertical_slice(&self, x: u8, z: u8) -> &[BlockId; 16] {
+        let base = ChunkOffset::new(x, 0, z).as_index();
+        let subslice: &[BlockId] = cast_slice(&self.blocks[base..base + 16]);
+        subslice.try_into().unwrap()
+    }
+}
+
+// private newtype to work around https://doc.rust-lang.org/error_codes/E0446.html
+struct ChunkNeighborsAdapter<'a>(&'a ChunkNeighbors);
+
+impl<'a> NeighborBuffer for ChunkNeighborsAdapter<'a> {
+    type Chunk<'b>
+        = NeighborChunkProxy<'b>
+    where
+        Self: 'b;
+
+    fn get(&self, dx: i32, dy: i32, dz: i32) -> Option<Self::Chunk<'_>> {
+        let neighbor_index = ChunkNeighbors::neighbor_index(dx, dy, dz);
+        if self.0.presence_bitmap & (1 << neighbor_index) == 0 {
+            None
+        } else {
+            let base = (16 * 16 * 16) * neighbor_index as usize;
+            Some(NeighborChunkProxy {
+                blocks: (&self.0.blocks[base..base + (16 * 16 * 16)])
+                    .try_into()
+                    .unwrap(),
+            })
+        }
+    }
+
+    fn inbound_light(&self, dx: i32, dy: i32, dz: i32) -> Lightfield {
+        self.0.lightfields[ChunkNeighbors::neighbor_index(dx, dy, dz) as usize]
     }
 }
 
@@ -2859,6 +2908,7 @@ impl GameMapTimer {
                 center: BlockCoordinate::new(0, 0, 0),
                 presence_bitmap: 0,
                 blocks: Box::new([0; 48 * 48 * 48]),
+                lightfields: Box::new([Lightfield::zero(); 27]),
             },
         };
         // Todo detect skipped ticks and adjust accordingly
@@ -3038,7 +3088,7 @@ impl GameMapTimer {
                 // We don't hold a read lock, so this doesn't risk deadlock
                 writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
             }
-            // this does the locking twice, with the benefit that it elides all of the memory copying
+            // this does the locking twice, with the benefit that it elides the memory copying
             // associated with build_neighbors if we don't end up actually using that neighbor data
             let (matches, latest_update) = self.build_neighbors(
                 &mut state.neighbor_buffer,
@@ -3495,23 +3545,29 @@ impl GameMapTimer {
                             update_times.push(neighbor_holder.last_written.get_acquire());
 
                             if let Some(contents) = neighbor_holder.try_get_read()? {
-                                presence_bitmap |= 1 << ((cx + 1) * 9 + (cz + 1) * 3 + (cy + 1));
+                                let neighbor_index = ChunkNeighbors::neighbor_index(cx, cy, cz);
+                                presence_bitmap |= 1 << neighbor_index;
                                 if copy_data {
-                                    for dx in 0..16 {
-                                        for dz in 0..16 {
-                                            for dy in 0..16 {
-                                                let x = (16 * cx) + dx;
-                                                let z = (16 * cz) + dz;
-                                                let y = (16 * cy) + dy;
-                                                let o_index = (x + 16) as usize * 48 * 48
-                                                    + (z + 16) as usize * 48
-                                                    + (y + 16) as usize;
-                                                let i_index = dx * 16 * 16 + dz * 16 + dy;
-                                                buf[o_index] = contents.block_ids[i_index as usize]
-                                                    .load(Ordering::Relaxed);
-                                            }
-                                        }
+                                    let base = 16 * 16 * 16 * neighbor_index as usize;
+                                    for (src, dst) in
+                                        contents.block_ids.iter().zip(&mut buf[base..base + 4096])
+                                    {
+                                        *dst = src.load(Ordering::Relaxed);
                                     }
+
+                                    let light_column = shard
+                                        .light_columns
+                                        .get(&(neighbor_coord.x, neighbor_coord.z))
+                                        .with_context(|| {
+                                            format!(
+                                                "Missing lightmap for present chunk {:?}",
+                                                neighbor_coord
+                                            )
+                                        })?;
+                                    let light = light_column
+                                        .get_incoming_light(neighbor_coord.y)
+                                        .unwrap_or(Lightfield::zero());
+                                    neighbor_data.lightfields[neighbor_index as usize] = light;
                                 }
                             }
                         }

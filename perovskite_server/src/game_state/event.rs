@@ -192,7 +192,7 @@ pub struct HandlerContext<'a> {
 }
 
 impl<'a> HandlerContext<'a> {
-    pub fn initiator(&self) -> &EventInitiator {
+    pub fn initiator(&self) -> &EventInitiator<'_> {
         &self.initiator
     }
     pub fn tick(&self) -> u64 {

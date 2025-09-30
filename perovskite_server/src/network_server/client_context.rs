@@ -570,10 +570,10 @@ impl ChunkTracker {
         self.write().remove(&player_coord);
     }
 
-    fn write(&self) -> parking_lot::RwLockWriteGuard<FxHashSet<ChunkCoordinate>> {
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, FxHashSet<ChunkCoordinate>> {
         tokio::task::block_in_place(|| self.loaded_chunks.write())
     }
-    fn read(&self) -> parking_lot::RwLockReadGuard<FxHashSet<ChunkCoordinate>> {
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, FxHashSet<ChunkCoordinate>> {
         tokio::task::block_in_place(|| self.loaded_chunks.read())
     }
 

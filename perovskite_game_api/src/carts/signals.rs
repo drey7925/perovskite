@@ -897,9 +897,6 @@ impl Display for PendingManualRoute {
                 Ok(InterlockingSignalRoute::DivergingRight) => {
                     "right"
                 }
-                Ok(InterlockingSignalRoute::Fork) => {
-                    "fork???"
-                }
                 Ok(InterlockingSignalRoute::StartingSignalApproachThenStop) => {
                     "stop"
                 }
@@ -1184,9 +1181,6 @@ pub(crate) enum SignalParseOutcome {
     DivergingLeft,
     /// The signal indicates that the next switch (capable of being set diverging right, i.e. switch tile with flip_x = false) is to be set diverging
     DivergingRight,
-    /// Not yet supported, may be removed in favor of microcontroller resolutions
-    #[deprecated]
-    Fork,
     /// The signal does snot permit travel.
     Deny,
     /// This is not a signal (it might be a speedpost or similar)
@@ -1205,9 +1199,7 @@ pub(crate) enum InterlockingSignalRoute {
     Straight = 0,
     DivergingLeft = 1,
     DivergingRight = 2,
-    /// Not yet supported, may be removed in favor of microcontroller resolutions
-    #[deprecated]
-    Fork = 3,
+    /// Fork used to have discriminant 3 but was never supported
     StartingSignalApproachThenStop = 4,
     /// Turns into a deny
     ManuallySignalledNoDecision = 5,
@@ -1223,7 +1215,6 @@ impl InterlockingSignalRoute {
             InterlockingSignalRoute::DivergingRight => {
                 Some(rotation | VARIANT_PERMISSIVE | VARIANT_RIGHT)
             }
-            InterlockingSignalRoute::Fork => None,
             InterlockingSignalRoute::StartingSignalApproachThenStop => {
                 // If we ended up in this branch, it's because VARIANT_RESTRICTIVE_EXTERNAL was set.
                 // Make sure that we keep it set.
@@ -1243,7 +1234,6 @@ impl InterlockingSignalRoute {
             InterlockingSignalRoute::Straight => SignalParseOutcome::Straight,
             InterlockingSignalRoute::DivergingLeft => SignalParseOutcome::DivergingLeft,
             InterlockingSignalRoute::DivergingRight => SignalParseOutcome::DivergingRight,
-            InterlockingSignalRoute::Fork => SignalParseOutcome::Fork,
             InterlockingSignalRoute::StartingSignalApproachThenStop => {
                 SignalParseOutcome::StartingSignalApproachThenStop
             }
@@ -1306,9 +1296,6 @@ fn query_manual_interlocking_signal(
     if let Some(pending) = signal_config.pending_manual_route.as_ref() {
         if cart_id == (pending.startup_counter, pending.cart_id) {
             match InterlockingSignalRoute::try_from(pending.decision)? {
-                InterlockingSignalRoute::Fork => {
-                    bail!("Invalid fork decision for manual signal");
-                }
                 InterlockingSignalRoute::StartingSignalApproachThenStop => {
                     bail!("StartingSignalApproachThenStop but not at a starting signal");
                 }

@@ -414,7 +414,7 @@ impl<'a> InlineContext<'a> {
         self.location
     }
 
-    pub fn initiator(&self) -> &EventInitiator {
+    pub fn initiator(&self) -> &EventInitiator<'_> {
         &self.initiator
     }
 
@@ -727,7 +727,7 @@ impl BlockTypeManager {
     /// being defined in a block type is not enough.
     ///
     /// This function will return an empty, nonsensical object if called before the game starts up.
-    pub fn fast_block_group(&self, block_group: &str) -> Option<FastBlockGroup> {
+    pub fn fast_block_group(&self, block_group: &str) -> Option<FastBlockGroup<'_>> {
         self.fast_block_groups
             .get(block_group)
             .map(|x| FastBlockGroup { blocks: x })
@@ -899,7 +899,7 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
         serialize_extended_data_handler: Some(Box::new(unknown_block_serialize_data_passthrough)),
         make_client_extended_data: None,
         dig_handler_full: None,
-        dig_handler_inline: Some(Box::new(move |ctx, block, _, _| {
+        dig_handler_inline: Some(Box::new(move |_ctx, block, _, _| {
             *block = AIR_ID;
             Ok(BlockInteractionResult::default())
         })),

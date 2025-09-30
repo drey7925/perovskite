@@ -4,7 +4,7 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 use bitvec::field::BitField;
 use bitvec::prelude as bv;
 
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::block_id::BlockId;
 use crate::coordinates::ChunkOffset;
@@ -109,7 +109,7 @@ impl Not for Lightfield {
 pub struct ChunkColumn {
     // *Chunk* coordinate y-values that are loaded in memory.
     // Locking order: key1 > key2 (key1 is geometrically above key2) => lock-for-key1 is taken first
-    present: BTreeMap<i32, RwLock<ChunkLightingState>>,
+    present: BTreeMap<i32, Mutex<ChunkLightingState>>,
     generation: AtomicUsize,
 }
 impl ChunkColumn {
@@ -124,7 +124,7 @@ impl ChunkColumn {
     pub fn insert_empty(&mut self, chunk_y: i32) {
         assert!(self
             .present
-            .insert(chunk_y, RwLock::new(ChunkLightingState::empty()))
+            .insert(chunk_y, Mutex::new(ChunkLightingState::empty()))
             .is_none());
     }
 
@@ -145,10 +145,10 @@ impl ChunkColumn {
             .present
             .range((chunk_y + 1)..)
             .next()
-            .map(|(pos, guard)| (*pos, guard.read()))
+            .map(|(pos, guard)| (*pos, guard.lock()))
             .unzip();
 
-        let current = self.present.get(&chunk_y).unwrap().write();
+        let current = self.present.get(&chunk_y).unwrap().lock();
         ChunkColumnCursor {
             generation: self
                 .generation
@@ -164,7 +164,7 @@ impl ChunkColumn {
     /// into the next chunk below it.
     pub fn cursor_out_of(&self, chunk_y: i32) -> Option<ChunkColumnCursor<'_>> {
         // Lock ordering: current read() is called before successor write()
-        let current = self.present.get(&chunk_y).unwrap().read();
+        let current = self.present.get(&chunk_y).unwrap().lock();
         let successor = self.present.range(..chunk_y).next_back()?;
         Some(ChunkColumnCursor {
             generation: self
@@ -174,7 +174,7 @@ impl ChunkColumn {
             current_pos: *successor.0,
             prev_pos: Some(chunk_y),
             previous: Some(current),
-            current: successor.1.write(),
+            current: successor.1.lock(),
         })
     }
 
@@ -186,7 +186,7 @@ impl ChunkColumn {
     /// Returns the incoming light for the given chunk.
     /// Takes a short-lived read lock.
     pub fn get_incoming_light(&self, y: i32) -> Option<Lightfield> {
-        self.present.get(&y).map(|x| x.read().incoming)
+        self.present.get(&y).map(|x| x.lock().incoming)
     }
 
     pub fn copy_keys(&self) -> Vec<i32> {
@@ -197,11 +197,11 @@ impl ChunkColumn {
 /// A cursor that can be used to perform light propagation in the column.
 pub struct ChunkColumnCursor<'a> {
     generation: usize,
-    map: &'a BTreeMap<i32, RwLock<ChunkLightingState>>,
+    map: &'a BTreeMap<i32, Mutex<ChunkLightingState>>,
     current_pos: i32,
     prev_pos: Option<i32>,
-    pub(crate) previous: Option<RwLockReadGuard<'a, ChunkLightingState>>,
-    pub(crate) current: RwLockWriteGuard<'a, ChunkLightingState>,
+    pub(crate) previous: Option<MutexGuard<'a, ChunkLightingState>>,
+    pub(crate) current: MutexGuard<'a, ChunkLightingState>,
 }
 impl<'a> ChunkColumnCursor<'a> {
     pub fn current_occlusion_mut(&mut self) -> &mut Lightfield {
@@ -215,7 +215,7 @@ impl<'a> ChunkColumnCursor<'a> {
     pub fn advance(self) -> Option<Self> {
         // Lock order: drop the previous lock, downgrade the current, and then take the successor
         drop(self.previous);
-        let new_previous = RwLockWriteGuard::downgrade(self.current);
+        let new_previous = self.current;
         let new_current = self.map.range(..self.current_pos).next_back()?;
         Some(ChunkColumnCursor {
             generation: self.generation,
@@ -223,7 +223,7 @@ impl<'a> ChunkColumnCursor<'a> {
             prev_pos: Some(self.current_pos),
             current_pos: *new_current.0,
             previous: Some(new_previous),
-            current: new_current.1.write(),
+            current: new_current.1.lock(),
         })
     }
 

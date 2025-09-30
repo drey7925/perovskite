@@ -219,7 +219,7 @@ tokio::task_local! {
 }
 
 impl InventoryManager {
-    fn lock(&self, key: InventoryKey) -> InventoryLockGuard {
+    fn lock(&self, key: InventoryKey) -> InventoryLockGuard<'_> {
         let _span = span!("Inventory lock");
         let mut lock_set = self.locked.lock();
         while lock_set.contains(&key) {

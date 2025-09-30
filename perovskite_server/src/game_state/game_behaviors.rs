@@ -69,7 +69,7 @@ impl GameBehaviors {
             self.defined_permissions.contains(permission)
         }
     }
-    pub(crate) fn ambient_permissions(&self, name: &str) -> Cow<HashSet<String>> {
+    pub(crate) fn ambient_permissions(&self, name: &str) -> Cow<'_, HashSet<String>> {
         let mut permissions = Cow::Borrowed(&self.ambient_permissions);
         if self.super_users.contains(name) {
             Cow::to_mut(&mut permissions).extend(

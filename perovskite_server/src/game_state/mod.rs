@@ -328,7 +328,7 @@ impl GameState {
     ///
     /// This is best-effort, and relies on tokio still being functional. We also expect
     /// a working memory allocator. i.e. this is application-level code trying to salvage
-    /// the player experience, not a signal-safe handler to dump stack.
+    /// the player experience, not a signal-safe handler that could be used for a SEGV or similar.
     pub fn crash_shutdown(&self, e: anyhow::Error) {
         tracing::error!("Crash shutdown activated: {e:?}");
 

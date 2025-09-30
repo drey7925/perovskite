@@ -460,12 +460,6 @@ fn single_pathfind_attempt(
                     left_pending = false;
                     right_pending = true;
                 }
-                SignalParseOutcome::Fork => {
-                    // forking is not yet supported.
-                    // In principle it should be simple - we just have to recursively call this function and ensure that on success,
-                    // we commit the right set of changes by passing a transaction with the correct outcome of the branch added to it.
-                    todo!()
-                }
                 SignalParseOutcome::Deny => {
                     return Ok(None);
                 }

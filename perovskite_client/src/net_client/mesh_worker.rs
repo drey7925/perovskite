@@ -62,8 +62,10 @@ impl NeighborPropagator {
     }
 
     pub(crate) fn enqueue(&self, coord: ChunkCoordinate) {
-        self.queue.lock().insert(coord);
+        let mut guard = self.queue.lock();
+        guard.insert(coord);
         self.cond.notify_one();
+        drop(guard);
     }
 
     pub(crate) fn cancel(&self) {
@@ -184,8 +186,10 @@ impl MeshWorker {
     }
 
     pub(crate) fn enqueue(&self, coord: ChunkCoordinate) {
-        self.queue.lock().insert(coord);
+        let mut guard = self.queue.lock();
+        guard.insert(coord);
         self.cond.notify_one();
+        drop(guard);
     }
 
     pub(crate) fn queue_len(&self) -> usize {

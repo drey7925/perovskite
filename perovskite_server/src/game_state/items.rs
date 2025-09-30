@@ -522,7 +522,7 @@ impl InteractionRuleExt for proto::InteractionRule {
 
 pub(crate) fn default_generic_handler(
     ctx: &HandlerContext,
-    coord: BlockCoordinate,
+    _coord: BlockCoordinate,
     stack: &ItemStack,
     op: impl FnOnce(&GameState) -> Result<BlockInteractionResult>,
 ) -> Result<ItemInteractionResult> {

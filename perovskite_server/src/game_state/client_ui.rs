@@ -122,7 +122,7 @@ impl Popup {
     pub(crate) fn find_view(
         &self,
         id: InventoryViewId,
-    ) -> Option<Box<InventoryViewWithContext<Popup>>> {
+    ) -> Option<Box<InventoryViewWithContext<'_, Popup>>> {
         if let Some(view) = self.inventory_views().values().find(|x| x.id == id) {
             return Some(Box::new(InventoryViewWithContext {
                 view,
