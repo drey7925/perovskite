@@ -32,6 +32,7 @@ impl BulkUpdateCallback for SoilTimerCallback {
         _timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
+        _lights: Option<&perovskite_core::lighting::LightScratchpad>,
     ) -> Result<()> {
         let neighbors = neighbors.context("Missing neighbors in soil timer callback")?;
         let water = ctx

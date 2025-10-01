@@ -345,6 +345,21 @@ impl ChatCommandHandler for ElevateCommandImpl {
                             "Temporary permissions cleared",
                         ))
                         .await?;
+                } else if params[1] == "*" {
+                    let mut granted = vec![];
+                    for permission in player_initiator.player.effective_permissions() {
+                        if let Some(suffix) = permission.strip_prefix(ELIGIBLE_PREFIX) {
+                            player_initiator.player.grant_permission(suffix)?;
+                            granted.push(permission.to_string());
+                        }
+                    }
+                    context
+                        .initiator()
+                        .send_chat_message_async(ChatMessage::new_server_message(format!(
+                            "Granted {}",
+                            granted.join(", ")
+                        )))
+                        .await?;
                 } else {
                     let permission_to_check = ELIGIBLE_PREFIX.to_string() + params[1];
                     if !player_initiator.player.has_permission(&permission_to_check) {

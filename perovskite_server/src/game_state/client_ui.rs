@@ -124,10 +124,10 @@ impl Popup {
         id: InventoryViewId,
     ) -> Option<Box<InventoryViewWithContext<'_, Popup>>> {
         if let Some(view) = self.inventory_views().values().find(|x| x.id == id) {
-            return Some(Box::new(InventoryViewWithContext {
+            Some(Box::new(InventoryViewWithContext {
                 view,
                 context: self,
-            }));
+            }))
         } else {
             None
         }

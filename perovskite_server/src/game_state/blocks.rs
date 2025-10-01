@@ -451,6 +451,7 @@ pub struct BlockTypeManager {
     // Separate copy of BlockType.client_info.allow_light_propagation, packed densely
     // to be more cache-friendly
     light_propagation: bitvec::vec::BitVec,
+    light_emission: Vec<u8>,
     trivially_replaceable_block_group: bitvec::vec::BitVec,
     has_client_side_extended_data: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
@@ -463,6 +464,7 @@ impl BlockTypeManager {
             name_to_base_id_map: FxHashMap::from_iter([(AIR.to_string(), AIR_ID.0)]),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            light_emission: vec![],
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
@@ -498,6 +500,11 @@ impl BlockTypeManager {
             // unknown blocks don't propagate light
             false
         }
+    }
+
+    #[inline]
+    pub(crate) fn light_emission(&self, id: BlockId) -> u8 {
+        self.light_emission.get(id.index()).copied().unwrap_or(0)
     }
 
     #[inline]
@@ -565,6 +572,7 @@ impl BlockTypeManager {
             name_to_base_id_map: FxHashMap::default(),
             init_complete: false,
             light_propagation: bitvec::vec::BitVec::new(),
+            light_emission: vec![],
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
@@ -762,12 +770,14 @@ impl BlockTypeManager {
             &mut self.trivially_replaceable_block_group,
         );
         self.light_propagation.resize(self.block_types.len(), false);
+        self.light_emission.resize(self.block_types.len(), 0);
         self.has_client_side_extended_data
             .resize(self.block_types.len(), false);
         for (index, block) in self.block_types.iter().enumerate() {
             if block.client_info.allow_light_propagation {
                 self.light_propagation.set(index, true);
             }
+            self.light_emission[index] = block.client_info.light_emission as u8;
             if block.client_info.has_client_extended_data {
                 self.has_client_side_extended_data.set(index, true);
             }

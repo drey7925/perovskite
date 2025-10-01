@@ -305,6 +305,7 @@ impl BulkUpdateCallback for GrowTimerImpl {
         _timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
+        _lights: Option<&perovskite_core::lighting::LightScratchpad>,
     ) -> Result<()> {
         let neighbors = neighbors.context("Crops growth update callback missing neighbors")?;
         tracing::debug!("gti timer invoked");

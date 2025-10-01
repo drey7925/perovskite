@@ -1,4 +1,5 @@
 //! Implementation details of light propagation that need to be shared between the client and server
+//! The only type interesting to plugins (for now) is [LightScratchpad]
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
 use bitvec::field::BitField;
@@ -326,7 +327,7 @@ impl ChunkLightingState {
 pub struct LightScratchpad {
     light_buffer: Box<[u8; 48 * 48 * 48]>,
     visit_queue: Vec<(i32, i32, i32, u8)>,
-    propagation_cache: bitvec::BitArr!(for 48*48*48),
+    propagation_cache: Box<bitvec::BitArr!(for 48*48*48)>,
 }
 impl LightScratchpad {
     pub fn clear(&mut self) {
@@ -338,13 +339,23 @@ impl LightScratchpad {
     pub fn get_packed_u4_u4(&self, x: i32, y: i32, z: i32) -> u8 {
         self.light_buffer[(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]
     }
+
+    #[inline(always)]
+    pub fn get_global_light(&self, x: i32, y: i32, z: i32) -> u8 {
+        self.get_packed_u4_u4(x, y, z) >> 4
+    }
+
+    #[inline(always)]
+    pub fn get_local_light(&self, x: i32, y: i32, z: i32) -> u8 {
+        self.get_packed_u4_u4(x, y, z) & 0xf
+    }
 }
 impl Default for LightScratchpad {
     fn default() -> Self {
         Self {
             light_buffer: Box::new([0; 48 * 48 * 48]),
             visit_queue: Vec::new(),
-            propagation_cache: bitvec::array::BitArray::ZERO,
+            propagation_cache: Box::new(bitvec::array::BitArray::ZERO),
         }
     }
 }
@@ -408,6 +419,9 @@ pub trait NeighborBuffer {
 }
 
 /// Fills in scratchpad with light in the center chunk of the neighbor buffer.
+// Critical function, inline it into every caller even at the cost of build time
+// In particular, we want to make sure that the compiler can see through the light data lookup
+// functions and inline them
 pub fn propagate_light(
     neighbors: impl NeighborBuffer,
     scratchpad: &mut LightScratchpad,

@@ -16,7 +16,9 @@
 
 use anyhow::Error;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::lighting::{ChunkBuffer, ChunkColumn, Lightfield, NeighborBuffer};
+use perovskite_core::lighting::{
+    propagate_light, ChunkBuffer, ChunkColumn, LightScratchpad, Lightfield, NeighborBuffer,
+};
 use rand::distributions::Bernoulli;
 use rand::prelude::Distribution;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
@@ -2597,7 +2599,8 @@ pub struct TimerState {
 struct ShardState {
     timer_state: TimerState,
     // pre-allocated here to avoid allocations in the timer path
-    neighbor_buffer: ChunkNeighbors,
+    neighbor_buffer: Option<ChunkNeighbors>,
+    lighting_buffer: Option<LightScratchpad>,
 }
 
 pub trait TimerInlineCallback: Send + Sync {
@@ -2626,6 +2629,7 @@ pub struct ChunkNeighbors {
     blocks: Box<[u32; 48 * 48 * 48]>,
     lightfields: Box<[Lightfield; 3 * 3 * 3]>,
 }
+
 impl ChunkNeighbors {
     /// Get the neighbors of a chunk.
     /// Note: This is guaranteed to return the neighbors of the chunk in question, assuming that the chunk is loaded.
@@ -2653,6 +2657,31 @@ impl ChunkNeighbors {
 
     fn neighbor_index(cx: i32, cz: i32, cy: i32) -> i32 {
         (cx + 1) * 9 + (cz + 1) * 3 + (cy + 1)
+    }
+
+    pub(crate) fn populate_lighting(
+        &mut self,
+        block_ids: &BlockTypeManager,
+        light: &mut Option<LightScratchpad>,
+    ) {
+        let light = light.get_or_insert_with(LightScratchpad::default);
+        let adapter = ChunkNeighborsAdapter(self);
+        propagate_light(
+            adapter,
+            light,
+            |id| block_ids.allows_light_propagation(id),
+            |id| block_ids.light_emission(id),
+        );
+    }
+}
+impl Default for ChunkNeighbors {
+    fn default() -> Self {
+        Self {
+            center: BlockCoordinate::new(0, 0, 0),
+            presence_bitmap: 0,
+            blocks: Box::new([0; 48 * 48 * 48]),
+            lightfields: Box::new([Lightfield::zero(); 27]),
+        }
     }
 }
 
@@ -2717,6 +2746,8 @@ pub trait BulkUpdateCallback: Send + Sync {
     ///         not visible in `neighbors`.
     ///     neighbors: For bulk update with neighbors, this contains neighbor data. This does not
     ///         show changes made via `chunk`.
+    ///     lights: For bulk update with neighbors when light computation is enabled. Does not show
+    ///         changes made via `chunk`
     fn bulk_update_callback(
         &self,
         ctx: &HandlerContext<'_>,
@@ -2724,6 +2755,7 @@ pub trait BulkUpdateCallback: Send + Sync {
         timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
+        lights: Option<&LightScratchpad>,
     ) -> Result<()>;
 }
 
@@ -2807,6 +2839,9 @@ pub struct TimerSettings {
     /// **Warning:** For per-block actions with a probability, this will idle the timer for a chunk
     /// if eligible blocks are present, but not selected due to the probability.
     pub idle_chunk_after_unchanged: bool,
+    /// For bulk update handlers, whether lighting data is populated into the neighbor buffer.
+    /// * Only applies for bulk handlers w/ neighbors
+    pub populate_lighting: bool,
     pub _ne: NonExhaustive,
 }
 impl Default for TimerSettings {
@@ -2819,6 +2854,7 @@ impl Default for TimerSettings {
             ignore_block_type_presence_check: false,
             per_block_probability: 1.0,
             idle_chunk_after_unchanged: false,
+            populate_lighting: false,
             _ne: NonExhaustive(()),
         }
     }
@@ -2904,12 +2940,8 @@ impl GameMapTimer {
                 prev_tick_time: start_time,
                 current_tick_time: Instant::now(),
             },
-            neighbor_buffer: ChunkNeighbors {
-                center: BlockCoordinate::new(0, 0, 0),
-                presence_bitmap: 0,
-                blocks: Box::new([0; 48 * 48 * 48]),
-                lightfields: Box::new([Lightfield::zero(); 27]),
-            },
+            neighbor_buffer: None,
+            lighting_buffer: None,
         };
         // Todo detect skipped ticks and adjust accordingly
         while !self.cancellation.is_cancelled() {
@@ -3107,6 +3139,13 @@ impl GameMapTimer {
                     game_state.game_map(),
                     true,
                 )?;
+                if self.settings.populate_lighting {
+                    state
+                        .neighbor_buffer
+                        .as_mut()
+                        .context("Neighbor buffer was None after building")?
+                        .populate_lighting(game_state.block_types(), &mut state.lighting_buffer);
+                }
                 let shard = game_state.game_map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
                     if let Some(mut chunk) = holder.try_get_write()? {
@@ -3117,7 +3156,8 @@ impl GameMapTimer {
                                     holder,
                                     &mut chunk,
                                     coord,
-                                    Some(&state.neighbor_buffer),
+                                    state.neighbor_buffer.as_ref(),
+                                    state.lighting_buffer.as_ref(),
                                     state,
                                     &mut writeback_permit,
                                 )?;
@@ -3274,6 +3314,7 @@ impl GameMapTimer {
                             holder,
                             &mut chunk,
                             coord,
+                            None,
                             None,
                             state,
                             writeback_permit,
@@ -3466,6 +3507,7 @@ impl GameMapTimer {
         chunk: &mut MapChunkInnerWriteGuard<'_>,
         coord: ChunkCoordinate,
         neighbor_data: Option<&ChunkNeighbors>,
+        light_data: Option<&LightScratchpad>,
         state: &ShardState,
         permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
     ) -> Result<()> {
@@ -3484,7 +3526,8 @@ impl GameMapTimer {
                         coord,
                         &state.timer_state,
                         chunk,
-                        neighbor_data
+                        neighbor_data,
+                        None,
                     ),
                     "timer_bulk_update",
                     &EventInitiator::Engine
@@ -3498,7 +3541,8 @@ impl GameMapTimer {
                         coord,
                         &state.timer_state,
                         chunk,
-                        neighbor_data
+                        neighbor_data,
+                        light_data,
                     ),
                     "timer_bulk_update_with_neighbors",
                     &EventInitiator::Engine
@@ -3520,11 +3564,13 @@ impl GameMapTimer {
 
     fn build_neighbors(
         &self,
-        neighbor_data: &mut ChunkNeighbors,
+        neighbor_data: &mut Option<ChunkNeighbors>,
         center_coord: ChunkCoordinate,
         game_map: &ServerGameMap,
         copy_data: bool,
     ) -> Result<(bool, Option<Instant>)> {
+        let neighbor_data = neighbor_data.get_or_insert_with(Default::default);
+
         let buf = &mut neighbor_data.blocks;
         let mut presence_bitmap = 0u32;
         let mut any_blooms_match = false;

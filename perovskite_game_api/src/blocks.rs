@@ -966,6 +966,7 @@ impl BulkUpdateCallback for LiquidPropagator {
         _timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
+        _lights: Option<&perovskite_core::lighting::LightScratchpad>,
     ) -> Result<()> {
         let neighbors = neighbors.unwrap();
         for liquid_type in self.liquids.iter() {
