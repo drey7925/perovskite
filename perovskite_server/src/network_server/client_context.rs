@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashSet, VecDeque};
-use std::ops::RangeInclusive;
+use std::ops::{DerefMut, RangeInclusive};
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -32,8 +32,8 @@ use crate::game_state::event::HandlerContext;
 use crate::game_state::event::{run_traced, run_traced_sync};
 
 use crate::game_state::event::PlayerInitiator;
-use crate::game_state::game_map::BlockUpdate;
 use crate::game_state::game_map::CACHE_CLEAN_MIN_AGE;
+use crate::game_state::game_map::{BlockUpdate, UpdateBroadcast};
 use crate::game_state::inventory::InventoryKey;
 use crate::game_state::inventory::InventoryViewWithContext;
 use crate::game_state::inventory::TypeErasedInventoryView;
@@ -526,11 +526,17 @@ impl Drop for SharedContext {
     }
 }
 
+struct ChunkTrackerInner {
+    loaded: FxHashSet<ChunkCoordinate>,
+    updated: FxHashSet<ChunkCoordinate>,
+}
+
 /// Tracks what chunks are close enough to the player to be of interest
 pub(crate) struct ChunkTracker {
     loaded_chunks_bloom: cbloom::Filter,
     // The client knows about these chunks, and we should send updates to them
-    loaded_chunks: RwLock<FxHashSet<ChunkCoordinate>>,
+    //
+    inner: RwLock<ChunkTrackerInner>,
     // todo later - chunks that the client might have unloaded, but might be worth sending on a best-effort basis
     // todo - move AIMD pacing into this
 }
@@ -549,44 +555,80 @@ impl ChunkTracker {
                 65536,
                 ((LOAD_LAZY_DISTANCE as usize).pow(3) / 2).max(1),
             ),
-            loaded_chunks: RwLock::new(FxHashSet::default()),
+            inner: RwLock::new(ChunkTrackerInner {
+                loaded: Default::default(),
+                updated: Default::default(),
+            }),
         }
     }
     fn is_loaded(&self, coord: ChunkCoordinate) -> bool {
         if !self.loaded_chunks_bloom.maybe_contains(coord.hash_u64()) {
             return false;
         }
-        self.read().contains(&coord)
+        self.read().loaded.contains(&coord)
     }
     // Marks a chunk as loaded. This must be called before the chunk is actually loaded and sent to the client
     fn mark_chunk_loaded(&self, coord: ChunkCoordinate) {
         self.loaded_chunks_bloom.insert(coord.hash_u64());
-        self.write().insert(coord);
+        self.write().loaded.insert(coord);
     }
 
     // Marks a chunk as unloaded. This must be called after the chunk is actually unloaded and the corresponding message is sent
     // to the client
     fn mark_chunk_unloaded(&self, player_coord: ChunkCoordinate) {
-        self.write().remove(&player_coord);
+        self.write().loaded.remove(&player_coord);
     }
 
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, FxHashSet<ChunkCoordinate>> {
-        tokio::task::block_in_place(|| self.loaded_chunks.write())
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, ChunkTrackerInner> {
+        tokio::task::block_in_place(|| self.inner.write())
     }
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, FxHashSet<ChunkCoordinate>> {
-        tokio::task::block_in_place(|| self.loaded_chunks.read())
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, ChunkTrackerInner> {
+        tokio::task::block_in_place(|| self.inner.read())
     }
 
     fn mark_chunks_unloaded(&self, chunks: impl Iterator<Item = ChunkCoordinate>) {
         let mut write_lock = self.write();
         for coord in chunks {
-            write_lock.remove(&coord);
+            write_lock.loaded.remove(&coord);
         }
+    }
+
+    fn mark_chunks_updated(&self, chunks: impl Iterator<Item = ChunkCoordinate>) {
+        let mut write_lock = tokio::task::block_in_place(|| self.write());
+        for coord in chunks {
+            write_lock.updated.insert(coord);
+        }
+    }
+
+    fn take_updated_chunks(
+        &self,
+        accept_predicate: impl Fn(&ChunkCoordinate) -> bool,
+    ) -> Vec<ChunkCoordinate> {
+        let mut results = vec![];
+        let mut write_lock = self.write();
+        let inner = write_lock.deref_mut();
+        // We need to manually deref once, then do a splitting borrow
+        let updated = &mut inner.updated;
+        let loaded = &inner.loaded;
+        updated.retain(|&coord| {
+            if accept_predicate(&coord) {
+                if loaded.contains(&coord) {
+                    // If it's not in the chunk tracker, no point dealing with it
+                    results.push(coord);
+                }
+                false
+            } else {
+                true
+            }
+        });
+        results
     }
 
     fn clear(&self) {
         self.loaded_chunks_bloom.clear();
-        self.write().clear();
+        let mut guard = self.write();
+        guard.loaded.clear();
+        guard.updated.clear();
     }
 }
 
@@ -759,9 +801,9 @@ impl MapChunkSender {
         let unsub_message = tokio::task::block_in_place(|| {
             let chunks_to_unsubscribe: Vec<_> = self
                 .chunk_tracker
-                .loaded_chunks
                 .read()
                 .trace_point(&trace, "chunk tracker read acquired")
+                .loaded
                 .iter()
                 .filter(|&x| crate::game_state::game_map::shard_id(*x) % 2 == self.shard_parity)
                 .filter(|&x| {
@@ -799,6 +841,11 @@ impl MapChunkSender {
 
         let effective_terrain_distance = LOAD_TERRAIN_DISTANCE
             .clamp(FORCE_LOAD_DISTANCE, update.client_requested_render_distance);
+
+        let mut updated_chunks =
+            FxHashSet::from_iter(self.chunk_tracker.take_updated_chunks(|x| {
+                crate::game_state::game_map::shard_id(*x) % 2 == self.shard_parity
+            }));
 
         // Phase 2: Load chunks that are close enough.
         tokio::task::block_in_place(|| {
@@ -913,13 +960,16 @@ impl MapChunkSender {
                 // chunk wasn't in the map, so we need to reload it
                 chunk_needs_reload = true;
             }
+            if updated_chunks.contains(&coord) {
+                chunk_needs_reload = true;
+            }
             // // We do need to bump chunk access times, even in the skip range :(
             // // Otherwise nearby chunks get unloaded and timers never fire
             // if i < skip {
             //     continue;
             // }
 
-            if self.chunk_tracker.is_loaded(coord) && !chunk_needs_reload {
+            if !chunk_needs_reload && self.chunk_tracker.is_loaded(coord) {
                 continue;
             }
             // We load chunks as long as they're close enough and the map system
@@ -977,12 +1027,16 @@ impl MapChunkSender {
 
                 trace.log("message sent");
                 sent_chunks += 1;
+                updated_chunks.remove(&coord);
                 if sent_chunks > update.chunks_to_send {
+                    self.context.chunk_aimd.lock().increase();
                     break;
                 }
             }
         }
-        self.context.chunk_aimd.lock().increase();
+        // give back update chunks we didn't handle
+        self.chunk_tracker
+            .mark_chunks_updated(updated_chunks.into_iter());
         Ok(())
     }
 
@@ -1056,6 +1110,33 @@ impl MapChunkSender {
     }
 }
 
+struct BlockEventCoalescer {
+    updates: FxHashMap<BlockCoordinate, BlockUpdate>,
+    chunks: FxHashSet<ChunkCoordinate>,
+}
+impl BlockEventCoalescer {
+    fn new() -> Self {
+        Self {
+            updates: Default::default(),
+            chunks: Default::default(),
+        }
+    }
+    fn handle(&mut self, update: UpdateBroadcast) {
+        match update {
+            UpdateBroadcast::Block(update) => {
+                if self.chunks.contains(&update.location.chunk()) {
+                    return;
+                }
+                self.updates.insert(update.location, update);
+            }
+            UpdateBroadcast::Chunk(chunk) => {
+                self.chunks.insert(chunk);
+                self.updates.retain(|k, _v| k.chunk() != chunk);
+            }
+        }
+    }
+}
+
 // Sends block updates to the client
 pub(crate) struct BlockEventSender {
     context: Arc<SharedContext>,
@@ -1065,7 +1146,7 @@ pub(crate) struct BlockEventSender {
 
     // All updates to the map from all sources, not yet filtered by location (BlockEventSender is
     // responsible for filtering)
-    block_events: broadcast::Receiver<BlockUpdate>,
+    block_events: broadcast::Receiver<UpdateBroadcast>,
     chunk_tracker: Arc<ChunkTracker>,
 }
 impl BlockEventSender {
@@ -1102,7 +1183,7 @@ impl BlockEventSender {
     )]
     async fn handle_block_update(
         &mut self,
-        update: Result<BlockUpdate, broadcast::error::RecvError>,
+        update: Result<UpdateBroadcast, broadcast::error::RecvError>,
     ) -> Result<()> {
         let update = match update {
             Err(broadcast::error::RecvError::Lagged(num_pending)) => {
@@ -1121,18 +1202,22 @@ impl BlockEventSender {
             }
             Ok(x) => x,
         };
-        let mut updates = FxHashMap::default();
-        if self.chunk_tracker.is_loaded(update.location.chunk()) {
-            updates.insert(update.location, update);
+
+        let mut coalescer = BlockEventCoalescer::new();
+        if self.chunk_tracker.is_loaded(update.chunk()) {
+            coalescer.handle(update);
         }
         // Drain and batch as many updates as possible
         let mut have_slept = false;
-        while updates.len() < MAX_UPDATE_BATCH_SIZE {
+        let mut incoming_events = 0;
+        while coalescer.updates.len() < MAX_UPDATE_OUTGOING_BATCH_SIZE
+            && incoming_events < MAX_UPDATE_INCOMING_BATCH_SIZE
+        {
+            incoming_events += 1;
             match self.block_events.try_recv() {
                 Ok(update) => {
-                    if self.chunk_tracker.is_loaded(update.location.chunk()) {
-                        // last update wins
-                        updates.insert(update.location, update);
+                    if self.chunk_tracker.is_loaded(update.chunk()) {
+                        coalescer.handle(update);
                     }
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
@@ -1153,21 +1238,24 @@ impl BlockEventSender {
                 }
             }
         }
-        plot!("block updates", updates.len() as f64);
+        plot!("block updates", coalescer.updates.len() as f64);
         tracing::event!(
             tracing::Level::TRACE,
             "Sending {} block updates",
-            updates.len()
+            coalescer.updates.len()
         );
 
         let mut update_protos = Vec::new();
-        for (coord, update) in updates {
+        for (coord, update) in coalescer.updates {
             update_protos.push(proto::MapDeltaUpdate {
                 block_coord: Some(coord.into()),
                 new_id: update.id.into(),
                 new_client_ext_data: update.new_ext_data,
             })
         }
+
+        self.chunk_tracker
+            .mark_chunks_updated(coalescer.chunks.into_iter());
 
         if !update_protos.is_empty() {
             let message = StreamToClient {
@@ -2726,7 +2814,8 @@ const UNLOAD_DISTANCE: i32 = 200;
 // Chunks within this distance will be sent, even if flow control would otherwise prevent them from being sent
 const FORCE_LOAD_DISTANCE: i32 = 4;
 
-const MAX_UPDATE_BATCH_SIZE: usize = 256;
+const MAX_UPDATE_INCOMING_BATCH_SIZE: usize = 256;
+const MAX_UPDATE_OUTGOING_BATCH_SIZE: usize = 256;
 
 const INITIAL_CHUNKS_PER_UPDATE: usize = 128;
 const MAX_CHUNKS_PER_UPDATE: usize = 4096;

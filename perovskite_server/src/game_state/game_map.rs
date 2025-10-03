@@ -554,6 +554,20 @@ pub(crate) struct BlockUpdate {
     pub(crate) new_ext_data: Option<ClientExtendedData>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum UpdateBroadcast {
+    Block(BlockUpdate),
+    Chunk(ChunkCoordinate),
+}
+impl UpdateBroadcast {
+    pub(crate) fn chunk(&self) -> ChunkCoordinate {
+        match self {
+            UpdateBroadcast::Block(update) => update.location.chunk(),
+            UpdateBroadcast::Chunk(c) => *c,
+        }
+    }
+}
+
 struct MapChunkInnerReadGuard<'a> {
     guard: RwLockReadGuard<'a, HolderState>,
 }
@@ -899,7 +913,7 @@ pub struct ServerGameMap {
     // However, it means that one shard's lock control word isn't aliasing with the data of other shards.
     live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_CHUNK_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
-    block_update_sender: broadcast::Sender<BlockUpdate>,
+    block_update_sender: broadcast::Sender<UpdateBroadcast>,
     writeback_senders: [mpsc::Sender<WritebackReq>; NUM_CHUNK_SHARDS],
     // prefetchers
     early_shutdown: CancellationToken,
@@ -1244,7 +1258,11 @@ impl ServerGameMap {
         // see if we can just turn this to a call to mutate_block_atomically
         self.enqueue_writeback(chunk_guard)?;
         if old_id != new_id || new_client_ext.is_some() {
-            self.broadcast_block_id_change(coord, new_id, new_client_ext);
+            self.broadcast_block_id_change(BlockUpdate {
+                location: coord,
+                id: new_id,
+                new_ext_data: new_client_ext,
+            });
         }
         Ok((old_id, old_data))
     }
@@ -1353,7 +1371,11 @@ impl ServerGameMap {
             .block_bloom_filter
             .insert(new_id.base_id() as u64);
         self.enqueue_writeback(chunk_guard)?;
-        self.broadcast_block_id_change(coord, new_id, new_client_ext);
+        self.broadcast_block_id_change(BlockUpdate {
+            location: coord,
+            id: new_id,
+            new_ext_data: new_client_ext,
+        });
         Ok((CasOutcome::Match, old_block, old_data))
     }
 
@@ -1505,11 +1527,11 @@ impl ServerGameMap {
                 .broadcast_block_update(chunk.coord.with_offset(offset));
         }
         if new_id != old_id || client_ext_data.is_some() {
-            game_map.broadcast_block_id_change(
-                chunk.coord.with_offset(offset),
-                new_id,
-                client_ext_data,
-            );
+            game_map.broadcast_block_id_change(BlockUpdate {
+                location: coord,
+                id: new_id,
+                new_ext_data: client_ext_data,
+            });
         }
 
         Ok((closure_result?, new_id != old_id))
@@ -1887,19 +1909,17 @@ impl ServerGameMap {
     }
 
     // Broadcasts when a block on the map changes
-    fn broadcast_block_id_change(
-        &self,
-        coord: BlockCoordinate,
-        id: BlockId,
-        new_ext_data: Option<ClientExtendedData>,
-    ) {
+    fn broadcast_block_id_change(&self, update: BlockUpdate) {
         // The only error we expect is that there are no receivers. This is fine; we might
         // be running a timer for a block that's still loaded after all players log out
-        let _ = self.block_update_sender.send(BlockUpdate {
-            location: coord,
-            id,
-            new_ext_data,
-        });
+        let _ = self
+            .block_update_sender
+            .send(UpdateBroadcast::Block(update));
+    }
+    fn broadcast_bulk_chunk_update(&self, coord: ChunkCoordinate) {
+        // The only error we expect is that there are no receivers. This is fine; we might
+        // be running a timer for a block that's still loaded after all players log out
+        let _ = self.block_update_sender.send(UpdateBroadcast::Chunk(coord));
     }
     /// Enqueues this chunk to be written back to the database.
     fn enqueue_writeback(&self, chunk: MapChunkOuterGuard<'_>) -> Result<()> {
@@ -1916,7 +1936,7 @@ impl ServerGameMap {
 
     /// Create a receiver that is notified of changes to all block IDs (including variant changes).
     /// This receiver will not obtain messages for changes to extended data.
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<BlockUpdate> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<UpdateBroadcast> {
         self.block_update_sender.subscribe()
     }
 
@@ -3627,6 +3647,8 @@ impl GameMapTimer {
     }
 }
 
+const AGGREGATE_UPDATES_THRESHOLD: usize = 128;
+
 fn reconcile_after_bulk_handler(
     old_block_ids: &[u32; _MAX_OFFSET],
     chunk: &mut MapChunkInnerWriteGuard<'_>,
@@ -3638,6 +3660,7 @@ fn reconcile_after_bulk_handler(
 ) -> Result<()> {
     let mut seen_blocks = FxHashSet::default();
     let mut any_updated = false;
+    let mut updates = vec![];
     for i in 0.._MAX_OFFSET {
         let old_block_id = BlockId::from(old_block_ids[i]);
         let new_block_id = BlockId::from(chunk.block_ids[i].load(Ordering::Relaxed));
@@ -3669,13 +3692,25 @@ fn reconcile_after_bulk_handler(
                     }
                 }
             };
-
-            game_state.game_map().broadcast_block_id_change(
-                coord.with_offset(ChunkOffset::from_index(i)),
-                new_block_id,
-                new_ext,
-            );
+            if updates.len() < AGGREGATE_UPDATES_THRESHOLD {
+                let update = BlockUpdate {
+                    location: coord.with_offset(ChunkOffset::from_index(i)),
+                    id: new_block_id,
+                    new_ext_data: new_ext,
+                };
+                updates.push(update);
+            }
         }
+    }
+
+    if updates.len() < AGGREGATE_UPDATES_THRESHOLD {
+        for update in updates {
+            game_state.game_map().broadcast_block_id_change(update);
+        }
+    } else {
+        game_state
+            .game_map()
+            .broadcast_bulk_chunk_update(chunk.coord);
     }
 
     if any_updated {
