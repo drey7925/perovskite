@@ -335,6 +335,8 @@ impl LightScratchpad {
         self.visit_queue.clear();
         self.propagation_cache.fill(false);
     }
+    /// Returns the light at the given coordinate, packed with global light in the upper 4 bits and
+    /// local light in the lower 4 bits
     #[inline(always)]
     pub fn get_packed_u4_u4(&self, x: i32, y: i32, z: i32) -> u8 {
         self.light_buffer[(x + 16) as usize * 48 * 48 + (z + 16) as usize * 48 + (y + 16) as usize]

@@ -19,6 +19,7 @@ use perovskite_server::game_state::game_map::{
 use perovskite_server::game_state::items::ItemStack;
 use rand::{thread_rng, Rng};
 use rustc_hash::FxHashMap;
+use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
@@ -114,13 +115,59 @@ impl Default for InteractionEffect {
     }
 }
 
+/// A function that controls crop growth. It is provided as a trait for ease of documenting
+/// parameters + for the sake of a Debug bound, and should generally be kept simple and pure.
+/// Deriving Debug is generally enough
+pub trait GrowProbabilityFn: Send + Sync + Debug + 'static {
+    /// Computes the probability that the crop will grow.
+    ///
+    /// Args:
+    ///   global_light: Strength of sunlight, 0-15
+    ///   local_light: Strength of nearby emitters, 0-15
+    ///   time_of_day: float between 0 and 1. Currently: 0 is midnight, 0.25 is middle of sunrise,
+    ///                     0.5 is midday, 0.75 is middle of sunset.
+    fn grow_probability(&self, global_light: u8, local_light: u8, time_of_day: f64) -> f64;
+}
+#[derive(Debug)]
+pub struct ConstantGrowProbability(f64);
+impl GrowProbabilityFn for ConstantGrowProbability {
+    fn grow_probability(&self, _global_light: u8, _local_light: u8, _time_of_day: f64) -> f64 {
+        self.0
+    }
+}
+impl ConstantGrowProbability {
+    pub fn new(p: f64) -> ConstantGrowProbability {
+        ConstantGrowProbability(p)
+    }
+}
+
+/// An implementation-defined sensible default for crops that grow in either sunlight or sufficient
+/// artificial light. The exact relationship and probability are subject to change (it is not 1.0
+/// even in full light, to make crop growth look a bit more random to players)
+#[derive(Debug)]
+pub struct DefaultGrowInLight;
+impl GrowProbabilityFn for DefaultGrowInLight {
+    fn grow_probability(&self, mut global_light: u8, local_light: u8, time_of_day: f64) -> f64 {
+        tracing::info!("{} {} {}", global_light, local_light, time_of_day);
+        if time_of_day < 0.25 || time_of_day > 0.75 {
+            global_light = 0;
+        }
+
+        if (global_light + local_light) > 5 {
+            0.50
+        } else {
+            0.0
+        }
+    }
+}
+
 /// A single growth stage of a crop. As the crop grows, it will transition to
 /// the next growth stage whenever the map timer fires, subject to the probability specified
 ///
 /// Default behavior: `dig_effect` removes block without dropping anything, no tap effects, no
 /// interaction effects, 1.0 probability of growth (except for the last stage which is forced to 0
 /// probability since there is no further stage)
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct GrowthStage {
     /// What happens when the crop at this stage is dug
     pub dig_effect: Option<InteractionEffect>,
@@ -133,15 +180,15 @@ pub struct GrowthStage {
     /// Extra block groups, that govern how tools dig this
     pub extra_block_groups: Vec<String>,
     /// How likely the stage is to increment when the timer fires
-    pub grow_probability: f32,
+    pub grow_probability: Box<dyn GrowProbabilityFn>,
 
     /// The block texture
     pub texture_name: OwnedTextureName,
 
     /// Non-exhaustive - this struct must be constructed with functional update syntax, i.e.
     /// ```
-    /// # use perovskite_game_api::farming::crops::GrowthStage;
-    /// GrowthStage { grow_probability: 0.5, ..Default::default() }
+    /// # use perovskite_game_api::farming::crops::{DefaultGrowInLight, GrowthStage};
+    /// GrowthStage { grow_probability: Box::new(DefaultGrowInLight), ..Default::default() }
     /// ```
     pub _ne: NonExhaustive,
 }
@@ -152,7 +199,7 @@ impl Default for GrowthStage {
             tap_effect: None,
             interaction_effects: Default::default(),
             extra_block_groups: vec![],
-            grow_probability: 1.0,
+            grow_probability: Box::new(DefaultGrowInLight),
             texture_name: OwnedTextureName(String::new()),
             _ne: NonExhaustive(()),
         }
@@ -160,7 +207,7 @@ impl Default for GrowthStage {
 }
 
 /// The definition of a crop, passed to [`define_crop`]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CropDefinition {
     /// The prefix for all blocks (and corresponding hidden internal items) for this crop
     /// Should follow block name syntax, e.g. `plugin_name:tomatoes`.
@@ -209,12 +256,14 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
 
     let stage_fbns: Vec<FastBlockName> = stage_names.iter().map(FastBlockName::new).collect();
 
+    let mut stage_transitions = Vec::with_capacity(def.stages.len());
     let mut built_stages = Vec::with_capacity(def.stages.len());
     for (stage, name) in def.stages.into_iter().zip(stage_names) {
         let mut builder = BlockBuilder::new(BlockName(name))
             .add_block_group(CROPS_GROUP)
             .add_block_groups(stage.extra_block_groups)
             .add_block_group(format!("crops:auto_group:{}", &def.base_name))
+            .set_allow_light_propagation(true)
             .set_cube_appearance(
                 CubeAppearanceBuilder::new().set_single_texture(stage.texture_name),
             );
@@ -234,13 +283,14 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
 
         let built_block = builder.build_and_deploy_into(game_builder)?;
 
-        built_stages.push((built_block, stage.grow_probability));
+        stage_transitions.push((built_block.clone(), stage.grow_probability));
+        built_stages.push(built_block);
     }
 
-    let timer_block_types = built_stages.iter().map(|x| x.0.id).collect();
+    let timer_block_types = stage_transitions.iter().map(|x| x.0.id).collect();
 
     let timer_impl = GrowTimerImpl {
-        stages: built_stages.clone(),
+        stages: stage_transitions,
         eligible_soil_blocks: def.eligible_soil_blocks.clone(),
     };
 
@@ -255,39 +305,44 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
             per_block_probability: 1.0,
             // must be false, we have a possibility of not acting on any blocks due to RNG
             idle_chunk_after_unchanged: false,
+            populate_lighting: true,
             ..Default::default()
         },
         TimerCallback::BulkUpdateWithNeighbors(Box::new(timer_impl)),
     );
 
-    Ok(BuiltCrop {
-        built_stages: built_stages.into_iter().map(|x| x.0).collect(),
-    })
+    Ok(BuiltCrop { built_stages })
 }
 
 struct GrowTimerImpl {
-    stages: Vec<(BuiltBlock, f32)>,
+    stages: Vec<(BuiltBlock, Box<dyn GrowProbabilityFn>)>,
     eligible_soil_blocks: Vec<FastBlockName>,
 }
-// TODO: introduce lighting! This will require some engine improvements
 impl GrowTimerImpl {
-    fn act(&self, ctx: &HandlerContext<'_>, plant: BlockId, soil: BlockId) -> BlockId {
+    fn act(
+        &self,
+        ctx: &HandlerContext<'_>,
+        plant: BlockId,
+        soil: BlockId,
+        packed_light: u8,
+        time_of_day: f64,
+    ) -> BlockId {
         let stage = self
             .stages
             .iter()
             .find_position(|x| x.0.id.equals_ignore_variant(plant));
         if let Some((i, (_, grow_probability))) = stage {
-            tracing::debug!("gti stage matched");
             if self.eligible_soil_blocks.iter().any(|x| {
                 ctx.block_types()
                     .resolve_name(&x)
                     .is_some_and(|x| x.equals_ignore_variant(soil))
             }) {
-                tracing::debug!("gti act() matched soil");
                 if i < (self.stages.len() - 1) {
-                    tracing::debug!("gti found stage {}", i);
-                    if rand::thread_rng().gen_bool(*grow_probability as f64) {
-                        tracing::debug!("gti rng passed");
+                    if rand::thread_rng().gen_bool(grow_probability.grow_probability(
+                        packed_light >> 4,
+                        packed_light & 0xf,
+                        time_of_day,
+                    )) {
                         return self.stages[i + 1].0.id;
                     }
                 }
@@ -305,10 +360,11 @@ impl BulkUpdateCallback for GrowTimerImpl {
         _timer_state: &TimerState,
         chunk: &mut MapChunk,
         neighbors: Option<&ChunkNeighbors>,
-        _lights: Option<&perovskite_core::lighting::LightScratchpad>,
+        lights: Option<&perovskite_core::lighting::LightScratchpad>,
     ) -> Result<()> {
         let neighbors = neighbors.context("Crops growth update callback missing neighbors")?;
-        tracing::debug!("gti timer invoked");
+        let lights = lights.context("Crops growth update callback missing lights")?;
+        let time_of_day = ctx.get_time_of_day();
         for x in 0..16 {
             for z in 0..16 {
                 for y in 0..16 {
@@ -319,7 +375,13 @@ impl BulkUpdateCallback for GrowTimerImpl {
                         None => continue,
                     };
                     if let Some(block_below) = neighbors.get_block(below) {
-                        let new_block = self.act(ctx, chunk.get_block(offset), block_below);
+                        let new_block = self.act(
+                            ctx,
+                            chunk.get_block(offset),
+                            block_below,
+                            lights.get_packed_u4_u4(x, y, z),
+                            time_of_day,
+                        );
                         chunk.set_block(offset, new_block, None);
                     }
                 }

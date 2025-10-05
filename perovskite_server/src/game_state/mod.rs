@@ -299,6 +299,10 @@ impl GameState {
         Ok(())
     }
 
+    pub fn get_time_of_day(&self) -> f64 {
+        self.time_state.lock().time_of_day()
+    }
+
     pub(crate) fn subscribe_player_state_resyncs(&self) -> tokio::sync::watch::Receiver<()> {
         self.resync_all_player_states.subscribe()
     }

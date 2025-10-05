@@ -2,7 +2,7 @@
 pub mod crops;
 mod soil;
 
-use crate::farming::crops::{CropDefinition, GrowthStage};
+use crate::farming::crops::{CropDefinition, DefaultGrowInLight, GrowthStage};
 use crate::game_builder::{GameBuilder, GameBuilderExtension, OwnedTextureName};
 use anyhow::Result;
 use perovskite_server::game_state::blocks::FastBlockName;
@@ -36,7 +36,7 @@ pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
             tap_effect: None,
             interaction_effects: Default::default(),
             extra_block_groups: vec![],
-            grow_probability: 0.5,
+            grow_probability: Box::new(DefaultGrowInLight),
             texture_name: OwnedTextureName::from_css_color(&format!(
                 "rgb({} {} {})",
                 rng.gen_range(0..255),
