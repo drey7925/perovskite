@@ -4,17 +4,14 @@ use anyhow::{ensure, Context, Result};
 use itertools::Itertools;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::block_id::BlockId;
-use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
+use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
 use perovskite_core::protocol::items::item_stack::QuantityType;
-use perovskite_core::protocol::render::TextureReference;
 use perovskite_server::game_state::blocks::{
-    BlockInteractionResult, BlockType, ExtendedDataHolder, FastBlockName, InlineContext,
-    InlineHandler,
+    BlockInteractionResult, FastBlockName, InlineContext, InlineHandler,
 };
 use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::game_map::{
-    BulkUpdateCallback, ChunkNeighbors, MapChunk, TimerCallback, TimerInlineCallback,
-    TimerSettings, TimerState, VerticalNeighborTimerCallback,
+    BulkUpdateCallback, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings, TimerState,
 };
 use perovskite_server::game_state::items::ItemStack;
 use rand::{thread_rng, Rng};
@@ -148,11 +145,9 @@ impl ConstantGrowProbability {
 pub struct DefaultGrowInLight;
 impl GrowProbabilityFn for DefaultGrowInLight {
     fn grow_probability(&self, mut global_light: u8, local_light: u8, time_of_day: f64) -> f64 {
-        tracing::info!("{} {} {}", global_light, local_light, time_of_day);
         if time_of_day < 0.25 || time_of_day > 0.75 {
             global_light = 0;
         }
-
         if (global_light + local_light) > 5 {
             0.50
         } else {
@@ -303,7 +298,8 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
             block_types: timer_block_types,
             ignore_block_type_presence_check: false,
             per_block_probability: 1.0,
-            // must be false, we have a possibility of not acting on any blocks due to RNG
+            // must be false, since we have a possibility of not acting on any blocks due to RNG
+            // or light
             idle_chunk_after_unchanged: false,
             populate_lighting: true,
             ..Default::default()
@@ -375,14 +371,17 @@ impl BulkUpdateCallback for GrowTimerImpl {
                         None => continue,
                     };
                     if let Some(block_below) = neighbors.get_block(below) {
+                        let old_block = chunk.get_block(offset);
                         let new_block = self.act(
                             ctx,
-                            chunk.get_block(offset),
+                            old_block,
                             block_below,
                             lights.get_packed_u4_u4(x, y, z),
                             time_of_day,
                         );
-                        chunk.set_block(offset, new_block, None);
+                        if new_block != old_block {
+                            chunk.set_block(offset, new_block, None);
+                        }
                     }
                 }
             }

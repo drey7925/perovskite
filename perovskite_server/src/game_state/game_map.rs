@@ -369,6 +369,12 @@ impl MapChunk {
         if old_block != block || extended_data_was_some || old_ext_data.is_some() {
             self.dirty = true;
         }
+        if old_block.equals_ignore_variant(block)
+            && old_ext_data.is_some()
+            && !extended_data_was_some
+        {
+            tracing::warn!("MapChunk set_block: Same block was kept, but extended data was wiped out. This is a sign of a possible bug; consider inserting a Some-but-logically-empty extended data instead")
+        }
     }
     /// Swaps blocks at two offsets, with extended data moved along with them
     pub fn swap_blocks(&mut self, a: ChunkOffset, b: ChunkOffset) {
@@ -3406,7 +3412,7 @@ impl GameMapTimer {
                 unreachable!()
             }
         }
-        reconcile_after_bulk_handler(
+        self.reconcile_after_bulk_handler(
             &upper_old_block_ids,
             &mut upper_chunk,
             upper_holder,
@@ -3415,7 +3421,7 @@ impl GameMapTimer {
             upper_writeback_permit,
             state.timer_state.current_tick_time,
         )?;
-        reconcile_after_bulk_handler(
+        self.reconcile_after_bulk_handler(
             &lower_old_block_ids,
             &mut lower_chunk,
             lower_holder,
@@ -3570,7 +3576,7 @@ impl GameMapTimer {
             }
             _ => unreachable!(),
         };
-        reconcile_after_bulk_handler(
+        self.reconcile_after_bulk_handler(
             &old_block_ids,
             chunk,
             holder,
@@ -3645,80 +3651,81 @@ impl GameMapTimer {
         neighbor_data.presence_bitmap = presence_bitmap;
         Ok((any_blooms_match, update_times.into_iter().max()))
     }
+
+    fn reconcile_after_bulk_handler(
+        &self,
+        old_block_ids: &[u32; _MAX_OFFSET],
+        chunk: &mut MapChunkInnerWriteGuard<'_>,
+        holder: &MapChunkHolder,
+        game_state: &Arc<GameState>,
+        coord: ChunkCoordinate,
+        permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
+        _update_time: Instant,
+    ) -> Result<()> {
+        let mut seen_blocks = FxHashSet::default();
+        let mut any_updated = false;
+        let mut updates = vec![];
+        for i in 0.._MAX_OFFSET {
+            let old_block_id = BlockId::from(old_block_ids[i]);
+            let new_block_id = BlockId::from(chunk.block_ids[i].load(Ordering::Relaxed));
+            let may_have_client_ext = game_state
+                .block_types()
+                .has_client_side_extended_data(new_block_id);
+            if old_block_id != new_block_id || may_have_client_ext {
+                if seen_blocks.insert(new_block_id.base_id()) {
+                    // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
+                    // on x86_64. Without forking the library, it seems unavoidable
+                    holder
+                        .block_bloom_filter
+                        .insert(new_block_id.base_id() as u64);
+                }
+                chunk.dirty = true;
+                any_updated = true;
+                let new_ext = match chunk.extended_data.get(&(i as u16)) {
+                    None => None,
+                    Some(x) => {
+                        if may_have_client_ext {
+                            client_serialize_inner(
+                                chunk.coord.with_offset(ChunkOffset::from_index(i)),
+                                x,
+                                &game_state,
+                                new_block_id,
+                            )?
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if updates.len() < AGGREGATE_UPDATES_THRESHOLD {
+                    let update = BlockUpdate {
+                        location: coord.with_offset(ChunkOffset::from_index(i)),
+                        id: new_block_id,
+                        new_ext_data: new_ext,
+                    };
+                    updates.push(update);
+                }
+            }
+        }
+
+        if updates.len() < AGGREGATE_UPDATES_THRESHOLD {
+            for update in updates {
+                game_state.game_map().broadcast_block_id_change(update);
+            }
+        } else {
+            game_state
+                .game_map()
+                .broadcast_bulk_chunk_update(chunk.coord);
+        }
+
+        if any_updated {
+            permit.take().unwrap().send(WritebackReq::Chunk(coord));
+            holder.last_written.update_now_release();
+        }
+        Ok(())
+    }
 }
 
 const AGGREGATE_UPDATES_THRESHOLD: usize = 128;
-
-fn reconcile_after_bulk_handler(
-    old_block_ids: &[u32; _MAX_OFFSET],
-    chunk: &mut MapChunkInnerWriteGuard<'_>,
-    holder: &MapChunkHolder,
-    game_state: &Arc<GameState>,
-    coord: ChunkCoordinate,
-    permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
-    _update_time: Instant,
-) -> Result<()> {
-    let mut seen_blocks = FxHashSet::default();
-    let mut any_updated = false;
-    let mut updates = vec![];
-    for i in 0.._MAX_OFFSET {
-        let old_block_id = BlockId::from(old_block_ids[i]);
-        let new_block_id = BlockId::from(chunk.block_ids[i].load(Ordering::Relaxed));
-        let may_have_client_ext = game_state
-            .block_types()
-            .has_client_side_extended_data(new_block_id);
-        if old_block_id != new_block_id || may_have_client_ext {
-            if seen_blocks.insert(new_block_id.base_id()) {
-                // this generates expensive `LOCK OR %rax(%r8,%rdx,8) as well as an expensive DIV
-                // on x86_64. Without forking the library, it seems unavoidable
-                holder
-                    .block_bloom_filter
-                    .insert(new_block_id.base_id() as u64);
-            }
-            chunk.dirty = true;
-            any_updated = true;
-            let new_ext = match chunk.extended_data.get(&(i as u16)) {
-                None => None,
-                Some(x) => {
-                    if may_have_client_ext {
-                        client_serialize_inner(
-                            chunk.coord.with_offset(ChunkOffset::from_index(i)),
-                            x,
-                            &game_state,
-                            new_block_id,
-                        )?
-                    } else {
-                        None
-                    }
-                }
-            };
-            if updates.len() < AGGREGATE_UPDATES_THRESHOLD {
-                let update = BlockUpdate {
-                    location: coord.with_offset(ChunkOffset::from_index(i)),
-                    id: new_block_id,
-                    new_ext_data: new_ext,
-                };
-                updates.push(update);
-            }
-        }
-    }
-
-    if updates.len() < AGGREGATE_UPDATES_THRESHOLD {
-        for update in updates {
-            game_state.game_map().broadcast_block_id_change(update);
-        }
-    } else {
-        game_state
-            .game_map()
-            .broadcast_bulk_chunk_update(chunk.coord);
-    }
-
-    if any_updated {
-        permit.take().unwrap().send(WritebackReq::Chunk(coord));
-        holder.last_written.update_now_release();
-    }
-    Ok(())
-}
 
 fn reacquire_writeback_permit<'a, 'b>(
     game_state: &'a Arc<GameState>,
