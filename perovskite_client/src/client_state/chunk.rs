@@ -399,8 +399,8 @@ impl ClientChunk {
             }
         };
         // The ordering doesn't matter; we're doing this under the lock
-        self.last_meshed.update_now_relaxed();
         let mut mesh_lock = self.chunk_mesh.lock();
+        self.last_meshed.update_now_relaxed();
         let old_batch = mesh_lock.batch;
         if let Some(vertex_data) = vertex_data {
             if Some(&vertex_data) == mesh_lock.solo_cpu.as_ref() {

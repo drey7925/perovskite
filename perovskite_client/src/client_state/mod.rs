@@ -320,7 +320,7 @@ impl ChunkManager {
             let chunk_coord = block_coord.chunk();
             let extra_chunks = match chunk_lock.get(&chunk_coord) {
                 Some(x) => {
-                    if !x.apply_delta(update).unwrap() {
+                    if !x.apply_delta(update)? {
                         None
                     } else {
                         let occlusion = x.get_occlusion(block_types);
