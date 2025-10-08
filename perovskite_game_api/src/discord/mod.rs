@@ -1,5 +1,5 @@
-use std::sync::Arc;
-
+use crate::game_builder::GameBuilder;
+use parking_lot::Mutex;
 use perovskite_core::chat::ChatMessage;
 use perovskite_server::game_state::GameState;
 use serde::{Deserialize, Serialize};
@@ -7,8 +7,8 @@ use serenity::{
     all::{GatewayIntents, GuildChannel},
     client::EventHandler,
 };
-
-use crate::game_builder::GameBuilder;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct DiscordConfig {
@@ -36,6 +36,7 @@ pub fn connect(game_builder: &mut GameBuilder) -> anyhow::Result<()> {
             let handler = DiscordEventHandler {
                 game_state: game.clone(),
                 config: config.clone(),
+                prev_cancellation: Mutex::new(None),
             };
             let mut client = serenity::client::ClientBuilder::new(&config.token, intents)
                 .event_handler(handler)
@@ -58,12 +59,32 @@ pub fn connect(game_builder: &mut GameBuilder) -> anyhow::Result<()> {
 struct DiscordEventHandler {
     game_state: Arc<GameState>,
     config: DiscordConfig,
+    prev_cancellation: Mutex<Option<CancellationToken>>,
 }
 
 const DISCORD_ORIGINATOR: &str = "[discord]";
 
 #[async_trait::async_trait]
 impl EventHandler for DiscordEventHandler {
+    async fn message(
+        &self,
+        _ctx: serenity::client::Context,
+        msg: serenity::model::channel::Message,
+    ) {
+        if msg.channel_id.get() != self.config.channel_id {
+            return;
+        }
+        if msg.author.bot {
+            return;
+        }
+        self.game_state
+            .chat()
+            .broadcast_chat_message(ChatMessage::new(
+                DISCORD_ORIGINATOR,
+                format!("{}: {}", msg.author.name, msg.content),
+            ))
+            .unwrap();
+    }
     async fn ready(&self, ctx: serenity::client::Context, ready: serenity::model::gateway::Ready) {
         for &guild in ready.guilds.iter() {
             let guild_id = guild.id;
@@ -93,32 +114,25 @@ impl EventHandler for DiscordEventHandler {
                     return;
                 }
             };
+            // `ready` appears to fire again during various discord and network outages, creating a
+            // new sender loop. The previous loop sometimes also recovers, causing duplicate
+            // messages. Cancel that previous loop explicitly instead.
+            let new_cancellation_token = CancellationToken::new();
+            let mut guard = self.prev_cancellation.lock();
+            if let Some(token) = guard.as_ref() {
+                tracing::info!("Already connected to discord, cancelling previous sender loop");
+                token.cancel();
+            }
+            *guard = Some(new_cancellation_token.clone());
 
-            tokio::task::spawn(run_outbound_loop(
-                ctx.clone(),
-                channel,
-                self.game_state.clone(),
-            ));
+            tokio::task::spawn(
+                new_cancellation_token.run_until_cancelled(run_outbound_loop(
+                    ctx.clone(),
+                    channel,
+                    self.game_state.clone(),
+                )),
+            );
         }
-    }
-    async fn message(
-        &self,
-        _ctx: serenity::client::Context,
-        msg: serenity::model::channel::Message,
-    ) {
-        if msg.channel_id.get() != self.config.channel_id {
-            return;
-        }
-        if msg.author.bot {
-            return;
-        }
-        self.game_state
-            .chat()
-            .broadcast_chat_message(ChatMessage::new(
-                DISCORD_ORIGINATOR,
-                format!("{}: {}", msg.author.name, msg.content),
-            ))
-            .unwrap();
     }
 }
 
