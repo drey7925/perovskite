@@ -125,13 +125,9 @@ impl EventHandler for DiscordEventHandler {
             }
             *guard = Some(new_cancellation_token.clone());
 
-            tokio::task::spawn(
-                new_cancellation_token.run_until_cancelled(run_outbound_loop(
-                    ctx.clone(),
-                    channel,
-                    self.game_state.clone(),
-                )),
-            );
+            tokio::task::spawn(new_cancellation_token.run_until_cancelled_owned(
+                run_outbound_loop(ctx.clone(), channel, self.game_state.clone()),
+            ));
         }
     }
 }

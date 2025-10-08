@@ -202,16 +202,27 @@ impl PlayerCoroutinePack {
             }
         })?;
 
-        // No shutdown actions at the moment; this removal is done in player.rs instead
-        // let cancellation = self.context.cancellation.clone();
-        // crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
-        //     cancellation.cancelled().await;
-        //     self.context
-        //         .game_state
-        //         .entities()
-        //         .remove(self.context.player_context.entity_id)
-        //         .await;
-        // })?;
+        let cancellation = self.context.cancellation.clone();
+        crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
+            cancellation.cancelled().await;
+            if let Err(e) = self
+                .context
+                .game_state
+                .game_behaviors()
+                .on_player_leave
+                .handle(
+                    &self.context.player_context,
+                    HandlerContext {
+                        tick: self.context.game_state.tick(),
+                        initiator: EventInitiator::Engine,
+                        game_state: self.context.game_state.clone(),
+                    },
+                )
+                .await
+            {
+                tracing::error!("Error running on_player_leave: {:?}", e);
+            }
+        })?;
 
         Ok(())
     }
