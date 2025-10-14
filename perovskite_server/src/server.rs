@@ -65,18 +65,28 @@ pub struct ServerArgs {
     #[arg(long)]
     pub bind_addr: Option<IpAddr>,
 
+    /// The port to listen on. (Currently TCP, could become QUIC-over-UDP in a future version)
     #[arg(short, long, default_value_t = 28273)]
     pub port: u16,
 
+    /// How often to print trace buffers. The higher the value, the lower the chance of printing
+    /// one
     #[arg(long, default_value_t = 65536)]
     pub trace_rate_denominator: usize,
 
+    /// Size of Rocksdb's underlying cache; passed directly to the database library.
     #[arg(long, default_value_t = 128)]
     pub rocksdb_point_lookup_cache_mib: u64,
 
+    /// Number of file descriptors to use for the underlying game database. On Linux, the program
+    /// will attempt to increase RLIMIT_NOFILE to 133% of this value; if it cannot set the limit
+    /// high enough, the Rocksdb file descriptor count will automatically be lowered to 75% of the
+    /// detected limit.
     #[arg(long, default_value_t = 512)]
     pub rocksdb_num_fds: std::os::raw::c_int,
 
+    /// How many map prefetchers to use. Note that they currently don't do anything in the default
+    /// game, and will sit idle.
     #[arg(long, default_value_t = 8)]
     pub num_map_prefetchers: usize,
 }
