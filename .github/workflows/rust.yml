@@ -28,5 +28,5 @@ jobs:
     - name: Build      
       run: |
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
-        rustup install 1.85
-        cargo +1.85 build --verbose
+        rustup install 1.87
+        cargo +1.87 build --verbose
