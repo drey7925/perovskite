@@ -10,29 +10,28 @@ categories = ["games"]
 build = "build.rs"
 
 [dependencies]
-argon2 = "0.5.3"
 anyhow = { version = "1", features = ["backtrace"] }
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
 perovskite_core = { path = "../perovskite_core", version = "0.2.1" }
 egui = "0.31.1"
 egui_winit_vulkano = "0.28.0"
-egui_extras = { version = "0.31.1", features = ["gif"] }
+egui_extras = { version = "0.31", features = ["gif"] }
 env_logger = "0.11.3"
 fps_counter = "3.0.0"
 hex = "0.4.3"
-image = "0.25.1"
+image = "0.25.8"
 line_drawing = "1.0.0"
 log = "0.4.17"
 opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
 parking_lot = "0.12.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rustc-hash = "2.0.0"
-texture_packer = { version = "0.29.0", features = ["bmp", "gif", "jpeg", "png", "tga", "webp", "common"] }
+texture_packer = { version = "0.30.0", features = ["bmp", "gif", "jpeg", "png", "tga", "webp", "common"] }
 tokio = { version = "1.38.2", features = ["full"] }
 tokio-stream = "0.1.14"
 tokio-util = "0.7.8"
-tonic = { version = "0.13.0", features = ["gzip", "tls-ring", "tls-webpki-roots", "tls-native-roots"] }
+tonic = { version = "0.14.2", features = ["gzip", "tls-ring", "tls-webpki-roots", "tls-native-roots"] }
 tracy-client = { version = "0.18.0", default-features = false, features = ["system-tracing", "context-switch-tracing", "sampling", "code-transfer",
     "broadcast"] }
 vulkano = "0.35.1"
@@ -41,17 +40,17 @@ winit = { version = "0.30.10", features = ["serde"] }
 unicode-normalization = "0.1.22"
 textwrap = { version = "0.16.0", default-features = false }
 serde = { version = "1.0.163", features = ["derive"] }
-prost = "0.13.5"
+prost = "0.14.1"
 directories = "6.0.0"
 arc-swap = "1.6.0"
-ron = "0.10.1"
+ron = "0.11.0"
 futures = "0.3.28"
 bitvec = "1.0.1"
 mimalloc = { version = "0.1.46", default-features = false }
 snap = "1.1.0"
 lazy_static = "1.4.0"
 sha2 = "0.10.6"
-splines = { version = "4.4.2", features = ["cgmath"] }
+splines = { version = "5.0.0", features = ["cgmath"] }
 smallvec = "1.13.1"
 cpal = "0.16.0"
 seqlock = "0.2.0"
@@ -82,7 +81,7 @@ static-mvk = ["ash-molten", "ash"]
 static-mvk-prebuilt = ["static-mvk", "ash-molten/pre-built"]
 
 [dev-dependencies]
-criterion = { version = "0.4", features = ["html_reports"] }
+criterion = { version = "0.7.0", features = ["html_reports"] }
 
 [build-dependencies]
 winresource = "0.1"

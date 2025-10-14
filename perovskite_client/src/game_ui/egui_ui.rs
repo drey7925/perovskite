@@ -822,7 +822,9 @@ impl EguiUi {
                         if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
                             let ccursor =
                                 egui::text::CCursor::new(self.chat_message_input.chars().count());
-                            state.set_ccursor_range(Some(egui::text::CCursorRange::one(ccursor)));
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
                             state.store(ui.ctx(), id);
                             ui.ctx().memory_mut(|m| m.request_focus(id)); // give focus back to the `TextEdit`.
                         }
