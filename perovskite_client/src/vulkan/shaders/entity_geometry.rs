@@ -208,7 +208,7 @@ impl EntityPipelineProvider {
             .context("Missing vertex shader")?;
         let fs_sparse = self
             .fs_sparse
-            .specialize(HashMap::from_iter([(0, false.into()), (1, false.into())]))?
+            .specialize(HashMap::from_iter([(0, true.into()), (1, false.into())]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
         let vertex_input_state = EntityVertex::per_vertex().definition(&vs)?;
