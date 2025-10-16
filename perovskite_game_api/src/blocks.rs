@@ -442,7 +442,19 @@ impl BlockBuilder {
             self
         }
     );
+
     /// Set the appearance of the block to that specified by the given builder
+    pub fn set_appearance(mut self, appearance: BlockAppearanceBuilder) -> Self {
+        match appearance {
+            BlockAppearanceBuilder::Cube(c) => self.set_cube_appearance(c),
+            BlockAppearanceBuilder::Plantlike(p) => self.set_plant_like_appearance(p),
+            BlockAppearanceBuilder::AxisAlignedBoxes(a) => {
+                self.set_axis_aligned_boxes_appearance(a)
+            }
+        }
+    }
+
+    /// Set the appearance of the block to a cube with textured faces.
     pub fn set_cube_appearance(mut self, appearance: CubeAppearanceBuilder) -> Self {
         self.variant_effect = match appearance.render_info.variant_effect() {
             CubeVariantEffect::None => BlockVariantEffect::None,
@@ -643,7 +655,30 @@ impl BlockBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug)]
+pub enum BlockAppearanceBuilder {
+    Cube(CubeAppearanceBuilder),
+    Plantlike(PlantLikeAppearanceBuilder),
+    AxisAlignedBoxes(AxisAlignedBoxesAppearanceBuilder),
+}
+impl From<CubeAppearanceBuilder> for BlockAppearanceBuilder {
+    fn from(builder: CubeAppearanceBuilder) -> Self {
+        BlockAppearanceBuilder::Cube(builder)
+    }
+}
+impl From<PlantLikeAppearanceBuilder> for BlockAppearanceBuilder {
+    fn from(builder: PlantLikeAppearanceBuilder) -> Self {
+        BlockAppearanceBuilder::Plantlike(builder)
+    }
+}
+
+impl From<AxisAlignedBoxesAppearanceBuilder> for BlockAppearanceBuilder {
+    fn from(builder: AxisAlignedBoxesAppearanceBuilder) -> Self {
+        BlockAppearanceBuilder::AxisAlignedBoxes(builder)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct CubeAppearanceBuilder {
     render_info: CubeRenderInfo,
 }
@@ -753,6 +788,7 @@ impl Default for CubeAppearanceBuilder {
     }
 }
 
+#[derive(Debug)]
 pub struct PlantLikeAppearanceBuilder {
     render_info: PlantLikeRenderInfo,
     is_solid: bool,
@@ -788,6 +824,19 @@ impl PlantLikeAppearanceBuilder {
         self.is_solid = is_solid;
         self
     }
+
+    /// Convenience method to generate a plant-like appearance builder with this texture.
+    ///
+    /// Equivalent to
+    /// ```
+    /// # use perovskite_game_api::blocks::PlantLikeAppearanceBuilder;
+    /// # use perovskite_game_api::game_builder::OwnedTextureName;
+    /// # let tex = OwnedTextureName(String::new());
+    /// PlantLikeAppearanceBuilder::new().set_texture(tex)
+    /// ```
+    pub fn from_tex(tex: impl Into<TextureReference>) -> PlantLikeAppearanceBuilder {
+        PlantLikeAppearanceBuilder::new().set_texture(tex)
+    }
 }
 impl Default for PlantLikeAppearanceBuilder {
     fn default() -> Self {
@@ -795,6 +844,7 @@ impl Default for PlantLikeAppearanceBuilder {
     }
 }
 
+use crate::game_builder::{OwnedTextureName, TextureName};
 pub use protocol::render::TextureCrop;
 
 fn make_texture_ref(diffuse: String) -> Option<TextureReference> {
@@ -1399,6 +1449,15 @@ impl AxisAlignedBoxesAppearanceBuilder {
             },
             TextureCropping::NoCrop => TextureReference { crop: None, ..tex },
         }
+    }
+}
+impl Debug for AxisAlignedBoxesAppearanceBuilder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AxisAlignedBoxesAppearanceBuilder")
+            .field("display", &self.display_proto.boxes.len())
+            .field("collision", &self.collision_proto.boxes.len())
+            .field("tool", &self.tool_proto.boxes.len())
+            .finish()
     }
 }
 

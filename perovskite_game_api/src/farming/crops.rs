@@ -1,5 +1,5 @@
-use crate::blocks::{BlockBuilder, BuiltBlock, CubeAppearanceBuilder};
-use crate::game_builder::{BlockName, GameBuilder, OwnedTextureName};
+use crate::blocks::{BlockAppearanceBuilder, BlockBuilder, BuiltBlock, PlantLikeAppearanceBuilder};
+use crate::game_builder::{BlockName, GameBuilder};
 use anyhow::{ensure, Context, Result};
 use itertools::Itertools;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
@@ -177,8 +177,8 @@ pub struct GrowthStage {
     /// How likely the stage is to increment when the timer fires
     pub grow_probability: Box<dyn GrowProbabilityFn>,
 
-    /// The block texture
-    pub texture_name: OwnedTextureName,
+    /// The block appearance
+    pub appearance: BlockAppearanceBuilder,
 
     /// Non-exhaustive - this struct must be constructed with functional update syntax, i.e.
     /// ```
@@ -195,7 +195,7 @@ impl Default for GrowthStage {
             interaction_effects: Default::default(),
             extra_block_groups: vec![],
             grow_probability: Box::new(DefaultGrowInLight),
-            texture_name: OwnedTextureName(String::new()),
+            appearance: PlantLikeAppearanceBuilder::default().into(),
             _ne: NonExhaustive(()),
         }
     }
@@ -259,9 +259,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
             .add_block_groups(stage.extra_block_groups)
             .add_block_group(format!("crops:auto_group:{}", &def.base_name))
             .set_allow_light_propagation(true)
-            .set_cube_appearance(
-                CubeAppearanceBuilder::new().set_single_texture(stage.texture_name),
-            );
+            .set_appearance(stage.appearance);
 
         if let Some(effect) = stage.dig_effect {
             let handler = effect.build_handler(stage_fbns.clone())?;

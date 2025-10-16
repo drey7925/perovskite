@@ -2,6 +2,7 @@
 pub mod crops;
 mod soil;
 
+use crate::blocks::PlantLikeAppearanceBuilder;
 use crate::farming::crops::{CropDefinition, DefaultGrowInLight, GrowthStage};
 use crate::game_builder::{GameBuilder, GameBuilderExtension, OwnedTextureName};
 use anyhow::Result;
@@ -31,18 +32,19 @@ pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
     let mut stages = vec![];
     let mut rng = thread_rng();
     for _ in 0..32 {
+        let tex = OwnedTextureName::from_css_color(&format!(
+            "rgb({} {} {})",
+            rng.gen_range(0..255),
+            rng.gen_range(0..255),
+            rng.gen_range(0..255)
+        ));
         stages.push(GrowthStage {
             dig_effect: None,
             tap_effect: None,
             interaction_effects: Default::default(),
             extra_block_groups: vec![],
             grow_probability: Box::new(DefaultGrowInLight),
-            texture_name: OwnedTextureName::from_css_color(&format!(
-                "rgb({} {} {})",
-                rng.gen_range(0..255),
-                rng.gen_range(0..255),
-                rng.gen_range(0..255)
-            )),
+            appearance: PlantLikeAppearanceBuilder::from_tex(tex).into(),
             ..Default::default()
         })
     }
