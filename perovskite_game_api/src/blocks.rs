@@ -655,7 +655,7 @@ impl BlockBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum BlockAppearanceBuilder {
     Cube(CubeAppearanceBuilder),
     Plantlike(PlantLikeAppearanceBuilder),
@@ -788,7 +788,7 @@ impl Default for CubeAppearanceBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PlantLikeAppearanceBuilder {
     render_info: PlantLikeRenderInfo,
     is_solid: bool,
@@ -1281,6 +1281,7 @@ impl AaBoxProperties {
 }
 
 /// Block appearance builder for blocks that have custom axis-aligned box geometry
+#[derive(Clone)]
 pub struct AxisAlignedBoxesAppearanceBuilder {
     display_proto: AxisAlignedBoxes,
     collision_proto: AxisAlignedBoxes,
