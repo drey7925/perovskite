@@ -26,10 +26,18 @@ pub struct NonExhaustive(pub(crate) ());
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum InteractionTransition {
-    /// When dug, jump to a stage in this range, selected randomly
+    /// When this interaction is triggered, jump to a stage in this range, selected randomly from
+    /// the range
     JumpToStage(Vec<usize>),
+    /// Convenience variant to jump to the next stage without needing to know the current stage
+    /// number
+    NextStage,
+    /// When this interaction is triggered, change to this other block type.
+    ChangeBlockType(BlockId),
     /// Remove the crop altogether
     Remove,
+    /// Don't do anything
+    DoNothing,
 }
 
 /// What happens when a crop is interacted with, dug, or tapped
@@ -52,7 +60,11 @@ pub struct InteractionEffect {
 }
 
 impl InteractionEffect {
-    fn build_handler(self, stage_fbns: Vec<FastBlockName>) -> Result<Box<InlineHandler>> {
+    fn build_handler(
+        self,
+        stage_fbns: Vec<FastBlockName>,
+        current_stage: usize,
+    ) -> Result<Box<InlineHandler>> {
         ensure!(self.transition_probability >= 0.0 && self.transition_probability <= 1.0);
         if let InteractionTransition::JumpToStage(stages) = &self.transition {
             ensure!(!stages.is_empty());
@@ -88,7 +100,18 @@ impl InteractionEffect {
                                 .resolve_name(&stage_fbns[stage])
                                 .unwrap_or(*id)
                         }
+                        InteractionTransition::NextStage => {
+                            match stage_fbns.get(current_stage + 1) {
+                                None => {
+                                    tracing::warn!("Got InteractionTransition::NextStage but there is no next stage");
+                                    *id
+                                }
+                                Some(x) => ctx.block_types().resolve_name(x).unwrap_or(*id),
+                            }
+                        }
+                        InteractionTransition::ChangeBlockType(id) => *id,
                         InteractionTransition::Remove => AIR_ID,
+                        InteractionTransition::DoNothing => *id,
                     }
                 }
 
@@ -115,21 +138,35 @@ impl Default for InteractionEffect {
 /// A function that controls crop growth. It is provided as a trait for ease of documenting
 /// parameters + for the sake of a Debug bound, and should generally be kept simple and pure.
 /// Deriving Debug is generally enough
-pub trait GrowProbabilityFn: Send + Sync + Debug + 'static {
-    /// Computes the probability that the crop will grow.
+pub trait GrowFunction: Send + Sync + Debug + 'static {
+    /// Computes the next state for the crop.
     ///
     /// Args:
     ///   global_light: Strength of sunlight, 0-15
     ///   local_light: Strength of nearby emitters, 0-15
     ///   time_of_day: float between 0 and 1. Currently: 0 is midnight, 0.25 is middle of sunrise,
     ///                     0.5 is midday, 0.75 is middle of sunset.
-    fn grow_probability(&self, global_light: u8, local_light: u8, time_of_day: f64) -> f64;
+    fn grow_outcome(
+        &self,
+        global_light: u8,
+        local_light: u8,
+        time_of_day: f64,
+    ) -> InteractionTransition;
 }
 #[derive(Debug)]
 pub struct ConstantGrowProbability(f64);
-impl GrowProbabilityFn for ConstantGrowProbability {
-    fn grow_probability(&self, _global_light: u8, _local_light: u8, _time_of_day: f64) -> f64 {
-        self.0
+impl GrowFunction for ConstantGrowProbability {
+    fn grow_outcome(
+        &self,
+        _global_light: u8,
+        _local_light: u8,
+        _time_of_day: f64,
+    ) -> InteractionTransition {
+        if thread_rng().gen_bool(self.0) {
+            InteractionTransition::NextStage
+        } else {
+            InteractionTransition::DoNothing
+        }
     }
 }
 impl ConstantGrowProbability {
@@ -143,15 +180,25 @@ impl ConstantGrowProbability {
 /// even in full light, to make crop growth look a bit more random to players)
 #[derive(Debug)]
 pub struct DefaultGrowInLight;
-impl GrowProbabilityFn for DefaultGrowInLight {
-    fn grow_probability(&self, mut global_light: u8, local_light: u8, time_of_day: f64) -> f64 {
+impl GrowFunction for DefaultGrowInLight {
+    fn grow_outcome(
+        &self,
+        mut global_light: u8,
+        local_light: u8,
+        time_of_day: f64,
+    ) -> InteractionTransition {
         if time_of_day < 0.25 || time_of_day > 0.75 {
             global_light = 0;
         }
-        if (global_light + local_light) > 5 {
+        let probability = if (global_light + local_light) > 5 {
             0.50
         } else {
             0.0
+        };
+        if thread_rng().gen_bool(probability) {
+            InteractionTransition::NextStage
+        } else {
+            InteractionTransition::DoNothing
         }
     }
 }
@@ -175,7 +222,7 @@ pub struct GrowthStage {
     /// Extra block groups, that govern how tools dig this
     pub extra_block_groups: Vec<String>,
     /// How likely the stage is to increment when the timer fires
-    pub grow_probability: Box<dyn GrowProbabilityFn>,
+    pub grow_probability: Box<dyn GrowFunction>,
 
     /// The block appearance
     pub appearance: BlockAppearanceBuilder,
@@ -253,7 +300,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
 
     let mut stage_transitions = Vec::with_capacity(def.stages.len());
     let mut built_stages = Vec::with_capacity(def.stages.len());
-    for (stage, name) in def.stages.into_iter().zip(stage_names) {
+    for (i, (stage, name)) in def.stages.into_iter().zip(stage_names).enumerate() {
         let mut builder = BlockBuilder::new(BlockName(name))
             .add_block_group(CROPS_GROUP)
             .add_block_groups(stage.extra_block_groups)
@@ -262,13 +309,13 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
             .set_appearance(stage.appearance);
 
         if let Some(effect) = stage.dig_effect {
-            let handler = effect.build_handler(stage_fbns.clone())?;
+            let handler = effect.build_handler(stage_fbns.clone(), i)?;
             builder = builder.add_modifier(Box::new(|bt| {
                 bt.dig_handler_inline = Some(handler);
             }));
         }
         if let Some(effect) = stage.tap_effect {
-            let handler = effect.build_handler(stage_fbns.clone())?;
+            let handler = effect.build_handler(stage_fbns.clone(), i)?;
             builder = builder.add_modifier(Box::new(|bt| {
                 bt.tap_handler_inline = Some(handler);
             }));
@@ -309,7 +356,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
 }
 
 struct GrowTimerImpl {
-    stages: Vec<(BuiltBlock, Box<dyn GrowProbabilityFn>)>,
+    stages: Vec<(BuiltBlock, Box<dyn GrowFunction>)>,
     eligible_soil_blocks: Vec<FastBlockName>,
 }
 impl GrowTimerImpl {
@@ -325,20 +372,30 @@ impl GrowTimerImpl {
             .stages
             .iter()
             .find_position(|x| x.0.id.equals_ignore_variant(plant));
-        if let Some((i, (_, grow_probability))) = stage {
+        if let Some((i, (_, grow_fn))) = stage {
             if self.eligible_soil_blocks.iter().any(|x| {
                 ctx.block_types()
                     .resolve_name(&x)
                     .is_some_and(|x| x.equals_ignore_variant(soil))
             }) {
                 if i < (self.stages.len() - 1) {
-                    if rand::thread_rng().gen_bool(grow_probability.grow_probability(
+                    return match grow_fn.grow_outcome(
                         packed_light >> 4,
                         packed_light & 0xf,
                         time_of_day,
-                    )) {
-                        return self.stages[i + 1].0.id;
-                    }
+                    ) {
+                        InteractionTransition::JumpToStage(i) => {
+                            self.stages[thread_rng().gen_range(0..self.stages.len())]
+                                .0
+                                .id
+                        }
+                        InteractionTransition::NextStage => {
+                            self.stages.get(i + 1).map(|x| x.0.id).unwrap_or(plant)
+                        }
+                        InteractionTransition::ChangeBlockType(id) => id,
+                        InteractionTransition::Remove => AIR_ID,
+                        InteractionTransition::DoNothing => plant,
+                    };
                 }
             }
         }
