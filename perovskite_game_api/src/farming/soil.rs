@@ -1,7 +1,8 @@
 use crate::blocks::{BlockBuilder, CubeAppearanceBuilder};
-use crate::default_game::basic_blocks::WATER;
+use crate::default_game::basic_blocks::{DIRT_TEXTURE, WATER};
 use crate::farming::FarmingGameStateExtension;
-use crate::game_builder::{GameBuilder, OwnedTextureName};
+use crate::game_builder::{GameBuilder, OwnedTextureName, StaticTextureName};
+use crate::include_texture_bytes;
 use anyhow::{Context, Result};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
@@ -87,7 +88,16 @@ impl BulkUpdateCallback for SoilTimerCallback {
     }
 }
 
+const TILLED_SOIL_TOP: StaticTextureName = StaticTextureName("farming:tilled_soil");
+const TILLED_SOIL_SIDE: StaticTextureName = DIRT_TEXTURE;
+const TILLED_SOIL_WET_TOP: StaticTextureName = StaticTextureName("farming:tilled_soil_wet");
+const TILLED_SOIL_WET_SIDE: StaticTextureName = StaticTextureName("farming:tilled_soil_wet_side");
+
 pub(super) fn register_soil_blocks(builder: &mut GameBuilder) -> Result<()> {
+    include_texture_bytes!(builder, TILLED_SOIL_TOP, "textures/tilled_dirt.png")?;
+    include_texture_bytes!(builder, TILLED_SOIL_WET_TOP, "textures/tilled_dirt_wet.png")?;
+    include_texture_bytes!(builder, TILLED_SOIL_WET_SIDE, "textures/dirt_side_wet.png")?;
+
     let paddy_dry = BlockBuilder::new(
         &builder
             .builder_extension_mut::<FarmingGameStateExtension>()
@@ -111,14 +121,20 @@ pub(super) fn register_soil_blocks(builder: &mut GameBuilder) -> Result<()> {
     .add_item_group(HIDDEN_FROM_CREATIVE)
     .build_and_deploy_into(builder)?;
 
+    // TODO: hide this from creative once we have a suitable tool
     let soil_dry = BlockBuilder::new(
         &builder
             .builder_extension_mut::<FarmingGameStateExtension>()
             .soil_dry,
     )
-    .set_cube_appearance(
-        CubeAppearanceBuilder::new().set_single_texture(OwnedTextureName::from_css_color("brown")),
-    )
+    .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+        TILLED_SOIL_SIDE,
+        TILLED_SOIL_SIDE,
+        TILLED_SOIL_TOP,
+        TILLED_SOIL_TOP,
+        TILLED_SOIL_SIDE,
+        TILLED_SOIL_SIDE,
+    ))
     .build_and_deploy_into(builder)?;
 
     let soil_wet = BlockBuilder::new(
@@ -126,9 +142,14 @@ pub(super) fn register_soil_blocks(builder: &mut GameBuilder) -> Result<()> {
             .builder_extension_mut::<FarmingGameStateExtension>()
             .soil_wet,
     )
-    .set_cube_appearance(
-        CubeAppearanceBuilder::new().set_single_texture(OwnedTextureName::from_css_color("orange")),
-    )
+    .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
+        TILLED_SOIL_WET_SIDE,
+        TILLED_SOIL_WET_SIDE,
+        TILLED_SOIL_WET_TOP,
+        TILLED_SOIL_WET_TOP,
+        TILLED_SOIL_WET_SIDE,
+        TILLED_SOIL_WET_SIDE,
+    ))
     .add_item_group(HIDDEN_FROM_CREATIVE)
     .build_and_deploy_into(builder)?;
 

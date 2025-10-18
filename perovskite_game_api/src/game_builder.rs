@@ -219,6 +219,11 @@ impl From<StaticItemName> for ItemName {
         ItemName(value.0.to_string())
     }
 }
+impl From<&str> for ItemName {
+    fn from(value: &str) -> Self {
+        ItemName(value.to_string())
+    }
+}
 
 #[cfg(feature = "unstable_api")]
 /// Unstable re-export of the raw gameserver API. This API is subject to

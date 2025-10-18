@@ -106,18 +106,19 @@ pub const SNOW_BLOCK: StaticBlockName = StaticBlockName("default:snow_block");
 pub const SNOW_BLOCK_FOOTPRINT: StaticBlockName = StaticBlockName("default:snow_block_footprint");
 pub const SNOWBALL: StaticItemName = StaticItemName("default:snowball");
 
-const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
+/// The texture used for dirt.
+pub const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_grass_side");
-const GRASS_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:grass_top");
-const STONE_TEXTURE: StaticTextureName = StaticTextureName("default:stone");
-const SAND_TEXTURE: StaticTextureName = StaticTextureName("default:sand");
+pub const GRASS_TOP_TEXTURE: StaticTextureName = StaticTextureName("default:grass_top");
+pub const STONE_TEXTURE: StaticTextureName = StaticTextureName("default:stone");
+pub const SAND_TEXTURE: StaticTextureName = StaticTextureName("default:sand");
 const SILT_DRY_TEXTURE: StaticTextureName = StaticTextureName("default:silt_dry");
 const SILT_DAMP_TEXTURE: StaticTextureName = StaticTextureName("default:silt_damp");
 const CLAY_TEXTURE: StaticTextureName = StaticTextureName("default:clay");
-const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:desert_stone");
-const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
-const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
-const GLASS_DICHROIC_TEXTURE: StaticTextureName = StaticTextureName("default:_glass_dichroic");
+pub const DESERT_STONE_TEXTURE: StaticTextureName = StaticTextureName("default:desert_stone");
+pub const DESERT_SAND_TEXTURE: StaticTextureName = StaticTextureName("default:desert_sand");
+pub const GLASS_TEXTURE: StaticTextureName = StaticTextureName("default:glass");
+pub const GLASS_DICHROIC_TEXTURE: StaticTextureName = StaticTextureName("default:_glass_dichroic");
 
 const WATER_TEXTURE: StaticTextureName = StaticTextureName("default:water");
 const RT_SPECULAR_TEST: StaticTextureName = StaticTextureName("default:rt_specular_test");

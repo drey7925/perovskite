@@ -334,9 +334,9 @@ impl Default for BlockType {
 ///     let ext_inner = ext.get_or_insert_with(Default::default);
 ///     ext_inner.simple_data.insert("foo".to_string(), "bar".to_string());
 ///     Ok(())
-/// });
+/// })?;
 /// #    Ok(())
-/// # });
+/// # }).unwrap();
 /// ```
 ///
 /// However, there is a risk of data loss if:
@@ -429,9 +429,9 @@ impl<'a> InlineContext<'a> {
 
 const FBN_NOTFOUND_SENTINEL: u32 = u32::MAX - 1;
 
-/// Manages all of the different block types defined in this game world.
+/// Manages the different block types defined in this game world.
 ///
-/// This struct owns all of the [`BlockType`]s that are registered with it;
+/// This struct owns all the [`BlockType`]s that are registered with it;
 /// they can be accessed using either a [`BlockTypeHandle`], or a [`BlockTypeName`]:
 /// * A handle refers to a block that is known to be already registered
 /// * A name refers to a block that may or may not be registered yet, using its unique short name.

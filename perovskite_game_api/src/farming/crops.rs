@@ -4,6 +4,7 @@ use anyhow::{ensure, Context, Result};
 use itertools::Itertools;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::block_id::BlockId;
+use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
 use perovskite_core::protocol::items::item_stack::QuantityType;
 use perovskite_server::game_state::blocks::{
@@ -262,6 +263,7 @@ pub struct CropDefinition {
     /// [crate::default_game::basic_blocks::DIRT] converted with `.into()`). The default for this is
     /// empty, which should be overridden unless your crop should only grow with manual interactions
     pub eligible_soil_blocks: Vec<FastBlockName>,
+    pub grow_on_any_block: bool,
     /// How often the timer fires. Each `grow_probability` is evaluated once per this duration.
     pub timer_period: Duration,
     pub _ne: NonExhaustive,
@@ -272,6 +274,7 @@ impl Default for CropDefinition {
             base_name: "".to_string(),
             stages: vec![],
             eligible_soil_blocks: vec![],
+            grow_on_any_block: false,
             timer_period: Duration::from_millis(60),
             _ne: NonExhaustive(()),
         }
@@ -306,6 +309,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
             .add_block_groups(stage.extra_block_groups)
             .add_block_group(format!("crops:auto_group:{}", &def.base_name))
             .set_allow_light_propagation(true)
+            .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_appearance(stage.appearance);
 
         if let Some(effect) = stage.dig_effect {
@@ -332,6 +336,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
     let timer_impl = GrowTimerImpl {
         stages: stage_transitions,
         eligible_soil_blocks: def.eligible_soil_blocks.clone(),
+        grow_on_any_block: def.grow_on_any_block,
     };
 
     game_builder.inner.add_timer(
@@ -358,6 +363,7 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
 struct GrowTimerImpl {
     stages: Vec<(BuiltBlock, Box<dyn GrowFunction>)>,
     eligible_soil_blocks: Vec<FastBlockName>,
+    grow_on_any_block: bool,
 }
 impl GrowTimerImpl {
     fn act(
@@ -373,11 +379,13 @@ impl GrowTimerImpl {
             .iter()
             .find_position(|x| x.0.id.equals_ignore_variant(plant));
         if let Some((i, (_, grow_fn))) = stage {
-            if self.eligible_soil_blocks.iter().any(|x| {
-                ctx.block_types()
-                    .resolve_name(&x)
-                    .is_some_and(|x| x.equals_ignore_variant(soil))
-            }) {
+            if self.grow_on_any_block
+                || self.eligible_soil_blocks.iter().any(|x| {
+                    ctx.block_types()
+                        .resolve_name(&x)
+                        .is_some_and(|x| x.equals_ignore_variant(soil))
+                })
+            {
                 if i < (self.stages.len() - 1) {
                     return match grow_fn.grow_outcome(
                         packed_light >> 4,

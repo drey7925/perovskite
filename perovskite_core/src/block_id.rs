@@ -45,15 +45,17 @@ pub enum BlockError {
 pub const BLOCK_VARIANT_MASK: u32 = 0xfff;
 
 /// The maximum number of blocks that can be defined.
-/// The upper 16 definitions are reserved for engine internals.
-pub const MAX_BLOCK_DEFS: usize = (1 << 20) - 16;
+/// The upper 256 definitions are reserved for engine internals.
+pub const MAX_BLOCK_DEFS: usize = (1 << 20) - 256;
 
 pub mod special_block_defs {
     use super::BlockId;
 
     pub const AIR_ID: BlockId = BlockId(0);
-    /// Used to indicate an unloaded chunk in the client. Not seen on the server (i.e. things like `try_get_block` return None instead).
+    // The variants of u32::MAX are used to denote various special blocks. See MAX_BLOCK_DEFS above
+    /// Used to indicate an unloaded chunk in the client. Not seen on the server (i.e., things like `try_get_block` return None instead).
     pub const UNLOADED_CHUNK_BLOCK_ID: BlockId = BlockId(u32::MAX);
+    pub const INVALID_BLOCK_ID: BlockId = UNLOADED_CHUNK_BLOCK_ID.with_variant_unchecked(0);
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bytemuck::Pod, bytemuck::Zeroable)]
@@ -65,15 +67,15 @@ impl BlockId {
     // for rationale. Most of these are tiny functions with pure results
 
     #[inline(always)]
-    pub fn base_id(&self) -> u32 {
+    pub const fn base_id(&self) -> u32 {
         self.0 & !BLOCK_VARIANT_MASK
     }
     #[inline(always)]
-    pub fn index(&self) -> usize {
+    pub const fn index(&self) -> usize {
         (self.0 & !BLOCK_VARIANT_MASK) as usize >> 12
     }
     #[inline(always)]
-    pub fn variant(&self) -> u16 {
+    pub const fn variant(&self) -> u16 {
         (self.0 & BLOCK_VARIANT_MASK) as u16
     }
     /// Returns a new BlockId with the same base block and a different variant
@@ -89,11 +91,11 @@ impl BlockId {
     /// Like [with_variant], but silently truncates excess bits. Note that while this is marked
     /// unchecked, it is still safe from a Rust memory safety standpoint.
     #[inline(always)]
-    pub fn with_variant_unchecked(self, variant: u16) -> BlockId {
+    pub const fn with_variant_unchecked(self, variant: u16) -> BlockId {
         BlockId(self.base_id() | (variant as u32 & BLOCK_VARIANT_MASK))
     }
     #[inline(always)]
-    pub fn with_variant_of(self, other: BlockId) -> BlockId {
+    pub const fn with_variant_of(self, other: BlockId) -> BlockId {
         BlockId(self.base_id() | (other.0 & BLOCK_VARIANT_MASK))
     }
     #[inline(always)]

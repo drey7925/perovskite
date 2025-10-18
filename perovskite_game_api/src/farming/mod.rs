@@ -1,6 +1,7 @@
 /// Utilities to define plants that can be grown
 pub mod crops;
 mod soil;
+mod tea;
 
 use crate::blocks::PlantLikeAppearanceBuilder;
 use crate::farming::crops::{CropDefinition, DefaultGrowInLight, GrowthStage};
@@ -58,6 +59,7 @@ pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
             ..CropDefinition::default()
         },
     )?;
+    tea::register_tea(builder)?;
     Ok(())
 }
 
