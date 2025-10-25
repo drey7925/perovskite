@@ -2784,7 +2784,7 @@ pub trait EntityHandlers: Send + Sync {
         tool: Option<&ItemStack>,
     ) -> Result<ItemInteractionResult> {
         Ok(ItemInteractionResult {
-            updated_tool: tool.cloned(),
+            updated_stack: tool.cloned(),
             obtained_items: vec![],
         })
     }
@@ -2808,7 +2808,7 @@ pub trait EntityHandlers: Send + Sync {
         tool: Option<&ItemStack>,
     ) -> Result<ItemInteractionResult> {
         Ok(ItemInteractionResult {
-            updated_tool: tool.cloned(),
+            updated_stack: tool.cloned(),
             obtained_items: vec![],
         })
     }

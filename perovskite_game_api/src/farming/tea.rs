@@ -7,19 +7,26 @@
 //! * [ ] Basic tea processing (e.g., withering, oxidation, fixing, drying)
 //! * [ ] ...
 
-use crate::blocks::{BlockAppearanceBuilder, PlantLikeAppearanceBuilder};
+use crate::blocks::{
+    AxisAlignedBoxesAppearanceBuilder, BlockAppearanceBuilder, PlantLikeAppearanceBuilder,
+};
 use crate::default_game::basic_blocks::{DIRT, DIRT_WITH_GRASS};
+use crate::default_game::recipes::RecipeSlot;
+use crate::default_game::DefaultGameBuilder;
 use crate::farming::crops::{
     define_crop, CropDefinition, DefaultGrowInLight, GrowthStage, InteractionAccumulator,
     InteractionEffect, InteractionTransition, InteractionTransitionTarget,
 };
 use crate::farming::FarmingGameStateExtension;
-use crate::game_builder::{GameBuilder, FALLBACK_UNKNOWN_TEXTURE_NAME};
+use crate::game_builder::{
+    GameBuilder, StaticBlockName, StaticTextureName, FALLBACK_UNKNOWN_TEXTURE_NAME,
+};
 use anyhow::Result;
 use perovskite_server::game_state::blocks::FastBlockName;
 use std::time::Duration;
 
 const TEA_LEAVES_FRESH_ITEM: &'static str = "farming:tea_leaves_fresh";
+const TEA_LEAVES_STEAMED_ITEM: &'static str = "farming:tea_leaves_steamed";
 
 pub(crate) fn register_tea(builder: &mut GameBuilder) -> Result<()> {
     builder.register_basic_item(
@@ -30,7 +37,68 @@ pub(crate) fn register_tea(builder: &mut GameBuilder) -> Result<()> {
         "farming:tea:leaves:fresh",
     )?;
 
+    let steamed_leaves = builder.register_basic_item(
+        TEA_LEAVES_STEAMED_ITEM,
+        "Steamed tea leaves",
+        FALLBACK_UNKNOWN_TEXTURE_NAME,
+        vec![],
+        "farming:tea:leaves:steamed",
+    )?;
+    let steamed_leaves_stack = steamed_leaves.make_stack(1);
+    // Borrow checker: need to pre-create the stack since `steamed_leaves` borrows from `builder`.
+    // (this is ugly, maybe we could get non-borrowing item handles holding string names????)
+
+    // Steaming fresh leaves gets us oxidation-fixed leaves, which then become green tea when rolled
+    // and then dried
+    builder.register_smelting_recipe(
+        RecipeSlot::Exact(TEA_LEAVES_FRESH_ITEM.to_string()),
+        steamed_leaves_stack,
+    );
+
+    // let steamed_rolled_leaves = builder.register_basic_item(
+    //     TEA_LEAVES_STEAMED_ITEM,
+    // );
+
     register_tea_plant_stages(builder)?;
+
+    register_tea_basket_stages(builder)?;
+
+    Ok(())
+}
+
+const EMPTY_TEA_BASKET: StaticBlockName = StaticBlockName("farming:tea_basket_empty");
+
+fn make_basket_aabbs(contents_texture: StaticTextureName) -> AxisAlignedBoxesAppearanceBuilder {
+    todo!()
+}
+
+fn register_tea_basket_stages(game_builder: &mut GameBuilder) -> Result<()> {
+    // TODO: build the graph of open-air processing stages, potentially using something like
+    // https://en.wikipedia.org/wiki/Tea_processing#/media/File:Teaprocessing.svg
+
+    //
+    // let stages = vec![
+    //     // empty basket should be a basic block via the block builder, so it can get its own item.
+    //     // etc
+    //     // GrowthStage {
+    //     //     dig_effect: Some(InteractionEffect {
+    //     //         item_drops: vec![
+    //     //             // TODO: tea tree sapling?
+    //     //         ],
+    //     //         transition: InteractionTransitionTarget::Remove.into(),
+    //     //         transition_probability: 1.0,
+    //     //         ..Default::default()
+    //     //     }),
+    //     //     block_name: Some(String::from("farming:tea_basket_empty")),
+    //     //     grow_probability: Box::new(DefaultGrowInLight(InteractionTransition {
+    //     //         target: InteractionTransitionTarget::NextStage,
+    //     //         accumulator: Some(InteractionAccumulator { add: 1, trip: 20 }),
+    //     //     })),
+    //     //     appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::default()),
+    //     //     ..Default::default()
+    //     // },
+    //
+    // ];
 
     Ok(())
 }

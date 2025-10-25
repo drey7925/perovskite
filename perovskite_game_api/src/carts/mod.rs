@@ -179,7 +179,7 @@ impl EntityHandlers for CartHandlers {
     ) -> Result<ItemInteractionResult> {
         ctx.entities().remove_blocking(target.entity_id);
         Ok(ItemInteractionResult {
-            updated_tool: tool.cloned(),
+            updated_stack: tool.cloned(),
             obtained_items: vec![ctx
                 .item_manager()
                 .get_item("carts:minecart")
@@ -339,8 +339,8 @@ pub fn register_carts(game_builder: &mut crate::game_builder::GameBuilder) -> Re
         .inner
         .items_mut()
         .register_item(game_state::items::Item {
-            place_on_block_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
-                place_cart(ctx, anchor, stack, ext_clone.clone())
+            place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
+                Ok(place_cart(ctx, coord.selected, stack, ext_clone.clone())?.into())
             })),
             ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "carts:minecart".to_string(),

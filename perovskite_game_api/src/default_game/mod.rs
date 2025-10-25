@@ -69,6 +69,8 @@ pub mod block_groups {
     pub const WOOD_PLANKS: &str = "default:wood_planks";
     /// Leaves of a tree
     pub const TREE_LEAVES: &str = "default:tree_leaves";
+    /// Things that can be turned into arable farmland (by a farming module or similar)
+    pub const SOILS: &str = "default:soils";
 }
 
 pub mod item_groups {
@@ -103,7 +105,9 @@ pub trait DefaultGameBuilder {
     /// If stackable is false, quantity represents item wear. Behavior is undefined if stackable is false,
     /// the item isn't subject to tool wear, and quantity != 1.
     ///
-    /// **This API is subject to change.**
+    /// **This API is subject to change. At some point before 1.0, I expect to improve the ItemStack
+    ///
+    /// If you have a strong opinion about it being unified _now_, please open an issue.
     fn register_crafting_recipe(
         &mut self,
         slots: [RecipeSlot; 9],
@@ -118,6 +122,14 @@ pub trait DefaultGameBuilder {
     ///   - fuel_name: Name of the fuel
     ///   - ticks: Metadata is number of furnace timer ticks (period tbd) that the fuel lasts for
     fn register_smelting_fuel(&mut self, fuel: RecipeSlot, ticks: u32);
+    /// Registers a new recipe for something that can be smelted.
+    ///
+    /// **This API is subject to change. It is intentionally inconsistent with
+    /// `register_crafting_recipe` so I can experiment with ergonomics. At some point before 1.0,
+    /// either the ItemStack will be wrapped in a new abstraction, or become more stable.
+    ///
+    /// If you have a strong opinion about it being unified _now_, please open an issue.
+    fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack);
 }
 
 // This is a private type; other plugins cannot name it, so they cannot access
@@ -266,6 +278,22 @@ impl DefaultGameBuilder for GameBuilder {
                 },
                 shapeless: false,
                 metadata: ticks,
+            });
+    }
+
+    fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack) {
+        assert!(
+            self.builder_extension_mut::<DefaultGameBuilderExtension>()
+                .initialized,
+            "DefaultGame builder_extension not initialized"
+        );
+        self.builder_extension_mut::<DefaultGameBuilderExtension>()
+            .smelting_recipes
+            .register_recipe(RecipeImpl {
+                slots: [input],
+                result: output,
+                shapeless: false,
+                metadata: 4,
             });
     }
 }

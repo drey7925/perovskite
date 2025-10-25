@@ -1,5 +1,9 @@
 use std::ops::ControlFlow;
 
+use super::{
+    tracks::{eval_rotation, TRACK_TEMPLATES},
+    CartsGameBuilderExtension,
+};
 use crate::carts::tracks::build_block;
 use crate::{
     blocks::variants::rotate_nesw_azimuth_to_variant,
@@ -14,16 +18,12 @@ use perovskite_core::{
     coordinates::BlockCoordinate,
     protocol::items as items_proto,
 };
+use perovskite_server::game_state::items::{ItemInteractionResult, PointeeBlockCoords};
 use perovskite_server::game_state::{
     client_ui::{Popup, UiElementContainer},
     event::HandlerContext,
     items::{Item, ItemStack},
     player::Player,
-};
-
-use super::{
-    tracks::{eval_rotation, TRACK_TEMPLATES},
-    CartsGameBuilderExtension,
 };
 
 pub(crate) fn register_track_tool(
@@ -40,8 +40,8 @@ pub(crate) fn register_track_tool(
 
     let config_clone = config.clone();
     let item = Item {
-        place_on_block_handler: Some(Box::new(move |ctx, place_coord, anchor_coord, stack| {
-            track_tool_interaction(ctx, place_coord, anchor_coord, stack, &config_clone)
+        place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
+            track_tool_interaction(ctx, coord, stack, &config_clone)
         })),
         ..Item::default_with_proto(items_proto::ItemDef {
             short_name: "carts:track_tool".to_string(),
@@ -60,17 +60,16 @@ pub(crate) fn register_track_tool(
 
 fn track_tool_interaction(
     ctx: &HandlerContext,
-    place_coord: BlockCoordinate,
-    anchor_coord: BlockCoordinate,
+    coord: PointeeBlockCoords,
     stack: &ItemStack,
     config: &CartsGameBuilderExtension,
-) -> Result<Option<ItemStack>> {
+) -> Result<ItemInteractionResult> {
     let work = |p: &Player| -> Result<()> {
-        let anchor_block = ctx.game_map().get_block(anchor_coord)?;
+        let anchor_block = ctx.game_map().get_block(coord.selected)?;
         let working_block = if config.is_any_rail_block(anchor_block) {
-            anchor_coord
+            coord.selected
         } else {
-            if Some(place_coord) != anchor_coord.try_delta(0, 1, 0) {
+            if coord.preceding.is_none() || coord.preceding != coord.selected.try_delta(0, 1, 0) {
                 p.send_chat_message(
                     ChatMessage::new_server_message(
                         "Track tool only works on rails or on top of other blocks",
@@ -79,7 +78,7 @@ fn track_tool_interaction(
                 )?;
                 return Ok(());
             }
-            place_coord
+            coord.preceding.unwrap()
         };
 
         let face_dir = rotate_nesw_azimuth_to_variant(p.last_position().face_direction.0);
@@ -102,7 +101,7 @@ fn track_tool_interaction(
         }
         _ => {}
     };
-    Ok(Some(stack.clone()))
+    Ok(Some(stack.clone()).into())
 }
 
 fn track_build_popup(

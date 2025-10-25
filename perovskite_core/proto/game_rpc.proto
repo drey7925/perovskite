@@ -213,7 +213,9 @@ message DigTapAction {
     EntityTarget entity_target = 11;
   }
   // The block coordinate on the face that was dug into/tapped (i.e. in
-  // raycasting just before we hit the target block). Absent when target is block_coord (for now)
+  // raycasting just before we hit the target block). Absent when target is entity_coord (for now)
+  //
+  // Also absent in edge cases of raycasting (e.g. player within the block being hit)
   perovskite.protocol.coordinates.WireBlockCoordinate prev_coord = 2;
   // zero-indexed slot for the tool in the player's hotbar/primary inventory
   uint32 item_slot = 3;

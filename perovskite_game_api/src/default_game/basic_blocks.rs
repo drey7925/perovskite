@@ -21,6 +21,7 @@ use super::{
     shaped_blocks::{make_slab, make_stairs},
     DefaultGameBuilder, DefaultGameBuilderExtension,
 };
+use crate::default_game::block_groups::SOILS;
 use crate::default_game::chest::register_chest;
 use crate::default_game::signs::register_sign;
 use crate::game_builder::{
@@ -56,6 +57,7 @@ use perovskite_server::game_state::blocks::{ExtendedDataHolder, InlineContext};
 use perovskite_server::game_state::game_map::{
     TimerCallback, TimerInlineCallback, TimerSettings, TimerState,
 };
+use perovskite_server::game_state::items::ItemInteractionResult;
 use perovskite_server::game_state::{
     blocks::BlockInteractionResult,
     items::{Item, ItemStack},
@@ -606,6 +608,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     let dirt = game_builder.add_block(
         BlockBuilder::new(DIRT)
             .add_block_group(GRANULAR)
+            .add_block_group(SOILS)
             .set_cube_single_texture(DIRT_TEXTURE)
             .set_display_name("Dirt block"),
     )?;
@@ -617,6 +620,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_GRASS)
             .add_block_group(GRANULAR)
+            .add_block_group(SOILS)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 DIRT_GRASS_SIDE_TEXTURE,
                 DIRT_GRASS_SIDE_TEXTURE,
@@ -807,10 +811,10 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     let snow_id = snow.id;
     let snow_block_id = snow_block.id;
     game_builder.inner.items_mut().register_item(Item {
-        place_on_block_handler: Some(Box::new(move |ctx, place_coord, anchor_coord, stack| {
+        place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
             let incremented =
                 ctx.game_map()
-                    .mutate_block_atomically(anchor_coord, |block, _| {
+                    .mutate_block_atomically(coord.selected, |block, _| {
                         if (block.equals_ignore_variant(snow_id)
                             || block.equals_ignore_variant(snow_footprint_id))
                             && block.variant() < 7
@@ -828,23 +832,29 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                         }
                     })?;
             if incremented {
-                return Ok(stack.decrement());
+                return Ok(ItemInteractionResult {
+                    updated_stack: stack.decrement(),
+                    obtained_items: vec![],
+                });
             }
             // We couldn't increment at the anchor coord, place at the place coord instead...
-            let replaced =
+            let replaced = if let Some(preceding) = coord.preceding {
                 ctx.game_map()
-                    .mutate_block_atomically(place_coord, move |block, _| {
+                    .mutate_block_atomically(preceding, move |block, _| {
                         if ctx.block_types().is_trivially_replaceable(*block) {
                             *block = snow_id.with_variant_unchecked(0);
                             Ok(true)
                         } else {
                             Ok(false)
                         }
-                    })?;
-            if replaced {
-                Ok(stack.decrement())
+                    })?
             } else {
-                Ok(Some(stack.clone()))
+                false
+            };
+            if replaced {
+                Ok(stack.decrement().into())
+            } else {
+                Ok(Some(stack.clone()).into())
             }
         })),
         ..Item::default_with_proto(ItemDef {
@@ -860,6 +870,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     game_builder.add_block(
         BlockBuilder::new(DIRT_WITH_SNOW)
             .add_block_group(GRANULAR)
+            .add_block_group(SOILS)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_individual_textures(
                 DIRT_SNOW_SIDE_TEXTURE,
                 DIRT_SNOW_SIDE_TEXTURE,

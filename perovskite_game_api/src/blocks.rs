@@ -49,7 +49,9 @@ use crate::{
     game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
     maybe_export,
 };
-use perovskite_server::game_state::items::PlaceHandler;
+use perovskite_server::game_state::items::{
+    ItemInteractionResult, PlaceHandler, PointeeBlockCoords,
+};
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
     event::HandlerContext,
@@ -61,12 +63,10 @@ use perovskite_server::game_state::{
 };
 use perovskite_server::media::SoundKey;
 
-pub mod custom_geometry;
-
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct DroppedItemClosureParam {
-    pub block_coordinate: BlockCoordinate,
+    pub coord: BlockCoordinate,
     pub variant: u16,
 }
 
@@ -88,7 +88,7 @@ impl DroppedItem {
         F: Fn(DroppedItemClosureParam) -> Vec<ItemStack> + Sync + Send + 'static,
     {
         Box::new(move |ctx, target_block, ext_data, stack| {
-            let block_type = ctx.block_types().get_block(target_block)?.0;
+            let block_type = ctx.block_types().get_block(*target_block)?.0;
             let variant = target_block.variant();
             let rule = ctx
                 .items()
@@ -100,7 +100,7 @@ impl DroppedItem {
 
                 Ok(BlockInteractionResult {
                     item_stacks: closure(DroppedItemClosureParam {
-                        block_coordinate: ctx.location(),
+                        coord: ctx.location(),
                         variant,
                     }),
                     tool_wear: match rule {
@@ -112,6 +112,38 @@ impl DroppedItem {
                 Ok(Default::default())
             }
         })
+    }
+
+    pub(crate) fn get_item(&self, coord: BlockCoordinate, variant: u16) -> Vec<ItemStack> {
+        match &self {
+            DroppedItem::None => {
+                vec![]
+            }
+            DroppedItem::Fixed(item, count) => {
+                vec![ItemStack {
+                    proto: protocol::items::ItemStack {
+                        item_name: item.clone(),
+                        quantity: *count,
+                        current_wear: 1,
+                        quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256)),
+                    },
+                }]
+            }
+            DroppedItem::Dynamic(closure) => {
+                let (item, count) = closure(DroppedItemClosureParam { coord, variant });
+                vec![ItemStack {
+                    proto: protocol::items::ItemStack {
+                        item_name: item.0.to_string(),
+                        quantity: count,
+                        current_wear: 1,
+                        quantity_type: Some(items_proto::item_stack::QuantityType::Stack(256)),
+                    },
+                }]
+            }
+            DroppedItem::NotDiggable => {
+                vec![]
+            }
+        }
     }
 
     pub(crate) fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
@@ -166,17 +198,19 @@ pub type ExtendedDataInitializer = Box<
         + Send
         + Sync,
 >;
+
+#[cfg(feature = "unstable_api")]
+pub type ExtraVariantCallback =
+    Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
 #[cfg(not(feature = "unstable_api"))]
 pub(crate) type ExtendedDataInitializer = Box<
-    dyn Fn(
-            HandlerContext,
-            BlockCoordinate,
-            BlockCoordinate,
-            &ItemStack,
-        ) -> Result<Option<ExtendedData>>
+    dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack) -> Result<Option<ExtendedData>>
         + Send
         + Sync,
 >;
+#[cfg(not(feature = "unstable_api"))]
+pub(crate) type ExtraVariantFunc =
+    Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BlockVariantEffect {
@@ -212,8 +246,12 @@ pub enum MatterType {
 
 /// Builder for simple blocks.
 /// Note that there are behaviors that this builder cannot express, but
-/// [crate::server_api::BlockType] (when used directly via the unstable API) can.
-#[must_use = "Builders do nothing unless used; set_foo will return a new builder."]
+/// [crate::server_api::BlockType] (when the `unstable_api` feature is enabled)
+///
+/// As a bridge to allow the convenience of the block builder with custom logic,
+/// [BlockBuilder::add_modifier] allows arbitrary modifications and handlers to be added to the
+/// block (also when the `unstable_api` feature is enabled)
+#[must_use = "Builders do nothing unless used; setters will return a new builder."]
 pub struct BlockBuilder {
     block_name: String,
     item: Item,
@@ -222,6 +260,7 @@ pub struct BlockBuilder {
     item_modifiers: Vec<Box<dyn FnOnce(&mut Item)>>,
     /// Same parameters as [perovskite_server::game_state::items::PlaceHandler]
     extended_data_initializer: Option<ExtendedDataInitializer>,
+    extra_variant_func: Option<ExtraVariantFunc>,
     // Exposed within the crate while not all APIs are complete
     pub(crate) client_info: BlockTypeDef,
     footstep_sound_override: Option<Option<SoundKey>>,
@@ -237,7 +276,7 @@ impl BlockBuilder {
     pub fn new(name: impl Into<BlockName>) -> BlockBuilder {
         let name = name.into().0;
         let item = Item {
-            place_on_block_handler: Some(Box::new(|_, _, _, _| {
+            place_on_block_handler: Some(Box::new(|_, _, _| {
                 panic!("Incomplete place_handler; item registration was not completed properly");
             })),
             ..Item::default_with_proto(ItemDef {
@@ -258,6 +297,7 @@ impl BlockBuilder {
             modifiers: vec![],
             item_modifiers: vec![],
             extended_data_initializer: None,
+            extra_variant_func: None,
             client_info: BlockTypeDef {
                 id: 0,
                 short_name: name.clone(),
@@ -323,7 +363,7 @@ impl BlockBuilder {
     /// block being dug; this will be done in a non-API-breaking way.
     #[deprecated(
         since = "0.2.1",
-        note = "Construct a DroppedItem instead and pass it to set_dropped_item"
+        note = "Construct a DroppedItem w/ a closure instead and pass it to set_dropped_item"
     )]
     pub fn set_dropped_item_closure(
         mut self,
@@ -398,6 +438,12 @@ impl BlockBuilder {
         self
     }
 
+    /// Set the relative amount of wear applied to tools that dig this block. (1.0 by default)
+    pub fn set_wear_multiplier(mut self, wear_multiplier: f64) -> Self {
+        self.client_info.wear_multiplier = wear_multiplier;
+        self
+    }
+
     maybe_export!(
         /// Run arbitrary changes on the block definition just before it's registered
         fn add_modifier(mut self, modifier: Box<dyn FnOnce(&mut BlockType)>) -> Self {
@@ -414,12 +460,21 @@ impl BlockBuilder {
     );
     maybe_export!(
         /// Sets a function to generate extended data just before the block is placed
-        /// This will be run even if the block is not placed due to a conflicting material
+        /// This may be run even if the block is not placed due to a conflicting material
         fn set_extended_data_initializer(
             mut self,
             extended_data_initializer: ExtendedDataInitializer,
         ) -> Self {
             self.extended_data_initializer = Some(extended_data_initializer);
+            self
+        }
+    );
+
+    maybe_export!(
+        /// Sets a function to tweak the variant just before the block is placed
+        /// This may be run even if the block is not placed due to a conflicting material
+        fn set_extra_variant_func(mut self, func: ExtraVariantFunc) -> Self {
+            self.extra_variant_func = Some(func);
             self
         }
     );
@@ -615,7 +670,7 @@ impl BlockBuilder {
         for modifier in self.modifiers {
             modifier(&mut block);
         }
-        let block_handle = game_builder.inner.blocks_mut().register_block(block)?;
+        let block_id = game_builder.inner.blocks_mut().register_block(block)?;
 
         let mut item = self.item;
         let item_name = ItemName(item.proto.short_name.clone());
@@ -623,7 +678,8 @@ impl BlockBuilder {
         item.place_on_block_handler = Some(build_place_handler(
             self.variant_effect,
             self.extended_data_initializer,
-            block_handle,
+            self.extra_variant_func,
+            block_id,
         ));
         for modifier in self.item_modifiers {
             modifier(&mut item);
@@ -640,16 +696,16 @@ impl BlockBuilder {
                     .liquids_by_flow_time
                     .entry(period)
                     .or_default()
-                    .push(block_handle);
+                    .push(block_id);
             }
         }
 
         if self.falls_down {
-            game_builder.falling_blocks.push(block_handle);
+            game_builder.falling_blocks.push(block_id);
         }
 
         Ok(BuiltBlock {
-            id: block_handle,
+            id: block_id,
             item_name,
         })
     }
@@ -860,17 +916,21 @@ fn make_texture_ref(diffuse: String) -> Option<TextureReference> {
 pub fn build_place_handler(
     variant_effect: BlockVariantEffect,
     extended_data_initializer: Option<ExtendedDataInitializer>,
+    extra_variant_func: Option<ExtraVariantFunc>,
     block_id: BlockId,
 ) -> Box<PlaceHandler> {
-    Box::new(move |ctx, coord, anchor, stack| {
+    Box::new(move |ctx, coord, stack| {
         if stack.proto().quantity == 0 {
-            return Ok(None);
+            return Ok(ItemInteractionResult {
+                updated_stack: None,
+                obtained_items: vec![],
+            });
         }
         let extended_data = match &extended_data_initializer {
-            Some(x) => x(ctx.clone(), coord, anchor, stack)?,
+            Some(x) => x(ctx.clone(), coord, stack)?,
             None => None,
         };
-        let variant = match variant_effect {
+        let mut variant = match variant_effect {
             BlockVariantEffect::None => 0,
             BlockVariantEffect::RotateNesw => ctx
                 .initiator()
@@ -879,7 +939,9 @@ pub fn build_place_handler(
                 .unwrap_or(0),
             BlockVariantEffect::LiquidLikeHeight => 0xfff,
         };
-
+        if let Some(func) = &extra_variant_func {
+            variant = func(ctx.clone(), coord, stack, variant)?;
+        }
         let place_step = |coord, extended_data| {
             ctx.game_map().compare_and_set_block_predicate(
                 coord,
@@ -893,15 +955,26 @@ pub fn build_place_handler(
 
         // First step: are we placing onto a trivially replaceable block? If so, that block (the
         // anchor) ought to be overwritten
-        let (outcome, _, extended_data) = place_step(anchor, extended_data)?;
+        let (outcome, _, extended_data) = place_step(coord.selected, extended_data)?;
         if outcome == CasOutcome::Match {
-            return Ok(stack.decrement());
+            return Ok(ItemInteractionResult {
+                updated_stack: stack.decrement(),
+                obtained_items: vec![],
+            });
         }
         // Second step: try to place in the actual addressed spot
-        match place_step(coord, extended_data)?.0 {
-            CasOutcome::Match => Ok(stack.decrement()),
-            CasOutcome::Mismatch => Ok(Some(stack.clone())),
-        }
+        let stack = if let Some(preceding) = coord.preceding {
+            match place_step(preceding, extended_data)?.0 {
+                CasOutcome::Match => stack.decrement(),
+                CasOutcome::Mismatch => Some(stack.clone()),
+            }
+        } else {
+            Some(stack.clone())
+        };
+        Ok(ItemInteractionResult {
+            updated_stack: stack,
+            obtained_items: vec![],
+        })
     })
 }
 

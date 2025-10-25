@@ -1,3 +1,4 @@
+use self::events::CircuitHandlerContext;
 use crate::{
     blocks::{BlockBuilder, BuiltBlock},
     game_builder::{GameBuilder, GameBuilderExtension},
@@ -5,6 +6,7 @@ use crate::{
 use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
 use perovskite_server::game_state::blocks::InlineHandler;
+use perovskite_server::game_state::items::ItemInteractionResult;
 use perovskite_server::game_state::{
     blocks::{BlockInteractionResult, FastBlockName, FullHandler},
     event::HandlerContext,
@@ -13,8 +15,6 @@ use perovskite_server::game_state::{
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::ops::Deref;
-
-use self::events::CircuitHandlerContext;
 
 mod simple_blocks;
 mod wire;
@@ -599,12 +599,22 @@ impl CircuitBlockBuilder for BlockBuilder {
         }))
         .add_item_modifier(Box::new(|item| {
             let old_handler = item.place_on_block_handler.take();
-            item.place_on_block_handler = Some(Box::new(move |ctx, coord, anchor, tool_stack| {
+            item.place_on_block_handler = Some(Box::new(move |ctx, coord, tool_stack| {
                 let result = match old_handler.as_deref() {
-                    Some(old_handler) => old_handler(ctx, coord, anchor, tool_stack),
-                    None => Ok(None),
+                    Some(old_handler) => old_handler(ctx, coord, tool_stack),
+                    None => Ok(ItemInteractionResult {
+                        updated_stack: None,
+                        obtained_items: vec![],
+                    }),
                 };
-                if let Err(e) = dispatch::place(coord, &events::make_root_context(ctx)) {
+                // We don't know where the placement handler actually placed a block. Try both
+                // common locations.
+                if let Some(preceding) = coord.preceding {
+                    if let Err(e) = dispatch::place(preceding, &events::make_root_context(ctx)) {
+                        tracing::error!("Error in place handler: {}", e);
+                    }
+                }
+                if let Err(e) = dispatch::place(coord.selected, &events::make_root_context(ctx)) {
                     tracing::error!("Error in place handler: {}", e);
                 }
                 result
@@ -687,7 +697,7 @@ mod dispatch {
         let connectivity = match ext.basic_properties.get(&block_id.base_id()) {
             Some(properties) => &properties.connectivity,
             None => {
-                tracing::warn!("block {:?} has no circuit properties but was registered with the circuits plugin", block_id);
+                // tracing::warn!("block {:?} has no circuit properties but was registered with the circuits plugin", block_id);
                 return Ok(());
             }
         };

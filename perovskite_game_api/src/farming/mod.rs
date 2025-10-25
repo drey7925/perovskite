@@ -3,12 +3,22 @@ pub mod crops;
 mod soil;
 mod tea;
 
-use crate::blocks::PlantLikeAppearanceBuilder;
+use crate::blocks::{DroppedItem, PlantLikeAppearanceBuilder, RotationMode};
+use crate::default_game::basic_blocks::ores::IRON_INGOT;
+use crate::default_game::block_groups::SOILS;
+use crate::default_game::foliage::STICK_ITEM;
+use crate::default_game::recipes::RecipeSlot;
+use crate::default_game::DefaultGameBuilder;
 use crate::farming::crops::{
     CropDefinition, DefaultGrowInLight, GrowthStage, InteractionTransitionTarget,
 };
-use crate::game_builder::{GameBuilder, GameBuilderExtension, OwnedTextureName};
+use crate::game_builder::{
+    GameBuilder, GameBuilderExtension, OwnedTextureName, FALLBACK_UNKNOWN_TEXTURE_NAME,
+};
+use crate::items::{ItemAction, ItemActionTarget, ItemBuilder, ItemHandler, StackDecrement};
 use anyhow::Result;
+use perovskite_core::protocol::items::item_stack::QuantityType;
+use perovskite_core::protocol::render::TextureReference;
 use perovskite_server::game_state::blocks::FastBlockName;
 use perovskite_server::game_state::GameStateExtension;
 use perovskite_server::server::ServerBuilder;
@@ -31,7 +41,8 @@ impl GameStateExtension for FarmingGameStateExtension {}
 pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
     soil::register_soil_blocks(builder)?;
     let ext = builder.builder_extension_mut::<FarmingGameStateExtension>();
-    let soil_blocks = vec![ext.paddy_wet.clone(), ext.soil_wet.clone()];
+    let wet_soil_blocks = vec![ext.paddy_wet.clone(), ext.soil_wet.clone()];
+    let soil_dry = ext.soil_dry.clone();
     let mut stages = vec![];
     let mut rng = thread_rng();
     for _ in 0..32 {
@@ -58,12 +69,22 @@ pub fn initialize_farming(builder: &mut GameBuilder) -> Result<()> {
         CropDefinition {
             base_name: "farming:test_crop".to_string(),
             stages,
-            eligible_soil_blocks: soil_blocks,
+            eligible_soil_blocks: wet_soil_blocks,
             timer_period: Duration::from_secs(1),
             ..CropDefinition::default()
         },
     )?;
     tea::register_tea(builder)?;
+    register_hoe(
+        builder,
+        FALLBACK_UNKNOWN_TEXTURE_NAME,
+        "farming:iron_hoe",
+        "Iron hoe",
+        120,
+        "iron",
+        Some(IRON_INGOT.into()),
+        soil_dry,
+    )?;
     Ok(())
 }
 
@@ -82,4 +103,55 @@ impl GameBuilderExtension for FarmingGameStateExtension {
     fn pre_run(&mut self, server_builder: &mut ServerBuilder) {
         server_builder.add_extension(self.clone())
     }
+}
+
+pub(crate) fn register_hoe(
+    game_builder: &mut GameBuilder,
+    texture: impl Into<TextureReference>,
+    name: impl Into<String>,
+    display_name: impl Into<String>,
+    durability: u32,
+    sort_key_component: &str,
+    craft_component: Option<RecipeSlot>,
+    produced_soil: FastBlockName,
+) -> Result<()> {
+    let name = name.into();
+    ItemBuilder::new(name.clone())
+        .set_display_name(display_name)
+        .add_tap_handler(ItemHandler {
+            target: ItemActionTarget::BlockGroup(SOILS.into()),
+            action: ItemAction::PlaceBlock {
+                block: produced_soil,
+                rotation_mode: RotationMode::None,
+                ignore_trivially_replaceable: true,
+                place_onto: false,
+            },
+            stack_decrement: Some(StackDecrement::FixedDestroyIfInsufficient(1)),
+            dropped_item: DroppedItem::None,
+            ..Default::default()
+        })
+        .set_inventory_texture(texture)
+        .set_max_wear(durability)
+        .set_sort_key("farming:tools:hoe:".to_string() + sort_key_component)
+        .build_into(game_builder)?;
+    if let Some(component) = craft_component {
+        game_builder.register_crafting_recipe(
+            [
+                component.clone(),
+                component,
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+                RecipeSlot::Exact(STICK_ITEM.0.to_string()),
+                RecipeSlot::Empty,
+            ],
+            name,
+            durability,
+            Some(QuantityType::Wear(durability)),
+            false,
+        );
+    }
+    Ok(())
 }

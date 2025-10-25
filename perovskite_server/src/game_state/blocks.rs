@@ -472,8 +472,8 @@ impl BlockTypeManager {
         }
     }
     /// Given a handle, return the block.
-    pub fn get_block(&self, handle: &BlockTypeHandle) -> Result<(&BlockType, u16)> {
-        self.get_block_by_id(*handle)
+    pub fn get_block(&self, handle: BlockId) -> Result<(&BlockType, u16), BlockError> {
+        self.get_block_by_id(handle)
     }
 
     pub fn is_trivially_replaceable(&self, id: BlockId) -> bool {
@@ -484,12 +484,11 @@ impl BlockTypeManager {
             .unwrap_or(&false)
     }
 
-    pub(crate) fn get_block_by_id(&self, id: BlockId) -> Result<(&BlockType, u16)> {
-        let block_type = self
-            .block_types
-            .get(id.index())
-            .with_context(|| BlockError::IdNotFound(id.into()))?;
-        Ok((block_type, id.variant()))
+    pub(crate) fn get_block_by_id(&self, id: BlockId) -> Result<(&BlockType, u16), BlockError> {
+        match self.block_types.get(id.index()) {
+            Some(x) => Ok((x, id.variant())),
+            None => Err(BlockError::IdNotFound(id.into())),
+        }
     }
 
     #[inline]
@@ -521,7 +520,7 @@ impl BlockTypeManager {
     ///
     /// Returns an error if another block is already registered with the same short name, or
     /// if there are too many blocktypes (up to roughly 1 million BlockTypes can be registered)
-    pub fn register_block(&mut self, mut block: BlockType) -> Result<BlockTypeHandle> {
+    pub fn register_block(&mut self, mut block: BlockType) -> Result<BlockId> {
         let id = match self
             .name_to_base_id_map
             .entry(block.short_name().to_string())
@@ -934,7 +933,8 @@ fn make_air_block() -> BlockType {
             physics_info: Some(PhysicsInfo::Air(Empty {})),
             base_dig_time: 1.0,
             groups: vec![DEFAULT_GAS.to_string(), TRIVIALLY_REPLACEABLE.to_string()],
-            wear_multiplier: 1.0,
+            // There is no wear done when digging air
+            wear_multiplier: 0.0,
             light_emission: 0,
             allow_light_propagation: true,
             footstep_sound: 0,

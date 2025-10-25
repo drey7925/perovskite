@@ -37,7 +37,7 @@ use perovskite_server::{
     server::{ServerArgs, ServerBuilder},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use itertools::Itertools;
 
 /// Type-safe newtype wrapper for a texture name
@@ -211,6 +211,12 @@ impl From<&BlockName> for FastBlockName {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StaticItemName(pub &'static str);
 
+impl From<StaticItemName> for RecipeSlot {
+    fn from(value: StaticItemName) -> Self {
+        RecipeSlot::Exact(value.0.to_string())
+    }
+}
+
 /// Type-safe wrapper for an item name
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemName(pub String);
@@ -222,6 +228,11 @@ impl From<StaticItemName> for ItemName {
 impl From<&str> for ItemName {
     fn from(value: &str) -> Self {
         ItemName(value.to_string())
+    }
+}
+impl From<String> for ItemName {
+    fn from(value: String) -> Self {
+        ItemName(value)
     }
 }
 
@@ -471,8 +482,11 @@ impl GameBuilder {
     }
 
     /// Registers a simple item that cannot be placed, doesn't have a block automatically generated for it, and is not a tool
-    /// The item can be stacked in the inventory, but has no other behaviors. If used as a tool, it will behave the same as if
-    /// nothing were held in the hand.
+    /// The item can be stacked in the inventory up to 256, but has no other behaviors.
+    ///
+    /// If used as a tool, it will behave the same as if nothing were held in the hand.
+    ///
+    /// TODO: Create a proper builder abstraction similar to BlockBuilder
     pub fn register_basic_item(
         &mut self,
         short_name: impl Into<ItemName>,
@@ -480,11 +494,12 @@ impl GameBuilder {
         texture: impl TextureName,
         groups: Vec<String>,
         sort_key: impl Into<String>,
-    ) -> Result<()> {
+    ) -> Result<&Item> {
+        let short_name = short_name.into().0.to_string();
         self.inner
             .items_mut()
             .register_item(Item::default_with_proto(ItemDef {
-                short_name: short_name.into().0.to_string(),
+                short_name: short_name.clone(),
                 display_name: display_name.into(),
                 appearance: Some(Appearance::InventoryTexture(texture.name().to_string())),
                 groups,
@@ -493,7 +508,11 @@ impl GameBuilder {
                     perovskite_core::protocol::items::item_def::QuantityType::Stack(256),
                 ),
                 sort_key: sort_key.into(),
-            }))
+            }))?;
+        self.inner
+            .items()
+            .get_item(&short_name)
+            .context("Item just registered, but missing. This shouldn't happen.")
     }
 
     maybe_export!(
@@ -571,6 +590,7 @@ macro_rules! include_texture_bytes {
         $game_builder.register_texture_bytes($tex_name, include_bytes!($file_name))
     };
 }
+use crate::default_game::recipes::RecipeSlot;
 pub use include_texture_bytes;
 use perovskite_core::constants::GENERATED_TEXTURE_CATEGORY_SOLID_FROM_CSS;
 use perovskite_core::protocol::items::item_def::Appearance;

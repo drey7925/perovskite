@@ -38,22 +38,44 @@ pub struct ItemInteractionResult {
     /// An updated version of the item (stack) that was used to dig.
     /// If None, the item disappears (e.g. a pickaxe breaks when its durability runs out)
     /// Does not need to be the same as the original item.
-    pub updated_tool: Option<ItemStack>,
+    pub updated_stack: Option<ItemStack>,
     /// Items that were obtained from digging and ought to be added to the player's inventory
     pub obtained_items: Vec<ItemStack>,
+}
+impl From<Option<ItemStack>> for ItemInteractionResult {
+    fn from(stack: Option<ItemStack>) -> Self {
+        ItemInteractionResult {
+            updated_stack: stack,
+            obtained_items: vec![],
+        }
+    }
+}
+
+/// The block coordinates that a player is pointing at
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct PointeeBlockCoords {
+    /// The actual block that was hit by the raycast. For digging and tapping, this is
+    /// the block being dug/tapped.
+    /// For placing, this is the block *onto which* the placement should happen.
+    /// (note that right-clicking may still modify this block. E.g., for placing a material into
+    /// a basket at `selected`, the basket itself would change into a full basket.
+    pub selected: BlockCoordinate,
+    /// The block coordinate that came just before in the raycast. This either contains
+    /// a block that the current tool couldn't
+    ///
+    /// May be absent in edge cases (e.g., player's head inside a block)
+    pub preceding: Option<BlockCoordinate>,
 }
 
 pub type GenericInteractionHandler<T> =
     dyn Fn(&HandlerContext, T, &ItemStack) -> Result<ItemInteractionResult> + Send + Sync;
 
 /// (handler context, coordinate of the block, the item stack in use)
-pub type BlockInteractionHandler = GenericInteractionHandler<BlockCoordinate>;
+pub type BlockInteractionHandler = GenericInteractionHandler<PointeeBlockCoords>;
 pub type EntityInteractionHandler = GenericInteractionHandler<EntityTarget>;
 /// The parameters are handler context, location where the new block is being placed, anchor block, and the item stack in use.
 /// The anchor block is the existing block that the player was pointing to when they clicked the place button.
-pub type PlaceHandler = dyn Fn(&HandlerContext, BlockCoordinate, BlockCoordinate, &ItemStack) -> Result<Option<ItemStack>>
-    + Send
-    + Sync;
+pub type PlaceHandler = GenericInteractionHandler<PointeeBlockCoords>;
 
 pub type EntityPlaceHandler =
     dyn Fn(&HandlerContext, EntityTarget, &ItemStack) -> Result<Option<ItemStack>> + Send + Sync;
@@ -286,6 +308,32 @@ impl ItemStack {
         }
     }
 
+    pub fn decrement_by(&self, count: u32) -> Option<ItemStack> {
+        if self.has_wear() {
+            if self.proto.current_wear > count {
+                Some(ItemStack {
+                    proto: proto::ItemStack {
+                        current_wear: self.proto.current_wear - count,
+                        ..self.proto.clone()
+                    },
+                })
+            } else {
+                None
+            }
+        } else {
+            if self.proto.quantity > count {
+                Some(ItemStack {
+                    proto: proto::ItemStack {
+                        quantity: self.proto.quantity - count,
+                        ..self.proto.clone()
+                    },
+                })
+            } else {
+                None
+            }
+        }
+    }
+
     pub fn stackable(&self) -> bool {
         matches!(
             self.proto.quantity_type,
@@ -297,6 +345,13 @@ impl ItemStack {
             self.proto.quantity_type,
             Some(proto::item_stack::QuantityType::Wear(_))
         )
+    }
+    pub fn quantity_or_wear(&self) -> u32 {
+        if self.has_wear() {
+            self.proto.current_wear
+        } else {
+            self.proto.quantity
+        }
     }
 }
 
@@ -522,7 +577,6 @@ impl InteractionRuleExt for proto::InteractionRule {
 
 pub(crate) fn default_generic_handler(
     ctx: &HandlerContext,
-    _coord: BlockCoordinate,
     stack: &ItemStack,
     op: impl FnOnce(&GameState) -> Result<BlockInteractionResult>,
 ) -> Result<ItemInteractionResult> {
@@ -535,7 +589,7 @@ pub(crate) fn default_generic_handler(
             .saturating_sub(dig_result.tool_wear);
     }
     Ok(ItemInteractionResult {
-        updated_tool: if stack.proto.quantity > 0
+        updated_stack: if stack.proto.quantity > 0
             && (!stack.has_wear() || stack.proto.current_wear > 0)
         {
             Some(stack.clone())
@@ -548,25 +602,25 @@ pub(crate) fn default_generic_handler(
 
 pub(crate) fn default_tap_handler(
     ctx: &HandlerContext,
-    coord: BlockCoordinate,
+    coord: PointeeBlockCoords,
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
-    default_generic_handler(ctx, coord, stack, |state| {
+    default_generic_handler(ctx, stack, |state| {
         state
             .game_map()
-            .tap_block(coord, ctx.initiator(), Some(stack))
+            .tap_block(coord.selected, ctx.initiator(), Some(stack))
     })
 }
 
 pub(crate) fn default_dig_handler(
     ctx: &HandlerContext,
-    coord: BlockCoordinate,
+    coord: PointeeBlockCoords,
     stack: &ItemStack,
 ) -> Result<ItemInteractionResult> {
-    default_generic_handler(ctx, coord, stack, |state| {
+    default_generic_handler(ctx, stack, |state| {
         state
             .game_map()
-            .dig_block(coord, ctx.initiator(), Some(stack))
+            .dig_block(coord.selected, ctx.initiator(), Some(stack))
     })
 }
 pub(crate) fn default_entity_dig_handler(

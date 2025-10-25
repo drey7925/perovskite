@@ -34,7 +34,7 @@ pub mod block_groups {
     /// Blocks that cannot be dug under any circumstances (other than admon intervention)
     /// Tools available to normal users should specify a dig_behavior of None for this block.
     pub const NOT_DIGGABLE: &str = "default:not_diggable";
-    /// Can be instantly dug
+    /// Can be instantly dug.
     pub const INSTANT_DIG: &str = "default:instant_dig";
 }
 
@@ -65,17 +65,17 @@ pub mod items {
     pub fn default_item_interaction_rules() -> Vec<InteractionRule> {
         vec![
             InteractionRule {
-                block_group: vec![NOT_DIGGABLE.to_string()],
+                block_group: vec![DEFAULT_SOLID.to_string(), NOT_DIGGABLE.to_string()],
                 dig_behavior: Some(DigBehavior::Undiggable(Empty {})),
                 tool_wear: 0,
             },
             InteractionRule {
-                block_group: vec![TOOL_REQUIRED.to_string()],
+                block_group: vec![DEFAULT_SOLID.to_string(), TOOL_REQUIRED.to_string()],
                 dig_behavior: Some(DigBehavior::Undiggable(Empty {})),
                 tool_wear: 0,
             },
             InteractionRule {
-                block_group: vec![INSTANT_DIG.to_string()],
+                block_group: vec![DEFAULT_SOLID.to_string(), INSTANT_DIG.to_string()],
                 dig_behavior: Some(DigBehavior::InstantDigOneshot(Empty {})),
                 tool_wear: 0,
             },

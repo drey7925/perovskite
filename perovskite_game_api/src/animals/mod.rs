@@ -14,7 +14,7 @@ use perovskite_server::game_state::entities::{
     EntityHandlers, EntityMoveDecision, EntityTypeId, MoveQueueType, Movement,
 };
 use perovskite_server::game_state::event::HandlerContext;
-use perovskite_server::game_state::items::{Item, ItemStack};
+use perovskite_server::game_state::items::{Item, ItemInteractionResult, ItemStack};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::Rng;
 use smallvec::SmallVec;
@@ -153,8 +153,8 @@ pub fn register_duck(game_builder: &mut GameBuilder) -> Result<()> {
         .inner
         .items_mut()
         .register_item(game_state::items::Item {
-            place_on_block_handler: Some(Box::new(move |ctx, _placement_coord, anchor, stack| {
-                place_duck(ctx, anchor, stack, id)
+            place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
+                place_duck(ctx, coord.selected, stack, id)
             })),
             ..Item::default_with_proto(protocol::items::ItemDef {
                 short_name: "animals:duck".to_string(),
@@ -178,7 +178,7 @@ fn place_duck(
     coord: BlockCoordinate,
     stack: &ItemStack,
     entity_class: EntityClassId,
-) -> Result<Option<ItemStack>> {
+) -> Result<ItemInteractionResult> {
     let water_block = ctx
         .block_types()
         .get_by_name(WATER.0)
@@ -189,7 +189,10 @@ fn place_duck(
         ctx.initiator().send_chat_message(
             ChatMessage::new_server_message("Not water source").with_color(SERVER_ERROR_COLOR),
         )?;
-        return Ok(Some(stack.clone()));
+        return Ok(ItemInteractionResult {
+            updated_stack: Some(stack.clone()),
+            obtained_items: vec![],
+        });
     }
     let coro = DuckCoroutine {
         last_coord: coord,
@@ -208,7 +211,10 @@ fn place_duck(
 
     ctx.initiator()
         .send_chat_message(ChatMessage::new_server_message(format!("[{id}]: Quack!")))?;
-    Ok(stack.decrement())
+    Ok(ItemInteractionResult {
+        updated_stack: Some(stack.clone()),
+        obtained_items: vec![],
+    })
 }
 
 const DUCK_MESH_BYTES: &[u8] = include_bytes!("duck.obj");

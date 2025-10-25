@@ -1153,9 +1153,9 @@ pub(crate) fn register_tracks(
     let rail_tile_id = rail_tile.id;
     let mut rail_slopes_8 = [BlockId::from(0); 8];
     game_builder.inner.items_mut().register_item(Item {
-        place_on_block_handler: Some(Box::new(move |ctx, coord, _anchor, stack| {
+        place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
             if stack.proto().quantity == 0 {
-                return Ok(None);
+                return Ok(None.into());
             }
             let rotation = ctx
                 .initiator()
@@ -1163,29 +1163,33 @@ pub(crate) fn register_tracks(
                 .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
                 .unwrap_or(0);
             let variant = rotation | TileId::new(8, 8, 0, false, false, false).block_variant();
-            match ctx
-                .game_map()
-                .compare_and_set_block_predicate(
-                    coord,
-                    |block, _, block_types| {
-                        // fast path
-                        if block == AIR_ID {
-                            return Ok(true);
-                        };
-                        let block_type = block_types.get_block(&block)?.0;
-                        Ok(block_type
-                            .client_info
-                            .groups
-                            .iter()
-                            .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
-                    },
-                    rail_tile_id.with_variant(variant)?,
-                    None,
-                )?
-                .0
-            {
-                CasOutcome::Match => Ok(stack.decrement()),
-                CasOutcome::Mismatch => Ok(Some(stack.clone())),
+            if let Some(preceding) = coord.preceding {
+                match ctx
+                    .game_map()
+                    .compare_and_set_block_predicate(
+                        preceding,
+                        |block, _, block_types| {
+                            // fast path
+                            if block == AIR_ID {
+                                return Ok(true);
+                            };
+                            let block_type = block_types.get_block(block)?.0;
+                            Ok(block_type
+                                .client_info
+                                .groups
+                                .iter()
+                                .any(|g| g == block_groups::TRIVIALLY_REPLACEABLE))
+                        },
+                        rail_tile_id.with_variant(variant)?,
+                        None,
+                    )?
+                    .0
+                {
+                    CasOutcome::Match => Ok(stack.decrement().into()),
+                    CasOutcome::Mismatch => Ok(Some(stack.clone()).into()),
+                }
+            } else {
+                Ok(Some(stack.clone()).into())
             }
         })),
         ..Item::default_with_proto(protocol::items::ItemDef {

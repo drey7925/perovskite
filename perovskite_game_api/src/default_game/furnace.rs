@@ -374,7 +374,7 @@ fn furnace_dig_handler(
     extended_data.clear();
     extended_data.set_dirty();
 
-    let block_type = ctx.block_types().get_block(bt)?.0;
+    let block_type = ctx.block_types().get_block(*bt)?.0;
     let rule = ctx
         .items()
         .get_stack_item(tool)

@@ -146,7 +146,7 @@ fn make_derived_block_core(
     display_suffix: &str,
     appearance_builder: impl Fn(&CubeRenderInfo) -> AxisAlignedBoxesAppearanceBuilder,
 ) -> Result<BuiltBlock> {
-    let block_type = game_builder.inner.blocks().get_block(&base.id)?;
+    let block_type = game_builder.inner.blocks().get_block(base.id)?;
     let item = game_builder
         .inner
         .items()

@@ -33,14 +33,8 @@ pub enum BlockError {
     IdAlreadyExists(u32, String),
     #[error("Too many block types are already registered")]
     TooManyBlocks,
-    #[error(
-        "BlockTypeRef/BlockTypeName came from the wrong BlockTypeManager. Ours: {0}, ref: {1}"
-    )]
-    WrongManager(usize, usize),
     #[error("Variant {0:x} is out of range (max is 0xfff")]
     VariantOutOfRange(u16),
-    #[error("This BlockType ({0}) object is not registered with a BlockTypeManager")]
-    BlockNotRegistered(String),
 }
 pub const BLOCK_VARIANT_MASK: u32 = 0xfff;
 

@@ -1587,11 +1587,11 @@ impl ServerGameMap {
     ///
     /// # Arguments
     ///
-    /// * `coord` - The block coordinate to run the handler for
-    /// * `initiator` - The initiator of this event, for handler context
-    /// * `tool` - Optional tool item stack, if this is a tool interaction
-    /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler
-    /// * `get_block_full_handler` - Callback to retrieve the desired full handler
+    /// * `coord` - The block coordinate to run the handler for.
+    /// * `initiator` - The initiator of this event, for handler context.
+    /// * `tool` - Optional tool item stack, if this is a tool interaction.
+    /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler.
+    /// * `get_block_full_handler` - Callback to retrieve the desired full handler.
     ///
     /// # Returns
     ///
@@ -1615,7 +1615,7 @@ impl ServerGameMap {
         let game_state = self.game_state();
         let tick = game_state.tick();
         let (blocktype, mut result) = self.mutate_block_atomically(coord, |block, ext_data| {
-            let (blocktype, _) = self.block_type_manager().get_block(block)?;
+            let (blocktype, _) = self.block_type_manager().get_block(*block)?;
 
             if let Some(ref inline_handler) = get_block_inline_handler(blocktype) {
                 let ctx = InlineContext {

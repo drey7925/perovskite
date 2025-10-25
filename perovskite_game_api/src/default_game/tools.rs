@@ -10,13 +10,14 @@ use perovskite_core::{
 };
 use perovskite_server::game_state::items::{Item, ItemInteractionResult};
 
+use super::block_groups::{BRITTLE, FIBROUS, GRANULAR};
+use crate::blocks::DroppedItem;
 use crate::default_game::basic_blocks::ores::{DIAMOND_PIECE, GOLD_INGOT, IRON_INGOT};
 use crate::default_game::foliage::STICK_ITEM;
 use crate::default_game::recipes::RecipeSlot;
 use crate::default_game::{item_groups, DefaultGameBuilder};
+use crate::items::{ItemAction, ItemActionTarget, ItemBuilder, ItemHandler, StackDecrement};
 use crate::{game_builder::StaticTextureName, include_texture_bytes};
-
-use super::block_groups::{BRITTLE, FIBROUS, GRANULAR};
 
 /// Registers a new pickaxe based on the given materials
 /// **This API is subject to change.**
@@ -56,7 +57,7 @@ pub(crate) fn register_pickaxe(
     )
 }
 
-pub(crate) fn register_tool(
+pub fn register_tool(
     game_builder: &mut super::GameBuilder,
     texture: StaticTextureName,
     name: impl Into<String>,
@@ -68,7 +69,6 @@ pub(crate) fn register_tool(
     craft_recipe: Option<[RecipeSlot; 9]>,
 ) -> Result<()> {
     let name = name.into();
-    // TODO: consider implementing this using an ItemBuilder
     let item = Item::default_with_proto(items_proto::ItemDef {
         short_name: name.clone(),
         display_name: display_name.into(),
@@ -118,11 +118,11 @@ fn register_superuser_pickaxe(
     // TODO: consider implementing this using an ItemBuilder
     let item = Item {
         dig_handler: Some(Box::new(move |ctx, coord, tool| {
-            let (old_block, _) = ctx.game_map().set_block(coord, AIR_ID, None)?;
-            let (block, variant) = ctx.block_types().get_block(&old_block)?;
+            let (old_block, _) = ctx.game_map().set_block(coord.selected, AIR_ID, None)?;
+            let (block, variant) = ctx.block_types().get_block(old_block)?;
             tracing::info!("superuser pickaxe dug {}:{:x}", block.short_name(), variant);
             Ok(ItemInteractionResult {
-                updated_tool: Some(tool.clone()),
+                updated_stack: Some(tool.clone()),
                 obtained_items: vec![],
             })
         })),

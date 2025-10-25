@@ -40,7 +40,7 @@ use crate::game_state::inventory::TypeErasedInventoryView;
 use crate::game_state::inventory::UpdatedInventory;
 use crate::game_state::items;
 
-use crate::game_state::items::{default_generic_handler, Item};
+use crate::game_state::items::{default_generic_handler, Item, PointeeBlockCoords};
 
 use crate::game_state::player::PlayerState;
 use crate::game_state::player::{Player, PlayerEventReceiver};
@@ -1500,7 +1500,7 @@ impl InboundWorker {
             None,
             move |_| {
                 &move |ctx, coord, stack| {
-                    default_generic_handler(ctx, coord, stack, {
+                    default_generic_handler(ctx, stack, {
                         move |gs| {
                             gs.game_map().run_block_interaction(
                                 coord,
@@ -1674,7 +1674,10 @@ impl InboundWorker {
                         // it's been long enough since the last dig
                         Self::run_map_handlers(
                             &self.context,
-                            coord.into(),
+                            PointeeBlockCoords {
+                                selected: coord.into(),
+                                preceding: dig_message.prev_coord.map(Into::into),
+                            },
                             dig_message.item_slot,
                             |item| {
                                 item.and_then(|x| x.dig_handler.as_deref())
@@ -1714,7 +1717,10 @@ impl InboundWorker {
                     ActionTarget::BlockCoord(coord) => {
                         Self::run_map_handlers(
                             &self.context,
-                            coord.into(),
+                            PointeeBlockCoords {
+                                selected: coord.into(),
+                                preceding: tap_message.prev_coord.map(Into::into),
+                            },
                             tap_message.item_slot,
                             |item| {
                                 item.and_then(|x| x.tap_handler.as_deref())
@@ -1730,7 +1736,7 @@ impl InboundWorker {
                             *id,
                             tap_message.item_slot,
                             |item| {
-                                item.and_then(|x| x.dig_entity_handler.as_deref())
+                                item.and_then(|x| x.tap_entity_handler.as_deref())
                                     .unwrap_or(&items::default_entity_tap_handler)
                             },
                             position,
@@ -1878,7 +1884,7 @@ impl InboundWorker {
                         &initiator,
                     )?
                 };
-                *stack = result.updated_tool;
+                *stack = result.updated_stack;
                 let mut leftover = vec![];
                 for stack in result.obtained_items {
                     if let Some(x) = inventory.try_insert(stack) {
@@ -2124,24 +2130,24 @@ impl InboundWorker {
                                         initiator: initiator.clone(),
                                         game_state: self.context.game_state.clone(),
                                     };
-                                    let new_stack = run_handler!(
-                                        || {
-                                            handler(
-                                                &ctx,
-                                                place_message
-                                                    .block_coord
-                                                    .with_context(|| {
-                                                        "Missing block_coord in place message"
-                                                    })?
-                                                    .into(),
-                                                anchor,
-                                                stack.as_ref().unwrap(),
-                                            )
-                                        },
+                                    let coord = PointeeBlockCoords {
+                                        selected: anchor,
+                                        preceding: place_message.block_coord.map(Into::into),
+                                    };
+                                    let outcome = run_handler!(
+                                        || { handler(&ctx, coord, stack.as_ref().unwrap(),) },
                                         "item_place",
                                         &initiator,
                                     )?;
-                                    *stack = new_stack;
+                                    *stack = outcome.updated_stack;
+                                    for stack in outcome.obtained_items {
+                                        if let Some(x) = inventory.try_insert(stack) {
+                                            tracing::warn!(
+                                                "Leftover stack {x:?} for initiator {:?}",
+                                                ctx.initiator()
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             ToolTarget::Entity(target) => {
@@ -2454,8 +2460,7 @@ impl InboundWorker {
                     .game_state
                     .game_map()
                     .block_type_manager()
-                    .get_block(&block)
-                    .unwrap()
+                    .get_block(block)?
                     .0
                     .interact_key_handler
                 {
