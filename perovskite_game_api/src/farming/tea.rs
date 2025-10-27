@@ -21,6 +21,7 @@ use crate::farming::FarmingGameStateExtension;
 use crate::game_builder::{
     GameBuilder, StaticBlockName, StaticTextureName, FALLBACK_UNKNOWN_TEXTURE_NAME,
 };
+use crate::include_texture_bytes;
 use anyhow::Result;
 use perovskite_server::game_state::blocks::FastBlockName;
 use std::time::Duration;
@@ -104,6 +105,27 @@ fn register_tea_basket_stages(game_builder: &mut GameBuilder) -> Result<()> {
 }
 
 fn register_tea_plant_stages(builder: &mut GameBuilder) -> Result<()> {
+    const TEX_SPROUT: StaticTextureName = StaticTextureName("farming:tea_sprout");
+    const TEX_SEEDLING: StaticTextureName = StaticTextureName("farming:tea_seedling");
+    const TEX_NO_LEAVES: StaticTextureName = StaticTextureName("farming:tea_plant_no_leaves");
+    const TEX_SPARSE_LEAVES: StaticTextureName =
+        StaticTextureName("farming:tea_plant_sparse_leaves");
+    const TEX_DENSE_LEAVES: StaticTextureName = StaticTextureName("farming:tea_plant_dense_leaves");
+
+    include_texture_bytes!(builder, TEX_SPROUT, "textures/tea_sprout.png")?;
+    include_texture_bytes!(builder, TEX_SEEDLING, "textures/tea_seedling.png")?;
+    include_texture_bytes!(builder, TEX_NO_LEAVES, "textures/tea_plant_no_leaves.png")?;
+    include_texture_bytes!(
+        builder,
+        TEX_SPARSE_LEAVES,
+        "textures/tea_plant_sparse_leaves.png"
+    )?;
+    include_texture_bytes!(
+        builder,
+        TEX_DENSE_LEAVES,
+        "textures/tea_plant_dense_leaves.png"
+    )?;
+
     let stages = vec![
         GrowthStage {
             dig_effect: Some(InteractionEffect {
@@ -119,7 +141,9 @@ fn register_tea_plant_stages(builder: &mut GameBuilder) -> Result<()> {
                 target: InteractionTransitionTarget::NextStage,
                 accumulator: Some(InteractionAccumulator { add: 1, trip: 20 }),
             })),
-            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::default()),
+            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::from_tex(
+                TEX_SPROUT,
+            )),
             ..Default::default()
         },
         GrowthStage {
@@ -136,7 +160,9 @@ fn register_tea_plant_stages(builder: &mut GameBuilder) -> Result<()> {
                 target: InteractionTransitionTarget::NextStage,
                 accumulator: Some(InteractionAccumulator { add: 1, trip: 20 }),
             })),
-            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::default()),
+            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::from_tex(
+                TEX_SEEDLING,
+            )),
             ..Default::default()
         },
         GrowthStage {
@@ -153,7 +179,9 @@ fn register_tea_plant_stages(builder: &mut GameBuilder) -> Result<()> {
                 target: InteractionTransitionTarget::NextStage,
                 accumulator: Some(InteractionAccumulator { add: 1, trip: 20 }),
             })),
-            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::default()),
+            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::from_tex(
+                TEX_NO_LEAVES,
+            )),
             ..Default::default()
         },
         GrowthStage {
@@ -176,7 +204,9 @@ fn register_tea_plant_stages(builder: &mut GameBuilder) -> Result<()> {
                 target: InteractionTransitionTarget::NextStage,
                 accumulator: Some(InteractionAccumulator { add: 1, trip: 20 }),
             })),
-            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::default()),
+            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::from_tex(
+                TEX_SPARSE_LEAVES,
+            )),
             ..Default::default()
         },
         GrowthStage {
@@ -199,7 +229,9 @@ fn register_tea_plant_stages(builder: &mut GameBuilder) -> Result<()> {
                 target: InteractionTransitionTarget::NextStage,
                 accumulator: Some(InteractionAccumulator { add: 1, trip: 20 }),
             })),
-            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::default()),
+            appearance: BlockAppearanceBuilder::Plantlike(PlantLikeAppearanceBuilder::from_tex(
+                TEX_DENSE_LEAVES,
+            )),
             ..Default::default()
         },
     ];
