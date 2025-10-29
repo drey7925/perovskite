@@ -1,3 +1,6 @@
+//! Foliage and plant products. Texture names are public to allow other plugins to derive textures
+//! and use them in their own block definitions
+
 use anyhow::Result;
 use perovskite_core::protocol::{
     blocks::{block_type_def::PhysicsInfo, Empty},

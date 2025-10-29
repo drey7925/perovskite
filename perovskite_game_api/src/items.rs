@@ -28,6 +28,35 @@ pub enum ItemActionTarget {
     BlockGroup(String),
     Any,
 }
+impl ItemActionTarget {
+    fn matches(&self, block_types: &BlockTypeManager, id: BlockId) -> bool {
+        match &self {
+            ItemActionTarget::Block(x) => {
+                let x_id = block_types.resolve_name(&x);
+                x_id.is_some_and(|x_id| x_id.equals_ignore_variant(id))
+            }
+            ItemActionTarget::Blocks(blocks) => blocks.iter().any(|x| {
+                let x_id = block_types.resolve_name(&x);
+                x_id.is_some_and(|x_id| x_id.equals_ignore_variant(id))
+            }),
+            ItemActionTarget::BlockGroup(g) => {
+                let block_type = match block_types.get_block(id) {
+                    Ok(x) => x,
+                    Err(BlockError::IdNotFound(_)) => {
+                        // false arther than erring since we might match an Any later
+                        return false;
+                    }
+                    Err(e) => {
+                        log::warn!("Unexpected error in item handler: {e:?}");
+                        return false;
+                    }
+                };
+                block_type.0.client_info.groups.contains(&g)
+            }
+            ItemActionTarget::Any => true,
+        }
+    }
+}
 
 pub enum ItemAction {
     /// Places a block.
@@ -79,33 +108,6 @@ pub struct ItemHandler {
     pub _ne: NonExhaustive,
 }
 impl ItemHandler {
-    fn matches(&self, block_types: &BlockTypeManager, id: BlockId) -> bool {
-        match &self.target {
-            ItemActionTarget::Block(x) => {
-                let x_id = block_types.resolve_name(&x);
-                x_id.is_some_and(|x_id| x_id.equals_ignore_variant(id))
-            }
-            ItemActionTarget::Blocks(blocks) => blocks.iter().any(|x| {
-                let x_id = block_types.resolve_name(&x);
-                x_id.is_some_and(|x_id| x_id.equals_ignore_variant(id))
-            }),
-            ItemActionTarget::BlockGroup(g) => {
-                let block_type = match block_types.get_block(id) {
-                    Ok(x) => x,
-                    Err(BlockError::IdNotFound(_)) => {
-                        // false arther than erring since we might match an Any later
-                        return false;
-                    }
-                    Err(e) => {
-                        log::warn!("Unexpected error in item handler: {e:?}");
-                        return false;
-                    }
-                };
-                block_type.0.client_info.groups.contains(&g)
-            }
-            ItemActionTarget::Any => true,
-        }
-    }
     fn execute(
         &self,
         ctx: &HandlerContext,
@@ -175,6 +177,11 @@ impl ItemHandler {
                 let success =
                     ctx.game_map()
                         .mutate_block_atomically(action_coord, |id, _ext| {
+                            if !self.target.matches(ctx.block_types(), *id) {
+                                // Someone raced with us
+                                tracing::error!("mismatch inside atomic mutator");
+                                return Ok(false);
+                            }
                             let success = *ignore_trivially_replaceable
                                 || ctx.block_types().get_block(*id).is_ok_and(|x| {
                                     x.0.client_info
@@ -208,7 +215,7 @@ impl ItemHandler {
             .get_item(coord.selected, target_block_id.variant());
         items.extend(dig_items);
         Ok(ItemInteractionResult {
-            updated_stack: new_stack,
+            updated_stack: dbg!(new_stack),
             obtained_items: items,
         })
     }
@@ -287,6 +294,18 @@ impl ItemBuilder {
         self
     }
 
+    /// Convenience function to make this item dig blocks without special effect or benefit
+    pub fn add_default_dig_handler(mut self) -> Self {
+        self.dig_handlers.push(ItemHandler {
+            target: ItemActionTarget::Any,
+            stack_decrement: None,
+            dropped_item: DroppedItem::None,
+            action: ItemAction::DigBlock,
+            ..Default::default()
+        });
+        self
+    }
+
     /// Sets the item to stack this many.
     pub fn set_max_stack(mut self, count: u32) -> Self {
         self.item_obj.proto.quantity_type = Some(QuantityType::Stack(count));
@@ -337,7 +356,7 @@ impl ItemBuilder {
     /// Adds a tap handler to the item. Currently, the first matching handler (based on its
     /// `target`) will apply.
     pub fn add_right_click_handler(mut self, handler: ItemHandler) -> Self {
-        self.dig_handlers.push(handler);
+        self.right_click_handlers.push(handler);
         self
     }
 
@@ -355,7 +374,9 @@ fn build_handler_chain(handlers: Vec<ItemHandler>) -> Box<BlockInteractionHandle
         // together here ad-hoc, this will just be weakly consistent instead
         let block = ctx.game_map().get_block(coord.selected)?;
         for handler in &handlers {
-            if handler.matches(ctx.block_types(), block) {
+            tracing::info!("checking a handler for {:?}", handler.target);
+            if handler.target.matches(ctx.block_types(), block) {
+                tracing::info!("match");
                 return handler.execute(ctx, coord, block, item_stack);
             }
         }

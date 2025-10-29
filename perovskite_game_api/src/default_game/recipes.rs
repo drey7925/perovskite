@@ -185,25 +185,26 @@ impl<const N: usize, T> RecipeImpl<N, T> {
         assert_eq!(remaining_slots.len(), remaining_stacks.len());
 
         match remaining_slots.len() {
-            0 => return true,
+            0 => true,
             1 => {
                 let slot = remaining_slots[0];
-                return remaining_stacks[0].proto.groups.contains(slot);
+                remaining_stacks[0].proto.groups.contains(slot)
             }
             2 => {
                 let slot1 = remaining_slots[0];
                 let slot2 = remaining_slots[1];
-                return (remaining_stacks[0].proto.groups.contains(slot1)
+                (remaining_stacks[0].proto.groups.contains(slot1)
                     && remaining_stacks[1].proto.groups.contains(slot2))
                     || (remaining_stacks[0].proto.groups.contains(slot2)
-                        && remaining_stacks[1].proto.groups.contains(slot1));
+                        && remaining_stacks[1].proto.groups.contains(slot1))
             }
-            _ => {}
+            _ => {
+                tracing::error!(
+                    "Too many shapeless slots to match to groups, todo implement graph matching here"
+                );
+                false
+            }
         }
-        tracing::error!(
-            "Too many shapeless slots to match to groups, todo implement graph matching here"
-        );
-        false
     }
 }
 
@@ -232,6 +233,29 @@ mod test {
             slots: [
                 RecipeSlot::Group("a".into()),
                 RecipeSlot::Exact("b".into()),
+                RecipeSlot::Empty,
+                RecipeSlot::Empty,
+            ],
+            result: ItemStack {
+                proto: protocol::items::ItemStack {
+                    ..Default::default()
+                },
+            },
+            shapeless: true,
+            metadata: (),
+        };
+
+        assert!(!recipe.matches(&[None, None, None, None]));
+        assert!(!recipe.matches(&[Some(&item_1), None, None, None]));
+        assert!(!recipe.matches(&[Some(&item_1), Some(&item_1), Some(&item_2), None]));
+
+        assert!(recipe.matches(&[Some(&item_1), Some(&item_2), None, None]));
+        assert!(recipe.matches(&[None, Some(&item_2), None, Some(&item_1)]));
+
+        let recipe2 = RecipeImpl {
+            slots: [
+                RecipeSlot::Group("a".into()),
+                RecipeSlot::Group("b".into()),
                 RecipeSlot::Empty,
                 RecipeSlot::Empty,
             ],
