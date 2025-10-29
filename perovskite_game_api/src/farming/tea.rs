@@ -266,7 +266,7 @@ fn register_tea_basket_stages(game_builder: &mut GameBuilder) -> Result<()> {
                 ..Default::default()
             }),
             block_name: Some(TEA_BASKET_WITHERING.into()),
-            grow_probability: Box::new(ConstantGrowProbability(
+            grow_probability: Box::new(ConstantGrowProbability::new(
                 0.5,
                 InteractionTransition {
                     target: InteractionTransitionTarget::NextStage,
@@ -328,7 +328,7 @@ fn register_tea_basket_stages(game_builder: &mut GameBuilder) -> Result<()> {
                 ..Default::default()
             }),
             block_name: Some(TEA_BASKET_UNOXIDIZED.into()),
-            grow_probability: Box::new(ConstantGrowProbability(
+            grow_probability: Box::new(ConstantGrowProbability::new(
                 0.5,
                 InteractionTransition {
                     target: InteractionTransitionTarget::NextStage,
@@ -355,7 +355,7 @@ fn register_tea_basket_stages(game_builder: &mut GameBuilder) -> Result<()> {
                 ..Default::default()
             }),
             block_name: Some(TEA_BASKET_PARTIALLY_OXIDIZED.into()),
-            grow_probability: Box::new(ConstantGrowProbability(
+            grow_probability: Box::new(ConstantGrowProbability::new(
                 0.5,
                 InteractionTransition {
                     target: InteractionTransitionTarget::NextStage,

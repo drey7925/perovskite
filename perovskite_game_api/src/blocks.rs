@@ -888,7 +888,9 @@ impl PlantLikeAppearanceBuilder {
     /// # use perovskite_game_api::blocks::PlantLikeAppearanceBuilder;
     /// # use perovskite_game_api::game_builder::OwnedTextureName;
     /// # let tex = OwnedTextureName(String::new());
+    /// # drop(
     /// PlantLikeAppearanceBuilder::new().set_texture(tex)
+    /// # )
     /// ```
     pub fn from_tex(tex: impl Into<TextureReference>) -> PlantLikeAppearanceBuilder {
         PlantLikeAppearanceBuilder::new().set_texture(tex)

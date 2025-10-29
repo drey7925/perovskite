@@ -91,7 +91,9 @@ pub struct InteractionEffect {
     /// ```
     /// # use perovskite_game_api::farming::crops::InteractionEffect;
     /// # use perovskite_game_api::game_builder::ItemName;
+    /// #
     /// InteractionEffect { item_drops: vec![(ItemName::from("foo:bar"), 3..=5)], ..Default::default() }
+    /// # ;
     /// ```
     pub _ne: NonExhaustive,
 }
@@ -305,7 +307,9 @@ pub struct GrowthStage {
     /// Non-exhaustive - this struct must be constructed with functional update syntax, i.e.
     /// ```
     /// # use perovskite_game_api::farming::crops::{DefaultGrowInLight, GrowthStage};
-    /// GrowthStage { grow_probability: Box::new(DefaultGrowInLight), ..Default::default() }
+    /// # use perovskite_game_api::farming::crops::InteractionTransitionTarget;
+    /// GrowthStage { grow_probability: Box::new(DefaultGrowInLight(InteractionTransitionTarget::NextStage.into())), ..Default::default() }
+    /// # ;
     /// ```
     pub _ne: NonExhaustive,
 }
