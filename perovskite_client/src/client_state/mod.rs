@@ -24,6 +24,7 @@ use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
 use egui::ahash::HashMapExt;
+use egui_plot::PlotPoint;
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{
@@ -899,8 +900,8 @@ impl ClientState {
                         x + 1
                     }
                 };
-                // We're the only thread updating it, other threads will read
-                // https://github.com/rust-lang/rust/issues/135894 makes this annoying
+                // We're the only thread updating it; other threads will read
+                // https://github.com/rust-lang/rust/issues/135894 for easier mechanism
                 let old_distance = self
                     .render_distance
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(incr(x)))
@@ -918,8 +919,8 @@ impl ClientState {
                         u32::max(x - 1, 4)
                     }
                 };
-                // We're the only thread updating it, other threads will read
-                // https://github.com/rust-lang/rust/issues/135894 makes this annoying
+                // We're the only thread updating it; other threads will read
+                // https://github.com/rust-lang/rust/issues/135894 for easier mechanism
                 let old_distance = self
                     .render_distance
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(decr(x)))
@@ -1078,10 +1079,33 @@ impl ClientState {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct ClientPerformanceMetrics {
     pub(crate) nprop_queue_lens: Vec<u64>,
     pub(crate) mesh_queue_lens: Vec<u64>,
+    pub(crate) timekeeper_raw: [i64; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
+    pub(crate) timekeeper_smoothed: [i64; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
+    /// timekeeper_raw and timekeeper_smooth should write to this index,
+    pub(crate) timekeeper_breakpoint: usize,
+}
+impl Default for ClientPerformanceMetrics {
+    fn default() -> Self {
+        Self {
+            nprop_queue_lens: vec![],
+            mesh_queue_lens: vec![],
+            timekeeper_raw: [0; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
+            timekeeper_smoothed: [0; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
+            timekeeper_breakpoint: 0,
+        }
+    }
+}
+impl ClientPerformanceMetrics {
+    pub(crate) const TIMEKEEPER_CHART_LEN: usize = 256;
+    pub(crate) fn update_timekeeper(&mut self, timekeeper: &Timekeeper) {
+        self.timekeeper_raw[self.timekeeper_breakpoint] = timekeeper.get_raw_offset();
+        self.timekeeper_smoothed[self.timekeeper_breakpoint] = timekeeper.get_smoothed_offset();
+        self.timekeeper_breakpoint = (self.timekeeper_breakpoint + 1) % Self::TIMEKEEPER_CHART_LEN;
+    }
 }
 
 pub(crate) struct FrameState {

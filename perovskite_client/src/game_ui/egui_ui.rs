@@ -24,7 +24,7 @@ use crate::{
 };
 use arc_swap::ArcSwap;
 use egui::load::SizedTexture;
-use egui_plot::{BarChart, Orientation};
+use egui_plot::{BarChart, Orientation, PlotPoint, PlotPoints};
 use parking_lot::MutexGuard;
 use perovskite_core::protocol::game_rpc::ServerPerformanceMetrics;
 use rustc_hash::FxHashMap;
@@ -1189,7 +1189,7 @@ impl EguiUi {
         result
     }
 
-    fn render_perf_chart(
+    fn render_perf_chart_bars(
         ui: &mut egui::Ui,
         title: &str,
         data: &Vec<u64>,
@@ -1221,6 +1221,77 @@ impl EguiUi {
             .show(ui, |ui| ui.bar_chart(BarChart::new(bars)));
     }
 
+    fn render_perf_chart_lines(
+        ui: &mut egui::Ui,
+        title: &str,
+        data: &[(&[i64], Color32)],
+        plot_name: &str,
+        breakpoint: usize,
+        format_unit: &str,
+        format_multiplier: f64,
+    ) {
+        let max = data
+            .iter()
+            .flat_map(|x| x.0.iter())
+            .max()
+            .copied()
+            .unwrap_or(0) as f64
+            * format_multiplier;
+        let (max, prefix) = if max == 0.0 {
+            (0.0, "")
+        } else if max.abs() < 1e-6 {
+            (max * 1e9, "n")
+        } else if max.abs() < 1e-3 {
+            (max * 1e6, "μ")
+        } else if max.abs() < 1.0 {
+            (max * 1e3, "m")
+        } else {
+            (max, "")
+        };
+        let precision = if max >= 100.0 {
+            0
+        } else if max >= 10.0 {
+            1
+        } else {
+            2
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "{title}\n(chart max={max:.precision$} {prefix}{format_unit})",
+            ))
+            .color(Color32::WHITE),
+        );
+        egui_plot::Plot::new(plot_name)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .auto_bounds(Vec2b::TRUE)
+            .include_x(0.0)
+            .allow_boxed_zoom(false)
+            .show_x(false)
+            .show_y(false)
+            .show_grid(Vec2b::FALSE)
+            .width(ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN as f32)
+            .height(48.0)
+            .show_axes(Vec2b::FALSE)
+            .show(ui, |ui| {
+                for chart in data.iter() {
+                    for segment in [0..breakpoint, breakpoint..chart.0.len()] {
+                        if segment.is_empty() {
+                            continue;
+                        }
+                        let pts = PlotPoints::Owned(
+                            chart.0[segment.clone()]
+                                .iter()
+                                .zip(segment)
+                                .map(|(y, x)| PlotPoint::new(x as f64, *y as f64))
+                                .collect(),
+                        );
+                        ui.line(egui_plot::Line::new(pts).color(chart.1).allow_hover(false))
+                    }
+                }
+            });
+    }
+
     fn render_perf(&mut self, ctx: &Context, state: &ClientState) {
         let server_perf = state.server_perf();
         let client_perf = state.client_perf();
@@ -1239,7 +1310,7 @@ impl EguiUi {
                 ui.horizontal_top(|ui| {
                     if let Some(perf) = server_perf {
                         ui.vertical(|ui| {
-                            Self::render_perf_chart(
+                            Self::render_perf_chart_bars(
                                 ui,
                                 "Shard writeback queue",
                                 &perf.mapshard_writeback_len,
@@ -1249,7 +1320,7 @@ impl EguiUi {
                             );
                         });
                         ui.vertical(|ui| {
-                            Self::render_perf_chart(
+                            Self::render_perf_chart_bars(
                                 ui,
                                 "Shard occupancy",
                                 &perf.mapshard_loaded_chunks,
@@ -1264,7 +1335,7 @@ impl EguiUi {
 
                     if let Some(perf) = client_perf {
                         ui.vertical(|ui| {
-                            Self::render_perf_chart(
+                            Self::render_perf_chart_bars(
                                 ui,
                                 "Lighting/neighbor queue",
                                 &perf.nprop_queue_lens,
@@ -1274,13 +1345,27 @@ impl EguiUi {
                             );
                         });
                         ui.vertical(|ui| {
-                            Self::render_perf_chart(
+                            Self::render_perf_chart_bars(
                                 ui,
                                 "Mesh queue",
                                 &perf.mesh_queue_lens,
                                 &mut self.client_perf_records.mesh_queue_lens,
                                 "occupancy_plot",
                                 Color32::GREEN,
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            Self::render_perf_chart_lines(
+                                ui,
+                                "Timekeeper",
+                                &[
+                                    (&perf.timekeeper_raw, Color32::YELLOW),
+                                    (&perf.timekeeper_smoothed, Color32::LIGHT_BLUE),
+                                ],
+                                "timekeeper",
+                                perf.timekeeper_breakpoint,
+                                "s",
+                                1e-9,
                             );
                         });
                     } else {

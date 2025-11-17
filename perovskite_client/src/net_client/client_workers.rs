@@ -164,14 +164,20 @@ async fn stats_loop(shared_state: Arc<SharedState>) {
             _ = shared_state.cancellation.cancelled() => { break; }
             _ = shared_state.client_state.want_new_client_perf.notified() => {}
         }
-        let mut new_state = ClientPerformanceMetrics::default();
+        let mut nprop_queue_lens = vec![];
         for nprop in &shared_state.neighbor_propagators {
-            new_state.nprop_queue_lens.push(nprop.queue_len() as u64)
+            nprop_queue_lens.push(nprop.queue_len() as u64)
         }
+        let mut mesh_queue_lens = vec![];
         for mesher in &shared_state.mesh_workers {
-            new_state.mesh_queue_lens.push(mesher.queue_len() as u64)
+            mesh_queue_lens.push(mesher.queue_len() as u64)
         }
-        *shared_state.client_state.client_perf.lock() = Some(new_state);
+        let mut guard = shared_state.client_state.client_perf.lock();
+        let mut guard = guard.get_or_insert_default();
+
+        guard.nprop_queue_lens = nprop_queue_lens;
+        guard.mesh_queue_lens = mesh_queue_lens;
+        guard.update_timekeeper(&shared_state.client_state.timekeeper)
     }
 }
 

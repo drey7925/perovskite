@@ -47,6 +47,12 @@ impl<T> DerefMut for CachelineAligned<T> {
     }
 }
 
+#[derive(Default)]
+struct Skew {
+    smoothed: AtomicI64,
+    raw: AtomicI64,
+}
+
 pub(crate) struct Timekeeper {
     /// The initial estimate for what the server is using as its timebase,
     /// given in terms of our own system clock.
@@ -58,7 +64,7 @@ pub(crate) struct Timekeeper {
     /// The tick at which we observed initial_timebase_estimate.
     initial_timebase_tick: u64,
     inner: CachelineAligned<Mutex<TimekeeperInner>>,
-    current_skew: CachelineAligned<AtomicI64>,
+    current_skew: CachelineAligned<Skew>,
 }
 impl Timekeeper {
     pub(crate) fn new(initial_tick: u64) -> Self {
@@ -73,7 +79,7 @@ impl Timekeeper {
                 smoothed_error: 0,
                 last_frame_time: now,
             })),
-            current_skew: CachelineAligned(AtomicI64::new(0)),
+            current_skew: CachelineAligned(Skew::default()),
         }
     }
 
@@ -111,14 +117,18 @@ impl Timekeeper {
             let new_smoothed_error = lock.smoothed_error + std::cmp::min(diff_nanos, cap);
 
             lock.smoothed_error = new_smoothed_error;
+            self.current_skew.raw.store(lock.error, Ordering::Relaxed);
             self.current_skew
+                .smoothed
                 .store(new_smoothed_error, Ordering::Relaxed);
         } else if lock.error < lock.smoothed_error {
             let diff_nanos = lock.smoothed_error - lock.error;
             let cap = (last_frame_nanos * MAX_SLEW_DOWN) as i64;
             let new_smoothed_error = lock.smoothed_error - std::cmp::min(diff_nanos, cap);
             lock.smoothed_error = new_smoothed_error;
+            self.current_skew.raw.store(lock.error, Ordering::Relaxed);
             self.current_skew
+                .smoothed
                 .store(new_smoothed_error, Ordering::Relaxed);
         }
         lock.last_frame_time = now;
@@ -131,20 +141,23 @@ impl Timekeeper {
     ///
     /// Negative means that the network delay has decreased, so we should do things slightly
     /// later (where possible due to available buffers/delays) to keep them in sync with the server.
-    pub(crate) fn get_offset(&self) -> i64 {
-        self.current_skew.load(Ordering::Relaxed)
+    pub(crate) fn get_smoothed_offset(&self) -> i64 {
+        self.current_skew.smoothed.load(Ordering::Relaxed)
+    }
+    pub(crate) fn get_raw_offset(&self) -> i64 {
+        self.current_skew.raw.load(Ordering::Relaxed)
     }
 
     /// Adjusts the server tick based on the offset.
     pub(crate) fn adjust_server_tick(&self, server_tick: u64) -> u64 {
-        (server_tick as i128 + self.get_offset() as i128)
+        (server_tick as i128 + self.get_smoothed_offset() as i128)
             .try_into()
             .unwrap()
     }
 
     pub(crate) fn estimated_send_time(&self, server_tick: u64) -> Instant {
         // Note that ticks can run negative relative to each other, due to queueing in the server.
-        // However, ticks should never run backwards relative to the first tick we received from the
+        // However, ticks should never run backwards compared to the first tick we received from the
         // server.
         if server_tick < self.initial_timebase_tick {
             panic!(
@@ -161,6 +174,6 @@ impl Timekeeper {
     pub(crate) fn time_to_tick_estimate(&self, time: Instant) -> u64 {
         let raw_nanos: i128 = (time - self.initial_timebase_estimate).as_nanos() as i128
             + self.initial_timebase_tick as i128;
-        (raw_nanos - self.get_offset() as i128) as u64
+        (raw_nanos - self.get_smoothed_offset() as i128) as u64
     }
 }
