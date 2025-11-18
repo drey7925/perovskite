@@ -17,7 +17,7 @@ use perovskite_core::{
 };
 use prost::Message;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{
     backtrace,
     collections::{hash_map::Entry, HashMap},
@@ -33,7 +33,7 @@ use crate::audio::{
     SOUND_SQUARELAW_ENABLED,
 };
 use crate::client_state::input::BoundAction;
-use crate::client_state::ClientPerformanceMetrics;
+use crate::client_state::{ClientPerformanceMetrics, LampId};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::protocol::game_rpc::Footstep;
 use perovskite_core::protocol::map::StoredChunk;
@@ -58,6 +58,8 @@ struct SharedState {
     cancellation: CancellationToken,
 
     latest_rx_tick: AtomicU64,
+
+    inbound_worker_busy: AtomicBool,
 }
 impl SharedState {
     async fn send_bugcheck(&self, description: String) -> Result<()> {
@@ -130,6 +132,7 @@ pub(crate) async fn make_contexts(
         audio_healer,
         cancellation,
         latest_rx_tick: AtomicU64::new(0),
+        inbound_worker_busy: AtomicBool::new(false),
     });
 
     tokio::task::spawn(stats_loop(shared_state.clone()));
@@ -177,7 +180,22 @@ async fn stats_loop(shared_state: Arc<SharedState>) {
 
         guard.nprop_queue_lens = nprop_queue_lens;
         guard.mesh_queue_lens = mesh_queue_lens;
-        guard.update_timekeeper(&shared_state.client_state.timekeeper)
+        guard.update_timekeeper(&shared_state.client_state.timekeeper);
+        let send_queue_capacity = shared_state.outbound_tx.capacity();
+        let send_queue_max_cap = shared_state.outbound_tx.max_capacity();
+        guard.lamps[LampId::CSendQ] = if send_queue_capacity == send_queue_max_cap {
+            ClientPerformanceMetrics::LAMP_COLOR_OFF
+        } else if send_queue_capacity == 0 {
+            ClientPerformanceMetrics::LAMP_COLOR_RED
+        } else {
+            ClientPerformanceMetrics::LAMP_COLOR_YELLOW
+        };
+
+        guard.lamps[LampId::InBusy] = if shared_state.inbound_worker_busy.load(Ordering::Relaxed) {
+            ClientPerformanceMetrics::LAMP_COLOR_BLUE
+        } else {
+            ClientPerformanceMetrics::LAMP_COLOR_OFF
+        }
     }
 }
 
@@ -464,12 +482,14 @@ impl InboundContext {
                             self.shared_state.cancellation.cancel();
                         }
                         Ok(Some(mut message)) => {
+                            self.shared_state.inbound_worker_busy.store(true, Ordering::Relaxed);
                             match self.handle_message(&mut message).await {
                                 Ok(_) => {},
                                 Err(e) => {
                                     log::warn!("Client failed to handle message: {:?}, error: {:?}", message, e);
                                 },
                             }
+                            self.shared_state.inbound_worker_busy.store(false, Ordering::Relaxed);
                         }
                     }
 

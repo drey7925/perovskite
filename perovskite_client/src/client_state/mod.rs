@@ -24,7 +24,9 @@ use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
 use egui::ahash::HashMapExt;
+use egui::Color32;
 use egui_plot::PlotPoint;
+use enum_map::{Enum, EnumMap};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{
@@ -1079,28 +1081,42 @@ impl ClientState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Enum, Debug, PartialEq, Eq)]
+pub(crate) enum LampId {
+    /// client send queue
+    CSendQ,
+    /// inbound worker currently busy
+    InBusy,
+}
+
+#[derive(Clone)]
 pub(crate) struct ClientPerformanceMetrics {
     pub(crate) nprop_queue_lens: Vec<u64>,
     pub(crate) mesh_queue_lens: Vec<u64>,
     pub(crate) timekeeper_raw: [i64; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
     pub(crate) timekeeper_smoothed: [i64; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
-    /// timekeeper_raw and timekeeper_smooth should write to this index,
+    /// timekeeper_raw and timekeeper_smooth should write to this index.
     pub(crate) timekeeper_breakpoint: usize,
+    pub(crate) lamps: EnumMap<LampId, (Color32, Color32)>,
 }
 impl Default for ClientPerformanceMetrics {
     fn default() -> Self {
         Self {
             nprop_queue_lens: vec![],
             mesh_queue_lens: vec![],
-            timekeeper_raw: [0; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
-            timekeeper_smoothed: [0; ClientPerformanceMetrics::TIMEKEEPER_CHART_LEN],
+            timekeeper_raw: [0; Self::TIMEKEEPER_CHART_LEN],
+            timekeeper_smoothed: [0; Self::TIMEKEEPER_CHART_LEN],
             timekeeper_breakpoint: 0,
+            lamps: EnumMap::from_fn(|_| Self::LAMP_COLOR_OFF),
         }
     }
 }
 impl ClientPerformanceMetrics {
     pub(crate) const TIMEKEEPER_CHART_LEN: usize = 256;
+    pub(crate) const LAMP_COLOR_OFF: (Color32, Color32) = (Color32::WHITE, Color32::from_gray(10));
+    pub(crate) const LAMP_COLOR_YELLOW: (Color32, Color32) = (Color32::BLACK, Color32::YELLOW);
+    pub(crate) const LAMP_COLOR_RED: (Color32, Color32) = (Color32::WHITE, Color32::RED);
+    pub(crate) const LAMP_COLOR_BLUE: (Color32, Color32) = (Color32::BLACK, Color32::LIGHT_BLUE);
     pub(crate) fn update_timekeeper(&mut self, timekeeper: &Timekeeper) {
         self.timekeeper_raw[self.timekeeper_breakpoint] = timekeeper.get_raw_offset();
         self.timekeeper_smoothed[self.timekeeper_breakpoint] = timekeeper.get_smoothed_offset();
