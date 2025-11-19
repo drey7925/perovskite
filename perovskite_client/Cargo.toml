@@ -66,6 +66,7 @@ tinyvec = "1.9.0"
 enum-map = "2.7.3"
 ash-molten = { version = "0.20.0+1.2.11", optional = true }
 ash = { version = "0.38", optional = true }
+dashmap = "6.1.0"
 
 [features]
 default = ["ash"]

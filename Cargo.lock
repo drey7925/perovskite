@@ -1364,6 +1364,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+    "cfg-if",
+    "crossbeam-utils",
+    "hashbrown 0.14.2",
+    "lock_api",
+    "once_cell",
+    "parking_lot_core",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2957,7 +2971,7 @@ checksum = "23e0b72e7c9042467008b10279fc732326bd605459ae03bda88825909dd19b56"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
- "dashmap",
+    "dashmap 5.5.3",
  "skeptic",
  "smallvec",
  "tagptr",
@@ -3662,6 +3676,7 @@ dependencies = [
  "criterion 0.7.0",
  "crossbeam-channel",
  "css-color",
+    "dashmap 6.1.0",
  "directories",
  "egui",
  "egui_extras",
@@ -4914,7 +4929,7 @@ dependencies = [
  "bytes",
  "chrono",
  "command_attr",
- "dashmap",
+    "dashmap 5.5.3",
  "flate2",
  "futures",
  "fxhash",
@@ -5973,7 +5988,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d112ab96abcb66808bb508fce8a9143fe2cee32b167d240d5d792c326db5a4"
 dependencies = [
  "chrono",
- "dashmap",
+    "dashmap 5.5.3",
  "hashbrown 0.14.2",
  "mini-moka",
  "parking_lot",

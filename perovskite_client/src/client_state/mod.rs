@@ -23,6 +23,7 @@ use std::time::Duration;
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
+use dashmap::DashMap;
 use egui::ahash::HashMapExt;
 use egui::Color32;
 use egui_plot::PlotPoint;
@@ -43,7 +44,7 @@ use perovskite_core::protocol::game_rpc::{
     MapDeltaUpdateBatch, ServerPerformanceMetrics, SetClientState,
 };
 use perovskite_core::time::TimeState;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -126,34 +127,30 @@ pub(crate) enum GameAction {
     InteractKey(InteractKeyAction),
     ChatMessage(String),
 }
-
+pub(crate) type ChunkDashmap = DashMap<ChunkCoordinate, Arc<ClientChunk>, FxBuildHasher>;
+/// A non-dashmapped version of the chunk map, used for non-concurrent cases like passing
+/// chunks to the raytracer
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
+pub(crate) type LightColumnDashmap = DashMap<(i32, i32), ChunkColumn, FxBuildHasher>;
 pub(crate) type LightColumnMap = FxHashMap<(i32, i32), ChunkColumn>;
 pub(crate) struct ChunkManager {
-    chunks: parking_lot::RwLock<ChunkMap>,
-    renderable_chunks: parking_lot::RwLock<ChunkMap>,
+    chunks: ChunkDashmap,
+    renderable_chunks: ChunkDashmap,
     raytrace_dirty: parking_lot::RwLock<FxHashSet<ChunkCoordinate>>,
-    light_columns: parking_lot::RwLock<LightColumnMap>,
+    light_columns: LightColumnDashmap,
     mesh_batches: Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
     raytrace_buffers: Arc<RaytraceBufferManager>,
 }
 impl ChunkManager {
     pub(crate) fn new(raytrace_buffers: Arc<RaytraceBufferManager>) -> ChunkManager {
         ChunkManager {
-            chunks: parking_lot::RwLock::new(FxHashMap::default()),
-            renderable_chunks: parking_lot::RwLock::new(FxHashMap::default()),
+            chunks: DashMap::with_hasher(FxBuildHasher),
+            renderable_chunks: DashMap::with_hasher(FxBuildHasher),
             raytrace_dirty: parking_lot::RwLock::new(FxHashSet::default()),
-            light_columns: parking_lot::RwLock::new(FxHashMap::default()),
+            light_columns: DashMap::with_hasher(FxBuildHasher),
             mesh_batches: Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
             raytrace_buffers,
         }
-    }
-    /// Locks the chunk manager and returns a struct that can be used to access chunks in a read/write manner,
-    /// but CANNOT be used to insert or remove chunks.
-    pub(crate) fn read_lock(&self) -> ChunkManagerView<'_> {
-        let _span = span!("Acquire chunk read lock");
-        let guard = self.chunks.read();
-        ChunkManagerView { guard }
     }
 
     /// Clones the chunk manager and returns a clone with the following properties:
@@ -163,67 +160,50 @@ impl ChunkManager {
     ///    * It will not show chunks inserted after this function returns.
     ///    * If chunks are deleted after cloned_view returned, they will remain in the cloned view, and their
     ///      memory will not be released until the cloned view is dropped, due to Arcs owned by the cloned view.
-    pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkManagerClonedView {
-        ChunkManagerClonedView {
-            data: self.renderable_chunks.read().clone(),
-        }
+    pub(crate) fn renderable_chunks_cloned_view(&self) -> ChunkMap {
+        self.renderable_chunks
+            .iter()
+            .map(|x| (x.key().clone(), x.value().clone()))
+            .collect()
     }
 
-    pub(crate) fn take_rt_dirty_chunks(&self) -> ChunkManagerClonedView {
-        let chunks = self.renderable_chunks.read();
+    pub(crate) fn take_rt_dirty_chunks(&self) -> ChunkMap {
         let mut dirty = self.raytrace_dirty.write();
         let mut result = ChunkMap::with_capacity(dirty.len());
         for coord in dirty.drain() {
-            if let Some(chunk) = chunks.get(&coord) {
+            if let Some(chunk) = self.renderable_chunks.get(&coord) {
                 result.insert(coord, chunk.clone());
             }
         }
-
-        ChunkManagerClonedView { data: result }
-    }
-
-    pub(crate) fn chunk_lock(&self) -> RwLockWriteGuard<'_, ChunkMap> {
-        let _span = span!("Acquire global chunk lock");
-        self.chunks.write()
+        result
     }
 
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
-        let mut chunk_lock = self.chunk_lock();
-        self.remove_locked(coord, &mut chunk_lock)
-    }
-
-    pub(crate) fn remove_locked(
-        &self,
-        coord: &ChunkCoordinate,
-        chunks_lock: &mut RwLockWriteGuard<ChunkMap>,
-    ) -> Option<Arc<ClientChunk>> {
-        if let Some(chunk) = chunks_lock.get(coord) {
-            // todo this is racy
-            if let Some(batch) = chunk.get_batch() {
-                self.spill(&chunks_lock, batch, "remove");
+        if let Some(chunk) = self.chunks.get(coord) {
+            let batch = chunk.get_batch();
+            drop(chunk); // avoid reentrant lock on the dashmap
+            if let Some(batch) = batch {
+                // todo this is racy
+                self.spill(batch, "remove");
             }
         }
-        // Lock order: chunks -> renderable_chunks -> rt_dirty
-        //                                         -> light_columns
-        let mut render_chunks_lock = {
-            let _span = span!("Acquire global renderable chunk lock");
-            self.renderable_chunks.write()
-        };
-        let mut light_columns_lock = {
-            let _span = span!("Acquire global light column lock");
-            self.light_columns.write()
-        };
-        let chunk = chunks_lock.remove(coord);
+        // "Lock order": chunks -> renderable_chunks -> rt_dirty
+        //                                           -> light_columns
+        // Same note applies - these are dashmap maps, so treat outstanding Refs as equivalent to
+        // locks for deadlock analysis
+
+        let chunk = self.chunks.remove(coord);
         // The column should be present, so we unwrap.
         if chunk.is_some() {
-            let column = light_columns_lock.get_mut(&(coord.x, coord.z)).unwrap();
-            column.remove(coord.y);
+            let mut column = self.light_columns.get_mut(&(coord.x, coord.z)).unwrap();
+            column.value_mut().remove(coord.y);
             if column.is_empty() {
-                light_columns_lock.remove(&(coord.x, coord.z));
+                drop(column);
+                self.light_columns.remove(&(coord.x, coord.z));
             }
         }
-        render_chunks_lock.remove(coord);
-        chunk
+        self.renderable_chunks.remove(coord);
+        chunk.map(|x| x.1)
     }
     fn handle_mapchunk_audio(
         &self,
@@ -264,29 +244,21 @@ impl ChunkManager {
         ced: Vec<ClientExtendedData>,
         block_types: &ClientBlockTypeManager,
     ) -> Result<usize> {
-        // Lock order: chunks -> [renderable_chunks] -> light_columns
-        let mut chunks_lock = {
-            let _span = span!("Acquire global chunk lock");
-            self.chunks.write()
-        };
-        let mut light_columns_lock = {
-            let _span = span!("Acquire global light column lock");
-            self.light_columns.write()
-        };
-        let light_column = light_columns_lock
+        let mut light_column = self
+            .light_columns
             .entry((coord.x, coord.z))
             .or_insert_with(ChunkColumn::empty);
-        let occlusion = match chunks_lock.entry(coord) {
-            std::collections::hash_map::Entry::Occupied(chunk_entry) => {
+        let occlusion = match self.chunks.entry(coord) {
+            dashmap::Entry::Occupied(chunk_entry) => {
                 client_state.world_audio.lock().remove_chunk(coord);
                 chunk_entry
                     .get()
                     .update_from(coord, block_ids, ced, block_types)?
             }
-            std::collections::hash_map::Entry::Vacant(x) => {
+            dashmap::Entry::Vacant(x) => {
                 let (chunk, occlusion) =
                     ClientChunk::from_proto(coord, block_ids, ced, block_types)?;
-                light_column.insert_empty(coord.y);
+                light_column.value_mut().insert_empty(coord.y);
                 x.insert(Arc::new(chunk));
                 occlusion
             }
@@ -309,8 +281,6 @@ impl ChunkManager {
         let mut unknown_coords = vec![];
         let mut missing_coord = false;
 
-        let chunk_lock = self.chunks.read();
-        let light_lock = self.light_columns.read();
         for update in batch.updates.drain(..) {
             let block_coord: BlockCoordinate = match &update.block_coord {
                 Some(x) => x.into(),
@@ -321,13 +291,16 @@ impl ChunkManager {
                 }
             };
             let chunk_coord = block_coord.chunk();
-            let extra_chunks = match chunk_lock.get(&chunk_coord) {
+            let extra_chunks = match self.chunks.get(&chunk_coord) {
                 Some(x) => {
                     if !x.apply_delta(update)? {
                         None
                     } else {
                         let occlusion = x.get_occlusion(block_types);
-                        let light_column = light_lock.get(&(chunk_coord.x, chunk_coord.z)).unwrap();
+                        let light_column = self
+                            .light_columns
+                            .get(&(chunk_coord.x, chunk_coord.z))
+                            .expect("Missing light column during delta update");
                         let mut light_cursor = light_column.cursor_into(chunk_coord.y);
                         *light_cursor.current_occlusion_mut() = occlusion;
                         light_cursor.mark_valid();
@@ -365,32 +338,27 @@ impl ChunkManager {
         result: &mut FastChunkNeighbors,
     ) {
         let _ = span!("cloned_neighbors_fast");
-        let chunk_lock = {
-            let _span = span!("chunk read lock");
-            self.chunks.read()
-        };
-        let lights_lock = {
-            let _span = span!("light column read lock");
-            self.light_columns.read()
-        };
 
-        let center_chunk = chunk_lock.get(&chunk);
-        if center_chunk.is_none_or(|x| x.chunk_data().is_empty_optimization_hint()) {
+        let center_chunk = self.chunks.get(&chunk);
+        if center_chunk
+            .as_ref()
+            .is_none_or(|x| x.chunk_data().is_empty_optimization_hint())
+        {
             result.outcome = ChunkNeighborOutcome::DontMesh;
             return;
         }
 
-        result.center = center_chunk.cloned();
+        result.center = center_chunk.map(|x| x.value().clone());
         result.outcome = ChunkNeighborOutcome::ShouldMesh;
 
         for i in -1..=1 {
             for k in -1..=1 {
                 let light_column = chunk
                     .try_delta(i, 0, k)
-                    .and_then(|delta| lights_lock.get(&(delta.x, delta.z)));
+                    .and_then(|delta| self.light_columns.get(&(delta.x, delta.z)));
                 for j in -1..=1 {
                     if let Some(delta) = chunk.try_delta(i, j, k) {
-                        if let Some(chunk) = chunk_lock.get(&delta) {
+                        if let Some(chunk) = self.chunks.get(&delta) {
                             if i != 0 || j != 0 || k != 0 {
                                 result.neighbors[(k + 1) as usize][(j + 1) as usize]
                                     [(i + 1) as usize]
@@ -406,7 +374,7 @@ impl ChunkManager {
                                 .0 = false;
                         }
 
-                        if let Some(light_column) = light_column {
+                        if let Some(light_column) = light_column.as_ref() {
                             result.inbound_lights[(k + 1) as usize][(j + 1) as usize]
                                 [(i + 1) as usize] = light_column
                                 .get_incoming_light(delta.y)
@@ -429,19 +397,20 @@ impl ChunkManager {
         coord: ChunkCoordinate,
         renderer: &BlockRenderer,
     ) -> Result<bool> {
-        // Lock order notes: self.chunks -> self.renderable_chunks
+        // "Lock order": notes: self.chunks -> self.renderable_chunks
         // Neighbor propagation and mesh generation only need self.chunks
         // Rendering only needs self.renderable_chunks, and that lock is limited in scope
         // to Self::cloned_view_renderable. The render thread should never end up needing
         // both chunks and renderable_chunks locked at the same time (and the render thread's
-        // use of chunks is likewise scoped to the physics code)
-        let src = self.chunks.read();
-        if let Some(chunk) = src.get(&coord) {
+        // use of chunks is likewise scoped to the physics code).
+        //
+        // Note that this isn't literal lock order since both are dashmaps. However, a dashmap is
+        // deadlock-prone under certain re-entrant use, so treat accesses/outstanding refs to it as
+        // effective locks for lock order considerations.
+
+        if let Some(chunk) = self.chunks.get(&coord) {
             let raster_state = chunk.mesh_with(renderer, Some(&self.raytrace_buffers))?;
-            let mut dst = {
-                let _span = span!("renderable chunks writelock");
-                self.renderable_chunks.write()
-            };
+
             {
                 let _span = span!("raytrace dirty insert (meshed)");
                 self.raytrace_dirty.write().insert(coord);
@@ -453,18 +422,16 @@ impl ChunkManager {
                 MeshResult::NewMesh(batch) => {
                     // We take the lock after mesh_with to keep the lock scope as short as possible
                     // and avoid blocking the render thread
-                    dst.insert(coord, chunk.clone());
-                    drop(dst);
+                    self.renderable_chunks.insert(coord, chunk.clone());
                     if let Some(batch) = batch {
-                        self.spill(&src, batch, "newmesh");
+                        self.spill(batch, "newmesh");
                     }
                 }
                 MeshResult::EmptyMesh(batch) => {
                     // Likewise.
-                    dst.remove(&coord);
-                    drop(dst);
+                    self.renderable_chunks.remove(&coord);
                     if let Some(batch) = batch {
-                        self.spill(&src, batch, "emptymesh");
+                        self.spill(batch, "emptymesh");
                     }
                 }
             }
@@ -480,8 +447,11 @@ impl ChunkManager {
         vk_ctx: &VulkanContext,
     ) -> Result<()> {
         let _span = span!("batch_round");
-        let mut chunks = self.chunks.read();
-        let mut keys = chunks.keys().cloned().collect::<Vec<_>>();
+        let mut keys = self
+            .chunks
+            .iter()
+            .map(|x| x.key().clone())
+            .collect::<Vec<_>>();
         // Sort with closest items at the end
         keys.sort_unstable_by_key(|coord| {
             let world_coord = vec3(
@@ -502,7 +472,7 @@ impl ChunkManager {
                 coord.z as f64 * 16.0 + 8.0,
             );
             if (player_pos - world_coord).magnitude() > 30.0 {
-                let chunk = match chunks.get(&coord) {
+                let chunk = match self.chunks.get(&coord) {
                     Some(chunk) => chunk,
                     None => continue 'outer,
                 };
@@ -549,9 +519,6 @@ impl ChunkManager {
                     }
                     continue 'outer;
                 }
-            }
-            if counter % 100 == 99 {
-                RwLockReadGuard::bump(&mut chunks);
             }
         }
         Ok(())
@@ -612,12 +579,7 @@ impl ChunkManager {
         (calls, handled)
     }
 
-    fn spill(
-        &self,
-        chunks: &FxHashMap<ChunkCoordinate, Arc<ClientChunk>>,
-        batch_id: u64,
-        _reason: &str,
-    ) {
+    fn spill(&self, batch_id: u64, _reason: &str) {
         {
             let _span = span!("batch_spill");
             // Possibly spill a mesh batch if necessary
@@ -625,7 +587,7 @@ impl ChunkManager {
             if batch_lock.1.id() == batch_id {
                 // We are spilling the current batch builder itself
                 for spilled_coord in batch_lock.1.chunks() {
-                    if let Some(spilled_chunk) = chunks.get(&spilled_coord) {
+                    if let Some(spilled_chunk) = self.chunks.get(&spilled_coord) {
                         spilled_chunk.spill_back_to_solo(batch_id);
                     }
                 }
@@ -635,7 +597,7 @@ impl ChunkManager {
                 if let Some(spilled_batch) = batch_lock.0.remove(&batch_id) {
                     let _batch_finished = false;
                     for spilled_coord in spilled_batch.coords() {
-                        if let Some(spilled_chunk) = chunks.get(spilled_coord) {
+                        if let Some(spilled_chunk) = self.chunks.get(spilled_coord) {
                             spilled_chunk.spill_back_to_solo(batch_id);
                         }
                     }
@@ -648,29 +610,11 @@ impl ChunkManager {
         &self.raytrace_buffers
     }
 }
-pub(crate) struct ChunkManagerView<'a> {
-    guard: RwLockReadGuard<'a, ChunkMap>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChunkNeighborOutcome {
     ShouldMesh,
     DontMesh,
-}
-
-impl<'a> ChunkManagerView<'a> {
-    pub(crate) fn get(&'a self, coord: &ChunkCoordinate) -> Option<&'a Arc<ClientChunk>> {
-        self.guard.get(coord)
-    }
-    pub(crate) fn contains_key(&self, coord: &ChunkCoordinate) -> bool {
-        self.guard.contains_key(coord)
-    }
-
-    pub(crate) fn iter(
-        &'a self,
-    ) -> impl Iterator<Item = (&'a ChunkCoordinate, &'a Arc<ClientChunk>)> {
-        self.guard.iter()
-    }
 }
 
 struct ChunkWithEdgesBuffer(bool, Box<[BlockId; 18 * 18 * 18]>);
@@ -726,24 +670,6 @@ impl Default for FastChunkNeighbors {
             }),
             outcome: ChunkNeighborOutcome::DontMesh,
         }
-    }
-}
-
-pub(crate) struct ChunkManagerClonedView {
-    data: ChunkMap,
-}
-impl Deref for ChunkManagerClonedView {
-    type Target = ChunkMap;
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-impl IntoIterator for ChunkManagerClonedView {
-    type Item = (ChunkCoordinate, Arc<ClientChunk>);
-    type IntoIter = std::collections::hash_map::IntoIter<ChunkCoordinate, Arc<ClientChunk>>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.data.into_iter()
     }
 }
 

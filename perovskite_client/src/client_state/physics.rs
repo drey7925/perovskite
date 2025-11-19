@@ -27,7 +27,7 @@ use perovskite_core::{
 use super::{
     input::{BoundAction, InputState},
     settings::GameSettings,
-    ChunkManagerView, ClientBlockTypeManager, ClientState,
+    ChunkDashmap, ChunkManager, ClientBlockTypeManager, ClientState,
 };
 use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
 use crate::client_state::chunk::ChunkDataView;
@@ -193,18 +193,13 @@ impl PhysicsState {
         self.target_az = Deg((self.target_az.0 + (x)).rem_euclid(360.0));
         self.target_el = Deg((self.target_el.0 - (y)).clamp(-90.0, 90.0));
 
-        let chunks = client_state.chunks.read_lock();
         self.update_smooth_angles(delta);
         match self.physics_mode {
-            PhysicsMode::Standard => {
-                self.update_standard(&mut input, delta, client_state, &chunks, tick)
-            }
+            PhysicsMode::Standard => self.update_standard(&mut input, delta, client_state, tick),
             PhysicsMode::FlyingCollisions => {
-                self.update_flying(&mut input, delta, true, client_state, &chunks)
+                self.update_flying(&mut input, delta, true, client_state)
             }
-            PhysicsMode::Noclip => {
-                self.update_flying(&mut input, delta, false, client_state, &chunks)
-            }
+            PhysicsMode::Noclip => self.update_flying(&mut input, delta, false, client_state),
         }
         let adjusted_for_bump = vec3(self.pos.x, self.pos.y - self.bump_decay, self.pos.z);
 
@@ -212,7 +207,7 @@ impl PhysicsState {
         let block_id = current_block
             .and_then(|coord| {
                 let chunk = coord.chunk();
-                let chunk = chunks.get(&chunk);
+                let chunk = client_state.chunks.chunks.get(&chunk);
                 chunk.map(|chunk| chunk.chunk_data().get_block(coord.offset()))
             })
             .unwrap_or(AIR_ID);
@@ -231,7 +226,6 @@ impl PhysicsState {
         // todo handle long deltas without falling through the ground
         delta: Duration,
         client_state: &ClientState,
-        chunks: &ChunkManagerView,
         tick: u64,
     ) {
         let _span = span!("physics_standard");
@@ -240,7 +234,8 @@ impl PhysicsState {
 
         // The block that the player's foot is in
         let surrounding_coord = BlockCoordinate::try_from(self.pos - vec3(0., EYE_TO_BTM, 0.)).ok();
-        let surrounding_block = surrounding_coord.and_then(|x| get_block(x, &chunks, block_types));
+        let surrounding_block =
+            surrounding_coord.and_then(|x| get_block(x, &client_state.chunks, block_types));
         let block_physics = surrounding_block.and_then(|(x, _)| x.physics_info.as_ref());
 
         let delta = delta.as_secs_f64();
@@ -253,7 +248,7 @@ impl PhysicsState {
                         y: (self.pos.y - EYE_TO_BTM + fluid_data.surface_thickness).round() as i32,
                         z: self.pos.z.round() as i32,
                     },
-                    &chunks,
+                    &client_state.chunks,
                     block_types,
                 );
                 let is_surface = matches!(
@@ -276,7 +271,7 @@ impl PhysicsState {
 
         plot!("physics_delta", (target - self.pos).magnitude());
 
-        let new_pos = clamp_collisions_loop(self.pos, target, &chunks, block_types);
+        let new_pos = clamp_collisions_loop(self.pos, target, &client_state.chunks, block_types);
         let footstep_coord =
             BlockCoordinate::try_from(new_pos - vec3(0., EYE_TO_BTM + DETECTION_EPS, 0.)).ok();
         // If we hit a floor or ceiling
@@ -290,7 +285,7 @@ impl PhysicsState {
                     self.animation_state.footstep_coord.push((tick, coord));
                 }
                 if let Some(coord) = footstep_coord {
-                    if let Some(block) = get_block(coord, &chunks, block_types) {
+                    if let Some(block) = get_block(coord, &client_state.chunks, block_types) {
                         if block.0.footstep_sound != 0 {
                             let _ = client_state.audio.insert_or_update_simple_sound(
                                 tick,
@@ -325,7 +320,7 @@ impl PhysicsState {
             self.landed_last_frame = false;
         }
 
-        // If we're landed now, we're able to bump up to the current height + about half a block or so (enough for a stair)
+        // If we're landed now, we're able to bump up to the current height + about half a block or so (enough for a stair).
         // Otherwise, we'll only bump up no more than 0.1 blocks or so, and never more than our current height
 
         let bump_height = if self.landed_last_frame {
@@ -335,8 +330,14 @@ impl PhysicsState {
                 .clamp(0., TRAVERSABLE_BUMP_HEIGHT_MIDAIR)
         };
 
-        self.pos =
-            self.update_with_bumping(new_pos, bump_height, target, chunks, block_types, delta);
+        self.pos = self.update_with_bumping(
+            new_pos,
+            bump_height,
+            target,
+            &client_state.chunks,
+            block_types,
+            delta,
+        );
         self.last_velocity = velocity;
     }
 
@@ -345,7 +346,7 @@ impl PhysicsState {
         mut new_pos: Vector3<f64>,
         bump_height: f64,
         target: Vector3<f64>,
-        chunks: &ChunkManagerView<'_>,
+        chunks: &ChunkManager,
         block_types: &Arc<ClientBlockTypeManager>,
         delta_secs: f64,
     ) -> Vector3<f64> {
@@ -357,11 +358,11 @@ impl PhysicsState {
             // We hit something in the horizontal direction. Try to bump up by some distance no larger than TRAVERSABLE_BUMP_HEIGHT...
             let bump_target = vec3(new_pos.x, new_pos.y + bump_height, new_pos.z);
             // This is where we end up as we try to go up the bump
-            let bump_outcome = clamp_collisions_loop(new_pos, bump_target, &chunks, block_types);
+            let bump_outcome = clamp_collisions_loop(new_pos, bump_target, chunks, block_types);
             // and this is where we want to end up after the bump
             let post_bump_target = vec3(target.x, bump_outcome.y, target.z);
             let post_bump_outcome =
-                clamp_collisions_loop(bump_outcome, post_bump_target, &chunks, block_types);
+                clamp_collisions_loop(bump_outcome, post_bump_target, chunks, block_types);
             // did we end up making it anywhere horizontally?
             if (post_bump_outcome.x - bump_target.x).abs() > COLLISION_EPS
                 || (post_bump_outcome.z - bump_target.z).abs() > COLLISION_EPS
@@ -372,12 +373,8 @@ impl PhysicsState {
                     post_bump_outcome.y - bump_height,
                     post_bump_outcome.z,
                 );
-                new_pos = clamp_collisions_loop(
-                    post_bump_outcome,
-                    down_bump_target,
-                    &chunks,
-                    block_types,
-                );
+                new_pos =
+                    clamp_collisions_loop(post_bump_outcome, down_bump_target, chunks, block_types);
                 self.bump_decay = self.bump_decay.max(new_pos.y - pre_bump_y);
                 if self.settings.load().render.physics_debug {
                     log::info!("bump success {bump_height} \ntarget   : {bump_target:?},\noutcome  : {bump_outcome:?}\nptarget : {post_bump_target:?}\npoutcome: {post_bump_outcome:?} \ndtarget : {down_bump_target:?}\nnewpos  : {new_pos:?}");
@@ -476,7 +473,6 @@ impl PhysicsState {
         delta: Duration,
         collisions: bool,
         client_state: &ClientState,
-        chunks: &ChunkManagerView,
     ) {
         let mut velocity = self.apply_movement_input(input, FLY_SPEED);
         if input.is_pressed(BoundAction::Jump) {
@@ -488,12 +484,13 @@ impl PhysicsState {
 
         if collisions {
             let block_types = &client_state.block_types;
-            let new_pos = clamp_collisions_loop(self.pos, target_pos, &chunks, block_types);
+            let new_pos =
+                clamp_collisions_loop(self.pos, target_pos, &client_state.chunks, block_types);
             self.pos = self.update_with_bumping(
                 new_pos,
                 TRAVERSABLE_BUMP_HEIGHT_LANDED,
                 target_pos,
-                &chunks,
+                &client_state.chunks,
                 block_types,
                 delta.as_secs_f64(),
             );
@@ -571,7 +568,7 @@ const BUMP_DECAY_SPEED: f64 = 3.0;
 fn clamp_collisions_loop(
     old_pos: Vector3<f64>,
     target: Vector3<f64>,
-    chunks: &ChunkManagerView,
+    chunks: &ChunkManager,
     block_types: &ClientBlockTypeManager,
 ) -> Vector3<f64> {
     if (target - old_pos).magnitude2() < (COLLISION_EPS * COLLISION_EPS) {
@@ -676,7 +673,7 @@ pub(crate) fn apply_aabox_transformation(
 fn clamp_collisions(
     old_pos: Vector3<f64>,
     mut new_pos: Vector3<f64>,
-    chunks: &ChunkManagerView,
+    chunks: &ChunkManager,
     block_types: &ClientBlockTypeManager,
 ) -> Vector3<f64> {
     // For new_active, bias toward including a block when we're right on the edge
@@ -773,10 +770,10 @@ fn clamp_single_axis(
 
 fn get_block<'a>(
     coord: BlockCoordinate,
-    chunks: &ChunkManagerView,
+    chunks: &ChunkManager,
     block_types: &'a ClientBlockTypeManager,
 ) -> Option<(&'a BlockTypeDef, u16)> {
-    let chunk = chunks.get(&coord.chunk())?;
+    let chunk = chunks.chunks.get(&coord.chunk())?;
     let id = chunk.get_single(coord.offset());
     let block = block_types.get_blockdef(id)?;
     Some((block, id.variant()))
@@ -793,7 +790,7 @@ fn inclusive<T: Ord>(a: T, b: T) -> RangeInclusive<T> {
 
 fn get_collision_boxes(
     pos: Vector3<f64>,
-    chunks: &ChunkManagerView,
+    chunks: &ChunkManager,
     block_types: &ClientBlockTypeManager,
 ) -> Vec<CollisionBox> {
     let corner1 = pos + PLAYER_COLLISIONBOX_CORNER_POS;

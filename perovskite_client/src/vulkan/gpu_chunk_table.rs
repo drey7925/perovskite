@@ -1,7 +1,7 @@
 //! GPU-friendly data structures, mostly used for the new raytracer.
 
 use crate::client_state::chunk::ChunkDataView;
-use crate::client_state::ChunkManagerClonedView;
+use crate::client_state::ChunkMap;
 use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_PRESENT, FLAG_HASHTABLE_TOMBSTONE};
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use perovskite_core::coordinates::ChunkCoordinate;
@@ -93,7 +93,7 @@ const PRIME: u32 = 1610612741;
 ///         accept the attempt. This does not include the first one (i.e., first try w/o
 ///         collision is counted as 0)
 pub(crate) fn build_chunk_hashtable(
-    chunks: ChunkManagerClonedView,
+    chunks: ChunkMap,
     max_tries: usize,
     max_probe_len: usize,
 ) -> (Vec<u32>, ChunkMapHeader) {

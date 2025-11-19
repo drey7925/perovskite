@@ -1,4 +1,4 @@
-use crate::client_state::ChunkManagerClonedView;
+use crate::client_state::ChunkMap;
 use crate::vulkan::gpu_chunk_table::{
     build_chunk_hashtable, gpu_table_lookup, CHUNK_LEN, CHUNK_LIGHTS_LEN, CHUNK_LIGHTS_OFFSET,
     CHUNK_STRIDE,
@@ -84,7 +84,7 @@ impl RaytraceBufferManager {
             vk_ctx,
         })
     }
-    pub(crate) fn spawn_rebuild(self: Arc<Self>, chunks: ChunkManagerClonedView) {
+    pub(crate) fn spawn_rebuild(self: Arc<Self>, chunks: ChunkMap) {
         tokio::task::spawn_blocking(move || {
             match std::panic::catch_unwind(AssertUnwindSafe(move || self.do_rebuild(chunks))) {
                 Ok(Ok(())) => {
@@ -100,7 +100,7 @@ impl RaytraceBufferManager {
         });
     }
 
-    pub(crate) fn do_rebuild(&self, chunks: ChunkManagerClonedView) -> Result<()> {
+    pub(crate) fn do_rebuild(&self, chunks: ChunkMap) -> Result<()> {
         // Catchup works as:
         // * Steady-state, only incremental buffer, no catchup buffer. During each frame we accumulate
         //     chunk updates into the incremental buffer, and on each acquire() we drain them to the render

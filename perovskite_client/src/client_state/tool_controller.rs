@@ -530,7 +530,6 @@ impl ToolController {
 
         let delta_inv = vec3(1.0 / (face.x), 1.0 / (face.y), 1.0 / (face.z));
 
-        let chunks = client_state.chunks.read_lock();
         let mut prev = None;
         let start_pos = match (pos + RAYCAST_FUDGE_VEC).try_into() {
             Ok(x) => x,
@@ -555,7 +554,7 @@ impl ToolController {
                 y: y.try_into().ok()?,
                 z: z.try_into().ok()?,
             };
-            let chunk = chunks.get(&coord.chunk());
+            let chunk = client_state.chunks.chunks.get(&coord.chunk());
             if let Some(chunk) = chunk {
                 let (id, ext) = chunk.get_single_with_extended_data(coord.offset());
                 let block_def = client_state
