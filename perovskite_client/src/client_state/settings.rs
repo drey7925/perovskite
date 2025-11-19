@@ -111,7 +111,7 @@ impl Default for RenderSettings {
             force_primary_rt: false,
             on_demand_raytracing: false,
             raytracer_debug: false,
-            raytracing_specular_downsampling: 2,
+            raytracing_specular_downsampling: 8,
             hdr: true,
             bloom_strength: 1.0,
             lens_flare_strength: 1.0,
