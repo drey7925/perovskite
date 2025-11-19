@@ -1061,7 +1061,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                     .set_rotate_laterally(),
             )
             .set_allow_light_propagation(true)
-            .set_display_name("Dichroic Glass"),
+            .set_display_name("Render rotation test block"),
     )?;
 
     include_texture_bytes!(
