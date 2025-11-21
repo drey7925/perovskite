@@ -21,7 +21,7 @@ use std::{
 };
 
 use crate::{
-    database::database_engine::{GameDatabase, KeySpace},
+    database::{GameDatabase, KeySpace},
     game_state::items::{ItemStack, MaybeStack},
     run_handler,
 };

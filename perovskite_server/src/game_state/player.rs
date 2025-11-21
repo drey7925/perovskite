@@ -38,7 +38,7 @@ use super::{
     GameState,
 };
 use crate::{
-    database::database_engine::{GameDatabase, KeySpace},
+    database::{GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,
 };
 use log::warn;

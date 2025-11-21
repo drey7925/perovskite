@@ -36,11 +36,12 @@ use serde::{Deserialize, Serialize};
 use tonic::transport::{Identity, ServerTlsConfig};
 use type_map::concurrent::TypeMap;
 
-use crate::database::database_engine::{InMemGameDabase, KeySpace};
 use crate::database::rocksdb::RocksdbOptions;
+pub use crate::database::GameDatabase;
+use crate::database::{InMemGameDabase, KeySpace};
 use crate::game_state::game_map::MapChunk;
 use crate::{
-    database::{database_engine::GameDatabase, rocksdb::RocksDbBackend},
+    database::rocksdb::RocksDbBackend,
     game_state::{
         blocks::BlockTypeManager,
         chat::commands::{ChatCommand, ChatCommandHandler, CommandManager},
@@ -196,9 +197,12 @@ impl Server {
     }
 }
 
-/// A simple server, with nothing registered, for unit tests and doctests
 pub fn testonly_in_memory() -> Result<Server> {
-    let db = Arc::new(InMemGameDabase::new());
+    testonly_in_memory_with_db(Arc::new(InMemGameDabase::new()))
+}
+
+/// A simple server, with nothing registered, for unit tests and doctests
+pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
     let mut blocks = BlockTypeManager::create_or_load(db.as_ref())?;
     let entities = EntityTypeManager::create_or_load(db.as_ref())?;
     blocks.pre_build()?;

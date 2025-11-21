@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use rocksdb::{ReadOptions, DB};
 use tracy_client::span;
 
-use super::database_engine::GameDatabase;
+use super::GameDatabase;
 pub use rocksdb::Options as RocksdbOptions;
 
 pub(crate) struct RocksDbBackend {

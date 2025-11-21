@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-mod database;
+pub mod database;
 /// Various utilities to convert between formats.
 pub mod formats;
 /// The state of the actual game world and all the things inside it

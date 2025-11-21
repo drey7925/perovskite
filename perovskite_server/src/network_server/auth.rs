@@ -31,7 +31,7 @@ use perovskite_core::{
 use rand::rngs::OsRng;
 use tokio::sync::mpsc;
 
-use crate::database::database_engine::{GameDatabase, KeySpace};
+use crate::database::{GameDatabase, KeySpace};
 
 fn db_key_from_username(username: &str) -> Vec<u8> {
     let mut key_builder = Vec::new();

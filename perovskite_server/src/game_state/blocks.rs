@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::database::database_engine::{GameDatabase, KeySpace};
+use crate::database::{GameDatabase, KeySpace};
 use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
 use rustc_hash::FxHashMap;

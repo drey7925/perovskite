@@ -38,7 +38,7 @@ use crate::game_state::client_ui::Popup;
 use crate::game_state::event::EventInitiator;
 use crate::game_state::items::{ItemInteractionResult, ItemStack};
 use crate::{
-    database::database_engine::{GameDatabase, KeySpace},
+    database::{GameDatabase, KeySpace},
     formats, run_handler, CachelineAligned,
 };
 use perovskite_core::constants::textures::FALLBACK_UNKNOWN_TEXTURE;

@@ -31,7 +31,7 @@ pub mod player;
 #[cfg(test)]
 pub mod tests;
 
-use crate::database::database_engine::{GameDatabase, KeySpace};
+use crate::database::{GameDatabase, KeySpace};
 use anyhow::{bail, Result};
 use integer_encoding::VarInt;
 use log::{info, warn};

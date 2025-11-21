@@ -37,7 +37,7 @@ use tracy_client::{plot, span};
 
 use crate::sync::{AtomicInstant, RwCondvar};
 use crate::{
-    database::database_engine::{GameDatabase, KeySpace},
+    database::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
 };
 use crate::{run_handler, CachelineAligned};
