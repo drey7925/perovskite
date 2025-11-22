@@ -1,7 +1,10 @@
 use parking_lot::Mutex;
-use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
+use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
+use perovskite_core::util::TraceBuffer;
+use perovskite_server::database::InMemGameDatabase;
+use perovskite_server::game_state::event::run_traced_sync;
 use perovskite_server::game_state::GameState;
-use perovskite_server::server::{testonly_in_memory, GameDatabase, Server};
+use perovskite_server::server::{testonly_in_memory_with_db, GameDatabase, Server};
 use rand::rngs::ThreadRng;
 use rand::{Rng, RngCore};
 use std::ops::Range;
@@ -9,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, OnceLock};
 use std::thread::sleep;
 use std::time::Duration;
+use tokio::time::Instant;
 
 struct SlowLoadSaveDb {
     base: Arc<dyn perovskite_server::database::GameDatabase>,
@@ -37,10 +41,10 @@ impl SlowLoadSaveDb {
         }
     }
     fn set_get_delay(delay: u64) {
-        Self::GET_DELAY.with(|v| v.fetch_sub(delay, Ordering::Relaxed));
+        Self::GET_DELAY.with(|v| v.store(delay, Ordering::Relaxed));
     }
     fn set_put_delay(delay: u64) {
-        Self::PUT_DELAY.with(|v| v.fetch_sub(delay, Ordering::Relaxed));
+        Self::PUT_DELAY.with(|v| v.store(delay, Ordering::Relaxed));
     }
 }
 impl GameDatabase for SlowLoadSaveDb {
@@ -97,6 +101,21 @@ impl Action for RandRead {
     }
 }
 
+struct FlushAll {
+    freq: f32,
+    next_awaken: Option<Instant>,
+}
+impl Action for FlushAll {
+    fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats) {
+        let now = Instant::now();
+        let next_awaken = self.next_awaken.get_or_insert_with(Instant::now);
+        sleep(*next_awaken - now);
+        *next_awaken += Duration::from_secs_f32(1.0 / self.freq);
+        gs.game_map().purge_and_flush();
+        stats.ops += 1;
+    }
+}
+
 struct RandWrite(Range<i32>);
 impl Action for RandWrite {
     fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats) {
@@ -119,15 +138,22 @@ struct Worker<A: Action> {
     barrier: Arc<(std::sync::Barrier, AtomicBool)>,
     result: Arc<OnceLock<WorkerStats>>,
     action: Mutex<A>,
+    setup: Box<dyn Fn() + Send + Sync + 'static>,
 }
 
 impl<A: Action> Worker<A> {
-    fn new(server: Arc<Server>, barrier: Arc<(Barrier, AtomicBool)>, action: A) -> Self {
+    fn new(
+        server: Arc<Server>,
+        barrier: Arc<(Barrier, AtomicBool)>,
+        action: A,
+        setup: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         Self {
             server,
             barrier,
             result: Arc::new(OnceLock::new()),
             action: Mutex::new(action),
+            setup: Box::new(setup),
         }
     }
     fn start(self: Arc<Self>) {
@@ -135,12 +161,14 @@ impl<A: Action> Worker<A> {
             let mut stats = WorkerStats::default();
             self.server
                 .run_task_in_server(|gs| {
+                    (self.setup)();
+
                     let mut rng = rand::thread_rng();
                     let mut action = self.action.lock();
                     self.barrier.0.wait();
                     let start = std::time::Instant::now();
                     while self.barrier.1.load(Ordering::Relaxed) {
-                        for _ in 0..256 {
+                        for _ in 0..16 {
                             action.act(gs, &mut rng, &mut stats);
                         }
                     }
@@ -158,14 +186,22 @@ impl<A: Action> Worker<A> {
 }
 
 fn main() {
+    const FLUSH_HZ: f32 = 100.0;
+    const RUN_PROBE: bool = true;
     const N_WRITERS: usize = 2;
     for n_read_thread in [0, 1, 2, 4, 8, 12, 16] {
-        let server = Arc::new(testonly_in_memory().unwrap());
+        let server = Arc::new(
+            testonly_in_memory_with_db(Arc::new(SlowLoadSaveDb {
+                base: Arc::new(InMemGameDatabase::new()),
+            }))
+            // testonly_in_memory()
+            .unwrap(),
+        );
         const WORKING_SET_SIZE: i32 = 1;
-        println!("\n{N_WRITERS}x write + {n_read_thread}x randread, random chunk from working set of {WORKING_SET_SIZE}");
+        println!("\n{N_WRITERS}x write + {n_read_thread}x randread, random chunk from working set of {WORKING_SET_SIZE}, forced flush at {FLUSH_HZ} Hz");
 
         let barrier = Arc::new((
-            Barrier::new(n_read_thread + N_WRITERS),
+            Barrier::new(n_read_thread + N_WRITERS + 1),
             AtomicBool::new(true),
         ));
 
@@ -176,6 +212,9 @@ fn main() {
                 server.clone(),
                 barrier.clone(),
                 RandRead(0..WORKING_SET_SIZE),
+                || {
+                    SlowLoadSaveDb::set_get_delay(1);
+                },
             )));
         }
         for _ in 0..N_WRITERS {
@@ -183,8 +222,22 @@ fn main() {
                 server.clone(),
                 barrier.clone(),
                 RandWrite(0..WORKING_SET_SIZE),
+                || {
+                    SlowLoadSaveDb::set_get_delay(1);
+                },
             )));
         }
+        let flusher = Arc::new(Worker::new(
+            server.clone(),
+            barrier.clone(),
+            FlushAll {
+                freq: FLUSH_HZ,
+                next_awaken: None,
+            },
+            || {
+                SlowLoadSaveDb::set_get_delay(1);
+            },
+        ));
 
         for worker in read_workers.iter() {
             worker.clone().start();
@@ -192,7 +245,21 @@ fn main() {
         for worker in write_workers.iter() {
             worker.clone().start();
         }
-        sleep(Duration::from_secs(10));
+        flusher.clone().start();
+        sleep(Duration::from_secs(5));
+
+        if RUN_PROBE {
+            server
+                .run_task_in_server(|gs| {
+                    let tracer = TraceBuffer::new(true);
+                    run_traced_sync(tracer, || {
+                        gs.game_map().get_block(BlockCoordinate::new(0, 0, 0))
+                    })
+                })
+                .unwrap();
+        }
+
+        sleep(Duration::from_secs(5));
         barrier.1.store(false, Ordering::Relaxed);
         // for worker in workers.iter() {
         //     println!("{:?}", worker.join())
@@ -202,6 +269,7 @@ fn main() {
             let stats = worker.join();
             read_rate += stats.ops as f64 / stats.duration.as_secs_f64();
         }
+        println!("flush: {:?}", flusher.join());
 
         let mut write_rate = 0.0;
         let mut expected_write_cksum: u32 = 0;

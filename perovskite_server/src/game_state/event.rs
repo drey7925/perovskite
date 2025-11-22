@@ -290,10 +290,14 @@ pub fn clone_trace_buffer() -> TraceBuffer {
     })
 }
 
-pub(crate) fn run_traced<F: Future>(buf: TraceBuffer, f: F) -> TaskLocalFuture<TraceBuffer, F> {
+/// Runs the given action with the given trace buffer. Most game content shouldn't need
+/// to use it, but it can be helpful for performance debugging.
+pub fn run_traced<F: Future>(buf: TraceBuffer, f: F) -> TaskLocalFuture<TraceBuffer, F> {
     TRACE_BUFFER.scope(buf, f)
 }
 
-pub(crate) fn run_traced_sync<T, F: FnOnce() -> T>(buf: TraceBuffer, f: F) -> T {
+/// Runs the given action with the given trace buffer. Most game content shouldn't need
+/// to use it, but it can be helpful for performance debugging.
+pub fn run_traced_sync<T, F: FnOnce() -> T>(buf: TraceBuffer, f: F) -> T {
     TRACE_BUFFER.sync_scope(buf, f)
 }

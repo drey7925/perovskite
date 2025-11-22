@@ -95,7 +95,9 @@ pub(crate) mod failure_injection {
 
 use anyhow::Result;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
+
 pub(crate) enum KeySpace {
     /// Core metadata for the game state, e.g. the block type list.
     /// Should generally contain only hardcoded keys.
@@ -160,17 +162,17 @@ pub trait GameDatabase: Send + Sync {
 }
 
 /// Test-only game database
-pub struct InMemGameDabase {
-    data: Mutex<HashMap<Vec<u8>, Vec<u8>>>,
+pub struct InMemGameDatabase {
+    data: Mutex<FxHashMap<Vec<u8>, Vec<u8>>>,
 }
-impl InMemGameDabase {
-    pub(crate) fn new() -> InMemGameDabase {
-        InMemGameDabase {
-            data: HashMap::new().into(),
+impl InMemGameDatabase {
+    pub fn new() -> InMemGameDatabase {
+        InMemGameDatabase {
+            data: HashMap::default().into(),
         }
     }
 }
-impl GameDatabase for InMemGameDabase {
+impl GameDatabase for InMemGameDatabase {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         Ok(self.data.lock().get(key).cloned())
     }

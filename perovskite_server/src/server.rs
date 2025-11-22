@@ -38,7 +38,7 @@ use type_map::concurrent::TypeMap;
 
 use crate::database::rocksdb::RocksdbOptions;
 pub use crate::database::GameDatabase;
-use crate::database::{InMemGameDabase, KeySpace};
+use crate::database::{InMemGameDatabase, KeySpace};
 use crate::game_state::game_map::MapChunk;
 use crate::{
     database::rocksdb::RocksDbBackend,
@@ -198,7 +198,7 @@ impl Server {
 }
 
 pub fn testonly_in_memory() -> Result<Server> {
-    testonly_in_memory_with_db(Arc::new(InMemGameDabase::new()))
+    testonly_in_memory_with_db(Arc::new(InMemGameDatabase::new()))
 }
 
 /// A simple server, with nothing registered, for unit tests and doctests
