@@ -37,7 +37,6 @@ use super::{
     inventory::{InventoryKey, InventoryView, InventoryViewId, TypeErasedInventoryView},
     GameState,
 };
-use crate::sync::SyncBackend;
 use crate::{
     database::{GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,

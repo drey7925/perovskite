@@ -62,4 +62,5 @@ pub mod items;
 pub mod lighting;
 pub mod time;
 
+pub mod sync;
 pub mod util;

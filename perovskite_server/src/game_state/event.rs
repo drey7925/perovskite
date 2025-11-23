@@ -21,10 +21,10 @@ use std::{num::NonZeroU64, sync::Arc};
 use anyhow::Result;
 
 use super::{client_ui::Popup, player::Player, GameState};
-use crate::sync::SyncBackend;
 use futures::Future;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::PlayerPositionUpdate;
+use perovskite_core::sync::SyncBackend;
 use perovskite_core::util::TraceBuffer;
 use tokio::task::futures::TaskLocalFuture;
 use tracing::warn;

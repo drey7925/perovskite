@@ -1,18 +1,18 @@
 use std::ops::{Deref, DerefMut};
 
-pub(crate) struct RwCondvar<T, S: SyncBackend> {
+pub struct RwCondvar<T, S: SyncBackend> {
     c: S::Condvar<T>,
     m: S::Mutex<()>,
 }
 impl<T: Send + Sync, S: SyncBackend> RwCondvar<T, S> {
-    pub(crate) fn new() -> RwCondvar<T, S> {
+    pub fn new() -> RwCondvar<T, S> {
         RwCondvar {
             c: S::Condvar::new(),
             m: S::Mutex::new(()),
         }
     }
 
-    pub(crate) fn wait_reader(&self, g: &mut S::ReadGuard<'_, T>) {
+    pub fn wait_reader(&self, g: &mut S::ReadGuard<'_, T>) {
         let guard = self.m.lock();
         S::RwLock::reader_unlocked(g, || {
             // It may seem like there's a lock ordering violation between self.m and g.
@@ -29,7 +29,7 @@ impl<T: Send + Sync, S: SyncBackend> RwCondvar<T, S> {
             self.c.wait(&mut guard);
         });
     }
-    pub(crate) fn wait_writer(&self, g: &mut S::WriteGuard<'_, T>) {
+    pub fn wait_writer(&self, g: &mut S::WriteGuard<'_, T>) {
         let guard = self.m.lock();
         S::RwLock::writer_unlocked(g, || {
             // Move the guard in so it gets unlocked before we re-lock g
@@ -37,24 +37,22 @@ impl<T: Send + Sync, S: SyncBackend> RwCondvar<T, S> {
             self.c.wait(&mut guard);
         });
     }
-    pub(crate) fn notify_all(&self) {
+    pub fn notify_all(&self) {
         let _guard = self.m.lock();
         self.c.notify_all();
     }
-    pub(crate) fn notify_one(&self) {
+    pub fn notify_one(&self) {
         let _guard = self.m.lock();
         self.c.notify_one();
     }
 }
 
-pub(crate) use perovskite_core::util::AtomicInstant;
-
-pub(crate) trait GenericMutex<T, S: SyncBackend> {
+pub trait GenericMutex<T, S: SyncBackend> {
     fn lock(&self) -> S::Guard<'_, T>;
     fn new(t: T) -> Self;
     fn into_inner(self) -> T;
 }
-pub(crate) trait GenericRwLock<T, S: SyncBackend> {
+pub trait GenericRwLock<T, S: SyncBackend> {
     fn read(&self) -> S::ReadGuard<'_, T>;
     fn write(&self) -> S::WriteGuard<'_, T>;
     fn new(t: T) -> Self;

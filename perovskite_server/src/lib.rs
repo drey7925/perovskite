@@ -27,8 +27,6 @@ pub mod network_server;
 /// The actual builders and lifecycle of a game server
 pub mod server;
 
-mod sync;
-
 use anyhow::Result;
 use std::{
     future::Future,

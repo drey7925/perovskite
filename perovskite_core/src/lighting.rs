@@ -5,10 +5,9 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 use bitvec::field::BitField;
 use bitvec::prelude as bv;
 
-use parking_lot::{Mutex, MutexGuard};
-
 use crate::block_id::BlockId;
 use crate::coordinates::ChunkOffset;
+use crate::sync::{GenericMutex, SyncBackend};
 use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
 /// A 256-bit bitfield indicating what XZ positions within a chunk. This requires mutable
@@ -107,13 +106,13 @@ impl Not for Lightfield {
 }
 
 /// Representation of the lighting for a column of chunks within the map.
-pub struct ChunkColumn {
+pub struct ChunkColumn<S: SyncBackend> {
     // *Chunk* coordinate y-values that are loaded in memory.
     // Locking order: key1 > key2 (key1 is geometrically above key2) => lock-for-key1 is taken first
-    present: BTreeMap<i32, Mutex<ChunkLightingState>>,
+    present: BTreeMap<i32, S::Mutex<ChunkLightingState>>,
     generation: AtomicUsize,
 }
-impl ChunkColumn {
+impl<S: SyncBackend> ChunkColumn<S> {
     pub fn empty() -> Self {
         Self {
             present: BTreeMap::new(),
@@ -125,7 +124,7 @@ impl ChunkColumn {
     pub fn insert_empty(&mut self, chunk_y: i32) {
         assert!(self
             .present
-            .insert(chunk_y, Mutex::new(ChunkLightingState::empty()))
+            .insert(chunk_y, S::Mutex::new(ChunkLightingState::empty()))
             .is_none());
     }
 
@@ -140,7 +139,7 @@ impl ChunkColumn {
 
     /// Returns a cursor that starts in a state where it can propagate light *into* the given chunk
     /// from the previous chunk above it.
-    pub fn cursor_into(&self, chunk_y: i32) -> ChunkColumnCursor<'_> {
+    pub fn cursor_into(&self, chunk_y: i32) -> ChunkColumnCursor<'_, S> {
         // Lock ordering: predecessor read() is called before current write()
         let (prev_pos, predecessor) = self
             .present
@@ -163,7 +162,7 @@ impl ChunkColumn {
     }
     /// Returns a cursor that starts in a state where it can propagate light *out* of the given chunk
     /// into the next chunk below it.
-    pub fn cursor_out_of(&self, chunk_y: i32) -> Option<ChunkColumnCursor<'_>> {
+    pub fn cursor_out_of(&self, chunk_y: i32) -> Option<ChunkColumnCursor<'_, S>> {
         // Lock ordering: current read() is called before successor write()
         let current = self.present.get(&chunk_y).unwrap().lock();
         let successor = self.present.range(..chunk_y).next_back()?;
@@ -180,7 +179,7 @@ impl ChunkColumn {
     }
 
     /// Returns a cursor out of the first possible chunk, into the second chunk.
-    pub fn cursor_out_of_first(&self) -> Option<ChunkColumnCursor<'_>> {
+    pub fn cursor_out_of_first(&self) -> Option<ChunkColumnCursor<'_, S>> {
         self.cursor_out_of(*self.present.last_key_value()?.0)
     }
 
@@ -196,15 +195,15 @@ impl ChunkColumn {
 }
 
 /// A cursor that can be used to perform light propagation in the column.
-pub struct ChunkColumnCursor<'a> {
+pub struct ChunkColumnCursor<'a, S: SyncBackend> {
     generation: usize,
-    map: &'a BTreeMap<i32, Mutex<ChunkLightingState>>,
+    map: &'a BTreeMap<i32, S::Mutex<ChunkLightingState>>,
     current_pos: i32,
     prev_pos: Option<i32>,
-    pub(crate) previous: Option<MutexGuard<'a, ChunkLightingState>>,
-    pub(crate) current: MutexGuard<'a, ChunkLightingState>,
+    pub(crate) previous: Option<S::Guard<'a, ChunkLightingState>>,
+    pub(crate) current: S::Guard<'a, ChunkLightingState>,
 }
-impl<'a> ChunkColumnCursor<'a> {
+impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
     pub fn current_occlusion_mut(&mut self) -> &mut Lightfield {
         &mut self.current.occlusion
     }
