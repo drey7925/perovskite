@@ -11,11 +11,11 @@ use std::sync::Arc;
 fn test_load_store() {
     let server = Arc::new(testonly_in_memory().unwrap());
 
-    let loom_map_backing_store = Arc::new(InMemGameDatabase::new());
     server
         .run_task_in_server(|gs| {
             let server = server.clone();
             loom::model(move || {
+                let loom_map_backing_store = Arc::new(InMemGameDatabase::new());
                 let loom_map = ServerGameMap::<TestonlyLoomBackend>::new_with_background_tasks(
                     // TODO: This is unholy grafting of multiple maps together. However, probably
                     // fine for now since these tests won't exercise game state dependent actions.
@@ -34,6 +34,9 @@ fn test_load_store() {
                     BackgroundTaskMode::DisabledTestonly,
                 )
                 .unwrap();
+
+                let block = loom_map.get_block(BlockCoordinate::new(0, 0, 0)).unwrap();
+                assert_eq!(block.0, 0);
 
                 let mut threads = vec![];
                 for _ in 0..2 {
@@ -68,6 +71,9 @@ fn test_load_store() {
                 }
                 let block = loom_map.get_block(BlockCoordinate::new(0, 0, 0)).unwrap();
                 assert_eq!(block.0, 4);
+                tokio::runtime::Handle::current()
+                    .block_on(loom_map.do_shutdown())
+                    .unwrap();
             });
             Ok(())
         })
