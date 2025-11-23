@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashSet, VecDeque};
+use std::future::Future;
 use std::ops::{DerefMut, RangeInclusive};
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -124,84 +125,58 @@ impl PlayerCoroutinePack {
 
         tracing::info!("Starting workers for {}...", username);
 
-        let context_clone = self.context.clone();
-        let kick_closure = move |reason: &'static str| async move {
-            let result = context_clone.player_context.kick_player(reason).await;
-            context_clone.cancellation.cancel();
-            match result {
-                Ok(()) => {}
-                Err(e) => {
-                    tracing::warn!("Error kicking player: {:?}", e);
-                }
-            }
-        };
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("net_prio_{}", username), async move {
-            if let Err(e) = self.net_prioritizer.run_loop().await {
-                tracing::error!("Error running outbound network priotizier: {:?}", e);
-                kick("net prio crashed").await;
-            }
-        })?;
+        crate::spawn_async(
+            &format!("net_prio_{username}"),
+            self.context
+                .run_cancelable_worker(self.net_prioritizer.run_loop(), "outbound net prioritizer"),
+        )?;
 
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("inbound_worker_{}", username), async move {
-            if let Err(e) = self.inbound_worker.inbound_worker_loop().await {
-                tracing::error!("Error running inbound loop: {:?}", e);
-                kick("Inbound loop crashed").await;
-            }
-        })?;
+        crate::spawn_async(
+            &format!("net_inbound_worker_{username}"),
+            self.context
+                .run_cancelable_worker(self.inbound_worker.inbound_worker_loop(), "inbound worker"),
+        )?;
 
         for (i, mut sender) in self.chunk_senders.into_iter().enumerate() {
-            let kick = kick_closure.clone();
-            crate::spawn_async(&format!("chunk_sender_{i}_{username}"), async move {
-                if let Err(e) = sender.chunk_sender_loop().await {
-                    tracing::error!("Error running chunk sender: {:?}", e);
-                    kick("Chunk sender loop crashed").await;
-                }
-            })?;
+            crate::spawn_async(
+                &format!("chunk_sender_{i}_{username}"),
+                self.context
+                    .run_cancelable_worker(sender.chunk_sender_loop(), "chunk sender"),
+            )?;
         }
 
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("block_event_sender_{}", username), async move {
-            if let Err(e) = self.block_event_sender.block_sender_loop().await {
-                tracing::error!("Error running block event sender loop: {:?}", e);
-                kick("Chunk sender loop crashed").await;
-            }
-        })?;
+        crate::spawn_async(
+            &format!("block_sender_{username}"),
+            self.context.run_cancelable_worker(
+                self.block_event_sender.block_sender_loop(),
+                "block event sender",
+            ),
+        )?;
+        crate::spawn_async(
+            &format!("inv_sender_{username}"),
+            self.context.run_cancelable_worker(
+                self.inventory_event_sender.inv_sender_loop(),
+                "inventory event sender",
+            ),
+        )?;
+        crate::spawn_async(
+            &format!("misc_events_{username}"),
+            self.context.run_cancelable_worker(
+                self.misc_outbound_worker.misc_outbound_worker_loop(),
+                "misc outbound event worker",
+            ),
+        )?;
 
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("inv_event_sender_{}", username), async move {
-            if let Err(e) = self.inventory_event_sender.inv_sender_loop().await {
-                tracing::error!("Error running inventory event sender loop: {:?}", e);
-                kick("inventory event loop crashed").await;
-            }
-        })?;
-
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("misc_outbound_worker_{}", username), async move {
-            if let Err(e) = self.misc_outbound_worker.misc_outbound_worker_loop().await {
-                tracing::error!("Error running misc outbound worker loop: {:?}", e);
-                // cancellations are handled in the misc outbound worker
-                kick("Misc outbound worker crashed").await;
-            }
-        })?;
-
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("entity_sender_{}", username), async move {
-            if let Err(e) = self.entity_sender.entity_sender_loop().await {
-                tracing::error!("Error running entity sender worker loop: {:?}", e);
-                kick("Entity sender crashed").await;
-            }
-        })?;
-
-        let kick = kick_closure.clone();
-        crate::spawn_async(&format!("audio_sender_{}", username), async move {
-            if let Err(e) = self.audio_sender.audio_sender_loop().await {
-                tracing::error!("Error running audio sender worker loop: {:?}", e);
-                kick("Audio sender crashed").await;
-            }
-        })?;
-
+        crate::spawn_async(
+            &format!("entity_sender_{username}"),
+            self.context
+                .run_cancelable_worker(self.entity_sender.entity_sender_loop(), "entity sender"),
+        )?;
+        crate::spawn_async(
+            &format!("audio_sender_{username}"),
+            self.context
+                .run_cancelable_worker(self.audio_sender.audio_sender_loop(), "audio sender"),
+        )?;
         let cancellation = self.context.cancellation.clone();
         crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
             cancellation.cancelled().await;
@@ -276,6 +251,7 @@ pub(crate) async fn make_client_contexts(
         chunk_aimd,
         enable_performance_metrics: AtomicBool::new(false),
         net_delay_estimator: Mutex::new(NetworkDelayMonitor::new()),
+        already_cancelled: AtomicBool::new(false),
     });
 
     let inbound_worker = InboundWorker {
@@ -388,7 +364,7 @@ async fn initialize_protocol_state(
     outbound_tx: &mpsc::Sender<tonic::Result<StreamToClient>>,
 ) -> Result<()> {
     if !context.player_context.has_permission(permissions::LOG_IN) {
-        context.cancellation.cancel();
+        context.cancel();
         outbound_tx
             .send(Ok(StreamToClient {
                 tick: context.game_state.tick(),
@@ -521,6 +497,7 @@ pub(crate) struct SharedContext {
     chunk_aimd: Mutex<Aimd>,
     enable_performance_metrics: AtomicBool,
     net_delay_estimator: Mutex<NetworkDelayMonitor>,
+    already_cancelled: AtomicBool,
 }
 impl SharedContext {
     fn maybe_get_performance_metrics(&self) -> Option<ServerPerformanceMetrics> {
@@ -530,10 +507,60 @@ impl SharedContext {
             None
         }
     }
+
+    /// Cancels the context, returns true if this is the first call to cancel.
+    fn cancel(&self) -> bool {
+        self.cancellation.cancel();
+        // Consider weaker ordering if applicable.
+        !self.already_cancelled.swap(true, Ordering::SeqCst)
+    }
+
+    async fn kick(&self, reason: &str) {
+        if !self.cancel() {
+            // already kicked and cancelling
+            return;
+        }
+        let result = self.player_context.kick_player(reason).await;
+        match result {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("Error kicking player: {:?}", e);
+            }
+        }
+    }
+
+    fn run_cancelable_worker(
+        self: &Arc<Self>,
+        fut: impl Future<Output = Result<()>> + Send + 'static,
+        worker: impl Into<String>,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        let self_clone = self.clone();
+        let name = self_clone.player_context.name().to_string();
+        let cancellation = self_clone.cancellation.clone();
+        let worker: String = worker.into();
+        async move {
+            match cancellation.run_until_cancelled(fut).await {
+                None => {
+                    tracing::info!("Stopped {worker} for player {name} due to cancellation");
+                }
+                Some(Ok(_)) => {
+                    if cancellation.is_cancelled() {
+                        tracing::info!("{worker} for player {name} exited cleanly");
+                    } else {
+                        tracing::warn!("{worker} for player {name} exited cleanly, but before the player context was cancelled.");
+                    }
+                }
+                Some(Err(e)) => {
+                    tracing::error!("Error running {worker} for {name}: {:?}", e);
+                    self_clone.kick(&format!("{worker} crashed")).await;
+                }
+            }
+        }
+    }
 }
 impl Drop for SharedContext {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        self.cancel();
     }
 }
 
@@ -677,7 +704,7 @@ struct NetPrioritizer {
     tx: mpsc::Sender<tonic::Result<StreamToClient>>,
 }
 impl NetPrioritizer {
-    async fn run_loop(&mut self) -> Result<()> {
+    async fn run_loop(mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             let message = tokio::select! {
                 biased;
@@ -697,7 +724,6 @@ impl NetPrioritizer {
             }
             self.tx.send(message).await?;
         }
-        tracing::info!("Prioritized outbound sender exiting");
         Ok(())
     }
 }
@@ -729,7 +755,7 @@ impl MapChunkSender {
             player_name = %self.context.player_context.name(),
         ),
     )]
-    pub(crate) async fn chunk_sender_loop(&mut self) -> Result<()> {
+    pub(crate) async fn chunk_sender_loop(mut self) -> Result<()> {
         assert!(CACHE_CLEAN_MIN_AGE > (Duration::from_secs_f64(0.2) * ACCESS_TIME_BUMP_SHARDS));
         let mut access_time_bump_idx = 0;
         while !self.context.cancellation.is_cancelled() {
@@ -740,12 +766,7 @@ impl MapChunkSender {
                     self.send_chunks_for_position_update(update, access_time_bump_idx).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {
-                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
-                }
-                _ = self.context.game_state.await_start_shutdown() => {
-                    info!("Game shutting down, disconnecting {}", self.context.id);
-                    // cancel the inbound context as well
-                    self.context.cancellation.cancel();
+                    break;
                 }
             }
         }
@@ -845,6 +866,7 @@ impl MapChunkSender {
 
             message
         });
+
         self.outbound_tx
             .send(Ok(unsub_message))
             .await
@@ -1032,7 +1054,7 @@ impl MapChunkSender {
             })?;
             if let Some(message) = chunk_message {
                 self.outbound_tx.send(Ok(message)).await.map_err(|_| {
-                    self.context.cancellation.cancel();
+                    self.context.cancel();
                     Error::msg("Could not send outbound message (full mapchunk)")
                 })?;
 
@@ -1169,15 +1191,14 @@ impl BlockEventSender {
             player_name = %self.context.player_context.name(),
         )
     )]
-    pub(crate) async fn block_sender_loop(&mut self) -> Result<()> {
+    pub(crate) async fn block_sender_loop(mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 block_event = self.block_events.recv() => {
                     self.handle_block_update(block_event).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {
-                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
-                    // pass
+                    break;
                 }
             }
         }
@@ -1208,7 +1229,7 @@ impl BlockEventSender {
                 return self.handle_block_update_lagged().await;
             }
             Err(broadcast::error::RecvError::Closed) => {
-                self.context.cancellation.cancel();
+                self.context.cancel();
                 return Ok(());
             }
             Ok(x) => x,
@@ -1379,15 +1400,14 @@ impl InventoryEventSender {
             player_name = %self.context.player_context.name(),
         )
     )]
-    pub(crate) async fn inv_sender_loop(&mut self) -> Result<()> {
+    pub(crate) async fn inv_sender_loop(mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 inventory_update = self.inventory_events.recv() => {
                     self.handle_inventory_update(inventory_update).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {
-                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
-                    // pass
+                    break;
                 }
             }
         }
@@ -1409,7 +1429,7 @@ impl InventoryEventSender {
                 return Ok(());
             }
             Err(broadcast::error::RecvError::Closed) => {
-                self.context.cancellation.cancel();
+                self.context.cancel();
                 return Ok(());
             }
             Ok(x) => x,
@@ -1539,16 +1559,14 @@ impl InboundWorker {
                         }
                     }
                 }
-                _ = ctx.cancellation.cancelled() => {
-                    break;
-                }
+                _ = ctx.cancellation.cancelled() => break,
             }
         }
         Ok(())
     }
 
     // Poll for world events and send them through outbound_tx
-    pub(crate) async fn inbound_worker_loop(&mut self) -> Result<()> {
+    pub(crate) async fn inbound_worker_loop(mut self) -> Result<()> {
         let (mut step_tx, step_rx) = mpsc::channel(32);
         let mut step_worker_handle = spawn_async(
             &format!("{}_footstep_worker", &self.context.player_context.name),
@@ -1566,12 +1584,12 @@ impl InboundWorker {
                     match message {
                         Err(e) => {
                             error!("Client {}, Failure reading inbound message: {:?}", self.context.id, e);
-                            self.context.cancellation.cancel();
+                            self.context.cancel();
                             return Ok(());
                         },
                         Ok(None) => {
                             info!("Client {} disconnected", self.context.id);
-                            self.context.cancellation.cancel();
+                            self.context.cancel();
                             return Ok(());
                         }
                         Ok(Some(message)) => {
@@ -1589,13 +1607,10 @@ impl InboundWorker {
                 _ = &mut step_worker_handle => {
                     info!("Off-thread footstep worker finished")
                 }
-                _ = self.context.cancellation.cancelled() => {
-                    info!("Client inbound context {} detected cancellation and shutting down", self.context.id)
-                    // pass
-                },
+                _ = self.context.cancellation.cancelled() => break,
                 _ = timeout => {
                     warn!("Client inbound context {} timed out and shutting down", self.context.id);
-                    self.context.cancellation.cancel();
+                    self.context.cancel();
                     self.context.game_state.game_behaviors().on_player_err.handle(
                         &self.context.player_context,
                         HandlerContext {
@@ -1912,7 +1927,7 @@ impl InboundWorker {
         };
 
         self.outbound_tx.send(Ok(message)).await.map_err(|_| {
-            self.context.cancellation.cancel();
+            self.context.cancel();
             Error::msg("Could not send outbound message (sequence ack)")
         })?;
 
@@ -2537,7 +2552,7 @@ impl InboundWorker {
 }
 impl Drop for InboundWorker {
     fn drop(&mut self) {
-        self.context.cancellation.cancel();
+        self.context.cancel();
     }
 }
 
@@ -2549,7 +2564,7 @@ struct MiscOutboundWorker {
     context: Arc<SharedContext>,
 }
 impl MiscOutboundWorker {
-    async fn misc_outbound_worker_loop(&mut self) -> Result<()> {
+    async fn misc_outbound_worker_loop(mut self) -> Result<()> {
         let mut broadcast_messages = self.context.game_state.chat().subscribe();
         let mut resync_player_state_global =
             self.context.game_state.subscribe_player_state_resyncs();
@@ -2593,12 +2608,9 @@ impl MiscOutboundWorker {
                         performance_metrics: self.context.maybe_get_performance_metrics(),
                     })).await?;
                     // cancel the inbound context as well
-                    self.context.cancellation.cancel();
+                    self.context.cancel();
                 },
-                _ = self.context.cancellation.cancelled() => {
-                    info!("Client misc outbound context {} detected cancellation and shutting down", self.context.id)
-                    // pass
-                }
+                _ = self.context.cancellation.cancelled() => break,
             }
         }
 
@@ -2682,24 +2694,13 @@ struct EntityEventSender {
     last_update: u64,
 }
 impl EntityEventSender {
-    async fn entity_sender_loop(&mut self) -> Result<()> {
-        if self.context.effective_protocol_version < 4 {
-            tracing::info!(
-                "Client {} is using an unsupported protocol version, ignoring entity events",
-                self.context.id
-            );
-            self.context.cancellation.cancelled().await;
-            return Ok(());
-        }
-
+    async fn entity_sender_loop(mut self) -> Result<()> {
         // TODO - optimize this with actual awakenings based on relevant entities
         let mut interval = tokio::time::interval(Duration::from_millis(10));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
-                _ = self.context.cancellation.cancelled() => {
-                    info!("Entity event sender context {} detected cancellation and shutting down", self.context.id);
-                }
+                _ = self.context.cancellation.cancelled() => break,
                 _ = interval.tick() => {
                     self.do_tick().await?;
                 }
@@ -2961,15 +2962,14 @@ impl AudioSender {
             player_name=%self.context.player_context.name(),
         )
     )]
-    pub(crate) async fn audio_sender_loop(&mut self) -> Result<()> {
+    pub(crate) async fn audio_sender_loop(mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
                 event = self.events.recv(self.position_watch.borrow().position.position) => {
                     self.handle_event(event?).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {
-                    info!("Client outbound loop {} detected cancellation and shutting down", self.context.id)
-                    // pass
+                    break;
                 }
             }
         }
