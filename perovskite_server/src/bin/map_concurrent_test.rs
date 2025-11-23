@@ -1,10 +1,10 @@
+use cgmath::num_traits::WrappingAdd;
 use parking_lot::Mutex;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 use perovskite_core::util::TraceBuffer;
-use perovskite_server::database::InMemGameDatabase;
 use perovskite_server::game_state::event::run_traced_sync;
 use perovskite_server::game_state::GameState;
-use perovskite_server::server::{testonly_in_memory_with_db, GameDatabase, Server};
+use perovskite_server::server::{testonly_in_memory, GameDatabase, Server};
 use rand::rngs::ThreadRng;
 use rand::{Rng, RngCore};
 use std::ops::Range;
@@ -186,18 +186,18 @@ impl<A: Action> Worker<A> {
 }
 
 fn main() {
-    const FLUSH_HZ: f32 = 100.0;
+    const FLUSH_HZ: f32 = 10.0;
     const RUN_PROBE: bool = true;
-    const N_WRITERS: usize = 2;
+    const N_WRITERS: usize = 0;
+    const LOAD_SLEEP_TIME_MICROS: u64 = 1000;
+    const WORKING_SET_SIZE: i32 = 256;
     for n_read_thread in [0, 1, 2, 4, 8, 12, 16] {
         let server = Arc::new(
-            testonly_in_memory_with_db(Arc::new(SlowLoadSaveDb {
-                base: Arc::new(InMemGameDatabase::new()),
-            }))
-            // testonly_in_memory()
-            .unwrap(),
+            // testonly_in_memory_with_db(Arc::new(SlowLoadSaveDb {
+            //     base: Arc::new(InMemGameDatabase::new()),
+            // }))
+            testonly_in_memory().unwrap(),
         );
-        const WORKING_SET_SIZE: i32 = 1;
         println!("\n{N_WRITERS}x write + {n_read_thread}x randread, random chunk from working set of {WORKING_SET_SIZE}, forced flush at {FLUSH_HZ} Hz");
 
         let barrier = Arc::new((
@@ -213,7 +213,7 @@ fn main() {
                 barrier.clone(),
                 RandRead(0..WORKING_SET_SIZE),
                 || {
-                    SlowLoadSaveDb::set_get_delay(1);
+                    SlowLoadSaveDb::set_get_delay(LOAD_SLEEP_TIME_MICROS);
                 },
             )));
         }
@@ -223,7 +223,7 @@ fn main() {
                 barrier.clone(),
                 RandWrite(0..WORKING_SET_SIZE),
                 || {
-                    SlowLoadSaveDb::set_get_delay(1);
+                    SlowLoadSaveDb::set_get_delay(LOAD_SLEEP_TIME_MICROS);
                 },
             )));
         }
@@ -235,7 +235,7 @@ fn main() {
                 next_awaken: None,
             },
             || {
-                SlowLoadSaveDb::set_get_delay(1);
+                SlowLoadSaveDb::set_get_delay(LOAD_SLEEP_TIME_MICROS);
             },
         ));
 
@@ -288,11 +288,12 @@ fn main() {
             .run_task_in_server(|gs| {
                 for i in 0..WORKING_SET_SIZE {
                     let coord = ChunkCoordinate::new(i >> 4 & 0xf, i >> 8, i & 0xf);
-                    checksum += gs
-                        .game_map()
-                        .get_block(coord.with_offset(ChunkOffset::new(0, 0, 0)))
-                        .unwrap()
-                        .0;
+                    checksum = checksum.wrapping_add(
+                        &gs.game_map()
+                            .get_block(coord.with_offset(ChunkOffset::new(0, 0, 0)))
+                            .unwrap()
+                            .0,
+                    );
                 }
                 Ok(())
             })

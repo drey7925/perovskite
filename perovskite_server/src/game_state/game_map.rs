@@ -35,7 +35,9 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
-use crate::sync::{AtomicInstant, RwCondvar};
+use crate::sync::{
+    AtomicInstant, DefaultSyncBackend, GenericMutex, GenericRwLock, RwCondvar, SyncBackend,
+};
 use crate::{
     database::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
@@ -53,7 +55,6 @@ use super::{
     GameState,
 };
 
-use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use perovskite_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::map as mapchunk_proto,
@@ -475,7 +476,7 @@ fn parse_v1(
         "Block IDs length != _MAX_OFFSET"
     );
     if run_cold_load_postprocessors {
-        // The length should be right so this should be safe and zero or low cost
+        // The length should be right, so this should be safe and zero or low cost
         for processor in game_state.block_types().cold_load_postprocessors() {
             let cast: &mut [BlockId] =
                 bytemuck::cast_slice_mut(chunk_data.block_ids.as_mut_slice());
@@ -574,23 +575,23 @@ impl UpdateBroadcast {
     }
 }
 
-struct MapChunkInnerReadGuard<'a> {
-    guard: RwLockReadGuard<'a, HolderState>,
+struct MapChunkInnerReadGuard<'a, S: SyncBackend> {
+    guard: S::ReadGuard<'a, HolderState>,
 }
-impl<'a> Deref for MapChunkInnerReadGuard<'a> {
+impl<'a, S: SyncBackend> Deref for MapChunkInnerReadGuard<'a, S> {
     type Target = MapChunk;
     fn deref(&self) -> &Self::Target {
         self.guard.unwrap()
     }
 }
 
-struct MapChunkInnerWriteGuard<'a> {
-    guard: RwLockWriteGuard<'a, HolderState>,
+struct MapChunkInnerWriteGuard<'a, S: SyncBackend> {
+    guard: S::WriteGuard<'a, HolderState>,
 }
-impl<'a> MapChunkInnerWriteGuard<'a> {
-    fn downgrade(self) -> MapChunkInnerReadGuard<'a> {
+impl<'a, S: SyncBackend> MapChunkInnerWriteGuard<'a, S> {
+    fn downgrade(self) -> MapChunkInnerReadGuard<'a, S> {
         MapChunkInnerReadGuard {
-            guard: RwLockWriteGuard::downgrade(self.guard),
+            guard: S::RwLock::downgrade(self.guard),
         }
     }
 
@@ -604,13 +605,13 @@ impl<'a> MapChunkInnerWriteGuard<'a> {
             .unwrap()
     }
 }
-impl<'a> Deref for MapChunkInnerWriteGuard<'a> {
+impl<'a, S: SyncBackend> Deref for MapChunkInnerWriteGuard<'a, S> {
     type Target = MapChunk;
     fn deref(&self) -> &Self::Target {
-        self.guard.unwrap()
+        self.guard.deref().unwrap()
     }
 }
-impl<'a> DerefMut for MapChunkInnerWriteGuard<'a> {
+impl<'a, S: SyncBackend> DerefMut for MapChunkInnerWriteGuard<'a, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.guard.unwrap_mut()
     }
@@ -638,9 +639,9 @@ impl HolderState {
     }
 }
 
-struct MapChunkHolder {
-    chunk: RwLock<HolderState>,
-    condition: RwCondvar,
+struct MapChunkHolder<S: SyncBackend> {
+    chunk: S::RwLock<HolderState>,
+    condition: RwCondvar<HolderState, S>,
     // TODO - should these go into their own cache line to avoid ping-ponging?
     //
     // At this time, benchmarking shows unclear evidence regarding this.
@@ -655,13 +656,13 @@ struct MapChunkHolder {
     // This is set only if chunk's state is ready.
     fast_path_read_ready: AtomicBool,
 }
-impl MapChunkHolder {
+impl<S: SyncBackend> MapChunkHolder<S> {
     fn new_empty() -> Self {
         // We're OK with allowing this lint; we really do want this atomic copied _MAX_OFFSET times.
         #[allow(clippy::declare_interior_mutable_const)]
         const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
-            chunk: RwLock::new(HolderState::Empty),
+            chunk: S::RwLock::new(HolderState::Empty),
             condition: RwCondvar::new(),
             last_accessed: AtomicInstant::new(),
             last_written: AtomicInstant::new(),
@@ -675,7 +676,7 @@ impl MapChunkHolder {
     }
 
     /// Get the chunk, blocking until it's loaded
-    fn wait_and_get_for_read(&self) -> Result<MapChunkInnerReadGuard<'_>> {
+    fn wait_and_get_for_read(&self) -> Result<MapChunkInnerReadGuard<'_, S>> {
         tokio::task::block_in_place(|| {
             let mut guard = self.chunk.read();
             let _span = span!("wait_and_get");
@@ -695,7 +696,7 @@ impl MapChunkHolder {
     }
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
-    fn try_get_read(&self) -> Result<Option<MapChunkInnerReadGuard<'_>>> {
+    fn try_get_read(&self) -> Result<Option<MapChunkInnerReadGuard<'_, S>>> {
         tokio::task::block_in_place(|| {
             let guard = self.chunk.read();
             match &*guard {
@@ -707,7 +708,7 @@ impl MapChunkHolder {
     }
 
     /// Get the chunk, blocking until it's loaded
-    fn wait_and_get_for_write(&self) -> Result<MapChunkInnerWriteGuard<'_>> {
+    fn wait_and_get_for_write(&self) -> Result<MapChunkInnerWriteGuard<'_, S>> {
         tokio::task::block_in_place(|| {
             let mut guard = self.chunk.write();
             let _span = span!("wait_and_get");
@@ -725,7 +726,7 @@ impl MapChunkHolder {
 
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
-    fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_>>> {
+    fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_, S>>> {
         tokio::task::block_in_place(|| {
             let guard = self.chunk.write();
             match &*guard {
@@ -769,7 +770,7 @@ impl MapChunkHolder {
 
     fn update_lighting_after_edit(
         &self,
-        outer_guard: &MapChunkOuterGuard,
+        outer_guard: &MapChunkOuterGuard<S>,
         chunk: &MapChunk,
         offset: ChunkOffset,
         block_types: &BlockTypeManager,
@@ -844,13 +845,13 @@ impl MapChunkHolder {
     }
 }
 
-struct MapChunkOuterGuard<'a> {
-    read_guard: RwLockReadGuard<'a, MapShard>,
+struct MapChunkOuterGuard<'a, S: SyncBackend> {
+    read_guard: S::ReadGuard<'a, MapShard<S>>,
     coord: ChunkCoordinate,
     writeback_permit: Option<mpsc::Permit<'a, WritebackReq>>,
     force_writeback: bool,
 }
-impl<'a> MapChunkOuterGuard<'a> {
+impl<'a, S: SyncBackend> MapChunkOuterGuard<'a, S> {
     // Actually submits a writeback request to the writeback queue.
     // Naming note - _inner because ServerGameMap first does some error checking and
     // monitoring/stats before calling this.
@@ -862,7 +863,7 @@ impl<'a> MapChunkOuterGuard<'a> {
             .send(WritebackReq::Chunk(self.coord));
     }
 }
-impl<'a> Drop for MapChunkOuterGuard<'a> {
+impl<'a, S: SyncBackend> Drop for MapChunkOuterGuard<'a, S> {
     fn drop(&mut self) {
         if self.force_writeback {
             // If the permit is still there, we didn't write this chunk back.
@@ -875,8 +876,8 @@ impl<'a> Drop for MapChunkOuterGuard<'a> {
         }
     }
 }
-impl<'a> Deref for MapChunkOuterGuard<'a> {
-    type Target = MapChunkHolder;
+impl<'a, S: SyncBackend> Deref for MapChunkOuterGuard<'a, S> {
+    type Target = MapChunkHolder<S>;
     fn deref(&self) -> &Self::Target {
         // This unwrap should always succeed - get_chunk and friends ensure that the chunk is inserted
         // before MapChunkOuterGuard is created
@@ -894,12 +895,12 @@ pub(crate) fn shard_id(coord: ChunkCoordinate) -> usize {
     (coord.coarse_hash_no_y() % NUM_CHUNK_SHARDS as u64) as usize
 }
 
-struct MapShard {
-    chunks: FxHashMap<ChunkCoordinate, MapChunkHolder>,
+struct MapShard<S: SyncBackend> {
+    chunks: FxHashMap<ChunkCoordinate, MapChunkHolder<S>>,
     light_columns: FxHashMap<(i32, i32), ChunkColumn>,
 }
-impl MapShard {
-    fn new(_shard: usize) -> MapShard {
+impl<S: SyncBackend> MapShard<S> {
+    fn new(_shard: usize) -> MapShard<S> {
         MapShard {
             chunks: FxHashMap::default(),
             light_columns: FxHashMap::default(),
@@ -909,15 +910,18 @@ impl MapShard {
 
 /// Represents the entire map of the world.
 /// This struct provides safe interior mutability - a shared reference
-/// is sufficient to read and write it. Locking is done at an implementation-defined
+/// is enough to read and write it. Locking is done at an implementation-defined
 /// granularity.
-pub struct ServerGameMap {
+///
+/// Type parameters:
+///     S: The locking backend to use. All gameplay usage currently uses
+///         `[crate::sync::DefaultRealBackend]` unconditionally. However, this is exposed
+///         for testing purposes, e.g.
+pub struct ServerGameMap<S: SyncBackend = DefaultSyncBackend> {
     game_state: Weak<GameState>,
     database: Arc<dyn GameDatabase>,
     // sharded 16 ways based on the coarse hash of the chunk
-    // Each one is 72 bytes, so we pad them out to a whole cacheline. This wastes a bit of space, unfortunately
-    // However, it means that one shard's lock control word isn't aliasing with the data of other shards.
-    live_chunks: [CachelineAligned<RwLock<MapShard>>; NUM_CHUNK_SHARDS],
+    live_chunks: [CachelineAligned<S::RwLock<MapShard<S>>>; NUM_CHUNK_SHARDS],
     block_type_manager: Arc<BlockTypeManager>,
     block_update_sender: broadcast::Sender<UpdateBroadcast>,
     writeback_senders: [mpsc::Sender<WritebackReq>; NUM_CHUNK_SHARDS],
@@ -925,24 +929,46 @@ pub struct ServerGameMap {
     early_shutdown: CancellationToken,
     // Writeback and cleanup
     shutdown: CancellationToken,
-    writeback_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
-    cleanup_handles: [Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
+    writeback_handles: [S::Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
+    cleanup_handles: [S::Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
 
-    prefetch_dispatch_task: Mutex<Option<JoinHandle<Result<()>>>>,
+    prefetch_dispatch_task: S::Mutex<Option<JoinHandle<Result<()>>>>,
     // Sender used to introduce new slots to the prefetcher. Rather than have
     // a separate tokio::sync::Notify to wake up the prefetcher when task lists are updated,
     // we piggyback this notification by passing None here
     prefetch_slot_sender: mpsc::Sender<Option<PrefetcherSlot>>,
 
-    timer_controller: Mutex<Option<TimerController>>,
+    timer_controller: S::Mutex<Option<TimerController<S>>>,
 }
-impl ServerGameMap {
+
+#[derive(Clone, Copy)]
+enum BackgroundTaskMode {
+    Enabled,
+    DisabledTestonly,
+}
+
+impl<S: SyncBackend> ServerGameMap<S> {
     pub(crate) fn new(
         game_state: Weak<GameState>,
         database: Arc<dyn GameDatabase>,
         block_type_manager: Arc<BlockTypeManager>,
         args: &ServerArgs,
-    ) -> Result<Arc<ServerGameMap>> {
+    ) -> Result<Arc<ServerGameMap<S>>> {
+        Self::new_with_background_tasks(
+            game_state,
+            database,
+            block_type_manager,
+            args,
+            BackgroundTaskMode::Enabled,
+        )
+    }
+    fn new_with_background_tasks(
+        game_state: Weak<GameState>,
+        database: Arc<dyn GameDatabase>,
+        block_type_manager: Arc<BlockTypeManager>,
+        args: &ServerArgs,
+        background_tasks: BackgroundTaskMode,
+    ) -> Result<Arc<ServerGameMap<S>>> {
         let (block_update_sender, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
         let mut writeback_senders = vec![];
         let mut writeback_receivers = vec![];
@@ -957,22 +983,22 @@ impl ServerGameMap {
         let cancellation = CancellationToken::new();
         let early_cancellation = CancellationToken::new();
 
-        let result = Arc::new(ServerGameMap {
+        let result = Arc::new(ServerGameMap::<S> {
             game_state: game_state.clone(),
             database: database.clone(),
             live_chunks: std::array::from_fn(|shard| {
-                CachelineAligned(RwLock::new(MapShard::new(shard)))
+                CachelineAligned(S::RwLock::new(MapShard::new(shard)))
             }),
             block_type_manager,
             block_update_sender,
             writeback_senders: writeback_senders.try_into().unwrap(),
             shutdown: cancellation.clone(),
             early_shutdown: early_cancellation.clone(),
-            writeback_handles: std::array::from_fn(|_| Mutex::new(None)),
-            cleanup_handles: std::array::from_fn(|_| Mutex::new(None)),
-            prefetch_dispatch_task: Mutex::new(None),
+            writeback_handles: std::array::from_fn(|_| S::Mutex::new(None)),
+            cleanup_handles: std::array::from_fn(|_| S::Mutex::new(None)),
+            prefetch_dispatch_task: S::Mutex::new(None),
             prefetch_slot_sender,
-            timer_controller: None.into(),
+            timer_controller: S::Mutex::new(None),
         });
         for (i, receiver) in writeback_receivers.into_iter().enumerate() {
             let game_state_clone = game_state.clone();
@@ -982,37 +1008,19 @@ impl ServerGameMap {
                 cancellation: cancellation.clone(),
                 shard_id: i,
             };
-            let writeback_handle = crate::spawn_async(
-                &format!("map_writeback_{}", i),
-                async move {
-                    let result = writeback.run_loop().await;
-                    match result {
-                        Ok(()) => {
-                            if !writeback.cancellation.is_cancelled() {
-                                tracing::error!(
-                                    "Map writeback for shard {} exited while map wasn't shut down.",
-                                    i
-                                );
-                            }
+            let writeback_handle =
+                crate::spawn_async(&format!("map_writeback_{}", i), async move {
+                    match background_tasks {
+                        BackgroundTaskMode::Enabled => {
+                            Self::real_writeback_task(i, game_state_clone, writeback).await
+                        }
+                        BackgroundTaskMode::DisabledTestonly => {
+                            Self::disabled_background_task(writeback.cancellation.clone()).await;
                             Ok(())
                         }
-                        Err(e) => {
-                            tracing::error!(
-                                "Map writeback for shard {} exited with an error: {:?}",
-                                i,
-                                e
-                            );
-                            if let Some(gs) = game_state_clone.upgrade() {
-                                gs.crash_shutdown(e);
-                            } else {
-                                tracing::error!("Game state is gone, cannot start crash shutdown. Did it shut down before us?")
-                            }
-                            bail!("Crash initiated");
-                        }
                     }
-                },
-            )?;
-            *result.writeback_handles[i].lock() = Some(writeback_handle);
+                })?;
+            *result.writeback_handles[i].lock().deref_mut() = Some(writeback_handle);
 
             let mut cache_cleanup = MapCacheCleanup {
                 map: result.clone(),
@@ -1022,29 +1030,13 @@ impl ServerGameMap {
 
             let game_state_clone = game_state.clone();
             let cleanup_handle = crate::spawn_async(&format!("map_cleanup_{}", i), async move {
-                let result = cache_cleanup.run_loop().await;
-                match result {
-                    Ok(()) => {
-                        if !cache_cleanup.cancellation.is_cancelled() {
-                            tracing::error!(
-                                "Map cache cleanup for shard {} exited while map wasn't shut down.",
-                                i
-                            );
-                        }
-                        Ok(())
+                match background_tasks {
+                    BackgroundTaskMode::Enabled => {
+                        Self::real_cleanup_task(i, cache_cleanup, game_state_clone).await
                     }
-                    Err(e) => {
-                        tracing::error!(
-                            "Map cache cleanup for shard {} exited with an error: {:?}",
-                            i,
-                            e
-                        );
-                        if let Some(gs) = game_state_clone.upgrade() {
-                            gs.crash_shutdown(e);
-                        } else {
-                            tracing::error!("Game state is gone, cannot start crash shutdown. Did it shut down before us?")
-                        }
-                        bail!("Crash initiated");
+                    BackgroundTaskMode::DisabledTestonly => {
+                        Self::disabled_background_task(cache_cleanup.cancellation.clone()).await;
+                        Ok(())
                     }
                 }
             })?;
@@ -1077,6 +1069,74 @@ impl ServerGameMap {
         *result.timer_controller.lock() = Some(timer_controller);
 
         Ok(result)
+    }
+
+    async fn real_cleanup_task(
+        shard: usize,
+        mut cache_cleanup: MapCacheCleanup<S>,
+        game_state_clone: Weak<GameState>,
+    ) -> Result<()> {
+        let result = cache_cleanup.run_loop().await;
+        match result {
+            Ok(()) => {
+                if !cache_cleanup.cancellation.is_cancelled() {
+                    tracing::error!(
+                        "Map cache cleanup for shard {} exited while map wasn't shut down.",
+                        shard
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Map cache cleanup for shard {} exited with an error: {:?}",
+                    shard,
+                    e
+                );
+                if let Some(gs) = game_state_clone.upgrade() {
+                    gs.crash_shutdown(e);
+                } else {
+                    tracing::error!("Game state is gone, cannot start crash shutdown. Did it shut down before us?")
+                }
+                bail!("Crash initiated");
+            }
+        }
+    }
+
+    async fn real_writeback_task(
+        shard: usize,
+        game_state_clone: Weak<GameState>,
+        mut writeback: GameMapWriteback<S>,
+    ) -> Result<()> {
+        let result = writeback.run_loop().await;
+        match result {
+            Ok(()) => {
+                if !writeback.cancellation.is_cancelled() {
+                    tracing::error!(
+                        "Map writeback for shard {} exited while map wasn't shut down.",
+                        shard
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Map writeback for shard {} exited with an error: {:?}",
+                    shard,
+                    e
+                );
+                if let Some(gs) = game_state_clone.upgrade() {
+                    gs.crash_shutdown(e);
+                } else {
+                    tracing::error!("Game state is gone, cannot start crash shutdown. Did it shut down before us?")
+                }
+                bail!("Crash initiated");
+            }
+        }
+    }
+
+    async fn disabled_background_task(cancellation: CancellationToken) {
+        cancellation.cancelled().await;
     }
 
     pub(crate) fn bump_chunk(&self, coord: ChunkCoordinate) -> bool {
@@ -1486,11 +1546,11 @@ impl ServerGameMap {
     /// Internal impl detail of mutate_block_atomically and timers
     fn mutate_block_atomically_locked<F, T>(
         &self,
-        holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerWriteGuard<'_>,
+        holder: &MapChunkHolder<S>,
+        chunk: &mut MapChunkInnerWriteGuard<'_, S>,
         coord: BlockCoordinate,
         mutator: F,
-        game_map: &ServerGameMap,
+        game_map: &ServerGameMap<S>,
     ) -> Result<(T, bool)>
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
@@ -1676,7 +1736,7 @@ impl ServerGameMap {
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
-    fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'_>> {
+    fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'_, S>> {
         tokio::task::block_in_place(|| {
             log_trace("get_chunk starting");
             let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
@@ -1738,7 +1798,7 @@ impl ServerGameMap {
                 // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
                 // they'll get an empty chunk holder and will wait for the condition variable to be signalled.
                 // When that thread waits on the condition variable, it atomically releases the inner lock.
-                let read_guard = RwLockWriteGuard::downgrade(write_guard);
+                let read_guard = S::RwLock::downgrade(write_guard);
                 log_trace("get_chunk downgraded write lock");
                 // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
                 let chunk_holder = read_guard.chunks.get(&coord).unwrap();
@@ -1781,7 +1841,7 @@ impl ServerGameMap {
         &self,
         coord: ChunkCoordinate,
         want_permit: bool,
-    ) -> Option<MapChunkOuterGuard<'_>> {
+    ) -> Option<MapChunkOuterGuard<'_, S>> {
         let shard = shard_id(coord);
         let mut permit = None;
         if want_permit {
@@ -1876,7 +1936,7 @@ impl ServerGameMap {
 
     fn unload_chunk_locked(
         &self,
-        lock: &mut RwLockWriteGuard<MapShard>,
+        lock: &mut S::WriteGuard<'_, MapShard<S>>,
         coord: ChunkCoordinate,
     ) -> Result<()> {
         let _span = span!("unload single chunk");
@@ -1928,7 +1988,7 @@ impl ServerGameMap {
         let _ = self.block_update_sender.send(UpdateBroadcast::Chunk(coord));
     }
     /// Enqueues this chunk to be written back to the database.
-    fn enqueue_writeback(&self, chunk: MapChunkOuterGuard<'_>) -> Result<()> {
+    fn enqueue_writeback(&self, chunk: MapChunkOuterGuard<'_, S>) -> Result<()> {
         if self.shutdown.is_cancelled() {
             return Err(Error::msg("Writeback thread was shut down"));
         }
@@ -2181,7 +2241,7 @@ impl ServerGameMap {
         }
     }
 }
-impl Drop for ServerGameMap {
+impl<S: SyncBackend> Drop for ServerGameMap<S> {
     fn drop(&mut self) {
         self.purge_and_flush();
         tracing::info!("ServerGameMap shut down");
@@ -2200,12 +2260,12 @@ const CACHE_CLEAN_INTERVAL: Duration = Duration::from_secs(3);
 const CACHE_CLEANUP_KEEP_N_RECENTLY_USED: usize = 0;
 const CACHE_CLEANUP_RELOCK_EVERY_N: usize = 32;
 
-struct MapCacheCleanup {
-    map: Arc<ServerGameMap>,
+struct MapCacheCleanup<S: SyncBackend> {
+    map: Arc<ServerGameMap<S>>,
     cancellation: CancellationToken,
     shard_id: usize,
 }
-impl MapCacheCleanup {
+impl<S: SyncBackend> MapCacheCleanup<S> {
     async fn run_loop(&mut self) -> Result<()> {
         let mut interval = tokio::time::interval(CACHE_CLEAN_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -2266,13 +2326,13 @@ const WRITEBACK_QUEUE_SIZE: usize = 256;
 const WRITEBACK_COALESCE_TIME: Duration = Duration::from_secs(3);
 const WRITEBACK_COALESCE_MAX_SIZE: usize = 256;
 
-struct GameMapWriteback {
-    map: Arc<ServerGameMap>,
+struct GameMapWriteback<S: SyncBackend> {
+    map: Arc<ServerGameMap<S>>,
     receiver: mpsc::Receiver<WritebackReq>,
     cancellation: CancellationToken,
     shard_id: usize,
 }
-impl GameMapWriteback {
+impl<S: SyncBackend> GameMapWriteback<S> {
     async fn run_loop(&mut self) -> Result<()> {
         while !self.cancellation.is_cancelled() {
             let writebacks = self.gather().await.unwrap();
@@ -2414,7 +2474,7 @@ impl GameMapWriteback {
         Some(dedup)
     }
 }
-impl Drop for GameMapWriteback {
+impl<S: SyncBackend> Drop for GameMapWriteback<S> {
     fn drop(&mut self) {
         self.cancellation.cancel()
     }
@@ -2478,9 +2538,9 @@ impl PrefetcherHandle {
     }
 }
 
-async fn run_prefetch_dispatch(
+async fn run_prefetch_dispatch<S: SyncBackend>(
     mut slot_receiver: mpsc::Receiver<Option<PrefetcherSlot>>,
-    map: Arc<ServerGameMap>,
+    map: Arc<ServerGameMap<S>>,
     concurrency: usize,
     cancellation: CancellationToken,
 ) {
@@ -3040,17 +3100,17 @@ impl GameMapTimer {
                     if upper_y == (lower_y + 1) {
                         // We can actually work on a chunk
                         if writeback_permit.is_none() {
-                            writeback_permit = Some(reacquire_writeback_permit(
-                                &game_state,
-                                coarse_shard,
-                                &mut read_lock,
+                            writeback_permit = Some(reacquire_writeback_permit::<
+                                DefaultSyncBackend,
+                            >(
+                                &game_state, coarse_shard, &mut read_lock
                             )?);
                         }
                         if writeback_permit2.is_none() {
-                            writeback_permit2 = Some(reacquire_writeback_permit(
-                                &game_state,
-                                coarse_shard,
-                                &mut read_lock,
+                            writeback_permit2 = Some(reacquire_writeback_permit::<
+                                DefaultSyncBackend,
+                            >(
+                                &game_state, coarse_shard, &mut read_lock
                             )?);
                         }
                         // Lock ordering: It's important that we lock these upper-to-lower
@@ -3271,14 +3331,14 @@ impl GameMapTimer {
         plot!("timer tick coords", coords.len() as f64);
         for (i, coord) in coords.into_iter().enumerate() {
             if writeback_permit.is_none() {
-                writeback_permit = Some(reacquire_writeback_permit(
+                writeback_permit = Some(reacquire_writeback_permit::<DefaultSyncBackend>(
                     &game_state,
                     coarse_shard,
                     &mut read_lock,
                 )?);
             } else if i % 100 == 0 {
                 let _span = span!("timer bumping");
-                RwLockReadGuard::bump(&mut read_lock);
+                parking_lot::RwLock::bump_read(&mut read_lock);
             }
             if let Some(chunk) = read_lock.chunks.get(&coord) {
                 if self.settings.ignore_block_type_presence_check
@@ -3310,7 +3370,7 @@ impl GameMapTimer {
     fn handle_chunk_no_neighbors(
         &self,
         coord: ChunkCoordinate,
-        holder: &MapChunkHolder,
+        holder: &MapChunkHolder<DefaultSyncBackend>,
         game_state: &Arc<GameState>,
         block_types: &FxHashSet<u32>,
         writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
@@ -3363,8 +3423,8 @@ impl GameMapTimer {
         &self,
         upper_coord: ChunkCoordinate,
         lower_coord: ChunkCoordinate,
-        upper_holder: &MapChunkHolder,
-        lower_holder: &MapChunkHolder,
+        upper_holder: &MapChunkHolder<DefaultSyncBackend>,
+        lower_holder: &MapChunkHolder<DefaultSyncBackend>,
         game_state: &Arc<GameState>,
         upper_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
         lower_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
@@ -3437,8 +3497,8 @@ impl GameMapTimer {
     fn run_per_block_handler(
         &self,
         game_state: &Arc<GameState>,
-        mut chunk: MapChunkInnerWriteGuard<'_>,
-        holder: &MapChunkHolder,
+        mut chunk: MapChunkInnerWriteGuard<'_, DefaultSyncBackend>,
+        holder: &MapChunkHolder<DefaultSyncBackend>,
         block_types: &FxHashSet<u32>,
         coord: ChunkCoordinate,
         state: &ShardState,
@@ -3473,12 +3533,12 @@ impl GameMapTimer {
         Ok(())
     }
 
-    fn run_per_block_callback(
+    fn run_per_block_callback<S: SyncBackend>(
         &self,
-        holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerWriteGuard<'_>,
+        holder: &MapChunkHolder<S>,
+        chunk: &mut MapChunkInnerWriteGuard<'_, S>,
         offset: ChunkOffset,
-        map: &ServerGameMap,
+        map: &ServerGameMap<S>,
         coord: ChunkCoordinate,
         game_state: &Arc<GameState>,
         state: &ShardState,
@@ -3526,11 +3586,11 @@ impl GameMapTimer {
         Ok(())
     }
 
-    fn run_bulk_handler(
+    fn run_bulk_handler<S: SyncBackend>(
         &self,
         game_state: &Arc<GameState>,
-        holder: &MapChunkHolder,
-        chunk: &mut MapChunkInnerWriteGuard<'_>,
+        holder: &MapChunkHolder<S>,
+        chunk: &mut MapChunkInnerWriteGuard<'_, S>,
         coord: ChunkCoordinate,
         neighbor_data: Option<&ChunkNeighbors>,
         light_data: Option<&LightScratchpad>,
@@ -3592,7 +3652,7 @@ impl GameMapTimer {
         &self,
         neighbor_data: &mut Option<ChunkNeighbors>,
         center_coord: ChunkCoordinate,
-        game_map: &ServerGameMap,
+        game_map: &ServerGameMap<impl SyncBackend>,
         copy_data: bool,
     ) -> Result<(bool, Option<Instant>)> {
         let neighbor_data = neighbor_data.get_or_insert_with(Default::default);
@@ -3652,11 +3712,11 @@ impl GameMapTimer {
         Ok((any_blooms_match, update_times.into_iter().max()))
     }
 
-    fn reconcile_after_bulk_handler(
+    fn reconcile_after_bulk_handler<S: SyncBackend>(
         &self,
         old_block_ids: &[u32; _MAX_OFFSET],
-        chunk: &mut MapChunkInnerWriteGuard<'_>,
-        holder: &MapChunkHolder,
+        chunk: &mut MapChunkInnerWriteGuard<'_, S>,
+        holder: &MapChunkHolder<S>,
         game_state: &Arc<GameState>,
         coord: ChunkCoordinate,
         permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
@@ -3727,10 +3787,10 @@ impl GameMapTimer {
 
 const AGGREGATE_UPDATES_THRESHOLD: usize = 128;
 
-fn reacquire_writeback_permit<'a, 'b>(
+fn reacquire_writeback_permit<'a, 'b, S: SyncBackend>(
     game_state: &'a Arc<GameState>,
     coarse_shard: usize,
-    read_lock: &mut RwLockReadGuard<'_, MapShard>,
+    read_lock: &mut S::ReadGuard<'_, MapShard<S>>,
 ) -> Result<mpsc::Permit<'b, WritebackReq>, Error>
 where
     'a: 'b,
@@ -3743,20 +3803,20 @@ where
     } else {
         // We need to release the read lock to get a permit, as the writeback thread needs to get a write lock
         // to make progress.
-        let permit_or = RwLockReadGuard::unlocked(read_lock, || {
+        let permit_or = S::RwLock::reader_unlocked(read_lock, || {
             game_state.game_map().get_writeback_permit(coarse_shard)
         });
         Ok(permit_or?)
     }
 }
 
-struct TimerController {
-    map: Arc<ServerGameMap>,
+struct TimerController<S: SyncBackend> {
+    map: Arc<ServerGameMap<S>>,
     game_state: Weak<GameState>,
     cancellation: CancellationToken,
     timers: FxHashMap<String, Arc<GameMapTimer>>,
 }
-impl TimerController {
+impl<S: SyncBackend> TimerController<S> {
     async fn shutdown(&self) -> Result<()> {
         self.cancellation.cancel();
         for timer in self.timers.values() {
@@ -3790,7 +3850,7 @@ impl TimerController {
     }
 }
 
-impl ServerGameMap {
+impl<S: SyncBackend> ServerGameMap<S> {
     /// Registers a timer to run on the map with the specified settings.
     pub fn register_timer(
         &self,
@@ -3888,3 +3948,5 @@ mod tests {
             .unwrap();
     }
 }
+
+mod loom_tests;

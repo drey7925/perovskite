@@ -60,6 +60,7 @@ use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
 use crate::media::MediaManager;
 use crate::network_server::auth::AuthService;
 use crate::server::ServerArgs;
+use crate::sync::{DefaultSyncBackend, SyncBackend};
 
 /// The main struct representing a Perovskite server.
 ///
@@ -75,7 +76,7 @@ pub struct GameState {
     /// The path to the directory where the server's data is stored.
     data_dir: PathBuf,
     /// The map for the server.
-    map: Arc<ServerGameMap>,
+    map: Arc<ServerGameMap<DefaultSyncBackend>>,
     /// The map generator for the server.
     mapgen: Arc<dyn MapgenInterface>,
     /// The database for the server. Access to map, inventory, or player data should be done through\
@@ -165,11 +166,11 @@ impl GameState {
     }
 
     /// Gets the map for this game.
-    pub fn game_map(&self) -> &ServerGameMap {
+    pub fn game_map(&self) -> &ServerGameMap<DefaultSyncBackend> {
         self.map.as_ref()
     }
 
-    pub(crate) fn game_map_clone(&self) -> Arc<ServerGameMap> {
+    pub(crate) fn game_map_clone(&self) -> Arc<ServerGameMap<DefaultSyncBackend>> {
         self.map.clone()
     }
 
