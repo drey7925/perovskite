@@ -8,7 +8,7 @@ use perovskite_core::coordinates::BlockCoordinate;
 use std::sync::Arc;
 
 #[test]
-fn test_concurrent_logic() {
+fn test_load_store() {
     let server = Arc::new(testonly_in_memory().unwrap());
 
     let loom_map_backing_store = Arc::new(InMemGameDatabase::new());
@@ -52,9 +52,17 @@ fn test_concurrent_logic() {
                 threads.push(loom::thread::spawn(move || {
                     for _ in 0..2 {
                         let block = map.get_block(BlockCoordinate::new(0, 0, 0)).unwrap();
-                        assert!(block.0 >= 0 && block.0 <= 4);
+                        if block.0 > 4 {
+                            panic!("block was {}", block.0);
+                        }
                     }
                 }));
+
+                let map = loom_map.clone();
+                threads.push(loom::thread::spawn(move || {
+                    map.purge_and_flush();
+                }));
+
                 for thread in threads {
                     thread.join().unwrap();
                 }
