@@ -131,8 +131,9 @@ pub(crate) type ChunkDashmap = DashMap<ChunkCoordinate, Arc<ClientChunk>, FxBuil
 /// A non-dashmapped version of the chunk map, used for non-concurrent cases like passing
 /// chunks to the raytracer
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
-pub(crate) type LightColumnDashmap = DashMap<(i32, i32), ChunkColumn, FxBuildHasher>;
-pub(crate) type LightColumnMap = FxHashMap<(i32, i32), ChunkColumn>;
+pub(crate) type LightColumnDashmap =
+    DashMap<(i32, i32), ChunkColumn<DefaultSyncBackend>, FxBuildHasher>;
+pub(crate) type LightColumnMap = FxHashMap<(i32, i32), ChunkColumn<DefaultSyncBackend>>;
 pub(crate) struct ChunkManager {
     chunks: ChunkDashmap,
     renderable_chunks: ChunkDashmap,
@@ -1062,6 +1063,7 @@ use crate::audio::MapSoundState;
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use perovskite_core::protocol::blocks::{self as blocks_proto, CubeVariantEffect};
 use perovskite_core::protocol::map::ClientExtendedData;
+use perovskite_core::sync::DefaultSyncBackend;
 
 pub(crate) fn make_fallback_blockdef() -> blocks_proto::BlockTypeDef {
     blocks_proto::BlockTypeDef {
