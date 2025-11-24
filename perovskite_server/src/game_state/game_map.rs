@@ -592,7 +592,7 @@ struct MapChunkInnerWriteGuard<'a, S: SyncBackend> {
 impl<'a, S: SyncBackend> MapChunkInnerWriteGuard<'a, S> {
     fn downgrade(self) -> MapChunkInnerReadGuard<'a, S> {
         MapChunkInnerReadGuard {
-            guard: S::RwLock::downgrade(self.guard),
+            guard: S::RwLock::downgrade_writer(self.guard),
         }
     }
 
@@ -679,7 +679,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
     /// Get the chunk, blocking until it's loaded
     fn wait_and_get_for_read(&self) -> Result<MapChunkInnerReadGuard<'_, S>> {
         tokio::task::block_in_place(|| {
-            let mut guard = self.chunk.read();
+            let mut guard = self.chunk.lock_read();
             let _span = span!("wait_and_get");
             loop {
                 match &*guard {
@@ -699,7 +699,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
     fn try_get_read(&self) -> Result<Option<MapChunkInnerReadGuard<'_, S>>> {
         tokio::task::block_in_place(|| {
-            let guard = self.chunk.read();
+            let guard = self.chunk.lock_read();
             match &*guard {
                 HolderState::Empty => Ok(None),
                 HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
@@ -711,7 +711,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
     /// Get the chunk, blocking until it's loaded
     fn wait_and_get_for_write(&self) -> Result<MapChunkInnerWriteGuard<'_, S>> {
         tokio::task::block_in_place(|| {
-            let mut guard = self.chunk.write();
+            let mut guard = self.chunk.lock_write();
             let _span = span!("wait_and_get");
             loop {
                 match &*guard {
@@ -729,7 +729,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
     fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_, S>>> {
         tokio::task::block_in_place(|| {
-            let guard = self.chunk.write();
+            let guard = self.chunk.lock_write();
             match &*guard {
                 HolderState::Empty => Ok(None),
                 HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
@@ -760,7 +760,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
             }
         }
         let _span = span!("game_map waiting to fill chunk");
-        let mut guard = self.chunk.write();
+        let mut guard = self.chunk.lock_write();
         assert!(matches!(*guard, HolderState::Empty));
 
         self.fill_lighting_for_load(&chunk, light_columns, block_types);
@@ -835,7 +835,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
 
     /// Set the chunk to an error, and notify any waiting threads so they can propagate the error
     fn set_err(&self, err: Error) {
-        let mut guard = self.chunk.write();
+        let mut guard = self.chunk.lock_write();
         assert!(matches!(*guard, HolderState::Empty));
         *guard = HolderState::Err(err);
         self.condition.notify_all();
@@ -1143,7 +1143,11 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
     pub(crate) fn bump_chunk(&self, coord: ChunkCoordinate) -> bool {
         let _span = span!("bump_access_time");
-        if let Some(chunk) = self.live_chunks[shard_id(coord)].read().chunks.get(&coord) {
+        if let Some(chunk) = self.live_chunks[shard_id(coord)]
+            .lock_read()
+            .chunks
+            .get(&coord)
+        {
             chunk.bump_access_time();
             true
         } else {
@@ -1748,7 +1752,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             let result = loop {
                 let read_guard = {
                     let _span = span!("acquire game_map read lock");
-                    self.live_chunks[shard].read()
+                    self.live_chunks[shard].lock_read()
                 };
                 log_trace("get_chunk acquired read lock");
                 // All good. The chunk is loaded.
@@ -1774,7 +1778,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 // This can't be done with an upgradable lock due to a deadlock risk.
                 let mut write_guard = {
                     let _span = span!("acquire game_map write lock");
-                    self.live_chunks[shard].write()
+                    self.live_chunks[shard].lock_write()
                 };
                 log_trace("get_chunk acquired write lock");
                 if write_guard.chunks.contains_key(&coord) {
@@ -1800,7 +1804,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
                 // they'll get an empty chunk holder and will wait for the condition variable to be signalled.
                 // When that thread waits on the condition variable, it atomically releases the inner lock.
-                let read_guard = S::RwLock::downgrade(write_guard);
+                let read_guard = S::RwLock::downgrade_writer(write_guard);
                 log_trace("get_chunk downgraded write lock");
                 // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
                 let chunk_holder = read_guard.chunks.get(&coord).unwrap();
@@ -1856,7 +1860,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 }
             }
         }
-        let guard = self.live_chunks[shard].read();
+        let guard = self.live_chunks[shard].lock_read();
         // We need this check - if the chunk isn't in memory, we cannot construct a MapChunkOuterGuard for it
         // (unwrapping will panic)
         //
@@ -2143,7 +2147,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// FR instead of using this function.
     pub fn purge_and_flush(&self) {
         for shard in 0..NUM_CHUNK_SHARDS {
-            let mut lock = self.live_chunks[shard].write();
+            let mut lock = self.live_chunks[shard].lock_write();
             let coords: Vec<_> = lock.chunks.keys().copied().collect();
             info!(
                 "ServerGameMap shard {} being flushed: Writing back {} chunks",
@@ -2180,7 +2184,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     pub(crate) fn debug_shard_sizes(&self) -> [usize; NUM_CHUNK_SHARDS] {
         let mut result = [0; NUM_CHUNK_SHARDS];
         for i in 0..NUM_CHUNK_SHARDS {
-            result[i] = self.live_chunks[i].read().chunks.len();
+            result[i] = self.live_chunks[i].lock_read().chunks.len();
         }
         result
     }
@@ -2291,7 +2295,7 @@ impl<S: SyncBackend, L: SyncBackend> MapCacheCleanup<S, L> {
             let now = Instant::now();
             let mut lock = {
                 let _span = span!("game_map cleanup write lock");
-                self.map.live_chunks[self.shard_id].write()
+                self.map.live_chunks[self.shard_id].lock_write()
             };
             if lock.chunks.len() <= CACHE_CLEANUP_KEEP_N_RECENTLY_USED {
                 return Ok(());
@@ -3670,7 +3674,7 @@ impl GameMapTimer {
             for cz in -1..=1 {
                 for cy in -1..=1 {
                     if let Some(neighbor_coord) = center_coord.try_delta(cx, cy, cz) {
-                        let shard = game_map.live_chunks[shard_id(neighbor_coord)].read();
+                        let shard = game_map.live_chunks[shard_id(neighbor_coord)].lock_read();
                         if let Some(neighbor_holder) = shard.chunks.get(&neighbor_coord) {
                             if self.settings.block_types.iter().any(|x| {
                                 neighbor_holder

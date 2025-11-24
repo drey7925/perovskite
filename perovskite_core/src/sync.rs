@@ -53,10 +53,10 @@ pub trait GenericMutex<T, S: SyncBackend> {
     fn into_inner(self) -> T;
 }
 pub trait GenericRwLock<T, S: SyncBackend> {
-    fn read(&self) -> S::ReadGuard<'_, T>;
-    fn write(&self) -> S::WriteGuard<'_, T>;
+    fn lock_read(&self) -> S::ReadGuard<'_, T>;
+    fn lock_write(&self) -> S::WriteGuard<'_, T>;
     fn new(t: T) -> Self;
-    fn downgrade<'a>(guard: S::WriteGuard<'a, T>) -> S::ReadGuard<'a, T>
+    fn downgrade_writer<'a>(guard: S::WriteGuard<'a, T>) -> S::ReadGuard<'a, T>
     where
         T: 'a;
     fn reader_unlocked<R, F: FnOnce() -> R>(guard: &mut S::ReadGuard<'_, T>, f: F) -> R;
@@ -102,11 +102,11 @@ mod parking_lot {
 
     impl<T> GenericRwLock<T, ParkingLotBackend> for parking_lot::RwLock<T> {
         #[inline]
-        fn read(&self) -> parking_lot::RwLockReadGuard<'_, T> {
+        fn lock_read(&self) -> parking_lot::RwLockReadGuard<'_, T> {
             parking_lot::RwLock::read(self)
         }
         #[inline]
-        fn write(&self) -> parking_lot::RwLockWriteGuard<'_, T> {
+        fn lock_write(&self) -> parking_lot::RwLockWriteGuard<'_, T> {
             parking_lot::RwLock::write(self)
         }
         #[inline]
@@ -114,7 +114,7 @@ mod parking_lot {
             parking_lot::RwLock::new(t)
         }
         #[inline]
-        fn downgrade<'a>(
+        fn downgrade_writer<'a>(
             guard: parking_lot::RwLockWriteGuard<'a, T>,
         ) -> parking_lot::RwLockReadGuard<'a, T>
         where
@@ -238,7 +238,7 @@ mod loom {
     impl<T> GenericRwLock<T, LoomBackend> for loom::sync::RwLock<T> {
         #[inline]
         #[track_caller]
-        fn read(&self) -> RwLockReadGuard<'_, T> {
+        fn lock_read(&self) -> RwLockReadGuard<'_, T> {
             RwLockReadGuard {
                 inner: loom::sync::RwLock::read(self).unwrap(),
                 lock: self,
@@ -246,7 +246,7 @@ mod loom {
         }
         #[inline]
         #[track_caller]
-        fn write(&self) -> RwLockWriteGuard<'_, T> {
+        fn lock_write(&self) -> RwLockWriteGuard<'_, T> {
             RwLockWriteGuard {
                 inner: loom::sync::RwLock::write(self).unwrap(),
                 lock: &self,
@@ -259,7 +259,7 @@ mod loom {
         }
         #[inline]
         #[track_caller]
-        fn downgrade<'a>(mut guard: RwLockWriteGuard<'a, T>) -> RwLockReadGuard<'a, T>
+        fn downgrade_writer<'a>(mut guard: RwLockWriteGuard<'a, T>) -> RwLockReadGuard<'a, T>
         where
             T: 'a,
         {

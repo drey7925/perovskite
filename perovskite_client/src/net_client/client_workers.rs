@@ -764,6 +764,8 @@ impl InboundContext {
                     self.enqueue_for_nprop(coord);
 
                     for i in -1..=1 {
+                        // this loop is almost certainly wrong, but I can't actually cause the bug
+                        // during playtesting. TODO fix.
                         for j in (-1 - extra_chunks as i32)..=1 {
                             for k in -1..=1 {
                                 if let Some(neighbor) = coord.try_delta(i, j, k) {

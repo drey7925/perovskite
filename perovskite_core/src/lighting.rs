@@ -1,5 +1,8 @@
 //! Implementation details of light propagation that need to be shared between the client and server
 //! The only type interesting to plugins (for now) is [LightScratchpad]
+
+mod tests;
+
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
 use bitvec::field::BitField;
@@ -12,7 +15,7 @@ use std::{collections::BTreeMap, sync::atomic::AtomicUsize};
 
 /// A 256-bit bitfield indicating what XZ positions within a chunk. This requires mutable
 /// access to modify, but does not entail atomic or mutex operations.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lightfield {
     // usize should match the native register size which will make it easier to
     // translate this to atomics in the future, if necessary.
@@ -20,19 +23,23 @@ pub struct Lightfield {
 }
 
 impl Lightfield {
+    #[inline]
     pub const fn zero() -> Self {
         Lightfield {
             data: bv::BitArray::ZERO,
         }
     }
+    #[inline]
     pub fn all_on() -> Self {
         !Lightfield {
             data: bv::BitArray::ZERO,
         }
     }
+    #[inline]
     pub fn any_set(&self) -> bool {
         self.data.any()
     }
+    #[inline]
     pub fn serialize(&self) -> [u32; 8] {
         [
             self.data[0..31].load_le(),
@@ -59,9 +66,11 @@ impl Lightfield {
         Lightfield { data }
     }
 
+    #[inline(always)]
     pub fn set(&mut self, x: u8, z: u8, arg: bool) {
         self.data.set((x as usize) * 16 + (z as usize), arg);
     }
+    #[inline(always)]
     pub fn get(&self, x: u8, z: u8) -> bool {
         self.data[(x as usize) * 16 + (z as usize)]
     }
@@ -183,6 +192,11 @@ impl<S: SyncBackend> ChunkColumn<S> {
         self.cursor_out_of(*self.present.last_key_value()?.0)
     }
 
+    /// Returns a cursor out of the first possible chunk, into the second chunk.
+    pub fn cursor_into_first(&self) -> Option<ChunkColumnCursor<'_, S>> {
+        Some(self.cursor_into(*self.present.last_key_value()?.0))
+    }
+
     /// Returns the incoming light for the given chunk.
     /// Takes a short-lived read lock.
     pub fn get_incoming_light(&self, y: i32) -> Option<Lightfield> {
@@ -247,16 +261,13 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
             .map_or(Lightfield::all_on(), |x| x.outgoing());
         loop {
             // We should have advanced into a chunk with valid lighting.
-            // However - this is not always true. We may enter a chunk that's undergoing a deferred load,
-            // and we do not have valid lighting for it yet. However, once it loads it'll fix up light anyway,
+            // However, this is not always true. We may enter a chunk undergoing a deferred load,
+            // and we do not have valid lighting for it yet. However, once it loads, it'll fix up light anyway,
             // so this is of no concern.
             //
             // This assertion has not tripped for any other reason yet. To be safe, we'll log it.
             //
             // assert!(self.current.valid);
-            if !self.current.valid {
-                eprintln!("WARNING: Lightfield has no valid lighting. This is normal under high contention and deferred loading, but may signal a bug in other cases.");
-            }
 
             let old_outgoing = self.current.outgoing();
             self.current.incoming = prev_outgoing;
