@@ -190,6 +190,9 @@ mod loom {
     use std::ops::{Deref, DerefMut};
     use std::process::abort;
 
+    /// A sync backend that is implemented using loom mocks. Unlike other crates, this is
+    /// not driven by a cargo feature - we may have tests that want to mock only certain
+    /// layers of concurrency with loom.
     pub struct LoomBackend;
 
     pub struct RwLockWriteGuard<'a, T: 'a> {

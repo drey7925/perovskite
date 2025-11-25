@@ -99,6 +99,32 @@ fn loom_test_concurrently_insert_remove() {
         }));
         let cc = col.clone();
         threads.push(loom::thread::spawn(move || {
+            let mut ccl = cc.lock_write();
+            ccl.insert_empty(4);
+            let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
+            let mut cursor = ccl.cursor_into(4);
+            *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8);
+            cursor.mark_valid();
+            cursor.propagate_lighting();
+            // cursor dropped here
+            drop(ccl);
+
+            let mut ccl = cc.lock_write();
+            ccl.remove(4);
+            drop(ccl);
+            let mut ccl = cc.lock_write();
+
+            ccl.insert_empty(4);
+            let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
+            let mut cursor = ccl.cursor_into(4);
+            *cursor.current_occlusion_mut() = lf(7) | lf(8);
+            cursor.mark_valid();
+            cursor.propagate_lighting();
+            // cursor dropped here
+            drop(ccl);
+        }));
+        let cc = col.clone();
+        threads.push(loom::thread::spawn(move || {
             let mut cc = cc.lock_write();
             cc.insert_empty(7);
             let cc = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(cc);
@@ -122,7 +148,7 @@ fn loom_test_concurrently_insert_remove() {
 
         assert_eq!(
             col.get_incoming_light(1),
-            Some(Lightfield::all_on() & !(lf(1) | lf(3) | lf(4) | lf(5) | lf(6) | lf(7)))
+            Some(Lightfield::all_on() & !(lf(1) | lf(3) | lf(4) | lf(5) | lf(6) | lf(7) | lf(8)))
         );
     });
 }

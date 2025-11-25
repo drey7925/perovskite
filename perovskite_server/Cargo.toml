@@ -56,7 +56,6 @@ arc-swap = "1.7.1"
 seqlock = "0.2.0"
 loom = { version = "0.7.2", features = ["default", "checkpoint"] }
 scopeguard = "1.2.0"
-
 [build-dependencies]
 rustc_version = "0.4.1"
 
@@ -64,7 +63,6 @@ rustc_version = "0.4.1"
 default = []
 deadlock_detection = ["parking_lot/deadlock_detection"]
 db_failure_injection = []
-
 # Performance tracing
 tracy = ["tracy-client/enable"]
 
