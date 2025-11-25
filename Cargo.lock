@@ -3736,6 +3736,7 @@ dependencies = [
  "bytemuck",
  "cgmath",
  "generic-array",
+    "log",
  "loom",
  "opaque-ke",
  "parking_lot",

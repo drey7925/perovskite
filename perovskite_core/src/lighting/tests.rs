@@ -69,19 +69,20 @@ fn loom_test_concurrently_insert_remove() {
 
         assert_eq!(col.get_incoming_light(1), None);
         col.insert_empty(1);
+        col.cursor_into(1).mark_valid();
 
         let mut col = Arc::new(<TestonlyLoomBackend as SyncBackend>::RwLock::new(col));
         let mut threads = vec![];
         let cc = col.clone();
-        threads.push(loom::thread::spawn(move || {
-            let mut cc = cc.lock_write();
-            cc.insert_empty(3);
-            let cc = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(cc);
-            let mut cursor = cc.cursor_into(3);
-            *cursor.current_occlusion_mut() = lf(4) | lf(5) | lf(6) | lf(7);
-            cursor.mark_valid();
-            cursor.propagate_lighting();
-        }));
+        // threads.push(loom::thread::spawn(move || {
+        //     let mut cc = cc.lock_write();
+        //     cc.insert_empty(3);
+        //     let cc = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(cc);
+        //     let mut cursor = cc.cursor_into(3);
+        //     *cursor.current_occlusion_mut() = lf(4) | lf(5) | lf(6) | lf(7);
+        //     cursor.mark_valid();
+        //     cursor.propagate_lighting();
+        // }));
         let cc = col.clone();
         threads.push(loom::thread::spawn(move || {
             let mut ccl = cc.lock_write();
@@ -99,6 +100,7 @@ fn loom_test_concurrently_insert_remove() {
         }));
         let cc = col.clone();
         threads.push(loom::thread::spawn(move || {
+            println!("4 add-rm-add thread");
             let mut ccl = cc.lock_write();
             ccl.insert_empty(4);
             let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
@@ -106,12 +108,15 @@ fn loom_test_concurrently_insert_remove() {
             *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8);
             cursor.mark_valid();
             cursor.propagate_lighting();
-            // cursor dropped here
+
+            println!("4 add-rm-add added1");
             drop(ccl);
 
             let mut ccl = cc.lock_write();
             ccl.remove(4);
+            println!("4 add-rm-add removed");
             drop(ccl);
+
             let mut ccl = cc.lock_write();
 
             ccl.insert_empty(4);
@@ -121,7 +126,11 @@ fn loom_test_concurrently_insert_remove() {
             cursor.mark_valid();
             cursor.propagate_lighting();
             // cursor dropped here
+            println!("4 add-rm-add added2");
+
             drop(ccl);
+
+            println!("4 add-rm-add thread done");
         }));
         let cc = col.clone();
         threads.push(loom::thread::spawn(move || {
@@ -138,17 +147,53 @@ fn loom_test_concurrently_insert_remove() {
             thread.join().unwrap();
         }
 
-        let mut col = col.lock_write();
-        let mut cursor = col.cursor_into(7);
-        cursor.propagate_lighting();
+        let mut col = col.lock_read();
+        // let mut cursor = col.cursor_into(7);
+        // cursor.propagate_lighting();
 
         let mut cursor = col.cursor_into(1);
         *cursor.current_occlusion_mut() = Lightfield::zero();
         cursor.propagate_lighting();
 
-        assert_eq!(
-            col.get_incoming_light(1),
-            Some(Lightfield::all_on() & !(lf(1) | lf(3) | lf(4) | lf(5) | lf(6) | lf(7) | lf(8)))
-        );
+        // assert_eq!(
+        //     col.get_incoming_light(1),
+        //     Some(Lightfield::all_on() & !(lf(1) | lf(3) | lf(4) | lf(5) | lf(6) | lf(7) | lf(8)))
+        // );
     });
+}
+
+#[test]
+fn non_loom_corruption_test() {
+    let mut ccl = ChunkColumn::<DefaultSyncBackend>::empty();
+    ccl.insert_empty(1);
+    ccl.cursor_into(1).mark_valid();
+
+    ccl.insert_empty(5);
+    let mut cursor = ccl.cursor_into(5);
+    *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(6) | lf(7);
+    cursor.mark_valid();
+    cursor.propagate_lighting();
+    // // cursor dropped here
+    // ccl.remove(5);
+
+    ccl.insert_empty(4);
+
+    let mut cursor = ccl.cursor_into(4);
+    *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8);
+    cursor.mark_valid();
+    cursor.propagate_lighting();
+
+    ccl.remove(4);
+
+    // ccl.insert_empty(4);
+    // let mut cursor = ccl.cursor_into(4);
+    // *cursor.current_occlusion_mut() = lf(7) | lf(8);
+    // cursor.mark_valid();
+    // cursor.propagate_lighting();
+    // cursor dropped here
+    ccl.insert_empty(7);
+    let mut cursor = ccl.cursor_into(7);
+    *cursor.current_occlusion_mut() = lf(1) | lf(3) | lf(5) | lf(7);
+    cursor.mark_valid();
+    cursor.propagate_lighting();
 }

@@ -143,6 +143,7 @@ impl<S: SyncBackend> ChunkColumn<S> {
 
     /// Removes an entry, panics if the chunk is not present.
     pub fn remove(&mut self, chunk_y: i32) {
+        println!("remove {chunk_y}");
         assert!(self.present.remove(&chunk_y).is_some());
     }
 
@@ -249,6 +250,10 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
     }
 
     pub fn propagate_lighting(mut self) -> usize {
+        println!(
+            "ChunkColumnCursor::propagate_lighting start {:?} -> {}",
+            self.prev_pos, self.current_pos
+        );
         // prev_diff is used only for checking an invariant; we can remove it once we're sure that the
         // algorithm is correct
         let mut prev_diff = Lightfield::all_on();
@@ -260,6 +265,12 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
             .as_ref()
             .map_or(Lightfield::all_on(), |x| x.outgoing());
         loop {
+            println!(
+                "ChunkColumnCursor::propagate_lighting {:?} -> {}. Current valid? {}",
+                self.prev_pos,
+                self.current_pos,
+                self.current_valid()
+            );
             // We should have advanced into a chunk with valid lighting.
             // However, this is not always true. We may enter a chunk undergoing a deferred load,
             // and we do not have valid lighting for it yet. However, once it loads, it'll fix up light anyway,
