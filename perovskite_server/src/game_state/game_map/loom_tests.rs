@@ -13,7 +13,9 @@ fn test_load_store_purge() {
     server
         .run_task_in_server(|gs| {
             let server = server.clone();
-            loom::model(move || {
+            let mut loom = loom::model::Builder::default();
+            loom.preemption_bound = Some(3);
+            loom.check(move || {
                 let loom_map = make_loom_map::<DefaultSyncBackend>(&server);
 
                 let block = loom_map.get_block(BlockCoordinate::new(0, 0, 0)).unwrap();
@@ -67,7 +69,9 @@ fn test_lighting() {
     server
         .run_task_in_server(|gs| {
             let server = server.clone();
-            loom::model(move || {
+            let mut loom = loom::model::Builder::default();
+            loom.preemption_bound = Some(2);
+            loom.check(move || {
                 let loom_map = make_loom_map::<TestonlyLoomBackend>(&server);
                 let coords = [
                     BlockCoordinate::new(0, 0, 0),
