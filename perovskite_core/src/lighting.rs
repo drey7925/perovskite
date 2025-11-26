@@ -135,6 +135,8 @@ impl<S: SyncBackend> ChunkColumn<S> {
             .present
             .insert(chunk_y, S::Mutex::new(ChunkLightingState::empty()))
             .is_none());
+        let mut cur = self.cursor_into(chunk_y);
+        cur.step_lighting();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -143,8 +145,28 @@ impl<S: SyncBackend> ChunkColumn<S> {
 
     /// Removes an entry, panics if the chunk is not present.
     pub fn remove(&mut self, chunk_y: i32) {
-        println!("remove {chunk_y}");
+        #[cfg(test)]
+        {
+            // println!("remove {chunk_y}");
+        }
         assert!(self.present.remove(&chunk_y).is_some());
+        let predecessor = self.present.range(chunk_y..).next();
+        let predecessor_lock = predecessor.map(|x| x.1.lock());
+        let successor = self.present.range(..chunk_y).next_back();
+        if let Some(successor) = successor {
+            let successor_lock = successor.1.lock();
+            ChunkColumnCursor::<S> {
+                generation: self
+                    .generation
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                map: &self.present,
+                current_pos: *successor.0,
+                prev_pos: predecessor.map(|x| *x.0),
+                previous: predecessor_lock,
+                current: successor_lock,
+            }
+            .propagate_lighting();
+        }
     }
 
     /// Returns a cursor that starts in a state where it can propagate light *into* the given chunk
@@ -249,14 +271,27 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
         self.prev_pos
     }
 
+    pub fn step_lighting(&mut self) {
+        // #[cfg(test)] {
+        //     println!("step_lighting {:?} -> {:?}", self.prev_pos, self.current_pos);
+        // }
+        let prev_outgoing = self
+            .previous
+            .as_ref()
+            .map_or(Lightfield::all_on(), |x| x.outgoing());
+        self.current.incoming = prev_outgoing;
+    }
+
     pub fn propagate_lighting(mut self) -> usize {
-        println!(
-            "ChunkColumnCursor::propagate_lighting start {:?} -> {}",
-            self.prev_pos, self.current_pos
-        );
+        // #[cfg(test)] {
+        //     println!(
+        //         "ChunkColumnCursor::propagate_lighting start {:?} -> {}",
+        //         self.prev_pos, self.current_pos
+        //     );
+        // }
         // prev_diff is used only for checking an invariant; we can remove it once we're sure that the
         // algorithm is correct
-        let mut prev_diff = Lightfield::all_on();
+        // let mut prev_diff = Lightfield::all_on();
 
         let mut counter = 0;
         // The light being transferred from one chunk to the next
@@ -265,12 +300,14 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
             .as_ref()
             .map_or(Lightfield::all_on(), |x| x.outgoing());
         loop {
-            println!(
-                "ChunkColumnCursor::propagate_lighting {:?} -> {}. Current valid? {}",
-                self.prev_pos,
-                self.current_pos,
-                self.current_valid()
-            );
+            // #[cfg(test)] {
+            //     println!(
+            //         "ChunkColumnCursor::propagate_lighting {:?} -> {}. Current valid? {}",
+            //         self.prev_pos,
+            //         self.current_pos,
+            //         self.current_valid()
+            //     );
+            // }
             // We should have advanced into a chunk with valid lighting.
             // However, this is not always true. We may enter a chunk undergoing a deferred load,
             // and we do not have valid lighting for it yet. However, once it loads, it'll fix up light anyway,
@@ -293,17 +330,19 @@ impl<'a, S: SyncBackend> ChunkColumnCursor<'a, S> {
             if counter > 0 && !outgoing_diffs.any_set() {
                 break;
             }
-            if (outgoing_diffs & !prev_diff).any_set() {
-                eprintln!("Lightfield invariant violated");
-                eprintln!("Prev diff: {:?}", prev_diff);
-                eprintln!("mismatch: {:?}", outgoing_diffs & !prev_diff);
-                panic!();
-            }
-            prev_diff = if counter > 0 {
-                outgoing_diffs
-            } else {
-                Lightfield::all_on()
-            };
+            // This is not actually an invariant. we could hit an out-of-date chunk that never had
+            // lighting propagated after an edit.
+            // if (outgoing_diffs & !prev_diff).any_set() {
+            //     eprintln!("Lightfield invariant violated");
+            //     eprintln!("Prev diff: {:?}", prev_diff);
+            //     eprintln!("mismatch: {:?}", outgoing_diffs & !prev_diff);
+            //     panic!();
+            // }
+            // prev_diff = if counter > 0 {
+            //     outgoing_diffs
+            // } else {
+            //     Lightfield::all_on()
+            // };
             prev_outgoing = new_outgoing;
 
             self = match self.advance() {

@@ -100,21 +100,21 @@ fn loom_test_concurrently_insert_remove() {
         }));
         let cc = col.clone();
         threads.push(loom::thread::spawn(move || {
-            println!("4 add-rm-add thread");
+            // println!("4 add-rm-add thread");
             let mut ccl = cc.lock_write();
             ccl.insert_empty(4);
             let ccl = <TestonlyLoomBackend as SyncBackend>::RwLock::downgrade_writer(ccl);
             let mut cursor = ccl.cursor_into(4);
-            *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8);
+            *cursor.current_occlusion_mut() = lf(2) | lf(3) | lf(7) | lf(8) | lf(9);
             cursor.mark_valid();
             cursor.propagate_lighting();
 
-            println!("4 add-rm-add added1");
+            // println!("4 add-rm-add added1");
             drop(ccl);
 
             let mut ccl = cc.lock_write();
             ccl.remove(4);
-            println!("4 add-rm-add removed");
+            // println!("4 add-rm-add removed");
             drop(ccl);
 
             let mut ccl = cc.lock_write();
@@ -126,11 +126,11 @@ fn loom_test_concurrently_insert_remove() {
             cursor.mark_valid();
             cursor.propagate_lighting();
             // cursor dropped here
-            println!("4 add-rm-add added2");
+            // println!("4 add-rm-add added2");
 
             drop(ccl);
 
-            println!("4 add-rm-add thread done");
+            // println!("4 add-rm-add thread done");
         }));
         let cc = col.clone();
         threads.push(loom::thread::spawn(move || {
@@ -151,14 +151,10 @@ fn loom_test_concurrently_insert_remove() {
         // let mut cursor = col.cursor_into(7);
         // cursor.propagate_lighting();
 
-        let mut cursor = col.cursor_into(1);
-        *cursor.current_occlusion_mut() = Lightfield::zero();
-        cursor.propagate_lighting();
-
-        // assert_eq!(
-        //     col.get_incoming_light(1),
-        //     Some(Lightfield::all_on() & !(lf(1) | lf(3) | lf(4) | lf(5) | lf(6) | lf(7) | lf(8)))
-        // );
+        assert_eq!(
+            col.get_incoming_light(1),
+            Some(!(lf(1) | lf(3) | lf(5) | lf(7) | lf(8)))
+        );
     });
 }
 
@@ -196,4 +192,37 @@ fn non_loom_corruption_test() {
     *cursor.current_occlusion_mut() = lf(1) | lf(3) | lf(5) | lf(7);
     cursor.mark_valid();
     cursor.propagate_lighting();
+}
+
+#[test]
+fn loom_hand_over_hand_deadlock_check() {
+    loom::model(move || {
+        let mut col = ChunkColumn::<TestonlyLoomBackend>::empty();
+
+        col.insert_empty(3);
+        col.insert_empty(2);
+        col.insert_empty(1);
+
+        let col = Arc::new(col);
+        let mut threads = vec![];
+        let cc = col.clone();
+        threads.push(loom::thread::spawn(move || {
+            cc.cursor_out_of(3);
+        }));
+        let cc = col.clone();
+        threads.push(loom::thread::spawn(move || {
+            cc.cursor_into(2);
+        }));
+        let cc = col.clone();
+        threads.push(loom::thread::spawn(move || {
+            cc.cursor_out_of(2);
+        }));
+        let cc = col.clone();
+        threads.push(loom::thread::spawn(move || {
+            cc.cursor_into(1);
+        }));
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    })
 }
