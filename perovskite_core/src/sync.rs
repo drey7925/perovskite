@@ -67,7 +67,7 @@ pub trait GenericRwLock<T, S: SyncBackend> {
     fn read_recursive(&self) -> S::ReadGuard<'_, T>;
 }
 
-trait GenericCondvar<S: SyncBackend> {
+pub trait GenericCondvar<S: SyncBackend> {
     fn new() -> Self;
     fn wait<Y>(&self, guard: &mut S::Guard<'_, Y>);
     fn notify_one(&self);
@@ -262,7 +262,7 @@ mod loom {
         }
         #[inline]
         #[track_caller]
-        fn downgrade_writer<'a>(mut guard: RwLockWriteGuard<'a, T>) -> RwLockReadGuard<'a, T>
+        fn downgrade_writer<'a>(guard: RwLockWriteGuard<'a, T>) -> RwLockReadGuard<'a, T>
         where
             T: 'a,
         {

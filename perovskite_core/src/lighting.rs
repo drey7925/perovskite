@@ -1,6 +1,7 @@
 //! Implementation details of light propagation that need to be shared between the client and server
 //! The only type interesting to plugins (for now) is [LightScratchpad]
 
+#[cfg(test)]
 mod tests;
 
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};

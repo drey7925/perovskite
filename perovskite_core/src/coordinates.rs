@@ -237,7 +237,6 @@ impl Ord for ChunkOffset {
 /// Each coordinate spans 16 blocks, covering the range [chunk_coord.x * 16, chunk_coord.x * 16 + 15].
 /// e.g. chunk 0,1,2 covers x:[0, 15], y:[16, 31], z:[32, 47]
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct ChunkCoordinate {
     pub x: i32,
     pub y: i32,

@@ -14,10 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use super::game_map::MapChunk;
+use crate::game_state::event::EventInitiator;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate};
 use std::ops::RangeInclusive;
-
-use super::game_map::MapChunk;
 
 pub trait MapgenInterface: Send + Sync {
     /// Generate a chunk using this map generator.
@@ -58,5 +58,5 @@ pub trait MapgenInterface: Send + Sync {
     /// specific mapgen.
     ///
     /// By default, does nothing.
-    fn dump_debug(&self, _pos: BlockCoordinate) {}
+    fn dump_debug(&self, _pos: BlockCoordinate, initiator: &EventInitiator<'_>) {}
 }

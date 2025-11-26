@@ -14,10 +14,12 @@ use crate::default_game::basic_blocks::{DIRT_WITH_SNOW, SNOW, SNOW_BLOCK};
 use crate::default_game::foliage::{PINE_NEEDLES, PINE_TREE};
 use noise::{MultiFractal, NoiseFn};
 use perovskite_core::block_id::special_block_defs::AIR_ID;
+use perovskite_core::chat::ChatMessage;
 use perovskite_core::{
     block_id::BlockId,
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
+use perovskite_server::game_state::event::EventInitiator;
 use perovskite_server::game_state::{
     blocks::{BlockTypeHandle, BlockTypeManager},
     game_map::MapChunk,
@@ -728,7 +730,7 @@ impl MapgenInterface for DefaultMapgen {
         Some(min_c..=max_c)
     }
 
-    fn dump_debug(&self, pos: BlockCoordinate) {
+    fn dump_debug(&self, pos: BlockCoordinate, initiator: &EventInitiator<'_>) {
         self.rolling_hills_noise.get::<true>(pos.x, pos.z);
 
         let mut rng = rand::thread_rng();
@@ -746,12 +748,17 @@ impl MapgenInterface for DefaultMapgen {
             if ce > RollingHillsGenerator::CALDERA_GATE_LOWER
                 && ce < RollingHillsGenerator::CALDERA_GATE_UPPER
             {
-                tracing::info!("Caldera at ({}, {})", x, z);
+                initiator
+                    .send_chat_message(ChatMessage::new(
+                        "mapgen",
+                        format!("Caldera at ({}, {})", x, z),
+                    ))
+                    .unwrap();
                 break;
             }
         }
 
-        for i in 0..10000 {
+        for _ in 0..10000 {
             let x = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
             let z = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
             let extra_coarse_pos = [
@@ -764,8 +771,12 @@ impl MapgenInterface for DefaultMapgen {
                 .highland_tendency
                 .get(extra_coarse_pos);
             if ce > 0.8 {
-                tracing::info!("Highland at ({}, {})", x, z);
-                break;
+                initiator
+                    .send_chat_message(ChatMessage::new(
+                        "mapgen",
+                        format!("Highland at ({}, {})", x, z),
+                    ))
+                    .unwrap();
             }
         }
     }

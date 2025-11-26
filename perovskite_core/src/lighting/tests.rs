@@ -27,7 +27,7 @@ fn light_column_basic_test() {
     cursor.mark_valid();
     assert!(cursor.advance().is_none());
 
-    let mut cursor = col.cursor_into_first().unwrap();
+    let cursor = col.cursor_into_first().unwrap();
     assert_eq!(cursor.current_pos, 7);
     assert_eq!(cursor.prev_pos, None);
     // 2 additional chunks
@@ -71,9 +71,9 @@ fn loom_test_concurrently_insert_remove() {
         col.insert_empty(1);
         col.cursor_into(1).mark_valid();
 
-        let mut col = Arc::new(<TestonlyLoomBackend as SyncBackend>::RwLock::new(col));
+        let col = Arc::new(<TestonlyLoomBackend as SyncBackend>::RwLock::new(col));
         let mut threads = vec![];
-        let cc = col.clone();
+        // let cc = col.clone();
         // threads.push(loom::thread::spawn(move || {
         //     let mut cc = cc.lock_write();
         //     cc.insert_empty(3);
@@ -147,7 +147,7 @@ fn loom_test_concurrently_insert_remove() {
             thread.join().unwrap();
         }
 
-        let mut col = col.lock_read();
+        let col = col.lock_read();
         // let mut cursor = col.cursor_into(7);
         // cursor.propagate_lighting();
 

@@ -499,7 +499,7 @@ impl BlockBuilder {
     );
 
     /// Set the appearance of the block to that specified by the given builder
-    pub fn set_appearance(mut self, appearance: BlockAppearanceBuilder) -> Self {
+    pub fn set_appearance(self, appearance: BlockAppearanceBuilder) -> Self {
         match appearance {
             BlockAppearanceBuilder::Cube(c) => self.set_cube_appearance(c),
             BlockAppearanceBuilder::Plantlike(p) => self.set_plant_like_appearance(p),
@@ -902,7 +902,7 @@ impl Default for PlantLikeAppearanceBuilder {
     }
 }
 
-use crate::game_builder::{OwnedTextureName, TextureName};
+use crate::game_builder::TextureName;
 pub use protocol::render::TextureCrop;
 
 fn make_texture_ref(diffuse: String) -> Option<TextureReference> {

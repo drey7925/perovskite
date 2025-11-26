@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use crate::client_state::chunk::ChunkDataViewMut;
 use crate::client_state::{
     block_types::ClientBlockTypeManager, chunk::ChunkOffsetExt, ClientState, FastChunkNeighbors,
 };

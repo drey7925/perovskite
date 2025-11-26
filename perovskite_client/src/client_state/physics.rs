@@ -27,7 +27,7 @@ use perovskite_core::{
 use super::{
     input::{BoundAction, InputState},
     settings::GameSettings,
-    ChunkDashmap, ChunkManager, ClientBlockTypeManager, ClientState,
+    ChunkManager, ClientBlockTypeManager, ClientState,
 };
 use crate::audio::{SimpleSoundControlBlock, SOUND_PRESENT, SOUND_STICKY};
 use crate::client_state::chunk::ChunkDataView;

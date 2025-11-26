@@ -12,10 +12,7 @@ use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::game_map::{
     BulkUpdateCallback, ChunkNeighbors, MapChunk, TimerCallback, TimerSettings, TimerState,
 };
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-
-static ALREADY_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 struct SoilTimerCallback {

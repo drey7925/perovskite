@@ -113,7 +113,8 @@ fn test_lighting() {
 }
 
 /// Makes a new empty Loom map with the specified lighting lock backend <L>. If L is
-/// TestonlyLoomBackend, Loom interleaves light operations.
+/// TestonlyLoomBackend, Loom interleaves light operations. If L is a non-Loom backend,
+/// only the main game map concurrency is tested.
 fn make_loom_map<L: SyncBackend>(
     server: &Arc<Server>,
 ) -> Arc<ServerGameMap<TestonlyLoomBackend, L>> {

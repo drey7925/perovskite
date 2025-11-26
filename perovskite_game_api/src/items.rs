@@ -1,19 +1,15 @@
 use crate::blocks::variants::rotate_nesw_azimuth_to_variant;
-use crate::blocks::CubeAppearanceBuilder;
 use crate::blocks::{DroppedItem, RotationMode};
 use crate::game_builder::{BlockName, GameBuilder, ItemName};
 use crate::NonExhaustive;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use perovskite_core::block_id::{BlockError, BlockId};
 use perovskite_core::constants::block_groups::TRIVIALLY_REPLACEABLE;
 use perovskite_core::constants::items::default_item_interaction_rules;
-use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_core::protocol::items::item_def;
 use perovskite_core::protocol::items::item_def::QuantityType;
 use perovskite_core::protocol::render::TextureReference;
-use perovskite_server::game_state::blocks::{
-    BlockInteractionResult, BlockTypeManager, FastBlockName,
-};
+use perovskite_server::game_state::blocks::{BlockTypeManager, FastBlockName};
 use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::items::{
     BlockInteractionHandler, Item, ItemInteractionResult, ItemStack, PointeeBlockCoords,
@@ -364,6 +360,9 @@ impl ItemBuilder {
         self.item_obj.dig_handler = Some(build_handler_chain(self.dig_handlers));
         self.item_obj.tap_handler = Some(build_handler_chain(self.tap_handlers));
         self.item_obj.place_on_block_handler = Some(build_handler_chain(self.right_click_handlers));
+        for modifier in self.modifiers {
+            (modifier)(&mut self.item_obj);
+        }
         builder.inner.items_mut().register_item(self.item_obj)
     }
 }

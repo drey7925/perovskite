@@ -18,7 +18,7 @@ use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::ops::{DerefMut, RangeInclusive};
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -106,7 +106,7 @@ pub(crate) struct PlayerCoroutinePack {
     audio_sender: AudioSender,
 }
 impl PlayerCoroutinePack {
-    pub(crate) async fn run_all(mut self) -> Result<()> {
+    pub(crate) async fn run_all(self) -> Result<()> {
         let username = self.context.player_context.name().to_string();
         initialize_protocol_state(&self.context, &self.inbound_worker.outbound_tx).await?;
         self.context
@@ -137,7 +137,7 @@ impl PlayerCoroutinePack {
                 .run_cancelable_worker(self.inbound_worker.inbound_worker_loop(), "inbound worker"),
         )?;
 
-        for (i, mut sender) in self.chunk_senders.into_iter().enumerate() {
+        for (i, sender) in self.chunk_senders.into_iter().enumerate() {
             crate::spawn_async(
                 &format!("chunk_sender_{i}_{username}"),
                 self.context

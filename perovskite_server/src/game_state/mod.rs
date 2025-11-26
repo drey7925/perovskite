@@ -60,7 +60,7 @@ use crate::game_state::{game_map::ServerGameMap, mapgen::MapgenInterface};
 use crate::media::MediaManager;
 use crate::network_server::auth::AuthService;
 use crate::server::ServerArgs;
-use perovskite_core::sync::{DefaultSyncBackend, SyncBackend};
+use perovskite_core::sync::DefaultSyncBackend;
 
 /// The main struct representing a Perovskite server.
 ///

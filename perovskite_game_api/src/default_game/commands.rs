@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use cgmath::Vector3;
 use noise::NoiseFn;
-use perovskite_core::constants::permissions::WORLD_STATE;
+use perovskite_core::constants::permissions::{PERFORMANCE_METRICS, WORLD_STATE};
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
@@ -374,6 +374,12 @@ struct TestonlyBenchmarkCommand;
 impl ChatCommandHandler for TestonlyBenchmarkCommand {
     async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
         {
+            if !context
+                .initiator()
+                .check_permission_if_player(PERFORMANCE_METRICS)
+            {
+                bail!("{PERFORMANCE_METRICS} permission requied")
+            }
             let start = Instant::now();
             let sgm = context.game_map();
             let mut oks = 0;
@@ -527,6 +533,9 @@ struct AttachEntityCommand;
 #[async_trait]
 impl ChatCommandHandler for AttachEntityCommand {
     async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !context.initiator().check_permission_if_player(WORLD_STATE) {
+            bail!("{WORLD_STATE} permission requied")
+        }
         if let EventInitiator::Player(p) = context.initiator() {
             let parts = message.split(' ').collect::<Vec<_>>();
 
@@ -568,6 +577,9 @@ struct DetachEntityCommand;
 #[async_trait]
 impl ChatCommandHandler for DetachEntityCommand {
     async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !context.initiator().check_permission_if_player(WORLD_STATE) {
+            bail!("{WORLD_STATE} permission requied")
+        }
         if let EventInitiator::Player(p) = context.initiator() {
             p.player.detach_from_entity().await?;
             Ok(())
@@ -588,6 +600,12 @@ struct MapgenDebugCommand;
 #[async_trait]
 impl ChatCommandHandler for MapgenDebugCommand {
     async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !context
+            .initiator()
+            .check_permission_if_player(PERFORMANCE_METRICS)
+        {
+            bail!("{PERFORMANCE_METRICS} permission requied")
+        }
         let pos = if let EventInitiator::Player(p) = context.initiator() {
             p.player.last_position().position
         } else {
@@ -605,7 +623,9 @@ impl ChatCommandHandler for MapgenDebugCommand {
         v.sort_by(|x, y| x.total_cmp(y));
         tracing::info!("100 samples of supersimplex: {v:?}");
 
-        context.mapgen().dump_debug(BlockCoordinate::try_from(pos)?);
+        context
+            .mapgen()
+            .dump_debug(BlockCoordinate::try_from(pos)?, context.initiator());
         Ok(())
     }
 }

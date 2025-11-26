@@ -24,7 +24,6 @@ use super::{client_ui::Popup, player::Player, GameState};
 use futures::Future;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::coordinates::PlayerPositionUpdate;
-use perovskite_core::sync::SyncBackend;
 use perovskite_core::util::TraceBuffer;
 use tokio::task::futures::TaskLocalFuture;
 use tracing::warn;

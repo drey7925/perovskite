@@ -176,7 +176,7 @@ async fn stats_loop(shared_state: Arc<SharedState>) {
             mesh_queue_lens.push(mesher.queue_len() as u64)
         }
         let mut guard = shared_state.client_state.client_perf.lock();
-        let mut guard = guard.get_or_insert_default();
+        let guard = guard.get_or_insert_default();
 
         guard.nprop_queue_lens = nprop_queue_lens;
         guard.mesh_queue_lens = mesh_queue_lens;

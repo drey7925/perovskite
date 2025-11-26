@@ -85,7 +85,6 @@ struct WorkerStats {
     duration: Duration,
 }
 trait Action: Send + Sync + 'static {
-    #[inline]
     fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats);
 }
 

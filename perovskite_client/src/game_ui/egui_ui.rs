@@ -1,7 +1,7 @@
 use anyhow::Result;
 use egui::{
     vec2, Align2, Button, Color32, Context, Id, RichText, ScrollArea, Sense, Stroke, TextEdit,
-    TextStyle, TextureId, Vec2b, WidgetText,
+    TextStyle, TextureId, Vec2b,
 };
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::items::ItemStackExt;

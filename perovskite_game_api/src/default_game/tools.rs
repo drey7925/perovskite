@@ -11,12 +11,10 @@ use perovskite_core::{
 use perovskite_server::game_state::items::{Item, ItemInteractionResult};
 
 use super::block_groups::{BRITTLE, FIBROUS, GRANULAR};
-use crate::blocks::DroppedItem;
 use crate::default_game::basic_blocks::ores::{DIAMOND_PIECE, GOLD_INGOT, IRON_INGOT};
 use crate::default_game::foliage::STICK_ITEM;
 use crate::default_game::recipes::RecipeSlot;
 use crate::default_game::{item_groups, DefaultGameBuilder};
-use crate::items::{ItemAction, ItemActionTarget, ItemBuilder, ItemHandler, StackDecrement};
 use crate::{game_builder::StaticTextureName, include_texture_bytes};
 
 /// Registers a new pickaxe based on the given materials

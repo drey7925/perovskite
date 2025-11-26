@@ -239,9 +239,9 @@ pub struct NeverGrow;
 impl GrowFunction for NeverGrow {
     fn grow_outcome(
         &self,
-        global_light: u8,
-        local_light: u8,
-        time_of_day: f64,
+        _global_light: u8,
+        _local_light: u8,
+        _time_of_day: f64,
     ) -> InteractionTransition {
         InteractionTransition {
             target: InteractionTransitionTarget::DoNothing,

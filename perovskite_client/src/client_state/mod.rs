@@ -16,7 +16,7 @@
 
 use std::f64::consts::PI;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +26,6 @@ use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
 use dashmap::DashMap;
 use egui::ahash::HashMapExt;
 use egui::Color32;
-use egui_plot::PlotPoint;
 use enum_map::{Enum, EnumMap};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
 use perovskite_core::constants::permissions;
@@ -35,7 +34,7 @@ use perovskite_core::coordinates::{
 };
 
 use log::warn;
-use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::Mutex;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::lighting::{ChunkColumn, Lightfield};
@@ -44,7 +43,7 @@ use perovskite_core::protocol::game_rpc::{
     MapDeltaUpdateBatch, ServerPerformanceMetrics, SetClientState,
 };
 use perovskite_core::time::TimeState;
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use seqlock::SeqLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

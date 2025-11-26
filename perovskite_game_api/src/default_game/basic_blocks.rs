@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{sync::atomic::AtomicU32, time::Duration};
+use std::time::Duration;
 
 use super::{
     block_groups::{BRITTLE, GRANULAR},
@@ -530,8 +530,6 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
 
     Ok(())
 }
-
-static TESTONLY_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     include_texture_bytes!(game_builder, DIRT_TEXTURE, "textures/dirt.png")?;

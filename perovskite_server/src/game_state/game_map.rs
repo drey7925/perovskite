@@ -1004,7 +1004,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         });
         for (i, receiver) in writeback_receivers.into_iter().enumerate() {
             let game_state_clone = game_state.clone();
-            let mut writeback = GameMapWriteback {
+            let writeback = GameMapWriteback {
                 map: result.clone(),
                 receiver,
                 cancellation: cancellation.clone(),
@@ -1024,7 +1024,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 })?;
             *result.writeback_handles[i].lock().deref_mut() = Some(writeback_handle);
 
-            let mut cache_cleanup = MapCacheCleanup {
+            let cache_cleanup = MapCacheCleanup {
                 map: result.clone(),
                 cancellation: cancellation.clone(),
                 shard_id: i,
@@ -2657,9 +2657,7 @@ async fn run_prefetch_dispatch<S: SyncBackend, L: SyncBackend>(
                     Ok(Some(s)) => {
                         slots.push(s);
                     }
-                    Ok(None) => {
-                        break_once_out_of_slots = false;
-                    }
+                    Ok(None) => continue,
                     Err(TryRecvError::Disconnected) => {
                         tracing::warn!("Prefetcher dispatcher sender disconnected; exiting");
                         return;
@@ -3958,4 +3956,5 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 mod loom_tests;

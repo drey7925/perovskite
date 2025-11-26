@@ -1,6 +1,5 @@
 use generic_array::{ArrayLength, GenericArray};
 use opaque_ke::errors::InternalError;
-use opaque_ke::ksf::Ksf;
 use opaque_ke::CipherSuite;
 
 pub struct PerovskiteOpaqueAuth;
