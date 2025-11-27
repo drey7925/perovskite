@@ -283,33 +283,8 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
         self.push_widget(UiElement::Label(label.into()));
         self
     }
-    /// Adds a new text field to this popup. At the moment, the layout is still TBD.
-    ///
-    /// Deprecated: Use text_field_from_builder for all functionalities; this method has too many
-    /// parameters that would get more and more unwieldy as features are added; hence it's limited
-    /// to the current set of parameters, and will not be expanded as textfields increase in
-    /// functionality
-    #[deprecated]
-    fn text_field(
-        mut self,
-        key: impl Into<String>,
-        label: impl Into<String>,
-        initial: impl Into<String>,
-        enabled: bool,
-        multiline: bool,
-    ) -> Self {
-        self.push_widget(UiElement::TextField(TextField {
-            key: key.into(),
-            label: label.into(),
-            initial: initial.into(),
-            enabled,
-            multiline,
-            hover_text: "".to_string(),
-        }));
-        self
-    }
 
-    fn text_field_from_builder(mut self, builder: TextFieldBuilder) -> Self {
+    fn text_field(mut self, builder: TextFieldBuilder) -> Self {
         self.push_widget(UiElement::TextField(builder.field));
         self
     }

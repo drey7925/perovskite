@@ -3,6 +3,13 @@
 
 use std::num::NonZeroU8;
 
+use super::{b2vec, CartsGameBuilderExtension};
+use crate::{
+    blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
+    default_game::{recipes::RecipeSlot, DefaultGameBuilder},
+    game_builder::{BlockName, StaticBlockName, StaticTextureName},
+    include_texture_bytes,
+};
 use anyhow::{Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3};
 use perovskite_core::constants::item_groups;
@@ -17,6 +24,9 @@ use perovskite_core::{
         render::DynamicCrop,
     },
 };
+use perovskite_server::game_state::blocks::InteractKeyHandler;
+use perovskite_server::game_state::client_ui::{Popup, TextFieldBuilder};
+use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::{
     client_ui::{PopupAction, PopupResponse, UiElementContainer},
     entities::{DeferrableResult, Deferral},
@@ -24,15 +34,6 @@ use perovskite_server::game_state::{
     game_map::{CasOutcome, ServerGameMap},
     items::Item,
 };
-
-use crate::{
-    blocks::{variants, AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder},
-    default_game::{recipes::RecipeSlot, DefaultGameBuilder},
-    game_builder::{BlockName, StaticBlockName, StaticTextureName},
-    include_texture_bytes,
-};
-
-use super::{b2vec, CartsGameBuilderExtension};
 
 #[rustfmt::skip]
 pub(crate) mod c {
@@ -1055,57 +1056,7 @@ pub(crate) fn register_tracks(
             .set_allow_light_propagation(true)
             .set_display_name("Railway track")
             .add_modifier(Box::new(|bt| {
-                bt.interact_key_handler = Some(Box::new(|ctx, coord, _| {
-                    let block = ctx.game_map().get_block(coord)?;
-                    let tile_id = TileId::from_variant(block.variant(), false, false);
-                    ctx.initiator()
-                        .send_chat_message(ChatMessage::new("[INFO]", format!("{:?}", tile_id)))?;
-
-                    Ok(Some(
-                        ctx.new_popup()
-                            .title("Mr. Yellow")
-                            .label("Update tile:")
-                            .text_field("tile_x", "Tile X", tile_id.x().to_string(), true, false)
-                            .text_field("tile_y", "Tile Y", tile_id.y().to_string(), true, false)
-                            .text_field(
-                                "rotation",
-                                "Rotation",
-                                tile_id.rotation().to_string(),
-                                true,
-                                false,
-                            )
-                            .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
-                            .button("apply", "Apply", true, true)
-                            .label("Scan tile:")
-                            .checkbox("reverse", "Reverse", false, true)
-                            .checkbox("diverging", "Diverging", false, true)
-                            .button("scan", "Scan", true, false)
-                            .button("multiscan", "Multi-Scan", true, false)
-                            .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
-                                match handle_popup_response(
-                                    &response,
-                                    coord,
-                                    response
-                                        .ctx
-                                        .extension::<CartsGameBuilderExtension>()
-                                        .as_ref()
-                                        .context("CartsGameBuilderExtension missing")?,
-                                ) {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        response.ctx.initiator().send_chat_message(
-                                            ChatMessage::new(
-                                                "[ERROR]",
-                                                "Failed to parse popup response: ".to_string()
-                                                    + e.to_string().as_str(),
-                                            ),
-                                        )?;
-                                    }
-                                }
-                                Ok(())
-                            })),
-                    ))
-                }));
+                bt.interact_key_handler = Some(make_track_interact_key_handler());
                 let ri = bt.client_info.render_info.as_mut().unwrap();
                 match ri {
                     protocol::blocks::block_type_def::RenderInfo::AxisAlignedBoxes(aabb) => {
@@ -1229,6 +1180,67 @@ pub(crate) fn register_tracks(
     Ok((rail_tile.id, rail_slope_1, rail_slopes_8))
 }
 
+fn make_track_interact_key_handler() -> Box<InteractKeyHandler> {
+    Box::new(|ctx, coord, _| {
+        let block = ctx.game_map().get_block(coord)?;
+        let tile_id = TileId::from_variant(block.variant(), false, false);
+        ctx.initiator()
+            .send_chat_message(ChatMessage::new("[INFO]", format!("{:?}", tile_id)))?;
+        Ok(Some(make_track_popup(ctx, coord, tile_id)))
+    })
+}
+
+fn make_track_popup(ctx: HandlerContext, coord: BlockCoordinate, tile_id: TileId) -> Popup {
+    ctx.new_popup()
+        .title("Mr. Yellow")
+        .label("Update tile:")
+        .text_field(
+            TextFieldBuilder::new("tile_x")
+                .label("Tile X")
+                .initial(tile_id.x().to_string()),
+        )
+        .text_field(
+            TextFieldBuilder::new("tile_y")
+                .label("Tile Y")
+                .initial(tile_id.y().to_string()),
+        )
+        .text_field(
+            TextFieldBuilder::new("rotation")
+                .label("Rotation")
+                .initial(tile_id.rotation().to_string()),
+        )
+        .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
+        .button("apply", "Apply", true, true)
+        .label("Scan tile:")
+        .checkbox("reverse", "Reverse", false, true)
+        .checkbox("diverging", "Diverging", false, true)
+        .button("scan", "Scan", true, false)
+        .button("multiscan", "Multi-Scan", true, false)
+        .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
+            match handle_popup_response(
+                &response,
+                coord,
+                response
+                    .ctx
+                    .extension::<CartsGameBuilderExtension>()
+                    .as_ref()
+                    .context("CartsGameBuilderExtension missing")?,
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    response
+                        .ctx
+                        .initiator()
+                        .send_chat_message(ChatMessage::new(
+                            "[ERROR]",
+                            "Failed to parse popup response: ".to_string() + e.to_string().as_str(),
+                        ))?;
+                }
+            }
+            Ok(())
+        }))
+}
+
 fn register_rail_slope(
     game_builder: &mut crate::game_builder::GameBuilder,
     numerator: u8,
@@ -1271,70 +1283,7 @@ fn register_rail_slope(
                 .set_allow_light_propagation(true)
                 .set_display_name(format!("Slope {numerator}/{denominator}"))
                 .add_modifier(Box::new(|bt| {
-                    bt.interact_key_handler = Some(Box::new(|ctx, coord, _| {
-                        let block = ctx.game_map().get_block(coord)?;
-                        let tile_id = TileId::from_variant(block.variant(), false, false);
-                        ctx.initiator().send_chat_message(ChatMessage::new(
-                            "[INFO]",
-                            format!("{:?}", tile_id),
-                        ))?;
-
-                        Ok(Some(
-                            ctx.new_popup()
-                                .title("Mr. Yellow")
-                                .label("Update tile:")
-                                .text_field(
-                                    "tile_x",
-                                    "Tile X",
-                                    tile_id.x().to_string(),
-                                    true,
-                                    false,
-                                )
-                                .text_field(
-                                    "tile_y",
-                                    "Tile Y",
-                                    tile_id.y().to_string(),
-                                    true,
-                                    false,
-                                )
-                                .text_field(
-                                    "rotation",
-                                    "Rotation",
-                                    tile_id.rotation().to_string(),
-                                    true,
-                                    false,
-                                )
-                                .checkbox("flip_x", "Flip X", tile_id.flip_x(), true)
-                                .button("apply", "Apply", true, true)
-                                .label("Scan tile:")
-                                .checkbox("reverse", "Reverse", false, true)
-                                .checkbox("diverging", "Diverging", false, true)
-                                .button("scan", "Scan", true, false)
-                                .button("multiscan", "Multi-Scan", true, false)
-                                .set_button_callback(Box::new(
-                                    move |response: PopupResponse<'_>| {
-                                        match handle_popup_response(
-                                            &response,
-                                            coord,
-                                            response.ctx.extension().as_ref().unwrap(),
-                                        ) {
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                response.ctx.initiator().send_chat_message(
-                                                    ChatMessage::new(
-                                                        "[ERROR]",
-                                                        "Failed to parse popup response: "
-                                                            .to_string()
-                                                            + e.to_string().as_str(),
-                                                    ),
-                                                )?;
-                                            }
-                                        }
-                                        Ok(())
-                                    },
-                                )),
-                        ))
-                    }));
+                    bt.interact_key_handler = Some(make_track_interact_key_handler());
                 })),
         )
         .map(|b| b.id)

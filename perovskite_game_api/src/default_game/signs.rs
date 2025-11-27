@@ -265,10 +265,9 @@ fn make_sign_popup(
         Ok(Some(
             ctx.new_popup()
                 .title("Sign")
-                .text_field_from_builder(
+                .text_field(
                     TextFieldBuilder::new(TEXT_KEY)
                         .label("Text")
-                        .enabled(true)
                         .multiline(true)
                         .initial(initial.unwrap_or_else(String::new)),
                 )

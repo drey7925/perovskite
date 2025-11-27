@@ -113,6 +113,20 @@ pub type InlineHandler = dyn Fn(
     + Send
     + Sync;
 
+/// The signature of this callback is subject to change.
+///
+/// Args:
+///     * HandlerContext: Handler context giving access to the player/initiator, game state, etc.
+///     * BlockCoordinate: Coordinate that was interacted with
+///     * &str: Indicates the name of the named interact key option. Empty for the unnamed default
+///         handler used when no named handlers are present. The string is passed from the client, and is
+///         not validated or sanitized.
+///         Assuming a proper client, this will be one of the entries in interact_key_option in the block proto.
+pub type InteractKeyHandler =
+    dyn Fn(HandlerContext, BlockCoordinate, &str) -> Result<Option<Popup>> + Send + Sync;
+
+/// Called on a chunk when it's being loaded, and the last time it was written was prior to
+/// this server's startup.
 pub type ColdLoadPostprocessor = dyn Fn(&mut [BlockId; 4096]) + Send + Sync + 'static;
 
 /// In-memory representation of the different types of blocks that can exist in the world.
@@ -254,19 +268,7 @@ pub struct BlockType {
     /// Called when the interact key is pressed and an interaction is selected.
     ///
     /// This can mutate the given block (using handlercontext) if desired, and return a popup (if desired)
-    ///
-    /// The signature of this callback is subject to change.
-    ///
-    /// Args:
-    ///     * HandlerContext: Handler context giving access to the player/initator, game state, etc
-    ///     * BlockCoordinate: Coordinate that was interacted with
-    ///     * &str: Indicates the name of the named interact key option. Empty for the unnamed default
-    ///         handler used when no named handlers are present. The string is passed from the client, and is
-    ///         not validated or sanitized.
-    ///         Assuming a proper client, this will be one of the entries in interact_key_option in the block proto
-    pub interact_key_handler: Option<
-        Box<dyn Fn(HandlerContext, BlockCoordinate, &str) -> Result<Option<Popup>> + Send + Sync>,
-    >,
+    pub interact_key_handler: Option<Box<InteractKeyHandler>>,
 
     /// Called when the block is stepped on.
     ///

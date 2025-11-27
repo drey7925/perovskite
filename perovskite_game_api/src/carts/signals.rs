@@ -584,11 +584,9 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             .title("Mrs. Yellow")
             .label("Update signal:")
             .text_field(
-                "rotation",
-                "Rotation",
-                (variant & 3).to_string(),
-                true,
-                false,
+                TextFieldBuilder::new("rotation")
+                    .label("Rotation")
+                    .initial((variant & 3).to_string()),
             )
             .checkbox(
                 "restrictive",
@@ -622,35 +620,35 @@ fn spawn_popup(ctx: HandlerContext, coord: BlockCoordinate) -> Result<Option<Pop
             )
             .checkbox("left", "Left", (variant & VARIANT_LEFT) != 0, true)
             .checkbox("right", "Right", (variant & VARIANT_RIGHT) != 0, true)
-            .text_field_from_builder(
+            .text_field(
                 TextFieldBuilder::new("left_routes")
                     .label("Left routes")
                     .initial(left_routes)
                     .multiline(true)
                     .hover_text(PATTERN_HOVER_TEXT),
             )
-            .text_field_from_builder(
+            .text_field(
                 TextFieldBuilder::new("right_routes")
                     .label("Right routes")
                     .initial(right_routes)
                     .multiline(true)
                     .hover_text(PATTERN_HOVER_TEXT),
             )
-            .text_field_from_builder(
+            .text_field(
                 TextFieldBuilder::new("manual_routes")
                     .label("Manual routes")
                     .initial(manual_routes)
                     .multiline(true)
                     .hover_text(MANUAL_ROUTES_HOVER_TEXT),
             )
-            .text_field_from_builder(
+            .text_field(
                 TextFieldBuilder::new("signal_nickname")
                     .label("Signal nickname")
                     .initial(ext.signal_nickname.as_str())
                     .multiline(false)
                     .hover_text("Used for digital messages sent over wires to/from the signal"),
             )
-            .text_field_from_builder(
+            .text_field(
                 TextFieldBuilder::new("pending_route_display")
                     .label("Pending manual route")
                     .enabled(false)

@@ -1,3 +1,4 @@
+use crate::game_builder::GameBuilder;
 use anyhow::Result;
 use itertools::Itertools;
 use parking_lot::RwLock;
@@ -6,6 +7,7 @@ use perovskite_core::{
     constants::{item_groups::HIDDEN_FROM_CREATIVE, permissions::CREATIVE},
     protocol::items::item_stack,
 };
+use perovskite_server::game_state::client_ui::TextFieldBuilder;
 use perovskite_server::game_state::entities::EntityClassId;
 use perovskite_server::game_state::inventory::{
     VirtualInputCallbacks, VirtualOutputReturnBehavior,
@@ -18,8 +20,6 @@ use perovskite_server::game_state::{
     GameState,
 };
 use std::sync::Arc;
-
-use crate::game_builder::GameBuilder;
 
 use super::{recipes::RecipeBook, DefaultGameBuilderExtension};
 
@@ -281,8 +281,12 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         if has_creative {
             Ok(Popup::new(game_state)
                 .title("Inventory")
-                .text_field("search", "Filter: ", "", true, false)
-                .text_field("count", "Creative stack size: ", "256", true, false)
+                .text_field(TextFieldBuilder::new("search").label("Filter: "))
+                .text_field(
+                    TextFieldBuilder::new("count")
+                        .label("Creative stack size: ")
+                        .initial("256"),
+                )
                 .button("update_btn", "Update", true, false)
                 .side_by_side_layout("Navigation", |p| {
                     Ok(p.button("left", "Prev. page", true, false).button(

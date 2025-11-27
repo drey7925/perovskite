@@ -28,9 +28,9 @@ use perovskite_core::{
     constants::items::default_item_interaction_rules,
     coordinates::BlockCoordinate,
     protocol::{self, items::item_def::QuantityType, render::CustomMesh},
-    util::{TraceBuffer, TraceLog},
+    util::TraceBuffer,
 };
-use perovskite_server::game_state::client_ui::Popup;
+use perovskite_server::game_state::client_ui::{Popup, TextFieldBuilder};
 use perovskite_server::game_state::entities::{
     CancelAction, EntityHandlers, EntityMoveDecision, TrailingEntity,
 };
@@ -393,8 +393,12 @@ fn place_cart(
     let popup = ctx
         .new_popup()
         .title("Spawn Cart")
-        .text_field("cart_name", "Cart name", "", true, false)
-        .text_field("cart_length", "Cart length", "8", true, false)
+        .text_field(TextFieldBuilder::new("cart_name").label("Cart name"))
+        .text_field(
+            TextFieldBuilder::new("cart_length")
+                .label("Cart length")
+                .initial("8"),
+        )
         .checkbox("board", "Board cart?", true, true)
         .button("spawn", "Spawn", true, true)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {

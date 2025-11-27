@@ -17,7 +17,9 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::BlockCoordinate;
 use perovskite_server::game_state::blocks::{BlockType, ExtendedData, FastBlockName};
-use perovskite_server::game_state::client_ui::{Popup, PopupAction, UiElementContainer};
+use perovskite_server::game_state::client_ui::{
+    Popup, PopupAction, TextFieldBuilder, UiElementContainer,
+};
 use perovskite_server::game_state::event::HandlerContext;
 
 use crate::blocks::{AaBoxProperties, BlockBuilder, RotationMode};
@@ -1195,35 +1197,36 @@ fn microcontroller_interaction(
     let popup = ctx
         .new_popup()
         .title("Microcontroller")
-        .text_field("program", "Program:", data.program, true, true)
         .text_field(
-            "falling_mask",
-            "Falling edge interrupt mask:",
-            data.falling_interrupt_mask.to_string(),
-            true,
-            false,
+            TextFieldBuilder::new("program")
+                .label("Program:")
+                .initial(data.program)
+                .multiline(true),
         )
         .text_field(
-            "rising_mask",
-            "Rising edge interrupt mask:",
-            data.rising_interrupt_mask.to_string(),
-            true,
-            false,
+            TextFieldBuilder::new("falling_mask")
+                .label("Falling edge interrupt mask:")
+                .initial(data.falling_interrupt_mask.to_string()),
+        )
+        .text_field(
+            TextFieldBuilder::new("rising_mask")
+                .label("Rising edge interrupt mask:")
+                .initial(data.rising_interrupt_mask.to_string()),
         )
         .button("upload", "Upload", true, true)
         .text_field(
-            "error_msg",
-            "Last error:",
-            data.last_error.as_deref().unwrap_or("-"),
-            false,
-            true,
+            TextFieldBuilder::new("error_msg")
+                .label("Last error:")
+                .initial(data.last_error.as_deref().unwrap_or("-"))
+                .enabled(false)
+                .multiline(true),
         )
         .text_field(
-            "debug_msg",
-            "Last debug message:",
-            data.debug_string.clone(),
-            false,
-            true,
+            TextFieldBuilder::new("debug_msg")
+                .label("Last debug message:")
+                .initial(data.debug_string.clone())
+                .enabled(false)
+                .multiline(true),
         )
         .set_button_callback(move |resp| {
             match resp.user_action {
