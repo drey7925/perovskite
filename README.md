@@ -216,3 +216,28 @@ I work on low-level infrastructure at a major hyperscaler and produce this game 
 discord as `drey7925`.
 
 Note that this project is not endorsed, sponsored, or supported by my employer or any affiliates.
+
+## AI policy
+
+Some code generation and chore tasks in this project are automated with LLM technology. Please see AI_AGENTS.md for examples
+of tasks that I've been automating.
+
+Most of the engine is handwritten; I haven't been able to get LLMs to generate reliable enough code for those components
+yet, and I strongly prefer to have direct design and implementation control anyway.
+
+Aspirationally, after making some API improvements, context instruction files, etc, I hope to make code generation for
+game _content_ viable, for a few reasons:
+
+* I don't enjoy writing game content as much as engine code anyway, but feel that game content is necessary to showcase
+  the engine
+* Being able to automatically convert from pseudocode, Lua, etc to Rust would make modding and content creation accessible
+  to a wider range of technical backgrounds
+
+No AI is used for image generation, textures, "AI art" generation, etc.
+
+### Pull requests and AI
+
+Please indicate in any pull requests if code was primarily generated with an AI tool/agent.
+
+Please do not contribute media (textures, audio, etc.) that you did not either photograph, record, or draw yourself.
+Non-AI tools like image/audio editors, denoising, etc are fine.
