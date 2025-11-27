@@ -991,11 +991,10 @@ impl GameRenderer {
         let mut game_lock = self.game.lock();
 
         game_lock.update_if_connected(&self.vk_wnd, event_loop);
+        if self.vk_wnd.want_recreate.swap(false, Ordering::AcqRel) {
+            self.need_swapchain_recreate = true;
+        }
         if let GameStateMutRef::Active(game) = game_lock.as_mut() {
-            if self.vk_wnd.want_recreate.swap(false, Ordering::AcqRel) {
-                self.need_swapchain_recreate = true;
-            }
-
             let _span = span!("MainEventsCleared");
             if self.vk_wnd.window.has_focus() && game.client_state.input.lock().is_mouse_captured()
             {

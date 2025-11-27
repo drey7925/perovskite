@@ -615,7 +615,7 @@ impl Deref for VulkanWindow {
 impl VulkanWindow {
     pub(crate) fn request_recreate(&self) {
         self.want_recreate
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     pub fn context(&self) -> &VulkanContext {

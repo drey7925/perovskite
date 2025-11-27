@@ -395,13 +395,8 @@ impl MainMenu {
                 vk_ctx,
             ) {
                 ControlFlow::Continue(_) => {}
-                ControlFlow::Break(_) => {
-                    if self
-                        .prospective_settings
-                        .render
-                        .build_global_config(&vk_ctx)
-                        != self.settings.load().render.build_global_config(&vk_ctx)
-                    {
+                ControlFlow::Break(should_recreate) => {
+                    if should_recreate {
                         vk_ctx.request_recreate();
                     }
                     self.show_settings_popup = false;
@@ -501,7 +496,7 @@ pub(crate) fn draw_settings_menu(
     prospective_settings: &mut GameSettings,
     input_capture: &mut InputCapture,
     vk_ctx: &VulkanContext,
-) -> ControlFlow<(), ()> {
+) -> ControlFlow<bool, ()> {
     let mut result = ControlFlow::Continue(());
 
     let max_height = (egui_ctx.available_rect().height() - 96.0).max(128.0);
@@ -545,12 +540,13 @@ pub(crate) fn draw_settings_menu(
         });
         ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
             let save_button = egui::Button::new("Save");
+            let graphics_updated = prospective_settings.render.build_global_config(vk_ctx) != settings.load().render.build_global_config(vk_ctx);
             if ui.add(save_button).clicked() {
                 settings.store(Arc::new(prospective_settings.clone()));
                 if let Err(e) = prospective_settings.save_to_disk() {
                     log::error!("Failure saving settings: {}", e);
                 }
-                result = ControlFlow::Break(());
+                result = ControlFlow::Break(graphics_updated);
             }
             let cancel_button = egui::Button::new("Cancel");
             if ui.add(cancel_button).clicked() || ui.input(|x| x.key_pressed(egui::Key::Escape)) {
@@ -561,7 +557,7 @@ pub(crate) fn draw_settings_menu(
                         log::error!("Failure loading audio devices: {}", e);
                     }
                 }
-                result = ControlFlow::Break(());
+                result = ControlFlow::Break(false);
             }
         });
     });

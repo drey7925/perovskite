@@ -240,8 +240,10 @@ impl EguiUi {
                 vk_ctx,
             ) {
                 ControlFlow::Continue(()) => {}
-                ControlFlow::Break(()) => {
-                    vk_ctx.request_recreate();
+                ControlFlow::Break(should_recreate) => {
+                    if should_recreate {
+                        vk_ctx.request_recreate();
+                    }
                     self.settings_menu_open = false;
                 }
             }
