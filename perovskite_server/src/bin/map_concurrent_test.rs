@@ -86,6 +86,9 @@ struct WorkerStats {
 }
 trait Action: Send + Sync + 'static {
     fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats);
+    fn describe(&self) -> String {
+        format!("{:?}", std::any::type_name::<Self>())
+    }
 }
 
 struct RandRead(Range<i32>);
@@ -97,6 +100,9 @@ impl Action for RandRead {
             .get_block(coord.with_offset(ChunkOffset::new(0, 0, 0)))
             .unwrap();
         stats.ops += 1;
+    }
+    fn describe(&self) -> String {
+        "randread".into()
     }
 }
 
@@ -112,6 +118,9 @@ impl Action for FlushAll {
         *next_awaken += Duration::from_secs_f32(1.0 / self.freq);
         gs.game_map().purge_and_flush();
         stats.ops += 1;
+    }
+    fn describe(&self) -> String {
+        "flush_all".into()
     }
 }
 
@@ -129,6 +138,9 @@ impl Action for RandWrite {
             .unwrap();
         stats.ops += 1;
         stats.write_checksum = stats.write_checksum.wrapping_add(inc);
+    }
+    fn describe(&self) -> String {
+        "randwrite".into()
     }
 }
 
@@ -156,28 +168,32 @@ impl<A: Action> Worker<A> {
         }
     }
     fn start(self: Arc<Self>) {
-        std::thread::spawn(move || {
-            let mut stats = WorkerStats::default();
-            self.server
-                .run_task_in_server(|gs| {
-                    (self.setup)();
+        let thread_name = self.action.lock().describe();
+        std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let mut stats = WorkerStats::default();
+                self.server
+                    .run_task_in_server(|gs| {
+                        (self.setup)();
 
-                    let mut rng = rand::thread_rng();
-                    let mut action = self.action.lock();
-                    self.barrier.0.wait();
-                    let start = std::time::Instant::now();
-                    while self.barrier.1.load(Ordering::Relaxed) {
-                        for _ in 0..16 {
-                            action.act(gs, &mut rng, &mut stats);
+                        let mut rng = rand::thread_rng();
+                        let mut action = self.action.lock();
+                        self.barrier.0.wait();
+                        let start = std::time::Instant::now();
+                        while self.barrier.1.load(Ordering::Relaxed) {
+                            for _ in 0..16 {
+                                action.act(gs, &mut rng, &mut stats);
+                            }
                         }
-                    }
-                    stats.duration = start.elapsed();
-                    Ok(())
-                })
-                .unwrap();
+                        stats.duration = start.elapsed();
+                        Ok(())
+                    })
+                    .unwrap();
 
-            self.result.set(stats).unwrap();
-        });
+                self.result.set(stats).unwrap();
+            })
+            .unwrap();
     }
     fn join(&self) -> WorkerStats {
         self.result.wait().clone()
@@ -187,7 +203,7 @@ impl<A: Action> Worker<A> {
 fn main() {
     const FLUSH_HZ: f32 = 10.0;
     const RUN_PROBE: bool = true;
-    const N_WRITERS: usize = 0;
+    const N_WRITERS: usize = 2;
     const LOAD_SLEEP_TIME_MICROS: u64 = 1000;
     const WORKING_SET_SIZE: i32 = 256;
     for n_read_thread in [0, 1, 2, 4, 8, 12, 16] {

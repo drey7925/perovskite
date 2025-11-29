@@ -671,7 +671,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
             // For now, 128 bytes is a reasonable overhead (a chunk contains _MAX_OFFSET u32s which is 16 KiB already + extended data)
             // 5 hashers is a reasonable tradeoff - it's not the best false positive rate, but less hashers means cheaper insertion
             block_bloom_filter: cbloom::Filter::with_size_and_hashers(128, 5),
-            atomic_storage: Arc::new([ATOMIC_INITIALIZER; _MAX_OFFSET]),
+            atomic_storage: bytemuck::allocation::zeroed_arc(),
             fast_path_read_ready: AtomicBool::new(false),
         }
     }
@@ -745,6 +745,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         light_columns: &FxHashMap<(i32, i32), ChunkColumn<impl SyncBackend>>,
         block_types: &BlockTypeManager,
     ) {
+        assert!(Arc::ptr_eq(&chunk.block_ids, &self.atomic_storage));
         let mut seen_blocks = FxHashSet::default();
         for block_id in chunk
             .block_ids

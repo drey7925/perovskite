@@ -212,6 +212,8 @@ pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
     entities.pre_build()?;
     entities.save_to(db.as_ref(), startup_counter)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .max_blocking_threads(1)
+        .worker_threads(1)
         .enable_all()
         .build()?;
     let _rt_guard = runtime.enter();

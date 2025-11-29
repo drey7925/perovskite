@@ -11,7 +11,7 @@ repository = "https://github.com/drey7925/perovskite"
 anyhow = {  version = "1" , features = ["backtrace"]}
 argon2 = "0.5.3"
 bitvec = "1.0.1"
-bytemuck = { version = "1.16.1", features = ["derive"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
 cgmath = "0.18.0"
 generic-array = "0.14.7"
 opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }

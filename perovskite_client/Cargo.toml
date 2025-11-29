@@ -60,7 +60,7 @@ egui_plot = "0.31.0"
 audio_thread_priority = "0.34.0"
 atomicbox = "0.4.0"
 crossbeam-channel = "0.5.15"
-bytemuck = { version = "1.23.0", features = ["must_cast", "min_const_generics"] }
+bytemuck = { version = "1.24.0", features = ["must_cast", "min_const_generics"] }
 css-color = "0.2.8"
 tinyvec = "1.9.0"
 enum-map = "2.7.3"
