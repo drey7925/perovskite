@@ -3060,6 +3060,7 @@ impl GameMapTimer {
         game_state: Arc<GameState>,
         state: &mut ShardState,
     ) -> Result<()> {
+        const MAX_TIME_UNDER_SHARD_LOCK: Duration = Duration::from_millis(50);
         let _span = span!("timer tick hand-over-hand");
         let mut writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
         let mut writeback_permit2 = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
@@ -3069,6 +3070,8 @@ impl GameMapTimer {
             let _span = span!("acquire game_map read lock");
             game_state.game_map().live_chunks[coarse_shard].read()
         };
+        let mut last_unlock_time = Instant::now();
+
         let mut coords = {
             let _span = span!("read and filter chunks");
             read_lock
@@ -3121,7 +3124,10 @@ impl GameMapTimer {
                             )?);
                         }
                         // Lock ordering: It's important that we lock these upper-to-lower
-                        // TODO: consider whether true hand-over-hand improves performance
+                        // TODO: consider whether true hand-over-hand improves performance.
+                        //    Answer: probably not, and it's potentially deadlock-prone.
+                        // Note that https://github.com/Amanieu/parking_lot/issues/505 does not
+                        //    apply here - we have a shard lock.
                         let upper_coord = ChunkCoordinate::new(x, upper_y, z);
                         let lower_coord = ChunkCoordinate::new(x, lower_y, z);
                         let upper_chunk = match read_lock.chunks.get(&upper_coord) {
@@ -3167,6 +3173,12 @@ impl GameMapTimer {
                                 &mut writeback_permit2,
                                 state,
                             )?;
+                        }
+
+                        if last_unlock_time.elapsed() > MAX_TIME_UNDER_SHARD_LOCK {
+                            let _span = span!("timer bumping read lock");
+                            parking_lot::RwLock::bump_read(&mut read_lock);
+                            last_unlock_time = Instant::now();
                         }
                     }
                 }
@@ -3846,9 +3858,6 @@ impl<S: SyncBackend, L: SyncBackend> TimerController<S, L> {
             name: name.clone(),
             callback,
             settings,
-            // This is a bug-prone code smell. The server game map shouldn't
-            // be rummaging around in the timer controller to get the cancellation token.
-            // TODO: fix it.
             cancellation: self.cancellation.clone(),
             tasks: tokio::sync::Mutex::new(vec![]),
         });

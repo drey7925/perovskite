@@ -183,6 +183,7 @@ mod parking_lot {
     }
 }
 
+#[cfg(any(test, feature = "loom_sync"))]
 mod loom {
     use crate::sync::{GenericCondvar, GenericMutex, GenericRwLock, SyncBackend};
     use scopeguard::defer;
@@ -374,5 +375,7 @@ mod loom {
     }
 }
 
+#[cfg(any(test, feature = "loom_sync"))]
 pub use loom::LoomBackend as TestonlyLoomBackend;
+
 pub use parking_lot::ParkingLotBackend as DefaultSyncBackend;
