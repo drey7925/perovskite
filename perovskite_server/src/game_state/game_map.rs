@@ -1240,9 +1240,12 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         let chunk_guard = self.try_get_chunk(coord.chunk(), false)?;
         // We don't have a mapchunk lock, so we need actual atomic ordering here
         if chunk_guard.fast_path_read_ready.load(Ordering::Acquire) {
+            // Relaxed read of chunk storage: we're not offering much of an ordering guarantee to the user.
+            // If someone requires synchronization between blocks, they're doing something subtle - initially
+            // they can use their own barriers, and we can revisit this in the future if a need arises.
             Some(
                 chunk_guard.atomic_storage[coord.offset().as_index()]
-                    .load(Ordering::Acquire)
+                    .load(Ordering::Relaxed)
                     .into(),
             )
         } else {
