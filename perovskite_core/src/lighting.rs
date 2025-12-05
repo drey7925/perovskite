@@ -146,10 +146,6 @@ impl<S: SyncBackend> ChunkColumn<S> {
 
     /// Removes an entry, panics if the chunk is not present.
     pub fn remove(&mut self, chunk_y: i32) {
-        #[cfg(test)]
-        {
-            // println!("remove {chunk_y}");
-        }
         assert!(self.present.remove(&chunk_y).is_some());
         let predecessor = self.present.range(chunk_y..).next();
         let predecessor_lock = predecessor.map(|x| x.1.lock());

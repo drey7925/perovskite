@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use perovskite_client::audio::generated_eqns::travel_time_newton_raphson;
+use std::hint::black_box;
 
 fn travel_time_newton_raphson_benchmark(c: &mut Criterion) {
     c.bench_function("nr_4iters", |b| {
