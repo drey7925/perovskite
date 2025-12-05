@@ -117,7 +117,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                 .set_simple_dropped_item(SIGN_ITEM.0, 1)
                 .set_allow_light_propagation(true)
                 .add_interact_key_menu_entry("", "Set text...")
-                .add_modifier(Box::new(|bt| {
+                .add_modifier(|bt| {
                     let fbn_standing = FastBlockName::new(STANDING_SIGN.0);
                     let fbn_wall = FastBlockName::new(WALL_SIGN.0);
                     let fbn_lightprobe = FastBlockName::new(LIGHTPROBE.0);
@@ -146,7 +146,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
                                 .collect(),
                         }))
                     }))
-                })),
+                }),
         )?;
         *id_mut = block.id;
     }

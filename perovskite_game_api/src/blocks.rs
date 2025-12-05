@@ -18,7 +18,6 @@ use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
 use anyhow::Result;
-use itertools::Itertools;
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_core::{
@@ -80,6 +79,13 @@ pub enum DroppedItem {
     NotDiggable,
 }
 impl DroppedItem {
+    pub fn dynamic<F>(closure: F) -> Self
+    where
+        F: Fn(DroppedItemClosureParam) -> (StaticItemName, u32) + Sync + Send + 'static,
+    {
+        Self::Dynamic(Box::new(closure))
+    }
+
     pub(crate) fn build_dig_handler_inner<F>(
         closure: F,
         _game_builder: &GameBuilder,
@@ -369,7 +375,7 @@ impl BlockBuilder {
         mut self,
         closure: impl Fn() -> (StaticItemName, u32) + Send + Sync + 'static,
     ) -> Self {
-        self.dropped_item = DroppedItem::Dynamic(Box::new(move |_param| closure()));
+        self.dropped_item = DroppedItem::dynamic(move |_param| closure());
         self
     }
 
@@ -385,7 +391,7 @@ impl BlockBuilder {
         mut self,
         closure: impl Fn(DroppedItemClosureParam) -> (StaticItemName, u32) + Send + Sync + 'static,
     ) -> Self {
-        self.dropped_item = DroppedItem::Dynamic(Box::new(closure));
+        self.dropped_item = DroppedItem::dynamic(closure);
         self
     }
 
@@ -446,15 +452,21 @@ impl BlockBuilder {
 
     maybe_export!(
         /// Run arbitrary changes on the block definition just before it's registered
-        fn add_modifier(mut self, modifier: Box<dyn FnOnce(&mut BlockType)>) -> Self {
-            self.modifiers.push(modifier);
+        fn add_modifier(
+            mut self,
+            modifier: impl FnOnce(&mut BlockType) + Send + Sync + 'static,
+        ) -> Self {
+            self.modifiers.push(Box::new(modifier));
             self
         }
     );
     maybe_export!(
         /// Run arbitrary changes on the associated item definition just before it's registered
-        fn add_item_modifier(mut self, modifier: Box<dyn FnOnce(&mut Item)>) -> Self {
-            self.item_modifiers.push(modifier);
+        fn add_item_modifier(
+            mut self,
+            modifier: impl FnOnce(&mut Item) + Send + Sync + 'static,
+        ) -> Self {
+            self.item_modifiers.push(Box::new(modifier));
             self
         }
     );

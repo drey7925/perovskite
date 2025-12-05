@@ -1055,7 +1055,7 @@ pub(crate) fn register_tracks(
             )
             .set_allow_light_propagation(true)
             .set_display_name("Railway track")
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler = Some(make_track_interact_key_handler());
                 let ri = bt.client_info.render_info.as_mut().unwrap();
                 match ri {
@@ -1092,7 +1092,7 @@ pub(crate) fn register_tracks(
                     }
                     _ => unreachable!(),
                 }
-            })),
+            }),
     )?;
 
     const CURVED_RAIL_ITEM_TEX: StaticTextureName = StaticTextureName("carts:curved_rail_item");
@@ -1282,9 +1282,9 @@ fn register_rail_slope(
                 })
                 .set_allow_light_propagation(true)
                 .set_display_name(format!("Slope {numerator}/{denominator}"))
-                .add_modifier(Box::new(|bt| {
+                .add_modifier(|bt| {
                     bt.interact_key_handler = Some(make_track_interact_key_handler());
-                })),
+                }),
         )
         .map(|b| b.id)
 }

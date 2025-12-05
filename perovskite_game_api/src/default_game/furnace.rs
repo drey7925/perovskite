@@ -271,13 +271,13 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_display_name("Furnace")
             .add_interact_key_menu_entry("", "Open furnace")
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| make_furnace_popup(ctx, coord)));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
                 bt.deserialize_extended_data_handler = Some(Box::new(furnace_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
-            })),
+            }),
     )?;
     let furnace_on_block = game_builder.add_block(
         BlockBuilder::new(FURNACE_ON)
@@ -299,13 +299,13 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
             .set_display_name("Lit furnace (should not see this)")
             .set_simple_dropped_item(FURNACE.0, 1)
             .add_interact_key_menu_entry("", "Open furnace")
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| make_furnace_popup(ctx, coord)));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
                 bt.deserialize_extended_data_handler = Some(Box::new(furnace_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
-            })),
+            }),
     )?;
 
     let timer_handler = FurnaceTimerCallback {

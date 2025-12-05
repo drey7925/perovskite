@@ -30,7 +30,7 @@ use crate::game_builder::{
 use crate::{
     blocks::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, CubeAppearanceBuilder,
-        MatterType, PlantLikeAppearanceBuilder,
+        DroppedItem, MatterType, PlantLikeAppearanceBuilder,
     },
     game_builder::{
         include_texture_bytes, GameBuilder, StaticBlockName, StaticItemName, StaticTextureName,
@@ -201,7 +201,9 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (COAL_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_dropped_item(DroppedItem::dynamic(|_| {
+                    (COAL_PIECE, rand::thread_rng().gen_range(1..=2))
+                }))
                 .set_item_sort_key("default:ore_blocks:coal"),
         )?;
 
@@ -268,7 +270,9 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (IRON_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_dropped_item(DroppedItem::dynamic(|_| {
+                    (IRON_PIECE, rand::thread_rng().gen_range(1..=2))
+                }))
                 .set_item_sort_key("default:ore_blocks:iron"),
         )?;
 
@@ -317,7 +321,9 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (DIAMOND_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_dropped_item(DroppedItem::dynamic(|_| {
+                    (DIAMOND_PIECE, rand::thread_rng().gen_range(1..=2))
+                }))
                 .set_item_sort_key("default:ore_blocks:diamond"),
         )?;
 
@@ -370,7 +376,9 @@ pub mod ores {
                 )
                 .add_block_group(BRITTLE)
                 .add_block_group(TOOL_REQUIRED)
-                .set_dropped_item_closure(|| (GOLD_PIECE, rand::thread_rng().gen_range(1..=2)))
+                .set_dropped_item(DroppedItem::dynamic(|_| {
+                    (GOLD_PIECE, rand::thread_rng().gen_range(1..=2))
+                }))
                 .set_item_sort_key("default:ore_blocks:gold"),
         )?;
 
@@ -491,7 +499,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
     builder.add_block(
         BlockBuilder::new(TNT)
             .set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(TNT_TEXTURE))
-            .add_modifier(Box::new(move |block_type| {
+            .add_modifier(move |block_type| {
                 block_type.tap_handler_full = Some(Box::new(move |ctx, coord, tool| {
                     if tool.is_some_and(|tool| tool.proto.item_name == "default:superuser_pickaxe")
                     {
@@ -525,7 +533,7 @@ fn register_tnt(builder: &mut GameBuilder) -> Result<()> {
                         tool_wear: 0,
                     })
                 }))
-            })),
+            }),
     )?;
 
     Ok(())
@@ -682,7 +690,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_cube_single_texture(SILT_DAMP_TEXTURE)
             .set_display_name("Silt (damp)")
             .set_simple_dropped_item(SILT_DRY.0, 1)
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 // TODO tune these, TODO move these into the block builder
                 bt.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
                     horizontal_speed: 0.75,
@@ -695,7 +703,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                     surf_jump_speed: 0.1,
                     surf_sink_speed: -0.1,
                 }))
-            })),
+            }),
     )?;
     let _clay = game_builder.add_block(
         BlockBuilder::new(CLAY)
@@ -765,12 +773,12 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_dropped_item_closure_extended(|param| {
                 (SNOWBALL, param.variant.clamp(0, 7) as u32 + 1)
             })
-            .add_modifier(Box::new(move |bt| {
+            .add_modifier(move |bt| {
                 bt.step_on_handler_inline = Some(Box::new(move |_, block, _, _| {
                     *block = snow_footprint_id.with_variant_of(*block);
                     Ok(BlockInteractionResult::default())
                 }))
-            })),
+            }),
     )?;
 
     let snow_block_footprint = game_builder.add_block(
@@ -799,12 +807,12 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .set_footstep_sound(Some(snow_footstep))
             .set_trivially_replaceable(false)
             .set_display_name("Snow block")
-            .add_modifier(Box::new(move |bt| {
+            .add_modifier(move |bt| {
                 bt.step_on_handler_inline = Some(Box::new(move |_, block, _, _| {
                     *block = snow_block_footprint_id.with_variant_of(*block);
                     Ok(BlockInteractionResult::default())
                 }))
-            })),
+            }),
     )?;
     let snow_id = snow.id;
     let snow_block_id = snow_block.id;
@@ -1117,10 +1125,10 @@ fn register_test_audio_block(game_builder: &mut GameBuilder) -> Result<()> {
     BlockBuilder::new(TEST_AUDIO_SOURCE)
         .set_display_name("Test audio source")
         .set_cube_single_texture(TEST_AUDIO_TEX)
-        .add_modifier(Box::new(move |bt| {
+        .add_modifier(move |bt| {
             bt.client_info.sound_id = audio_id.0;
             bt.client_info.sound_volume = 0.25;
-        }))
+        })
         .build_and_deploy_into(game_builder)?;
 
     Ok(())

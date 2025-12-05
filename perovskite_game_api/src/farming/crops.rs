@@ -403,15 +403,15 @@ pub fn define_crop(game_builder: &mut GameBuilder, def: CropDefinition) -> Resul
 
         if let Some(effect) = stage.dig_effect {
             let handler = effect.build_handler(stage_fbns.clone(), i)?;
-            builder = builder.add_modifier(Box::new(|bt| {
+            builder = builder.add_modifier(|bt| {
                 bt.dig_handler_inline = Some(handler);
-            }));
+            });
         }
         if let Some(effect) = stage.tap_effect {
             let handler = effect.build_handler(stage_fbns.clone(), i)?;
-            builder = builder.add_modifier(Box::new(|bt| {
+            builder = builder.add_modifier(|bt| {
                 bt.tap_handler_inline = Some(handler);
-            }));
+            });
         }
         if !stage.interaction_effects.is_empty() {
             todo!("Interaction effects not yet wired up");

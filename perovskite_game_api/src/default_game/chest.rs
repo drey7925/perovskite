@@ -53,14 +53,14 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_display_name("Unlocked chest")
             .add_interact_key_menu_entry("", "Open chest")
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
-                        Ok(Some(make_chest_popup(&ctx, coord, p)?))
+                        Ok(Some(make_chest_popup(&ctx, coord, &p)?))
                     }
                     _ => Ok(None),
                 }));
-            })),
+            }),
     )?;
 
     const LOCKED_CHEST_OWNER: &str = "default:locked_chest:owner";
@@ -81,7 +81,7 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
             )
             .set_display_name("Locked chest")
             .add_interact_key_menu_entry("", "Open chest")
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| match ctx.initiator() {
                     perovskite_server::game_state::event::EventInitiator::Player(p) => {
                         let (_, owner) =
@@ -99,7 +99,7 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
                             || p.player
                                 .has_permission(permissions::BYPASS_INVENTORY_CHECKS)
                         {
-                            Ok(Some(make_chest_popup(&ctx, coord, p)?))
+                            Ok(Some(make_chest_popup(&ctx, coord, &p)?))
                         } else {
                             // unwrap is safe - if owner were none, we would have given access to the chest
                             p.player.send_chat_message(
@@ -114,7 +114,7 @@ pub(crate) fn register_chest(game_builder: &mut GameBuilder) -> Result<()> {
                     }
                     _ => Ok(None),
                 }))
-            }))
+            })
             .set_extended_data_initializer(Box::new(|ctx, _coord, _stack| {
                 Ok(ctx.initiator().player_name().map(|name| {
                     let mut data = ExtendedData::default();

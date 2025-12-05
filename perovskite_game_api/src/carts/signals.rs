@@ -437,11 +437,11 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
                     ),
             )
             .set_allow_light_propagation(true)
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
                 bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
-            }))
+            })
             .add_interact_key_menu_entry("", "Signal Properties")
             .set_extra_variant_func(Box::new(|_ctx, _coord, _stack, old_variant| {
                 Ok(old_variant | VARIANT_RESTRICTIVE)
@@ -537,11 +537,11 @@ fn register_single_signal(
                     ),
             )
             .set_allow_light_propagation(true)
-            .add_modifier(Box::new(|bt| {
+            .add_modifier(|bt| {
                 bt.interact_key_handler = Some(Box::new(|ctx, coord, _| spawn_popup(ctx, coord)));
                 bt.deserialize_extended_data_handler = Some(Box::new(signal_config_deserialize));
                 bt.serialize_extended_data_handler = Some(Box::new(signal_config_serialize));
-            }))
+            })
             .add_interact_key_menu_entry("", "Signal Properties")
             .set_extra_variant_func(Box::new(|_ctx, _coord, _stack, old_variant| {
                 Ok(old_variant | VARIANT_RESTRICTIVE)

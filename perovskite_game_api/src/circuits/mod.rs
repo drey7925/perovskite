@@ -547,7 +547,7 @@ pub trait CircuitBlockBuilder {
 
 impl CircuitBlockBuilder for BlockBuilder {
     fn register_circuit_callbacks(self) -> BlockBuilder {
-        self.add_modifier(Box::new(move |bt| {
+        self.add_modifier(move |bt| {
             let old_inline_handler: Option<Box<InlineHandler>> = bt.dig_handler_inline.take();
             let old_full_handler: Option<Box<FullHandler>> = bt.dig_handler_full.take();
             let block_name = FastBlockName::new(bt.client_info.short_name.clone());
@@ -596,8 +596,8 @@ impl CircuitBlockBuilder for BlockBuilder {
             bt.client_info
                 .groups
                 .push(constants::CIRCUITS_GROUP.to_string());
-        }))
-        .add_item_modifier(Box::new(|item| {
+        })
+        .add_item_modifier(|item| {
             let old_handler = item.place_on_block_handler.take();
             item.place_on_block_handler = Some(Box::new(move |ctx, coord, tool_stack| {
                 let result = match old_handler.as_deref() {
@@ -619,7 +619,7 @@ impl CircuitBlockBuilder for BlockBuilder {
                 }
                 result
             }))
-        }))
+        })
     }
 }
 mod dispatch {

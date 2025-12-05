@@ -1112,7 +1112,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_inventory_texture(UNBROKEN_TEXTURE)
             .set_simple_dropped_item(UNBROKEN_NAME.0, 1)
-            .add_modifier(Box::new(block_modifier.clone())),
+            .add_modifier(block_modifier.clone()),
     )?;
 
     let box_properties = AaBoxProperties::new(
@@ -1133,7 +1133,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             .add_interact_key_menu_entry("", "Program microcontroller")
             .set_inventory_texture(UNBROKEN_TEXTURE)
             .register_circuit_callbacks()
-            .add_modifier(Box::new(block_modifier)),
+            .add_modifier(block_modifier),
     )?;
     let properties = CircuitBlockProperties {
         connectivity: CONN_PORT.to_vec(),

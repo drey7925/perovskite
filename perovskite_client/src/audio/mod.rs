@@ -1397,12 +1397,18 @@ impl SmoothedVar {
         }
         self.val
     }
+    #[allow(dead_code)]
+    #[inline]
     fn reset(&mut self, val: f64) {
         self.val = val;
     }
+    #[allow(dead_code)]
+    #[inline]
     fn get(&self) -> f64 {
         self.val
     }
+    #[allow(dead_code)]
+    #[inline]
     fn clear(&mut self) {
         self.val = f64::NAN;
     }

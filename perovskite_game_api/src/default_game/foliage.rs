@@ -294,9 +294,9 @@ fn register_flowers(builder: &mut GameBuilder) -> Result<()> {
                 .set_inventory_texture(texture)
                 .add_block_group(foliage_groups::FLOWERS)
                 .set_allow_light_propagation(true)
-                .add_modifier(Box::new(|block: &mut BlockType| {
+                .add_modifier(|block: &mut BlockType| {
                     block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
-                }))
+                })
                 .set_item_sort_key(format!("default:flowers:{}", block.0)),
         )?;
         builder.register_crafting_recipe(
