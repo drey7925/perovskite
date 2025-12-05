@@ -35,7 +35,7 @@ use crate::media::CacheManager;
 // Public for testing
 pub struct EngineHandle {
     control: Arc<SharedControl>,
-    drop_guard: DropGuard,
+    _drop_guard: DropGuard,
     allocator_state: Mutex<AllocatorState>,
     simple_sound_lengths: FxHashMap<u32, u64>,
     freeing_receiver: crossbeam_channel::Receiver<Box<EntityData>>,
@@ -124,7 +124,7 @@ impl EngineHandle {
                 .iter()
                 .copied()
                 .enumerate()
-                .min_by_key(|&(i, score)| score)
+                .min_by_key(|&(_, score)| score)
                 .unwrap();
             if min_score < candidate_score {
                 let token = seqnum + (min_index as u64);
@@ -238,7 +238,7 @@ impl EngineHandle {
                 .iter()
                 .copied()
                 .enumerate()
-                .min_by_key(|&(i, score)| score)
+                .min_by_key(|&(_, score)| score)
                 .unwrap();
             if min_score < candidate_score {
                 let token = seqnum + (min_index as u64);
@@ -423,7 +423,7 @@ pub(crate) async fn start_engine(
 
     Ok(EngineHandle {
         control,
-        drop_guard: cancellation_token.drop_guard(),
+        _drop_guard: cancellation_token.drop_guard(),
         allocator_state: Mutex::new(AllocatorState::new()),
         simple_sound_lengths: wav_lengths,
         freeing_receiver,
@@ -464,7 +464,6 @@ struct EngineState {
     initial_callback_timing: Option<(Instant, cpal::StreamInstant)>,
     initial_playback_timing: Option<(Instant, cpal::StreamInstant)>,
     game_timekeeper: Arc<Timekeeper>,
-    previous_tick: u64,
 
     nanos_per_sample: f64,
     total_samples_seen: u64,
@@ -750,7 +749,6 @@ impl EngineState {
             game_timekeeper: timekeeper,
             // what the heck? Extra factor of 2?
             nanos_per_sample: 1_000_000_000.0 / stream_config.sample_rate().0 as f64,
-            previous_tick: 0,
             total_samples_seen: 0,
 
             rng: rand::rngs::SmallRng::from_rng(&mut rand::thread_rng())?,
@@ -914,7 +912,7 @@ impl EngineState {
 
             entity.visit_sub_entities_including_trailing(
                 buffer_start_tick,
-                |idx, pos, move_dist, m, _class| {
+                |_idx, pos, _move_dist, _m, _class| {
                     // Potential later optimization: if we're far enough compared to the
                     // trailing length, bail out of the loop early
 
@@ -1060,7 +1058,7 @@ impl EngineState {
     fn free_entity_data_off_thread(&mut self, data: Box<EntityData>) {
         // If the channel is full, we can't really do anything other than sadly give up
         match self.freeing_sender.try_send(data) {
-            Ok(x) => {}
+            Ok(()) => {}
             // Two error cases, same code, different rationale
             Err(TrySendError::Disconnected(data)) => {
                 // Shutdown ordering error; if we've lost the freeing receiver, we've also lost
@@ -1172,7 +1170,7 @@ impl EntityData {
             return u64::MAX;
         }
 
-        let (position, velocity, elapsed, m) = entity_data.position_velocity(tick_now);
+        let (position, velocity, _elapsed, _m) = entity_data.position_velocity(tick_now);
         let distance = (position - player_position).magnitude();
 
         const BASE_SCORE: u64 = 1 << 60;
@@ -1217,8 +1215,6 @@ impl SharedControl {
     fn new(settings: Arc<ArcSwap<GameSettings>>, initial_position: Vector3<f64>) -> SharedControl {
         const SIMPLE_SOUND_CONST_INIT: SeqLock<SimpleSoundControlBlock> =
             SeqLock::new(SimpleSoundControlBlock::const_default());
-        const PROCEDURAL_ENTITY_CONST_INIT: SeqLock<ProceduralEntitySoundControlBlock> =
-            SeqLock::new(ProceduralEntitySoundControlBlock::const_default());
         SharedControl {
             enabled: AtomicBool::new(false),
             player_state: SeqLock::new(PlayerState {
@@ -1581,9 +1577,6 @@ impl PrerecordedSampler {
             (1.0 - fpart) * preceding_sample.1 + fpart * following_sample.1,
         )
     }
-    pub fn len_nanos(&self) -> u64 {
-        self.len_nanos
-    }
 }
 
 #[inline]
@@ -1601,8 +1594,9 @@ struct EntityScratchpad {
     entity_id: u64,
     last_balance: SmoothedVar,
     // Used to provide an extra burst of sound at edges
-    edge_cycle: f32,
-    edge_strength: f32,
+    // TODO: Re-add if we start having edge effects
+    // edge_cycle: f32,
+    // edge_strength: f32,
 }
 impl Default for EntityScratchpad {
     fn default() -> Self {
@@ -1610,8 +1604,8 @@ impl Default for EntityScratchpad {
             turbulence_iir_state: IirLpfCascade::default(),
             entity_id: u64::MAX,
             last_balance: Default::default(),
-            edge_cycle: -1.0,
-            edge_strength: 0.0,
+            // edge_cycle: -1.0,
+            // edge_strength: 0.0,
         }
     }
 }

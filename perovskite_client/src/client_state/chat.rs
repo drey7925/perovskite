@@ -9,6 +9,8 @@ impl ChatState {
             message_history: Vec::new(),
         }
     }
+
+    #[allow(dead_code)]
     pub(crate) fn show_client_message(&mut self, message: String) {
         self.message_history
             .push(ChatMessage::new("[client]", message).with_color(CLIENT_INTERNAL_MESSAGE_COLOR))

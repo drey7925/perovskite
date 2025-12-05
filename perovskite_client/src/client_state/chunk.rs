@@ -28,7 +28,7 @@ use perovskite_core::{block_id::BlockId, coordinates::ChunkCoordinate};
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{cast_slice, must_cast_slice};
-use egui::ahash::{HashMapExt, HashSetExt};
+use egui::ahash::HashMapExt;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracy_client::span;
 use vulkano::buffer::Subbuffer;
@@ -45,7 +45,6 @@ use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
 use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
-use prost::Message;
 use rustc_hash::{FxHashMap, FxHasher};
 use vulkano::DeviceSize;
 
@@ -56,6 +55,7 @@ pub(crate) trait ChunkDataView {
     fn get_block(&self, offset: ChunkOffset) -> BlockId {
         self.block_ids()[offset.as_extended_index()]
     }
+    #[allow(dead_code)]
     fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData>;
     fn raytrace_data(&self) -> Option<&VkChunkRaytraceData>;
 
@@ -138,6 +138,7 @@ impl<'a> ChunkDataViewMut<'a> {
         self.0.render_state = state;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_block(&self, offset: ChunkOffset) -> BlockId {
         self.0
             .block_ids
@@ -145,6 +146,7 @@ impl<'a> ChunkDataViewMut<'a> {
             .map(|x| x[offset.as_extended_index()])
             .unwrap_or(BlockId(0))
     }
+    #[allow(dead_code)]
     pub(crate) fn raytrace_data_mut(&mut self) -> Option<&mut VkChunkRaytraceData> {
         self.0.raytrace_data.as_mut()
     }
@@ -281,9 +283,6 @@ impl MeshVectorReclaim {
     pub(crate) fn put(&self, idx: Vec<u32>, vtx: Vec<CubeGeometryVertex>) {
         // Drop - if we don't have space, just drop it
         drop(self.sender.try_send((idx, vtx)));
-    }
-    pub(crate) fn occupancy(&self) -> usize {
-        self.receiver.len()
     }
 }
 
@@ -613,10 +612,6 @@ impl ClientChunk {
         (id, ext_data)
     }
 
-    pub(crate) fn coord(&self) -> ChunkCoordinate {
-        self.coord
-    }
-
     pub(crate) fn chunk_data(&self) -> LockedChunkDataView<'_> {
         let _ = span!("chunk_data");
         LockedChunkDataView(self.chunk_data.read())
@@ -761,6 +756,10 @@ impl MeshBatch {
             if check_frustum(view_proj_matrix * translation) {
                 any_frustum_pass = true;
             }
+        }
+
+        if !any_frustum_pass {
+            return None;
         }
 
         Some(CubeGeometryDrawCall {

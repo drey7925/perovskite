@@ -124,7 +124,7 @@ async fn build_texture_atlas(
 
         assert_eq!(images.len(), needs_render.len());
 
-        for ((def, id), image) in needs_render.iter().zip(images) {
+        for ((def, _id), image) in needs_render.iter().zip(images) {
             let mut bytes: Vec<u8> = Vec::new();
             image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)?;
             cache_insertions.push((def, bytes));

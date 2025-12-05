@@ -51,7 +51,7 @@ struct SharedState {
     ack_map: Mutex<HashMap<u64, Instant>>,
     mesh_workers: Vec<Arc<MeshWorker>>,
     neighbor_propagators: Vec<Arc<NeighborPropagator>>,
-    audio_healer: Arc<EvictedAudioHealer>,
+    _audio_healer: Arc<EvictedAudioHealer>,
 
     batcher: Arc<MeshBatcher>,
     initial_state_notification: Arc<tokio::sync::Notify>,
@@ -129,7 +129,7 @@ pub(crate) async fn make_contexts(
         neighbor_propagators,
         batcher,
         initial_state_notification,
-        audio_healer,
+        _audio_healer: audio_healer,
         cancellation,
         latest_rx_tick: AtomicU64::new(0),
         inbound_worker_busy: AtomicBool::new(false),
@@ -604,10 +604,9 @@ impl InboundContext {
                 .client_state
                 .timekeeper
                 .update_error(message.tick);
-            let old_tick = self
-                .shared_state
+            self.shared_state
                 .latest_rx_tick
-                .swap(message.tick, Ordering::Relaxed);
+                .store(message.tick, Ordering::Relaxed);
             // It's tempting to check whether old_tick > message.tick. For protocol version 9, this
             // is actually a wrong check; the server-side prioritizer does interleave messages from
             // different sources

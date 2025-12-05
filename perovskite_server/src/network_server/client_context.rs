@@ -1776,7 +1776,7 @@ impl InboundWorker {
                 self.handle_inventory_action(inventory_message).await?;
             }
             Some(proto::stream_to_server::ClientMessage::PopupResponse(response)) => {
-                self.check_player_permission(permissions::INVENTORY)?;
+                self.check_player_permission(permissions::TAP_INTERACT)?;
                 self.handle_popup_response(response).await?;
             }
             Some(proto::stream_to_server::ClientMessage::InteractKey(interact_key)) => {

@@ -914,7 +914,6 @@ impl Default for PlantLikeAppearanceBuilder {
     }
 }
 
-use crate::game_builder::TextureName;
 pub use protocol::render::TextureCrop;
 
 fn make_texture_ref(diffuse: String) -> Option<TextureReference> {

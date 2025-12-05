@@ -28,7 +28,7 @@ pub(crate) mod raytrace_buffer;
 use anyhow::{bail, ensure, Context, Error, Result};
 use arc_swap::ArcSwap;
 use enum_map::EnumMap;
-use image::GenericImageView;
+
 use log::warn;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -1226,27 +1226,6 @@ impl<const M: usize, const N: usize> Display for FramebufferAndLoadOpId<M, N> {
     }
 }
 
-impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<0, N> {}
-impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<1, N> {}
-impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<2, N> {}
-impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<3, N> {}
-impl<const N: usize> ColorAttachmentsWithinLimits for FramebufferAndLoadOpId<4, N> {}
-impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 0> {}
-impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 1> {}
-impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 2> {}
-impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 3> {}
-impl<const M: usize> InputAttachmentsWithinLimits for FramebufferAndLoadOpId<M, 4> {}
-
-trait ColorAttachmentsWithinLimits {}
-
-trait InputAttachmentsWithinLimits {}
-
-pub(crate) trait SupportedByVulkanCore {}
-impl<T: ColorAttachmentsWithinLimits + InputAttachmentsWithinLimits + ?Sized> SupportedByVulkanCore
-    for T
-{
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct FramebufferId {
     color_attachments: tinyvec::ArrayVec<[ImageId; 8]>,
@@ -1633,8 +1612,8 @@ impl Debug for FramebufferHolder {
                     .image_views
                     .lock()
                     .iter()
-                    .filter(|(x, y)| y.is_some())
-                    .map(|(x, y)| x)
+                    .filter(|(_x, y)| y.is_some())
+                    .map(|(x, _y)| x)
                     .collect::<Vec<_>>(),
             )
             .field(
@@ -1643,8 +1622,8 @@ impl Debug for FramebufferHolder {
                     .samplers
                     .lock()
                     .iter()
-                    .filter(|(x, y)| y.is_some())
-                    .map(|(x, y)| x)
+                    .filter(|(_x, y)| y.is_some())
+                    .map(|(x, _y)| x)
                     .collect::<Vec<_>>(),
             )
             .field("blit_path", &self.blit_path)

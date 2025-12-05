@@ -192,7 +192,7 @@ pub(crate) struct GameEntity {
     audio_token: Option<ProceduralEntityToken>,
     turbulence_audio_model: Option<TurbulenceAudioModel>,
     // debug only
-    created: Instant,
+    _created: Instant,
 }
 
 impl GameEntity {
@@ -549,7 +549,7 @@ impl GameEntity {
                 .map(|x| x.distance)
                 .fold(0.0, |a, b| a.max(b)),
             trailing_entities,
-            created: Instant::now(),
+            _created: Instant::now(),
             class: update.entity_class,
             id: update.id,
             audio_token: None,
@@ -686,11 +686,11 @@ impl EntityState {
         &self,
         player_position: Vector3<f64>,
         time_tick: u64,
-        entity_renderer: &EntityRenderer,
+        _entity_renderer: &EntityRenderer,
         entity: &GameEntity,
     ) -> impl Iterator<Item = (Matrix4<f32>, u32)> {
         let mut results = Vec::with_capacity(entity.trailing_entities.len() + 1);
-        entity.visit_sub_entities_including_trailing(time_tick, |i, pos, _, m, class| {
+        entity.visit_sub_entities_including_trailing(time_tick, |_i, pos, _, m, class| {
             results.push((
                 build_transform(player_position, pos, m.face_direction, m.pitch),
                 class,

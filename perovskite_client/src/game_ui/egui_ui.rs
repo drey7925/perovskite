@@ -275,10 +275,6 @@ impl EguiUi {
         self.status_bar = Some((Instant::now() + duration, message))
     }
 
-    pub(crate) fn is_perf_panel_open(&self) -> bool {
-        self.perf_open
-    }
-
     fn get_text_fields(&self, popup_id: u64) -> HashMap<String, String> {
         self.text_fields
             .iter()
@@ -322,7 +318,7 @@ impl EguiUi {
                 // todo support multiline, other styling
                 if text_field.multiline {
                     ScrollArea::both()
-                        .id_source("scroll_".to_string() + text_field.key.as_str())
+                        .id_salt("scroll_".to_string() + text_field.key.as_str())
                         .max_width(320.0)
                         .max_height(240.0)
                         .show(ui, |ui| {
@@ -372,7 +368,7 @@ impl EguiUi {
                 };
                 egui::CollapsingHeader::new(label)
                     .default_open(true)
-                    .id_source(Id::new("collapsing_header_inv").with(inventory.inventory_key))
+                    .id_salt(Id::new("collapsing_header_inv").with(inventory.inventory_key))
                     .show(ui, |ui| {
                         self.draw_inventory_view(
                             ui,
@@ -385,7 +381,7 @@ impl EguiUi {
             }
             Some(proto::ui_element::Element::SideBySide(side_by_side)) => {
                 egui::CollapsingHeader::new(&side_by_side.header)
-                    .id_source(id)
+                    .id_salt(id)
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
@@ -427,7 +423,9 @@ impl EguiUi {
             .resizable(true)
             .default_pos(center)
             .show(ctx, |ui| {
-                ui.set_enabled(enabled);
+                if !enabled {
+                    ui.disable();
+                }
                 ui.visuals_mut().override_text_color = Some(Color32::WHITE);
 
                 let mut clicked_button = None;
@@ -788,7 +786,7 @@ impl EguiUi {
                     let scroll_area = egui::ScrollArea::vertical()
                         .auto_shrink([false, true])
                         .min_scrolled_height(240.0)
-                        .id_source("chat_history")
+                        .id_salt("chat_history")
                         .max_height(240.0);
                     let messages = &chat.message_history;
                     scroll_area.show(ui, |ui| {

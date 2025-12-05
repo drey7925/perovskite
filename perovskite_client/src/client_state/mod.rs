@@ -926,7 +926,8 @@ impl ClientState {
 
         *self.last_position_weak.lock_write() = ppu;
 
-        let (sky, lighting, sun_direction) = self.light_cycle.lock().get_colors();
+        // TODO: Either do something with sky (like give it to the sky shader), or remove it
+        let (_sky, lighting, sun_direction) = self.light_cycle.lock().get_colors();
 
         self.want_new_client_perf.notify_waiters();
         FrameState {
@@ -969,7 +970,13 @@ impl ClientState {
                     .permission
                     .iter()
                     .any(|p| p == permissions::INVENTORY),
-            )
+            );
+            egui_lock.set_allow_button_interaction(
+                state_update
+                    .permission
+                    .iter()
+                    .any(|p| p == permissions::TAP_INTERACT),
+            );
         }
         {
             let mut tc_lock = self.tool_controller.lock();

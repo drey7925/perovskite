@@ -7,7 +7,6 @@ use lazy_static::lazy_static;
 use perovskite_core::protocol::render::TextureReference;
 use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Formatter};
-use texture_packer::texture::Texture;
 use texture_packer::{Rect, TexturePacker};
 use vulkano::format::Format;
 

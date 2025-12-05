@@ -193,7 +193,7 @@ impl RaytraceBufferManager {
         Ok(())
     }
 
-    pub(crate) fn acquire(&self, ctx: &VulkanContext) -> Result<RtFrameData> {
+    pub(crate) fn acquire(&self) -> Result<RtFrameData> {
         let _span = span!("raytrace acquire");
         let mut state = self.state.lock();
         let mut update_steps = SmallVec::new();

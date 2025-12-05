@@ -145,7 +145,7 @@ impl ActiveGame {
             let RtFrameData {
                 new_buffer,
                 update_steps,
-            } = self.client_state.chunks.raytrace_buffers().acquire(&ctx)?;
+            } = self.client_state.chunks.raytrace_buffers().acquire()?;
             if let Some(new_buffer) = new_buffer {
                 if let Some(old) = self.raytrace_data.replace(new_buffer) {
                     ctx.u32_reclaimer.give_buffer(

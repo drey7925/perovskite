@@ -274,5 +274,8 @@ mod test {
 
         assert!(recipe.matches(&[Some(&item_1), Some(&item_2), None, None]));
         assert!(recipe.matches(&[None, Some(&item_2), None, Some(&item_1)]));
+
+        assert!(recipe2.matches(&[Some(&item_1), Some(&item_2), None, None]));
+        assert!(recipe2.matches(&[None, Some(&item_2), None, Some(&item_1)]));
     }
 }

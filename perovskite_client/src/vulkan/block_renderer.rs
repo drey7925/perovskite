@@ -42,7 +42,6 @@ use crate::client_state::chunk::{
 use crate::client_state::ClientState;
 use crate::media::{load_or_generate_image, CacheManager};
 use crate::vulkan::atlas::{TextureAtlas, TextureKey};
-use crate::vulkan::gpu_chunk_table::ht_consts::{FLAG_HASHTABLE_HEAVY, FLAG_HASHTABLE_PRESENT};
 use crate::vulkan::shaders::cube_geometry::{
     CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
 };
@@ -74,11 +73,6 @@ impl CubeFace {
     #[inline(always)]
     const fn index(&self) -> usize {
         *self as usize
-    }
-
-    #[inline(always)]
-    const fn repr(&self) -> u8 {
-        *self as u8
     }
 
     #[inline(always)]
@@ -400,25 +394,16 @@ static RAYTRACE_CHUNK_VERSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone)]
 pub(crate) struct VkChunkRaytraceData {
-    pub(crate) flags: u32,
     // Only Some if we overrode anything
     pub(crate) blocks: Option<Box<[u32; 5832]>>,
     // May only be used for debugging, still TBD. Small enough to keep for now
-    pub(crate) version: usize,
+    pub(crate) _version: usize,
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct VkChunkVertexDataCpu {
     pub(crate) draw_buffers: EnumMap<CubeDrawStep, Option<VkBufferCpu<CubeGeometryVertex>>>,
 }
 impl VkChunkVertexDataCpu {
-    fn empty() -> VkChunkVertexDataCpu {
-        VkChunkVertexDataCpu {
-            draw_buffers: enum_map! {
-                _ => None
-            },
-        }
-    }
-
     pub(crate) fn to_gpu(&self, allocator: Arc<VkAllocator>) -> Result<VkChunkVertexDataGpu> {
         let work = move |x: &VkBufferCpu<CubeGeometryVertex>| x.to_gpu(allocator.clone());
         Ok(VkChunkVertexDataGpu {
@@ -516,8 +501,6 @@ impl BlockRenderer {
     }
 }
 
-const BLACK_PIXEL: &'static str = "builtin:black_pixel";
-
 impl BlockRenderer {
     pub(crate) async fn new(
         block_type_manager: Arc<ClientBlockTypeManager>,
@@ -582,15 +565,8 @@ impl BlockRenderer {
                 .block_defs()
                 .iter()
                 .map(|x| {
-                    x.as_ref().and_then(|x| {
-                        build_simple_cache_entry(
-                            x,
-                            &texture_atlas.texel_coords,
-                            &block_type_manager,
-                            texture_atlas.width as f32,
-                            texture_atlas.height as f32,
-                        )
-                    })
+                    x.as_ref()
+                        .and_then(|x| build_simple_cache_entry(x, &texture_atlas.texel_coords))
                 })
                 .collect(),
         };
@@ -655,10 +631,6 @@ impl BlockRenderer {
         &self.texture_atlas
     }
 
-    pub(crate) fn allocator(&self) -> &VkAllocator {
-        &self.vk_ctx.allocator()
-    }
-
     pub(crate) fn clone_vk_allocator(&self) -> Arc<VkAllocator> {
         self.vk_ctx.clone_allocator()
     }
@@ -681,7 +653,6 @@ impl BlockRenderer {
         }
 
         let max_block_id = ((self.raytrace_control_ssbo.len() as u32) << 12) - 1;
-        let mut flags = FLAG_HASHTABLE_PRESENT;
 
         let blocks = if block_ids
             .iter()
@@ -699,18 +670,9 @@ impl BlockRenderer {
         } else {
             None
         };
-
-        if block_ids
-            .iter()
-            .any(|x| self.block_defs.is_raytrace_heavy(*x))
-        {
-            flags |= FLAG_HASHTABLE_HEAVY;
-        }
-
         Some(VkChunkRaytraceData {
-            flags,
             blocks,
-            version: RAYTRACE_CHUNK_VERSION_COUNTER.fetch_add(1, Ordering::Relaxed),
+            _version: RAYTRACE_CHUNK_VERSION_COUNTER.fetch_add(1, Ordering::Relaxed),
         })
     }
 
@@ -1253,24 +1215,11 @@ pub(crate) mod rt_flags {
 fn build_simple_cache_entry(
     block_def: &BlockTypeDef,
     texture_coords: &FxHashMap<TextureKey, Rect>,
-    block_type_manager: &ClientBlockTypeManager,
-    w: f32,
-    h: f32,
 ) -> Option<SimpleTexCoordEntry> {
-    use rt_flags::*;
     match &block_def.render_info {
-        Some(RenderInfo::Cube(render_info)) => {
-            let mut flags = FLAG_BLOCK_PRESENT;
-            if render_info.variant_effect() == CubeVariantEffect::RotateNesw {
-                flags |= FLAG_BLOCK_ROTATE_NESW;
-            }
-            if block_type_manager.is_raytrace_fallback_render(BlockId(block_def.id)) {
-                flags |= FLAG_BLOCK_FALLBACK;
-            }
-            Some(SimpleTexCoordEntry {
-                coords: get_cube_coords(texture_coords, render_info),
-            })
-        }
+        Some(RenderInfo::Cube(render_info)) => Some(SimpleTexCoordEntry {
+            coords: get_cube_coords(texture_coords, render_info),
+        }),
         Some(RenderInfo::PlantLike(render_info)) => Some(SimpleTexCoordEntry {
             coords: [get_texture(texture_coords, render_info.tex.as_ref()); 6],
         }),

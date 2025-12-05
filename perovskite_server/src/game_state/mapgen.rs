@@ -58,5 +58,5 @@ pub trait MapgenInterface: Send + Sync {
     /// specific mapgen.
     ///
     /// By default, does nothing.
-    fn dump_debug(&self, _pos: BlockCoordinate, initiator: &EventInitiator<'_>) {}
+    fn dump_debug(&self, _pos: BlockCoordinate, _initiator: &EventInitiator<'_>) {}
 }

@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 
 use cgmath::num_traits::Float;
 use cgmath::{vec3, Vector3};
-use futures::TryStreamExt;
 use lazy_static::lazy_static;
 use perovskite_core::constants::permissions;
 use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
@@ -38,7 +37,6 @@ use perovskite_core::protocol::items::interaction_rule::DigBehavior;
 use perovskite_core::protocol::items::ItemDef;
 use perovskite_core::protocol::map::ClientExtendedData;
 use rustc_hash::FxHashSet;
-use sha2::digest::generic_array::functional::FunctionalSequence;
 
 /// The thing which is being dug/tapped or was dug/tapped
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -52,8 +50,8 @@ pub(crate) enum ToolTargetWithId {
 impl ToolTargetWithId {
     pub(crate) fn target(&self) -> ToolTarget {
         match self {
-            ToolTargetWithId::Block(x, id) => ToolTarget::Block(*x),
-            ToolTargetWithId::Entity(id, class) => ToolTarget::Entity(*id),
+            ToolTargetWithId::Block(x, _id) => ToolTarget::Block(*x),
+            ToolTargetWithId::Entity(id, _class) => ToolTarget::Entity(*id),
         }
     }
     pub(crate) fn without_trailing_index(&self) -> ToolTargetWithId {

@@ -111,7 +111,9 @@ impl MainMenu {
         let mut result = None;
         let enable_main_controls = self.should_enable_main_controls(&game_state);
         egui::CentralPanel::default().show(&self.egui_gui.egui_ctx, |ui| {
-            ui.set_enabled(enable_main_controls);
+            if !enable_main_controls {
+                ui.disable();
+            }
             ui.visuals_mut().override_text_color = Some(Color32::WHITE);
             if cfg!(debug_assertions) {
                 ui.label(
@@ -132,7 +134,7 @@ impl MainMenu {
 
             ui.with_layout(Layout::left_to_right(egui::Align::Min), |ui| {
                 let label = ui.label("Recent servers: ");
-                egui::ComboBox::from_id_source(label.id)
+                egui::ComboBox::from_id_salt(label.id)
                     .selected_text("Select...")
                     .width(256.0)
                     .show_ui(ui, |ui| {
@@ -481,15 +483,6 @@ fn make_connection(
     (state, settings)
 }
 
-fn rich_label(label: &str, changed: bool) -> egui::Label {
-    let color = if changed {
-        egui::Color32::from_rgb(0x8c, 0xff, 0xff)
-    } else {
-        egui::Color32::GRAY
-    };
-    egui::Label::new(egui::RichText::new(label).color(color))
-}
-
 pub(crate) fn draw_settings_menu(
     egui_ctx: &egui::Context,
     settings: &ArcSwap<GameSettings>,
@@ -727,7 +720,7 @@ fn draw_render_settings(
                 &prospective_settings.render.preferred_gpu
             };
             let mut preferred_gpu = prospective_settings.render.preferred_gpu.clone();
-            egui::ComboBox::from_id_source(gpu_label.id)
+            egui::ComboBox::from_id_salt(gpu_label.id)
                 .selected_text(selected_gpu)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut preferred_gpu, String::new(), "No preference");
@@ -1002,7 +995,7 @@ fn draw_audio_settings(ui: &mut Ui, prospective_settings: &mut GameSettings) {
                 &prospective_settings.audio.preferred_output_device
             };
             let mut preferred_device = prospective_settings.audio.preferred_output_device.clone();
-            egui::ComboBox::from_id_source(output_label.id)
+            egui::ComboBox::from_id_salt(output_label.id)
                 .selected_text(selected_audio_device)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut preferred_device, String::new(), "No preference");
