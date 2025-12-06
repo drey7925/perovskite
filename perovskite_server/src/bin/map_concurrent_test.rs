@@ -17,6 +17,7 @@ use tokio::time::Instant;
 struct SlowLoadSaveDb {
     base: Arc<dyn perovskite_server::database::GameDatabase>,
 }
+#[allow(dead_code)]
 impl SlowLoadSaveDb {
     thread_local! {
         static GET_DELAY: AtomicU64 = AtomicU64::new(0);
@@ -111,7 +112,7 @@ struct FlushAll {
     next_awaken: Option<Instant>,
 }
 impl Action for FlushAll {
-    fn act(&mut self, gs: &GameState, rng: &mut ThreadRng, stats: &mut WorkerStats) {
+    fn act(&mut self, gs: &GameState, _rng: &mut ThreadRng, stats: &mut WorkerStats) {
         let now = Instant::now();
         let next_awaken = self.next_awaken.get_or_insert_with(Instant::now);
         sleep(*next_awaken - now);
@@ -131,7 +132,7 @@ impl Action for RandWrite {
         let inc = rng.next_u32();
         let coord = ChunkCoordinate::new(val >> 4 & 0xf, val >> 8, val & 0xf);
         gs.game_map()
-            .mutate_block_atomically(coord.with_offset(ChunkOffset::new(0, 0, 0)), |b, e| {
+            .mutate_block_atomically(coord.with_offset(ChunkOffset::new(0, 0, 0)), |b, _e| {
                 b.0 = b.0.wrapping_add(inc);
                 Ok(())
             })

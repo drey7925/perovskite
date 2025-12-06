@@ -176,7 +176,6 @@ vulkano_shaders::shader! {
 }
 
 pub(crate) struct PostProcessingPipelineWrapper {
-    upsample_blend_pipeline: Arc<GraphicsPipeline>,
     lens_flare_pipeline: Arc<GraphicsPipeline>,
     blur_stages: Vec<(PassInfo, Arc<GraphicsPipeline>, PostProcessUniform)>,
     blit_stages: Vec<(PassInfo, Arc<GraphicsPipeline>, PostProcessUniform)>,
@@ -327,7 +326,7 @@ impl PostProcessingPipelineWrapper {
     }
 }
 
-const EXTRACTOR: FramebufferAndLoadOpId<1, 1> = FramebufferAndLoadOpId {
+const _EXTRACTOR: FramebufferAndLoadOpId<1, 1> = FramebufferAndLoadOpId {
     color_attachments: [(ImageId::Blur(0), LoadOp::DontCare)],
     depth_stencil_attachment: None,
     input_attachments: [(ImageId::MainColorResolved, LoadOp::Load)],
@@ -397,16 +396,6 @@ impl PostProcessingPipelineProvider {
             .entry_point("main")
             .context("Missing fragment shader: lens flare")?;
 
-        let upsample_blend_stages = smallvec![
-            PipelineShaderStageCreateInfo::new(vs.clone()),
-            PipelineShaderStageCreateInfo::new(fs_upsample_blend.clone())
-        ];
-        let upsample_blend_layout = PipelineLayout::new(
-            self.device.clone(),
-            PipelineDescriptorSetLayoutCreateInfo::from_stages(&upsample_blend_stages)
-                .into_pipeline_layout_create_info(self.device.clone())?,
-        )?;
-
         let vp_size = ImageId::MainColorResolved.dimension(
             ctx.viewport.extent[0] as u32,
             ctx.viewport.extent[1] as u32,
@@ -468,42 +457,6 @@ impl PostProcessingPipelineProvider {
             };
             blit_passes.push((target, Kernel::Down, input, Blend::None));
         }
-
-        let upsample_blend_info = GraphicsPipelineCreateInfo {
-            stages: upsample_blend_stages,
-            // No bindings or attributes
-            vertex_input_state: Some(VertexInputState::new()),
-            input_assembly_state: Some(InputAssemblyState::default()),
-            rasterization_state: Some(RasterizationState {
-                cull_mode: CullMode::Back,
-                front_face: FrontFace::CounterClockwise,
-                ..Default::default()
-            }),
-            multisample_state: Some(MultisampleState::default()),
-            depth_stencil_state: None,
-            color_blend_state: Some(ColorBlendState {
-                attachments: vec![ColorBlendAttachmentState {
-                    blend: None,
-                    color_write_mask: ColorComponents::all(),
-                    color_write_enable: true,
-                }],
-                ..Default::default()
-            }),
-            viewport_state: Some(ImageId::Blur(0).viewport_state(&ctx.viewport, *global_config)),
-            subpass: Some(PipelineSubpassType::BeginRenderPass(
-                Subpass::from(
-                    ctx.renderpasses
-                        .get_by_framebuffer_id(EXTRACTOR)
-                        .context("Missing extractor renderpass")?,
-                    0,
-                )
-                .context("Missing subpass")?,
-            )),
-            ..GraphicsPipelineCreateInfo::layout(upsample_blend_layout)
-        };
-        let upsample_blend_pipeline =
-            GraphicsPipeline::new(self.device.clone(), None, upsample_blend_info)
-                .context("Building overbright extractor pipeline")?;
 
         let lens_flare_stages = smallvec![
             PipelineShaderStageCreateInfo::new(vs.clone()),
@@ -592,7 +545,6 @@ impl PostProcessingPipelineProvider {
         }
 
         Ok(PostProcessingPipelineWrapper {
-            upsample_blend_pipeline,
             lens_flare_pipeline,
             blur_stages,
             blit_stages,

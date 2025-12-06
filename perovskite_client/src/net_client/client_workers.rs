@@ -903,11 +903,10 @@ impl InboundContext {
             };
             for &coord in needs_remesh.iter() {
                 if eligible_for_inline(coord) {
-                    self.shared_state.client_state.chunks.cloned_neighbors_fast(
-                        coord,
-                        &self.shared_state.client_state.block_types,
-                        &mut self.inline_fcn_scratchpad,
-                    );
+                    self.shared_state
+                        .client_state
+                        .chunks
+                        .cloned_neighbors_fast(coord, &mut self.inline_fcn_scratchpad);
                     propagate_neighbor_data(
                         &self.shared_state.client_state.block_types,
                         &self.inline_fcn_scratchpad,

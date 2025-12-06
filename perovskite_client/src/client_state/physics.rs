@@ -72,24 +72,6 @@ const DETECTION_EPS: f64 = COLLISION_EPS * 2.;
 // float_eps is used to avoid issues related to exact float comparisions
 const _FLOAT_EPS: f64 = 0.000001;
 
-trait BumpMagnitude {
-    fn bias_with(self, bias: f64) -> Self;
-}
-impl BumpMagnitude for f64 {
-    fn bias_with(self, bias: f64) -> Self {
-        self + (bias * self.signum())
-    }
-}
-impl BumpMagnitude for Vector3<f64> {
-    fn bias_with(self, bias: f64) -> Self {
-        vec3(
-            self.x.bias_with(bias),
-            self.y.bias_with(bias),
-            self.z.bias_with(bias),
-        )
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum PhysicsMode {
     Standard,

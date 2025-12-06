@@ -375,6 +375,9 @@ impl ClientBlockTypeManager {
         }
     }
 
+    // Unused: Currently only hybrid raytracing, but no reason why we wouldn't
+    // distinguish light vs heavy blocks in the future
+    #[allow(unused)]
     #[inline]
     pub(crate) fn is_raytrace_heavy(&self, id: BlockId) -> bool {
         if id.index() < self.raytrace_heavy.len() {

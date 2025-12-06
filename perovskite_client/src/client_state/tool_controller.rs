@@ -118,7 +118,7 @@ fn target_properties(
     ext: Option<ClientExtendedData>,
 ) -> TargetProperties<'_> {
     match target {
-        ToolTargetWithId::Block(coord, id) => {
+        ToolTargetWithId::Block(_coord, id) => {
             if let Some(blockdef) = state.block_types.get_blockdef(id) {
                 let hover_text: Option<Cow<str>> = if blockdef.has_client_extended_data {
                     ext.map(|x| {
@@ -261,7 +261,7 @@ impl ToolController {
                 self.selected_menu_entry = None;
                 return ToolState {
                     pointee: None,
-                    neighbor: None,
+                    _neighbor: None,
                     action: None,
                     interact_key_options: None,
                     selected_interact_option: 0,
@@ -448,7 +448,7 @@ impl ToolController {
 
         ToolState {
             pointee: Some(pointee),
-            neighbor,
+            _neighbor: neighbor,
             action,
             interact_key_options: if self.menu_entries.is_empty()
                 || self.selected_menu_entry.is_none()
@@ -749,7 +749,7 @@ pub(crate) struct ToolState {
     pub(crate) pointee: Option<ToolTargetWithId>,
     // The previous block coordinate, where we would place a block
     // if the place button were pressed
-    pub(crate) neighbor: Option<BlockCoordinate>,
+    pub(crate) _neighbor: Option<BlockCoordinate>,
     // The action taken during this frame, if there was one
     pub(crate) action: Option<GameAction>,
     // The menu entries, if a menu is up (None vec otherwise)

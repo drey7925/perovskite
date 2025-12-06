@@ -72,3 +72,5 @@ tracy = ["tracy-client/enable"]
 
 dhat-heap = []
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)', 'cfg(fuzzing)'] }

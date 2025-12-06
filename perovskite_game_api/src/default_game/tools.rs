@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::Result;
 use perovskite_core::protocol::items::item_stack::QuantityType;
 use perovskite_core::{

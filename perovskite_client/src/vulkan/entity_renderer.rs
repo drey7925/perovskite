@@ -20,7 +20,7 @@ use cgmath::{Matrix3, Rad, Vector3, Zero};
 /// that state is in EntityState.
 pub(crate) struct EntityRenderer {
     texture_atlas: TextureAtlas,
-    allocator: Arc<VkAllocator>,
+    _allocator: Arc<VkAllocator>,
     mesh_definitions: FxHashMap<u32, EntityMesh>,
     /// These include buffers that render a single entity. Later on, as we add various accelerated and
     /// instanced rendering, the renderer may build buffers with multiple entities in them.
@@ -82,7 +82,7 @@ impl EntityRenderer {
         }
         Ok(EntityRenderer {
             texture_atlas,
-            allocator: ctx.clone_allocator(),
+            _allocator: ctx.clone_allocator(),
             mesh_definitions: all_meshes,
             singleton_gpu_buffers,
         })
@@ -215,5 +215,3 @@ pub(crate) struct EntityMesh {
     // under normal circumstances?
     pub(crate) def: proto::EntityAppearance,
 }
-
-struct EntityRendererState {}

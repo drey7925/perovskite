@@ -662,14 +662,14 @@ pub(crate) enum GameState {
     Active(ActiveGame),
 }
 impl GameState {
-    fn as_mut(&mut self) -> GameStateMutRef<'_> {
-        match self {
-            GameState::MainMenu => GameStateMutRef::MainMenu,
-            GameState::Connecting(x) => GameStateMutRef::Connecting(x),
-            GameState::Active(x) => GameStateMutRef::Active(x),
-            GameState::Error(x) => GameStateMutRef::ConnectError(x),
+    fn active_game_mut(&mut self) -> Option<&mut ActiveGame> {
+        if let GameState::Active(game) = self {
+            Some(game)
+        } else {
+            None
         }
     }
+
     fn update_if_connected(&mut self, ctx: &VulkanWindow, event_loop: &ActiveEventLoop) {
         if let GameState::Connecting(state) = self {
             match state.result.try_recv() {
@@ -818,13 +818,6 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
     Ok(game)
 }
 
-pub(crate) enum GameStateMutRef<'a> {
-    MainMenu,
-    Connecting(&'a mut ConnectionState),
-    ConnectError(&'a mut anyhow::Error),
-    Active(&'a mut ActiveGame),
-}
-
 type FutureType = FenceSignalFuture<
     PresentFuture<CommandBufferExecFuture<JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture>>>,
 >;
@@ -954,7 +947,7 @@ impl GameRenderer {
         let mut game_lock = self.game.lock();
         game_lock.update_if_connected(&self.vk_wnd, event_loop);
 
-        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+        if let Some(game) = game_lock.active_game_mut() {
             if event == WindowEvent::CloseRequested || event == WindowEvent::Destroyed {
                 game.client_state.shutdown.cancel();
                 event_loop.exit();
@@ -982,7 +975,7 @@ impl GameRenderer {
     ) {
         let mut game_lock = self.game.lock();
 
-        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+        if let Some(game) = game_lock.active_game_mut() {
             game.client_state.device_event(&event);
         }
     }
@@ -994,7 +987,7 @@ impl GameRenderer {
         if self.vk_wnd.want_recreate.swap(false, Ordering::AcqRel) {
             self.need_swapchain_recreate = true;
         }
-        if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+        if let Some(game) = game_lock.active_game_mut() {
             let _span = span!("MainEventsCleared");
             if self.vk_wnd.window.has_focus() && game.client_state.input.lock().is_mouse_captured()
             {
@@ -1063,7 +1056,7 @@ impl GameRenderer {
             let size = self.vk_wnd.window.inner_size();
 
             if size.height == 0 || size.width == 0 {
-                if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                if let Some(game) = game_lock.active_game_mut() {
                     game.advance_without_rendering();
                     // Hacky, otherwise we spin really fast here, while also messing
                     // with physics state thanks to tiny updates.
@@ -1086,7 +1079,7 @@ impl GameRenderer {
                 *game_lock = GameState::Error(e);
             }
             self.vk_wnd.viewport.extent = size.into();
-            if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+            if let Some(game) = game_lock.active_game_mut() {
                 if let Err(e) = game.handle_swapchain_recreate(&mut self.vk_wnd) {
                     *game_lock = GameState::Error(e);
                 };
@@ -1100,7 +1093,7 @@ impl GameRenderer {
                 Err(Validated::Error(VulkanError::OutOfDate)) => {
                     info!("Swapchain out of date");
                     self.need_swapchain_recreate = true;
-                    if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+                    if let Some(game) = game_lock.active_game_mut() {
                         game.advance_without_rendering();
                     }
                     return;
@@ -1132,7 +1125,7 @@ impl GameRenderer {
 
         let fb_holder = &self.vk_wnd.framebuffers[image_i as usize];
 
-        let game_command_buffers = if let GameStateMutRef::Active(game) = game_lock.as_mut() {
+        let game_command_buffers = if let Some(game) = game_lock.active_game_mut() {
             match game.build_command_buffers(
                 window_size,
                 &self.vk_wnd,

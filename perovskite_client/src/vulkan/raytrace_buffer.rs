@@ -5,14 +5,13 @@ use crate::vulkan::gpu_chunk_table::{
 };
 use crate::vulkan::shaders::raytracer::ChunkMapHeader;
 use crate::vulkan::{ReclaimType, ReclaimableBuffer, VulkanContext};
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use bytemuck::cast_slice;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 use perovskite_core::coordinates::ChunkCoordinate;
 use rustc_hash::FxHashMap;
 use smallvec::{smallvec, SmallVec};
 use std::fmt::Debug;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tracy_client::span;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -64,9 +63,6 @@ pub(crate) struct RtFrameData {
 
 pub(crate) struct RaytraceBufferManager {
     state: Mutex<RaytraceBufferState>,
-    // Signalled whenever something happens that drains a full incremental staging buffer and
-    // produces capacity within the system
-    ready: Condvar,
     vk_ctx: Arc<VulkanContext>,
 }
 impl RaytraceBufferManager {
@@ -80,24 +76,8 @@ impl RaytraceBufferManager {
                 rebuild_in_progress: false,
                 new_buffer: None,
             }),
-            ready: Condvar::new(),
             vk_ctx,
         })
-    }
-    pub(crate) fn spawn_rebuild(self: Arc<Self>, chunks: ChunkMap) {
-        tokio::task::spawn_blocking(move || {
-            match std::panic::catch_unwind(AssertUnwindSafe(move || self.do_rebuild(chunks))) {
-                Ok(Ok(())) => {
-                    // pass
-                }
-                Ok(Err(e)) => {
-                    log::error!("Raytrace rebuild failed: {e:}")
-                }
-                Err(e) => {
-                    log::error!("Raytrace rebuild panicked");
-                }
-            }
-        });
     }
 
     pub(crate) fn do_rebuild(&self, chunks: ChunkMap) -> Result<()> {
@@ -401,21 +381,6 @@ impl UpdateBuilder {
             staging_buffer_locations_lights: Default::default(),
             lookup_data,
         })
-    }
-
-    fn into_buffer(self) -> Result<Option<RenderThreadAction>> {
-        ensure!(
-            self.unresolved_sg_list.is_empty(),
-            "Unresolved actions remaining"
-        );
-        if self.resolved_sg_list.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(RenderThreadAction::Incremental {
-                staging_buffer: self.staging_buffer,
-                scatter_gather_list: self.resolved_sg_list,
-            }))
-        }
     }
 
     fn reset_with_capacity(

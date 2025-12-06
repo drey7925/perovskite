@@ -49,7 +49,7 @@ impl ClientItemManager {
 
 #[derive(Debug)]
 pub(crate) struct ClientInventory {
-    id: u64,
+    _id: u64,
     pub(crate) dimensions: (u32, u32),
     stacks: Vec<Option<items_proto::ItemStack>>,
     pub(crate) can_place: bool,
@@ -63,7 +63,7 @@ impl ClientInventory {
     ) -> ClientInventory {
         let inventory = proto.inventory.clone().unwrap();
         ClientInventory {
-            id: proto.view_id,
+            _id: proto.view_id,
             dimensions: (inventory.height, inventory.width),
             stacks: inventory
                 .contents

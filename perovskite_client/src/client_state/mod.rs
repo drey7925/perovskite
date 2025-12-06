@@ -24,7 +24,6 @@ use anyhow::Result;
 use arc_swap::ArcSwap;
 use cgmath::{vec3, Deg, InnerSpace, Matrix4, Vector3, Zero};
 use dashmap::DashMap;
-use egui::ahash::HashMapExt;
 use egui::Color32;
 use enum_map::{Enum, EnumMap};
 use perovskite_core::constants::block_groups::DEFAULT_SOLID;
@@ -132,11 +131,9 @@ pub(crate) type ChunkDashmap = DashMap<ChunkCoordinate, Arc<ClientChunk>, FxBuil
 pub(crate) type ChunkMap = FxHashMap<ChunkCoordinate, Arc<ClientChunk>>;
 pub(crate) type LightColumnDashmap =
     DashMap<(i32, i32), ChunkColumn<DefaultSyncBackend>, FxBuildHasher>;
-pub(crate) type LightColumnMap = FxHashMap<(i32, i32), ChunkColumn<DefaultSyncBackend>>;
 pub(crate) struct ChunkManager {
     chunks: ChunkDashmap,
     renderable_chunks: ChunkDashmap,
-    raytrace_dirty: parking_lot::RwLock<FxHashSet<ChunkCoordinate>>,
     light_columns: LightColumnDashmap,
     mesh_batches: Mutex<(FxHashMap<u64, MeshBatch>, MeshBatchBuilder)>,
     raytrace_buffers: Arc<RaytraceBufferManager>,
@@ -146,7 +143,6 @@ impl ChunkManager {
         ChunkManager {
             chunks: DashMap::with_hasher(FxBuildHasher),
             renderable_chunks: DashMap::with_hasher(FxBuildHasher),
-            raytrace_dirty: parking_lot::RwLock::new(FxHashSet::default()),
             light_columns: DashMap::with_hasher(FxBuildHasher),
             mesh_batches: Mutex::new((FxHashMap::default(), MeshBatchBuilder::new())),
             raytrace_buffers,
@@ -167,17 +163,6 @@ impl ChunkManager {
             .collect()
     }
 
-    pub(crate) fn take_rt_dirty_chunks(&self) -> ChunkMap {
-        let mut dirty = self.raytrace_dirty.write();
-        let mut result = ChunkMap::with_capacity(dirty.len());
-        for coord in dirty.drain() {
-            if let Some(chunk) = self.renderable_chunks.get(&coord) {
-                result.insert(coord, chunk.clone());
-            }
-        }
-        result
-    }
-
     pub(crate) fn remove(&self, coord: &ChunkCoordinate) -> Option<Arc<ClientChunk>> {
         if let Some(chunk) = self.chunks.get(coord) {
             let batch = chunk.get_batch();
@@ -187,8 +172,7 @@ impl ChunkManager {
                 self.spill(batch, "remove");
             }
         }
-        // "Lock order": chunks -> renderable_chunks -> rt_dirty
-        //                                           -> light_columns
+        // "Lock order": chunks -> renderable_chunks -> light_columns
         // Same note applies - these are dashmap maps, so treat outstanding Refs as equivalent to
         // locks for deadlock analysis
 
@@ -334,7 +318,6 @@ impl ChunkManager {
     pub(crate) fn cloned_neighbors_fast(
         &self,
         chunk: ChunkCoordinate,
-        block_manager: &ClientBlockTypeManager,
         result: &mut FastChunkNeighbors,
     ) {
         let _ = span!("cloned_neighbors_fast");
@@ -411,10 +394,6 @@ impl ChunkManager {
         if let Some(chunk) = self.chunks.get(&coord) {
             let raster_state = chunk.mesh_with(renderer, Some(&self.raytrace_buffers))?;
 
-            {
-                let _span = span!("raytrace dirty insert (meshed)");
-                self.raytrace_dirty.write().insert(coord);
-            }
             match raster_state {
                 MeshResult::SameMesh => {
                     // Don't spill or anything
@@ -461,11 +440,9 @@ impl ChunkManager {
             );
             -1 * ((player_pos - world_coord).magnitude2() as i64)
         });
-        let mut counter = 0;
         let mut needs_resort = true;
 
         'outer: while let Some(coord) = keys.pop() {
-            counter += 1;
             let world_coord = vec3(
                 coord.x as f64 * 16.0 + 8.0,
                 coord.y as f64 * 16.0 + 8.0,
@@ -801,7 +778,7 @@ impl ClientState {
     }
 
     pub(crate) fn next_frame(&self, aspect_ratio: f64, tick: u64) -> FrameState {
-        let mut egui_wants_events = false;
+        let egui_wants_events;
         {
             self.timekeeper.update_frame();
 

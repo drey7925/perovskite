@@ -133,10 +133,6 @@ impl VulkanContext {
         self.memory_allocator.clone()
     }
 
-    pub(crate) fn allocator(&self) -> &VkAllocator {
-        &self.memory_allocator
-    }
-
     pub(crate) fn clone_graphics_queue(&self) -> Arc<Queue> {
         self.graphics_queue.clone()
     }
@@ -189,63 +185,6 @@ impl VulkanContext {
         } else {
             ClearValue::Depth(1.0)
         }
-    }
-
-    pub(crate) fn val_to_device_via_staging<T: BufferContents>(
-        &self,
-        data: T,
-        usage: BufferUsage,
-    ) -> Result<Subbuffer<T>> {
-        let staging_buffer = {
-            let _span = span!("build staging buffer");
-            Buffer::from_data(
-                self.clone_allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::TRANSFER_SRC,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                data,
-            )?
-        };
-        let target_buffer = {
-            let _span = span!("build target buffer");
-            Buffer::new_sized(
-                self.clone_allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::TRANSFER_DST | usage,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                    ..Default::default()
-                },
-            )?
-        };
-
-        let transfer_queue = self.clone_transfer_queue();
-        let mut command_buffer = AutoCommandBufferBuilder::primary(
-            self.command_buffer_allocator(),
-            transfer_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-        command_buffer.copy_buffer(CopyBufferInfo::buffers(
-            staging_buffer,
-            target_buffer.clone(),
-        ))?;
-        let fut = {
-            let _span = span!("build target buffer future");
-            command_buffer.build()?.execute(transfer_queue)?
-        };
-        {
-            let _span = span!("flush target buffer future");
-            fut.flush()?
-        }
-        Ok(target_buffer)
     }
 
     pub(crate) fn iter_to_device_via_staging<T: BufferContents>(
@@ -398,29 +337,6 @@ impl VulkanContext {
         Ok(target_buffer)
     }
 
-    pub(crate) fn copy_to_device<T: ?Sized>(
-        &self,
-        src: Subbuffer<T>,
-        dst: Subbuffer<T>,
-    ) -> Result<()> {
-        let transfer_queue = self.clone_transfer_queue();
-        let mut command_buffer = AutoCommandBufferBuilder::primary(
-            self.command_buffer_allocator(),
-            transfer_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-        command_buffer.copy_buffer(CopyBufferInfo::buffers(src, dst.clone()))?;
-        let fut = {
-            let _span = span!("build target buffer future");
-            command_buffer.build()?.execute(transfer_queue)?
-        };
-        {
-            let _span = span!("flush target buffer future");
-            fut.flush()?
-        }
-        Ok(())
-    }
-
     /// Constructs a render config suitable for render-to-texture only
     pub(crate) fn non_swapchain_config(&self) -> LiveRenderConfig {
         LiveRenderConfig {
@@ -490,14 +406,14 @@ impl RenderPassHolder {
 }
 
 impl RenderPassHolder {
-    pub(crate) fn new(vk_device: Arc<Device>, config: LiveRenderConfig) -> Self {
+    fn new(vk_device: Arc<Device>, config: LiveRenderConfig) -> Self {
         Self {
             vk_device,
             config,
             passes: Mutex::new(FxHashMap::default()),
         }
     }
-    pub(crate) fn get(&self, id: RenderPassId) -> Result<Arc<RenderPass>> {
+    fn get(&self, id: RenderPassId) -> Result<Arc<RenderPass>> {
         match self.passes.lock().entry(id) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => Ok(entry
@@ -975,36 +891,6 @@ fn best_swapchain_format(formats: Vec<(Format, ColorSpace)>) -> Result<(Format, 
         })
         .copied()
         .with_context(|| "Could not find an image format")
-}
-
-#[derive(Clone)]
-pub(crate) struct RaytraceBuffers {
-    // R8G8B8A8_UNORM. We have three components, RGB isn't a supported type, so we use RGBA.
-    // Not clear what alpha can be used for in general; for now alpha = 0.0 will prevent any
-    // specular raytracing from occurring (i.e. it's a validity bit, but we can reclaim it at the
-    // cost of VRAM BW and use specular_ray_dir.alpha instead). Always uses main target resolution
-    // storage image usage
-    specular_strength: Arc<ImageView>,
-    // The direction of the ray, corresponding to spec_ray_dir
-    // R32G32B32A32_UINT - this would naturally be R32G32B32, but that's not well-supported.
-    // Note that the ray origin is derived based on the depth buffer.
-    // r/g/b are x/y/z reinterpreted as uint32, alpha is the block id
-    // Always uses main target resolution
-    // storage image usage
-    specular_ray_dir: Arc<ImageView>,
-    // Direction of the ray, but cleaned up for each downsampled pixel. `mask_specular_stencil_frag`
-    // prepares this.
-    specular_ray_dir_downsampled: Arc<ImageView>,
-    // The actual computed color, in R16G16B16A16_SFLOAT. Smaller resolution; raytracer will render to
-    // this when doing the deferred specular pass
-    // Is a storage | transfer_dst
-    specular_raw_color: Arc<ImageView>,
-    // Native depth type (we really only need the stencil but VK_FORMAT_S8_UINT isn't guaranteed, so
-    // we use the standard depth type for now). Smaller resolution
-    // depth attachment usage
-    specular_stencil: Arc<ImageView>,
-    // A depth/stencil only framebuffer
-    specular_framebuffer: Arc<Framebuffer>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1971,6 +1857,9 @@ impl<T: BufferContents> BufferReclaim<T> {
 
     fn clean_expired(inner: &mut ReclaimInner<T>) {
         clean_expired(Instant::now(), &mut inner.pending);
+        inner.ready.iter_mut().for_each(|(_, v)| {
+            v.clean_expired();
+        });
     }
     fn unsequester(&self, frame: usize) {
         let mut inner = self.inner.lock();

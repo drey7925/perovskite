@@ -38,7 +38,6 @@ use perovskite_server::{
 };
 
 use anyhow::{Context, Result};
-use itertools::Itertools;
 
 /// Type-safe newtype wrapper for a texture name
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -5,9 +5,7 @@
 use std::collections::VecDeque;
 
 use anyhow::{Context, Result};
-use perovskite_core::{
-    block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE, coordinates::BlockCoordinate,
-};
+use perovskite_core::{constants::item_groups::HIDDEN_FROM_CREATIVE, coordinates::BlockCoordinate};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -183,7 +181,6 @@ pub(crate) fn register_wire(builder: &mut GameBuilder) -> Result<()> {
 }
 
 pub(crate) struct WireCallbacksImpl {
-    pub(crate) base_id: BlockId,
     pub(crate) state: PinState,
 }
 impl CircuitBlockCallbacks for WireCallbacksImpl {

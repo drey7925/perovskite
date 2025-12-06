@@ -18,8 +18,6 @@ use tracy_client::plot;
 //                                                         when we observe [tick] now
 //                                   error (positive)-->|  |<--
 struct TimekeeperInner {
-    /// The last time, in terms of our own clock, that we received an update from the server.
-    last_server_tick: Instant,
     /// The actual error between the server's measured timebase and our own timebase.
     error: i64,
     /// The smoothed error that we have in current_skew.
@@ -74,7 +72,6 @@ impl Timekeeper {
             initial_timebase_estimate: now,
             initial_timebase_tick: initial_tick,
             inner: CachelineAligned(Mutex::new(TimekeeperInner {
-                last_server_tick: now,
                 error: 0,
                 smoothed_error: 0,
                 last_frame_time: now,
@@ -155,6 +152,7 @@ impl Timekeeper {
             .unwrap()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn estimated_send_time(&self, server_tick: u64) -> Instant {
         // Note that ticks can run negative relative to each other, due to queueing in the server.
         // However, ticks should never run backwards compared to the first tick we received from the

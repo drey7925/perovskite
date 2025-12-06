@@ -11,7 +11,7 @@ use std::sync::Arc;
 fn test_load_store_purge() {
     let server = Arc::new(testonly_in_memory().unwrap());
     server
-        .run_task_in_server(|gs| {
+        .run_task_in_server(|_gs| {
             let server = server.clone();
             let mut loom = loom::model::Builder::default();
             loom.preemption_bound = Some(3);
@@ -67,7 +67,7 @@ fn test_load_store_purge() {
 fn test_lighting() {
     let server = Arc::new(testonly_in_memory().unwrap());
     server
-        .run_task_in_server(|gs| {
+        .run_task_in_server(|_gs| {
             let server = server.clone();
             let mut loom = loom::model::Builder::default();
             loom.preemption_bound = Some(2);

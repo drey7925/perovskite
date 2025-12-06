@@ -473,14 +473,8 @@ impl CircuitGameBuilerPrivate for GameBuilder {
         off: BuiltBlock,
         properties: CircuitBlockProperties,
     ) -> Result<()> {
-        fn make_wire_callbacks(
-            block_id: BlockId,
-            state: PinState,
-        ) -> Box<dyn CircuitBlockCallbacks> {
-            Box::new(wire::WireCallbacksImpl {
-                base_id: block_id,
-                state,
-            })
+        fn make_wire_callbacks(state: PinState) -> Box<dyn CircuitBlockCallbacks> {
+            Box::new(wire::WireCallbacksImpl { state })
         }
 
         let inner = self
@@ -495,10 +489,10 @@ impl CircuitGameBuilerPrivate for GameBuilder {
 
         inner
             .callbacks
-            .insert(on.id.base_id(), make_wire_callbacks(on.id, PinState::High));
+            .insert(on.id.base_id(), make_wire_callbacks(PinState::High));
         inner
             .callbacks
-            .insert(off.id.base_id(), make_wire_callbacks(off.id, PinState::Low));
+            .insert(off.id.base_id(), make_wire_callbacks(PinState::Low));
         inner.basic_wire_off = off.id;
         inner.basic_wire_on = on.id;
 

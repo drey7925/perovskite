@@ -317,6 +317,7 @@ pub fn rotate_y<T: Num + std::ops::Neg<Output = T>>(
     }
 }
 
+#[allow(dead_code)]
 pub fn rotate_x<T: Num + std::ops::Neg<Output = T>>(
     c: (T, T, T),
     angle_90_deg_units: u16,
@@ -330,6 +331,7 @@ pub fn rotate_x<T: Num + std::ops::Neg<Output = T>>(
     }
 }
 
+#[allow(dead_code)]
 pub fn rotate_z<T: Num + std::ops::Neg<Output = T>>(
     c: (T, T, T),
     angle_90_deg_units: u16,
@@ -374,20 +376,6 @@ const UNIFIED_FACE_ORDER: [CubeFace; 10] = [
 #[derive(Clone)]
 pub(crate) struct VkChunkVertexDataGpu {
     pub(crate) draw_buffers: EnumMap<CubeDrawStep, Option<VkDrawBufferGpu<CubeGeometryVertex>>>,
-}
-impl VkChunkVertexDataGpu {
-    pub(crate) fn empty() -> VkChunkVertexDataGpu {
-        VkChunkVertexDataGpu {
-            draw_buffers: enum_map! {
-                CubeDrawStep::OpaqueSimple => None,
-                CubeDrawStep::OpaqueSpecular => None,
-                CubeDrawStep::Transparent => None,
-                CubeDrawStep::TransparentSpecular => None,
-                CubeDrawStep::Translucent => None,
-                CubeDrawStep::RaytraceFallback => None,
-            },
-        }
-    }
 }
 
 static RAYTRACE_CHUNK_VERSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -1447,15 +1435,18 @@ impl AxisAlignedBoxBlocksCache {
         self.blocks.get(block_id.index()).and_then(|x| x.as_deref())
     }
 }
-
+// These three were moved to shaders but may still be meaningful in the future
+#[allow(dead_code)]
 const GLOBAL_BRIGHTNESS_TABLE_RAW: [f32; 16] = [
     0.0, 0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75,
     0.8125, 0.875, 0.9375,
 ];
+#[allow(dead_code)]
 const BRIGHTNESS_TABLE_RAW: [f32; 16] = [
     0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125,
     0.875, 0.9375, 1.00,
 ];
+#[allow(dead_code)]
 const CUBE_FACE_BRIGHTNESS_BIASES: [f32; 10] = [
     0.975, 0.975, 1.05, 0.95, 0.975, 0.975, 0.975, 0.975, 0.975, 0.975,
 ];

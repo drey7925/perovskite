@@ -11,11 +11,10 @@ use perovskite_core::{
         self,
         entities::{EntityAppearance, EntityTypeAssignment, ServerEntityTypeAssignments},
     },
-    util::{TraceBuffer, TraceLog},
+    util::TraceBuffer,
 };
 use prost::Message;
 use std::collections::VecDeque;
-use std::io::Read;
 use std::ops::DerefMut;
 /// This implementation is EXTREMELY unstable while it is under active development.
 /// Do not assume any functionality or performance guarantees while different techniques
@@ -527,7 +526,7 @@ impl Movement {
     pub fn pos_after_move(&self, start: Vector3<f64>) -> Vector3<f64> {
         self.pos_after(start, self.move_time)
     }
-    pub fn to_backbuffer(&self, start: Vector3<f64>) -> BackBufferSegment {
+    pub(crate) fn to_backbuffer(&self, start: Vector3<f64>) -> BackBufferSegment {
         let end = self.pos_after(start, self.move_time);
         BackBufferSegment {
             start,

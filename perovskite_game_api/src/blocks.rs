@@ -259,7 +259,7 @@ pub enum MatterType {
 /// block (also when the `unstable_api` feature is enabled)
 #[must_use = "Builders do nothing unless used; setters will return a new builder."]
 pub struct BlockBuilder {
-    block_name: String,
+    _block_name: String,
     item: Item,
     dropped_item: DroppedItem,
     modifiers: Vec<Box<dyn FnOnce(&mut BlockType)>>,
@@ -297,7 +297,7 @@ impl BlockBuilder {
         };
 
         BlockBuilder {
-            block_name: name.clone(),
+            _block_name: name.clone(),
             item,
             dropped_item: DroppedItem::Fixed(name.clone(), 1),
             modifiers: vec![],

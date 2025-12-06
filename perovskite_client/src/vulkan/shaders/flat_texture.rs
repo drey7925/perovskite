@@ -69,12 +69,6 @@ pub(crate) struct FlatTextureDrawCall {
     vertex_buffer: Subbuffer<[FlatTextureVertex]>,
 }
 
-impl FlatTextureDrawCall {
-    pub(crate) fn vertex_buffer(&self) -> &Subbuffer<[FlatTextureVertex]> {
-        &self.vertex_buffer
-    }
-}
-
 pub(crate) struct FlatTextureDrawBuilder {
     vertices: Vec<FlatTextureVertex>,
 }
@@ -172,9 +166,10 @@ impl FlatTexPipelineWrapper {
         let _span = span!("Draw flat graphics");
         builder.bind_pipeline_graphics(self.pipeline.clone())?;
         for call in calls {
-            builder.bind_vertex_buffers(0, call.vertex_buffer.clone())?;
+            let buffer = call.vertex_buffer.clone();
+            builder.bind_vertex_buffers(0, buffer.clone())?;
             unsafe {
-                builder.draw(call.vertex_buffer.len() as u32, 1, 0, 0)?;
+                builder.draw(buffer.len() as u32, 1, 0, 0)?;
             }
         }
         Ok(())

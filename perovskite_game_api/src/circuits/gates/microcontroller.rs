@@ -511,7 +511,7 @@ async fn interrupt_poll_loop(
 
     let mut edges: SmallVec<[(BlockCoordinate, BlockCoordinate, PinState); 4]> =
         smallvec::SmallVec::new();
-    ctx.game_map().mutate_block_atomically(coord, |id, ext| {
+    ctx.game_map().mutate_block_atomically(coord, |id, _ext| {
         if !id.equals_ignore_variant(ids.ok) {
             return Ok(());
         }
@@ -713,7 +713,7 @@ fn program_microcontroller(
 // Note that we can widen u8 -> u16 freely; this doesn't need to go into block ID variants
 
 type Interrupt = u8;
-const IRQ_PIN_MASK: Interrupt = 0xf;
+const _IRQ_PIN_MASK: Interrupt = 0xf;
 const IRQ_BUS_MESSAGE: Interrupt = 0x10;
 
 const MAX_PENDING_BUS_MESSAGES: usize = 8;

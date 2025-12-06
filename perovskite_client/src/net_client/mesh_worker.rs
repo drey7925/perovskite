@@ -135,11 +135,9 @@ impl NeighborPropagator {
                 let _span = span!("nprop_work");
 
                 for &coord in chunks {
-                    self.client_state.chunks.cloned_neighbors_fast(
-                        coord,
-                        &self.client_state.block_types,
-                        &mut chunk_neighbor_scratchpad,
-                    );
+                    self.client_state
+                        .chunks
+                        .cloned_neighbors_fast(coord, &mut chunk_neighbor_scratchpad);
 
                     let should_mesh = propagate_neighbor_data(
                         &self.client_state.block_types,

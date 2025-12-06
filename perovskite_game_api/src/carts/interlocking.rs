@@ -241,7 +241,7 @@ fn single_pathfind_attempt(
     max_scan_distance: usize,
     cart_config: &CartsGameBuilderExtension,
     resume: Option<InterlockingResumeState>,
-    buffer_time_estimate: f32,
+    _buffer_time_estimate: f32,
 ) -> Result<Option<InterlockingRoute>> {
     let mut steps = vec![];
     let mut state = initial_state;

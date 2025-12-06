@@ -734,7 +734,7 @@ impl MapgenInterface for DefaultMapgen {
         self.rolling_hills_noise.get::<true>(pos.x, pos.z);
 
         let mut rng = rand::thread_rng();
-        for i in 0..10000 {
+        for _ in 0..10000 {
             let x = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
             let z = rng.gen_range(i32::MIN as f64..i32::MAX as f64);
             let extra_coarse_pos = [

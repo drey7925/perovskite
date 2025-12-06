@@ -29,11 +29,6 @@ pub(crate) struct EntityMove {
     seq: u64,
 }
 
-pub(crate) enum ElapsedOrOverflow {
-    ElapsedThisMove(f32),
-    OverflowIntoNext(f32),
-}
-
 impl EntityMove {
     pub(crate) fn elapsed(&self, tick: u64) -> f32 {
         self.elapsed_unclamped(tick)
@@ -42,17 +37,6 @@ impl EntityMove {
 
     pub(crate) fn elapsed_unclamped(&self, tick: u64) -> f32 {
         (tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0
-    }
-
-    pub(crate) fn elapsed_or_overflow(&self, tick: u64) -> ElapsedOrOverflow {
-        let time = (tick.saturating_sub(self.start_tick) as f32) / 1_000_000_000.0;
-        if time < 0.0 {
-            ElapsedOrOverflow::ElapsedThisMove(0.0)
-        } else if time <= self.total_time_seconds {
-            ElapsedOrOverflow::ElapsedThisMove(time)
-        } else {
-            ElapsedOrOverflow::OverflowIntoNext(time - self.total_time_seconds)
-        }
     }
 
     #[inline]
@@ -71,16 +55,6 @@ impl EntityMove {
             self.velocity.y + (self.acceleration.y * time),
             self.velocity.z + (self.acceleration.z * time),
         )
-    }
-
-    #[inline]
-    pub(crate) fn current_seqnum(&self) -> u64 {
-        self.seq
-    }
-
-    #[inline]
-    pub(crate) fn total_time_sec(&self) -> f32 {
-        self.total_time_seconds
     }
 
     /// An *estimate* of the distance covered in this move, *only* to be used for trailing
@@ -220,14 +194,6 @@ impl GameEntity {
         self.move_queue.front().copied()
     }
 
-    pub(crate) fn max_trailing_length(&self) -> f32 {
-        self.trailing_entities
-            .iter()
-            .map(|x| x.1)
-            .max_by(f32::total_cmp)
-            .unwrap_or(0.0)
-    }
-
     /// Visits the trailing entities (also the main entity). This function will not allocate unless
     /// the callback allocates.
     #[inline]
@@ -318,7 +284,7 @@ impl GameEntity {
                     + ((m.total_time_seconds * 1_000_000_000.0) as u64).saturating_sub(tick_now))
             );
             let front = self.move_queue.front();
-            if let Some(front) = front {
+            if front.is_some() {
                 let flags =
                     SOUND_PRESENT | SOUND_ENTITY_SPATIAL | SOUND_ENTITY_LINK_TRAILING_ENTITIES;
 
@@ -465,7 +431,8 @@ impl GameEntity {
         trailing_entity_index: u32,
     ) -> Option<Vector3<f64>> {
         if trailing_entity_index == 0 {
-            let (position, _, move_progress, move_desc) = self.position_velocity(time_tick);
+            let (position, _velocity, _move_progress, move_desc) =
+                self.position_velocity(time_tick);
             Some(entity_manager.transform_position(
                 self.class,
                 position,

@@ -40,7 +40,7 @@ use vulkano::{
     image::{view::ImageView, ImageUsage},
     memory::allocator::AllocationCreateInfo,
     pipeline::graphics::viewport::Viewport,
-    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
+    render_pass::{Framebuffer, FramebufferCreateInfo},
     sync::GpuFuture,
     DeviceSize,
 };
@@ -50,9 +50,7 @@ const BATCH_SIZE: usize = 16;
 pub(crate) struct MiniBlockRenderer {
     ctx: Arc<VulkanContext>,
     surface_size: [u32; 2],
-    render_pass: Arc<RenderPass>,
     framebuffers: Vec<(Arc<ImageView>, Arc<Framebuffer>, Subbuffer<[u8]>)>,
-    cube_provider: CubePipelineProvider,
     cube_pipeline: CubePipelineWrapper,
     uniform: Subbuffer<UniformData>,
     fake_chunks: Vec<Box<[BlockId; 18 * 18 * 18]>>,
@@ -74,7 +72,7 @@ impl MiniBlockRenderer {
 
         let mut target_images = Vec::new();
         let mut framebuffers = Vec::new();
-        for i in 0..BATCH_SIZE {
+        for _ in 0..BATCH_SIZE {
             let target_image = ImageView::new_default(
                 Image::new(
                     ctx.memory_allocator.clone(),
@@ -172,9 +170,7 @@ impl MiniBlockRenderer {
         Ok(Self {
             ctx,
             surface_size,
-            render_pass,
             framebuffers,
-            cube_provider,
             cube_pipeline,
             uniform,
             fake_chunks: iter::repeat(Box::new([AIR_ID; 18 * 18 * 18]))
@@ -312,7 +308,7 @@ impl<'a> ChunkDataView for FakeChunkDataView<'a> {
         &FAKE_LIGHTMAP
     }
 
-    fn client_ext_data(&self, offset: ChunkOffset) -> Option<&ClientExtendedData> {
+    fn client_ext_data(&self, _offset: ChunkOffset) -> Option<&ClientExtendedData> {
         None
     }
 

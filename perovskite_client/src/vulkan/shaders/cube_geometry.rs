@@ -278,16 +278,6 @@ pub(crate) const SPECULAR_FRAMEBUFFER: FramebufferAndLoadOpId<2, 0> = Framebuffe
     input_attachments: [],
 };
 
-pub(crate) const SPECULAR_FRAMEBUFFER_CLEAR_OUTPUT: FramebufferAndLoadOpId<2, 0> =
-    FramebufferAndLoadOpId {
-        color_attachments: [
-            (ImageId::RtSpecStrength, LoadOp::Clear),
-            (ImageId::RtSpecRayDir, LoadOp::Clear),
-        ],
-        depth_stencil_attachment: Some((ImageId::TransparentWithSpecularDepth, LoadOp::Load)),
-        input_attachments: [],
-    };
-
 pub(crate) const UNIFIED_FRAMEBUFFER: FramebufferAndLoadOpId<3, 0> = FramebufferAndLoadOpId {
     color_attachments: [
         (ImageId::MainColor, LoadOp::Load),
