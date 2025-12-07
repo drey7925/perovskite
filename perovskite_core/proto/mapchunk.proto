@@ -121,12 +121,14 @@ message FarSheetControl {
   // *  *  *  *  *  *  *  *  V=2 row has M+2K points, from (0, 2) to (M+2K-1, 2)
   // *  *  *  *  *  *  *     V=1 row has M+K points, from (0, 1) to (M+K-1, 1)
   // *  *  *  *  *  *        V=0 row has M points, from (0, 0) to (M-1, 0)
+  //
+  // m and n must be positive.
   uint32 m = 4;
   uint32 n = 5;
   // Note that it is an error for M + NK to be less than 0 (but k may be
   // negative as long as M is large enough to avoid negative-length rows)
   //
-  // The total number of points in the sheet is M * N + KN(N+1).
+  // The total number of points in the sheet is M * N + KN(N+1)/2.
   //
   // Note that not all choices of k will mesh cleanly with any given tesselation
   // mode. See TessellationMode's documentation for details.

@@ -411,6 +411,7 @@ impl TryFrom<cgmath::Vector3<f32>> for crate::protocol::coordinates::Vec3F {
         })
     }
 }
+
 impl TryFrom<&crate::protocol::coordinates::Vec3F> for cgmath::Vector3<f32> {
     type Error = anyhow::Error;
 
