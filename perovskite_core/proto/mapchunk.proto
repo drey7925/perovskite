@@ -18,42 +18,118 @@ syntax = "proto3";
 
 package perovskite.protocol.map;
 
+import "coordinates.proto";
 import "items.proto";
 import "render.proto";
 import "blocks.proto";
 
 message ExtendedData {
-    // Offset in the chunk, 0..4095
-    uint32 offset_in_chunk = 1;
-    // Serialized data, passed to the relevant handler.
-    bytes serialized_data = 2;
-    // Inventories stored in a block. Stored on the server, client uses a different interface (i.e. InventoryUpdate with
-    // view IDs) to get this.
-    map<string, perovskite.protocol.items.Inventory> inventories = 3;
-    // Simple key-value storage.
-    map<string, string> simple_storage = 4;
+  // Offset in the chunk, 0..4095
+  uint32 offset_in_chunk = 1;
+  // Serialized data, passed to the relevant handler.
+  bytes serialized_data = 2;
+  // Inventories stored in a block. Stored on the server, client uses a
+  // different interface (i.e. InventoryUpdate with view IDs) to get this.
+  map<string, perovskite.protocol.items.Inventory> inventories = 3;
+  // Simple key-value storage.
+  map<string, string> simple_storage = 4;
 }
 
 message ClientExtendedData {
-    // Offset in the chunk, 0..4095
-    uint32 offset_in_chunk = 1;
-    // Text to display.
-    repeated perovskite.protocol.render.BlockText block_text = 2;
+  // Offset in the chunk, 0..4095
+  uint32 offset_in_chunk = 1;
+  // Text to display.
+  repeated perovskite.protocol.render.BlockText block_text = 2;
 }
 
 message ChunkV1 {
-    // Array, 4096 long, containing block IDs
-    repeated uint32 block_ids = 1 [packed=true];
-    // Extended data; only available on the server
-    repeated ExtendedData extended_data = 2;
-    // Extended data as relevant to the client
-    repeated ClientExtendedData client_extended_data = 3;
+  // Array, 4096 long, containing block IDs
+  repeated uint32 block_ids = 1 [ packed = true ];
+  // Extended data; only available on the server
+  repeated ExtendedData extended_data = 2;
+  // Extended data as relevant to the client
+  repeated ClientExtendedData client_extended_data = 3;
 }
 
 message StoredChunk {
-    oneof chunk_data {
-        ChunkV1 v1 = 1;
-    }
+  oneof chunk_data { ChunkV1 v1 = 1; }
 
-    uint64 startup_counter = 127;
+  uint64 startup_counter = 127;
+}
+
+// A sheet of generated map far away from the player, beyond the range that
+// normal chunks can represent. This is used for a "far mesh", representing an
+// approximation of the world.
+//
+// For now, this is the only type of far mesh supported, and the only type that
+// is planned. However, other types of far meshes may be added in principle.
+message FarSheet {
+  FarSheetControl control = 1;
+  // See FarSheetControl for details on coordinates, geometry, valid length,
+  // etc. This is stored row-major as (0,0), (1,0), (2,0), ... (M-1,0), (0,1),
+  // (1,1), ... (M+K-1,1) ... (M+(N-1)K-1, N-1).
+  repeated sint32 heights = 2 [ packed = true ];
+}
+
+enum TessellationMode {
+  // Invalid mode, will not generate a mesh.
+  TESSELLATION_MODE_INVALID = 0;
+  // Each rectangle in lattice space is made into two triangles, split
+  // on the u = -v diagonal. e.g. the rectangle [0,1]x[0,1] is made into
+  // triangles [(0,0)-(0,1)-(1,0)] and [(1,1)-(1,0)-(0,1)] (up to vertex
+  // order). Note for k other than 0 and -1, this will yield either ragged
+  // overhung edges (positive k) or non-straight edges (negative k < -1).
+  TESSELLATION_MODE_NEG_DIAGONAL = 1;
+
+  // Each rectangle in lattice space is made into two triangles, split
+  // on the u = v diagonal. e.g. the rectangle [0,1]x[0,1] is made into
+  // triangles [(0,0)-(1,0)-(1,1)] and [(0,0)-(0,1)-(1,1)] (up to vertex
+  // order). Note that for k other than 0 and 1, this will yield either
+  // ragged overhung edges (negative k) or non-straight edges (positive k >
+  // 1).
+  // This is NOT CURRENTLY SUPPORTED - I am focusing on getting the neg
+  // diagonal working first, as it directly aligns with the first geometry I
+  // envision.
+  //
+  // TESSELLATION_MODE_POS_DIAGONAL = 2;
+}
+
+message FarSheetControl {
+  // The location of the (0,0) point of the sheet, in world space. Y is ignored.
+  perovskite.protocol.coordinates.Vec3D origin = 1;
+  // The basis vectors of the sheet, representing the stride, in world space,
+  // that corresponds to a step through the grid in the sheet.
+  perovskite.protocol.coordinates.Vec3F basis_u = 2;
+  perovskite.protocol.coordinates.Vec3F basis_v = 3;
+
+  // The extents of the sheet, in lattice space.
+  //
+  // (note that while the diagram below shows a coordinate system, its
+  // illustrated orientation is arbitrary, the basis vectors are needed to
+  // transform into world space)
+  //
+  // V
+  // ^
+  // |
+  // |
+  // |
+  // #-----> U
+  //
+  // V=(N-1) row has M+(N-1)K points, from (0, N-1) to (M+(N-1)K-1, N-1)
+  // *  *  *  *  *  *  *  *  (see above)
+  //    ...
+  // *  *  *  *  *  *  *  *  V=2 row has M+2K points, from (0, 2) to (M+2K-1, 2)
+  // *  *  *  *  *  *  *     V=1 row has M+K points, from (0, 1) to (M+K-1, 1)
+  // *  *  *  *  *  *        V=0 row has M points, from (0, 0) to (M-1, 0)
+  uint32 m = 4;
+  uint32 n = 5;
+  // Note that it is an error for M + NK to be less than 0 (but k may be
+  // negative as long as M is large enough to avoid negative-length rows)
+  //
+  // The total number of points in the sheet is M * N + KN(N+1).
+  //
+  // Note that not all choices of k will mesh cleanly with any given tesselation
+  // mode. See TessellationMode's documentation for details.
+  sint32 k = 6;
+  TessellationMode tess = 7;
 }
