@@ -41,7 +41,7 @@ message BlockTypeDef {
   // When a tool is digging this block, multiply the effective wear by this
   // amount.
   double wear_multiplier = 5;
-  
+
   // How much light the block emits
   uint32 light_emission = 6;
   // Whether the block allows light to propagate through it
@@ -49,7 +49,8 @@ message BlockTypeDef {
   // The sampled sound ID when the block is stepped on, or 0 for none
   uint32 footstep_sound = 8;
   // Custom axis-aligned boxes for the pointing raycast, if non-empty
-  // Any texture/rendering related info is ignored; rotation and variant_mask are used
+  // Any texture/rendering related info is ignored; rotation and variant_mask
+  // are used
   AxisAlignedBoxes tool_custom_hitbox = 9;
 
   // How the client should render the block
@@ -57,9 +58,11 @@ message BlockTypeDef {
     Empty empty = 10;
     // The block is a solid cube
     CubeRenderInfo cube = 11;
-    // The block is a plant-like object, with transparency; the texture is applied as an X shape.
+    // The block is a plant-like object, with transparency; the texture is
+    // applied as an X shape.
     PlantLikeRenderInfo plant_like = 12;
-    // The block contains many rectangular prisms, each with its own texture and extent.
+    // The block contains many rectangular prisms, each with its own texture and
+    // extent.
     AxisAlignedBoxes axis_aligned_boxes = 13;
   };
   // How the client should handle physics when interacting with the block
@@ -67,7 +70,8 @@ message BlockTypeDef {
     Empty air = 20;
     SolidPhysicsInfo solid = 21;
     FluidPhysicsInfo fluid = 22;
-    // Any texture/rendering related info is ignored; rotation and variant_mask are used
+    // Any texture/rendering related info is ignored; rotation and variant_mask
+    // are used
     AxisAlignedBoxes solid_custom_collisionboxes = 23;
   }
 
@@ -76,17 +80,17 @@ message BlockTypeDef {
   // Only applicable for nonzero sound_id
   float sound_volume = 31;
 
-  // If non-empty, a menu is shown when the block is targeted, scrolling allows selecting an item from the menu
+  // If non-empty, a menu is shown when the block is targeted, scrolling allows
+  // selecting an item from the menu
   repeated InteractKeyOption interact_key_option = 41;
-  // If set, client-side extended data in the chunk is consulted. If unset, it may be ignored (if
-  // client-side extended data is provided but this is false, the behavior is unspecified and may be
-  // inconsistent across client features)
+  // If set, client-side extended data in the chunk is consulted. If unset, it
+  // may be ignored (if client-side extended data is provided but this is false,
+  // the behavior is unspecified and may be inconsistent across client features)
   bool has_client_extended_data = 42;
 }
 
-// A rectangular prism. 0,0,0 is at the center of the block. A full cube spans (-0.5, 0.5) on
-// each axis.
-// y is given with positive upwards.
+// A rectangular prism. 0,0,0 is at the center of the block. A full cube spans
+// (-0.5, 0.5) on each axis. y is given with positive upwards.
 message AxisAlignedBox {
   float x_min = 1;
   float y_min = 2;
@@ -94,7 +98,7 @@ message AxisAlignedBox {
   float x_max = 4;
   float y_max = 5;
   float z_max = 6;
-  
+
   perovskite.protocol.render.TextureReference tex_left = 7;
   perovskite.protocol.render.TextureReference tex_right = 8;
   perovskite.protocol.render.TextureReference tex_top = 9;
@@ -106,29 +110,30 @@ message AxisAlignedBox {
   // If nonzero, this box will only be rendered if variant & variant_mask != 0.
   uint32 variant_mask = 14;
 
-  // If set, transform y values on the top face from y_max to (y_max + top_slope_x * x + top_slope_z * z)
+  // If set, transform y values on the top face from y_max to (y_max +
+  // top_slope_x * x + top_slope_z * z)
   float top_slope_x = 15;
   float top_slope_z = 16;
   // Same, but for the bottom face
   float bottom_slope_x = 17;
   float bottom_slope_z = 18;
 
-  // If true, use a plant-like appearance spanning this bounding box with this texture, _and suppress_ the original box
-  // made of the six textures listed above
+  // If true, use a plant-like appearance spanning this bounding box with this
+  // texture, _and suppress_ the original box made of the six textures listed
+  // above
   perovskite.protocol.render.TextureReference plant_like_tex = 19;
 }
 
 enum AxisAlignedBoxRotation {
   // No rotation is performed
   AXIS_ALIGNED_BOX_ROTATION_NONE = 0;
-  // Bottom two bits of variant 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
-  // The top and bottom textures are rotated to line up.
+  // Bottom two bits of variant 0/1/2/3 cause the block to point its front face
+  // toward Z-/X-/Z+/X+, respectively. The top and bottom textures are rotated
+  // to line up.
   AXIS_ALIGNED_BOX_ROTATION_NESW = 1;
 }
 
-message AxisAlignedBoxes {
-  repeated AxisAlignedBox boxes = 1;
-}
+message AxisAlignedBoxes { repeated AxisAlignedBox boxes = 1; }
 
 message Empty {}
 
@@ -172,18 +177,23 @@ message PlantLikeRenderInfo {
 enum CubeVariantEffect {
   // The variant has no effect on rendering
   CUBE_VARIANT_EFFECT_NONE = 0;
-  // Bottom two bits of variant 0/1/2/3 cause the block to point its front face toward Z-/X-/Z+/X+, respectively.
-  // The top and bottom textures are rotated to line up.
+  // Bottom two bits of variant 0/1/2/3 cause the block to point its front face
+  // toward Z-/X-/Z+/X+, respectively. The top and bottom textures are rotated
+  // to line up.
   CUBE_VARIANT_EFFECT_ROTATE_NESW = 1;
-  // Variant 0xfff is a full cube representing a source of this liquid. Variants 0-7 indicate flowing instances of this liquid.
-  // Variant 0xfff has the same appearance as variant 7, but game logic may choose to make a distinction (i.e. 0xfff can be collected
-  // into a bucket and creates other liquid around it, variants 0-7 can't)
-  // Behavior for variants 8 - 0xffe is unspecified (may become specified in the future) - builtin and default game code guarantees not
-  // to crash upon those variants, but may act arbitrarily
+  // Variant 0xfff is a full cube representing a source of this liquid. Variants
+  // 0-7 indicate flowing instances of this liquid. Variant 0xfff has the same
+  // appearance as variant 7, but game logic may choose to make a distinction
+  // (i.e. 0xfff can be collected into a bucket and creates other liquid around
+  // it, variants 0-7 can't) Behavior for variants 8 - 0xffe is unspecified (may
+  // become specified in the future) - builtin and default game code guarantees
+  // not to crash upon those variants, but may act arbitrarily
   //
-  // Note - this may be superseded by its own render_info oneof type in the future.
+  // Note - this may be superseded by its own render_info oneof type in the
+  // future.
   CUBE_VARIANT_EFFECT_LIQUID = 2;
-  /// Same as CUBE_VARIANT_EFFECT_LIQUID, but without smoothly connecting neighboring heights
+  /// Same as CUBE_VARIANT_EFFECT_LIQUID, but without smoothly connecting
+  /// neighboring heights
   CUBE_VARIANT_HEIGHT = 3;
 }
 
@@ -202,18 +212,19 @@ message FluidPhysicsInfo {
   double surface_thickness = 5;
   // Speed of movement when in the fluid and within surface effects, blocks/sec
   double surf_horizontal_speed = 6;
-  // Speed when not pressing jump or lower keys, blocks/sec and within surface effects. Positive means
-  // upward
+  // Speed when not pressing jump or lower keys, blocks/sec and within surface
+  // effects. Positive means upward
   double surf_vertical_speed = 7;
   // Speed when pressing jump when in the surface. Positive means upward
   double surf_jump_speed = 8;
-  // Speed when pressing the lower key when in the surface. Positive means upward.
+  // Speed when pressing the lower key when in the surface. Positive means
+  // upward.
   double surf_sink_speed = 9;
 }
 
 message SolidPhysicsInfo {
-  // If set, the variant has this effect on physics. For full solid cubes, only CUBE_VARIANT_EFFECT_LIQUID
-  // has an effect at the moment.
+  // If set, the variant has this effect on physics. For full solid cubes, only
+  // CUBE_VARIANT_EFFECT_LIQUID has an effect at the moment.
   CubeVariantEffect variant_effect = 1;
 }
 

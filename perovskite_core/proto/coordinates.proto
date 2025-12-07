@@ -19,29 +19,28 @@ syntax = "proto3";
 package perovskite.protocol.coordinates;
 
 message WireBlockCoordinate {
-    sint32 x = 1;
-    sint32 y = 2;
-    sint32 z = 3;
+  sint32 x = 1;
+  sint32 y = 2;
+  sint32 z = 3;
 }
-
-message WireChunkCoordinate {
-    sint32 x = 1;
-    sint32 y = 2;
-    sint32 z = 3;
+　message WireChunkCoordinate {
+  sint32 x = 1;
+  sint32 y = 2;
+  sint32 z = 3;
 }
 
 message Vec3D {
-    double x = 1;
-    double y = 2;
-    double z = 3;
+  double x = 1;
+  double y = 2;
+  double z = 3;
 }
 message Vec3F {
-    float x = 1;
-    float y = 2;
-    float z = 3;
+  float x = 1;
+  float y = 2;
+  float z = 3;
 }
 
 message Angles {
-    double deg_azimuth = 1;
-    double deg_elevation = 2;
+  double deg_azimuth = 1;
+  double deg_elevation = 2;
 }

@@ -23,8 +23,8 @@ import "coordinates.proto";
 message SampledSound {
   // The ID used for all messages setting up the sound
   uint32 sound_id = 1;
-  // The filename to use with GetMediaRequest to get this sound. At this time, only full WAV files (with header) are
-  // supported.
+  // The filename to use with GetMediaRequest to get this sound. At this time,
+  // only full WAV files (with header) are supported.
   string media_filename = 2;
 }
 
@@ -33,21 +33,26 @@ enum SoundSource {
   SOUNDSOURCE_UNSPECIFIED = 0;
   // Background effects (e.g. natural sounds, running water, etc)
   SOUNDSOURCE_BACKGROUND = 1;
-  // Sound came from oneself (if we see this in a network packet, the sound was routed via the server
-  // e.g. because a player did something that produced a sound through game content)
+  // Sound came from oneself (if we see this in a network packet, the sound was
+  // routed via the server e.g. because a player did something that produced a
+  // sound through game content)
   SOUNDSOURCE_SELF = 2;
-  // Sound came from a player other than self; this is always routed via the server
+  // Sound came from a player other than self; this is always routed via the
+  // server
   SOUNDSOURCE_PLAYER = 3;
   // Sound came from a world interaction (e.g. entity, block)
   SOUNDSOURCE_WORLD = 4;
 }
 
 message SampledSoundPlayback {
-  // Initial implementation, probably byte-inefficient compared to a more packed format. Oh well.
+  // Initial implementation, probably byte-inefficient compared to a more packed
+  // format. Oh well.
 
-  // Tick to start the sound. If precisely 0, play the sound as soon as it's received.
+  // Tick to start the sound. If precisely 0, play the sound as soon as it's
+  // received.
   uint64 tick = 1;
   uint32 sound_id = 2;
+
   // The position of the sound
   perovskite.protocol.coordinates.Vec3D position = 3;
   // If set, no doppler effect or time delay

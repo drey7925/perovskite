@@ -71,8 +71,8 @@ message GetAudioDefsResponse {
   repeated perovskite.protocol.audio.SampledSound sampled_sounds = 1;
 }
 
-message GetMediaRequest {string media_name = 1;}
-message GetMediaResponse {bytes media = 1;}
+message GetMediaRequest { string media_name = 1; }
+message GetMediaResponse { bytes media = 1; }
 
 message ListMediaRequest {}
 message ListMediaEntry {
@@ -80,9 +80,7 @@ message ListMediaEntry {
   bytes sha256 = 2;
 }
 
-message ListMediaResponse {
-  repeated ListMediaEntry media = 1;
-}
+message ListMediaResponse { repeated ListMediaEntry media = 1; }
 
 message StreamToServer {
   uint64 sequence = 1;
@@ -174,13 +172,14 @@ message StreamToClient {
     // inventory.
     InventoryUpdate inventory_update = 85;
     // Client state needs to be set (either during game startup or because the
-    // player is being teleported
+    // player is being teleported)
     SetClientState client_state = 86;
     // Client should show a popup
     perovskite.protocol.ui.PopupDescription show_popup = 87;
     // Client should display a chat message
     ChatMessage chat_message = 88;
-    // An entity changed in some way. This part of the protocol is under development
+    // An entity changed in some way. This part of the protocol is under
+    // development
     perovskite.protocol.entities.EntityUpdate entity_update = 89;
     // Play a sound from a sampled media file
     perovskite.protocol.audio.SampledSoundPlayback play_sampled_sound = 90;
@@ -192,8 +191,9 @@ message StreamToClient {
     bytes server_login_response = 151;
     // Indicates that authentication is successful
     AuthSuccess auth_success = 152;
-    // Indicates that the server is about to shut down (e.g. crash, admin-initiated shutdown)
-    // or that the connection is about to shut down (e.g. user being kicked)
+    // Indicates that the server is about to shut down (e.g. crash,
+    // admin-initiated shutdown) or that the connection is about to shut down
+    // (e.g. user being kicked)
     string shutdown_message = 153;
   };
 }
@@ -213,9 +213,11 @@ message DigTapAction {
     EntityTarget entity_target = 11;
   }
   // The block coordinate on the face that was dug into/tapped (i.e. in
-  // raycasting just before we hit the target block). Absent when target is entity_coord (for now)
+  // raycasting just before we hit the target block). Absent when target is
+  // entity_coord (for now)
   //
-  // Also absent in edge cases of raycasting (e.g. player within the block being hit)
+  // Also absent in edge cases of raycasting (e.g. player within the block being
+  // hit)
   perovskite.protocol.coordinates.WireBlockCoordinate prev_coord = 2;
   // zero-indexed slot for the tool in the player's hotbar/primary inventory
   uint32 item_slot = 3;
@@ -234,7 +236,6 @@ message PlaceAction {
     EntityTarget anchor_entity = 11;
   }
 
-
   // zero-indexed slot for the item in the player's hotbar/primary inventory
   uint32 item_slot = 3;
 
@@ -243,7 +244,7 @@ message PlaceAction {
 }
 
 message InteractKeyAction {
-  // The block coordinate that was interacted with
+  // The block coordinate that was interacted with　
   oneof interaction_target {
     perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
     EntityTarget entity_target = 11;
@@ -254,7 +255,6 @@ message InteractKeyAction {
 
   // The named interaction that was selected
   string menu_entry = 4;
-
 
   // More fields may be added in the future to support multiple interactions per
   // block
@@ -275,13 +275,13 @@ message InventoryAction {
   bool swap = 6;
 }
 
-message MapDeltaUpdateBatch {repeated MapDeltaUpdate updates = 1;}
+message MapDeltaUpdateBatch { repeated MapDeltaUpdate updates = 1; }
 
 message MapDeltaUpdate {
   perovskite.protocol.coordinates.WireBlockCoordinate block_coord = 1;
   uint32 new_id = 2;
-  // If set, insert or replace this extended data into the client's view of the map.
-  // If unset, clear it.
+  // If set, insert or replace this extended data into the client's view of the
+  // map. If unset, clear it.
   perovskite.protocol.map.ClientExtendedData new_client_ext_data = 3;
 }
 
@@ -352,20 +352,19 @@ message SetClientState {
   // A 1x1 transient view used for the item that the player clicked and is
   // moving around.
   uint64 inventory_manipulation_view = 4;
-  // The time of day, as a floating point. 0.0 is midnight, 0.99999 is just before midnight
+  // The time of day, as a floating point. 0.0 is midnight, 0.99999 is just
+  // before midnight
   double time_of_day = 5;
   // The period, in real-time seconds, of a day
   double day_length_sec = 6;
-  // Permissions available to the client. Only permissions listed in CLIENT_RELEVANT_PERMISSIONS
-  // are included here
+  // Permissions available to the client. Only permissions listed in
+  // CLIENT_RELEVANT_PERMISSIONS are included here
   repeated string permission = 7;
   // The ID of the entity that the player is currently attached to
   EntityTarget attached_to_entity = 8;
 }
 
-message AuthSuccess {
-  uint32 effective_protocol_version = 1;
-}
+message AuthSuccess { uint32 effective_protocol_version = 1; }
 
 message StartAuth {
   // The username to authenticate as
@@ -389,7 +388,8 @@ message StartAuth {
   //        * Server sends set of client-relevant permissions to the client
   //        * Client and server send protocol versions to each other
   // 2 - circa 2023-10-20
-  //        * Server sends minimal entity definitions (WIP) with only ID/coordinates/velocities
+  //        * Server sends minimal entity definitions (WIP) with only
+  //        ID/coordinates/velocities
   //        * Client assumes each entity is a player
   // 3 - circa 2023-12-06
   //        * side-by-side UI elements
@@ -400,7 +400,8 @@ message StartAuth {
   //        * Entity definition with meshes
   //        * Checkboxes in popups
   // 5 - circa 2024-09-01 onward
-  //        * Audio (sampled sounds, entity sounds without per-entity-class details)
+  //        * Audio (sampled sounds, entity sounds without per-entity-class
+  //        details)
   //        * TLS supported
   //        * opaque_ke bump to v3
   // 6 - up to around 2025-04-15
@@ -421,14 +422,13 @@ message StartAuth {
   uint32 max_protocol_version = 5;
 }
 
-
 // Chat message to be shown on the client.
 message ChatMessage {
   // Who sent the message, e.g. <playername> or [server]
   string origin = 1;
   // The color to use to highlight the message's origin (e.g. for errors, system
-  // messages, admin/moderator users, etc). Most significant byte is ignored (alpha always 1.0), least significant byte
-  // is blue.
+  // messages, admin/moderator users, etc). Most significant byte is ignored
+  // (alpha always 1.0), least significant byte is blue.
   fixed32 color_argb = 2;
 
   // The actual text to display

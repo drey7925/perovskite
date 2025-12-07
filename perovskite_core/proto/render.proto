@@ -15,99 +15,102 @@
 // SPDX-License-Identifier: Apache-2.0
 
 syntax = "proto3";
-
 package perovskite.protocol.render;
 
 message TextureReference {
-    // The diffuse texture + only texture for basic rendering. Alpha channel controls blending, but RenderInfo must also
-    // be set accordingly to enable alpha blend. Should be an image in sRGB
-    string diffuse = 1;
-    // Only supported for rendering blocks, not supported in inventory or popups yet. Applies to ALL textures in this
-    // object
-    TextureCrop crop = 2;
-    // Specular component. *Diffuse*'s alpha channel controls blend between fresnel vs constant specular: 0 = fresnel,
-    // 1 = constant. This image's alpha channel is still TBD. Should be an image in sRGB.
-    string rt_specular = 3;
-    // Light emission component. *Tone-mapped in some TBD way; Components that are full-value (255 for 8-bit images) are
-    // likely to be extremely bright. Alpha = 0 -> very tightly focused, alpha = 1 -> isotropic.
-    //
-    // Because the tone-mapping is still TBD, it's not yet clear whether it should be sRGB or linear. For now, it's
-    // interpreted as sRGB and then undergoes additional tone mapping.
-    string emissive = 4;
-    // Normal-map component. R = tangent, G = bitangent, 0.5 is neutral, 0 and 1 point up/down and left/right in texture
-    // mapped as vector_component = 2 * (texture_component) - 1
-    // space. Normal component is imputed from the tangent/bitangent components (TBD how)
-    // B = TBD. A = TBD.
-    //
-    // Internal detail: the meaning of tangent/bitangent here is opposite that of the shader (for reasons related to
-    // sloped water top face encodings). For texture design, tangent (red channel) runs horizontally in texture space,
-    // while `tangent` inside the engine/shaders is vertical in the texture space.
-    //
-    // Must be LINEAR, not sRGB
-    string normal_map = 5;
+  // The diffuse texture + only texture for basic rendering. Alpha channel
+  // controls blending, but RenderInfo must also be set accordingly to enable
+  // alpha blend. Should be an image in sRGB
+  string diffuse = 1;
+  // Only supported for rendering blocks, not supported in inventory or popups
+  // yet. Applies to ALL textures in this object
+  TextureCrop crop = 2;
+  // Specular component. *Diffuse*'s alpha channel controls blend between
+  // fresnel vs constant specular: 0 = fresnel, 1 = constant. This image's alpha
+  // channel is still TBD. Should be an image in sRGB.
+  string rt_specular = 3;
+  // Light emission component. *Tone-mapped in some TBD way; Components that are
+  // full-value (255 for 8-bit images) are likely to be extremely bright. Alpha
+  // = 0 -> very tightly focused, alpha = 1 -> isotropic.
+  //
+  // Because the tone-mapping is still TBD, it's not yet clear whether it should
+  // be sRGB or linear. For now, it's interpreted as sRGB and then undergoes
+  // additional tone mapping.
+  string emissive = 4;
+  // Normal-map component. R = tangent, G = bitangent, 0.5 is neutral, 0 and 1
+  // point up/down and left/right in texture mapped as vector_component = 2 *
+  // (texture_component) - 1 space. Normal component is imputed from the
+  // tangent/bitangent components (TBD how) B = TBD. A = TBD.
+  //
+  // Internal detail: the meaning of tangent/bitangent here is opposite that of
+  // the shader (for reasons related to sloped water top face encodings). For
+  // texture design, tangent (red channel) runs horizontally in texture space,
+  // while `tangent` inside the engine/shaders is vertical in the texture space.
+  //
+  // Must be LINEAR, not sRGB
+  string normal_map = 5;
 }
 
 // If set, the texture will be cropped to the given coordinates.
 // Use ranges 0-1 for the full texture
 message TextureCrop {
-    float left = 1;
-    float top = 2;
-    float right = 3;
-    float bottom = 4;
-    // If set, the rectangle defined by the four fields above will
-    // be cropped *further* by this dynamic rule
-    DynamicCrop dynamic = 5;
+  float left = 1;
+  float top = 2;
+  float right = 3;
+  float bottom = 4;
+  // If set, the rectangle defined by the four fields above will
+  // be cropped *further* by this dynamic rule
+  DynamicCrop dynamic = 5;
 }
 // The rule defining how to crop a texture based on its variant
 message DynamicCrop {
-    // AND the variant with this value to get the horizontal grid cell (the 1 bits must be contiguous)...
-    uint32 x_selector_bits = 1;
-    // out of this many grid cells total. Values range from [0..x_cells-1]
-    // with 0 leftmost in the texture
-    uint32 x_cells = 2;
-    // Do the same thing with these fields to get the vertical grid cell
-    // (0 is topmost)
-    uint32 y_selector_bits = 3;
-    uint32 y_cells = 4;
-    // If variant AND this is nonzero, flip the selected grid cell horizontally
-    uint32 flip_x_bit = 5;
-    // If variant AND this is nonzero, flip the selected grid cell vertically
-    uint32 flip_y_bit = 6;
-    // If set, invert the logic of flip_x_bit
-    bool extra_flip_x = 7;
-    // If set, invert the logic of flip_y_bit
-    bool extra_flip_y = 8;
+  // AND the variant with this value to get the horizontal grid cell (the 1 bits
+  // must be contiguous)...
+  uint32 x_selector_bits = 1;
+  // out of this many grid cells total. Values range from [0..x_cells-1]
+  // with 0 leftmost in the texture
+  uint32 x_cells = 2;
+  // Do the same thing with these fields to get the vertical grid cell
+  // (0 is topmost)
+  uint32 y_selector_bits = 3;
+  uint32 y_cells = 4;
+  // If variant AND this is nonzero, flip the selected grid cell horizontally
+  uint32 flip_x_bit = 5;
+  // If variant AND this is nonzero, flip the selected grid cell vertically
+  uint32 flip_y_bit = 6;
+  // If set, invert the logic of flip_x_bit
+  bool extra_flip_x = 7;
+  // If set, invert the logic of flip_y_bit
+  bool extra_flip_y = 8;
 }
 
 message CustomMesh {
-    // The texture to apply to the mesh
-    TextureReference texture = 1;
-    // Parallel arrays of vertices. All of these must have the same length
-    // In vulkan's coordinate system, with Y going down.
-    repeated float x = 2;
-    repeated float y = 3;
-    repeated float z = 4;
-    // Parallel arrays of texture coordinates, relative to the texture field.
-    // These will be internally rescaled to fit the position of the texture in
-    // any texture atlases
-    // u is in [0..1] going left to right
-    repeated float u = 5;
-    // v is in [0..1] going top to bottom
-    repeated float v = 6;
-    // Parallel arrays of vertex normals
-    repeated float nx = 7;
-    repeated float ny = 8;
-    repeated float nz = 9;
+  // The texture to apply to the mesh
+  TextureReference texture = 1;
+  // Parallel arrays of vertices. All of these must have the same length
+  // In vulkan's coordinate system, with Y going down.
+  repeated float x = 2;
+  repeated float y = 3;
+  repeated float z = 4;
+  // Parallel arrays of texture coordinates, relative to the texture field.
+  // These will be internally rescaled to fit the position of the texture in
+  // any texture atlases
+  // u is in [0..1] going left to right
+  repeated float u = 5;
+  // v is in [0..1] going top to bottom
+  repeated float v = 6;
+  // Parallel arrays of vertex normals
+  repeated float nx = 7;
+  repeated float ny = 8;
+  repeated float nz = 9;
 
-    // This list's length must be divisible by 3
-    // Each three entries in this list define a triangle
-    // All values must be <= the number of vertices in the parallel arrays above.
-    repeated uint32 indices = 10;
+  // This list's length must be divisible by 3
+  // Each three entries in this list define a triangle
+  // All values must be <= the number of vertices in the parallel arrays above.
+  repeated uint32 indices = 10;
 }
 
 // Text that's rendered on signs, other blocks, etc.
-// At some point this will contain rendering information to properly apply it to a block
-// For now, this just wraps a string
-message BlockText {
-    string text = 1;
-}
+// At some point this will contain rendering information to properly apply it to
+// a block For now, this just wraps a string
+message BlockText { string text = 1; }

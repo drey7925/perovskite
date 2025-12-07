@@ -30,7 +30,8 @@ message EntityMove {
   // The acceleration of the movement
   perovskite.protocol.coordinates.Vec3F acceleration = 3;
   reserved 4;
-  // The face direction (about the vertical Y axis) in radians. 0 means facing +z
+  // The face direction (about the vertical Y axis) in radians. 0 means facing
+  // +z
   float face_direction = 5;
   // The pitch up/down in radians. Positive means pitch up
   float pitch = 9;
@@ -39,7 +40,8 @@ message EntityMove {
   // The total time scheduled for the movement, nanosecond ticks
   uint64 time_ticks = 7;
   // The tick on which the move is scheduled to start
-  // This is synchronized with the timebase used for ticks in every stream message
+  // This is synchronized with the timebase used for ticks in every stream
+  // message
   uint64 start_tick = 8;
 }
 
@@ -59,10 +61,10 @@ message EntityUpdate {
   // demand
   // The entity's class, controlling its appearance
   uint32 entity_class = 6;
-  // Entities trailing behind this entity. Note that these have less functionality;
-  // they essentially just follow behind it, while the location of the primary entity
-  // is used for things like collision detection, proximity queries, etc. The exact
-  // set of limitations is still TBD
+  // Entities trailing behind this entity. Note that these have less
+  // functionality; they essentially just follow behind it, while the location
+  // of the primary entity is used for things like collision detection,
+  // proximity queries, etc. The exact set of limitations is still TBD
   repeated TrailingEntity trailing_entity = 7;
 }
 
@@ -91,9 +93,11 @@ message EntityDef {
 message TurbulenceAudioModel {
   // The volume (given as amplitude 0.0-1.0) of movement-associated turbulence
   float volume = 1;
-  // The volume (given as amplitude 0.0-1.0) when the player is attached to the entity
+  // The volume (given as amplitude 0.0-1.0) when the player is attached to the
+  // entity
   float volume_attached = 2;
-  // The cutoff frequency for the LPF that shapes the spectrum of the turbulence noise.
+  // The cutoff frequency for the LPF that shapes the spectrum of the turbulence
+  // noise.
   float lpf_cutoff_hz = 3;
 }
 
@@ -102,16 +106,18 @@ message EntityAppearance {
   repeated perovskite.protocol.render.CustomMesh custom_mesh = 1;
   // The offset to move the player position when attached to this entity.
   perovskite.protocol.coordinates.Vec3D attachment_offset = 2;
-  // If true, the attachment offset is given in model space and will be transformed
-  // subject to the angle of the entity. If false, the attachment offset is given
-  // in world space and undergoes no transformation
+  // If true, the attachment offset is given in model space and will be
+  // transformed subject to the angle of the entity. If false, the attachment
+  // offset is given in world space and undergoes no transformation
   bool attachment_offset_in_model_space = 3;
-  // If true, trailing entities count the same as the main entity for dig progress tracking. This applies to the
-  // entity on which digging begins; for consistency it's recommended to have the same setting for this for the entity
-  // classes of all trailing entities.
+  // If true, trailing entities count the same as the main entity for dig
+  // progress tracking. This applies to the entity on which digging begins; for
+  // consistency it's recommended to have the same setting for this for the
+  // entity classes of all trailing entities.
   //
-  // Furthermore, this only works if trailing entities are geometrically contiguous with the main entity, at least in
-  // screen space. Otherwise, digging is interrupted by gaps between trailing entities.
+  // Furthermore, this only works if trailing entities are geometrically
+  // contiguous with the main entity, at least in screen space. Otherwise,
+  // digging is interrupted by gaps between trailing entities.
   bool merge_trailing_entities_for_dig = 4;
   // Block groups, used for dig/tool interaction behavior
   repeated string tool_interaction_groups = 5;
@@ -119,5 +125,6 @@ message EntityAppearance {
   double base_dig_time = 6;
   // Turbulence sound, if present for this entity
   TurbulenceAudioModel turbulence_audio = 7;
-  repeated perovskite.protocol.blocks.InteractKeyOption interact_key_options = 8;
+  repeated perovskite.protocol.blocks.InteractKeyOption interact_key_options =
+      8;
 }
