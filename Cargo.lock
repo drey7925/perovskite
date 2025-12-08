@@ -3736,6 +3736,7 @@ dependencies = [
  "bytemuck",
  "cgmath",
  "generic-array",
+ "itertools 0.14.0",
  "log",
  "loom",
  "opaque-ke",

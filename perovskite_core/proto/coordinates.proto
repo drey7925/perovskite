@@ -40,6 +40,19 @@ message Vec3F {
   float z = 3;
 }
 
+message Vec2F {
+  float x = 1;
+  // Note that this coordinate could mean y or z, depending on the context.
+  // See the docstring of the site where this is used for details.
+  float y = 2;
+}
+message Vec2D {
+  double x = 1;
+  // Note that this coordinate could mean y or z, depending on the context.
+  // See the docstring of the site where this is used for details.
+  double y = 2;
+}
+
 message Angles {
   double deg_azimuth = 1;
   double deg_elevation = 2;

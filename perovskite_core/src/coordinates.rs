@@ -388,6 +388,7 @@ impl TryFrom<&crate::protocol::coordinates::Vec3D> for cgmath::Vector3<f64> {
         })
     }
 }
+
 impl TryFrom<crate::protocol::coordinates::Vec3D> for cgmath::Vector3<f64> {
     type Error = anyhow::Error;
 
@@ -433,6 +434,84 @@ impl TryFrom<crate::protocol::coordinates::Vec3F> for cgmath::Vector3<f32> {
     type Error = anyhow::Error;
 
     fn try_from(value: crate::protocol::coordinates::Vec3F) -> Result<Self> {
+        (&value).try_into()
+    }
+}
+
+impl TryFrom<cgmath::Vector2<f32>> for crate::protocol::coordinates::Vec2F {
+    type Error = anyhow::Error;
+
+    fn try_from(value: cgmath::Vector2<f32>) -> std::result::Result<Self, Self::Error> {
+        ensure!(
+            value.x.is_finite() && value.y.is_finite(),
+            "vec2F contained NaN or inf"
+        );
+        Ok(crate::protocol::coordinates::Vec2F {
+            x: value.x,
+            y: value.y,
+        })
+    }
+}
+impl TryFrom<&crate::protocol::coordinates::Vec2F> for cgmath::Vector2<f32> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        value: &crate::protocol::coordinates::Vec2F,
+    ) -> std::result::Result<Self, Self::Error> {
+        ensure!(
+            value.x.is_finite() && value.y.is_finite(),
+            "vec2F contained NaN or inf"
+        );
+        Ok(cgmath::Vector2 {
+            x: value.x,
+            y: value.y,
+        })
+    }
+}
+
+impl TryFrom<crate::protocol::coordinates::Vec2F> for cgmath::Vector2<f32> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: crate::protocol::coordinates::Vec2F) -> Result<Self> {
+        (&value).try_into()
+    }
+}
+
+impl TryFrom<cgmath::Vector2<f64>> for crate::protocol::coordinates::Vec2D {
+    type Error = anyhow::Error;
+
+    fn try_from(value: cgmath::Vector2<f64>) -> std::result::Result<Self, Self::Error> {
+        ensure!(
+            value.x.is_finite() && value.y.is_finite(),
+            "vec2D contained NaN or inf"
+        );
+        Ok(crate::protocol::coordinates::Vec2D {
+            x: value.x,
+            y: value.y,
+        })
+    }
+}
+impl TryFrom<&crate::protocol::coordinates::Vec2D> for cgmath::Vector2<f64> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        value: &crate::protocol::coordinates::Vec2D,
+    ) -> std::result::Result<Self, Self::Error> {
+        ensure!(
+            value.x.is_finite() && value.y.is_finite(),
+            "vec2D contained NaN or inf"
+        );
+        Ok(cgmath::Vector2 {
+            x: value.x,
+            y: value.y,
+        })
+    }
+}
+
+impl TryFrom<crate::protocol::coordinates::Vec2D> for cgmath::Vector2<f64> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: crate::protocol::coordinates::Vec2D) -> Result<Self> {
         (&value).try_into()
     }
 }

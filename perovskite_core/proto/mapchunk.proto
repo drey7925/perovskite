@@ -68,7 +68,16 @@ message FarSheet {
   // See FarSheetControl for details on coordinates, geometry, valid length,
   // etc. This is stored row-major as (0,0), (1,0), (2,0), ... (M-1,0), (0,1),
   // (1,1), ... (M+K-1,1) ... (M+(N-1)K-1, N-1).
-  repeated sint32 heights = 2 [ packed = true ];
+  //
+  // Heights are given in Y-up space, in block / 64 units. This is used to help
+  // keep values small in the protobuf encoding.
+  //
+  // Note that in the future, it might make sense to investigate using
+  // different encodings (e.g. float16, fixed-point sint32, etc) to save
+  // space and bandwidth, however this is a premature optimization.
+  //
+  // If this is done, another field will be added and this one left empty.
+  repeated float heights = 2 [ packed = true ];
 }
 
 enum TessellationMode {
@@ -99,8 +108,11 @@ message FarSheetControl {
   perovskite.protocol.coordinates.Vec3D origin = 1;
   // The basis vectors of the sheet, representing the stride, in world space,
   // that corresponds to a step through the grid in the sheet.
-  perovskite.protocol.coordinates.Vec3F basis_u = 2;
-  perovskite.protocol.coordinates.Vec3F basis_v = 3;
+  //
+  // This represents X and Z components of world space.
+  perovskite.protocol.coordinates.Vec2D basis_u = 2;
+  // This represents Y and Z components of world space.
+  perovskite.protocol.coordinates.Vec2D basis_v = 3;
 
   // The extents of the sheet, in lattice space.
   //
