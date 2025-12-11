@@ -64,7 +64,8 @@ message StoredChunk {
 // For now, this is the only type of far mesh supported, and the only type that
 // is planned. However, other types of far meshes may be added in principle.
 message FarSheet {
-  FarSheetControl control = 1;
+  uint64 geometry_id = 1;
+  FarSheetControl control = 2;
   // See FarSheetControl for details on coordinates, geometry, valid length,
   // etc. This is stored row-major as (0,0), (1,0), (2,0), ... (M-1,0), (0,1),
   // (1,1), ... (M+K-1,1) ... (M+(N-1)K-1, N-1).
@@ -77,7 +78,9 @@ message FarSheet {
   // space and bandwidth, however this is a premature optimization.
   //
   // If this is done, another field will be added and this one left empty.
-  repeated float heights = 2 [ packed = true ];
+  repeated float heights = 3 [ packed = true ];
+
+  // More fields to come... (e.g. color, lights, etc)
 }
 
 enum TessellationMode {
