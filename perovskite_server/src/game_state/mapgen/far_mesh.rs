@@ -264,15 +264,6 @@ mod far_mesh {
             use std::cell::RefCell;
 
             use super::*;
-            // #[test]
-            // fn test_traversal_simple_pair() {
-            //     let tree = TriQuadPair {
-            //         lower: TriQuadNode::Leaf('a'),
-            //         upper: TriQuadNode::Leaf('b'),
-            //     };
-            //     assert_eq!(tree.traverse(12, 12, 16), Some(&'b'));
-            //     assert_eq!(tree.traverse(3, 10, 16), Some(&'a'));
-            // }
 
             fn make_pair<T>(
                 nodes: &RefCell<slotmap::SlotMap<NodeKey, TriQuadNode<T>>>,
@@ -297,6 +288,19 @@ mod far_mesh {
                     rect,
                     tris: [nodes.insert(node0), nodes.insert(node1)],
                 }
+            }
+
+            #[test]
+            fn test_traversal_simple_pair() {
+                let nodes = RefCell::new(slotmap::SlotMap::with_key());
+                let root = make_pair(&nodes, TriQuadNode::Leaf('a'), TriQuadNode::Leaf('b'));
+                let tree = TriQuadTree {
+                    root,
+                    nodes: nodes.into_inner(),
+                    grid_size: 16,
+                };
+                assert_eq!(tree.get(12, 12), Some(&'b'));
+                assert_eq!(tree.get(3, 10), Some(&'a'));
             }
 
             #[test]
