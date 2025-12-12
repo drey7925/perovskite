@@ -3827,6 +3827,7 @@ dependencies = [
  "seqlock",
  "serde",
  "sha2",
+ "slotmap",
  "smallvec",
  "snap",
  "thiserror 2.0.17",
@@ -5078,6 +5079,15 @@ name = "slabbin"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9db491c0d4152a069911a0fbdaca959691bf0b9d7110d98a7ed1c8e59b79ab30"
+
+[[package]]
+name = "slotmap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
+dependencies = [
+ "version_check",
+]
 
 [[package]]
 name = "smallvec"

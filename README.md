@@ -46,17 +46,17 @@ The limitations:
 * The game lacks a lot of content
 * A lot of basic features, like a player model, are still missing
 * No scripting language yet - all game logic is written in Rust
-    * And no dynamic content loading yet. It might be possible once crABI stabilizes.
+  * And no dynamic content loading yet. It might be possible once crABI stabilizes.
 * TLS support is a WIP. At this time, you need to bring your own certificate.
-    * Let's Encrypt (certbot) works for this. One day, I'd like to implement automatic certificate provisioning using
+  * Let's Encrypt (certbot) works for this. One day, I'd like to implement automatic certificate provisioning using
       ACME + ALPN challenges. This ran into some problems on my first attempt.
-    * TLS-secured servers should use address format `https://domain:port`
-    * Unsecured servers should use the existing format `grpc://domain:port`
+  * TLS-secured servers should use address format `https://domain:port`
+  * Unsecured servers should use the existing format `grpc://domain:port`
 
 The benefits:
 
 * The engine is optimized for scalability and performance where possible
-    * Note that not all of the components have been optimized yet
+  * Note that not all of the components have been optimized yet
 * The minecarts can move at an unusually high speed, comparable to real-world HSR
 * All game logic is written in Rust
 * Authentication uses a secure remote password protocol that avoids sending the password over the network
@@ -81,9 +81,9 @@ On Windows, you'll also need `protoc` and `ninja` (e.g. use these exact package 
 
 First, build and run the server:
 
-```
-$ cargo build  --features= --bin perovskite_game_api --release
-$ target/release/perovskite_game_api --data-dir /path/to/data-directory
+```sh
+cargo build  --features= --bin perovskite_game_api --release
+target/release/perovskite_game_api --data-dir /path/to/data-directory
 ```
 
 The default server port is 28273.
@@ -92,7 +92,7 @@ The following `--features` can be used to do performance debugging of the server
 
 * `deadlock_detection` - Prints stacktraces when certain deadlocks occur
 * `tracy` - Exports trace spans and metrics to [tracy](https://github.com/wolfpld/tracy).
-    * Depending on your system configuration, thread stacks and thread scheduling events may be visible.
+  * Depending on your system configuration, thread stacks and thread scheduling events may be visible.
       e.g. on Windows, this requires running the game server as an admin.
 * `dhat-heap` - Tracks heap allocations with dhat. Slow, and suspected to cause a rare deadlock.
 * `tokio-console` - Exports tokio stats to [Tokio console](https://github.com/tokio-rs/console). Requires `$RUSTFLAGS`
@@ -110,9 +110,9 @@ graceful shutdown to hang.
 
 Then, build and run the client:
 
-```
-$ cargo build --features= --bin perovskite_client --release
-$ target/release/perovskite_client
+```sh
+cargo build --features= --bin perovskite_client --release
+target/release/perovskite_client
 ```
 
 The only supported feature is `--features=tracy`, with similar behavior to the same feature on the server.
@@ -128,7 +128,7 @@ To reach a client on the local machine, use `grpc://localhost:28273` as the serv
 * F to interact with a block (e.g. furnace/chest).
 * I for inventory
 * P to toggle between normal physics, flying, and noclip. This is useful if you spawn underground.
-    * left-control to descend
+  * left-control to descend
 * Left-shift to sprint (if you have server permission to do so)
 * Escape for menu
 
@@ -148,7 +148,7 @@ I tend to test with a fairly powerful laptop and a high-end GPU. I aim for the f
   ensure there are not bottlenecks at the high end of scaling at lower render distance
 * 60-90 FPS on max render distance
 * 30-50 FPS on Intel integrated graphics when the client and server are limited to a few E-cores.
-    * This will require both optimizations and better control over load (e.g. settings, dynamic render distance, etc)
+  * This will require both optimizations and better control over load (e.g. settings, dynamic render distance, etc)
 
 ## What's on the near-term roadmap?
 
@@ -156,46 +156,44 @@ Tons of stuff, in no particular order, and not yet prioritized. Everything in th
 on my available time and mood.
 
 * Rendering and display:
-    * TBD
-    * Maybe a raytraced system?
-    * Fog for distant chunks
+  * Low-poly distant chunks
 * Game map
-    * Further optimized APIs
-        * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
-    * Out-of-line chunk loading (e.g. offloaded onto a dedicated executor)
-    * Map bypass (i.e. stream chunks directly to the client for display)
+  * Further optimized APIs
+    * Block visitors? (e.g. `for_each_connected` and similar taking closures and running them efficiently)
+  * Out-of-line chunk loading (e.g. offloaded onto a dedicated executor)
+  * Map bypass (i.e. stream chunks directly to the client for display)
 * Block handling
-    * Further refinements of signs/text
-    * Implement place_on handler
-    * Implement step_on handler and wire up to client context
-    * Further client-side extended data
+  * Further refinements of signs/text
+  * Implement place_on handler
+  * Implement step_on handler and wire up to client context
+  * Further client-side extended data
 * Entities
-    * Optimized (shader-assisted?) entity renderer
-    * Simpler (tokio-driven) entity API (i.e. use a tokio task rather than the custom coroutine)
+  * Optimized (shader-assisted?) entity renderer
+  * Simpler (tokio-driven) entity API (i.e. use a tokio task rather than the custom coroutine)
 * Net code
-    * Testing and optimization for slow WANs, avoiding head-of-line blocking
-    * Player action validation
-    * Adaptive and adjustable chunk load distance
+  * Testing and optimization for slow WANs, avoiding head-of-line blocking
+  * Player action validation
+  * Adaptive and adjustable chunk load distance
 * Content
-    * Torch (doable w/ custom geometry + custom handlers)
-    * Mapgen
-        * Trees - keep refining
-        * Sand and other surface material variety
-        * Mapgen improvement
-    * More simple tools (textures needed)
-    * Cobblestone, bricks, etc
-    * Minecarts
-        * Integration with circuits for station automation
-        * Freight minecarts (requires some work for persistence to avoid losing minecart contents during restart)
-    * Pneumatic tubes
-        * Tubes to send items between chests and furnaces, as a basis for some kind of machines later on
-    * Circuit
-        * In-inventory microcontroller (e.g. for handheld devices and smartcards)
-           * Depends on extended data for inventory items 
+  * Torch (doable w/ custom geometry + custom handlers)
+  * Mapgen
+    * Trees - keep refining
+    * Sand and other surface material variety
+    * Mapgen improvement
+  * More simple tools (textures needed)
+  * Cobblestone, bricks, etc
+  * Minecarts
+    * Integration with circuits for station automation
+    * Freight minecarts (requires some work for persistence to avoid losing minecart contents during restart)
+  * Pneumatic tubes
+    * Tubes to send items between chests and furnaces, as a basis for some kind of machines later on
+  * Circuit
+    * In-inventory microcontroller (e.g. for handheld devices and smartcards)
+      * Depends on extended data for inventory items
 * Further audio development
 * Bugfixes for known issues
-    * Trees intersect each other
-    * Only binds to IPv6 on Windows
+  * Trees intersect each other
+  * Only binds to IPv6 on Windows
 
 ## What are the stability guarantees?
 
@@ -207,7 +205,9 @@ should be reasonably stable once it's written. I intend to re-export some unstab
 ## Code style
 
 * Formatted following `cargo fmt`
-* No unsafe
+* Minimal unsafe, where it is either absolutely necessary (e.g. unsafe-only API, like Vulkan where some preconditions
+    cannot be checked automatically) or where it has an outsized benefit to code readability and performance + is easily
+    verified by the reader.
 * No nightly-only features; should build on stable Rust.
 
 ## Who is behind this?
@@ -226,7 +226,7 @@ Most of the engine is handwritten; I haven't been able to get LLMs to generate r
 yet, and I strongly prefer to have direct design and implementation control anyway.
 
 Aspirationally, after making some API improvements, context instruction files, etc, I hope to make code generation for
-game _content_ viable, for a few reasons:
+game *content* viable, for a few reasons:
 
 * I don't enjoy writing game content as much as engine code anyway, but feel that game content is necessary to showcase
   the engine
@@ -237,7 +237,9 @@ No AI is used for image generation, textures, "AI art" generation, etc.
 
 ### Pull requests and AI
 
-Please indicate in any pull requests if code was primarily generated with an AI tool/agent.
+Please indicate in any pull requests if code was primarily generated with an AI tool/agent. Please no AI-generated unsafe Rust;
+I would prefer that it be handwritten and verified. Of course, AI code review, test generation, etc is good as an additional signal
+that unsafe code is sound.
 
 Please do not contribute media (textures, audio, etc.) that you did not either photograph, record, or draw yourself.
 Non-AI tools like image/audio editors, denoising, etc are fine.
