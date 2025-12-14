@@ -44,7 +44,7 @@ mod far_mesh {
     // with bit-twiddles to traverse
 
     #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
-    enum TilePosture {
+    pub(crate) enum TilePosture {
         LowerHalf,
         UpperHalf,
     }
@@ -106,11 +106,24 @@ mod far_mesh {
         }
     }
 
+    /// A triangular quadtree. This is specific to the game server, and is not a general-purpose data structure.
+    /// In particular: weaker ability to remove nodes, filling-in procedure specific to the game's needs,
+    /// change tracking used for network updates, etc, all tightly coupled with the data structure.
+    ///
+    /// It has a generic type parameter for two reasons: Testing, and flexibility for the network implementation/caching/etc.
     pub(crate) mod tri_quad {
+        use std::ops::Range;
+
         use crate::game_state::mapgen::far_mesh::far_mesh::TilePosture;
 
         slotmap::new_key_type! {
             struct NodeKey;
+        }
+
+        /// Callback that is called when a node is inserted or deleted.
+        pub(crate) trait ChangeCallbacks<T: Default + Send + Sync + 'static> {
+            fn insert(&mut self, entry: &EntryCore) -> T;
+            fn delete(&mut self, entry: &TriQuadEntryMut<T>);
         }
 
         /// A node of a triangular quadtree. Note that this can be a server implementation detail and
@@ -156,16 +169,21 @@ mod far_mesh {
                 })
             }
 
-            pub(crate) fn get(&self, x: u32, y: u32) -> Option<&T> {
-                let entry =
-                    self.traverse_rects(&self.root, x, y, self.grid_size - 1, self.grid_size >> 1);
-                if let Some(entry) = entry {
-                    match self.nodes.get(entry.node).unwrap() {
-                        TriQuadNode::Leaf(t) => Some(t),
-                        _ => None,
-                    }
-                } else {
-                    None
+            fn core_entry(&self, x: u32, y: u32) -> EntryCore {
+                self.traverse_rects(&self.root, x, y, self.grid_size - 1, self.grid_size >> 1)
+            }
+
+            pub(crate) fn entry(&self, x: u32, y: u32) -> TriQuadEntry<'_, T> {
+                TriQuadEntry {
+                    core: self.core_entry(x, y),
+                    map: &self.nodes,
+                }
+            }
+
+            pub(crate) fn entry_mut(&mut self, x: u32, y: u32) -> TriQuadEntryMut<'_, T> {
+                TriQuadEntryMut {
+                    core: self.core_entry(x, y),
+                    map: &mut self.nodes,
                 }
             }
 
@@ -176,56 +194,44 @@ mod far_mesh {
                 y: u32,
                 dense_mask: u32,
                 leading_mask: u32,
-            ) -> Option<TriQuadEntry<T>> {
+            ) -> EntryCore {
                 println!("node ({},{},{},{})", x, y, dense_mask, leading_mask);
                 match self.nodes.get(slot).unwrap() {
-                    TriQuadNode::Leaf(t) => {
-                        return Some(TriQuadEntry {
-                            x,
-                            y,
-                            // TODO: determine posture
-                            posture: TilePosture::LowerHalf,
-                            dense_mask,
-                            node: slot,
-                            phantom: std::marker::PhantomData,
-                        });
-                    }
-                    TriQuadNode::EmptyLeaf => return None,
+                    TriQuadNode::Leaf(_) | TriQuadNode::EmptyLeaf => EntryCore {
+                        x,
+                        y,
+                        posture: if (x & dense_mask) + (y & dense_mask) < dense_mask {
+                            TilePosture::LowerHalf
+                        } else {
+                            TilePosture::UpperHalf
+                        },
+                        dense_mask,
+                        node: slot,
+                    },
                     TriQuadNode::Internal { rect, tris } => {
                         let cx = (x & leading_mask) != 0;
                         let cy = (y & leading_mask) != 0;
 
                         println!("cx {} cy {}", cx, cy);
                         match (cx, cy) {
-                            (true, false) => {
-                                return self.traverse_nodes(
-                                    tris[0],
-                                    x,
-                                    y,
-                                    dense_mask >> 1,
-                                    leading_mask >> 1,
-                                );
-                            }
-                            (false, true) => {
-                                return self.traverse_nodes(
-                                    tris[1],
-                                    x,
-                                    y,
-                                    dense_mask >> 1,
-                                    leading_mask >> 1,
-                                );
-                            }
-
+                            (true, false) => self.traverse_nodes(
+                                tris[0],
+                                x,
+                                y,
+                                dense_mask >> 1,
+                                leading_mask >> 1,
+                            ),
+                            (false, true) => self.traverse_nodes(
+                                tris[1],
+                                x,
+                                y,
+                                dense_mask >> 1,
+                                leading_mask >> 1,
+                            ),
                             (false, false) | (true, true) => {
-                                return self.traverse_rects(
-                                    rect,
-                                    x,
-                                    y,
-                                    dense_mask >> 1,
-                                    leading_mask >> 1,
-                                );
+                                self.traverse_rects(rect, x, y, dense_mask >> 1, leading_mask >> 1)
                             }
-                        };
+                        }
                     }
                 }
             }
@@ -237,7 +243,7 @@ mod far_mesh {
                 y: u32,
                 dense_mask: u32,
                 leading_mask: u32,
-            ) -> Option<TriQuadEntry<T>> {
+            ) -> EntryCore {
                 println!("pair ({},{},{},{})", x, y, dense_mask, leading_mask);
                 let sum = (x & dense_mask) + (y & dense_mask);
                 println!("sum {} = {} + {}", sum, x & dense_mask, y & dense_mask);
@@ -250,13 +256,117 @@ mod far_mesh {
             }
         }
 
-        pub(crate) struct TriQuadEntry<T> {
+        impl<T: Default + Send + Sync + 'static> TriQuadTree<T> {
+            /// Insert a node at the given position, with the given side length. If there is already
+            /// finer geometry at this location, do nothing (the finer geometry takes precedence).
+            ///
+            /// Otherwise, insert the node at this level, call the callbacks, then recursively
+            /// insert neighbors to fill nodes on the way back up, with the most coarse representation
+            /// that will fit.
+            fn insert_at(
+                &mut self,
+                x: u32,
+                y: u32,
+                side_length: u32,
+                callbacks: &mut impl ChangeCallbacks<T>,
+            ) {
+                let starting_entry = self.core_entry(x, y);
+                if starting_entry.side_length() < side_length {
+                    return;
+                } else if starting_entry.side_length() == side_length {
+                    todo!("Fill single");
+                } else {
+                    todo!("Fill multiple then recurse back");
+                }
+            }
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        pub(crate) struct EntryCore {
             x: u32,
             y: u32,
             posture: TilePosture,
             dense_mask: u32,
             node: NodeKey,
-            phantom: std::marker::PhantomData<T>,
+        }
+
+        pub(crate) struct TriQuadEntry<'a, T> {
+            core: EntryCore,
+            map: &'a slotmap::SlotMap<NodeKey, TriQuadNode<T>>,
+        }
+        impl<'a, T> TriQuadEntry<'a, T> {
+            pub(crate) fn core(&self) -> &EntryCore {
+                &self.core
+            }
+            fn node(&self) -> &TriQuadNode<T> {
+                self.map.get(self.core.node).unwrap()
+            }
+            pub(crate) fn value(&self) -> Option<&T> {
+                match self.node() {
+                    TriQuadNode::Leaf(value) => Some(value),
+                    _ => None,
+                }
+            }
+        }
+
+        impl EntryCore {
+            pub(crate) fn posture(&self) -> TilePosture {
+                self.posture
+            }
+            pub(crate) fn x_range(&self) -> Range<u32> {
+                self.x & !self.dense_mask..self.x | self.dense_mask
+            }
+            pub(crate) fn y_range(&self) -> Range<u32> {
+                self.y & !self.dense_mask..self.y | self.dense_mask
+            }
+            pub(crate) fn debug_describe(&self) -> String {
+                format!(
+                    "{} half of [{},{}) x [{},{})",
+                    match self.posture {
+                        TilePosture::LowerHalf => "Lower",
+                        TilePosture::UpperHalf => "Upper",
+                    },
+                    self.x_range().start,
+                    self.x_range().end + 1,
+                    self.y_range().start,
+                    self.y_range().end + 1
+                )
+            }
+            pub(crate) fn side_length(&self) -> u32 {
+                self.dense_mask + 1
+            }
+        }
+
+        pub(crate) struct TriQuadEntryMut<'a, T> {
+            core: EntryCore,
+            map: &'a mut slotmap::SlotMap<NodeKey, TriQuadNode<T>>,
+        }
+        impl<'a, T> TriQuadEntryMut<'a, T> {
+            fn core(&self) -> &EntryCore {
+                &self.core
+            }
+            fn node(&self) -> &TriQuadNode<T> {
+                self.map.get(self.core.node).unwrap()
+            }
+            pub(crate) fn value(&self) -> Option<&T> {
+                match self.node() {
+                    TriQuadNode::Leaf(value) => Some(value),
+                    _ => None,
+                }
+            }
+            fn node_mut(&mut self) -> &mut TriQuadNode<T> {
+                self.map.get_mut(self.core.node).unwrap()
+            }
+            pub(crate) fn value_mut(&mut self) -> Option<&mut T> {
+                match self.node_mut() {
+                    TriQuadNode::Leaf(value) => Some(value),
+                    _ => None,
+                }
+            }
+        }
+        pub(crate) struct EntryMut<'a, T> {
+            core: EntryCore,
+            map: &'a mut slotmap::SlotMap<NodeKey, TriQuadNode<T>>,
         }
 
         #[cfg(test)]
@@ -290,6 +400,15 @@ mod far_mesh {
                 }
             }
 
+            #[track_caller]
+            fn check_entry<T: PartialEq + std::fmt::Debug>(
+                entry: TriQuadEntry<T>,
+                expected: Option<&T>,
+            ) {
+                println!("{}", entry.core().debug_describe());
+                assert_eq!(entry.value(), expected);
+            }
+
             #[test]
             fn test_traversal_simple_pair() {
                 let nodes = RefCell::new(slotmap::SlotMap::with_key());
@@ -299,8 +418,8 @@ mod far_mesh {
                     nodes: nodes.into_inner(),
                     grid_size: 16,
                 };
-                assert_eq!(tree.get(12, 12), Some(&'b'));
-                assert_eq!(tree.get(3, 10), Some(&'a'));
+                check_entry(tree.entry(12, 12), Some(&'b'));
+                check_entry(tree.entry(3, 10), Some(&'a'));
             }
 
             #[test]
@@ -321,16 +440,16 @@ mod far_mesh {
                     grid_size: 16,
                 };
                 println!("j");
-                assert_eq!(tree.get(15, 15), Some(&'j'));
+                check_entry(tree.entry(15, 15), Some(&'j'));
                 println!("e");
-                assert_eq!(tree.get(11, 11), Some(&'e'));
+                check_entry(tree.entry(11, 11), Some(&'e'));
                 println!("c");
-                assert_eq!(tree.get(1, 15), Some(&'c'));
+                check_entry(tree.entry(1, 15), Some(&'c'));
                 println!("b");
-                assert_eq!(tree.get(1, 1), Some(&'a'));
+                check_entry(tree.entry(1, 1), Some(&'a'));
                 println!("b");
-                assert_eq!(tree.get(15, 1), Some(&'b'));
-                assert_eq!(tree.get(15, 7), Some(&'b'));
+                check_entry(tree.entry(15, 1), Some(&'b'));
+                check_entry(tree.entry(15, 7), Some(&'b'));
             }
 
             #[test]
@@ -363,22 +482,22 @@ mod far_mesh {
                     grid_size: 16,
                 };
                 println!("j");
-                assert_eq!(tree.get(15, 15), Some(&'j'));
+                check_entry(tree.entry(15, 15), Some(&'j'));
                 println!("g");
-                assert_eq!(tree.get(12, 8), Some(&'g'));
+                check_entry(tree.entry(12, 8), Some(&'g'));
                 println!("h");
-                assert_eq!(tree.get(8, 12), Some(&'h'));
+                check_entry(tree.entry(8, 12), Some(&'h'));
                 println!("e");
-                assert_eq!(tree.get(9, 9), Some(&'e'));
+                check_entry(tree.entry(9, 9), Some(&'e'));
                 println!("f");
-                assert_eq!(tree.get(11, 10), Some(&'f'));
+                check_entry(tree.entry(11, 10), Some(&'f'));
                 println!("c");
-                assert_eq!(tree.get(1, 15), Some(&'c'));
+                check_entry(tree.entry(1, 15), Some(&'c'));
                 println!("b");
-                assert_eq!(tree.get(1, 1), Some(&'a'));
+                check_entry(tree.entry(1, 1), Some(&'a'));
                 println!("b");
-                assert_eq!(tree.get(15, 1), Some(&'b'));
-                assert_eq!(tree.get(15, 7), Some(&'b'));
+                check_entry(tree.entry(15, 1), Some(&'b'));
+                check_entry(tree.entry(15, 7), Some(&'b'));
             }
         }
     }
