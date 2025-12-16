@@ -120,10 +120,12 @@ mod far_mesh {
             struct NodeKey;
         }
 
-        /// Callback that is called when a node is inserted or deleted.
-        pub(crate) trait ChangeCallbacks<T: Default + Send + Sync + 'static> {
+        /// Callback that is called when a node is inserted or deleted. These callbacks should
+        /// both provide a value, and also have a side effect, e.g. sending a network update to
+        /// the client.
+        pub(crate) trait ChangeCallbacks<T: Send + Sync + 'static> {
             fn insert(&mut self, entry: &EntryCore) -> T;
-            fn delete(&mut self, entry: &TriQuadEntryMut<T>);
+            fn delete(&mut self, entry: T);
         }
 
         /// A node of a triangular quadtree. Note that this can be a server implementation detail and
@@ -138,6 +140,7 @@ mod far_mesh {
             },
         }
 
+        #[derive(Clone, Copy)]
         struct TriQuadPair {
             upper: NodeKey,
             lower: NodeKey,
@@ -197,17 +200,9 @@ mod far_mesh {
             ) -> EntryCore {
                 println!("node ({},{},{},{})", x, y, dense_mask, leading_mask);
                 match self.nodes.get(slot).unwrap() {
-                    TriQuadNode::Leaf(_) | TriQuadNode::EmptyLeaf => EntryCore {
-                        x,
-                        y,
-                        posture: if (x & dense_mask) + (y & dense_mask) < dense_mask {
-                            TilePosture::LowerHalf
-                        } else {
-                            TilePosture::UpperHalf
-                        },
-                        dense_mask,
-                        node: slot,
-                    },
+                    TriQuadNode::Leaf(_) | TriQuadNode::EmptyLeaf => {
+                        EntryCore::new(slot, x, y, dense_mask)
+                    }
                     TriQuadNode::Internal { rect, tris } => {
                         let cx = (x & leading_mask) != 0;
                         let cy = (y & leading_mask) != 0;
@@ -256,14 +251,161 @@ mod far_mesh {
             }
         }
 
-        impl<T: Default + Send + Sync + 'static> TriQuadTree<T> {
+        impl<T: Send + Sync + 'static> TriQuadTree<T> {
+            fn traverse_and_fill_nodes(
+                &mut self,
+                slot: NodeKey,
+                x: u32,
+                y: u32,
+                dense_mask: u32,
+                leading_mask: u32,
+                stop_side_length: u32,
+                callbacks: &mut impl ChangeCallbacks<T>,
+                current_posture: TilePosture,
+            ) {
+                println!(
+                    "{{ fillnode ({},{},{},{} -> {})",
+                    x, y, dense_mask, leading_mask, stop_side_length
+                );
+                // At the leaf we wanted to reach.
+                if leading_mask <= stop_side_length {
+                    println!("base case");
+                    let entry = EntryCore {
+                        x,
+                        y,
+                        posture: current_posture,
+                        dense_mask,
+                        node: slot,
+                    };
+                    let data = callbacks.insert(&entry);
+                    let old = std::mem::replace(
+                        self.nodes.get_mut(slot).unwrap(),
+                        TriQuadNode::Leaf(data),
+                    );
+                    self.remove_detached_tree(old, callbacks);
+                } else {
+                    // Not at the leaf we wanted to reach. Inspect what we have,
+                    // then traverse down to the leaf we want to reach.
+                    let node = self.nodes.get(slot).unwrap();
+                    let next_rect;
+                    let next_tris;
+                    match node {
+                        TriQuadNode::Leaf(_) | TriQuadNode::EmptyLeaf => {
+                            // The node is a leaf. Subdivide it once.
+                            next_rect = TriQuadPair {
+                                lower: self.nodes.insert(TriQuadNode::EmptyLeaf),
+                                upper: self.nodes.insert(TriQuadNode::EmptyLeaf),
+                            };
+                            next_tris = [
+                                self.nodes.insert(TriQuadNode::EmptyLeaf),
+                                self.nodes.insert(TriQuadNode::EmptyLeaf),
+                            ];
+                            let new_node = TriQuadNode::Internal {
+                                rect: next_rect,
+                                tris: next_tris,
+                            };
+                            let old_node =
+                                std::mem::replace(self.nodes.get_mut(slot).unwrap(), new_node);
+                            self.remove_detached_tree(old_node, callbacks);
+                        }
+                        TriQuadNode::Internal { rect, tris } => {
+                            next_rect = *rect;
+                            next_tris = *tris;
+                        }
+                    }
+
+                    let cx = (x & leading_mask) != 0;
+                    let cy = (y & leading_mask) != 0;
+                    let dense_node = match (cx, cy) {
+                        (true, false) => next_tris[0],
+                        (false, true) => next_tris[1],
+                        (false, false) | (true, true) => {
+                            // The decision of triangle orientation needs to happen
+                            // with a smaller mask. Compare to how traverse_nodes halves the mask
+                            // when calling traverse_rects, then traverse_rects passes that same
+                            // halved mask to traverse_nodes.
+                            let half_mask = dense_mask >> 1;
+                            let sum = (x & half_mask) + (y & half_mask);
+                            if sum < half_mask {
+                                next_rect.lower
+                            } else {
+                                next_rect.upper
+                            }
+                        }
+                    };
+                    let xmin = x & !dense_mask;
+                    let ymin = y & !dense_mask;
+                    let xmax = x | dense_mask;
+                    let ymax = y | dense_mask;
+                    let rect_coord = match current_posture {
+                        TilePosture::LowerHalf => (xmin, ymin),
+                        TilePosture::UpperHalf => (xmax, ymax),
+                    };
+                    for (node, coord, posture, debug) in [
+                        (next_tris[0], (xmax, ymin), current_posture, "t0"),
+                        (next_tris[1], (xmin, ymax), current_posture, "t1"),
+                        (next_rect.lower, rect_coord, TilePosture::LowerHalf, "lower"),
+                        (next_rect.upper, rect_coord, TilePosture::UpperHalf, "upper"),
+                    ] {
+                        println!("traverse {}", debug);
+                        let stop_mask = if node == dense_node {
+                            println!("will recurse");
+                            stop_side_length
+                        } else {
+                            println!("will not recurse");
+                            leading_mask >> 1
+                        };
+                        let coord = if node == dense_node { (x, y) } else { coord };
+                        self.traverse_and_fill_nodes(
+                            node,
+                            coord.0,
+                            coord.1,
+                            dense_mask >> 1,
+                            leading_mask >> 1,
+                            stop_mask,
+                            callbacks,
+                            posture,
+                        );
+                    }
+                }
+
+                println!("}}");
+            }
+
+            /// Remove a node and all of its children. The node itself must have already been
+            /// removed or replaced either before this call or right after.
+            /// (Removed == no longer referenced by a parent node, AND removed from the slotmap)
+            /// (Replaced == a new node was put into the slotmap, and we're now recursively cleaning
+            ///   up the old node and its children)
+            fn remove_detached_tree(
+                &mut self,
+                node: TriQuadNode<T>,
+                callbacks: &mut impl ChangeCallbacks<T>,
+            ) {
+                match node {
+                    TriQuadNode::Leaf(data) => callbacks.delete(data),
+                    TriQuadNode::Internal { rect, tris } => {
+                        let node = self.nodes.remove(rect.lower).unwrap();
+                        self.remove_detached_tree(node, callbacks);
+                        let node = self.nodes.remove(rect.upper).unwrap();
+                        self.remove_detached_tree(node, callbacks);
+
+                        for &tri in tris.iter() {
+                            let node = self.nodes.remove(tri).unwrap();
+                            self.remove_detached_tree(node, callbacks);
+                        }
+                    }
+                    TriQuadNode::EmptyLeaf => {}
+                }
+            }
+
             /// Insert a node at the given position, with the given side length. If there is already
             /// finer geometry at this location, do nothing (the finer geometry takes precedence).
             ///
             /// Otherwise, insert the node at this level, call the callbacks, then recursively
             /// insert neighbors to fill nodes on the way back up, with the most coarse representation
             /// that will fit.
-            fn insert_at(
+            pub(crate) fn insert_at(
                 &mut self,
                 x: u32,
                 y: u32,
@@ -272,11 +414,37 @@ mod far_mesh {
             ) {
                 let starting_entry = self.core_entry(x, y);
                 if starting_entry.side_length() < side_length {
+                    // Finer geometry already present, do nothing.
                     return;
                 } else if starting_entry.side_length() == side_length {
-                    todo!("Fill single");
+                    // Edge case, exact match. As a precondition, it should already be present, because
+                    // the fill case should have filled in siblings on its way back up.
+                    self.assert_filled(starting_entry.node);
+                    return;
                 } else {
-                    todo!("Fill multiple then recurse back");
+                    self.traverse_and_fill_nodes(
+                        starting_entry.node,
+                        x,
+                        y,
+                        starting_entry.dense_mask,
+                        starting_entry.dense_mask + 1,
+                        side_length,
+                        callbacks,
+                        starting_entry.posture,
+                    );
+                }
+            }
+
+            fn assert_filled(&self, key: NodeKey) {
+                match self.nodes.get(key).unwrap() {
+                    TriQuadNode::Leaf(_) => {}
+                    TriQuadNode::Internal { rect, tris } => {
+                        self.assert_filled(tris[0]);
+                        self.assert_filled(tris[1]);
+                        self.assert_filled(rect.lower);
+                        self.assert_filled(rect.upper);
+                    }
+                    TriQuadNode::EmptyLeaf => panic!("node {:?} is an empty leaf", key),
                 }
             }
         }
@@ -288,6 +456,21 @@ mod far_mesh {
             posture: TilePosture,
             dense_mask: u32,
             node: NodeKey,
+        }
+        impl EntryCore {
+            fn new(slot: NodeKey, x: u32, y: u32, dense_mask: u32) -> EntryCore {
+                EntryCore {
+                    x,
+                    y,
+                    posture: if (x & dense_mask) + (y & dense_mask) < dense_mask {
+                        TilePosture::LowerHalf
+                    } else {
+                        TilePosture::UpperHalf
+                    },
+                    dense_mask,
+                    node: slot,
+                }
+            }
         }
 
         pub(crate) struct TriQuadEntry<'a, T> {
@@ -371,7 +554,7 @@ mod far_mesh {
 
         #[cfg(test)]
         mod tests {
-            use std::cell::RefCell;
+            use std::{cell::RefCell, collections::HashSet};
 
             use super::*;
 
@@ -498,6 +681,45 @@ mod far_mesh {
                 println!("b");
                 check_entry(tree.entry(15, 1), Some(&'b'));
                 check_entry(tree.entry(15, 7), Some(&'b'));
+            }
+
+            #[test]
+            fn test_simple_insert() {
+                let nodes = RefCell::new(slotmap::SlotMap::with_key());
+                let root = make_pair(
+                    &nodes,
+                    TriQuadNode::Leaf("a".to_string()),
+                    TriQuadNode::Leaf("b".to_string()),
+                );
+                struct TestCallbacks {
+                    fills: HashSet<(Range<u32>, Range<u32>, TilePosture)>,
+                };
+                impl ChangeCallbacks<String> for TestCallbacks {
+                    fn insert(&mut self, entry: &EntryCore) -> String {
+                        self.fills.insert((
+                            entry.x_range().clone(),
+                            entry.y_range().clone(),
+                            entry.posture(),
+                        ));
+                        println!("inserting {}", entry.debug_describe());
+                        entry.debug_describe()
+                    }
+                    fn delete(&mut self, value: String) {
+                        println!("deleting {}", value);
+                    }
+                }
+                let mut tree = TriQuadTree {
+                    root,
+                    nodes: nodes.into_inner(),
+                    grid_size: 16,
+                };
+                let mut callbacks = TestCallbacks {
+                    fills: HashSet::new(),
+                };
+                tree.insert_at(9, 9, 4, &mut callbacks);
+                tree.assert_filled(root.lower);
+                tree.assert_filled(root.upper);
+                assert_eq!(callbacks.fills.len(), 7);
             }
         }
     }
