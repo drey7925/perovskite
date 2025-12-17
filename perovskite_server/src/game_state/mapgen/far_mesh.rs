@@ -124,7 +124,9 @@ mod far_mesh {
         /// both provide a value, and also have a side effect, e.g. sending a network update to
         /// the client.
         pub(crate) trait ChangeCallbacks<T: Send + Sync + 'static> {
+            /// Called when a node is inserted, with an EntryCore describing the node. Returns the value to store in the node.
             fn insert(&mut self, entry: &EntryCore) -> T;
+            /// Called when a node is deleted, with the value that was stored in the node.
             fn delete(&mut self, entry: T);
         }
 
@@ -155,21 +157,25 @@ mod far_mesh {
         }
 
         impl<T> TriQuadTree<T> {
-            pub(crate) fn new(grid_size: u32) -> anyhow::Result<Self> {
-                if grid_size == u32::MAX {
-                    return Err(anyhow::anyhow!("grid_size must be less than u32::MAX"));
-                }
-                if grid_size & (grid_size - 1) != 0 {
-                    return Err(anyhow::anyhow!("grid_size must be a power of 2"));
+            /// Creates a new TriQuadTree.
+            ///
+            /// Args:
+            ///     * grid_size: Side length of the root level. Must be a power of two.
+            ///
+            /// Returns:
+            ///     * TriQuadTree<T>: The new TriQuadTree.
+            pub(crate) fn new(grid_size: u32) -> Self {
+                if !grid_size.is_power_of_two() {
+                    panic!("grid_size must be a power of 2");
                 }
                 let mut nodes = slotmap::SlotMap::with_key();
                 let upper = nodes.insert(TriQuadNode::EmptyLeaf);
                 let lower = nodes.insert(TriQuadNode::EmptyLeaf);
-                Ok(Self {
+                Self {
                     root: TriQuadPair { upper, lower },
                     nodes,
                     grid_size,
-                })
+                }
             }
 
             fn core_entry(&self, x: u32, y: u32) -> EntryCore {
@@ -404,7 +410,19 @@ mod far_mesh {
             ///
             /// Otherwise, insert the node at this level, call the callbacks, then recursively
             /// insert neighbors to fill nodes on the way back up, with the most coarse representation
-            /// that will fit.
+            /// that will fit. This will insert at every intermediate level EXCEPT the uppermost
+            /// diagonal split (i.e. if the position ends up in the lower half-plane, then the giant
+            /// triangle for the upper half-plane will not be inserted).
+            ///
+            /// It is the responsibility of the caller to disregard levels that are too coarse to be
+            /// interesting, and provide a suitable empty value from the callback (that empty value
+            /// being application-dependent)
+            ///
+            /// Args:
+            ///     * x: x coordinate.
+            ///     * y: y coordinate.
+            ///     * side_length: Side length of the target level. Must be a power of two.
+            ///     * callbacks: Callbacks to be called when nodes are inserted or removed.
             pub(crate) fn insert_at(
                 &mut self,
                 x: u32,
@@ -412,6 +430,7 @@ mod far_mesh {
                 side_length: u32,
                 callbacks: &mut impl ChangeCallbacks<T>,
             ) {
+                assert!(side_length.is_power_of_two());
                 let starting_entry = self.core_entry(x, y);
                 if starting_entry.side_length() < side_length {
                     // Finer geometry already present, do nothing.
@@ -419,7 +438,7 @@ mod far_mesh {
                 } else if starting_entry.side_length() == side_length {
                     // Edge case, exact match. As a precondition, it should already be present, because
                     // the fill case should have filled in siblings on its way back up.
-                    self.assert_filled(starting_entry.node);
+                    self.assert_key_filled(starting_entry.node);
                     return;
                 } else {
                     self.traverse_and_fill_nodes(
@@ -435,16 +454,29 @@ mod far_mesh {
                 }
             }
 
-            fn assert_filled(&self, key: NodeKey) {
+            fn assert_key_filled(&self, key: NodeKey) {
                 match self.nodes.get(key).unwrap() {
                     TriQuadNode::Leaf(_) => {}
                     TriQuadNode::Internal { rect, tris } => {
-                        self.assert_filled(tris[0]);
-                        self.assert_filled(tris[1]);
-                        self.assert_filled(rect.lower);
-                        self.assert_filled(rect.upper);
+                        self.assert_key_filled(tris[0]);
+                        self.assert_key_filled(tris[1]);
+                        self.assert_key_filled(rect.lower);
+                        self.assert_key_filled(rect.upper);
                     }
-                    TriQuadNode::EmptyLeaf => panic!("node {:?} is an empty leaf", key),
+                    TriQuadNode::EmptyLeaf => {
+                        panic!("node {:?} is an empty leaf", key);
+                    }
+                }
+            }
+
+            fn assert_filled(&self) {
+                let lower = self.nodes.get(self.root.lower).unwrap();
+                let upper = self.nodes.get(self.root.upper).unwrap();
+                if let TriQuadNode::Internal { .. } = lower {
+                    self.assert_key_filled(self.root.lower);
+                }
+                if let TriQuadNode::Internal { .. } = upper {
+                    self.assert_key_filled(self.root.upper);
                 }
             }
         }
@@ -497,10 +529,16 @@ mod far_mesh {
                 self.posture
             }
             pub(crate) fn x_range(&self) -> Range<u32> {
-                self.x & !self.dense_mask..self.x | self.dense_mask
+                // Lower is inclusive, add 1 since dense mask gives an inclusive range
+                let lower = self.x & !self.dense_mask;
+                let upper = (self.x | self.dense_mask) + 1;
+                lower..upper
             }
             pub(crate) fn y_range(&self) -> Range<u32> {
-                self.y & !self.dense_mask..self.y | self.dense_mask
+                // Upper is exclusive, add 1 since dense mask gives an inclusive range
+                let lower = self.y & !self.dense_mask;
+                let upper = (self.y | self.dense_mask) + 1;
+                lower..upper
             }
             pub(crate) fn debug_describe(&self) -> String {
                 format!(
@@ -510,9 +548,9 @@ mod far_mesh {
                         TilePosture::UpperHalf => "Upper",
                     },
                     self.x_range().start,
-                    self.x_range().end + 1,
+                    self.x_range().end,
                     self.y_range().start,
-                    self.y_range().end + 1
+                    self.y_range().end
                 )
             }
             pub(crate) fn side_length(&self) -> u32 {
@@ -685,15 +723,9 @@ mod far_mesh {
 
             #[test]
             fn test_simple_insert() {
-                let nodes = RefCell::new(slotmap::SlotMap::with_key());
-                let root = make_pair(
-                    &nodes,
-                    TriQuadNode::Leaf("a".to_string()),
-                    TriQuadNode::Leaf("b".to_string()),
-                );
                 struct TestCallbacks {
                     fills: HashSet<(Range<u32>, Range<u32>, TilePosture)>,
-                };
+                }
                 impl ChangeCallbacks<String> for TestCallbacks {
                     fn insert(&mut self, entry: &EntryCore) -> String {
                         self.fills.insert((
@@ -708,18 +740,30 @@ mod far_mesh {
                         println!("deleting {}", value);
                     }
                 }
-                let mut tree = TriQuadTree {
-                    root,
-                    nodes: nodes.into_inner(),
-                    grid_size: 16,
-                };
+                let mut tree = TriQuadTree::new(16);
                 let mut callbacks = TestCallbacks {
                     fills: HashSet::new(),
                 };
                 tree.insert_at(9, 9, 4, &mut callbacks);
-                tree.assert_filled(root.lower);
-                tree.assert_filled(root.upper);
                 assert_eq!(callbacks.fills.len(), 7);
+
+                let expected_fills = [
+                    // First level, flanking triangles
+                    (0..8, 8..16, TilePosture::UpperHalf),
+                    (8..16, 0..8, TilePosture::UpperHalf),
+                    // First level, rectangle pair
+                    (8..16, 8..16, TilePosture::UpperHalf),
+                    // Second level, flanking triangles
+                    (8..12, 12..16, TilePosture::LowerHalf),
+                    (12..16, 8..12, TilePosture::LowerHalf),
+                    // Second level, rectangle pair
+                    (8..12, 8..12, TilePosture::LowerHalf),
+                    (8..12, 8..12, TilePosture::UpperHalf),
+                ];
+                assert_eq!(callbacks.fills.len(), expected_fills.len());
+                assert_eq!(callbacks.fills, HashSet::from_iter(expected_fills));
+
+                tree.assert_filled();
             }
         }
     }

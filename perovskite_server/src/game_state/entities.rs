@@ -79,8 +79,6 @@ struct Completion<T: Send + Sync + 'static> {
 
 // A deferred call to be invoked on a tokio executor, same as Deferral but private
 struct DeferredPrivate<T: Send + Sync + 'static> {
-    // TODO future scaffolding, not yet implemented
-    //
     // Design notes: This represents the future that we want to invoke on a Tokio
     // executor.
     //
@@ -99,7 +97,7 @@ struct DeferredPrivate<T: Send + Sync + 'static> {
     //     If it's a sender, then backlogs will lead to tasks building up in tokio. We may need to
     //     keep an eye on the number of outstanding tokio tasks and avoid invoking coroutines when
     //     facing such a backlog. This can probably be itself deferred for a future version.
-    deferred_call: Pin<Box<(dyn Future<Output = T> + Send + 'static)>>,
+    deferred_call: Pin<Box<dyn Future<Output = T> + Send + 'static>>,
 
     trace_buffer: TraceBuffer,
 }
