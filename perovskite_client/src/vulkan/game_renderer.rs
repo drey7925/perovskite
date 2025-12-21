@@ -29,7 +29,7 @@ use super::{
     shaders::{
         cube_geometry::{self, CubeDrawStep, CubeGeometryDrawCall},
         egui_adapter::EguiAdapter,
-        entity_geometry, flat_texture, post_process,
+        entity_geometry, far_mesh, flat_texture, post_process,
     },
     FramebufferAndLoadOpId, FramebufferHolder, ImageId, LoadOp, VulkanContext, VulkanWindow,
     CLEARING_RASTER_FRAMEBUFFER,
@@ -80,6 +80,9 @@ pub(crate) struct ActiveGame {
     entities_provider: entity_geometry::EntityPipelineProvider,
     entities_pipeline: entity_geometry::EntityPipelineWrapper,
 
+    far_mesh_provider: far_mesh::FarMeshPipelineProvider,
+    far_mesh_pipeline: far_mesh::FarMeshPipelineWrapper,
+
     sky_provider: sky::SkyPipelineProvider,
     sky_pipeline: sky::SkyPipelineWrapper,
 
@@ -92,7 +95,8 @@ pub(crate) struct ActiveGame {
     egui_adapter: Option<EguiAdapter>,
 
     client_state: Arc<ClientState>,
-    // Held across frames to avoid constant reallocations. Only the allocation itself is important
+    // Held across frames to avoid constant reallocations. Only the allocation itself is important,
+    // the actual logical contents are emptied at the end of each frame.
     cube_draw_calls: Vec<CubeGeometryDrawCall>,
 
     raytrace_data: Option<RaytraceBuffer>,
@@ -306,11 +310,23 @@ impl ActiveGame {
 
         let cube_uniform = self.cube_pipeline.make_uniform_buffer(ctx, scene_state)?;
 
+        let far_mesh_calls = {
+            let lock = self.client_state.far_geometry.lock();
+            lock.draw_calls(player_position, scene_state.vp_matrix)
+        };
+
         // At this point, we are in the Color + Depth renderpass
         let hybrid_rt_enabled = ctx.renderpasses.config.raytracing
             && ctx.renderpasses.config.hybrid_rt
             && ctx.raytracing_supported;
         if self.raytrace_data.is_none() || hybrid_rt_enabled {
+            // Either we aren't raytracing, or we're raytracing reflections but rasterizing
+            // all geometry.
+
+            self.far_mesh_pipeline
+                .draw(ctx, &mut command_buf_builder, &far_mesh_calls, scene_state)
+                .context("Far mesh pipeline draw failed")?;
+
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
@@ -408,6 +424,8 @@ impl ActiveGame {
                     .context("Opaque specular draw failed")?;
             }
         } else {
+            // This only applies if we're using raytracing for the primary geometry,
+            // which is a test-only feature.
             self.cube_pipeline
                 .draw_single_step(
                     ctx,
@@ -416,7 +434,7 @@ impl ActiveGame {
                     &mut self.cube_draw_calls,
                     CubeDrawStep::RaytraceFallback,
                 )
-                .context("Transparent pipeline draw failed")?;
+                .context("Raytrace fallback pipeline draw failed")?;
         }
 
         if hybrid_rt_enabled {
@@ -629,6 +647,7 @@ impl ActiveGame {
                 &global_config,
             )?
         };
+        self.far_mesh_pipeline = self.far_mesh_provider.make_pipeline(ctx, &global_config)?;
         self.sky_pipeline = self.sky_provider.make_pipeline(ctx, &global_config)?;
         self.post_process_pipeline = self
             .post_process_provider
@@ -776,6 +795,9 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         )?
     };
 
+    let far_mesh_provider = far_mesh::FarMeshPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let far_mesh_pipeline = far_mesh_provider.make_pipeline(&vk_wnd, &global_render_config)?;
+
     let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;
     let sky_pipeline = sky_provider.make_pipeline(&vk_wnd, &global_render_config)?;
 
@@ -803,6 +825,8 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         flat_pipeline,
         entities_provider,
         entities_pipeline,
+        far_mesh_provider,
+        far_mesh_pipeline,
         sky_provider,
         sky_pipeline,
         post_process_provider,

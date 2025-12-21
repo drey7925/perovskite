@@ -159,7 +159,9 @@ impl EntityPipelineWrapper {
 
         builder.bind_pipeline_graphics(pipeline)?;
         for call in draw_calls.iter() {
-            let push_data: ModelMatrix = call.model_matrix.into();
+            let push_data = ModelMatrix {
+                model_matrix: call.model_matrix.into(),
+            };
             builder
                 .push_constants(layout.clone(), 0, push_data)?
                 .bind_vertex_buffers(0, call.model.vtx.clone())?

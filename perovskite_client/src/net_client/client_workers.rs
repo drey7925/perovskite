@@ -596,6 +596,13 @@ impl InboundContext {
         self.shared_state.batcher.cancel();
         Ok(())
     }
+    /// Handles a single message from the server.
+    ///
+    /// This takes a &mut StreamToClient because we want as much of the message intact as possible
+    /// for error reporting.
+    ///
+    /// However, it's perfectly acceptable for code to drain, swap-with-empty, etc large vecs and maps
+    /// out of the message; chances are we won't want to log those anyway.
     async fn handle_message(&mut self, message: &mut StreamToClient) -> Result<()> {
         if message.tick == 0 {
             log::warn!("Got message with tick 0");
@@ -713,6 +720,12 @@ impl InboundContext {
                         control_block,
                         None,
                     );
+            }
+            Some(rpc::stream_to_client::ServerMessage::FarGeometry(far_geometry)) => {
+                self.shared_state.client_state.far_geometry.lock().update(
+                    far_geometry,
+                    self.shared_state.client_state.block_renderer.vk_ctx(),
+                )?;
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);

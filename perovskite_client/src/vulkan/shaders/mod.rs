@@ -25,6 +25,7 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 pub(crate) mod cube_geometry;
 pub(crate) mod egui_adapter;
 pub(crate) mod entity_geometry;
+pub(crate) mod far_mesh;
 pub(crate) mod flat_texture;
 pub(crate) mod raytracer;
 
@@ -44,14 +45,6 @@ pub(crate) mod vert_3d {
                 ty: "vertex",
                 path: "src/vulkan/shaders/entity_vert.glsl"
             },
-        }
-    }
-
-    impl From<cgmath::Matrix4<f32>> for ModelMatrix {
-        fn from(value: cgmath::Matrix4<f32>) -> Self {
-            ModelMatrix {
-                model_matrix: value.into(),
-            }
         }
     }
 }

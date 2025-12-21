@@ -16,6 +16,7 @@
 
 pub(crate) mod block_renderer;
 pub(crate) mod entity_renderer;
+pub(crate) mod far_geometry;
 pub mod game_renderer;
 pub(crate) mod mini_renderer;
 pub(crate) mod shaders;

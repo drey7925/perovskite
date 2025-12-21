@@ -622,10 +622,10 @@ impl ChatCommandHandler for MapgenDebugCommand {
         }
         v.sort_by(|x, y| x.total_cmp(y));
         tracing::info!("100 samples of supersimplex: {v:?}");
-
-        context
-            .mapgen()
-            .dump_debug(BlockCoordinate::try_from(pos)?, context.initiator());
+        let coord = BlockCoordinate::try_from(pos)?;
+        tokio::task::block_in_place(|| {
+            context.mapgen().dump_debug(coord, context.initiator());
+        });
         Ok(())
     }
 }

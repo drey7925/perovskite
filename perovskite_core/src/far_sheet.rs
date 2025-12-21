@@ -48,8 +48,10 @@ impl IndexBufferKey {
     /// Builds an index buffer for the sheet with this key.
     ///
     /// The current implementation is not highly optimized, good enough for
-    /// a handful of builds, but would become a bottleneck if repeatedly
+    /// a handful of builds during startup, but would become a bottleneck if repeatedly
     /// called in the critical path of rendering every sheet.
+    ///
+    /// Caller should really be caching this based on the key.
     pub fn build(&self) -> Vec<u32> {
         match self.tess {
             TessellationMode::Invalid => panic!("Invalid tessellation mode"),
@@ -208,6 +210,11 @@ impl SheetControl {
         })
     }
 
+    #[inline(always)]
+    pub fn origin(&self) -> Vector3<f64> {
+        self.origin
+    }
+
     /// Returns an iterator over the lattice points in the sheet, in world space.
     ///
     /// The basis vectors and origin are respected.
@@ -219,45 +226,60 @@ impl SheetControl {
         self.iter_lattice_points_local_space()
             .map(move |point| vec3(origin.x + point.x, origin.y + point.y, origin.z + point.z))
     }
+
+    pub fn new(
+        origin: Vector3<f64>,
+        basis_u: Vector2<f64>,
+        basis_v: Vector2<f64>,
+        m: usize,
+        n: usize,
+        k: isize,
+        tess: TessellationMode,
+    ) -> Result<Self> {
+        ensure!(
+            m as isize + n as isize * k as isize >= 0,
+            "m + n * k must be non-negative"
+        );
+        if tess == crate::protocol::map::TessellationMode::Invalid {
+            bail!("Invalid tessellation mode");
+        }
+        Ok(Self {
+            origin,
+            basis_u,
+            basis_v,
+            m,
+            n,
+            k,
+            tess,
+        })
+    }
 }
 
 impl TryFrom<FarSheetControlProto> for SheetControl {
     type Error = anyhow::Error;
 
     fn try_from(value: FarSheetControlProto) -> Result<Self> {
-        ensure!(value.m > 0, "m must be positive");
-        ensure!(value.n > 0, "n must be positive");
-        ensure!(
-            value.m as isize + value.n as isize * value.k as isize >= 0,
-            "m + n * k must be non-negative"
-        );
-
-        let tess = value.tess();
-        if tess == crate::protocol::map::TessellationMode::Invalid {
-            bail!("Invalid tessellation mode");
-        }
-
-        Ok(SheetControl {
-            origin: value
+        Self::new(
+            value
                 .origin
                 .context("Missing origin")?
                 .try_into()
                 .context("origin")?,
-            basis_u: value
+            value
                 .basis_u
                 .context("Missing basis_u")?
                 .try_into()
                 .context("basis_u")?,
-            basis_v: value
+            value
                 .basis_v
                 .context("Missing basis_v")?
                 .try_into()
                 .context("basis_v")?,
-            m: value.m as usize,
-            n: value.n as usize,
-            k: value.k as isize,
-            tess,
-        })
+            value.m as usize,
+            value.n as usize,
+            value.k as isize,
+            value.tess(),
+        )
     }
 }
 

@@ -53,6 +53,11 @@ pub trait MapgenInterface: Send + Sync {
         None
     }
 
+    /// Estimate the height of the terrain at the given (X, Z) coordinate.
+    ///
+    /// WIP, subject to change! Potentially will get more metadata, more outputs, vectorization, etc.
+    fn height(&self, x: f64, z: f64) -> f32;
+
     /// Prints debugging information regarding map generation. The definition of this is up to
     /// the implementor, and can include whatever information is most useful for developing this
     /// specific mapgen.
@@ -60,4 +65,4 @@ pub trait MapgenInterface: Send + Sync {
     /// By default, does nothing.
     fn dump_debug(&self, _pos: BlockCoordinate, _initiator: &EventInitiator<'_>) {}
 }
-mod far_mesh;
+pub(crate) mod far_mesh;

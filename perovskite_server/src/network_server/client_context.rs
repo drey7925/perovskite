@@ -43,6 +43,8 @@ use crate::game_state::items;
 
 use crate::game_state::items::{default_generic_handler, Item, PointeeBlockCoords};
 
+use crate::game_state::mapgen::far_mesh::tri_quad;
+use crate::game_state::mapgen::MapgenInterface;
 use crate::game_state::player::PlayerState;
 use crate::game_state::player::{Player, PlayerEventReceiver};
 use crate::game_state::player::{PlayerContext, PlayerEvent};
@@ -70,12 +72,12 @@ use perovskite_core::protocol::audio::{SampledSoundPlayback, SoundSource};
 use perovskite_core::protocol::coordinates as coords_proto;
 use perovskite_core::protocol::coordinates::Vec3D;
 use perovskite_core::protocol::entities as entities_proto;
-use perovskite_core::protocol::game_rpc as proto;
 use perovskite_core::protocol::game_rpc::dig_tap_action::ActionTarget;
 use perovskite_core::protocol::game_rpc::interact_key_action::InteractionTarget;
 use perovskite_core::protocol::game_rpc::stream_to_client::ServerMessage;
 use perovskite_core::protocol::game_rpc::PlayerPosition;
 use perovskite_core::protocol::game_rpc::StreamToClient;
+use perovskite_core::protocol::game_rpc::{self as proto, FarGeometry};
 use perovskite_core::protocol::game_rpc::{MapDeltaUpdateBatch, ServerPerformanceMetrics};
 use perovskite_core::util::{LogInspect, TraceBuffer};
 use prost::Message;
@@ -104,6 +106,7 @@ pub(crate) struct PlayerCoroutinePack {
     misc_outbound_worker: MiscOutboundWorker,
     entity_sender: EntityEventSender,
     audio_sender: AudioSender,
+    far_mesh_sender: FarMeshSender,
 }
 impl PlayerCoroutinePack {
     pub(crate) async fn run_all(self) -> Result<()> {
@@ -177,6 +180,13 @@ impl PlayerCoroutinePack {
             self.context
                 .run_cancelable_worker(self.audio_sender.audio_sender_loop(), "audio sender"),
         )?;
+        crate::spawn_async(
+            &format!("far_mesh_sender_{username}"),
+            self.context.run_cancelable_worker(
+                self.far_mesh_sender.far_mesh_sender_loop(),
+                "far mesh sender",
+            ),
+        )?;
         let cancellation = self.context.cancellation.clone();
         crate::spawn_async(&format!("shutdown_actions_{}", username), async move {
             cancellation.cancelled().await;
@@ -219,11 +229,10 @@ pub(crate) async fn make_client_contexts(
         face_direction: (0., 0.),
     };
     let (pos_send, pos_recv) = watch::channel(PositionAndPacing {
-        position: initial_position,
+        kinematics: initial_position,
         chunks_to_send: 16,
         client_requested_render_distance: 20,
     });
-    let pos_recv_clone = pos_recv.clone();
 
     let cancellation = CancellationToken::new();
     // TODO add other inventories from the inventory UI layer
@@ -254,12 +263,16 @@ pub(crate) async fn make_client_contexts(
         already_cancelled: AtomicBool::new(false),
     });
 
+    let (testonly_farmesh_notify_tx, testonly_farmesh_notify_rx) = tokio::sync::watch::channel(());
+
     let inbound_worker = InboundWorker {
         context: context.clone(),
         inbound_rx,
         own_positions: pos_send,
         outbound_tx: outbound_tx.clone(),
         next_pos_writeback: Instant::now(),
+
+        testonly_farmesh_notify_tx,
     };
     let chunk_sender_0 = MapChunkSender {
         context: context.clone(),
@@ -281,7 +294,7 @@ pub(crate) async fn make_client_contexts(
         context: context.clone(),
         outbound_tx: outbound_tx.clone(),
         chunk_tracker: chunk_tracker.clone(),
-        player_position: pos_recv,
+        player_position: pos_recv.clone(),
         skip_if_near: ChunkCoordinate { x: 0, y: 0, z: 0 },
         processed_elements: 0,
         snappy: SnappyEncoder {
@@ -336,7 +349,16 @@ pub(crate) async fn make_client_contexts(
         context: context.clone(),
         outbound_tx: prio_tx.clone(),
         events: context.game_state.audio().subscribe(),
-        position_watch: pos_recv_clone,
+        position_watch: pos_recv.clone(),
+    };
+
+    let far_mesh_sender = FarMeshSender {
+        outbound_tx: map_tx.clone(),
+        context: context.clone(),
+        meshes: tri_quad::TriQuadTree::new(1 << 31),
+        player_position: pos_recv.clone(),
+        testonly_notifier: testonly_farmesh_notify_rx,
+        next_id: 1,
     };
 
     Ok(PlayerCoroutinePack {
@@ -349,6 +371,7 @@ pub(crate) async fn make_client_contexts(
         misc_outbound_worker,
         entity_sender,
         audio_sender,
+        far_mesh_sender,
     })
 }
 
@@ -788,7 +811,7 @@ impl MapChunkSender {
     ) -> Result<()> {
         let trace = TraceBuffer::new(false);
         trace.log("starting hpu");
-        let position = update.position;
+        let position = update.kinematics;
 
         let mut load_deadline = Instant::now();
 
@@ -1511,6 +1534,8 @@ pub(crate) struct InboundWorker {
     // The client's self-reported position
     own_positions: watch::Sender<PositionAndPacing>,
     next_pos_writeback: Instant,
+
+    testonly_farmesh_notify_tx: tokio::sync::watch::Sender<()>,
 }
 impl InboundWorker {
     fn process_footstep(player: Arc<Player>, ctx: &SharedContext, coord: BlockCoordinate) {
@@ -1787,6 +1812,10 @@ impl InboundWorker {
                 let gs = self.context.game_state.clone();
                 let player_handle = self.context.player_context.clone();
                 let message = message.clone();
+                if message.starts_with("/fm") {
+                    // TODO: Remove before merging. This is for early testing
+                    self.testonly_farmesh_notify_tx.send_replace(());
+                }
                 tokio::task::spawn(async move {
                     if let Err(e) = gs
                         .chat()
@@ -2001,7 +2030,7 @@ impl InboundWorker {
                 }
 
                 self.own_positions.send_replace(PositionAndPacing {
-                    position: pos,
+                    kinematics: pos,
                     chunks_to_send: self.context.chunk_aimd.lock().get(),
                     client_requested_render_distance: max_distance,
                 });
@@ -2817,6 +2846,132 @@ impl EntityEventSender {
     }
 }
 
+struct FarMeshSender {
+    outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
+    context: Arc<SharedContext>,
+    meshes: tri_quad::TriQuadTree<u64>,
+    player_position: watch::Receiver<PositionAndPacing>,
+    testonly_notifier: tokio::sync::watch::Receiver<()>,
+    next_id: u64,
+}
+impl FarMeshSender {
+    async fn far_mesh_sender_loop(mut self) -> Result<()> {
+        // TODO: check protocol version and withhold data if client doesn't support it
+        loop {
+            tokio::select! {
+                _ = self.testonly_notifier.changed() => {
+                    let player_position = self.player_position.borrow().clone();
+                    self.send_mesh(player_position).await?;
+                },
+                _ = self.context.cancellation.cancelled() => {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+    async fn send_mesh(&mut self, player_position: PositionAndPacing) -> Result<()> {
+        use crate::game_state::mapgen::far_mesh;
+        use cgmath::vec2;
+        let player_xz = vec2(
+            player_position.kinematics.position.x,
+            player_position.kinematics.position.z,
+        );
+        let map_pos = far_mesh::world_pos_to_map_pos(player_xz);
+        struct Callbacks<'a> {
+            mapgen: &'a dyn MapgenInterface,
+            messages: Vec<perovskite_core::protocol::map::FarSheet>,
+            removals: Vec<u64>,
+            next_id: &'a mut u64,
+        }
+        impl<'a> tri_quad::ChangeCallbacks<u64> for Callbacks<'a> {
+            fn insert(&mut self, entry: &tri_quad::EntryCore) -> u64 {
+                if entry.side_length() > far_mesh::COARSEST_RENDERED_SIZE {
+                    return 0;
+                }
+                let geometry_id = *self.next_id;
+                *self.next_id += 1;
+
+                let control = far_mesh::to_sheet_control(entry);
+
+                let min_x = control
+                    .iter_lattice_points_world_space()
+                    .map(|p| p.x as i64)
+                    .min()
+                    .unwrap();
+                let min_z = control
+                    .iter_lattice_points_world_space()
+                    .map(|p| p.z as i64)
+                    .min()
+                    .unwrap();
+                let max_x = control
+                    .iter_lattice_points_world_space()
+                    .map(|p| p.x as i64)
+                    .max()
+                    .unwrap();
+                let max_z = control
+                    .iter_lattice_points_world_space()
+                    .map(|p| p.z as i64)
+                    .max()
+                    .unwrap();
+
+                tracing::info!(
+                    "Generating far mesh {} for {}, origin ({}, {}), world space: x ({}, {}) z ({}, {})",
+                    geometry_id,
+                    entry.debug_describe(),
+                    control.origin().x,
+                    control.origin().z,
+                    min_x,
+                    max_x,
+                    min_z,
+                    max_z,
+                );
+
+                let heights = control
+                    .iter_lattice_points_world_space()
+                    .map(|p| self.mapgen.height(p.x, p.z))
+                    .collect::<Vec<_>>();
+                let sheet = perovskite_core::protocol::map::FarSheet {
+                    geometry_id,
+                    control: Some(control.to_proto()),
+                    heights,
+                };
+                self.messages.push(sheet);
+
+                return geometry_id;
+            }
+
+            fn delete(&mut self, entry: u64) {
+                self.removals.push(entry);
+            }
+        }
+        let mut callbacks = Callbacks {
+            mapgen: self.context.game_state.mapgen(),
+            messages: Vec::new(),
+            removals: Vec::new(),
+            next_id: &mut self.next_id,
+        };
+        self.meshes.insert_at(
+            map_pos.0,
+            map_pos.1,
+            far_mesh::FINEST_RENDERED_SIZE,
+            &mut callbacks,
+        );
+
+        self.outbound_tx
+            .send(Ok(StreamToClient {
+                tick: self.context.game_state.tick(),
+                server_message: Some(ServerMessage::FarGeometry(FarGeometry {
+                    remove_ids: callbacks.removals,
+                    far_sheet: callbacks.messages,
+                })),
+                performance_metrics: self.context.maybe_get_performance_metrics(),
+            }))
+            .await?;
+        Ok(())
+    }
+}
+
 // TODO tune these and make them adjustable via settings
 // Units of chunks
 // Chunks within this distance will be loaded into memory if not yet loaded
@@ -2902,7 +3057,7 @@ lazy_static::lazy_static! {
 
 #[derive(Copy, Clone, Debug)]
 struct PositionAndPacing {
-    position: PlayerPositionUpdate,
+    kinematics: PlayerPositionUpdate,
     chunks_to_send: usize,
     client_requested_render_distance: i32,
 }
@@ -2965,7 +3120,7 @@ impl AudioSender {
     pub(crate) async fn audio_sender_loop(mut self) -> Result<()> {
         while !self.context.cancellation.is_cancelled() {
             tokio::select! {
-                event = self.events.recv(self.position_watch.borrow().position.position) => {
+                event = self.events.recv(self.position_watch.borrow().kinematics.position) => {
                     self.handle_event(event?).await?;
                 }
                 _ = self.context.cancellation.cancelled() => {

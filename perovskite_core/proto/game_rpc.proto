@@ -183,6 +183,8 @@ message StreamToClient {
     perovskite.protocol.entities.EntityUpdate entity_update = 89;
     // Play a sound from a sampled media file
     perovskite.protocol.audio.SampledSoundPlayback play_sampled_sound = 90;
+    // Update of far geometry.
+    FarGeometry far_geometry = 91;
 
     // The server->client message sent as part of registration in the OPAQUE
     // protocol
@@ -419,7 +421,8 @@ message StartAuth {
   // 9 - 2025-08-22 ~
   //        * Add client tick to pacing
   // 10 - 2025-12-08 ~
-  //        * Far geometry using FarSheet
+  //        * Far geometry using FarSheet. Server sending nothing is a valid
+  //        state, so this only requires attention for new servers + old clients
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }

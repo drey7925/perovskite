@@ -54,6 +54,7 @@ use crate::game_ui::egui_ui::EguiUi;
 use crate::game_ui::hud::GameHud;
 use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::entity_renderer::EntityRenderer;
+use crate::vulkan::far_geometry::FarGeometryState;
 use crate::vulkan::shaders::cube_geometry::CubeGeometryDrawCall;
 use crate::vulkan::shaders::SceneState;
 use crate::vulkan::VulkanContext;
@@ -667,6 +668,7 @@ pub(crate) struct ClientState {
     pub(crate) light_cycle: Arc<Mutex<LightCycle>>,
     pub(crate) chat: Arc<Mutex<ChatState>>,
     pub(crate) entities: Mutex<EntityState>,
+    pub(crate) far_geometry: Mutex<FarGeometryState>,
 
     // block_renderer doesn't currently need a mutex because it's stateless
     // and keeps its cached geometry data in the chunks themselves
@@ -707,6 +709,7 @@ impl ClientState {
         egui: EguiUi,
         block_renderer: BlockRenderer,
         entity_renderer: EntityRenderer,
+        far_geometry: FarGeometryState,
         timekeeper: Arc<Timekeeper>,
         audio: Arc<audio::EngineHandle>,
     ) -> Result<ClientState> {
@@ -732,6 +735,7 @@ impl ClientState {
 
             block_renderer: Arc::new(block_renderer),
             entity_renderer: Arc::new(entity_renderer),
+            far_geometry: Mutex::new(far_geometry),
             hud: Arc::new(Mutex::new(hud)),
             egui: Arc::new(Mutex::new(egui)),
             pending_error: Mutex::new(None),

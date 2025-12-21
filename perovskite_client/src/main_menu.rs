@@ -833,7 +833,7 @@ fn draw_render_settings(
             )
                 .on_hover_text(ON_DEMAND_RAYTRACING_HOVER_TEXT);
             ui.end_row();
-            ui.label("Force primary raytrace")
+            ui.label("Force primary raytrace (test only)")
                 .on_hover_text(FORCE_PRIMARY_RAYTRACING_HOVER_TEXT);
             ui.add_enabled(
                 prospective_settings.render.raytracing,

@@ -730,6 +730,11 @@ impl MapgenInterface for DefaultMapgen {
         Some(min_c..=max_c)
     }
 
+    fn height(&self, x: f64, z: f64) -> f32 {
+        let (_, elevation, _, _, _) = self.prefill_single(x as i32, z as i32);
+        elevation
+    }
+
     fn dump_debug(&self, pos: BlockCoordinate, initiator: &EventInitiator<'_>) {
         self.rolling_hills_noise.get::<true>(pos.x, pos.z);
 

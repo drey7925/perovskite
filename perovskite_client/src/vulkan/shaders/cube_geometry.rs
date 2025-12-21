@@ -81,8 +81,8 @@ pub(crate) struct CubeGeometryVertex {
     #[format(R16_SINT)]
     pub(crate) normal: u16,
 
-    /// Tangent, using a lookup table. This does not use all 8 bits, at some point they will be
-    /// absorbed into a few of the LSBs
+    /// Tangent, using a lookup table. This only represents values 0-5, and might have its
+    /// MSBs used for other purposes in the future.
     #[format(R8_UINT)]
     pub(crate) tangent: u8,
 
@@ -191,7 +191,9 @@ impl CubePipelineWrapper {
             if let Some(pass_data) = pass_data {
                 effective_calls += 1;
 
-                let push_data: ModelMatrix = call.model_matrix.into();
+                let push_data = ModelMatrix {
+                    model_matrix: call.model_matrix.into(),
+                };
                 builder
                     .push_constants(layout.clone(), 0, push_data)?
                     .bind_vertex_buffers(0, pass_data.vtx.clone())?

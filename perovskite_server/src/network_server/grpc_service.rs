@@ -165,7 +165,7 @@ impl PerovskiteGame for PerovskiteGameServerImpl {
 }
 
 pub(crate) const SERVER_MIN_PROTOCOL_VERSION: u32 = 8;
-pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 9;
+pub(crate) const SERVER_MAX_PROTOCOL_VERSION: u32 = 10;
 async fn game_stream_impl(
     game_state: Arc<GameState>,
     mut inbound_rx: Streaming<StreamToServer>,

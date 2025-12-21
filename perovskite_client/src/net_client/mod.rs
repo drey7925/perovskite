@@ -44,6 +44,7 @@ use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::client_state::ChunkManager;
+use crate::vulkan::far_geometry::FarGeometryState;
 use crate::vulkan::raytrace_buffer::RaytraceBufferManager;
 use crate::vulkan::VulkanContext;
 use crate::{
@@ -60,7 +61,7 @@ mod client_workers;
 pub(crate) mod mesh_worker;
 
 const MIN_PROTOCOL_VERSION: u32 = 9;
-const MAX_PROTOCOL_VERSION: u32 = 9;
+const MAX_PROTOCOL_VERSION: u32 = 10;
 
 async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channel>> {
     let tls = ClientTlsConfig::new()
@@ -214,6 +215,8 @@ pub(crate) async fn connect_game(
         .context("Failed to start audio engine")?,
     );
 
+    let far_geometry = FarGeometryState::new();
+
     let (action_sender, action_receiver) = mpsc::channel(4);
 
     let client_state = Arc::new(ClientState::new(
@@ -229,6 +232,7 @@ pub(crate) async fn connect_game(
         egui,
         block_renderer,
         entitity_renderer,
+        far_geometry,
         timekeeper,
         audio,
     )?);

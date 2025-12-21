@@ -322,6 +322,9 @@ impl MapgenInterface for DummyMapgen {
     fn fill_chunk(&self, _coord: ChunkCoordinate, _chunk: &mut MapChunk) {
         // pass
     }
+    fn height(&self, _x: f64, _z: f64) -> f32 {
+        0.0
+    }
 }
 
 impl ServerBuilder {
