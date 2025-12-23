@@ -52,7 +52,7 @@ const TRI_QUAD_FINEST_VALID: u32 = 2;
 // with 2*2/sqrt(3) = 2.3 block stride.
 pub(crate) const FINEST_RENDERED_SIZE: u32 = 4;
 // This is 16x larger, with 37-block stride, roughly.
-pub(crate) const COARSEST_RENDERED_SIZE: u32 = 8; // Changed from 64 for ease of testing
+pub(crate) const COARSEST_RENDERED_SIZE: u32 = 64;
 
 pub(crate) fn to_sheet_control(coord: &EntryCore) -> SheetControl {
     let basis_mult = match coord.posture() {
