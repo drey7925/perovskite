@@ -2878,6 +2878,12 @@ impl FarMeshSender {
             player_position.kinematics.position.z,
         );
         let map_pos = far_mesh::world_pos_to_map_pos(player_xz);
+        tracing::info!(
+            "Generating far mesh for player at map pos ({}, {})",
+            (map_pos.0 as i32).wrapping_add(i32::MIN),
+            (map_pos.1 as i32).wrapping_add(i32::MIN)
+        );
+        tracing::info!("@test pos {}, {}", map_pos.0, map_pos.1);
         struct Callbacks<'a> {
             mapgen: &'a dyn MapgenInterface,
             messages: Vec<perovskite_core::protocol::map::FarSheet>,
@@ -2886,6 +2892,13 @@ impl FarMeshSender {
         }
         impl<'a> tri_quad::ChangeCallbacks<u64> for Callbacks<'a> {
             fn insert(&mut self, entry: &tri_quad::EntryCore) -> u64 {
+                tracing::info!(
+                    "@test ({:?}, {:?}, TilePosture::{:?})",
+                    entry.x_range(),
+                    entry.y_range(),
+                    entry.posture()
+                );
+
                 if entry.side_length() > far_mesh::COARSEST_RENDERED_SIZE {
                     return 0;
                 }
@@ -2926,7 +2939,6 @@ impl FarMeshSender {
                     min_z,
                     max_z,
                 );
-
                 let heights = control
                     .iter_lattice_points_world_space()
                     .map(|p| self.mapgen.height(p.x, p.z))
@@ -2942,7 +2954,9 @@ impl FarMeshSender {
             }
 
             fn delete(&mut self, entry: u64) {
-                self.removals.push(entry);
+                if entry != 0 {
+                    self.removals.push(entry);
+                }
             }
         }
         let mut callbacks = Callbacks {

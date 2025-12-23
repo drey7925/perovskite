@@ -52,7 +52,7 @@ const TRI_QUAD_FINEST_VALID: u32 = 2;
 // with 2*2/sqrt(3) = 2.3 block stride.
 pub(crate) const FINEST_RENDERED_SIZE: u32 = 4;
 // This is 16x larger, with 37-block stride, roughly.
-pub(crate) const COARSEST_RENDERED_SIZE: u32 = 64;
+pub(crate) const COARSEST_RENDERED_SIZE: u32 = 8; // Changed from 64 for ease of testing
 
 pub(crate) fn to_sheet_control(coord: &EntryCore) -> SheetControl {
     let basis_mult = match coord.posture() {
@@ -220,7 +220,6 @@ pub(crate) mod tri_quad {
             dense_mask: u32,
             leading_mask: u32,
         ) -> EntryCore {
-            println!("node ({},{},{},{})", x, y, dense_mask, leading_mask);
             match self.nodes.get(slot).unwrap() {
                 TriQuadNode::Leaf(_) | TriQuadNode::EmptyLeaf => {
                     EntryCore::new(slot, x, y, dense_mask)
@@ -229,7 +228,6 @@ pub(crate) mod tri_quad {
                     let cx = (x & leading_mask) != 0;
                     let cy = (y & leading_mask) != 0;
 
-                    println!("cx {} cy {}", cx, cy);
                     match (cx, cy) {
                         (true, false) => {
                             self.traverse_nodes(tris[0], x, y, dense_mask >> 1, leading_mask >> 1)
@@ -253,9 +251,7 @@ pub(crate) mod tri_quad {
             dense_mask: u32,
             leading_mask: u32,
         ) -> EntryCore {
-            println!("pair ({},{},{},{})", x, y, dense_mask, leading_mask);
             let sum = (x & dense_mask) + (y & dense_mask);
-            println!("sum {} = {} + {}", sum, x & dense_mask, y & dense_mask);
             let node = if sum < dense_mask {
                 rect.lower
             } else {
@@ -277,13 +273,21 @@ pub(crate) mod tri_quad {
             callbacks: &mut impl ChangeCallbacks<T>,
             current_posture: TilePosture,
         ) {
+            use std::sync::atomic::AtomicUsize;
+            use std::sync::atomic::Ordering;
+            static DEPTH: AtomicUsize = AtomicUsize::new(0);
+            let depth = DEPTH.fetch_add(1, Ordering::SeqCst);
             println!(
-                "{{ fillnode ({},{},{},{} -> {})",
-                x, y, dense_mask, leading_mask, stop_side_length
+                "{} fillnode ({},{},{},{} -> {})",
+                " ".repeat(depth),
+                (x as i32).wrapping_sub(i32::MIN),
+                (y as i32).wrapping_sub(i32::MIN),
+                dense_mask,
+                leading_mask,
+                stop_side_length
             );
             // At the leaf we wanted to reach.
             if leading_mask <= stop_side_length {
-                println!("base case");
                 let entry = EntryCore {
                     x,
                     y,
@@ -325,12 +329,33 @@ pub(crate) mod tri_quad {
                         next_tris = *tris;
                     }
                 }
+                let xmin = x & !dense_mask;
+                let ymin = y & !dense_mask;
+                let xmax = x | dense_mask;
+                let ymax = y | dense_mask;
+                println!(
+                    "{} Considering x [{},{}) y [{},{}) dense_mask {} leading_mask {} stop_side_length {}",
+                    " ".repeat(depth),
+                    (xmin as i32).wrapping_sub(i32::MIN),
+                    (xmax as i32).wrapping_sub(i32::MIN),
+                    (ymin as i32).wrapping_sub(i32::MIN),
+                    (ymax as i32).wrapping_sub(i32::MIN),
+                    dense_mask,
+                    leading_mask,
+                    stop_side_length
+                );
 
-                let cx = (x & leading_mask) != 0;
-                let cy = (y & leading_mask) != 0;
+                let cx = (x & leading_mask >> 1) != 0;
+                let cy = (y & leading_mask >> 1) != 0;
                 let dense_node = match (cx, cy) {
-                    (true, false) => next_tris[0],
-                    (false, true) => next_tris[1],
+                    (true, false) => {
+                        println!("{} dense nt0", " ".repeat(depth));
+                        next_tris[0]
+                    }
+                    (false, true) => {
+                        println!("{} dense nt1", " ".repeat(depth));
+                        next_tris[1]
+                    }
                     (false, false) | (true, true) => {
                         // The decision of triangle orientation needs to happen
                         // with a smaller mask. Compare to how traverse_nodes halves the mask
@@ -339,32 +364,34 @@ pub(crate) mod tri_quad {
                         let half_mask = dense_mask >> 1;
                         let sum = (x & half_mask) + (y & half_mask);
                         if sum < half_mask {
+                            println!("{} dense rl", " ".repeat(depth));
                             next_rect.lower
                         } else {
+                            println!("{} dense ru", " ".repeat(depth));
                             next_rect.upper
                         }
                     }
                 };
-                let xmin = x & !dense_mask;
-                let ymin = y & !dense_mask;
-                let xmax = x | dense_mask;
-                let ymax = y | dense_mask;
+
+                println!(
+                    "{} Current posture: {:?}",
+                    " ".repeat(depth),
+                    current_posture
+                );
                 let rect_coord = match current_posture {
                     TilePosture::LowerHalf => (xmin, ymin),
                     TilePosture::UpperHalf => (xmax, ymax),
                 };
-                for (node, coord, posture, debug) in [
-                    (next_tris[0], (xmax, ymin), current_posture, "t0"),
-                    (next_tris[1], (xmin, ymax), current_posture, "t1"),
-                    (next_rect.lower, rect_coord, TilePosture::LowerHalf, "lower"),
-                    (next_rect.upper, rect_coord, TilePosture::UpperHalf, "upper"),
+                for (node, coord, posture) in [
+                    (next_tris[0], (xmax, ymin), current_posture),
+                    (next_tris[1], (xmin, ymax), current_posture),
+                    (next_rect.lower, rect_coord, TilePosture::LowerHalf),
+                    (next_rect.upper, rect_coord, TilePosture::UpperHalf),
                 ] {
-                    println!("traverse {}", debug);
                     let stop_mask = if node == dense_node {
-                        println!("will recurse");
+                        println!("{} dense node", " ".repeat(depth));
                         stop_side_length
                     } else {
-                        println!("will not recurse");
                         leading_mask >> 1
                     };
                     let coord = if node == dense_node { (x, y) } else { coord };
@@ -380,8 +407,7 @@ pub(crate) mod tri_quad {
                     );
                 }
             }
-
-            println!("}}");
+            DEPTH.fetch_sub(1, Ordering::SeqCst);
         }
 
         /// Remove a node and all of its children. The node itself must have already been
@@ -553,10 +579,10 @@ pub(crate) mod tri_quad {
                     TilePosture::LowerHalf => "Lower",
                     TilePosture::UpperHalf => "Upper",
                 },
-                self.x_range().start,
-                self.x_range().end,
-                self.y_range().start,
-                self.y_range().end
+                (self.x_range().start as i32).wrapping_add(i32::MIN),
+                (self.x_range().end as i32).wrapping_add(i32::MIN),
+                (self.y_range().start as i32).wrapping_add(i32::MIN),
+                (self.y_range().end as i32).wrapping_add(i32::MIN)
             )
         }
         pub(crate) fn side_length(&self) -> u32 {
@@ -769,6 +795,483 @@ pub(crate) mod tri_quad {
                 // Second level, rectangle pair
                 (8..12, 8..12, TilePosture::LowerHalf),
                 (8..12, 8..12, TilePosture::UpperHalf),
+            ];
+            assert_eq!(callbacks.fills.len(), expected_fills.len());
+            assert_eq!(callbacks.fills, HashSet::from_iter(expected_fills));
+
+            tree.assert_filled();
+        }
+
+        #[test]
+        fn test_empirical_insert() {
+            struct TestCallbacks {
+                fills: HashSet<(Range<u32>, Range<u32>, TilePosture)>,
+            }
+            impl ChangeCallbacks<String> for TestCallbacks {
+                fn insert(&mut self, entry: &EntryCore) -> String {
+                    self.fills.insert((
+                        entry.x_range().clone(),
+                        entry.y_range().clone(),
+                        entry.posture(),
+                    ));
+                    println!(
+                        "inserting {} {:?}",
+                        entry.debug_describe(),
+                        crate::game_state::mapgen::far_mesh::to_sheet_control(entry)
+                    );
+                    entry.debug_describe()
+                }
+                fn delete(&mut self, value: String) {
+                    println!("deleting {}", value);
+                }
+            }
+            let mut tree = TriQuadTree::new(1 << 31);
+            let mut callbacks = TestCallbacks {
+                fills: HashSet::new(),
+            };
+            tree.insert_at(2147483663, 2147483649, 4, &mut callbacks);
+
+            let expected_fills = [
+                (
+                    3221225472..0,
+                    2147483648..3221225472,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..3221225472,
+                    3221225472..0,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2684354560..3221225472,
+                    2147483648..2684354560,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2684354560,
+                    2684354560..3221225472,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2415919104..2684354560,
+                    2147483648..2415919104,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2415919104,
+                    2415919104..2684354560,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2281701376..2415919104,
+                    2147483648..2281701376,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2281701376,
+                    2281701376..2415919104,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2214592512..2281701376,
+                    2147483648..2214592512,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2214592512,
+                    2214592512..2281701376,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2181038080..2214592512,
+                    2147483648..2181038080,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2181038080,
+                    2181038080..2214592512,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2164260864..2181038080,
+                    2147483648..2164260864,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2164260864,
+                    2164260864..2181038080,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2155872256..2164260864,
+                    2147483648..2155872256,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2155872256,
+                    2155872256..2164260864,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2151677952..2155872256,
+                    2147483648..2151677952,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2151677952,
+                    2151677952..2155872256,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2149580800..2151677952,
+                    2147483648..2149580800,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2149580800,
+                    2149580800..2151677952,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2148532224..2149580800,
+                    2147483648..2148532224,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2148532224,
+                    2148532224..2149580800,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2148007936..2148532224,
+                    2147483648..2148007936,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2148007936,
+                    2148007936..2148532224,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147745792..2148007936,
+                    2147483648..2147745792,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147745792,
+                    2147745792..2148007936,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147614720..2147745792,
+                    2147483648..2147614720,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147614720,
+                    2147614720..2147745792,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147549184..2147614720,
+                    2147483648..2147549184,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147549184,
+                    2147549184..2147614720,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147516416..2147549184,
+                    2147483648..2147516416,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147516416,
+                    2147516416..2147549184,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147500032..2147516416,
+                    2147483648..2147500032,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147500032,
+                    2147500032..2147516416,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147491840..2147500032,
+                    2147483648..2147491840,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147491840,
+                    2147491840..2147500032,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147487744..2147491840,
+                    2147483648..2147487744,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147487744,
+                    2147487744..2147491840,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147485696..2147487744,
+                    2147483648..2147485696,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147485696,
+                    2147485696..2147487744,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147484672..2147485696,
+                    2147483648..2147484672,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147484672,
+                    2147484672..2147485696,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147484160..2147484672,
+                    2147483648..2147484160,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147484160,
+                    2147484160..2147484672,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483904..2147484160,
+                    2147483648..2147483904,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147483904,
+                    2147483904..2147484160,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483776..2147483904,
+                    2147483648..2147483776,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147483776,
+                    2147483776..2147483904,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483712..2147483776,
+                    2147483648..2147483712,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147483712,
+                    2147483712..2147483776,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483680..2147483712,
+                    2147483648..2147483680,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147483680,
+                    2147483680..2147483712,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483664..2147483680,
+                    2147483648..2147483664,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147483664,
+                    2147483664..2147483680,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483648..2147483664,
+                    2147483648..2147483664,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483660..2147483664,
+                    2147483648..2147483652,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483656..2147483660,
+                    2147483652..2147483656,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483660..2147483664,
+                    2147483652..2147483656,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483660..2147483664,
+                    2147483652..2147483656,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147483656,
+                    2147483656..2147483664,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483656..2147483664,
+                    2147483656..2147483664,
+                    TilePosture::LowerHalf,
+                ),
+                (
+                    2147483656..2147483664,
+                    2147483656..2147483664,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147483680,
+                    2147483648..2147483680,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147483712,
+                    2147483648..2147483712,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147483776,
+                    2147483648..2147483776,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147483904,
+                    2147483648..2147483904,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147484160,
+                    2147483648..2147484160,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147484672,
+                    2147483648..2147484672,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147485696,
+                    2147483648..2147485696,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147487744,
+                    2147483648..2147487744,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147491840,
+                    2147483648..2147491840,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147500032,
+                    2147483648..2147500032,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147516416,
+                    2147483648..2147516416,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147549184,
+                    2147483648..2147549184,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147614720,
+                    2147483648..2147614720,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2147745792,
+                    2147483648..2147745792,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2148007936,
+                    2147483648..2148007936,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2148532224,
+                    2147483648..2148532224,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2149580800,
+                    2147483648..2149580800,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2151677952,
+                    2147483648..2151677952,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2155872256,
+                    2147483648..2155872256,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2164260864,
+                    2147483648..2164260864,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2181038080,
+                    2147483648..2181038080,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2214592512,
+                    2147483648..2214592512,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2281701376,
+                    2147483648..2281701376,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2415919104,
+                    2147483648..2415919104,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..2684354560,
+                    2147483648..2684354560,
+                    TilePosture::UpperHalf,
+                ),
+                (
+                    2147483648..3221225472,
+                    2147483648..3221225472,
+                    TilePosture::UpperHalf,
+                ),
             ];
             assert_eq!(callbacks.fills.len(), expected_fills.len());
             assert_eq!(callbacks.fills, HashSet::from_iter(expected_fills));

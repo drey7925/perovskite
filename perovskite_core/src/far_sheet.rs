@@ -93,7 +93,7 @@ impl IndexBufferKey {
                 }
 
                 if indices.len() > indices_est {
-                    log::warn!("Index buffer for sheet {:?} is larger than estimated. This can lead to a performance penalty", self);
+                    log::warn!("Index buffer for sheet {:?} is larger than estimated. This can lead to a performance penalty. Estimated: {}, actual: {}", self, indices_est, indices.len());
                 }
                 indices
             }
