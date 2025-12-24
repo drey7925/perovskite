@@ -2880,8 +2880,8 @@ impl FarMeshSender {
         let map_pos = far_mesh::world_pos_to_map_pos(player_xz);
         tracing::info!(
             "Generating far mesh for player at map pos ({}, {})",
-            (map_pos.0 as i32).wrapping_add(i32::MIN),
-            (map_pos.1 as i32).wrapping_add(i32::MIN)
+            (map_pos.0 as i32).wrapping_add(i32::MIN >> 1),
+            (map_pos.1 as i32).wrapping_add(i32::MIN >> 1)
         );
         tracing::info!("@test pos {}, {}", map_pos.0, map_pos.1);
         struct Callbacks<'a> {
