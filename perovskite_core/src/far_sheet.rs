@@ -200,15 +200,42 @@ impl SheetControl {
     /// The points are returned in the order the index buffer will use them.
     #[inline(always)]
     pub fn iter_lattice_points_local_space(&self) -> impl Iterator<Item = Vector3<f64>> + use<'_> {
-        self.iter_lattice_points_lattice_space().map(|(i, j)| {
-            let i_f = i as f64;
-            let j_f = j as f64;
-            vec3(
-                self.basis_u.x * i_f + self.basis_v.x * j_f,
-                0.0,
-                self.basis_u.y * i_f + self.basis_v.y * j_f,
-            )
-        })
+        self.iter_lattice_points_lattice_space()
+            .map(|r| self.lattice_to_local(r))
+    }
+
+    #[inline(always)]
+    fn lattice_to_local(&self, r: (isize, isize)) -> Vector3<f64> {
+        let i_f = r.0 as f64;
+        let j_f = r.1 as f64;
+        vec3(
+            self.basis_u.x * i_f + self.basis_v.x * j_f,
+            0.0,
+            self.basis_u.y * i_f + self.basis_v.y * j_f,
+        )
+    }
+
+    /// Returns the corners of the sheet in lattice space. Points may be
+    /// repeated in case of a triangular sheet.
+    #[inline(always)]
+    pub fn lattice_corners_lattice_space(&self) -> [(isize, isize); 4] {
+        [
+            (0, 0),
+            (self.m as isize, 0),
+            (0, self.n as isize),
+            (
+                self.m as isize,
+                self.n as isize + (self.k * self.m as isize) as isize,
+            ),
+        ]
+    }
+
+    /// Returns the corners of the sheet in local space. Points may be
+    /// repeated in case of a triangular sheet.
+    #[inline(always)]
+    pub fn lattice_corners_local_space(&self) -> [Vector3<f64>; 4] {
+        self.lattice_corners_lattice_space()
+            .map(|r| self.lattice_to_local(r))
     }
 
     #[inline(always)]
@@ -226,6 +253,13 @@ impl SheetControl {
         let origin = self.origin;
         self.iter_lattice_points_local_space()
             .map(move |point| vec3(origin.x + point.x, origin.y + point.y, origin.z + point.z))
+    }
+
+    #[inline(always)]
+    pub fn lattice_corners_world_space(&self) -> [Vector3<f64>; 4] {
+        let origin = self.origin;
+        self.lattice_corners_local_space()
+            .map(|point| vec3(origin.x + point.x, origin.y + point.y, origin.z + point.z))
     }
 
     pub fn new(
@@ -332,6 +366,17 @@ mod tests {
                 vec3(12.0, 5.0, 21.0),
             ]
         );
+
+        let corners_world = control.lattice_corners_world_space();
+        assert_eq!(
+            corners_world,
+            [
+                vec3(10.0, 5.0, 20.0),
+                vec3(12.0, 5.0, 21.0),
+                vec3(10.0, 5.0, 22.0),
+                vec3(12.0, 5.0, 21.0),
+            ]
+        );
     }
 
     #[test]
@@ -388,7 +433,11 @@ mod tests {
         })
         .is_err());
 
-        assert!(SheetControl::try_from(FarSheetControlProto { m: 0, ..good }).is_err());
+        assert!(SheetControl::try_from(FarSheetControlProto {
+            origin: None,
+            ..good
+        })
+        .is_err());
 
         assert!(SheetControl::try_from(FarSheetControlProto {
             m: 3,
