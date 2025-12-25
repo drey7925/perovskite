@@ -41,6 +41,7 @@ use crate::vulkan::shaders::entity_geometry::EntityDrawStep;
 use crate::vulkan::shaders::flat_texture::FlatPipelineConfig;
 use crate::vulkan::shaders::raytracer::RaytracingBindings;
 use crate::vulkan::shaders::{raytracer, sky};
+use crate::vulkan::CLEAR_RASTER_DEPTH_ONLY;
 use crate::{
     client_state::{settings::GameSettings, ClientState, FrameState},
     main_menu::MainMenu,
@@ -322,10 +323,19 @@ impl ActiveGame {
         if self.raytrace_data.is_none() || hybrid_rt_enabled {
             // Either we aren't raytracing, or we're raytracing reflections but rasterizing
             // all geometry.
+            if !far_mesh_calls.is_empty() {
+                self.far_mesh_pipeline
+                    .draw(ctx, &mut command_buf_builder, &far_mesh_calls, scene_state)
+                    .context("Far mesh pipeline draw failed")?;
 
-            self.far_mesh_pipeline
-                .draw(ctx, &mut command_buf_builder, &far_mesh_calls, scene_state)
-                .context("Far mesh pipeline draw failed")?;
+                command_buf_builder.end_render_pass(SubpassEndInfo::default())?;
+                framebuffer.begin_render_pass(
+                    &mut command_buf_builder,
+                    CLEAR_RASTER_DEPTH_ONLY,
+                    &ctx.renderpasses,
+                    SubpassContents::Inline,
+                )?;
+            }
 
             self.cube_pipeline
                 .draw_single_step(

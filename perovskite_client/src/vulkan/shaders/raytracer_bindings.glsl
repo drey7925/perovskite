@@ -17,3 +17,13 @@ layout(set = 1, binding = 0) uniform RaytracingPerFrameData {
     uint render_distance;
     uint initial_block_id;
 };
+layout(set = 1, binding = 1) uniform ChunkMapHeader {
+    uint n_minus_one;
+    uint mxc;
+    uvec3 k;
+    ivec3 min_chunk;
+    ivec3 max_chunk;
+};
+layout(set = 1, binding = 2) readonly buffer chunk_map {
+    uint chunks[];
+};

@@ -91,6 +91,10 @@ impl FarGeometryState {
         Ok(())
     }
 
+    pub(crate) fn num_meshes(&self) -> usize {
+        self.sheets.len()
+    }
+
     pub(crate) fn draw_calls(
         &self,
         player_position: Vector3<f64>,

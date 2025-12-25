@@ -60,10 +60,11 @@ impl IndexBufferKey {
                 let triangles_est = 2 * self.m as isize * self.n as isize
                     + (self.m as isize * self.k * self.n as isize);
                 let triangles_est = triangles_est as usize;
-                let num_strips = self.n - 1;
+                let num_strips = self.n;
                 // Each strip requires a restart flag. We also need one index per triangle
-                // but also two more indices per strip to start/end the strip.
-                let indices_est = triangles_est + (num_strips * 3);
+                // but also two more indices per strip to start/end the strip, minus one
+                // because the last strip doesn't need a restart flag.
+                let indices_est = triangles_est + (num_strips * 3) - 1;
                 let mut indices = Vec::with_capacity(indices_est);
 
                 let m = self.m as isize;

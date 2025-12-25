@@ -22,20 +22,11 @@ layout(set = 0, binding = 2) readonly buffer RaytraceControl {
 };
 
 
-layout(set = 1, binding = 1) uniform ChunkMapHeader {
-    uint n_minus_one;
-    uint mxc;
-    uvec3 k;
-    ivec3 min_chunk;
-    ivec3 max_chunk;
-};
-layout(set = 1, binding = 2) readonly buffer chunk_map {
-    uint chunks[];
-};
-
 // Each shader derived from this common file should declare its own storage image bindings
 // with the appropriate binding indices and readonly/writeonly
+// Note that raytracer_bindings.glsl already uses set 1 bindings 0-2 for chunk map data
 
+// e.g.:
 //layout (set = 1, binding = 3, rgba8) uniform restrict image2D deferred_specular_color;
 //layout (set = 1, binding = 4, rgba32f) uniform restrict image2D deferred_specular_ray_dir;
 //layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInput f_depth_in;

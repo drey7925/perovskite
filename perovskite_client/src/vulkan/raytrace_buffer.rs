@@ -255,7 +255,7 @@ impl UpdateBuilder {
                 if blocks.is_some() {
                     let current_pos = self.append_pos;
                     // Extra 24 bytes of wasted padding data in cases where lights aren't being
-                    // updated. The bookkeeping cost makes it not worth it
+                    // updated. The bookkeeping cost makes it not worth it to chase these 24 bytes
                     self.append_pos += CHUNK_LIGHTS_OFFSET;
                     self.staging_buffer_locations_blocks
                         .insert(coord, current_pos);

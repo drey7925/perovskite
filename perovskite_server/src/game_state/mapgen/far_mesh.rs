@@ -50,9 +50,9 @@ const TRI_QUAD_TOTAL_SIZE: u32 = 1 << 30;
 const TRI_QUAD_FINEST_VALID: u32 = 2;
 // This is appoximately a 64 * 2 * 2 / sqrt(3), i.e. 147-block-long tile,
 // with 2*2/sqrt(3) = 2.3 block stride.
-pub(crate) const FINEST_RENDERED_SIZE: u32 = 4;
+pub(crate) const FINEST_RENDERED_SIZE: u32 = 8;
 // This is 16x larger, with 37-block stride, roughly.
-pub(crate) const COARSEST_RENDERED_SIZE: u32 = 64;
+pub(crate) const COARSEST_RENDERED_SIZE: u32 = 128;
 
 pub(crate) fn to_sheet_control(coord: &EntryCore) -> SheetControl {
     let basis_mult = match coord.posture() {

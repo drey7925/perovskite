@@ -1140,9 +1140,10 @@ impl EguiUi {
                     }
 
                     let (av, ai) = state.chunks.average_solid_batch_occupancy();
+                    let num_far_meshes = state.far_geometry.lock().num_meshes();
                     ui.label(
                         egui::RichText::new(format!(
-                            "Average solid mesh batch: {av} vertices, {ai} indices"
+                            "Average solid mesh batch: {av} vertices, {ai} indices. {num_far_meshes} far meshes"
                         ))
                         .font(egui::FontId::monospace(16.0))
                         .color(Color32::WHITE),
