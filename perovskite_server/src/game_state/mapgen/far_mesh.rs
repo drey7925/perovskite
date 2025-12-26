@@ -334,10 +334,8 @@ pub(crate) mod tri_quad {
             impl InsertionPolicy for PolicyImpl {
                 fn decide(&self, entry: &EntryCore) -> PolicyDecision {
                     if entry.contains(self.x, self.y) && entry.side_length() > self.stop_len {
-                        println!("Subdividing at {}", entry.debug_describe());
                         PolicyDecision::Subdivide
                     } else {
-                        println!("Inserting flat at {}", entry.debug_describe());
                         PolicyDecision::InsertAtLevel
                     }
                 }
@@ -521,13 +519,10 @@ pub(crate) mod tri_quad {
         }
 
         pub(crate) fn contains(&self, x: u32, y: u32) -> bool {
-            println!("{:?} contains {} {}", self, x, y);
             if self.x & !self.dense_mask != x & !self.dense_mask {
-                println!("x mismatch {} {}", self.x, x);
                 return false;
             }
             if self.y & !self.dense_mask != y & !self.dense_mask {
-                println!("y mismatch {} {}", self.y, y);
                 return false;
             }
             let expected_posture =
@@ -537,7 +532,6 @@ pub(crate) mod tri_quad {
                     TilePosture::UpperHalf
                 };
             if self.posture != expected_posture {
-                println!("posture mismatch {:?} {:?}", self.posture, expected_posture);
                 return false;
             }
             true
@@ -669,6 +663,7 @@ pub(crate) mod tri_quad {
             entry: TriQuadEntry<T>,
             expected: Option<&T>,
         ) {
+            // This is for a unit test, println is ok
             println!("{}", entry.core().debug_describe());
             assert_eq!(entry.value(), expected);
         }

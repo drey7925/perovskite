@@ -271,7 +271,7 @@ impl ActiveGame {
         let mut chunks = chunks.into_iter().collect::<Vec<_>>();
         plot!("total_chunks", chunks.len() as f64);
 
-        let (batched_calls, batched_handled) = self
+        let (batched_calls, mut batched_handled) = self
             .client_state
             .chunks
             .make_batched_draw_calls(player_position, scene_state.vp_matrix);
@@ -288,6 +288,7 @@ impl ActiveGame {
         self.cube_draw_calls
             .extend(chunks.iter().filter_map(|(coord, chunk)| {
                 if !batched_handled.contains(coord) {
+                    batched_handled.insert(*coord);
                     chunk.make_draw_call(*coord, player_position, scene_state.vp_matrix)
                 } else {
                     None
@@ -313,7 +314,7 @@ impl ActiveGame {
 
         let far_mesh_calls = {
             let lock = self.client_state.far_geometry.lock();
-            lock.draw_calls(player_position, scene_state.vp_matrix)
+            lock.draw_calls(player_position, scene_state.vp_matrix, &batched_handled)
         };
 
         // At this point, we are in the Color + Depth renderpass

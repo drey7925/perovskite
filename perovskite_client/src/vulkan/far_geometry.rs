@@ -3,10 +3,11 @@ use std::collections::hash_map::Entry;
 use anyhow::{Context, Result};
 use cgmath::{ElementWise, Matrix4, Vector3};
 use perovskite_core::{
+    coordinates::ChunkCoordinate,
     far_sheet::{IndexBufferKey, SheetControl},
     protocol::{game_rpc, map as map_rpc},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use vulkano::buffer::{BufferUsage, Subbuffer};
 
 use crate::vulkan::{
@@ -17,6 +18,7 @@ struct ClientFarSheet {
     index_buffer: Subbuffer<[u32]>,
     vertex_buffer: Subbuffer<[FarMeshVertex]>,
     origin: Vector3<f64>,
+    chunk_corners: [(i32, i32); 4],
 }
 
 fn build_index_buffer(key: IndexBufferKey, vk_ctx: &VulkanContext) -> Result<Subbuffer<[u32]>> {
@@ -53,12 +55,25 @@ impl ClientFarSheet {
             })
             .collect::<Vec<_>>();
 
+        let chunk_corners = control.lattice_corners_world_space().map(|corner| {
+            let x = (corner.x.clamp(i32::MIN as f64, i32::MAX as f64) as i32).div_euclid(16);
+            let z = (corner.y.clamp(i32::MIN as f64, i32::MAX as f64) as i32).div_euclid(16);
+            (x, z)
+        });
+
         Ok(Self {
             index_buffer,
             vertex_buffer: vk_ctx
                 .iter_to_device_via_staging(vertices.into_iter(), BufferUsage::VERTEX_BUFFER)?,
             origin: control.origin(),
+            chunk_corners,
         })
+    }
+
+    fn should_render(&self, ignore_chunks: &FxHashSet<(i32, i32)>) -> bool {
+        self.chunk_corners
+            .iter()
+            .any(|corner| !ignore_chunks.contains(corner))
     }
 }
 pub(crate) struct FarGeometryState {
@@ -100,9 +115,14 @@ impl FarGeometryState {
         player_position: Vector3<f64>,
         // Will eventually be used for frustum culling
         _view_proj_matrix: Matrix4<f32>,
+        ignore_chunks: &FxHashSet<ChunkCoordinate>,
     ) -> Vec<FarMeshDrawCall> {
+        let ignore_slices =
+            FxHashSet::from_iter(ignore_chunks.iter().map(|coord| (coord.x, coord.z)));
+
         self.sheets
             .values()
+            .filter(|sheet| sheet.should_render(&ignore_slices))
             .map(|sheet| {
                 let relative_origin =
                     (sheet.origin - player_position).mul_element_wise(Vector3::new(1., -1., 1.));

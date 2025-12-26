@@ -5,7 +5,7 @@
 //! need to share.
 use crate::protocol::map::FarSheetControl as FarSheetControlProto;
 use anyhow::{bail, ensure, Context, Result};
-use cgmath::{vec3, Vector2, Vector3};
+use cgmath::{vec2, vec3, Vector2, Vector3};
 use itertools::Itertools;
 
 pub use crate::protocol::map::TessellationMode;
@@ -249,17 +249,17 @@ impl SheetControl {
     ///
     /// The points are returned in the order the index buffer will use them.
     #[inline(always)]
-    pub fn iter_lattice_points_world_space(&self) -> impl Iterator<Item = Vector3<f64>> + use<'_> {
+    pub fn iter_lattice_points_world_space(&self) -> impl Iterator<Item = Vector2<f64>> + use<'_> {
         let origin = self.origin;
         self.iter_lattice_points_local_space()
-            .map(move |point| vec3(origin.x + point.x, origin.y + point.y, origin.z + point.z))
+            .map(move |point| vec2(origin.x + point.x, origin.z + point.z))
     }
 
     #[inline(always)]
-    pub fn lattice_corners_world_space(&self) -> [Vector3<f64>; 4] {
+    pub fn lattice_corners_world_space(&self) -> [Vector2<f64>; 4] {
         let origin = self.origin;
         self.lattice_corners_local_space()
-            .map(|point| vec3(origin.x + point.x, origin.y + point.y, origin.z + point.z))
+            .map(|point| vec2(origin.x + point.x, origin.z + point.z))
     }
 
     pub fn new(
@@ -358,12 +358,12 @@ mod tests {
         assert_eq!(
             lattice_world,
             vec![
-                vec3(10.0, 5.0, 20.0),
-                vec3(10.0, 5.0, 21.0),
-                vec3(10.0, 5.0, 22.0),
-                vec3(11.0, 5.0, 20.5),
-                vec3(11.0, 5.0, 21.5),
-                vec3(12.0, 5.0, 21.0),
+                vec2(10.0, 20.0),
+                vec2(10.0, 21.0),
+                vec2(10.0, 22.0),
+                vec2(11.0, 20.5),
+                vec2(11.0, 21.5),
+                vec2(12.0, 21.0),
             ]
         );
 
@@ -371,10 +371,10 @@ mod tests {
         assert_eq!(
             corners_world,
             [
-                vec3(10.0, 5.0, 20.0),
-                vec3(12.0, 5.0, 21.0),
-                vec3(10.0, 5.0, 22.0),
-                vec3(12.0, 5.0, 21.0),
+                vec2(10.0, 20.0),
+                vec2(12.0, 21.0),
+                vec2(10.0, 22.0),
+                vec2(12.0, 21.0),
             ]
         );
     }

@@ -552,6 +552,17 @@ impl SharedContext {
         }
     }
 
+    fn get_position_override(&self) -> Option<Vector3<f64>> {
+        tokio::task::block_in_place(|| {
+            let entity_id = self.player_context.state.lock().attached_to_entity?;
+            // Add 2 seconds of predictive lookahead
+            let tick = self.game_state.tick().saturating_add(2_000_000_000);
+            self.game_state
+                .entities()
+                .predictive_position(entity_id, tick)
+        })
+    }
+
     fn run_cancelable_worker(
         self: &Arc<Self>,
         fut: impl Future<Output = Result<()>> + Send + 'static,
@@ -839,12 +850,13 @@ impl MapChunkSender {
                 })
             }
         };
-        let prefetch_position = if let Some(position_override) = self.get_position_override() {
-            load_deadline += Duration::from_millis(500);
-            position_override.try_into().unwrap_or(true_position)
-        } else {
-            true_position
-        };
+        let prefetch_position =
+            if let Some(position_override) = self.context.get_position_override() {
+                load_deadline += Duration::from_millis(500);
+                position_override.try_into().unwrap_or(true_position)
+            } else {
+                true_position
+            };
         let true_player_chunk = true_position.chunk();
         let prefetch_player_chunk = prefetch_position.chunk();
 
@@ -1147,22 +1159,6 @@ impl MapChunkSender {
         !((chunk.x >= x_min && chunk.x <= x_max)
             && (chunk.z >= z_min && chunk.z <= z_max)
             && (chunk.y >= y_min && chunk.y <= y_max))
-    }
-    fn get_position_override(&self) -> Option<Vector3<f64>> {
-        tokio::task::block_in_place(|| {
-            let entity_id = self
-                .context
-                .player_context
-                .state
-                .lock()
-                .attached_to_entity?;
-            // Add 2 seconds of predictive lookahead
-            let tick = self.context.game_state.tick().saturating_add(2_000_000_000);
-            self.context
-                .game_state
-                .entities()
-                .predictive_position(entity_id, tick)
-        })
     }
 }
 
@@ -2857,11 +2853,12 @@ struct FarMeshSender {
 impl FarMeshSender {
     async fn far_mesh_sender_loop(mut self) -> Result<()> {
         // TODO: check protocol version and withhold data if client doesn't support it
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
         loop {
             tokio::select! {
-                _ = self.testonly_notifier.changed() => {
-                    let player_position = self.player_position.borrow().clone();
-                    self.send_mesh(player_position).await?;
+                _ = interval.tick() => {
+                    let position = self.context.get_position_override().unwrap_or(self.player_position.borrow().kinematics.position);
+                    self.send_mesh(position).await?;
                 },
                 _ = self.context.cancellation.cancelled() => {
                     break;
@@ -2870,13 +2867,10 @@ impl FarMeshSender {
         }
         Ok(())
     }
-    async fn send_mesh(&mut self, player_position: PositionAndPacing) -> Result<()> {
+    async fn send_mesh(&mut self, player_position: Vector3<f64>) -> Result<()> {
         use crate::game_state::mapgen::far_mesh;
         use cgmath::vec2;
-        let player_xz = vec2(
-            player_position.kinematics.position.x,
-            player_position.kinematics.position.z,
-        );
+        let player_xz = vec2(player_position.x, player_position.z);
         let map_pos = far_mesh::world_pos_to_map_pos(player_xz);
         tracing::debug!(
             "Generating far mesh for player at map pos ({}, {})",
@@ -2906,7 +2900,7 @@ impl FarMeshSender {
                     .unwrap();
                 let min_z = control
                     .iter_lattice_points_world_space()
-                    .map(|p| p.z as i64)
+                    .map(|p| p.y as i64)
                     .min()
                     .unwrap();
                 let max_x = control
@@ -2916,7 +2910,7 @@ impl FarMeshSender {
                     .unwrap();
                 let max_z = control
                     .iter_lattice_points_world_space()
-                    .map(|p| p.z as i64)
+                    .map(|p| p.y as i64)
                     .max()
                     .unwrap();
 
@@ -2933,7 +2927,7 @@ impl FarMeshSender {
                 );
                 let heights = control
                     .iter_lattice_points_world_space()
-                    .map(|p| self.mapgen.height(p.x, p.z))
+                    .map(|p| self.mapgen.height(p.x, p.y))
                     .collect::<Vec<_>>();
                 let sheet = perovskite_core::protocol::map::FarSheet {
                     geometry_id,
