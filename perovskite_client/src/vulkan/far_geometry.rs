@@ -92,7 +92,15 @@ impl FarGeometryState {
         rpc: &game_rpc::FarGeometry,
         vk_ctx: &VulkanContext,
     ) -> Result<()> {
+        let remove_set = FxHashSet::from_iter(rpc.remove_ids.iter().copied());
+        let add_set = FxHashSet::from_iter(rpc.far_sheet.iter().map(|sheet| sheet.geometry_id));
+        let intersection = FxHashSet::from_iter(remove_set.intersection(&add_set));
+        if !intersection.is_empty() {
+            log::warn!("Far sheet ID collision: {:?}", intersection);
+        }
+
         for id in &rpc.remove_ids {
+            log::info!("Removing far sheet {}", id);
             if self.sheets.remove(id).is_none() {
                 log::warn!("Tried to remove non-existent far sheet {}", id);
             }

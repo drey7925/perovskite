@@ -1165,6 +1165,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// Warning: If your extended data includes interior mutability (mutex, refcell, etc), it is important
     /// to note that this function does NOT set the dirty bit on the chunk, and any changes made via that
     /// interior mutability may be lost.
+    /// See the docstring of [ExtendedDataHolder] for more details.
     pub fn get_block_with_extended_data<F, T>(
         &self,
         coord: BlockCoordinate,
@@ -1476,6 +1477,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// Once auto traits and negative impls are stabilized, add a bound using this technique.
     ///
     /// Warning: If the mutator panics, the extended data may be lost.
+    ///
+    /// Warning: If your extended data includes interior mutability (mutex, refcell, etc), it is important
+    /// to note that this function may fail to detect changes if the dirty bit is not set manually.
+    /// See the docstring of [ExtendedDataHolder] for more details.
     pub fn mutate_block_atomically<F, T>(&self, coord: BlockCoordinate, mutator: F) -> Result<T>
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
@@ -1515,6 +1520,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///               `mutate_block_atomically`
     ///   `wait_for_inner` - If true, we're willing to wait for the inner mutex; this is useful if
     ///                      the caller is OK with blocking but doesn't want to load unloaded chunks
+    ///
+    /// Warning: If your extended data includes interior mutability (mutex, refcell, etc), it is important
+    /// to note that this function may fail to detect changes if the dirty bit is not set manually.
+    /// See the docstring of [ExtendedDataHolder] for more details.
     pub fn try_mutate_block_atomically<F, T>(
         &self,
         coord: BlockCoordinate,
@@ -1578,9 +1587,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         let mut new_id = old_id;
         let closure_result = mutator(&mut new_id, &mut data_holder);
 
-        // This would have been a nice optimization, but I can't even consistently be sure to set
-        // the dirty bit in my own code. Do this for now, until there's a better design.
-        let extended_data_dirty = true; //data_holder.dirty();
+        // The dirty bit is set automatically when extended data is modified through
+        // DerefMut. Users of the API are warned that interior mutability can lead to
+        // missed updates if the dirty bit is not set manually.
+        let extended_data_dirty = data_holder.dirty();
         let client_ext_data = self.maybe_client_ext_data(coord, new_id, extended_data.as_ref())?;
         if let Some(new_data) = extended_data {
             chunk

@@ -57,6 +57,7 @@ use anyhow::Error;
 use anyhow::Result;
 use cgmath::Vector3;
 use cgmath::Zero;
+use futures::FutureExt;
 use parking_lot::MutexGuard;
 use perovskite_core::chat::{ChatMessage, SERVER_WARNING_COLOR};
 use perovskite_core::constants::permissions;
@@ -1565,7 +1566,7 @@ impl InboundWorker {
     async fn off_loop_footsteps_worker(
         ctx: Arc<SharedContext>,
         mut rx: mpsc::Receiver<BlockCoordinate>,
-    ) -> Result<()> {
+    ) {
         let player = Arc::downgrade(&ctx.player_context.player);
         while !ctx.cancellation.is_cancelled() {
             tokio::select! {
@@ -1583,7 +1584,6 @@ impl InboundWorker {
                 _ = ctx.cancellation.cancelled() => break,
             }
         }
-        Ok(())
     }
 
     // Poll for world events and send them through outbound_tx
@@ -1592,7 +1592,8 @@ impl InboundWorker {
         let mut step_worker_handle = spawn_async(
             &format!("{}_footstep_worker", &self.context.player_context.name),
             Self::off_loop_footsteps_worker(self.context.clone(), step_rx),
-        )?;
+        )?
+        .fuse();
 
         const INBOUND_TIMEOUT: Duration = Duration::from_secs(10);
         while !self.context.cancellation.is_cancelled() {
@@ -1625,8 +1626,19 @@ impl InboundWorker {
                     }
 
                 },
-                _ = &mut step_worker_handle => {
-                    info!("Off-thread footstep worker finished")
+                result = &mut step_worker_handle => {
+                    warn!("Off-thread footstep worker finished");
+                    match result {
+                        Ok(()) => {
+                            if !self.context.cancellation.is_cancelled() {
+                                self.context.kick("Off-thread footstep worker finished unexpectedly").await;
+                            }
+                        },
+                        Err(e) => {
+                            error!("Off-thread footstep worker panicked: {e:?}");
+                            self.context.kick("Off-thread footstep worker panicked").await;
+                        }
+                    }
                 }
                 _ = self.context.cancellation.cancelled() => break,
                 _ = timeout => {
@@ -2951,12 +2963,34 @@ impl FarMeshSender {
             removals: Vec::new(),
             next_id: &mut self.next_id,
         };
-        self.meshes.insert_at(
-            map_pos.0,
-            map_pos.1,
-            far_mesh::FINEST_RENDERED_SIZE,
-            &mut callbacks,
-        );
+
+        struct FillPolicy {
+            map_pos: (u32, u32),
+        }
+        impl tri_quad::InsertionPolicy for FillPolicy {
+            fn decide(&self, entry: &tri_quad::EntryCore) -> tri_quad::PolicyDecision {
+                let target_len = if entry.contains(self.map_pos.0, self.map_pos.1) {
+                    8
+                } else {
+                    let distance = f64::hypot(
+                        (entry.x_range().start as f64 + entry.x_range().end as f64) / 2.0
+                            - self.map_pos.0 as f64,
+                        (entry.y_range().start as f64 + entry.y_range().end as f64) / 2.0
+                            - self.map_pos.1 as f64,
+                    );
+                    ((distance * 0.5) as u32).max(8).next_power_of_two()
+                };
+
+                if entry.side_length() > target_len {
+                    return tri_quad::PolicyDecision::Subdivide;
+                } else {
+                    return tri_quad::PolicyDecision::Retract;
+                }
+            }
+        }
+
+        self.meshes
+            .fill_with_policy(&mut callbacks, &FillPolicy { map_pos });
 
         self.outbound_tx
             .send(Ok(StreamToClient {

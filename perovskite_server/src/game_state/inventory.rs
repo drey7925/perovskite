@@ -66,7 +66,7 @@ impl InventoryKey {
 ///
 /// inventories may be presented via a UI; this is an additional layer (TODO write it)
 /// That UI will have rules on access control that the server will enforce
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Inventory {
     key: Option<InventoryKey>,
     pub dimensions: (u32, u32),
@@ -258,7 +258,7 @@ impl InventoryManager {
     ///
     /// Deadlock warning: Attempting to access the player inventory while in an item handler will
     /// cause a deadlock. As a workaround, spawn a deferred task that can wait for the item handler
-    /// ti finish, or file a feature request detailing your use-case.
+    /// to finish, or file a feature request detailing your use-case.
     ///
     /// Deadlock warning: the mutator should not attempt to access inventories; if you need
     /// multiple inventories, use [mutate_inventories_atomically] to acquire locks in the right
@@ -270,12 +270,14 @@ impl InventoryManager {
     {
         let lock = self.lock(*key);
         let mut inv = lock.get()?.context("Inventory ID not found")?;
-
+        let old_inv = inv.clone();
         Self::assert_no_reentrant_calls();
 
         let result = DEADLOCK_DETECTOR.sync_scope((), || mutator(&mut inv));
-        lock.put(inv)?;
-        self.broadcast_update(*key);
+        if inv != old_inv {
+            lock.put(inv)?;
+            self.broadcast_update(*key);
+        }
         result
     }
 

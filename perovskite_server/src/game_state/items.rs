@@ -218,7 +218,7 @@ impl HasInteractionRules for &Item {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ItemStack {
     pub proto: proto::ItemStack,
 }

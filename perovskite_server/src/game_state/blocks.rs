@@ -347,7 +347,7 @@ impl Default for BlockType {
 /// 2. That data (behind that interior mutability) should be written back to the game database (i.e.
 ///    the block's extended data serializer reads it, and it's not just some in-memory cache)
 /// 3. The only way the extended data is accessed is via an immutable deref (e.g. `ext.map()`,
-///    `ext.and_then()`, `ext.deref()`)
+///    `ext.and_then()`, `ext.deref()`, `&ext`)
 /// 4. And `ExtendedDataHolder::set_dirty` is not called manually.
 ///
 /// In this case, if the chunk is unloaded without any other changes, the changes will be lost since

@@ -153,8 +153,12 @@ pub(crate) mod tri_quad {
         InsertAtLevel,
         /// Subdivide the node into four smaller nodes, then recursively fill.
         Subdivide,
-        /// Do not insert the node, and do not fill in any of its children.
+        /// Do not insert the node, and do not fill in any of its children. Leave it as-is.
         DoNotInsert,
+        /// If the node is subdivided, bring it back to the current level.
+        Retract,
+        /// Regardless of whether the node is subdivided, delete it.
+        Delete,
     }
     pub(crate) trait InsertionPolicy {
         fn decide(&self, entry: &EntryCore) -> PolicyDecision;
@@ -354,10 +358,18 @@ pub(crate) mod tri_quad {
             &mut self,
             entry: EntryCore,
             callbacks: &mut impl ChangeCallbacks<T>,
-            policy: &mut impl InsertionPolicy,
+            policy: &impl InsertionPolicy,
         ) {
             let node = &self.nodes[entry.node];
             let decision = policy.decide(&entry);
+            let xmin = entry.x_range().start;
+            let ymin = entry.y_range().start;
+            let xmax = entry.x_range().end - 1;
+            let ymax = entry.y_range().end - 1;
+            let rect_coord = match entry.posture {
+                TilePosture::LowerHalf => (xmin, ymin),
+                TilePosture::UpperHalf => (xmax, ymax),
+            };
             match decision {
                 PolicyDecision::Subdivide => {
                     let next_rect;
@@ -385,15 +397,6 @@ pub(crate) mod tri_quad {
                             next_tris = *tris;
                         }
                     }
-                    let xmin = entry.x_range().start;
-                    let ymin = entry.y_range().start;
-                    let xmax = entry.x_range().end - 1;
-                    let ymax = entry.y_range().end - 1;
-
-                    let rect_coord = match entry.posture {
-                        TilePosture::LowerHalf => (xmin, ymin),
-                        TilePosture::UpperHalf => (xmax, ymax),
-                    };
 
                     for (node, coord, posture) in [
                         (next_tris[0], (xmax, ymin), entry.posture),
@@ -416,8 +419,29 @@ pub(crate) mod tri_quad {
                 }
                 PolicyDecision::InsertAtLevel => {
                     match node {
-                        TriQuadNode::Leaf(_) | TriQuadNode::Internal { .. } => {
+                        TriQuadNode::Leaf(_) => {
                             // Do nothing, data already present at same or denser level
+                        }
+                        TriQuadNode::Internal { rect, tris } => {
+                            // May need some retractions, but not at this level
+                            for (node, coord, posture) in [
+                                (tris[0], (xmax, ymin), entry.posture),
+                                (tris[1], (xmin, ymax), entry.posture),
+                                (rect.lower, rect_coord, TilePosture::LowerHalf),
+                                (rect.upper, rect_coord, TilePosture::UpperHalf),
+                            ] {
+                                self.fill_with_policy_impl(
+                                    EntryCore::new_from_posture(
+                                        node,
+                                        coord.0,
+                                        coord.1,
+                                        entry.dense_mask >> 1,
+                                        posture,
+                                    ),
+                                    callbacks,
+                                    policy,
+                                );
+                            }
                         }
                         TriQuadNode::EmptyLeaf => {
                             let data = callbacks.insert(&entry);
@@ -425,14 +449,36 @@ pub(crate) mod tri_quad {
                         }
                     }
                 }
-                PolicyDecision::DoNotInsert => todo!(),
+                PolicyDecision::DoNotInsert => {
+                    return;
+                }
+                PolicyDecision::Retract => match node {
+                    TriQuadNode::Internal { .. } => {
+                        let data = callbacks.insert(&entry);
+                        let old_node =
+                            std::mem::replace(&mut self.nodes[entry.node], TriQuadNode::Leaf(data));
+                        self.remove_detached_tree(old_node, callbacks);
+                    }
+                    TriQuadNode::EmptyLeaf => {
+                        let data = callbacks.insert(&entry);
+                        self.nodes[entry.node] = TriQuadNode::Leaf(data);
+                    }
+                    TriQuadNode::Leaf(_) => {
+                        // Do nothing, data already present at intended level
+                    }
+                },
+                PolicyDecision::Delete => {
+                    let old_node =
+                        std::mem::replace(&mut self.nodes[entry.node], TriQuadNode::EmptyLeaf);
+                    self.remove_detached_tree(old_node, callbacks);
+                }
             }
         }
 
         pub(crate) fn fill_with_policy(
             &mut self,
             callbacks: &mut impl ChangeCallbacks<T>,
-            policy: &mut impl InsertionPolicy,
+            policy: &impl InsertionPolicy,
         ) {
             let root_lower = EntryCore::new_from_posture(
                 self.root.lower,
