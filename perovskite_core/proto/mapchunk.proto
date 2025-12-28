@@ -79,7 +79,10 @@ message FarSheet {
   //
   // If this is done, another field will be added and this one left empty.
   repeated float heights = 3 [ packed = true ];
-
+  // Block types at each point. This is used to estimate the color of the
+  // terrain. Same length as heights. Since LODs do not depend on the variant,
+  // this is represented as block_id >> 12.
+  repeated uint32 block_types_no_variant = 4 [ packed = true ];
   // More fields to come... (e.g. color, lights, etc)
 }
 

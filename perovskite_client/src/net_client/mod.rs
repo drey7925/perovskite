@@ -215,7 +215,7 @@ pub(crate) async fn connect_game(
         .context("Failed to start audio engine")?,
     );
 
-    let far_geometry = FarGeometryState::new();
+    let far_geometry = FarGeometryState::new(block_types.clone());
 
     let (action_sender, action_receiver) = mpsc::channel(4);
 

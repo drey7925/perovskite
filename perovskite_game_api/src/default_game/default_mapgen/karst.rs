@@ -195,28 +195,32 @@ impl KarstGenerator {
                     self.dirt
                 }
             } else if block_coord.y > -32 {
-                let limestone_noise = self.limestone_noise.get([
-                    xg as f64 * LIMESTONE_NOISE_SCALE.x,
-                    y as f64 * LIMESTONE_NOISE_SCALE.y,
-                    zg as f64 * LIMESTONE_NOISE_SCALE.z,
-                ]);
-                let slow_limestone_noise = 0.25
-                    * self.limestone_slow_noise.get([
-                        xg as f64 * LIMESTONE_SLOW_NOISE_SCALE,
-                        zg as f64 * LIMESTONE_SLOW_NOISE_SCALE,
-                    ]);
-                if limestone_noise + slow_limestone_noise > 0.25 {
-                    self.dark_limestone
-                } else if limestone_noise + slow_limestone_noise < -0.25 {
-                    self.light_limestone
-                } else {
-                    self.limestone
-                }
+                self.get_limestone(xg, block_coord.y, zg)
             } else {
                 gen_ore(block_coord)
             };
 
             chunk.set_block(offset, block, None);
+        }
+    }
+
+    pub(super) fn get_limestone(&self, xg: i32, y: i32, zg: i32) -> BlockId {
+        let limestone_noise = self.limestone_noise.get([
+            xg as f64 * LIMESTONE_NOISE_SCALE.x,
+            y as f64 * LIMESTONE_NOISE_SCALE.y,
+            zg as f64 * LIMESTONE_NOISE_SCALE.z,
+        ]);
+        let slow_limestone_noise = 0.25
+            * self.limestone_slow_noise.get([
+                xg as f64 * LIMESTONE_SLOW_NOISE_SCALE,
+                zg as f64 * LIMESTONE_SLOW_NOISE_SCALE,
+            ]);
+        if limestone_noise + slow_limestone_noise > 0.25 {
+            self.dark_limestone
+        } else if limestone_noise + slow_limestone_noise < -0.25 {
+            self.light_limestone
+        } else {
+            self.limestone
         }
     }
 }

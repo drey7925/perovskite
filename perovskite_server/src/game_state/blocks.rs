@@ -434,7 +434,7 @@ const FBN_NOTFOUND_SENTINEL: u32 = u32::MAX - 1;
 /// Manages the different block types defined in this game world.
 ///
 /// This struct owns all the [`BlockType`]s that are registered with it;
-/// they can be accessed using either a [`BlockTypeHandle`], or a [`BlockTypeName`]:
+/// they can be accessed using either a [`BlockId`], or a [`BlockTypeName`]:
 /// * A handle refers to a block that is known to be already registered
 /// * A name refers to a block that may or may not be registered yet, using its unique short name.
 ///
@@ -710,7 +710,7 @@ impl BlockTypeManager {
     ///
     /// Equivalent to calling make_block_name and then resolve_name back to back, but without the
     /// caching benefits of FastBlockName
-    pub fn get_by_name(&self, block_name: &str) -> Option<BlockTypeHandle> {
+    pub fn get_by_name(&self, block_name: &str) -> Option<BlockId> {
         if let Some(&id) = self.name_to_base_id_map.get(block_name) {
             Some(id.into())
         } else {
@@ -903,6 +903,8 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
             sound_volume: 0.0,
             interact_key_option: vec![],
             has_client_extended_data: false,
+            // Bright magenta to call attention to unknown blocks
+            lod_color_argb: 0xffff00ff,
         },
         deserialize_extended_data_handler: Some(Box::new(
             unknown_block_deserialize_data_passthrough,
@@ -945,6 +947,7 @@ fn make_air_block() -> BlockType {
             sound_volume: 0.0,
             interact_key_option: vec![],
             has_client_extended_data: false,
+            lod_color_argb: 0xff808080,
         },
         ..Default::default()
     }
@@ -953,7 +956,7 @@ fn make_air_block() -> BlockType {
 /// Traits for types that can be interpreted as a block type.
 pub trait TryAsHandle {
     /// Use the given manager to transform this into a handle.
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle>;
+    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId>;
 }
 
 /// A handle for a blocktype. This can be passed to the block manager it came from to get back the
@@ -964,9 +967,9 @@ pub trait TryAsHandle {
 /// these contexts.
 pub type BlockTypeHandle = BlockId;
 
-impl TryAsHandle for BlockTypeHandle {
+impl TryAsHandle for BlockId {
     #[inline]
-    fn as_handle(&self, _manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
+    fn as_handle(&self, _manager: &BlockTypeManager) -> Option<BlockId> {
         Some(*self)
     }
 }
@@ -996,17 +999,17 @@ impl Clone for FastBlockName {
     }
 }
 impl TryAsHandle for FastBlockName {
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
+    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId> {
         manager.resolve_name(self)
     }
 }
 impl TryAsHandle for &FastBlockName {
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
+    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId> {
         manager.resolve_name(self)
     }
 }
 impl TryAsHandle for &str {
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockTypeHandle> {
+    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId> {
         manager.get_by_name(self)
     }
 }

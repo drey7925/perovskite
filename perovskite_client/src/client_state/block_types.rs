@@ -29,6 +29,7 @@ pub(crate) struct ClientBlockTypeManager {
     raytrace_fallback_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
     audio_emitters: Vec<Option<(NonZeroU32, f32)>>,
+    lod_color_argb: Vec<u32>,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(server_defs: Vec<BlockTypeDef>) -> Result<ClientBlockTypeManager> {
@@ -76,7 +77,8 @@ impl ClientBlockTypeManager {
         light_emitters.resize(BlockId(max_id).index() + 1, 0);
         let mut audio_emitters = Vec::new();
         audio_emitters.resize(BlockId(max_id).index() + 1, None);
-
+        let mut lod_color_argb = Vec::new();
+        lod_color_argb.resize(BlockId(max_id).index() + 1, 0xffff00ff);
         let mut name_to_id = FxHashMap::default();
 
         for def in server_defs {
@@ -191,6 +193,7 @@ impl ClientBlockTypeManager {
             }
 
             light_emitters[id.index()] = light_emission;
+            lod_color_argb[id.index()] = def.lod_color_argb;
             block_defs[id.index()] = Some(def);
         }
 
@@ -212,6 +215,7 @@ impl ClientBlockTypeManager {
             raytrace_fallback_render_blocks,
             name_to_id,
             audio_emitters,
+            lod_color_argb,
         })
     }
 
@@ -403,6 +407,20 @@ impl ClientBlockTypeManager {
             self.audio_emitters[id.index()]
         } else {
             None
+        }
+    }
+
+    #[inline]
+    pub(crate) fn lod_color_argb(&self, id: BlockId) -> u32 {
+        self.lod_color_argb_from_index(id.index())
+    }
+
+    #[inline]
+    pub(crate) fn lod_color_argb_from_index(&self, index: usize) -> u32 {
+        if index < self.lod_color_argb.len() {
+            self.lod_color_argb[index]
+        } else {
+            0xff808080
         }
     }
 

@@ -87,6 +87,12 @@ message BlockTypeDef {
   // may be ignored (if client-side extended data is provided but this is false,
   // the behavior is unspecified and may be inconsistent across client features)
   bool has_client_extended_data = 42;
+  // The color to use for this block when its full texture/shape cannot be
+  // rendered. Alpha is potentially ignored depending on the implementation.
+  // Upper bits are alpha, lower bits are RGB, one byte each. i.e., this would
+  // use the same format as VK_FORMAT_A8R8G8B8_UNORM, *if* that existed.
+  // (this is for consistency with chat messages which also use ARGB)
+  fixed32 lod_color_argb = 43;
 }
 
 // A rectangular prism. 0,0,0 is at the center of the block. A full cube spans
@@ -236,11 +242,13 @@ message InteractKeyOption {
   string label = 2;
 }
 
+// Stored on the server, not sent to the client
 message BlockTypeAssignment {
   string short_name = 1;
   uint32 id = 2;
 }
 
+// Stored on the server, not sent to the client
 message ServerBlockTypeAssignments {
   repeated BlockTypeAssignment block_type = 1;
 }

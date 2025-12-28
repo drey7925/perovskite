@@ -16,6 +16,7 @@
 
 use super::game_map::MapChunk;
 use crate::game_state::event::EventInitiator;
+use perovskite_core::block_id::BlockId;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate};
 use std::ops::RangeInclusive;
 
@@ -56,7 +57,7 @@ pub trait MapgenInterface: Send + Sync {
     /// Estimate the height of the terrain at the given (X, Z) coordinate.
     ///
     /// WIP, subject to change! Potentially will get more metadata, more outputs, vectorization, etc.
-    fn height(&self, x: f64, z: f64) -> f32;
+    fn far_mesh_estimate(&self, x: f64, z: f64) -> FarMeshPoint;
 
     /// Prints debugging information regarding map generation. The definition of this is up to
     /// the implementor, and can include whatever information is most useful for developing this
@@ -65,4 +66,13 @@ pub trait MapgenInterface: Send + Sync {
     /// By default, does nothing.
     fn dump_debug(&self, _pos: BlockCoordinate, _initiator: &EventInitiator<'_>) {}
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FarMeshPoint {
+    /// The height of the terrain at this point.
+    pub height: f32,
+    /// The block type at this point. This is used to estimate the color of the terrain.
+    pub block_type: BlockId,
+}
+
 pub(crate) mod far_mesh;

@@ -2937,14 +2937,16 @@ impl FarMeshSender {
                     min_z,
                     max_z,
                 );
-                let heights = control
+                let (heights, block_types_no_variant) = control
                     .iter_lattice_points_world_space()
-                    .map(|p| self.mapgen.height(p.x, p.y))
-                    .collect::<Vec<_>>();
+                    .map(|p| self.mapgen.far_mesh_estimate(p.x, p.y))
+                    .map(|p| (p.height, p.block_type.0 >> 12))
+                    .unzip();
                 let sheet = perovskite_core::protocol::map::FarSheet {
                     geometry_id,
                     control: Some(control.to_proto()),
                     heights,
+                    block_types_no_variant,
                 };
                 self.messages.push(sheet);
 

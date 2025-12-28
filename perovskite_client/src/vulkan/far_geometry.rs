@@ -1,4 +1,4 @@
-use std::collections::hash_map::Entry;
+use std::{collections::hash_map::Entry, sync::Arc};
 
 use anyhow::{Context, Result};
 use cgmath::{ElementWise, Matrix4, Vector3};
@@ -10,15 +10,26 @@ use perovskite_core::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use vulkano::buffer::{BufferUsage, Subbuffer};
 
-use crate::vulkan::{
-    shaders::far_mesh::{FarMeshDrawCall, FarMeshVertex},
-    VulkanContext,
+use crate::{
+    client_state::block_types::ClientBlockTypeManager,
+    vulkan::{
+        shaders::far_mesh::{FarMeshDrawCall, FarMeshVertex},
+        VulkanContext,
+    },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WindingOrder {
+    Clockwise,
+    CounterClockwise,
+}
+
 struct ClientFarSheet {
     index_buffer: Subbuffer<[u32]>,
     vertex_buffer: Subbuffer<[FarMeshVertex]>,
     origin: Vector3<f64>,
     chunk_corners: [(i32, i32); 4],
+    winding_order: WindingOrder,
 }
 
 fn build_index_buffer(key: IndexBufferKey, vk_ctx: &VulkanContext) -> Result<Subbuffer<[u32]>> {
@@ -30,6 +41,7 @@ impl ClientFarSheet {
         sheet: &map_rpc::FarSheet,
         index_buffer_cache: &mut FxHashMap<IndexBufferKey, Subbuffer<[u32]>>,
         vk_ctx: &VulkanContext,
+        block_type_manager: &ClientBlockTypeManager,
     ) -> Result<Self> {
         let control =
             SheetControl::try_from(sheet.control.clone().context("Missing far sheet control")?)?;
@@ -50,8 +62,12 @@ impl ClientFarSheet {
         let vertices = control
             .iter_lattice_points_local_space()
             .zip(sheet.heights.iter().copied())
-            .map(|(point, height)| FarMeshVertex {
+            .zip(sheet.block_types_no_variant.iter().copied())
+            .map(|((point, height), block_index)| FarMeshVertex {
                 position: [point.x as f32, -height, point.z as f32],
+                color: block_type_manager
+                    .lod_color_argb_from_index(block_index as usize)
+                    .to_le_bytes(),
             })
             .collect::<Vec<_>>();
 
@@ -61,12 +77,20 @@ impl ClientFarSheet {
             (x, z)
         });
 
+        let basis_cross = control.basis_u().perp_dot(control.basis_v());
+        let winding_order = if basis_cross > 0.0 {
+            WindingOrder::Clockwise
+        } else {
+            WindingOrder::CounterClockwise
+        };
+
         Ok(Self {
             index_buffer,
             vertex_buffer: vk_ctx
                 .iter_to_device_via_staging(vertices.into_iter(), BufferUsage::VERTEX_BUFFER)?,
             origin: control.origin(),
             chunk_corners,
+            winding_order,
         })
     }
 
@@ -79,12 +103,14 @@ impl ClientFarSheet {
 pub(crate) struct FarGeometryState {
     sheets: FxHashMap<u64, ClientFarSheet>,
     index_buffer_cache: FxHashMap<IndexBufferKey, Subbuffer<[u32]>>,
+    block_type_manager: Arc<ClientBlockTypeManager>,
 }
 impl FarGeometryState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(block_type_manager: Arc<ClientBlockTypeManager>) -> Self {
         Self {
             sheets: FxHashMap::default(),
             index_buffer_cache: FxHashMap::default(),
+            block_type_manager,
         }
     }
     pub(crate) fn update(
@@ -100,7 +126,6 @@ impl FarGeometryState {
         }
 
         for id in &rpc.remove_ids {
-            log::info!("Removing far sheet {}", id);
             if self.sheets.remove(id).is_none() {
                 log::warn!("Tried to remove non-existent far sheet {}", id);
             }
@@ -108,7 +133,12 @@ impl FarGeometryState {
         for sheet in &rpc.far_sheet {
             self.sheets.insert(
                 sheet.geometry_id,
-                ClientFarSheet::new(sheet, &mut self.index_buffer_cache, vk_ctx)?,
+                ClientFarSheet::new(
+                    sheet,
+                    &mut self.index_buffer_cache,
+                    vk_ctx,
+                    &self.block_type_manager,
+                )?,
             );
         }
         Ok(())
@@ -141,6 +171,7 @@ impl FarGeometryState {
                     vtx: sheet.vertex_buffer.clone(),
                     idx: sheet.index_buffer.clone(),
                     num_indices: sheet.index_buffer.len() as u32,
+                    winding_order: sheet.winding_order,
                 }
             })
             .collect()

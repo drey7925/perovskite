@@ -26,6 +26,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use integer_encoding::VarInt;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::coordinates::ChunkCoordinate;
 use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
@@ -49,7 +50,7 @@ use crate::{
         game_behaviors::GameBehaviors,
         game_map::{TimerCallback, TimerSettings},
         items::ItemManager,
-        mapgen::MapgenInterface,
+        mapgen::{FarMeshPoint, MapgenInterface},
         GameState, GameStateExtension,
     },
     media::MediaManager,
@@ -322,8 +323,11 @@ impl MapgenInterface for DummyMapgen {
     fn fill_chunk(&self, _coord: ChunkCoordinate, _chunk: &mut MapChunk) {
         // pass
     }
-    fn height(&self, _x: f64, _z: f64) -> f32 {
-        0.0
+    fn far_mesh_estimate(&self, _x: f64, _z: f64) -> FarMeshPoint {
+        FarMeshPoint {
+            height: 0.0,
+            block_type: AIR_ID,
+        }
     }
 }
 

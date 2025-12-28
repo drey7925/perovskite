@@ -17,7 +17,7 @@
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_core::{
@@ -275,6 +275,8 @@ pub struct BlockBuilder {
     falls_down: bool,
     matter_type: MatterType,
     trivially_replaceable: bool,
+
+    override_lod_color: Option<u32>,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -332,6 +334,8 @@ impl BlockBuilder {
                 sound_volume: 0.0,
                 interact_key_option: vec![],
                 has_client_extended_data: false,
+                // Generic grey for now
+                lod_color_argb: 0xff808080,
             },
             variant_effect: BlockVariantEffect::None,
             footstep_sound_override: None,
@@ -339,6 +343,7 @@ impl BlockBuilder {
             falls_down: false,
             matter_type: MatterType::Solid,
             trivially_replaceable: false,
+            override_lod_color: None,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -447,6 +452,13 @@ impl BlockBuilder {
     /// Set the relative amount of wear applied to tools that dig this block. (1.0 by default)
     pub fn set_wear_multiplier(mut self, wear_multiplier: f64) -> Self {
         self.client_info.wear_multiplier = wear_multiplier;
+        self
+    }
+
+    /// Sets the color of the block in the far geometry. Accepts a color in ARGB format,
+    /// e.g. 0xffff0000 for red.
+    pub fn override_lod_color(mut self, color: u32) -> Self {
+        self.override_lod_color = Some(color);
         self
     }
 
@@ -647,7 +659,9 @@ impl BlockBuilder {
         self
     }
 
-    /// Set the appearance of the block to that specified by the given builder
+    /// Set the appearance of the block to that specified by the given builder. The textures for this
+    /// block should have already been registered with the game builder at this point, otherwise the
+    /// low-LOD (far mesh) color will be a bright magenta as a fallback.
     pub(crate) fn build_and_deploy_into(
         self,
         game_builder: &mut GameBuilder,
@@ -674,6 +688,32 @@ impl BlockBuilder {
 
         if let Some(sound) = self.footstep_sound_override {
             block.client_info.footstep_sound = sound.map(|x| x.0).unwrap_or(0);
+        }
+
+        if let Some(color) = self.override_lod_color {
+            block.client_info.lod_color_argb = color;
+        } else {
+            block.client_info.lod_color_argb = match make_lod_color_heuristic(
+                block.client_info.render_info.as_ref(),
+                &game_builder,
+            ) {
+                Ok(color) => {
+                    tracing::info!(
+                        "Made LOD color heuristic {:#010x} for block {}",
+                        color,
+                        block.client_info.short_name
+                    );
+                    color
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to make LOD color heuristic for block {}: {}",
+                        block.client_info.short_name,
+                        e
+                    );
+                    0xff00ffff
+                }
+            };
         }
 
         block.client_info.groups.sort();
@@ -720,6 +760,90 @@ impl BlockBuilder {
             id: block_id,
             item_name,
         })
+    }
+}
+
+fn make_lod_color_heuristic(
+    render_info: Option<&RenderInfo>,
+    game_builder: &GameBuilder,
+) -> Result<u32> {
+    fn get_tex(game_builder: &GameBuilder, tex: &TextureReference) -> Result<image::Rgba32FImage> {
+        let tex = game_builder
+            .inner
+            .media()
+            .get(&tex.diffuse)
+            .context("Missing texture")?;
+        let rgba = image::load_from_memory(&tex.data()?)
+            .context("Failed to load texture")?
+            .into_rgba32f();
+        Ok(rgba)
+    }
+
+    fn convert_channel(val: f32) -> u8 {
+        (val * 256.0).clamp(0.0, 255.0) as u8
+    }
+
+    fn average_tex_argb(tex: &image::Rgba32FImage) -> u32 {
+        let sum_color =
+            tex.pixels()
+                .fold(image::Rgba::<f32>([0.0, 0.0, 0.0, 0.0]), |acc, pixel| {
+                    image::Rgba::<f32>([
+                        acc[0] + pixel[0],
+                        acc[1] + pixel[1],
+                        acc[2] + pixel[2],
+                        acc[3] + pixel[3],
+                    ])
+                });
+        let divisor = (tex.len() / 4) as f32;
+        let rgba = image::Rgba::<f32>([
+            sum_color[0] / divisor,
+            sum_color[1] / divisor,
+            sum_color[2] / divisor,
+            sum_color[3] / divisor,
+        ]);
+        // Converting RGBA to ARGB
+        (convert_channel(rgba[3]) as u32) << 24
+            | (convert_channel(rgba[0]) as u32) << 16
+            | (convert_channel(rgba[1]) as u32) << 8
+            | (convert_channel(rgba[2]) as u32)
+    }
+
+    match render_info {
+        // TODO make these actual colors
+        Some(RenderInfo::Cube(cube)) => {
+            let tex = get_tex(
+                game_builder,
+                cube.tex_top
+                    .as_ref()
+                    .context("Missing tex_top in cube render info")?,
+            )?;
+            Ok(average_tex_argb(&tex))
+        }
+        Some(RenderInfo::PlantLike(plant_like)) => {
+            let tex = get_tex(
+                game_builder,
+                plant_like
+                    .tex
+                    .as_ref()
+                    .context("Missing tex in plantlike render info")?,
+            )?;
+            Ok(average_tex_argb(&tex))
+        }
+        Some(RenderInfo::AxisAlignedBoxes(axis_aligned_boxes)) => {
+            let tex = get_tex(
+                game_builder,
+                axis_aligned_boxes
+                    .boxes
+                    .get(0)
+                    .context("axis aligned boxes were empty")?
+                    .tex_front
+                    .as_ref()
+                    .context("Missing tex_front in axisalignedboxes render info")?,
+            )?;
+            Ok(average_tex_argb(&tex))
+        }
+        Some(RenderInfo::Empty(_)) => Ok(0x00000000),
+        None => Ok(0xff00ffff),
     }
 }
 

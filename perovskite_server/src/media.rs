@@ -61,7 +61,7 @@ impl Resource {
     pub(crate) fn hash(&self) -> &[u8] {
         &self.hash
     }
-    pub(crate) fn data(&self) -> Result<Vec<u8>> {
+    pub fn data(&self) -> Result<Vec<u8>> {
         self.data.get()
     }
 }

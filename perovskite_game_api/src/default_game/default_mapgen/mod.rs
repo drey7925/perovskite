@@ -20,10 +20,9 @@ use perovskite_core::{
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
 };
 use perovskite_server::game_state::event::EventInitiator;
+use perovskite_server::game_state::mapgen::FarMeshPoint;
 use perovskite_server::game_state::{
-    blocks::{BlockTypeHandle, BlockTypeManager},
-    game_map::MapChunk,
-    mapgen::MapgenInterface,
+    blocks::BlockTypeManager, game_map::MapChunk, mapgen::MapgenInterface,
 };
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -420,34 +419,34 @@ pub struct OreDefinition {
 }
 
 struct DefaultMapgen {
-    dirt: BlockTypeHandle,
-    dirt_grass: BlockTypeHandle,
-    dirt_snow: BlockTypeHandle,
-    stone: BlockTypeHandle,
-    sand: BlockTypeHandle,
-    silt_dry: BlockTypeHandle,
-    silt_damp: BlockTypeHandle,
-    clay: BlockTypeHandle,
+    dirt: BlockId,
+    dirt_grass: BlockId,
+    dirt_snow: BlockId,
+    stone: BlockId,
+    sand: BlockId,
+    silt_dry: BlockId,
+    silt_damp: BlockId,
+    clay: BlockId,
 
-    desert_stone: BlockTypeHandle,
-    desert_sand: BlockTypeHandle,
+    desert_stone: BlockId,
+    desert_sand: BlockId,
 
-    water: BlockTypeHandle,
-    snow: BlockTypeHandle,
-    snow_block: BlockTypeHandle,
+    water: BlockId,
+    snow: BlockId,
+    snow_block: BlockId,
     // todo organize the foliage (and more of the blocks in general) in a better way
-    maple_tree: BlockTypeHandle,
-    maple_leaves: BlockTypeHandle,
+    maple_tree: BlockId,
+    maple_leaves: BlockId,
 
-    pine_tree: BlockTypeHandle,
-    pine_needles: BlockTypeHandle,
+    pine_tree: BlockId,
+    pine_needles: BlockId,
 
-    cactus: BlockTypeHandle,
-    tall_grass: BlockTypeHandle,
-    flowers: Vec<BlockTypeHandle>,
+    cactus: BlockId,
+    tall_grass: BlockId,
+    flowers: Vec<BlockId>,
 
-    marsh_grass: BlockTypeHandle,
-    tall_reed: BlockTypeHandle,
+    marsh_grass: BlockId,
+    tall_reed: BlockId,
 
     rolling_hills_noise: RollingHillsGenerator,
     tree_density_noise: noise::Billow<noise::SuperSimplex>,
@@ -462,9 +461,9 @@ struct DefaultMapgen {
 
     // These tiles are used for the temporary prespawned railways until I have a chance to implement
     // a suitable gameplay experience for creating long tracks
-    rail_testonly: BlockTypeHandle,
-    signal_testonly: BlockTypeHandle,
-    glass_testonly: BlockTypeHandle,
+    rail_testonly: BlockId,
+    signal_testonly: BlockId,
+    glass_testonly: BlockId,
 
     macrobiome_noise: MacrobiomeNoise,
     cave_noise: CaveNoise,
@@ -730,9 +729,37 @@ impl MapgenInterface for DefaultMapgen {
         Some(min_c..=max_c)
     }
 
-    fn height(&self, x: f64, z: f64) -> f32 {
-        let (_, elevation, _, _, _) = self.prefill_single(x as i32, z as i32);
-        elevation
+    fn far_mesh_estimate(&self, x: f64, z: f64) -> FarMeshPoint {
+        let (macrobiome, elevation, _, water_height, microbiome) =
+            self.prefill_single(x as i32, z as i32);
+        if elevation < water_height {
+            return FarMeshPoint {
+                height: water_height,
+                block_type: self.water,
+            };
+        }
+        FarMeshPoint {
+            height: elevation,
+            block_type: match macrobiome {
+                Macrobiome::RollingHills => match microbiome {
+                    RHBiome::DefaultGrassy => self.dirt_grass,
+                    RHBiome::SandyBeach => self.sand,
+                    RHBiome::Desert => self.desert_sand,
+                    RHBiome::Saltmarsh => self.silt_damp,
+                    RHBiome::SnowyHighland => {
+                        if self.snow_tendency(x as i32, elevation as i32, z as i32) > 0.0 {
+                            self.snow
+                        } else {
+                            self.dirt_grass
+                        }
+                    }
+                },
+                Macrobiome::Karst => {
+                    self.karst_noise
+                        .get_limestone(x as i32, elevation as i32, z as i32)
+                }
+            },
+        }
     }
 
     fn dump_debug(&self, pos: BlockCoordinate, initiator: &EventInitiator<'_>) {
@@ -789,7 +816,7 @@ impl MapgenInterface for DefaultMapgen {
 
 impl DefaultMapgen {
     #[inline]
-    fn generate_ore(&self, coord: BlockCoordinate) -> BlockTypeHandle {
+    fn generate_ore(&self, coord: BlockCoordinate) -> BlockId {
         let (is_cave, cave_bias) = self.cave_noise.get(coord);
         if is_cave {
             // TODO - lava, etc?
@@ -1264,6 +1291,9 @@ impl DefaultMapgen {
         }
     }
 
+    // Inline this into the far_mesh_estimate function so that dead branches are eliminated
+    // based on the call site if possible.
+    #[inline]
     fn generate_snowy_highland<F>(
         &self,
         vert_offset: i32,
@@ -1284,8 +1314,7 @@ impl DefaultMapgen {
             }
         } else if vert_offset == 1 {
             if block_coord.y > water_height {
-                let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
-                    + (block_coord.y as f64) / 300.0;
+                let snow_tendency = self.snow_tendency(x, block_coord.y, z);
                 if snow_tendency < 0.0 {
                     AIR_ID
                 } else {
@@ -1300,8 +1329,7 @@ impl DefaultMapgen {
                 self.water
             }
         } else if vert_offset == 0 && block_coord.y >= water_height {
-            let snow_tendency = self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0])
-                + (block_coord.y as f64) / 300.0;
+            let snow_tendency = self.snow_tendency(x, block_coord.y, z);
             if snow_tendency > 0.0 {
                 self.dirt_snow
             } else {
@@ -1313,6 +1341,10 @@ impl DefaultMapgen {
         } else {
             gen_ore()
         }
+    }
+
+    fn snow_tendency(&self, x: i32, y: i32, z: i32) -> f64 {
+        self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0]) + (y as f64) / 300.0
     }
 
     fn make_simple_foliage(

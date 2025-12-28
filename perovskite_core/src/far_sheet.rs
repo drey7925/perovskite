@@ -193,6 +193,16 @@ impl SheetControl {
             .flat_map(|i| (0..=self.n as isize + (self.k * i) as isize).map(move |j| (i, j)))
     }
 
+    #[inline(always)]
+    pub fn basis_u(&self) -> Vector2<f64> {
+        self.basis_u
+    }
+
+    #[inline(always)]
+    pub fn basis_v(&self) -> Vector2<f64> {
+        self.basis_v
+    }
+
     /// Returns an iterator over the lattice points in the sheet, in local space.
     ///
     /// The basis vectors are respected, but the origin is ignored.
