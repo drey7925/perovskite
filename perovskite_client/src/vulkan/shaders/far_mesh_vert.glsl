@@ -13,6 +13,11 @@ layout(push_constant) uniform FarMeshPushConstants {
 };
 
 void main() {
-    color_out = color.rgb;
+    // gamma correction. This is done in the shader, rather than
+    // using an SRGB vulkan data type, because this color is being
+    // retrieved via the vertex buffer, not a texture sampler.
+    // Vulkan does not guarantee VK_FORMAT_R8G8B8A8_SRGB
+    // + VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT together.
+    color_out = pow(color.rgb, vec3(2.2));
     gl_Position = vp_matrix * model_matrix * vec4(position, 1.0);
 }

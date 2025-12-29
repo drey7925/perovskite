@@ -5,11 +5,6 @@ layout(location = 0) flat in vec3 color;
 
 
 void main() {
-    // Discard half of fragments while developing to make it easier
-    // to see other geometry
-    int stipple = (int(gl_FragCoord.x + gl_FragCoord.y)) % 2;
-    if (stipple != 0) {
-        discard;
-    }
+    // TODO: Once we have normals, use the color mapping code
     f_color = vec4(color, 1.0);
 }
