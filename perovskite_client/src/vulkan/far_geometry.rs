@@ -1,10 +1,11 @@
 use std::{collections::hash_map::Entry, sync::Arc};
 
 use anyhow::{Context, Result};
-use cgmath::{ElementWise, Matrix4, Vector3};
+use cgmath::{ElementWise, InnerSpace, Matrix4, Vector3};
+use itertools::Itertools;
 use perovskite_core::{
     coordinates::ChunkCoordinate,
-    far_sheet::{IndexBufferKey, SheetControl},
+    far_sheet::{IndexBufferKey, IndexPrimitiveTopology, SheetControl},
     protocol::{game_rpc, map as map_rpc},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -15,7 +16,7 @@ use crate::{
     vulkan::{
         shaders::{
             far_mesh::{FarMeshDrawCall, FarMeshVertex},
-            x5y5z5_pack16,
+            x5y5z5_pack_vec,
         },
         VulkanContext,
     },
@@ -35,14 +36,54 @@ struct ClientFarSheet {
     winding_order: WindingOrder,
 }
 
-fn build_index_buffer(key: IndexBufferKey, vk_ctx: &VulkanContext) -> Result<Subbuffer<[u32]>> {
-    vk_ctx.iter_to_device_via_staging(key.build().into_iter(), BufferUsage::INDEX_BUFFER)
+fn build_index_buffer(
+    key: IndexBufferKey,
+    vk_ctx: &VulkanContext,
+) -> Result<(Vec<u32>, Subbuffer<[u32]>)> {
+    let cpu = key.build();
+    let gpu = vk_ctx.iter_to_device_via_staging(cpu.iter().copied(), BufferUsage::INDEX_BUFFER)?;
+    Ok((cpu, gpu))
+}
+
+fn fill_normals(
+    vertices: &mut [FarMeshVertex],
+    index_buffer: &[u32],
+    topology: IndexPrimitiveTopology,
+    winding_order: WindingOrder,
+) {
+    assert_eq!(topology, IndexPrimitiveTopology::VkTriangleStrip);
+    for (i0, i1, i2) in index_buffer.iter().copied().tuple_windows() {
+        if i0 == u32::MAX || i1 == u32::MAX || i2 == u32::MAX {
+            // primitive restart
+            continue;
+        }
+        let v0: Vector3<f32> = vertices[i0 as usize].position.into();
+        let v1: Vector3<f32> = vertices[i1 as usize].position.into();
+        let v2: Vector3<f32> = vertices[i2 as usize].position.into();
+        let normal = (v1 - v0).cross(v2 - v0).normalize();
+
+        let normal_max_component = normal.x.abs().max(normal.y.abs()).max(normal.z.abs());
+        let mut normal = normal * 15.0 / normal_max_component;
+
+        if winding_order == WindingOrder::CounterClockwise {
+            normal = -normal;
+        }
+
+        // Assume that the first vertex is the provoking vertex. This may not
+        // necessarily hold, but it should cause only a subtle difference in
+        // the final result if it doesn't.
+        //
+        // TODO: On devices that allow specifying the provoking vertex, set it
+        // to the first vertex of the strip to ensure that the assumption
+        // holds.
+        vertices[i0 as usize].normal = x5y5z5_pack_vec(normal);
+    }
 }
 
 impl ClientFarSheet {
     fn new(
         sheet: &map_rpc::FarSheet,
-        index_buffer_cache: &mut FxHashMap<IndexBufferKey, Subbuffer<[u32]>>,
+        index_buffer_cache: &mut FxHashMap<IndexBufferKey, (Vec<u32>, Subbuffer<[u32]>)>,
         vk_ctx: &VulkanContext,
         block_type_manager: &ClientBlockTypeManager,
     ) -> Result<Self> {
@@ -62,7 +103,7 @@ impl ClientFarSheet {
         // TODO: This should not use CubeGeometryVertex, but rather a far-mesh specific
         // vertex type. This is a hack to quickly test using the existing cube geometry
         // pipeline.
-        let vertices = control
+        let mut vertices = control
             .iter_lattice_points_local_space()
             .zip(sheet.heights.iter().copied())
             .zip(sheet.block_types_no_variant.iter().copied())
@@ -71,16 +112,9 @@ impl ClientFarSheet {
                 color: block_type_manager
                     .lod_color_argb_from_index(block_index as usize)
                     .to_le_bytes(),
-                normal: x5y5z5_pack16(0, 1, 0),
+                normal: 0,
             })
             .collect::<Vec<_>>();
-
-        let chunk_corners = control.lattice_corners_world_space().map(|corner| {
-            let x = (corner.x.clamp(i32::MIN as f64, i32::MAX as f64) as i32).div_euclid(16);
-            let z = (corner.y.clamp(i32::MIN as f64, i32::MAX as f64) as i32).div_euclid(16);
-            (x, z)
-        });
-
         let basis_cross = control.basis_u().perp_dot(control.basis_v());
         let winding_order = if basis_cross > 0.0 {
             WindingOrder::Clockwise
@@ -88,8 +122,21 @@ impl ClientFarSheet {
             WindingOrder::CounterClockwise
         };
 
+        fill_normals(
+            &mut vertices,
+            &index_buffer.0,
+            control.index_buffer_key().primitive_topology(),
+            winding_order,
+        );
+
+        let chunk_corners = control.lattice_corners_world_space().map(|corner| {
+            let x = (corner.x.clamp(i32::MIN as f64, i32::MAX as f64) as i32).div_euclid(16);
+            let z = (corner.y.clamp(i32::MIN as f64, i32::MAX as f64) as i32).div_euclid(16);
+            (x, z)
+        });
+
         Ok(Self {
-            index_buffer,
+            index_buffer: index_buffer.1,
             vertex_buffer: vk_ctx
                 .iter_to_device_via_staging(vertices.into_iter(), BufferUsage::VERTEX_BUFFER)?,
             origin: control.origin(),
@@ -106,7 +153,7 @@ impl ClientFarSheet {
 }
 pub(crate) struct FarGeometryState {
     sheets: FxHashMap<u64, ClientFarSheet>,
-    index_buffer_cache: FxHashMap<IndexBufferKey, Subbuffer<[u32]>>,
+    index_buffer_cache: FxHashMap<IndexBufferKey, (Vec<u32>, Subbuffer<[u32]>)>,
     block_type_manager: Arc<ClientBlockTypeManager>,
 }
 impl FarGeometryState {

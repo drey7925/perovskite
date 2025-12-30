@@ -51,11 +51,11 @@ vulkano_shaders::shader! {
     shaders: {
         vert: {
             ty: "vertex",
-            path: "src/vulkan/shaders/far_mesh_vert.glsl"
+            path: "src/vulkan/shaders/far_mesh.vert"
         },
         frag: {
             ty: "fragment",
-            path: "src/vulkan/shaders/far_mesh_frag.glsl"
+            path: "src/vulkan/shaders/far_mesh.frag"
         }
     }
 }

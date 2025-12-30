@@ -36,7 +36,7 @@ pub(crate) mod vert_3d {
         shaders: {
             cube_geometry: {
                 ty: "vertex",
-                path: "src/vulkan/shaders/cube_geometry_vtx.glsl"
+                path: "src/vulkan/shaders/cube_geometry.vert"
             },
             // WIP entity shader - essentially just a simple transform-and-shade pipeline. At some
             // point, this should be re-structured to better scale entity rendering (e.g. doing move
@@ -216,4 +216,18 @@ pub(crate) const fn x5y5z5_pack16(x: i8, y: i8, z: i8) -> u16 {
         (i & 0x1f) as u16
     }
     (encode(x) << 10) | (encode(y) << 5) | (encode(z))
+}
+pub(crate) fn x5y5z5_pack_vec(v: Vector3<f32>) -> u16 {
+    let max_component = v.x.abs().max(v.y.abs()).max(v.z.abs());
+    let v = v * 15.0 / max_component;
+    x5y5z5_pack16(v.x as i8, v.y as i8, v.z as i8)
+}
+
+#[test]
+fn test_x5y5z5_pack_vec() {
+    assert_eq!(x5y5z5_pack_vec(Vector3::new(1.0, 0.0, 0.0)), 0xf << 10);
+    assert_eq!(
+        x5y5z5_pack_vec(Vector3::new(1.0, -1.0, 0.0)),
+        0xf << 10 | 0x11 << 5
+    );
 }
