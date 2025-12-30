@@ -211,3 +211,9 @@ impl<T: BufferContents + Copy> VkDrawBufferGpu<T> {
         }
     }
 }
+pub(crate) const fn x5y5z5_pack16(x: i8, y: i8, z: i8) -> u16 {
+    const fn encode(i: i8) -> u16 {
+        (i & 0x1f) as u16
+    }
+    (encode(x) << 10) | (encode(y) << 5) | (encode(z))
+}

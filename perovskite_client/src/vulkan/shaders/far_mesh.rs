@@ -67,6 +67,9 @@ pub(crate) struct FarMeshVertex {
     pub(crate) position: [f32; 3],
     #[format(B8G8R8A8_UNORM)]
     pub(crate) color: [u8; 4],
+    /// Normal, encoded in 15 bits
+    #[format(R16_SINT)]
+    pub(crate) normal: u16,
 }
 
 pub(crate) struct FarMeshDrawCall {
@@ -101,6 +104,8 @@ impl FarMeshPipelineWrapper {
                 ..Default::default()
             },
             FarMeshUniforms {
+                global_brightness: scene_state.global_light_color.into(),
+                global_light_dir: scene_state.sun_direction.into(),
                 vp_matrix: scene_state.vp_matrix.into(),
             },
         )?;

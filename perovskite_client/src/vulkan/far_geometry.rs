@@ -13,7 +13,10 @@ use vulkano::buffer::{BufferUsage, Subbuffer};
 use crate::{
     client_state::block_types::ClientBlockTypeManager,
     vulkan::{
-        shaders::far_mesh::{FarMeshDrawCall, FarMeshVertex},
+        shaders::{
+            far_mesh::{FarMeshDrawCall, FarMeshVertex},
+            x5y5z5_pack16,
+        },
         VulkanContext,
     },
 };
@@ -68,6 +71,7 @@ impl ClientFarSheet {
                 color: block_type_manager
                     .lod_color_argb_from_index(block_index as usize)
                     .to_le_bytes(),
+                normal: x5y5z5_pack16(0, 1, 0),
             })
             .collect::<Vec<_>>();
 

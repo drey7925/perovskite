@@ -46,7 +46,7 @@ use crate::vulkan::shaders::cube_geometry::{
     CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
 };
 use crate::vulkan::shaders::raytracer::{SimpleCubeInfo, TexRef};
-use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
+use crate::vulkan::shaders::{x5y5z5_pack16, VkBufferCpu, VkDrawBufferGpu};
 use crate::vulkan::VulkanContext;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::game_rpc::EntityTarget;
@@ -110,13 +110,6 @@ impl CubeFace {
             CubeFace::PlantXMinusZMinus => x5y5z5_pack16(-1, 0, -1),
         }
     }
-}
-
-const fn x5y5z5_pack16(x: i8, y: i8, z: i8) -> u16 {
-    const fn encode(i: i8) -> u16 {
-        (i & 0x1f) as u16
-    }
-    (encode(x) << 10) | (encode(y) << 5) | (encode(z))
 }
 
 #[derive(Clone, Copy, Debug)]
