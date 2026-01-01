@@ -251,7 +251,7 @@ async fn build_texture_atlas(
         }
     }
 
-    let texture_atlas = Arc::new(Texture2DHolder::from_srgb(
+    let texture_atlas = Arc::new(Texture2DHolder::from_rgba8_srgb(
         &ctx,
         texture_atlas.into_rgba8(),
     )?);

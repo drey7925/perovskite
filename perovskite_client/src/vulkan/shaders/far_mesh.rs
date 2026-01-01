@@ -17,6 +17,7 @@
 use anyhow::{Context, Result};
 use cgmath::Matrix4;
 use smallvec::smallvec;
+use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
@@ -33,6 +34,7 @@ use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::shader::SpecializationConstant;
 use vulkano::{
     device::Device,
     pipeline::{graphics::input_assembly::InputAssemblyState, GraphicsPipeline, Pipeline},
@@ -45,7 +47,7 @@ use crate::vulkan::shaders::SceneState;
 use crate::vulkan::{
     shaders::LiveRenderConfig, FramebufferAndLoadOpId, ImageId, LoadOp, VulkanWindow,
 };
-use crate::vulkan::{CommandBufferBuilder, VulkanContext};
+use crate::vulkan::{CommandBufferBuilder, Texture2DHolder, VulkanContext};
 
 vulkano_shaders::shader! {
     shaders: {
@@ -66,10 +68,14 @@ pub(crate) struct FarMeshVertex {
     #[format(R32G32B32_SFLOAT)]
     pub(crate) position: [f32; 3],
     #[format(B8G8R8A8_UNORM)]
-    pub(crate) color: [u8; 4],
+    pub(crate) top_color: [u8; 4],
+    #[format(B8G8R8A8_UNORM)]
+    pub(crate) side_color: [u8; 4],
     /// Normal, encoded in 15 bits
     #[format(R16_SINT)]
     pub(crate) normal: u16,
+    #[format(R8_SNORM)]
+    pub(crate) lod_orientation_bias: i8,
 }
 
 pub(crate) struct FarMeshDrawCall {
@@ -83,6 +89,7 @@ pub(crate) struct FarMeshDrawCall {
 pub(crate) struct FarMeshPipelineWrapper {
     pub(crate) pipeline_cw: Arc<GraphicsPipeline>,
     pub(crate) pipeline_ccw: Arc<GraphicsPipeline>,
+    pub(crate) global_descriptor_set: Arc<DescriptorSet>,
 }
 impl FarMeshPipelineWrapper {
     pub(crate) fn draw<L>(
@@ -125,9 +132,10 @@ impl FarMeshPipelineWrapper {
         builder.bind_descriptor_sets(
             PipelineBindPoint::Graphics,
             layout.clone(),
-            1,
-            vec![per_frame_set.clone()],
+            0,
+            vec![self.global_descriptor_set.clone(), per_frame_set],
         )?;
+
         for (winding_order, pipeline) in [
             (WindingOrder::Clockwise, &self.pipeline_ccw),
             (WindingOrder::CounterClockwise, &self.pipeline_cw),
@@ -156,13 +164,20 @@ pub(crate) struct FarMeshPipelineProvider {
     device: Arc<Device>,
     vs: Arc<ShaderModule>,
     fs: Arc<ShaderModule>,
+    blue_noise: Texture2DHolder,
 }
 
 impl FarMeshPipelineProvider {
-    pub(crate) fn new(device: Arc<Device>) -> Result<Self> {
-        let vs = load_vert(device.clone())?;
-        let fs = load_frag(device.clone())?;
-        Ok(FarMeshPipelineProvider { device, vs, fs })
+    pub(crate) fn new(window: &VulkanWindow) -> Result<Self> {
+        let vs = load_vert(window.vk_device.clone())?;
+        let fs = load_frag(window.vk_device.clone())?;
+        let blue_noise = super::make_blue_noise_image(&window)?;
+        Ok(FarMeshPipelineProvider {
+            device: window.vk_device.clone(),
+            vs,
+            fs,
+            blue_noise,
+        })
     }
 
     pub(crate) fn make_pipeline(
@@ -188,6 +203,10 @@ impl FarMeshPipelineProvider {
             .context("Missing vertex shader")?;
         let fs = self
             .fs
+            .specialize(HashMap::from_iter([(
+                0,
+                SpecializationConstant::U32(global_config.supersampling.to_int()),
+            )]))?
             .entry_point("main")
             .context("Missing fragment shader")?;
 
@@ -244,9 +263,26 @@ impl FarMeshPipelineProvider {
         let pipeline_cw = GraphicsPipeline::new(self.device.clone(), None, create_info_cw)?;
         let pipeline_ccw = GraphicsPipeline::new(self.device.clone(), None, create_info_ccw)?;
 
+        let layout = pipeline_cw.layout().clone();
+        let set_layout = layout
+            .set_layouts()
+            .get(0)
+            .context("far_mesh layout missing set 0")
+            .unwrap();
+        let global_descriptor_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            set_layout.clone(),
+            [WriteDescriptorSet::image_view_sampler(
+                0,
+                self.blue_noise.image_view.clone(),
+                self.blue_noise.sampler.clone(),
+            )],
+            [],
+        )?;
         Ok(FarMeshPipelineWrapper {
             pipeline_cw,
             pipeline_ccw,
+            global_descriptor_set,
         })
     }
 }

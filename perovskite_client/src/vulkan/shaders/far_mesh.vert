@@ -3,12 +3,18 @@
 #include "encoding.glsl"
 
 layout(location = 0) in vec3 position;
-layout(location = 1) in vec4 color;
-layout(location = 2) in int normal;
+layout(location = 1) in vec4 top_color;
+layout(location = 2) in vec4 side_color;
+layout(location = 3) in int normal;
+layout(location = 4) in float lod_orientation_bias;
 
-layout(location = 0) out vec3 color_out;
-layout(location = 1) out vec3 world_normal;
-layout(location = 2) out vec3 world_pos;
+layout(location = 0) out vec3 top_color_out;
+layout(location = 1) out vec3 side_color_out;
+layout(location = 2) out vec3 world_normal;
+layout(location = 3) out vec3 model_pos;
+layout(location = 4) out vec3 camera_relative_pos;
+layout(location = 5) out float lod_orientation_bias_out;
+
 layout(set = 1, binding = 0) uniform FarMeshUniforms {
   mat4 vp_matrix;
   vec3 global_brightness;
@@ -23,15 +29,17 @@ void main() {
   // retrieved via the vertex buffer, not a texture sampler.
   // Vulkan does not guarantee VK_FORMAT_R8G8B8A8_SRGB
   // + VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT together.
-  color_out = pow(color.rgb, vec3(2.2));
+  top_color_out = pow(top_color.rgb, vec3(2.2));
+  side_color_out = pow(side_color.rgb, vec3(2.2));
+  model_pos = position;
 
   vec4 world_pos4 = model_matrix * vec4(position, 1.0);
-  world_pos = world_pos4.xyz / world_pos4.w;
+
   gl_Position = vp_matrix * world_pos4;
 
-  if (normal == 0) {
-    color_out = vec3(1.0, 0.0, 0.0);
-  }
+  camera_relative_pos = world_pos4.xyz / world_pos4.w;
 
   world_normal = decode_normal_x5y5z5_pack15(normal);
+
+  lod_orientation_bias_out = lod_orientation_bias;
 }

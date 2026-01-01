@@ -107,12 +107,17 @@ impl ClientFarSheet {
             .iter_lattice_points_local_space()
             .zip(sheet.heights.iter().copied())
             .zip(sheet.block_types_no_variant.iter().copied())
-            .map(|((point, height), block_index)| FarMeshVertex {
-                position: [point.x as f32, -height, point.z as f32],
-                color: block_type_manager
-                    .lod_color_argb_from_index(block_index as usize)
-                    .to_le_bytes(),
-                normal: 0,
+            .map(|((point, height), block_index)| {
+                let lod_info = block_type_manager.lod_color_argb_from_index(block_index as usize);
+                FarMeshVertex {
+                    position: [point.x as f32, -height, point.z as f32],
+                    top_color: lod_info.top_argb.to_le_bytes(),
+                    side_color: lod_info.side_argb.to_le_bytes(),
+                    normal: 0,
+                    lod_orientation_bias: (lod_info.lod_orientation_bias * 127.0)
+                        .round()
+                        .clamp(-127.0, 127.0) as i8,
+                }
             })
             .collect::<Vec<_>>();
         let basis_cross = control.basis_u().perp_dot(control.basis_v());

@@ -275,8 +275,8 @@ pub struct BlockBuilder {
     falls_down: bool,
     matter_type: MatterType,
     trivially_replaceable: bool,
-
-    override_lod_color: Option<u32>,
+    lod_orientation_bias: f32,
+    override_lod_info: Option<protocol::blocks::LodInfo>,
 }
 impl BlockBuilder {
     /// Create a new block builder that will build a block and a corresponding inventory
@@ -334,8 +334,12 @@ impl BlockBuilder {
                 sound_volume: 0.0,
                 interact_key_option: vec![],
                 has_client_extended_data: false,
-                // Generic grey for now
-                lod_color_argb: 0xff808080,
+                lod_info: Some(protocol::blocks::LodInfo {
+                    // Generic grey for now
+                    top_color_argb: 0xff808080,
+                    side_color_argb: 0xff808080,
+                    lod_orientation_bias: 0.0,
+                }),
             },
             variant_effect: BlockVariantEffect::None,
             footstep_sound_override: None,
@@ -343,7 +347,8 @@ impl BlockBuilder {
             falls_down: false,
             matter_type: MatterType::Solid,
             trivially_replaceable: false,
-            override_lod_color: None,
+            lod_orientation_bias: 0.0,
+            override_lod_info: None,
         }
     }
     /// Sets the item which will be given to a player that digs this block.
@@ -456,9 +461,29 @@ impl BlockBuilder {
     }
 
     /// Sets the color of the block in the far geometry. Accepts a color in ARGB format,
-    /// e.g. 0xffff0000 for red.
-    pub fn override_lod_color(mut self, color: u32) -> Self {
-        self.override_lod_color = Some(color);
+    /// e.g. 0xffff0000 for red. Note that this will take precedence over any value set by
+    /// `set_lod_orientation_bias`.
+    pub fn override_lod_colors(
+        mut self,
+        top_argb: u32,
+        side_argb: u32,
+        lod_orientation_bias: f32,
+    ) -> Self {
+        self.override_lod_info = Some(protocol::blocks::LodInfo {
+            top_color_argb: top_argb,
+            side_color_argb: side_argb,
+            lod_orientation_bias,
+        });
+        self
+    }
+
+    /// Sets the orientation bias of the block in the far geometry. This affects
+    /// how this block is seen from a distance.
+    /// When positive, bias toward seeing the top texture. When negative, bias toward seeing the side texture.
+    ///
+    /// Note that `override_lod_colors` will take precedence over this value.
+    pub fn set_lod_orientation_bias(mut self, lod_orientation_bias: f32) -> Self {
+        self.lod_orientation_bias = lod_orientation_bias;
         self
     }
 
@@ -690,21 +715,15 @@ impl BlockBuilder {
             block.client_info.footstep_sound = sound.map(|x| x.0).unwrap_or(0);
         }
 
-        if let Some(color) = self.override_lod_color {
-            block.client_info.lod_color_argb = color;
+        if let Some(color) = self.override_lod_info {
+            block.client_info.lod_info = Some(color);
         } else {
-            block.client_info.lod_color_argb = match make_lod_color_heuristic(
+            let top_color_argb = match make_lod_color_heuristic(
                 block.client_info.render_info.as_ref(),
                 &game_builder,
+                HeuristicFace::Top,
             ) {
-                Ok(color) => {
-                    tracing::info!(
-                        "Made LOD color heuristic {:#010x} for block {}",
-                        color,
-                        block.client_info.short_name
-                    );
-                    color
-                }
+                Ok(color) => color,
                 Err(e) => {
                     tracing::warn!(
                         "Failed to make LOD color heuristic for block {}: {}",
@@ -714,6 +733,26 @@ impl BlockBuilder {
                     0xff00ffff
                 }
             };
+            let side_color_argb = match make_lod_color_heuristic(
+                block.client_info.render_info.as_ref(),
+                &game_builder,
+                HeuristicFace::Front,
+            ) {
+                Ok(color) => color,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to make LOD color heuristic for block {}: {}",
+                        block.client_info.short_name,
+                        e
+                    );
+                    0xff00ffff
+                }
+            };
+            block.client_info.lod_info = Some(protocol::blocks::LodInfo {
+                top_color_argb,
+                side_color_argb,
+                lod_orientation_bias: self.lod_orientation_bias,
+            });
         }
 
         block.client_info.groups.sort();
@@ -763,9 +802,15 @@ impl BlockBuilder {
     }
 }
 
+enum HeuristicFace {
+    Top,
+    Front,
+}
+
 fn make_lod_color_heuristic(
     render_info: Option<&RenderInfo>,
     game_builder: &GameBuilder,
+    face: HeuristicFace,
 ) -> Result<u32> {
     fn get_tex(game_builder: &GameBuilder, tex: &TextureReference) -> Result<image::Rgba32FImage> {
         let tex = game_builder
@@ -813,9 +858,11 @@ fn make_lod_color_heuristic(
         Some(RenderInfo::Cube(cube)) => {
             let tex = get_tex(
                 game_builder,
-                cube.tex_top
-                    .as_ref()
-                    .context("Missing tex_top in cube render info")?,
+                match face {
+                    HeuristicFace::Top => cube.tex_top.as_ref(),
+                    HeuristicFace::Front => cube.tex_front.as_ref(),
+                }
+                .context("Missing tex_top in cube render info")?,
             )?;
             Ok(average_tex_argb(&tex))
         }
@@ -832,13 +879,22 @@ fn make_lod_color_heuristic(
         Some(RenderInfo::AxisAlignedBoxes(axis_aligned_boxes)) => {
             let tex = get_tex(
                 game_builder,
-                axis_aligned_boxes
-                    .boxes
-                    .get(0)
-                    .context("axis aligned boxes were empty")?
-                    .tex_front
-                    .as_ref()
-                    .context("Missing tex_front in axisalignedboxes render info")?,
+                match face {
+                    HeuristicFace::Top => axis_aligned_boxes
+                        .boxes
+                        .get(0)
+                        .context("axis aligned boxes were empty")?
+                        .tex_top
+                        .as_ref()
+                        .context("Missing tex_top in axisalignedboxes render info")?,
+                    HeuristicFace::Front => axis_aligned_boxes
+                        .boxes
+                        .get(0)
+                        .context("axis aligned boxes were empty")?
+                        .tex_front
+                        .as_ref()
+                        .context("Missing tex_front in axisalignedboxes render info")?,
+                },
             )?;
             Ok(average_tex_argb(&tex))
         }

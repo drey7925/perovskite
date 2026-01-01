@@ -1,4 +1,3 @@
-use crate::client_state::settings::Supersampling;
 use crate::vulkan::block_renderer::BlockRenderer;
 use crate::vulkan::shaders::{LiveRenderConfig, SceneState};
 use crate::vulkan::{
@@ -80,7 +79,6 @@ pub(crate) struct RaytracedPipelineWrapper {
     deferred_specular_pipeline: Arc<GraphicsPipeline>,
     blend_pipeline: Arc<GraphicsPipeline>,
     long_term_descriptor_set: Arc<DescriptorSet>,
-    supersampling: Supersampling,
     raytrace_control_ssbo_len: u32,
 }
 
@@ -133,7 +131,6 @@ impl RaytracedPipelineWrapper {
                 })?
                 .into(),
             forward_vp_matrix: per_frame_config.scene_state.vp_matrix.into(),
-            supersampling: self.supersampling.to_float(),
             coarse_pos: [player_chunk.x, player_chunk.y, player_chunk.z].into(),
             fine_pos: [fine.x as f32, fine.y as f32, fine.z as f32].into(),
             max_cube_info_idx: self.raytrace_control_ssbo_len.into(),
@@ -480,6 +477,10 @@ impl RaytracedPipelineProvider {
                 3,
                 SpecializationConstant::U32(global_config.raytracing_specular_downsampling),
             ),
+            (
+                4,
+                SpecializationConstant::U32(global_config.supersampling.to_int()),
+            ),
         ]);
         let fs_primary = self
             .fs_primary
@@ -756,7 +757,6 @@ impl RaytracedPipelineProvider {
             deferred_specular_pipeline,
             blend_pipeline,
             long_term_descriptor_set,
-            supersampling: global_config.supersampling,
             raytrace_control_ssbo_len,
         })
     }

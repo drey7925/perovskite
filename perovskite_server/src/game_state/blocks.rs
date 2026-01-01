@@ -39,7 +39,7 @@ use perovskite_core::{
         blocks::AIR,
     },
     coordinates::BlockCoordinate,
-    protocol::blocks as blocks_proto,
+    protocol::blocks::{self as blocks_proto, LodInfo},
 };
 use prost::Message;
 
@@ -903,8 +903,12 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
             sound_volume: 0.0,
             interact_key_option: vec![],
             has_client_extended_data: false,
-            // Bright magenta to call attention to unknown blocks
-            lod_color_argb: 0xffff00ff,
+            lod_info: Some(LodInfo {
+                // Bright magenta to call attention to unknown blocks
+                top_color_argb: 0xffff00ff,
+                side_color_argb: 0xffff00ff,
+                lod_orientation_bias: 0.0,
+            }),
         },
         deserialize_extended_data_handler: Some(Box::new(
             unknown_block_deserialize_data_passthrough,
@@ -947,7 +951,11 @@ fn make_air_block() -> BlockType {
             sound_volume: 0.0,
             interact_key_option: vec![],
             has_client_extended_data: false,
-            lod_color_argb: 0xff808080,
+            lod_info: Some(LodInfo {
+                top_color_argb: 0xff808080,
+                side_color_argb: 0xff808080,
+                lod_orientation_bias: 0.0,
+            }),
         },
         ..Default::default()
     }

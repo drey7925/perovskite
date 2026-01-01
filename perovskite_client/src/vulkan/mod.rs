@@ -1533,6 +1533,7 @@ impl Debug for FramebufferHolder {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Texture2DHolder {
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     sampler: Arc<Sampler>,
@@ -1540,19 +1541,36 @@ pub(crate) struct Texture2DHolder {
     dimensions: [u32; 2],
 }
 impl Texture2DHolder {
-    pub(crate) fn from_image(
+    pub(crate) fn from_image<P: image::Pixel>(
         ctx: &VulkanContext,
-        image: image::RgbaImage,
+        image: image::ImageBuffer<P, impl Deref<Target = [P::Subpixel]>>,
         load_format: Format,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        P::Subpixel: BufferContents,
+    {
         let dimensions = image.dimensions();
-        let img_rgba = image.into_vec();
+        let img_raw = image.into_raw();
 
-        if load_format.components() != [8; 4] {
-            bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose components are not 4x 8-bit")
-        }
         if load_format.block_extent() != [1, 1, 1] {
-            bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose block extent is not [1, 1, 1]")
+            bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose block extent is not [1, 1, 1], got block extent {:?}", load_format.block_extent())
+        }
+        let component_count = match load_format.components() {
+            [8, 8, 8, 8] => 4,
+            [8, 8, 8, 0] => 3,
+            [8, 8, 0, 0] => 2,
+            [8, 0, 0, 0] => 1,
+            _ => bail!("Texture2DHolder with RgbaImage does not support format {load_format:?} whose components are not all 8-bit, got components {:?}", load_format.components()),
+        };
+        if img_raw.len() != (dimensions.0 * dimensions.1 * component_count) as usize {
+            bail!(
+                "Mismatched image size: expected {} elements ({} x {} x {}), got {} elements",
+                dimensions.0 * dimensions.1 * component_count,
+                dimensions.0,
+                dimensions.1,
+                component_count,
+                img_raw.len()
+            )
         }
 
         let image = Image::new(
@@ -1572,7 +1590,7 @@ impl Texture2DHolder {
 
         let region = BufferImageCopy {
             buffer_offset: 0,
-            image_subresource: ImageSubresourceLayers::from_parameters(Format::R8G8B8A8_SRGB, 1),
+            image_subresource: ImageSubresourceLayers::from_parameters(load_format, 1),
             image_extent: [dimensions.0, dimensions.1, 1],
             ..Default::default()
         };
@@ -1587,7 +1605,7 @@ impl Texture2DHolder {
                 memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            img_rgba.iter().cloned(),
+            img_raw.iter().cloned(),
         )?;
 
         let mut copy_builder = AutoCommandBufferBuilder::primary(
@@ -1626,7 +1644,7 @@ impl Texture2DHolder {
 
     /// Creates a texture, uploads it to the device, and returns a TextureHolder
     /// The image should be in SRGB R8G8B8A8.
-    pub(crate) fn from_srgb(
+    pub(crate) fn from_rgba8_srgb(
         ctx: &VulkanContext,
         image: image::RgbaImage,
     ) -> Result<Texture2DHolder> {

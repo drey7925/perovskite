@@ -806,7 +806,7 @@ fn make_active_game(vk_wnd: &VulkanWindow, client_state: Arc<ClientState>) -> Re
         )?
     };
 
-    let far_mesh_provider = far_mesh::FarMeshPipelineProvider::new(vk_wnd.vk_device.clone())?;
+    let far_mesh_provider = far_mesh::FarMeshPipelineProvider::new(&vk_wnd)?;
     let far_mesh_pipeline = far_mesh_provider.make_pipeline(&vk_wnd, &global_render_config)?;
 
     let sky_provider = sky::SkyPipelineProvider::new(vk_wnd.vk_device.clone())?;

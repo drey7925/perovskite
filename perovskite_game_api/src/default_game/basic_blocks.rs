@@ -637,7 +637,7 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             ))
             .set_simple_dropped_item(DIRT.0, 1)
             .set_footstep_sound(Some(grass_footstep))
-            // testonly
+            .set_lod_orientation_bias(0.25)
             .set_simple_dropped_item(DIRT.0, 1),
     )?;
     let stone = game_builder.add_block(
@@ -652,21 +652,23 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(LIMESTONE_TEXTURE)
-            .set_display_name("Limestone"),
+            .set_display_name("Limestone")
+            .override_lod_colors(0xff45911f, 0xff6a6a6a, 0.1),
     )?;
     let limestone_light = game_builder.add_block(
         BlockBuilder::new(LIMESTONE_LIGHT)
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(LIMESTONE_LIGHT_TEXTURE)
-            .set_display_name("Light limestone"),
+            .set_display_name("Light limestone")
+            .override_lod_colors(0xff45911f, 0xff83827a, 0.1),
     )?;
     let limestone_dark = game_builder.add_block(
         BlockBuilder::new(LIMESTONE_DARK)
             .add_block_group(BRITTLE)
             .add_block_group(TOOL_REQUIRED)
             .set_cube_single_texture(LIMESTONE_DARK_TEXTURE)
-            .set_display_name("Dark limestone"),
+            .override_lod_colors(0xff45911f, 0xff4b4b4b, 0.1),
     )?;
 
     let _sand = game_builder.add_block(

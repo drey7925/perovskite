@@ -259,9 +259,9 @@ impl TextureAtlas {
         Ok(TextureAtlas {
             width: diffuse_image.width(),
             height: diffuse_image.height(),
-            diffuse: Texture2DHolder::from_srgb(ctx, diffuse_image.into_rgba8())?,
-            specular: Texture2DHolder::from_srgb(ctx, specular_image)?,
-            emissive: Texture2DHolder::from_srgb(ctx, emissive_image)?,
+            diffuse: Texture2DHolder::from_rgba8_srgb(ctx, diffuse_image.into_rgba8())?,
+            specular: Texture2DHolder::from_rgba8_srgb(ctx, specular_image)?,
+            emissive: Texture2DHolder::from_rgba8_srgb(ctx, emissive_image)?,
             normal_map: Texture2DHolder::from_image(ctx, normal_map_image, Format::R8G8B8A8_UNORM)?,
             texel_coords,
         })

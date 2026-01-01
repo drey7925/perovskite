@@ -29,7 +29,7 @@ pub(crate) struct ClientBlockTypeManager {
     raytrace_fallback_render_blocks: bv::BitVec,
     name_to_id: FxHashMap<String, BlockId>,
     audio_emitters: Vec<Option<(NonZeroU32, f32)>>,
-    lod_color_argb: Vec<u32>,
+    lod_color_argb: Vec<LodColors>,
 }
 impl ClientBlockTypeManager {
     pub(crate) fn new(server_defs: Vec<BlockTypeDef>) -> Result<ClientBlockTypeManager> {
@@ -78,7 +78,15 @@ impl ClientBlockTypeManager {
         let mut audio_emitters = Vec::new();
         audio_emitters.resize(BlockId(max_id).index() + 1, None);
         let mut lod_color_argb = Vec::new();
-        lod_color_argb.resize(BlockId(max_id).index() + 1, 0xffff00ff);
+        // Copy out relevant fields, in case we add more (heavyweight) fields later
+        lod_color_argb.resize(
+            BlockId(max_id).index() + 1,
+            LodColors {
+                top_argb: 0xffff00ff,
+                side_argb: 0xffff00ff,
+                lod_orientation_bias: 0.0,
+            },
+        );
         let mut name_to_id = FxHashMap::default();
 
         for def in server_defs {
@@ -193,7 +201,13 @@ impl ClientBlockTypeManager {
             }
 
             light_emitters[id.index()] = light_emission;
-            lod_color_argb[id.index()] = def.lod_color_argb;
+            if let Some(lod_info) = def.lod_info {
+                lod_color_argb[id.index()] = LodColors {
+                    top_argb: lod_info.top_color_argb,
+                    side_argb: lod_info.side_color_argb,
+                    lod_orientation_bias: lod_info.lod_orientation_bias,
+                };
+            }
             block_defs[id.index()] = Some(def);
         }
 
@@ -410,17 +424,22 @@ impl ClientBlockTypeManager {
         }
     }
 
+    #[allow(dead_code)]
     #[inline]
-    pub(crate) fn lod_color_argb(&self, id: BlockId) -> u32 {
+    pub(crate) fn lod_color_argb(&self, id: BlockId) -> LodColors {
         self.lod_color_argb_from_index(id.index())
     }
 
     #[inline]
-    pub(crate) fn lod_color_argb_from_index(&self, index: usize) -> u32 {
+    pub(crate) fn lod_color_argb_from_index(&self, index: usize) -> LodColors {
         if index < self.lod_color_argb.len() {
             self.lod_color_argb[index]
         } else {
-            0xff808080
+            LodColors {
+                top_argb: 0xff808080,
+                side_argb: 0xff808080,
+                lod_orientation_bias: 0.0,
+            }
         }
     }
 
@@ -470,4 +489,11 @@ fn has_specular_channel(tex: &Option<TextureReference>) -> bool {
 
 fn has_any_specular_texture(ri: &RenderInfo) -> bool {
     has_any_tex_with_predicate(ri, &has_specular_channel)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LodColors {
+    pub top_argb: u32,
+    pub side_argb: u32,
+    pub lod_orientation_bias: f32,
 }

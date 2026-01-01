@@ -16,6 +16,7 @@
 
 use super::{SelectedFormats, VkAllocator};
 use crate::client_state::settings::Supersampling;
+use crate::vulkan::{Texture2DHolder, VulkanContext};
 use anyhow::Result;
 use cgmath::{Matrix4, Vector3};
 use std::sync::Arc;
@@ -211,6 +212,7 @@ impl<T: BufferContents + Copy> VkDrawBufferGpu<T> {
         }
     }
 }
+
 pub(crate) const fn x5y5z5_pack16(x: i8, y: i8, z: i8) -> u16 {
     const fn encode(i: i8) -> u16 {
         (i & 0x1f) as u16
@@ -230,4 +232,18 @@ fn test_x5y5z5_pack_vec() {
         x5y5z5_pack_vec(Vector3::new(1.0, -1.0, 0.0)),
         0xf << 10 | 0x11 << 5
     );
+}
+
+// Blue noise texture for dithering. Made by running
+// blue-noise generate --size 64 --output blue-noise.png --seed 28273
+// with https://crates.io/crates/blue-noise version 0.2.1, Windows 11 x64,
+// rustc 1.92.0
+const _BLUE_NOISE_PNG_BYTES: &[u8] = include_bytes!("blue_noise.png");
+fn make_blue_noise_image(ctx: &VulkanContext) -> Result<Texture2DHolder> {
+    let image = image::load_from_memory(_BLUE_NOISE_PNG_BYTES)?.to_luma8();
+    Ok(Texture2DHolder::from_image(
+        ctx,
+        image,
+        vulkano::format::Format::R8_UNORM,
+    )?)
 }
