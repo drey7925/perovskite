@@ -780,7 +780,8 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
                     *block = snow_footprint_id.with_variant_of(*block);
                     Ok(BlockInteractionResult::default())
                 }))
-            }),
+            })
+            .override_lod_colors(0xffa4aeae, 0xff402a0e, 0.9),
     )?;
 
     let snow_block_footprint = game_builder.add_block(
