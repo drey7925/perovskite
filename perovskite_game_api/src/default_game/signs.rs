@@ -152,7 +152,11 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
     }
     game_builder.inner.items_mut().register_item(Item {
         place_on_block_handler: Some(Box::new(move |ctx, coord, stack| {
-            let new_block = if coord.selected.try_delta(0, 1, 0) == coord.preceding {
+            let preceding_coord = match coord.preceding {
+                Some(x) => x,
+                None => return Ok(Some(stack.clone()).into()),
+            };
+            let new_block = if coord.selected.try_delta(0, 1, 0) == Some(preceding_coord) {
                 standing_sign
             } else {
                 wall_sign
@@ -165,7 +169,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
             ));
             let placed =
                 ctx.game_map()
-                    .mutate_block_atomically(coord.selected, |block, _ext| {
+                    .mutate_block_atomically(preceding_coord, |block, _ext| {
                         if ctx.block_types().is_trivially_replaceable(*block) {
                             *block = new_block;
                             Ok(true)
