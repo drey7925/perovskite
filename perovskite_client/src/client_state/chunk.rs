@@ -42,6 +42,7 @@ use crate::vulkan::shaders::cube_geometry::{
     CubeDrawStep, CubeGeometryDrawCall, CubeGeometryVertex,
 };
 use crate::vulkan::shaders::{VkBufferCpu, VkDrawBufferGpu};
+use crate::vulkan::util::check_frustum;
 use crate::vulkan::{BufferReclaim, ReclaimType, ReclaimableBuffer, VulkanContext};
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::util::AtomicInstant;
@@ -552,7 +553,7 @@ impl ClientChunk {
         ) - player_position)
             .mul_element_wise(Vector3::new(1., -1., 1.));
         let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
-        if check_frustum(view_proj_matrix * translation) {
+        if check_frustum(view_proj_matrix * translation, CHUNK_CORNERS) {
             let lock = self.chunk_mesh.lock();
             lock.solo_gpu.as_ref().map(|solo_gpu| CubeGeometryDrawCall {
                 models: solo_gpu.clone(),
@@ -622,69 +623,17 @@ impl ClientChunk {
         ChunkDataViewMut(self.chunk_data.write())
     }
 }
-
-fn check_frustum(transformation: Matrix4<f32>) -> bool {
-    #[inline]
-    fn mvmul4(matrix: Matrix4<f32>, vector: Vector4<f32>) -> Vector4<f32> {
-        // This is the implementation hidden behind the simd feature gate
-        matrix[0] * vector[0]
-            + matrix[1] * vector[1]
-            + matrix[2] * vector[2]
-            + matrix[3] * vector[3]
-    }
-
-    #[inline]
-    fn overlaps(min1: f32, max1: f32, min2: f32, max2: f32) -> bool {
-        min1 <= max2 && min2 <= max1
-    }
-    // todo fix jank that requires this to be 17.0 rather than 16.0
-    const CORNERS: [Vector4<f32>; 8] = [
-        vec4(-1.0, 1.0, -1.0, 1.),
-        vec4(17.0, 1.0, -1.0, 1.),
-        vec4(-1.0, -17.0, -1.0, 1.),
-        vec4(17.0, -17.0, -1.0, 1.),
-        vec4(-1.0, 1.0, 17.0, 1.),
-        vec4(17.0, 1.0, 17.0, 1.),
-        vec4(-1.0, -17.0, 17.0, 1.),
-        vec4(17.0, -17.0, 17.0, 1.),
-    ];
-    let mut ndc_min = vec4(f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut ndc_max = vec4(
-        f32::NEG_INFINITY,
-        f32::NEG_INFINITY,
-        f32::NEG_INFINITY,
-        f32::NEG_INFINITY,
-    );
-
-    for corner in CORNERS {
-        let mut ndc = mvmul4(transformation, corner);
-        let ndcw = ndc.w;
-        // We don't want to flip the x/y/z components when the ndc is negative, since
-        // then we'll span the frustum.
-        // We also want to avoid an ndc of exactly zero
-        ndc /= ndc.w.abs().max(0.000001);
-        ndc_min = vec4(
-            ndc_min.x.min(ndc.x),
-            ndc_min.y.min(ndc.y),
-            0.0,
-            ndc_min.w.min(ndcw),
-        );
-        ndc_max = vec4(
-            ndc_max.x.max(ndc.x),
-            ndc_max.y.max(ndc.y),
-            0.0,
-            ndc_max.w.max(ndcw),
-        );
-    }
-    // Simply dividing by w as we go isn't enough; we need to also ensure that at least
-    // one point is actually in the front clip space: https://stackoverflow.com/a/51798873/1424875
-    //
-    // This check is a bit conservative; it's possible that one point is in front of the camera, but not within
-    // the frustum, while other points cause the overlap check to pass. However, it's good enough for now.
-    ndc_max.w > 0.0
-        && overlaps(ndc_min.x, ndc_max.x, -1., 1.)
-        && overlaps(ndc_min.y, ndc_max.y, -1., 1.)
-}
+// todo fix jank that requires this to be 17.0 rather than 16.0
+const CHUNK_CORNERS: [Vector4<f32>; 8] = [
+    vec4(-1.0, 1.0, -1.0, 1.),
+    vec4(17.0, 1.0, -1.0, 1.),
+    vec4(-1.0, -17.0, -1.0, 1.),
+    vec4(17.0, -17.0, -1.0, 1.),
+    vec4(-1.0, 1.0, 17.0, 1.),
+    vec4(17.0, 1.0, 17.0, 1.),
+    vec4(-1.0, -17.0, 17.0, 1.),
+    vec4(17.0, -17.0, 17.0, 1.),
+];
 
 fn get_occlusion_for_proto(
     block_ids: &[u32; 4096],
@@ -753,7 +702,7 @@ impl MeshBatch {
             ) - player_position)
                 .mul_element_wise(Vector3::new(1., -1., 1.));
             let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
-            if check_frustum(view_proj_matrix * translation) {
+            if check_frustum(view_proj_matrix * translation, CHUNK_CORNERS) {
                 any_frustum_pass = true;
             }
         }

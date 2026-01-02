@@ -327,6 +327,7 @@ impl MapgenInterface for DummyMapgen {
         FarMeshPoint {
             height: 0.0,
             block_type: AIR_ID,
+            water_height: 0.0,
         }
     }
 }

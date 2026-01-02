@@ -16,6 +16,7 @@
 
 use super::game_map::MapChunk;
 use crate::game_state::event::EventInitiator;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::block_id::BlockId;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate};
 use std::ops::RangeInclusive;
@@ -65,14 +66,21 @@ pub trait MapgenInterface: Send + Sync {
     ///
     /// By default, does nothing.
     fn dump_debug(&self, _pos: BlockCoordinate, _initiator: &EventInitiator<'_>) {}
+
+    /// When far_mesh_estimate returns a water_height, this is the block type to use for water
+    fn water_type(&self, _x: f64, _z: f64) -> BlockId {
+        AIR_ID
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FarMeshPoint {
     /// The height of the terrain at this point.
     pub height: f32,
-    /// The block type at this point. This is used to estimate the color of the terrain.
+    /// The block type at this point. This is used to estimate the appearance of the terrain.
     pub block_type: BlockId,
+    /// The height of the water at this point.
+    pub water_height: f32,
 }
 
 pub(crate) mod far_mesh;

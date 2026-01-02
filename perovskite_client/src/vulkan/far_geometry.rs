@@ -1,7 +1,7 @@
 use std::{collections::hash_map::Entry, sync::Arc};
 
 use anyhow::{Context, Result};
-use cgmath::{ElementWise, InnerSpace, Matrix4, Vector3};
+use cgmath::{vec4, ElementWise, InnerSpace, Matrix4, Vector3, Vector4};
 use itertools::Itertools;
 use perovskite_core::{
     coordinates::ChunkCoordinate,
@@ -9,6 +9,7 @@ use perovskite_core::{
     protocol::{game_rpc, map as map_rpc},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use tracy_client::span;
 use vulkano::buffer::{BufferUsage, Subbuffer};
 
 use crate::{
@@ -18,6 +19,7 @@ use crate::{
             far_mesh::{FarMeshDrawCall, FarMeshVertex},
             x5y5z5_pack_vec,
         },
+        util::check_frustum,
         VulkanContext,
     },
 };
@@ -34,6 +36,13 @@ struct ClientFarSheet {
     origin: Vector3<f64>,
     chunk_corners: [(i32, i32); 4],
     winding_order: WindingOrder,
+    alpha: bool,
+    min_x: f32,
+    max_x: f32,
+    min_y: f32,
+    max_y: f32,
+    min_z: f32,
+    max_z: f32,
 }
 
 fn build_index_buffer(
@@ -87,6 +96,7 @@ impl ClientFarSheet {
         vk_ctx: &VulkanContext,
         block_type_manager: &ClientBlockTypeManager,
     ) -> Result<Self> {
+        let _span = span!("ClientFarSheet::new");
         let control =
             SheetControl::try_from(sheet.control.clone().context("Missing far sheet control")?)?;
 
@@ -100,15 +110,40 @@ impl ClientFarSheet {
             }
         };
 
-        // TODO: This should not use CubeGeometryVertex, but rather a far-mesh specific
-        // vertex type. This is a hack to quickly test using the existing cube geometry
-        // pipeline.
+        fn argb_needs_alpha_blend(argb: u32) -> bool {
+            argb & 0xFF00_0000 != 0xFF00_0000
+        }
+
+        let mut alpha = false;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_z = f32::MAX;
+        let mut max_z = f32::MIN;
+
+        control
+            .lattice_corners_local_space()
+            .iter()
+            .for_each(|corner| {
+                min_x = min_x.min(corner.x as f32);
+                max_x = max_x.max(corner.x as f32);
+                min_z = min_z.min(corner.z as f32);
+                max_z = max_z.max(corner.z as f32);
+            });
+
         let mut vertices = control
             .iter_lattice_points_local_space()
             .zip(sheet.heights.iter().copied())
             .zip(sheet.block_types_no_variant.iter().copied())
             .map(|((point, height), block_index)| {
+                let height = height + control.origin().y as f32;
                 let lod_info = block_type_manager.lod_color_argb_from_index(block_index as usize);
+                alpha = alpha || argb_needs_alpha_blend(lod_info.top_argb);
+                alpha = alpha || argb_needs_alpha_blend(lod_info.side_argb);
+                min_y = min_y.min(-height);
+                max_y = max_y.max(-height);
+
                 FarMeshVertex {
                     position: [point.x as f32, -height, point.z as f32],
                     top_color: lod_info.top_argb.to_le_bytes(),
@@ -147,6 +182,13 @@ impl ClientFarSheet {
             origin: control.origin(),
             chunk_corners,
             winding_order,
+            alpha,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            min_z,
+            max_z,
         })
     }
 
@@ -207,28 +249,41 @@ impl FarGeometryState {
     pub(crate) fn draw_calls(
         &self,
         player_position: Vector3<f64>,
-        // Will eventually be used for frustum culling
-        _view_proj_matrix: Matrix4<f32>,
+        view_proj_matrix: Matrix4<f32>,
         ignore_chunks: &FxHashSet<ChunkCoordinate>,
     ) -> Vec<FarMeshDrawCall> {
+        let _span = span!("FarGeometry draw_calls");
         let ignore_slices =
             FxHashSet::from_iter(ignore_chunks.iter().map(|coord| (coord.x, coord.z)));
 
         self.sheets
             .values()
             .filter(|sheet| sheet.should_render(&ignore_slices))
-            .map(|sheet| {
+            .filter_map(|sheet| {
                 let relative_origin =
                     (sheet.origin - player_position).mul_element_wise(Vector3::new(1., -1., 1.));
                 let translation = Matrix4::from_translation(relative_origin.cast().unwrap());
-
-                FarMeshDrawCall {
+                let corners = [
+                    vec4(sheet.min_x, sheet.min_y, sheet.min_z, 1.),
+                    vec4(sheet.min_x, sheet.min_y, sheet.max_z, 1.),
+                    vec4(sheet.min_x, sheet.max_y, sheet.min_z, 1.),
+                    vec4(sheet.min_x, sheet.max_y, sheet.max_z, 1.),
+                    vec4(sheet.max_x, sheet.min_y, sheet.min_z, 1.),
+                    vec4(sheet.max_x, sheet.min_y, sheet.max_z, 1.),
+                    vec4(sheet.max_x, sheet.max_y, sheet.min_z, 1.),
+                    vec4(sheet.max_x, sheet.max_y, sheet.max_z, 1.),
+                ];
+                if !check_frustum(view_proj_matrix * translation, corners) {
+                    return None;
+                }
+                Some(FarMeshDrawCall {
                     model_matrix: translation,
                     vtx: sheet.vertex_buffer.clone(),
                     idx: sheet.index_buffer.clone(),
                     num_indices: sheet.index_buffer.len() as u32,
                     winding_order: sheet.winding_order,
-                }
+                    alpha: sheet.alpha,
+                })
             })
             .collect()
     }

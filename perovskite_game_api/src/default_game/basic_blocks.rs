@@ -980,7 +980,8 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         .set_allow_light_propagation(true)
         .set_display_name("Water block")
         .set_liquid_flow(Some(Duration::from_millis(500)))
-        .set_matter_type(MatterType::Liquid);
+        .set_matter_type(MatterType::Liquid)
+        .override_lod_colors(0xb03a62cf, 0xb03a62cf, 0.0);
     water_builder.client_info.physics_info = Some(PhysicsInfo::Fluid(FluidPhysicsInfo {
         horizontal_speed: 1.5,
         vertical_speed: -0.5,

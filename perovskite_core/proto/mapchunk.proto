@@ -77,13 +77,12 @@ message FarSheet {
   // different encodings (e.g. float16, fixed-point sint32, etc) to save
   // space and bandwidth, however this is a premature optimization.
   //
-  // If this is done, another field will be added and this one left empty.
+  // If this is done, another field will be added and this one deprecated.
   repeated float heights = 3 [ packed = true ];
   // Block types at each point. This is used to estimate the color of the
   // terrain. Same length as heights. Since LODs do not depend on the variant,
-  // this is represented as block_id >> 12.
+  // this is represented as block_id >> 12 to help make varints smaller.
   repeated uint32 block_types_no_variant = 4 [ packed = true ];
-  // More fields to come... (e.g. color, lights, etc)
 }
 
 enum TessellationMode {

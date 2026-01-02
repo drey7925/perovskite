@@ -65,9 +65,10 @@ use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPosit
 
 use crate::game_state::audio_crossbar::{AudioCrossbarReceiver, AudioEvent, AudioInstruction};
 use either::Either;
-use itertools::iproduct;
+use itertools::{iproduct, Itertools};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::game_actions::ToolTarget;
 use perovskite_core::protocol::audio::{SampledSoundPlayback, SoundSource};
 use perovskite_core::protocol::coordinates as coords_proto;
@@ -2857,7 +2858,7 @@ impl EntityEventSender {
 struct FarMeshSender {
     outbound_tx: mpsc::Sender<tonic::Result<StreamToClient>>,
     context: Arc<SharedContext>,
-    meshes: tri_quad::TriQuadTree<u64>,
+    meshes: tri_quad::TriQuadTree<(u64, Option<u64>)>,
     player_position: watch::Receiver<PositionAndPacing>,
     testonly_notifier: tokio::sync::watch::Receiver<()>,
     next_id: u64,
@@ -2895,10 +2896,10 @@ impl FarMeshSender {
             removals: Vec<u64>,
             next_id: &'a mut u64,
         }
-        impl<'a> tri_quad::ChangeCallbacks<u64> for Callbacks<'a> {
-            fn insert(&mut self, entry: &tri_quad::EntryCore) -> u64 {
+        impl<'a> tri_quad::ChangeCallbacks<(u64, Option<u64>)> for Callbacks<'a> {
+            fn insert(&mut self, entry: &tri_quad::EntryCore) -> (u64, Option<u64>) {
                 if entry.side_length() > far_mesh::COARSEST_RENDERED_SIZE {
-                    return 0;
+                    return (0, None);
                 }
                 let geometry_id = *self.next_id;
                 *self.next_id += 1;
@@ -2937,25 +2938,57 @@ impl FarMeshSender {
                     min_z,
                     max_z,
                 );
-                let (heights, block_types_no_variant) = control
+                let (heights, water_heights, block_types_no_variant): (
+                    Vec<f32>,
+                    Vec<f32>,
+                    Vec<u32>,
+                ) = control
                     .iter_lattice_points_world_space()
                     .map(|p| self.mapgen.far_mesh_estimate(p.x, p.y))
-                    .map(|p| (p.height, p.block_type.0 >> 12))
-                    .unzip();
+                    .map(|p| (p.height, p.water_height, p.block_type.0 >> 12))
+                    .multiunzip();
+
+                let water_block = self
+                    .mapgen
+                    .water_type(control.origin().x as f64, control.origin().z as f64);
+                let water_id = if water_block != AIR_ID
+                    && heights
+                        .iter()
+                        .zip(water_heights.iter())
+                        .any(|(&height, &water_height)| height < water_height)
+                {
+                    let water_id = *self.next_id;
+                    *self.next_id += 1;
+                    let water_sheet = perovskite_core::protocol::map::FarSheet {
+                        geometry_id: water_id,
+                        control: Some(control.to_proto()),
+                        block_types_no_variant: vec![water_block.0 >> 12; water_heights.len()],
+                        heights: water_heights,
+                    };
+                    self.messages.push(water_sheet);
+                    Some(water_id)
+                } else {
+                    None
+                };
+
                 let sheet = perovskite_core::protocol::map::FarSheet {
                     geometry_id,
                     control: Some(control.to_proto()),
                     heights,
                     block_types_no_variant,
                 };
+
                 self.messages.push(sheet);
 
-                return geometry_id;
+                return (geometry_id, water_id);
             }
 
-            fn delete(&mut self, entry: u64) {
-                if entry != 0 {
-                    self.removals.push(entry);
+            fn delete(&mut self, entry: (u64, Option<u64>)) {
+                if entry.0 != 0 {
+                    self.removals.push(entry.0);
+                }
+                if let Some(water_id) = entry.1 {
+                    self.removals.push(water_id);
                 }
             }
         }
@@ -2972,7 +3005,7 @@ impl FarMeshSender {
         impl tri_quad::InsertionPolicy for FillPolicy {
             fn decide(&self, entry: &tri_quad::EntryCore) -> tri_quad::PolicyDecision {
                 let target_len = if entry.contains(self.map_pos.0, self.map_pos.1) {
-                    8
+                    4
                 } else {
                     let distance = f64::hypot(
                         (entry.x_range().start as f64 + entry.x_range().end as f64) / 2.0
@@ -2980,7 +3013,7 @@ impl FarMeshSender {
                         (entry.y_range().start as f64 + entry.y_range().end as f64) / 2.0
                             - self.map_pos.1 as f64,
                     );
-                    ((distance * 0.5) as u32).max(8).next_power_of_two()
+                    ((distance * 0.3) as u32).max(4).next_power_of_two()
                 };
 
                 if entry.side_length() > target_len {

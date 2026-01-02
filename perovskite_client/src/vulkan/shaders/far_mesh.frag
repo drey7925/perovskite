@@ -10,8 +10,8 @@ layout(set = 1, binding = 0) uniform FarMeshUniforms {
 
 layout(location = 0) out vec4 f_color;
 
-layout(location = 0) flat in vec3 top_color;
-layout(location = 1) flat in vec3 side_color;
+layout(location = 0) flat in vec4 top_color;
+layout(location = 1) flat in vec4 side_color;
 layout(location = 2) flat in vec3 world_normal;
 layout(location = 3) in vec3 model_pos;
 layout(location = 4) in vec3 camera_relative_pos;
@@ -47,7 +47,7 @@ void main() {
     effective_normal.z = 0;
   }
 
-  vec3 color;
+  vec4 color;
   if (side_ratio - lod_orientation_bias >= blue_noise) {
     color = side_color;
   } else {
@@ -58,6 +58,6 @@ void main() {
 
   float gbc_adjustment =
       0.5 + 0.5 * max(-0.3, dot(global_light_dir, effective_normal));
-  vec3 ec = (0.03125 + (global_brightness * gbc_adjustment)) * color;
-  f_color = vec4(ec, 1.0);
+  vec3 ec = (0.03125 + (global_brightness * gbc_adjustment)) * color.rgb;
+  f_color = vec4(ec, color.a);
 }

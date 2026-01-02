@@ -732,17 +732,19 @@ impl MapgenInterface for DefaultMapgen {
     fn far_mesh_estimate(&self, x: f64, z: f64) -> FarMeshPoint {
         let (macrobiome, elevation, _, water_height, microbiome) =
             self.prefill_single(x as i32, z as i32);
-        if elevation < water_height {
-            return FarMeshPoint {
-                height: water_height,
-                block_type: self.water,
-            };
-        }
+        // z-fighting fix w/ water
+        let elevation = if elevation == 0.0 { 0.25 } else { elevation };
         FarMeshPoint {
             height: elevation,
             block_type: match macrobiome {
                 Macrobiome::RollingHills => match microbiome {
-                    RHBiome::DefaultGrassy => self.dirt_grass,
+                    RHBiome::DefaultGrassy => {
+                        if elevation < water_height {
+                            self.dirt
+                        } else {
+                            self.dirt_grass
+                        }
+                    }
                     RHBiome::SandyBeach => self.sand,
                     RHBiome::Desert => self.desert_sand,
                     RHBiome::Saltmarsh => self.silt_damp,
@@ -759,6 +761,7 @@ impl MapgenInterface for DefaultMapgen {
                         .get_limestone(x as i32, elevation as i32, z as i32)
                 }
             },
+            water_height,
         }
     }
 
@@ -811,6 +814,10 @@ impl MapgenInterface for DefaultMapgen {
                     .unwrap();
             }
         }
+    }
+
+    fn water_type(&self, _x: f64, _z: f64) -> BlockId {
+        self.water
     }
 }
 

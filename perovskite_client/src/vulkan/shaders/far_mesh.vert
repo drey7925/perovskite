@@ -8,8 +8,8 @@ layout(location = 2) in vec4 side_color;
 layout(location = 3) in int normal;
 layout(location = 4) in float lod_orientation_bias;
 
-layout(location = 0) out vec3 top_color_out;
-layout(location = 1) out vec3 side_color_out;
+layout(location = 0) out vec4 top_color_out;
+layout(location = 1) out vec4 side_color_out;
 layout(location = 2) out vec3 world_normal;
 layout(location = 3) out vec3 model_pos;
 layout(location = 4) out vec3 camera_relative_pos;
@@ -29,8 +29,8 @@ void main() {
   // retrieved via the vertex buffer, not a texture sampler.
   // Vulkan does not guarantee VK_FORMAT_R8G8B8A8_SRGB
   // + VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT together.
-  top_color_out = pow(top_color.rgb, vec3(2.2));
-  side_color_out = pow(side_color.rgb, vec3(2.2));
+  top_color_out = vec4(pow(top_color.rgb, vec3(2.2)), top_color.a);
+  side_color_out = vec4(pow(side_color.rgb, vec3(2.2)), side_color.a);
   model_pos = position;
 
   vec4 world_pos4 = model_matrix * vec4(position, 1.0);

@@ -23,7 +23,7 @@ use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Sub
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{
-    ColorBlendAttachmentState, ColorBlendState, ColorComponents,
+    AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
 };
 use vulkano::pipeline::graphics::depth_stencil::{DepthState, DepthStencilState};
 use vulkano::pipeline::graphics::input_assembly::PrimitiveTopology;
@@ -84,11 +84,14 @@ pub(crate) struct FarMeshDrawCall {
     pub(crate) idx: Subbuffer<[u32]>,
     pub(crate) num_indices: u32,
     pub(crate) winding_order: WindingOrder,
+    pub(crate) alpha: bool,
 }
 
 pub(crate) struct FarMeshPipelineWrapper {
-    pub(crate) pipeline_cw: Arc<GraphicsPipeline>,
-    pub(crate) pipeline_ccw: Arc<GraphicsPipeline>,
+    pub(crate) pipeline_cw_alpha: Arc<GraphicsPipeline>,
+    pub(crate) pipeline_ccw_alpha: Arc<GraphicsPipeline>,
+    pub(crate) pipeline_cw_no_alpha: Arc<GraphicsPipeline>,
+    pub(crate) pipeline_ccw_no_alpha: Arc<GraphicsPipeline>,
     pub(crate) global_descriptor_set: Arc<DescriptorSet>,
 }
 impl FarMeshPipelineWrapper {
@@ -117,7 +120,7 @@ impl FarMeshPipelineWrapper {
             },
         )?;
 
-        let layout = self.pipeline_cw.layout().clone();
+        let layout = self.pipeline_cw_alpha.layout().clone();
         let set_layout = layout
             .set_layouts()
             .get(1)
@@ -136,13 +139,24 @@ impl FarMeshPipelineWrapper {
             vec![self.global_descriptor_set.clone(), per_frame_set],
         )?;
 
-        for (winding_order, pipeline) in [
-            (WindingOrder::Clockwise, &self.pipeline_ccw),
-            (WindingOrder::CounterClockwise, &self.pipeline_cw),
+        for (winding_order, alpha, pipeline) in [
+            // no alpha must be drawn first, so alpha can overdraw it.
+            (WindingOrder::Clockwise, false, &self.pipeline_ccw_no_alpha),
+            (
+                WindingOrder::CounterClockwise,
+                false,
+                &self.pipeline_cw_no_alpha,
+            ),
+            (WindingOrder::Clockwise, true, &self.pipeline_ccw_alpha),
+            (
+                WindingOrder::CounterClockwise,
+                true,
+                &self.pipeline_cw_alpha,
+            ),
         ] {
             builder.bind_pipeline_graphics(pipeline.clone())?;
             for draw_call in draw_calls {
-                if draw_call.winding_order != winding_order {
+                if (draw_call.winding_order, draw_call.alpha) != (winding_order, alpha) {
                     continue;
                 }
                 let push_data = FarMeshPushConstants {
@@ -222,48 +236,58 @@ impl FarMeshPipelineProvider {
                 .into_pipeline_layout_create_info(self.device.clone())?,
         )?;
 
-        let create_info_cw = GraphicsPipelineCreateInfo {
-            stages,
-            vertex_input_state: Some(vertex_input_state),
-            input_assembly_state: Some(InputAssemblyState {
-                topology: PrimitiveTopology::TriangleStrip,
-                primitive_restart_enable: true,
-                ..Default::default()
-            }),
-            rasterization_state: Some(RasterizationState {
-                cull_mode: CullMode::Back,
-                front_face: FrontFace::Clockwise,
-                ..Default::default()
-            }),
-            multisample_state: Some(MultisampleState::default()),
-            viewport_state: Some(ImageId::MainColor.viewport_state(&ctx.viewport, *global_config)),
-            depth_stencil_state: Some(DepthStencilState {
-                depth: Some(DepthState::simple()),
-                ..Default::default()
-            }),
-            color_blend_state: Some(ColorBlendState {
-                attachments: vec![ColorBlendAttachmentState {
-                    blend: None,
-                    color_write_mask: ColorComponents::all(),
-                    color_write_enable: true,
-                }],
-                ..Default::default()
-            }),
-            subpass: Some(PipelineSubpassType::BeginRenderPass(subpass)),
-            ..GraphicsPipelineCreateInfo::layout(layout)
+        let make_pipeline = |front_face: FrontFace, attachment_blend: Option<AttachmentBlend>| {
+            GraphicsPipelineCreateInfo {
+                stages: stages.clone(),
+                vertex_input_state: Some(vertex_input_state.clone()),
+                input_assembly_state: Some(InputAssemblyState {
+                    topology: PrimitiveTopology::TriangleStrip,
+                    primitive_restart_enable: true,
+                    ..Default::default()
+                }),
+                rasterization_state: Some(RasterizationState {
+                    cull_mode: CullMode::Back,
+                    front_face,
+                    ..Default::default()
+                }),
+                multisample_state: Some(MultisampleState::default()),
+                viewport_state: Some(
+                    ImageId::MainColor.viewport_state(&ctx.viewport, *global_config),
+                ),
+                depth_stencil_state: Some(DepthStencilState {
+                    depth: Some(DepthState::simple()),
+                    ..Default::default()
+                }),
+                color_blend_state: Some(ColorBlendState {
+                    attachments: vec![ColorBlendAttachmentState {
+                        blend: attachment_blend,
+                        color_write_mask: ColorComponents::all(),
+                        color_write_enable: true,
+                    }],
+                    ..Default::default()
+                }),
+                subpass: Some(PipelineSubpassType::BeginRenderPass(subpass.clone())),
+                ..GraphicsPipelineCreateInfo::layout(layout.clone())
+            }
         };
 
-        let mut create_info_ccw = create_info_cw.clone();
-        create_info_ccw
-            .rasterization_state
-            .as_mut()
-            .unwrap()
-            .front_face = FrontFace::CounterClockwise;
+        let create_info_cw_alpha =
+            make_pipeline(FrontFace::Clockwise, Some(AttachmentBlend::alpha()));
+        let create_info_ccw_alpha =
+            make_pipeline(FrontFace::CounterClockwise, Some(AttachmentBlend::alpha()));
+        let create_info_cw_no_alpha = make_pipeline(FrontFace::Clockwise, None);
+        let create_info_ccw_no_alpha = make_pipeline(FrontFace::CounterClockwise, None);
 
-        let pipeline_cw = GraphicsPipeline::new(self.device.clone(), None, create_info_cw)?;
-        let pipeline_ccw = GraphicsPipeline::new(self.device.clone(), None, create_info_ccw)?;
+        let pipeline_cw_alpha =
+            GraphicsPipeline::new(self.device.clone(), None, create_info_cw_alpha)?;
+        let pipeline_ccw_alpha =
+            GraphicsPipeline::new(self.device.clone(), None, create_info_ccw_alpha)?;
+        let pipeline_cw_no_alpha =
+            GraphicsPipeline::new(self.device.clone(), None, create_info_cw_no_alpha)?;
+        let pipeline_ccw_no_alpha =
+            GraphicsPipeline::new(self.device.clone(), None, create_info_ccw_no_alpha)?;
 
-        let layout = pipeline_cw.layout().clone();
+        let layout = pipeline_cw_alpha.layout().clone();
         let set_layout = layout
             .set_layouts()
             .get(0)
@@ -280,8 +304,10 @@ impl FarMeshPipelineProvider {
             [],
         )?;
         Ok(FarMeshPipelineWrapper {
-            pipeline_cw,
-            pipeline_ccw,
+            pipeline_cw_alpha,
+            pipeline_ccw_alpha,
+            pipeline_cw_no_alpha,
+            pipeline_ccw_no_alpha,
             global_descriptor_set,
         })
     }
