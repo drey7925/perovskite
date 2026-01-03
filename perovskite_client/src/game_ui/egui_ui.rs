@@ -52,7 +52,6 @@ pub(crate) struct EguiUi {
     chat_force_scroll_to_end: bool,
     pub(crate) inventory_view: Option<PopupDescription>,
     scale: f32,
-    scale_override: f32,
 
     debug_open: bool,
     perf_open: bool,
@@ -102,7 +101,6 @@ impl EguiUi {
 
             inventory_view: None,
             scale: 1.0,
-            scale_override: 1.0,
             visible_popups: vec![],
             text_fields: FxHashMap::default(),
             checkboxes: FxHashMap::default(),
@@ -169,14 +167,6 @@ impl EguiUi {
     ) {
         self.scale = ctx.input(|i| i.pixels_per_point);
         // TODO have more things controlled by the scale. e.g. font sizes?
-        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Plus)) {
-            self.scale_override += 0.1;
-        } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Minus)) {
-            self.scale_override -= 0.1;
-        } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num0)) {
-            self.scale_override = 1.0;
-        }
-        self.scale_override = self.scale_override.clamp(0.1, 2.0);
 
         if !self.visible_popups.is_empty() {
             for popup in self
@@ -507,7 +497,7 @@ impl EguiUi {
                 self.scale
             } else {
                 1.0
-            } / self.scale_override;
+            };
 
             let x = self.stack_carried_by_mouse_offset.0 + self.last_mouse_position.x;
             let y = self.stack_carried_by_mouse_offset.1 + self.last_mouse_position.y;
@@ -584,9 +574,9 @@ impl EguiUi {
             .render
             .scale_inventories_with_high_dpi
         {
-            vec2(frame_pixels.w as f32, frame_pixels.h as f32) * self.scale_override
+            vec2(frame_pixels.w as f32, frame_pixels.h as f32)
         } else {
-            vec2(frame_pixels.w as f32, frame_pixels.h as f32) * self.scale_override / (self.scale)
+            vec2(frame_pixels.w as f32, frame_pixels.h as f32) / self.scale
         };
         let inv_rect = egui::Rect::from_min_size(
             ui.cursor().min,
