@@ -2872,7 +2872,7 @@ impl FarMeshSender {
             tokio::select! {
                 _ = interval.tick() => {
                     let position = self.context.get_position_override().unwrap_or(self.player_position.borrow().kinematics.position);
-                    self.send_mesh(position).await?;
+                    self.send_meshes(position).await?;
                 },
                 _ = self.context.cancellation.cancelled() => {
                     break;
@@ -2881,7 +2881,7 @@ impl FarMeshSender {
         }
         Ok(())
     }
-    async fn send_mesh(&mut self, player_position: Vector3<f64>) -> Result<()> {
+    async fn send_meshes(&mut self, player_position: Vector3<f64>) -> Result<()> {
         use crate::game_state::mapgen::far_mesh;
         use cgmath::vec2;
         let player_xz = vec2(player_position.x, player_position.z);
@@ -2906,6 +2906,16 @@ impl FarMeshSender {
                 *self.next_id += 1;
 
                 let control = far_mesh::to_sheet_control(entry);
+
+                for corner in control.lattice_corners_world_space() {
+                    if corner.x < i32::MIN as f64
+                        || corner.y < i32::MIN as f64
+                        || corner.x > i32::MAX as f64
+                        || corner.y > i32::MAX as f64
+                    {
+                        return (0, None);
+                    }
+                }
 
                 let min_x = control
                     .iter_lattice_points_world_space()

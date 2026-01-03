@@ -780,71 +780,67 @@ impl EguiUi {
     fn render_chat_history(&mut self, ctx: &Context, client_state: &ClientState) {
         let chat = client_state.chat.lock();
         if self.chat_open {
-            egui::TopBottomPanel::top("chat_panel")
-                .max_height(260.0)
-                .show(ctx, |ui| {
-                    let scroll_area = egui::ScrollArea::vertical()
-                        .auto_shrink([false, true])
-                        .min_scrolled_height(240.0)
-                        .id_salt("chat_history")
-                        .max_height(240.0);
-                    let messages = &chat.message_history;
-                    scroll_area.show(ui, |ui| {
-                        for message in messages {
-                            ui.horizontal_top(|ui| {
-                                let formatted_message = format_chat(message);
-                                ui.label(formatted_message.0);
-                                ui.add(egui::Label::new(formatted_message.1).wrap());
-                            });
-                        }
-                        if self.chat_scroll_counter != messages.len()
-                            || self.chat_force_scroll_to_end
-                        {
-                            ui.scroll_to_cursor(Some(egui::Align::Max));
-                            self.chat_scroll_counter = messages.len();
-                            self.chat_force_scroll_to_end = false;
-                        }
-                    });
-                    let editor = ui.add(
-                        TextEdit::singleline(&mut self.chat_message_input)
-                            .hint_text("Type a message; press Enter to send or Escape to close.")
-                            .lock_focus(true)
-                            .desired_width(f32::INFINITY)
-                            .font(egui::FontId::proportional(16.0)),
-                    );
-                    if self.chat_force_request_focus {
-                        self.chat_force_request_focus = false;
-                        ui.ctx().memory_mut(|m| m.request_focus(editor.id));
+            egui::TopBottomPanel::top("chat_panel").show(ctx, |ui| {
+                let scroll_area = egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .min_scrolled_height(240.0)
+                    .id_salt("chat_history")
+                    .max_height(240.0);
+                let messages = &chat.message_history;
+                scroll_area.show(ui, |ui| {
+                    for message in messages {
+                        ui.horizontal_top(|ui| {
+                            let formatted_message = format_chat(message);
+                            ui.label(formatted_message.0);
+                            ui.add(egui::Label::new(formatted_message.1).wrap());
+                        });
                     }
-                    if self.chat_force_cursor_to_end {
-                        self.chat_force_cursor_to_end = false;
-                        let id = editor.id;
-                        if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
-                            let ccursor =
-                                egui::text::CCursor::new(self.chat_message_input.chars().count());
-                            state
-                                .cursor
-                                .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
-                            state.store(ui.ctx(), id);
-                            ui.ctx().memory_mut(|m| m.request_focus(id)); // give focus back to the `TextEdit`.
-                        }
-                    }
-                    ui.memory_mut(|m| m.request_focus(editor.id));
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        && !self.chat_message_input.trim().is_empty()
-                    {
-                        // If this is failing to unwrap, we have pretty serious problems and may as well crash
-                        client_state
-                            .actions
-                            .blocking_send(GameAction::ChatMessage(self.chat_message_input.clone()))
-                            .unwrap();
-
-                        self.chat_message_input.clear();
-                    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        self.chat_message_input.clear();
-                        self.chat_open = false;
+                    if self.chat_scroll_counter != messages.len() || self.chat_force_scroll_to_end {
+                        ui.scroll_to_cursor(Some(egui::Align::Max));
+                        self.chat_scroll_counter = messages.len();
+                        self.chat_force_scroll_to_end = false;
                     }
                 });
+                let editor = ui.add(
+                    TextEdit::singleline(&mut self.chat_message_input)
+                        .hint_text("Type a message; press Enter to send or Escape to close.")
+                        .lock_focus(true)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::FontId::proportional(16.0)),
+                );
+                if self.chat_force_request_focus {
+                    self.chat_force_request_focus = false;
+                    ui.ctx().memory_mut(|m| m.request_focus(editor.id));
+                }
+                if self.chat_force_cursor_to_end {
+                    self.chat_force_cursor_to_end = false;
+                    let id = editor.id;
+                    if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
+                        let ccursor =
+                            egui::text::CCursor::new(self.chat_message_input.chars().count());
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
+                        state.store(ui.ctx(), id);
+                        ui.ctx().memory_mut(|m| m.request_focus(id)); // give focus back to the `TextEdit`.
+                    }
+                }
+                ui.memory_mut(|m| m.request_focus(editor.id));
+                if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && !self.chat_message_input.trim().is_empty()
+                {
+                    // If this is failing to unwrap, we have pretty serious problems and may as well crash
+                    client_state
+                        .actions
+                        .blocking_send(GameAction::ChatMessage(self.chat_message_input.clone()))
+                        .unwrap();
+
+                    self.chat_message_input.clear();
+                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.chat_message_input.clear();
+                    self.chat_open = false;
+                }
+            });
         } else {
             const SHORT_MESSAGE_HISTORY_LEN: usize = 8;
             const SHORT_MESSAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);

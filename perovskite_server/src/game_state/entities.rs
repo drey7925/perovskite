@@ -2608,14 +2608,14 @@ impl EntityShardWorker {
     fn handle_messages(&self, rx_messages: &mut Vec<EntityAction>) -> u64 {
         let mut lock = self.entities.shards[self.shard_id].core.write();
         let completion_tx = &self.entities.shards[self.shard_id].completion_tx;
-        let mut indices: smallvec::SmallVec<[usize; COMMAND_BATCH_SIZE]> =
+        let mut rerun_coro_ids: smallvec::SmallVec<[u64; COMMAND_BATCH_SIZE]> =
             smallvec::SmallVec::new();
         for action in rx_messages.drain(..) {
             match action {
                 EntityAction::Insert(id, position, coroutine, entity_type, trailing_entities) => {
                     let def = self.game_state.entities().get_by_type(&entity_type);
 
-                    let index = lock.insert(
+                    lock.insert(
                         id,
                         entity_type,
                         def,
@@ -2626,7 +2626,7 @@ impl EntityShardWorker {
                         completion_tx,
                         self.game_state.tick(),
                     );
-                    indices.push(index);
+                    rerun_coro_ids.push(id);
                 }
                 EntityAction::Remove(id) => match lock.remove(id, &self.services()) {
                     Ok(_) => {}
@@ -2645,8 +2645,8 @@ impl EntityShardWorker {
                         next_movement,
                         self.game_state.tick(),
                     ) {
-                        Ok(index) => {
-                            indices.push(index);
+                        Ok(_) => {
+                            rerun_coro_ids.push(id);
                         }
                         Err(EntityError::NotFound) => {
                             tracing::warn!(
@@ -2661,13 +2661,11 @@ impl EntityShardWorker {
                 }
             }
         }
-        indices.sort();
-        indices.dedup();
+        rerun_coro_ids.sort();
+        rerun_coro_ids.dedup();
         let mut next_event = u64::MAX;
-        for index in indices {
-            if index != 0 {
-                //println!("post control message");
-            }
+        for id in rerun_coro_ids {
+            let index = *lock.id_lookup.get(&id).unwrap();
             lock.run_coro_single(
                 index,
                 &self.services(),

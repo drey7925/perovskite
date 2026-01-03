@@ -1535,13 +1535,15 @@ impl ScanState {
             }
             return Ok(ScanOutcome::CannotAdvance);
         }
-        let next_coord = next_delta
-            .eval_delta(
-                self.block_coord,
-                current_tile_id.flip_x(),
-                current_tile_id.rotation(),
-            )
-            .context("block coordinate overflow")?;
+        let next_coord = match next_delta.eval_delta(
+            self.block_coord,
+            current_tile_id.flip_x(),
+            current_tile_id.rotation(),
+        ) {
+            Some(coord) => coord,
+            // Coordinate overflowed and we're at the edge of the map.
+            None => return Ok(ScanOutcome::CannotAdvance),
+        };
         if CHATTY {
             tracing::info!("Next coord: {:?}", next_coord);
         }
