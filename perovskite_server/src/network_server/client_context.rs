@@ -834,8 +834,9 @@ impl MapChunkSender {
             Ok(x) => x,
             Err(e) => {
                 warn!(
-                    "Player had invalid position: {:?}, error {:?}",
-                    position.position, e
+                    "Player had invalid position: {:?}, error {}",
+                    position.position,
+                    e.to_string()
                 );
                 let fixed_position = self.fix_position_and_notify(position.position).await?;
                 self.context

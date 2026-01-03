@@ -79,10 +79,10 @@ impl MacrobiomeNoise {
             karst_tendency: noise::SuperSimplex::new(seed.wrapping_add(9)),
         }
     }
-    fn get(&self, x: i32, z: i32) -> (Macrobiome, f32) {
+    fn get(&self, x: f64, z: f64) -> (Macrobiome, f32) {
         let karst_value = self.karst_tendency.get([
-            x as f64 * KARST_TENDENCY_INPUT_SCALE,
-            z as f64 * KARST_TENDENCY_INPUT_SCALE,
+            x * KARST_TENDENCY_INPUT_SCALE,
+            z * KARST_TENDENCY_INPUT_SCALE,
         ]);
         if karst_value > 0.3 {
             (
@@ -126,8 +126,8 @@ impl RHBiomeNoise {
     ///     elevation to get a final value)
     fn get<const DEBUG: bool>(
         &self,
-        x: i32,
-        z: i32,
+        x: f64,
+        z: f64,
         elevation: f32,
         coastal_flatness: f32,
     ) -> (RHBiome, f32) {
@@ -139,8 +139,8 @@ impl RHBiomeNoise {
             |_: &'static str, _: f64| {}
         };
         let highland_value = self.highland_tendency.get([
-            x as f64 * Self::HIGHLAND_INPUT_SCALE,
-            z as f64 * Self::HIGHLAND_INPUT_SCALE,
+            x * Self::HIGHLAND_INPUT_SCALE,
+            z * Self::HIGHLAND_INPUT_SCALE,
         ]) as f32;
         debug_log("highland_value", highland_value as f64);
         if highland_value > 0.7 {
@@ -151,8 +151,8 @@ impl RHBiomeNoise {
         }
 
         let sand_value = self.sand_tendency.get([
-            x as f64 * BEACH_TENDENCY_INPUT_SCALE,
-            z as f64 * BEACH_TENDENCY_INPUT_SCALE,
+            x * BEACH_TENDENCY_INPUT_SCALE,
+            z * BEACH_TENDENCY_INPUT_SCALE,
         ]) as f32;
         if sand_value > 0.2 {
             let excess = sand_value - 0.2;
@@ -163,8 +163,8 @@ impl RHBiomeNoise {
             }
         };
         let marsh_value = self.saltmarsh_tendency.get([
-            x as f64 * BEACH_TENDENCY_INPUT_SCALE,
-            z as f64 * BEACH_TENDENCY_INPUT_SCALE,
+            x * BEACH_TENDENCY_INPUT_SCALE,
+            z * BEACH_TENDENCY_INPUT_SCALE,
         ]) as f32
             + (coastal_flatness * 3.0);
         if marsh_value > 0.5 {
@@ -176,8 +176,8 @@ impl RHBiomeNoise {
             }
         };
         let desert_value = self.desert_tendency.get([
-            x as f64 * DESERT_TENDENCY_INPUT_SCALE,
-            z as f64 * DESERT_TENDENCY_INPUT_SCALE,
+            x * DESERT_TENDENCY_INPUT_SCALE,
+            z * DESERT_TENDENCY_INPUT_SCALE,
         ]) as f32;
         if desert_value > 0.4 {
             // The more extreme the desert value, the closer it can approach sea level
@@ -235,7 +235,7 @@ impl RollingHillsGenerator {
         }
     }
 
-    fn get<const DEBUG: bool>(&self, x: i32, z: i32) -> (f32, f32, f32, RHBiome) {
+    fn get<const DEBUG: bool>(&self, x: f64, z: f64) -> (f32, f32, f32, RHBiome) {
         let debug_log = if DEBUG {
             |desc: &'static str, val: f64| {
                 tracing::info!("{}: {}", desc, val);
@@ -245,8 +245,8 @@ impl RollingHillsGenerator {
         };
 
         let coarse_pos = [
-            x as f64 * Self::ELEVATION_COARSE_INPUT_SCALE,
-            z as f64 * Self::ELEVATION_COARSE_INPUT_SCALE,
+            x * Self::ELEVATION_COARSE_INPUT_SCALE,
+            z * Self::ELEVATION_COARSE_INPUT_SCALE,
         ];
 
         let coarse_ridge_height = self.coarse.get(coarse_pos) * Self::ELEVATION_COARSE_OUTPUT_SCALE;
@@ -256,8 +256,8 @@ impl RollingHillsGenerator {
         debug_log("coarse_nr_height", coarse_nr_height);
 
         let extra_coarse_pos = [
-            x as f64 * Self::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
-            z as f64 * Self::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
+            x * Self::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
+            z * Self::ELEVATION_EXTRA_COARSE_INPUT_SCALE,
         ];
 
         let ridge_strength = self.ridge_strength.get(extra_coarse_pos);
@@ -275,13 +275,13 @@ impl RollingHillsGenerator {
         debug_log("extra_coarse_height", extra_coarse_height);
 
         let fine_pos = [
-            x as f64 * Self::ELEVATION_FINE_INPUT_SCALE,
-            z as f64 * Self::ELEVATION_FINE_INPUT_SCALE,
+            x * Self::ELEVATION_FINE_INPUT_SCALE,
+            z * Self::ELEVATION_FINE_INPUT_SCALE,
         ];
 
         let flatness_pos = [
-            x as f64 * Self::COASTAL_FLATNESS_SCALE,
-            z as f64 * Self::COASTAL_FLATNESS_SCALE,
+            x * Self::COASTAL_FLATNESS_SCALE,
+            z * Self::COASTAL_FLATNESS_SCALE,
         ];
 
         let fine_height = self.fine.get(fine_pos) * Self::ELEVATION_FINE_OUTPUT_SCALE;
@@ -326,8 +326,8 @@ impl RollingHillsGenerator {
         };
         if caldera_gate > Self::CALDERA_GATE_LOWER {
             let position_med = [
-                x as f64 * Self::ELEVATION_MED_INPUT_SCALE,
-                z as f64 * Self::ELEVATION_MED_INPUT_SCALE,
+                x * Self::ELEVATION_MED_INPUT_SCALE,
+                z * Self::ELEVATION_MED_INPUT_SCALE,
             ];
             let effective_gate_upper_input = self.caldera_inner_sharpness.get(position_med);
             debug_log("eff_gate_upper_input", effective_gate_upper_input);
@@ -473,7 +473,7 @@ struct DefaultMapgen {
 
 impl DefaultMapgen {
     #[inline]
-    fn prefill_single(&self, xg: i32, zg: i32) -> (Macrobiome, f32, f32, f32, RHBiome) {
+    fn prefill_single(&self, xg: f64, zg: f64) -> (Macrobiome, f32, f32, f32, RHBiome) {
         let (macrobiome, rolling_hills_blend, karst_blend) = self.macrobiome_single(xg, zg);
         let mut elevation = 0.0;
         let mut flatness = 0.0;
@@ -494,7 +494,7 @@ impl DefaultMapgen {
         (macrobiome, elevation, flatness, water_height, microbiome)
     }
 
-    fn macrobiome_single(&self, xg: i32, zg: i32) -> (Macrobiome, f32, f32) {
+    fn macrobiome_single(&self, xg: f64, zg: f64) -> (Macrobiome, f32, f32) {
         let (macrobiome, blend_factor) = self.macrobiome_noise.get(xg, zg);
         match macrobiome {
             Macrobiome::RollingHills => (Macrobiome::RollingHills, 1.0, 0.0),
@@ -516,10 +516,13 @@ impl DefaultMapgen {
         let mut karst_blend = [[0.0; 16]; 16];
         let mut coastal_flatness_map = [[0.0; 16]; 16];
 
-        for x in 0..16 {
-            for z in 0..16 {
-                let xg = (chunk_coord.x * 16) + x as i32;
-                let zg = (chunk_coord.z * 16) + z as i32;
+        let chunk_x = (chunk_coord.x * 16) as f64;
+        let chunk_z = (chunk_coord.z * 16) as f64;
+
+        for x in 0usize..16 {
+            for z in 0usize..16 {
+                let xg = chunk_x + x as f64;
+                let zg = chunk_z + z as f64;
                 (
                     macrobiome_map[x][z],
                     rolling_hills_blend[x][z],
@@ -532,10 +535,8 @@ impl DefaultMapgen {
             for x in 0..16 {
                 for z in 0..16 {
                     let (elevation, flatness, water_height, microbiome) =
-                        self.rolling_hills_noise.get::<false>(
-                            (chunk_coord.x * 16) + x as i32,
-                            (chunk_coord.z * 16) + z as i32,
-                        );
+                        self.rolling_hills_noise
+                            .get::<false>(chunk_x + x as f64, chunk_z + z as f64);
                     coastal_flatness_map[x][z] = flatness;
                     height_map[x][z] += rolling_hills_blend[x][z] * elevation;
                     water_height_map[x][z] += rolling_hills_blend[x][z] * water_height;
@@ -546,10 +547,9 @@ impl DefaultMapgen {
         if karst_blend.iter().flatten().any(|&x| x > 0.0) {
             for x in 0..16 {
                 for z in 0..16 {
-                    let (raw_height, raw_cave_floor, raw_cave_ceil) = self.karst_noise.height(
-                        (chunk_coord.x * 16) + x as i32,
-                        (chunk_coord.z * 16) + z as i32,
-                    );
+                    let (raw_height, raw_cave_floor, raw_cave_ceil) = self
+                        .karst_noise
+                        .height(chunk_x + x as f64, chunk_z + z as f64);
                     height_map[x][z] += karst_blend[x][z] * raw_height;
                     cave_floor_map[x][z] += karst_blend[x][z] * raw_cave_floor;
                     cave_ceil_map[x][z] += karst_blend[x][z] * raw_cave_ceil;
@@ -701,11 +701,11 @@ impl MapgenInterface for DefaultMapgen {
     }
 
     fn terrain_range_hint(&self, chunk_x: i32, chunk_z: i32) -> Option<RangeInclusive<i32>> {
-        let xg0 = chunk_x * 16;
-        let zg0 = chunk_z * 16;
+        let xg0 = chunk_x as f64 * 16.0;
+        let zg0 = chunk_z as f64 * 16.0;
         let mut max_h = f32::MIN;
         let mut min_h = f32::MAX;
-        for (dx, dz) in [(0, 0), (0, 15), (15, 0), (15, 15)] {
+        for (dx, dz) in [(0.0, 0.0), (0.0, 15.0), (15.0, 0.0), (15.0, 15.0)] {
             let mut water_height = 0.0;
             let xg = xg0 + dx;
             let zg = zg0 + dz;
@@ -730,8 +730,23 @@ impl MapgenInterface for DefaultMapgen {
     }
 
     fn far_mesh_estimate(&self, x: f64, z: f64) -> FarMeshPoint {
-        let (macrobiome, elevation, _, water_height, microbiome) =
-            self.prefill_single(x as i32, z as i32);
+        if x < (i32::MIN) as f64
+            || x > (i32::MAX) as f64
+            || z < (i32::MIN) as f64
+            || z > (i32::MAX) as f64
+        {
+            // easter egg: this only happens at the edges of the world
+            return FarMeshPoint {
+                height: -10.0,
+                block_type: if rand::random::<f64>() < 0.5 {
+                    self.pine_needles
+                } else {
+                    self.stone
+                },
+                water_height: -20.0,
+            };
+        }
+        let (macrobiome, elevation, _, water_height, microbiome) = self.prefill_single(x, z);
         // z-fighting fix w/ water
         let elevation = if elevation == 0.0 { 0.25 } else { elevation };
         FarMeshPoint {
@@ -749,7 +764,7 @@ impl MapgenInterface for DefaultMapgen {
                     RHBiome::Desert => self.desert_sand,
                     RHBiome::Saltmarsh => self.silt_damp,
                     RHBiome::SnowyHighland => {
-                        if self.snow_tendency(x as i32, elevation as i32, z as i32) > 0.0 {
+                        if self.snow_tendency(x, elevation as f64, z) > 0.0 {
                             self.snow
                         } else {
                             self.dirt_grass
@@ -766,7 +781,8 @@ impl MapgenInterface for DefaultMapgen {
     }
 
     fn dump_debug(&self, pos: BlockCoordinate, initiator: &EventInitiator<'_>) {
-        self.rolling_hills_noise.get::<true>(pos.x, pos.z);
+        self.rolling_hills_noise
+            .get::<true>(pos.x as f64, pos.z as f64);
 
         let mut rng = rand::thread_rng();
         for _ in 0..10000 {
@@ -902,7 +918,7 @@ impl DefaultMapgen {
                         )
                     } else {
                         let (macrobiome, elevation, _flatness, water_height, biome) =
-                            self.prefill_single(x, z);
+                            self.prefill_single(x as f64, z as f64);
                         (elevation, macrobiome, biome, water_height)
                     };
                     let ground_y = elevation.floor() as i32;
@@ -1321,7 +1337,7 @@ impl DefaultMapgen {
             }
         } else if vert_offset == 1 {
             if block_coord.y > water_height {
-                let snow_tendency = self.snow_tendency(x, block_coord.y, z);
+                let snow_tendency = self.snow_tendency(x as f64, block_coord.y as f64, z as f64);
                 if snow_tendency < 0.0 {
                     AIR_ID
                 } else {
@@ -1336,7 +1352,7 @@ impl DefaultMapgen {
                 self.water
             }
         } else if vert_offset == 0 && block_coord.y >= water_height {
-            let snow_tendency = self.snow_tendency(x, block_coord.y, z);
+            let snow_tendency = self.snow_tendency(x as f64, block_coord.y as f64, z as f64);
             if snow_tendency > 0.0 {
                 self.dirt_snow
             } else {
@@ -1350,8 +1366,8 @@ impl DefaultMapgen {
         }
     }
 
-    fn snow_tendency(&self, x: i32, y: i32, z: i32) -> f64 {
-        self.snow_noise.get([x as f64 / 600.0, z as f64 / 600.0]) + (y as f64) / 300.0
+    fn snow_tendency(&self, x: f64, y: f64, z: f64) -> f64 {
+        self.snow_noise.get([x / 600.0, z / 600.0]) + y / 300.0
     }
 
     fn make_simple_foliage(

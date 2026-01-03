@@ -87,27 +87,27 @@ impl KarstGenerator {
     }
 
     #[inline]
-    pub(crate) fn height(&self, xg: i32, zg: i32) -> (f32, f32, f32) {
-        let profile = self.karst_profile_noise.get([
-            xg as f64 * PROFILE_INPUT_SCALE,
-            zg as f64 * PROFILE_INPUT_SCALE,
-        ]) * 30.0
+    pub(crate) fn height(&self, xg: f64, zg: f64) -> (f32, f32, f32) {
+        let profile = self
+            .karst_profile_noise
+            .get([xg * PROFILE_INPUT_SCALE, zg * PROFILE_INPUT_SCALE])
+            * 30.0
             + 60.0;
-        let valley = self.karst_valley_noise.get([
-            xg as f64 * VALLEY_INPUT_SCALE,
-            zg as f64 * VALLEY_INPUT_SCALE,
-        ]) * 20.0;
-        let raw_modulation = self.modulating_noise.get([
-            xg as f64 * MODULATING_INPUT_SCALE,
-            zg as f64 * MODULATING_INPUT_SCALE,
-        ]) + self.slow_modulator.get([
-            xg as f64 * SLOW_MODULATOR_INPUT_SCALE,
-            zg as f64 * SLOW_MODULATOR_INPUT_SCALE,
-        ]) * 0.25;
+        let valley = self
+            .karst_valley_noise
+            .get([xg * VALLEY_INPUT_SCALE, zg * VALLEY_INPUT_SCALE])
+            * 20.0;
+        let raw_modulation = self
+            .modulating_noise
+            .get([xg * MODULATING_INPUT_SCALE, zg * MODULATING_INPUT_SCALE])
+            + self.slow_modulator.get([
+                xg * SLOW_MODULATOR_INPUT_SCALE,
+                zg * SLOW_MODULATOR_INPUT_SCALE,
+            ]) * 0.25;
 
         let cave_control = self
             .cave_control
-            .get([xg as f64 * CAVES_INPUT_SCALE, zg as f64 * CAVES_INPUT_SCALE]);
+            .get([xg * CAVES_INPUT_SCALE, zg * CAVES_INPUT_SCALE]);
 
         // The tanh lands between -1 and 1
         // Multiplying by 0.6 gives us -0.6 to 0.6
@@ -118,8 +118,8 @@ impl KarstGenerator {
             * (0.7
                 + 0.4
                     * self.modulation_slope.get([
-                        xg as f64 * MODULATION_SLOPE_INPUT_SCALE,
-                        zg as f64 * MODULATION_SLOPE_INPUT_SCALE,
+                        xg * MODULATION_SLOPE_INPUT_SCALE,
+                        zg * MODULATION_SLOPE_INPUT_SCALE,
                     ]));
         let modulation = (scaled.tanh() * 0.6 + 0.4).clamp(0.0, 1.0);
         // The cave excess is higher when modulation is higher, and is clamped to 0.
@@ -137,20 +137,16 @@ impl KarstGenerator {
         (height as f32, valley as f32, cave_ceiling as f32)
     }
 
-    pub(crate) fn profile(&self, xg: i32, zg: i32) -> f32 {
-        self.karst_profile_noise.get([
-            xg as f64 * PROFILE_INPUT_SCALE,
-            zg as f64 * PROFILE_INPUT_SCALE,
-        ]) as f32
+    pub(crate) fn profile(&self, xg: f64, zg: f64) -> f32 {
+        self.karst_profile_noise
+            .get([xg * PROFILE_INPUT_SCALE, zg * PROFILE_INPUT_SCALE]) as f32
             * 30.0
             + 60.0
     }
 
-    pub(crate) fn floor(&self, xg: i32, zg: i32) -> f32 {
-        self.karst_valley_noise.get([
-            xg as f64 * VALLEY_INPUT_SCALE,
-            zg as f64 * VALLEY_INPUT_SCALE,
-        ]) as f32
+    pub(crate) fn floor(&self, xg: f64, zg: f64) -> f32 {
+        self.karst_valley_noise
+            .get([xg * VALLEY_INPUT_SCALE, zg * VALLEY_INPUT_SCALE]) as f32
             * 20.0
     }
 
