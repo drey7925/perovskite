@@ -993,6 +993,10 @@ impl ClientState {
     pub(crate) fn client_perf(&self) -> Option<ClientPerformanceMetrics> {
         self.client_perf.lock().clone()
     }
+
+    pub(crate) fn clone_vk_ctx(&self) -> Arc<VulkanContext> {
+        self.block_renderer.clone_vk_ctx()
+    }
 }
 
 #[derive(Enum, Debug, PartialEq, Eq)]

@@ -3,6 +3,7 @@ use crate::{
         entities::GameEntity, items::ClientInventory, ClientState, FastChunkNeighbors, GameAction,
     },
     net_client::{MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION},
+    vulkan::far_geometry::far_mesh_worker,
 };
 use anyhow::{anyhow, ensure, Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3, Zero};
@@ -56,6 +57,9 @@ struct SharedState {
     batcher: Arc<MeshBatcher>,
     initial_state_notification: Arc<tokio::sync::Notify>,
     cancellation: CancellationToken,
+
+    // From network to the far geometry worker
+    far_mesh_tx: mpsc::Sender<rpc::FarGeometry>,
 
     latest_rx_tick: AtomicU64,
 
@@ -120,6 +124,16 @@ pub(crate) async fn make_contexts(
 
     let (audio_healer, audio_healer_handle) = EvictedAudioHealer::new(client_state.clone());
 
+    let state_clone = client_state.clone();
+    let cancel_clone = cancellation.clone();
+    let (far_mesh_tx, far_mesh_rx) = mpsc::channel(16);
+    let far_mesh_worker_handle = tokio::task::spawn(far_mesh_worker(
+        client_state.clone_vk_ctx(),
+        state_clone,
+        far_mesh_rx,
+        cancel_clone,
+    ));
+
     let shared_state = Arc::new(SharedState {
         protocol_version,
         outbound_tx: tx_send,
@@ -131,6 +145,7 @@ pub(crate) async fn make_contexts(
         initial_state_notification,
         _audio_healer: audio_healer,
         cancellation,
+        far_mesh_tx,
         latest_rx_tick: AtomicU64::new(0),
         inbound_worker_busy: AtomicBool::new(false),
     });
@@ -149,6 +164,7 @@ pub(crate) async fn make_contexts(
         inline_fcn_scratchpad: FastChunkNeighbors::default(),
         audio_healer_handle,
         raytrace_worker_handle,
+        far_mesh_worker_handle,
     };
 
     let outbound = OutboundContext {
@@ -460,6 +476,8 @@ pub(crate) struct InboundContext {
 
     audio_healer_handle: tokio::task::JoinHandle<Result<()>>,
     raytrace_worker_handle: tokio::task::JoinHandle<Result<()>>,
+
+    far_mesh_worker_handle: tokio::task::JoinHandle<Result<()>>,
 }
 impl InboundContext {
     pub(crate) async fn run_inbound_loop(&mut self) -> Result<()> {
@@ -579,6 +597,21 @@ impl InboundContext {
                         },
                         Err(e) => {
                             log::error!("Error awaiting raytrace worker: {e:?}");
+                            return Err(e.into());
+                        }
+                    }
+                }
+                result = &mut self.far_mesh_worker_handle => {
+                    match result {
+                        Ok(Err(e)) => {
+                            log::error!("Far mesh worker crashed: {e:?}");
+                            return Err(e.into());
+                        },
+                        Ok(Ok(_)) => {
+                            log::info!("Far mesh worker exiting");
+                        },
+                        Err(e) => {
+                            log::error!("Error awaiting far mesh worker: {e:?}");
                             return Err(e.into());
                         }
                     }
@@ -722,10 +755,12 @@ impl InboundContext {
                     );
             }
             Some(rpc::stream_to_client::ServerMessage::FarGeometry(far_geometry)) => {
-                self.shared_state.client_state.far_geometry.lock().update(
-                    far_geometry,
-                    self.shared_state.client_state.block_renderer.vk_ctx(),
-                )?;
+                match self.shared_state.far_mesh_tx.try_send(far_geometry.clone()) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::error!("Dropping far geometry message due to backlog.");
+                    }
+                }
             }
             Some(_) => {
                 log::warn!("Unimplemented server->client message {:?}", message);

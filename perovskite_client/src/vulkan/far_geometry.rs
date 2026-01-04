@@ -3,17 +3,19 @@ use std::{collections::hash_map::Entry, sync::Arc};
 use anyhow::{Context, Result};
 use cgmath::{vec4, ElementWise, InnerSpace, Matrix4, Vector3};
 use itertools::Itertools;
+use parking_lot::Mutex;
 use perovskite_core::{
     coordinates::ChunkCoordinate,
     far_sheet::{IndexBufferKey, IndexPrimitiveTopology, SheetControl},
     protocol::{game_rpc, map as map_rpc},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use tokio_util::sync::CancellationToken;
 use tracy_client::span;
 use vulkano::buffer::{BufferUsage, Subbuffer};
 
 use crate::{
-    client_state::block_types::ClientBlockTypeManager,
+    client_state::{block_types::ClientBlockTypeManager, ClientState},
     vulkan::{
         shaders::{
             far_mesh::{FarMeshDrawCall, FarMeshVertex},
@@ -287,4 +289,28 @@ impl FarGeometryState {
             })
             .collect()
     }
+}
+
+pub(crate) async fn far_mesh_worker(
+    vk_ctx: Arc<VulkanContext>,
+    state: Arc<ClientState>,
+    mut rx: tokio::sync::mpsc::Receiver<game_rpc::FarGeometry>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                break;
+            }
+            rpc = rx.recv() => {
+                if let Some(rpc) = rpc {
+                  tokio::task::block_in_place(|| state.far_geometry.lock().update(&rpc, &vk_ctx))?;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    log::info!("Far geometry worker exiting");
+    Ok(())
 }

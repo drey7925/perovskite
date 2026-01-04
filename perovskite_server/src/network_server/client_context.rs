@@ -3035,8 +3035,10 @@ impl FarMeshSender {
             }
         }
 
-        self.meshes
-            .fill_with_policy(&mut callbacks, &FillPolicy { map_pos });
+        tokio::task::block_in_place(|| {
+            self.meshes
+                .fill_with_policy(&mut callbacks, &FillPolicy { map_pos });
+        });
 
         self.outbound_tx
             .send(Ok(StreamToClient {

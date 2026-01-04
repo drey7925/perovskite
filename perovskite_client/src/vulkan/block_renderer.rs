@@ -620,6 +620,10 @@ impl BlockRenderer {
         &self.vk_ctx
     }
 
+    pub(crate) fn clone_vk_ctx(&self) -> Arc<VulkanContext> {
+        self.vk_ctx.clone()
+    }
+
     pub(crate) fn build_raytrace_data(
         &self,
         block_ids: &[BlockId; 18 * 18 * 18],
