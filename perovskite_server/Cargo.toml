@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_server"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Game server"
@@ -11,12 +11,12 @@ categories = ["game-engines"]
 build = "build.rs"
 
 [dependencies]
-anyhow = {  version = "1" , features = ["backtrace"]}
+anyhow = { version = "1", features = ["backtrace"] }
 bitvec = "1.0.1"
 cbloom = "0.1.3"
 cgmath = "0.18.0"
 clap = { version = "4.3.0", features = ["derive"] }
-perovskite_core = { path = "../perovskite_core", version = "0.2.1" }
+perovskite_core = { path = "../perovskite_core", version = "0.2.2" }
 hashbrown = "0.16.0"
 hex = "0.4.3"
 integer-encoding = "4.0.0"
@@ -38,16 +38,27 @@ tokio-util = "0.7.8"
 tonic = { version = "0.14.2", features = ["gzip", "tls-ring"] }
 tonic-reflection = "0.14.2"
 tracing = "0.1.41"
-tracy-client = { version = "0.18.2", default-features = false, features = ["system-tracing", "context-switch-tracing", "sampling", "code-transfer",
-            "broadcast" ] }
-uuid = { version="1.3.3", features = ["v4", "fast-rng"] }
+tracy-client = { version = "0.18.2", default-features = false, features = [
+    "system-tracing",
+    "context-switch-tracing",
+    "sampling",
+    "code-transfer",
+    "broadcast",
+] }
+uuid = { version = "1.3.3", features = ["v4", "fast-rng"] }
 smallvec = "1.11.1"
 futures = "0.3.28"
 type-map = "0.5.0"
 circular-buffer = "1.1.0"
 arrayvec = "^0.7.4"
 obj-rs = "0.7.1"
-bytemuck = { version = "1.24.0", features = ["alloc_uninit", "derive", "extern_crate_alloc", "zeroable_atomics", "zeroable_maybe_uninit"] }
+bytemuck = { version = "1.24.0", features = [
+    "alloc_uninit",
+    "derive",
+    "extern_crate_alloc",
+    "zeroable_atomics",
+    "zeroable_maybe_uninit",
+] }
 rlimit = "0.10.1"
 serde = { version = "1.0.163", features = ["derive"] }
 ron = "0.11.0"
@@ -62,7 +73,9 @@ rustc_version = "0.4.1"
 [dev-dependencies]
 scopeguard = "1.2.0"
 loom = { version = "0.7.2", features = ["default", "checkpoint"] }
-perovskite_core = { path = "../perovskite_core", version = "0.2.1", features = ["loom_sync"] }
+perovskite_core = { path = "../perovskite_core", version = "0.2.2", features = [
+    "loom_sync",
+] }
 
 [features]
 default = []
@@ -74,4 +87,7 @@ tracy = ["tracy-client/enable"]
 dhat-heap = []
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)', 'cfg(fuzzing)'] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(tokio_unstable)',
+    'cfg(fuzzing)',
+] }

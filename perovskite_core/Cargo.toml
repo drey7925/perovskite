@@ -1,6 +1,6 @@
 [package]
 name = "perovskite_core"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Multiplayer voxel game written in Rust - Implementation details shared between client and server"
@@ -8,7 +8,7 @@ authors = ["drey7925 <drey@dreyclimbs.rocks>"]
 repository = "https://github.com/drey7925/perovskite"
 
 [dependencies]
-anyhow = {  version = "1" , features = ["backtrace"]}
+anyhow = { version = "1", features = ["backtrace"] }
 argon2 = "0.5.3"
 bitvec = "1.0.1"
 bytemuck = { version = "1.24.0", features = ["derive"] }
@@ -24,7 +24,10 @@ thiserror = "2.0.17"
 tonic = "0.14.2"
 scopeguard = "1.2.0"
 log = "0.4.28"
-loom = { version = "0.7.2", features = ["default", "checkpoint"], optional = true }
+loom = { version = "0.7.2", features = [
+    "default",
+    "checkpoint",
+], optional = true }
 itertools = "0.14.0"
 
 [dev-dependencies]
