@@ -16,6 +16,9 @@
 
 pub mod perovskite {
     pub mod protocol {
+        pub const MIN_VERSION_HEADER: &str = "perovskite-rpc-min-version";
+        pub const MAX_VERSION_HEADER: &str = "perovskite-rpc-max-version";
+
         pub mod blocks {
             tonic::include_proto!("perovskite.protocol.blocks");
         }

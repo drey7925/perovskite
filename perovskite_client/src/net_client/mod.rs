@@ -40,6 +40,7 @@ use tokio::task::block_in_place;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::ClientTlsConfig;
+use tonic::IntoRequest;
 use tonic::{async_trait, transport::Channel, Request, Streaming};
 use unicode_normalization::UnicodeNormalization;
 
@@ -70,6 +71,7 @@ async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channe
     let channel = Channel::from_shared(server_addr)?
         .tls_config(tls)?
         .connect_timeout(Duration::from_secs(10))
+        .user_agent("PerovskiteClient")?
         .connect()
         .await?;
 
@@ -78,6 +80,24 @@ async fn connect_grpc(server_addr: String) -> Result<PerovskiteGameClient<Channe
 
 const TOTAL_STEPS: f32 = 12.0;
 
+pub(crate) trait WithVersionHeaders {
+    fn with_version_headers(self) -> Self;
+}
+
+impl<T> WithVersionHeaders for Request<T> {
+    fn with_version_headers(self) -> Self {
+        let mut request = self;
+        request.metadata_mut().append(
+            perovskite_core::protocol::MIN_VERSION_HEADER,
+            MIN_PROTOCOL_VERSION.to_string().try_into().unwrap(),
+        );
+        request.metadata_mut().append(
+            perovskite_core::protocol::MAX_VERSION_HEADER,
+            MAX_PROTOCOL_VERSION.to_string().try_into().unwrap(),
+        );
+        request
+    }
+}
 pub(crate) async fn connect_game(
     server_addr: String,
     username: String,
@@ -100,6 +120,7 @@ pub(crate) async fn connect_game(
     let request = Request::new(ReceiverStream::new(tx_recv));
     let mut stream = connection.game_stream(request).await?.into_inner();
     progress.send((2.0 / TOTAL_STEPS, "Logging into server...".to_string()))?;
+    log::info!("Logging into server...");
 
     let AuthSuccess {
         protocol_version,
@@ -120,11 +141,21 @@ pub(crate) async fn connect_game(
             protocol_version
         )
     }
-    log::info!("Protocol version: {}", protocol_version);
-    log::info!("Connection to {} established.", &server_addr);
+    log::info!(
+        "Connection to {} established with protocol version {}",
+        &server_addr,
+        protocol_version
+    );
 
     progress.send((3.0 / TOTAL_STEPS, "Fetching media list...".to_string()))?;
-    let media_list = connection.list_media(ListMediaRequest::default()).await?;
+    log::info!("Fetching media list...");
+    let media_list = connection
+        .list_media(
+            ListMediaRequest::default()
+                .into_request()
+                .with_version_headers(),
+        )
+        .await?;
     log::info!(
         "{} media items loaded from server",
         media_list.get_ref().media.len()
@@ -138,14 +169,17 @@ pub(crate) async fn connect_game(
         4.0 / TOTAL_STEPS,
         "Loading block definitions...".to_string(),
     ))?;
-    let block_defs_proto = connection.get_block_defs(GetBlockDefsRequest {}).await?;
+    log::info!("Loading block definitions...");
+    let block_defs_proto = connection
+        .get_block_defs(GetBlockDefsRequest {}.into_request().with_version_headers())
+        .await?;
     log::info!(
         "{} block defs loaded from server",
         block_defs_proto.get_ref().block_types.len()
     );
 
     progress.send((5.0 / TOTAL_STEPS, "Loading block textures...".to_string()))?;
-
+    log::info!("Loading block textures...");
     let block_types = Arc::new(block_in_place(|| {
         ClientBlockTypeManager::new(block_defs_proto.into_inner().block_types)
     })?);
@@ -154,6 +188,7 @@ pub(crate) async fn connect_game(
         6.0 / TOTAL_STEPS,
         "Setting up block renderer...".to_string(),
     ))?;
+    log::info!("Setting up block renderer...");
     let block_renderer =
         { BlockRenderer::new(block_types.clone(), &mut cache_manager, vk_ctx.clone()).await? };
 
@@ -164,7 +199,10 @@ pub(crate) async fn connect_game(
     })?;
 
     progress.send((7.0 / TOTAL_STEPS, "Loading item definitions...".to_string()))?;
-    let item_defs_proto = connection.get_item_defs(GetItemDefsRequest {}).await?;
+    log::info!("Loading item definitions...");
+    let item_defs_proto = connection
+        .get_item_defs(GetItemDefsRequest {}.into_request().with_version_headers())
+        .await?;
     log::info!(
         "{} item defs loaded from server",
         item_defs_proto.get_ref().item_defs.len()
@@ -174,6 +212,7 @@ pub(crate) async fn connect_game(
     )?);
 
     progress.send((8.0 / TOTAL_STEPS, "Loading item textures...".to_string()))?;
+    log::info!("Loading item textures...");
     let (hud, egui) = crate::game_ui::make_uis(
         items.clone(),
         &mut cache_manager,
@@ -187,7 +226,14 @@ pub(crate) async fn connect_game(
         9.0 / TOTAL_STEPS,
         "Loading entity definitions...".to_string(),
     ))?;
-    let entity_defs = connection.get_entity_defs(GetEntityDefsRequest {}).await?;
+    log::info!("Loading entity definitions...");
+    let entity_defs = connection
+        .get_entity_defs(
+            GetEntityDefsRequest {}
+                .into_request()
+                .with_version_headers(),
+        )
+        .await?;
     log::info!(
         "{} entity defs loaded from server",
         entity_defs.get_ref().entity_defs.len()
@@ -199,8 +245,9 @@ pub(crate) async fn connect_game(
     )
     .await?;
     progress.send((10.0 / TOTAL_STEPS, "Loading audio files...".to_string()))?;
+    log::info!("Loading audio files...");
     let audio_defs = connection
-        .get_audio_defs(GetAudioDefsRequest {})
+        .get_audio_defs(GetAudioDefsRequest {}.into_request().with_version_headers())
         .await?
         .into_inner();
 
