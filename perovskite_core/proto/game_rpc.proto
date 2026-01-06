@@ -418,11 +418,11 @@ message StartAuth {
   // 8 - 2025-06-10 ~ 2025-08-13
   //        * Refactor TextureReference+friends for raytracing PBR
   //        * All the other PBR and raytracing related stuff up until 0.2.0
-  // 9 - 2025-08-22 ~
+  // 9 - 2025-08-22
   //        * Add client tick to pacing
-  // 10 - 2025-12-08 ~
-  //        * Far geometry using FarSheet. Server sending nothing is a valid
-  //        state, so this only requires attention for new servers + old clients
+  // 10 - 2025-12-08 - 2026-01-06
+  //        * Far geometry using FarSheet.
+  //        * LOD details in block definitions
   uint32 min_protocol_version = 4;
   uint32 max_protocol_version = 5;
 }
