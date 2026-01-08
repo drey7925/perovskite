@@ -3,7 +3,6 @@ use std::{collections::hash_map::Entry, sync::Arc};
 use anyhow::{Context, Result};
 use cgmath::{vec4, ElementWise, InnerSpace, Matrix4, Vector3};
 use itertools::Itertools;
-use parking_lot::Mutex;
 use perovskite_core::{
     coordinates::ChunkCoordinate,
     far_sheet::{IndexBufferKey, IndexPrimitiveTopology, SheetControl},

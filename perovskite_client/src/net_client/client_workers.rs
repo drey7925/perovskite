@@ -757,7 +757,7 @@ impl InboundContext {
             Some(rpc::stream_to_client::ServerMessage::FarGeometry(far_geometry)) => {
                 match self.shared_state.far_mesh_tx.try_send(far_geometry.clone()) {
                     Ok(_) => {}
-                    Err(e) => {
+                    Err(_) => {
                         log::error!("Dropping far geometry message due to backlog.");
                     }
                 }

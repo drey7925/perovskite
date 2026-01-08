@@ -384,8 +384,8 @@ impl InputState {
     }
 
     pub(crate) fn window_event(&mut self, event: &WindowEvent) {
-        if let WindowEvent::KeyboardInput { event: input, .. } = event {
-            match input.state {
+        match event {
+            WindowEvent::KeyboardInput { event: input, .. } => match input.state {
                 ElementState::Pressed => {
                     self.active_keybinds
                         .insert(Keybind::Key(input.physical_key));
@@ -400,9 +400,8 @@ impl InputState {
                         .remove(&Keybind::Key(input.physical_key));
                     self.new_releases.insert(Keybind::Key(input.physical_key));
                 }
-            }
-        } else if let &WindowEvent::MouseInput { state, button, .. } = event {
-            match state {
+            },
+            &WindowEvent::MouseInput { state, button, .. } => match state {
                 ElementState::Pressed => {
                     if self.mouse_captured {
                         self.active_keybinds.insert(Keybind::MouseButton(button));
@@ -415,7 +414,11 @@ impl InputState {
                     self.active_keybinds.remove(&Keybind::MouseButton(button));
                     self.new_releases.insert(Keybind::MouseButton(button));
                 }
+            },
+            WindowEvent::Focused(false) => {
+                self.mouse_captured = false;
             }
+            _ => {}
         }
     }
 

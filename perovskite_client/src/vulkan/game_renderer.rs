@@ -988,7 +988,11 @@ impl GameRenderer {
                 event_loop.exit();
                 return;
             }
-            let consumed = game.egui_adapter.as_mut().unwrap().window_event(&event);
+            let consumed = game
+                .egui_adapter
+                .as_mut()
+                .expect("Running game should have egui adapter")
+                .window_event(&event);
 
             if !consumed {
                 game.client_state.window_event(&event);
@@ -1037,8 +1041,9 @@ impl GameRenderer {
                         if !self.warned_about_capture_issue {
                             self.warned_about_capture_issue = true;
                             log::warn!(
-                                            "Failed to move cursor position to center of window. This message will only display once per session. {:?}", e
-                                        )
+                                "Failed to move cursor position to center of window. This message will only display once per session. {:?}",
+                                e
+                            );
                         }
                     }
                 }
@@ -1053,15 +1058,15 @@ impl GameRenderer {
                         if !self.warned_about_capture_issue {
                             self.warned_about_capture_issue = true;
                             log::warn!(
-                                            "Failed to grab cursor, falling back to non-confined. This message will only display once per session. {:?}", e
-                                        )
+                                "Failed to grab cursor, falling back to non-confined. This message will only display once per session. {:?}",
+                                e
+                            );
                         }
                     }
                 }
                 self.vk_wnd.window.set_cursor_visible(false);
             } else {
                 self.vk_wnd.window.set_cursor_visible(true);
-                // todo this is actually fallible, and some window managers get unhappy
                 match self
                     .vk_wnd
                     .window
@@ -1072,8 +1077,8 @@ impl GameRenderer {
                         if !self.warned_about_capture_issue {
                             self.warned_about_capture_issue = true;
                             log::warn!(
-                                            "Failed to release cursor, falling back to non-confined. This message will only display once per session."
-                                        )
+                                "Failed to release cursor, falling back to non-confined. This message will only display once per session."
+                            );
                         }
                     }
                 }
