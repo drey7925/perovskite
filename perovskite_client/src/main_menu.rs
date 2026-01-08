@@ -535,6 +535,7 @@ pub(crate) fn draw_settings_menu(
             let save_button = egui::Button::new("Save");
             let graphics_updated = prospective_settings.render.build_global_config(vk_ctx) != settings.load().render.build_global_config(vk_ctx);
             if ui.add(save_button).clicked() {
+                prospective_settings.generation += 1;
                 settings.store(Arc::new(prospective_settings.clone()));
                 if let Err(e) = prospective_settings.save_to_disk() {
                     log::error!("Failure saving settings: {}", e);

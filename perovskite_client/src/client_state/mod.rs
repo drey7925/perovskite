@@ -16,7 +16,7 @@
 
 use std::f64::consts::PI;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -693,6 +693,7 @@ pub(crate) struct ClientState {
     pub(crate) want_new_client_perf: tokio::sync::Notify,
     pub(crate) render_distance: AtomicU32,
     pub(crate) far_geometry_enabled: AtomicBool,
+    pub(crate) settings_generation: AtomicU64,
 }
 
 const PROJ_NEAR: f64 = 0.05;
@@ -755,6 +756,7 @@ impl ClientState {
             want_new_client_perf: tokio::sync::Notify::new(),
             render_distance: AtomicU32::new(settings.load().render.render_distance),
             far_geometry_enabled: AtomicBool::new(settings.load().render.enable_far_geometry),
+            settings_generation: AtomicU64::new(settings.load().generation),
         })
     }
 
@@ -784,6 +786,23 @@ impl ClientState {
     }
 
     pub(crate) fn next_frame(&self, aspect_ratio: f64, tick: u64) -> FrameState {
+        {
+            let settings_generation = self.settings_generation.load(Ordering::Acquire);
+            let settings = self.settings.load();
+            if settings_generation != settings.generation {
+                // These are only atomic for atomicity, not for synchronization.
+                // We can freely interleave them and don't care about the exact order.
+                self.settings_generation
+                    .store(settings.generation, Ordering::Release);
+                self.render_distance
+                    .store(settings.render.render_distance, Ordering::Release);
+                self.far_geometry_enabled
+                    .store(settings.render.enable_far_geometry, Ordering::Release);
+                drop(settings);
+                log::info!("New settings generation {}", settings_generation);
+            }
+        }
+
         let egui_wants_events;
         {
             self.timekeeper.update_frame();

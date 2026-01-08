@@ -236,6 +236,9 @@ pub(crate) struct GameSettings {
     // If set, the settings couldn't be parsed and shouldn't be saved
     #[serde(skip)]
     pub(crate) internal_parsing_failure_message: Option<String>,
+
+    #[serde(skip)]
+    pub(crate) generation: u64,
 }
 impl GameSettings {
     pub(crate) fn save_to_disk(&self) -> Result<()> {
