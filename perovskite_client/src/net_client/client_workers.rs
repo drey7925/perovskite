@@ -338,6 +338,11 @@ impl OutboundContext {
                             .load(Ordering::Relaxed),
                     }),
                     hotbar_slot,
+                    want_far_geometry: self
+                        .shared_state
+                        .client_state
+                        .far_geometry_enabled
+                        .load(Ordering::Relaxed),
                     footstep_coordinate: animation_state
                         .footstep_coord
                         .into_iter()

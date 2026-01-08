@@ -234,6 +234,7 @@ pub(crate) async fn make_client_contexts(
         kinematics: initial_position,
         chunks_to_send: 16,
         client_requested_render_distance: 20,
+        client_wants_far_geometry: false,
     });
 
     let cancellation = CancellationToken::new();
@@ -2043,6 +2044,7 @@ impl InboundWorker {
                     kinematics: pos,
                     chunks_to_send: self.context.chunk_aimd.lock().get(),
                     client_requested_render_distance: max_distance,
+                    client_wants_far_geometry: update.want_far_geometry,
                 });
                 self.context
                     .player_context
@@ -2871,7 +2873,13 @@ impl FarMeshSender {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let position = self.context.get_position_override().unwrap_or(self.player_position.borrow().kinematics.position);
+                    let position = {
+                        let player_position = self.player_position.borrow();
+                        if !player_position.client_wants_far_geometry {
+                            continue;
+                        }
+                        self.context.get_position_override().unwrap_or(player_position.kinematics.position)
+                    };
                     self.send_meshes(position).await?;
                 },
                 _ = self.context.cancellation.cancelled() => {
@@ -3142,6 +3150,7 @@ struct PositionAndPacing {
     kinematics: PlayerPositionUpdate,
     chunks_to_send: usize,
     client_requested_render_distance: i32,
+    client_wants_far_geometry: bool,
 }
 
 struct Aimd {

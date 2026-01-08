@@ -62,6 +62,7 @@ pub(crate) struct RenderSettings {
     pub(crate) raytracer_debug: bool,
     pub(crate) raytracing_specular_downsampling: u32,
     pub(crate) approx_gaussian_blit: bool,
+    pub(crate) enable_far_geometry: bool,
 }
 
 impl RenderSettings {
@@ -117,6 +118,7 @@ impl Default for RenderSettings {
             lens_flare_strength: 1.0,
             blur_steps: 5,
             approx_gaussian_blit: false,
+            enable_far_geometry: true,
         }
     }
 }

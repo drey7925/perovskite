@@ -30,6 +30,7 @@ pub(crate) enum BoundAction {
     AuxDebugKey,
     ViewRangeUp,
     ViewRangeDown,
+    ToggleFarGeometry,
 }
 impl std::fmt::Display for BoundAction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -60,6 +61,7 @@ impl BoundAction {
             BoundAction::AuxDebugKey => "Aux debug key",
             BoundAction::ViewRangeUp => "Increase view range",
             BoundAction::ViewRangeDown => "Decrease view range",
+            BoundAction::ToggleFarGeometry => "Toggle terrain preview",
         }
     }
 
@@ -88,6 +90,7 @@ impl BoundAction {
             BoundAction::AuxDebugKey => "Development-only keybind, used for WIP features.",
             BoundAction::ViewRangeUp => "Increase the max chunk view distance",
             BoundAction::ViewRangeDown => "Decrease the max chunk view distance",
+            BoundAction::ToggleFarGeometry => "Toggle the far terrain preview on/off",
         }
     }
 
@@ -114,6 +117,7 @@ impl BoundAction {
             BoundAction::AuxDebugKey,
             BoundAction::ViewRangeUp,
             BoundAction::ViewRangeDown,
+            BoundAction::ToggleFarGeometry,
         ];
         ALL
     }
@@ -151,6 +155,7 @@ pub(crate) struct KeybindSettings {
 
     pub(crate) view_range_up: Keybind,
     pub(crate) view_range_down: Keybind,
+    pub(crate) toggle_far_geometry: Keybind,
 
     pub(crate) hotbar_slots: [Keybind; 8],
 }
@@ -178,6 +183,7 @@ impl KeybindSettings {
             BoundAction::AuxDebugKey => self.aux_debug_key,
             BoundAction::ViewRangeUp => self.view_range_up,
             BoundAction::ViewRangeDown => self.view_range_down,
+            BoundAction::ToggleFarGeometry => self.toggle_far_geometry,
         }
     }
 
@@ -204,6 +210,7 @@ impl KeybindSettings {
             BoundAction::AuxDebugKey => self.aux_debug_key = keybind,
             BoundAction::ViewRangeUp => self.view_range_up = keybind,
             BoundAction::ViewRangeDown => self.view_range_down = keybind,
+            BoundAction::ToggleFarGeometry => self.toggle_far_geometry = keybind,
         }
     }
 
@@ -238,6 +245,7 @@ impl KeybindSettings {
             aux_debug_key: migrate(self.aux_debug_key),
             view_range_up: migrate(self.view_range_up),
             view_range_down: migrate(self.view_range_down),
+            toggle_far_geometry: migrate(self.toggle_far_geometry),
             hotbar_slots: self.hotbar_slots.map(|x| migrate(x)),
         }
     }
@@ -269,6 +277,7 @@ impl Default for KeybindSettings {
             aux_debug_key: Key(PhysicalKey::Code(KeyCode::F12)),
             view_range_up: Key(PhysicalKey::Code(KeyCode::BracketRight)),
             view_range_down: Key(PhysicalKey::Code(KeyCode::BracketLeft)),
+            toggle_far_geometry: Key(PhysicalKey::Code(KeyCode::F4)),
             hotbar_slots: [
                 Key(PhysicalKey::Code(KeyCode::Digit1)),
                 Key(PhysicalKey::Code(KeyCode::Digit2)),

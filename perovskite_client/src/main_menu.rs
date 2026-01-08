@@ -650,6 +650,8 @@ fn draw_render_settings(
     const SCALE_INVENTORY_HOVER_TEXT: &str = "When on a high-density display, whether to make inventory tiles larger based on the display's scale.";
     const FOV_HOVER_TEXT: &str = "The field of view. Higher values give a wider view.";
     const RENDER_DISTANCE_HOVER_TEXT: &str = "How many chunks away to load and render.";
+    const TERRAIN_PREVIEW_HOVER_TEXT: &str =
+        "Whether to render the terrain preview for chunks that are not currently loaded. May have small visual artifacts, and may be weird if the mapgen changes over time.";
     const HDR_HOVER_TEXT: &str = "HDR effects (lens flares, light bloom)";
     const HDR_BLOOM_STRENGTH_HOVER_TEXT: &str = "Relative strength of the HDR bloom effect.";
     const HDR_BLOOM_SIZE_HOVER_TEXT: &str = "Relative size of the HDR bloom effect.";
@@ -766,6 +768,15 @@ fn draw_render_settings(
             )
                 .on_hover_text(RENDER_DISTANCE_HOVER_TEXT);
             ui.end_row();
+
+            ui.label("Terrain preview").on_hover_text(TERRAIN_PREVIEW_HOVER_TEXT);
+            ui.add(egui::Checkbox::new(
+                &mut prospective_settings.render.enable_far_geometry,
+                "Enabled",
+            ))
+                .on_hover_text(TERRAIN_PREVIEW_HOVER_TEXT);
+            ui.end_row();
+
             ui.label("HDR").on_hover_text(HDR_HOVER_TEXT);
             ui.add(egui::Checkbox::new(
                 &mut prospective_settings.render.hdr,

@@ -312,9 +312,15 @@ impl ActiveGame {
 
         let cube_uniform = self.cube_pipeline.make_uniform_buffer(ctx, scene_state)?;
 
-        let far_mesh_calls = {
+        let far_mesh_calls = if self
+            .client_state
+            .far_geometry_enabled
+            .load(Ordering::Relaxed)
+        {
             let lock = self.client_state.far_geometry.lock();
             lock.draw_calls(player_position, scene_state.vp_matrix, &batched_handled)
+        } else {
+            Vec::new()
         };
 
         // At this point, we are in the Color + Depth renderpass

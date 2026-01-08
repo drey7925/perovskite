@@ -692,6 +692,7 @@ pub(crate) struct ClientState {
     pub(crate) want_server_perf: AtomicBool,
     pub(crate) want_new_client_perf: tokio::sync::Notify,
     pub(crate) render_distance: AtomicU32,
+    pub(crate) far_geometry_enabled: AtomicBool,
 }
 
 const PROJ_NEAR: f64 = 0.05;
@@ -753,6 +754,7 @@ impl ClientState {
             want_server_perf: AtomicBool::new(false),
             want_new_client_perf: tokio::sync::Notify::new(),
             render_distance: AtomicU32::new(settings.load().render.render_distance),
+            far_geometry_enabled: AtomicBool::new(settings.load().render.enable_far_geometry),
         })
     }
 
@@ -838,6 +840,18 @@ impl ClientState {
                 self.egui.lock().push_status_bar(
                     Duration::from_secs(5),
                     format!("Asking server to send up to {new_distance} chunks view distance"),
+                );
+            } else if input.take_just_pressed(BoundAction::ToggleFarGeometry) {
+                let new_enabled = !self
+                    .far_geometry_enabled
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(!x))
+                    .unwrap();
+                self.egui.lock().push_status_bar(
+                    Duration::from_secs(5),
+                    format!(
+                        "Far geometry {}",
+                        if new_enabled { "enabled" } else { "disabled" }
+                    ),
                 );
             }
         }

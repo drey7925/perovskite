@@ -325,6 +325,8 @@ message ClientUpdate {
   // todo animation state
   // If set, player had footsteps since the last client update
   repeated Footstep footstep_coordinate = 4;
+  // If true, the client wants the server to send far geometry
+  bool want_far_geometry = 5;
 }
 
 message PlayerPosition {
