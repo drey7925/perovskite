@@ -261,7 +261,7 @@ impl Default for KeybindSettings {
             move_left: Key(PhysicalKey::Code(KeyCode::KeyA)),
             move_right: Key(PhysicalKey::Code(KeyCode::KeyD)),
             toggle_physics: Key(PhysicalKey::Code(KeyCode::KeyP)),
-            jump: Key(PhysicalKey::Code(KeyCode::KeyJ)),
+            jump: Key(PhysicalKey::Code(KeyCode::Space)),
             descend: Key(PhysicalKey::Code(KeyCode::ShiftLeft)),
             fast_move: Key(PhysicalKey::Code(KeyCode::ControlLeft)),
             interact_key: Key(PhysicalKey::Code(KeyCode::KeyF)),
