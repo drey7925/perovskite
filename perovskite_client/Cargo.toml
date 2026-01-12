@@ -52,7 +52,7 @@ tracy-client = { version = "0.18.0", default-features = false, features = [
     "code-transfer",
     "broadcast",
 ] }
-vulkano = "0.35.1"
+vulkano = "0.35.2"
 vulkano-shaders = { version = "0.35.0", features = [
     "shaderc-build-from-source",
     "shaderc-debug",

@@ -770,7 +770,7 @@ fn draw_render_settings(
                 .on_hover_text(RENDER_DISTANCE_HOVER_TEXT);
             ui.end_row();
 
-            ui.label("Terrain preview").on_hover_text(TERRAIN_PREVIEW_HOVER_TEXT);
+            ui.label("Terrain preview (beta)").on_hover_text(TERRAIN_PREVIEW_HOVER_TEXT);
             ui.add(egui::Checkbox::new(
                 &mut prospective_settings.render.enable_far_geometry,
                 "Enabled",
