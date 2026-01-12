@@ -542,6 +542,8 @@ impl EguiUi {
         atlas_texture: TextureId,
         client_state: &ClientState,
     ) {
+        ui.style_mut().interaction.tooltip_delay = 0.0;
+        ui.style_mut().interaction.show_tooltips_only_when_still = false;
         let mut clicked_index = None;
         let inventory = match inventory_manager.inventory_views.get(&view_id) {
             Some(x) => x,
