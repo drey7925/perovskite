@@ -93,6 +93,24 @@ pub struct ServerArgs {
     pub num_map_prefetchers: usize,
 }
 
+impl ServerArgs {
+    /// Returns a ServerArgs struct that can be used for testing. The temporary directory
+    /// will be passed to the underlying game content, but is not inherently used unless either
+    /// a disk-backed database is initialized with it, or any game content accesses files based on
+    /// GameState.args.data_dir.
+    pub fn with_tempdir() -> ServerArgs {
+        ServerArgs {
+            data_dir: temp_dir().join("perovskite_inmem_dummy"),
+            bind_addr: None,
+            port: 0,
+            trace_rate_denominator: 1024,
+            rocksdb_point_lookup_cache_mib: 32,
+            rocksdb_num_fds: 32,
+            num_map_prefetchers: 8,
+        }
+    }
+}
+
 pub struct Server {
     runtime: tokio::runtime::Runtime,
     game_state: Arc<GameState>,
@@ -192,7 +210,7 @@ impl Server {
         }
     }
 
-    pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> Result<T>) -> Result<T> {
+    pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> T) -> T {
         let _enter_guard = self.runtime.enter();
         task(self.game_state())
     }
@@ -221,15 +239,7 @@ pub fn testonly_in_memory_with_db(db: Arc<dyn GameDatabase>) -> Result<Server> {
 
     let game_behaviors = GameBehaviors::dummy_game_behaviors();
 
-    let args = ServerArgs {
-        data_dir: temp_dir().join("perovskite_inmem_dummy"),
-        bind_addr: None,
-        port: 0,
-        trace_rate_denominator: 1024,
-        rocksdb_point_lookup_cache_mib: 32,
-        rocksdb_num_fds: 32,
-        num_map_prefetchers: 8,
-    };
+    let args = ServerArgs::with_tempdir();
 
     let gs = GameState::new(
         args,
@@ -333,10 +343,14 @@ impl MapgenInterface for DummyMapgen {
 }
 
 impl ServerBuilder {
+    /// Creates a ServerBuilder that will run a server according to the command line arguments
+    /// passed to the program, using a real disk-backed database.
     pub fn from_cmdline() -> Result<ServerBuilder> {
         Self::from_args(&ServerArgs::parse())
     }
 
+    /// Creates a ServerBuilder that will run a server according to the command line arguments
+    /// passed as a struct, using a real disk-backed database.
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
         tracing::info!(
             "Build info: {}",
@@ -354,18 +368,23 @@ impl ServerBuilder {
 
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
-        let mut options = RocksdbOptions::default();
-        options.create_if_missing(true);
-        options.optimize_for_point_lookup(args.rocksdb_point_lookup_cache_mib);
+        let mut db_opts = RocksdbOptions::default();
+        db_opts.create_if_missing(true);
+        db_opts.optimize_for_point_lookup(args.rocksdb_point_lookup_cache_mib);
         let rocksdb_fds = set_rlimit_for_rocksdb(args.rocksdb_num_fds)?;
         tracing::info!(
             "Using up to {} open file descriptors for rocksdb",
             rocksdb_fds
         );
-        options.set_max_open_files(rocksdb_fds);
+        db_opts.set_max_open_files(rocksdb_fds);
 
-        let db = Self::make_rocksdb_backend(db_dir, options)?;
+        let db = Self::make_rocksdb_backend(db_dir, db_opts)?;
+        Self::from_args_and_db(args, db)
+    }
 
+    /// Creates a ServerBuilder that will run a server according to the command line arguments
+    /// passed as a struct, and using the provided database implementation.
+    pub fn from_args_and_db(args: &ServerArgs, db: Arc<dyn GameDatabase>) -> Result<ServerBuilder> {
         let blocks = BlockTypeManager::create_or_load(db.as_ref())?;
         let entities = EntityTypeManager::create_or_load(db.as_ref())?;
         let items = ItemManager::new()?;

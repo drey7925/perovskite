@@ -66,6 +66,7 @@ either = "1.15.0"
 arc-swap = "1.7.1"
 seqlock = "0.2.0"
 slotmap = "1.1.1"
+googletest = { version = "0.14.2", optional = true }
 
 [build-dependencies]
 rustc_version = "0.4.1"
@@ -76,6 +77,7 @@ loom = { version = "0.7.2", features = ["default", "checkpoint"] }
 perovskite_core = { path = "../perovskite_core", version = "0.2.2", features = [
     "loom_sync",
 ] }
+googletest = "0.14.2"
 
 [features]
 default = []
@@ -85,6 +87,7 @@ db_failure_injection = []
 tracy = ["tracy-client/enable"]
 
 dhat-heap = []
+test-support = ["googletest"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

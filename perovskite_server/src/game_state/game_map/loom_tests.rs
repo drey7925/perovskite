@@ -58,7 +58,7 @@ fn test_load_store_purge() {
                     .block_on(loom_map.do_shutdown())
                     .unwrap();
             });
-            Ok(())
+            anyhow::Ok(())
         })
         .unwrap();
 }
@@ -111,7 +111,7 @@ fn test_lighting() {
                     .block_on(loom_map.do_shutdown())
                     .unwrap();
             });
-            Ok(())
+            anyhow::Ok(())
         })
         .unwrap();
 }

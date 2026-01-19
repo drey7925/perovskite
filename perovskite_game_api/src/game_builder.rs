@@ -34,7 +34,7 @@ use perovskite_server::{
         items::Item,
         GameState,
     },
-    server::{ServerArgs, ServerBuilder},
+    server::{GameDatabase, Server, ServerArgs, ServerBuilder},
 };
 
 use anyhow::{Context, Result};
@@ -310,10 +310,10 @@ impl GameBuilder {
     /// command line. If argument parsing fails, usage info is printed to
     /// the terminal and the process exits.
     pub fn from_cmdline() -> Result<GameBuilder> {
-        Self::new_with_builtins(ServerBuilder::from_cmdline()?)
+        Self::from_serverbuilder(ServerBuilder::from_cmdline()?)
     }
 
-    pub fn using_tempdir() -> Result<(GameBuilder, PathBuf)> {
+    pub fn using_tempdir_disk_backed() -> Result<(GameBuilder, PathBuf)> {
         let data_dir =
             std::env::temp_dir().join(format!("perovskite-{}", rand::thread_rng().next_u64()));
         let builder = ServerBuilder::from_args(&ServerArgs {
@@ -326,13 +326,13 @@ impl GameBuilder {
             num_map_prefetchers: 8,
         })?;
 
-        Ok((Self::new_with_builtins(builder)?, data_dir))
+        Ok((Self::from_serverbuilder(builder)?, data_dir))
     }
 
     /// Creates a new game builder with custom server configuration
     #[cfg(feature = "unstable_api")]
     pub fn from_args(args: &ServerArgs) -> Result<GameBuilder> {
-        Self::new_with_builtins(ServerBuilder::from_args(args)?)
+        Self::from_serverbuilder(ServerBuilder::from_args(args)?)
     }
 
     /// Borrows the ServerBuilder that can be used to directly register
@@ -401,10 +401,16 @@ impl GameBuilder {
         self.inner.force_seed(seed);
     }
 
-    /// Run the game server
+    /// Run the game server. This function will block until the server is stopped.
     pub fn run_game_server(mut self) -> Result<()> {
         self.pre_build()?;
         self.inner.build()?.serve()
+    }
+
+    /// Instantiates a server from this game builder, but does not block on running it.
+    pub(crate) fn into_server(mut self) -> Result<Server> {
+        self.pre_build()?;
+        self.inner.build()
     }
 
     /// Starts a server, runs a task in it, and returns. This is meant for unit-testing
@@ -417,8 +423,8 @@ impl GameBuilder {
         server.run_task_in_server(task)
     }
 
-    // Instantiate some builtin content
-    fn new_with_builtins(mut inner: ServerBuilder) -> Result<GameBuilder> {
+    /// Instantiates a game builder from a server builder
+    pub(crate) fn from_serverbuilder(mut inner: ServerBuilder) -> Result<GameBuilder> {
         inner.media_mut().register_from_memory(
             FALLBACK_UNKNOWN_TEXTURE,
             include_bytes!("media/block_unknown.png"),

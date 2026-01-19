@@ -435,6 +435,13 @@ impl MapChunk {
         // We have a &MapChunk, meaning we can use relaxed loads
         BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed))
     }
+
+    /// Fills the chunk with a single block type.
+    pub fn fill(&mut self, id: BlockId) {
+        for block_id in self.block_ids.iter() {
+            block_id.store(id.into(), Ordering::Relaxed);
+        }
+    }
 }
 
 fn client_serialize_inner(
@@ -3943,7 +3950,7 @@ mod tests {
 
                 assert_eq!(gs.game_map().get_block(ZERO_COORD).unwrap(), BlockId(1));
 
-                Ok(())
+                anyhow::Ok(())
             })
             .unwrap();
     }
@@ -3973,7 +3980,7 @@ mod tests {
                 assert_eq!(ext, Some(String::from("bar")));
                 assert_eq!(block, BlockId(3));
 
-                Ok(())
+                anyhow::Ok(())
             })
             .unwrap();
     }

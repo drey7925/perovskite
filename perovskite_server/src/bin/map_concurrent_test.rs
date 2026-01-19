@@ -188,7 +188,7 @@ impl<A: Action> Worker<A> {
                             }
                         }
                         stats.duration = start.elapsed();
-                        Ok(())
+                        anyhow::Ok(())
                     })
                     .unwrap();
 
@@ -311,7 +311,7 @@ fn main() {
                             .0,
                     );
                 }
-                Ok(())
+                anyhow::Ok(())
             })
             .unwrap();
         println!(

@@ -108,6 +108,8 @@ impl BlockId {
     pub fn equals_ignore_variant(&self, other: BlockId) -> bool {
         self.base_id() == other.base_id()
     }
+
+    pub const AIR: BlockId = BlockId(0);
 }
 
 impl From<u32> for BlockId {

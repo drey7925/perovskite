@@ -57,6 +57,7 @@ rhai = { version = "1.19.0", features = [
 circular-buffer = "1.2.0"
 smartstring = "1.0.1"
 tokio-util = "0.7.14"
+googletest = { version = "0.14.2", optional = true }
 
 [features]
 default = ["default_game", "farming", "animals", "circuits", "discord", "carts"]
@@ -105,12 +106,11 @@ tokio-console = ["dep:console-subscriber"]
 # Requires rust 1.74.0 or higher
 discord = ["dep:serenity"]
 
+# Enable testing helpers
+test-support = ["perovskite_server/test-support", "googletest"]
+
 [dev-dependencies]
-criterion = { version = "0.4", features = [
-    "html_reports",
-    "async",
-    "async_tokio",
-] }
+googletest = "0.14.2"
 
 [[bench]]
 name = "mapgen_bench"
@@ -118,4 +118,9 @@ harness = false
 
 [[bench]]
 name = "game_map_bench"
+criterion = { version = "0.4", features = [
+    "html_reports",
+    "async",
+    "async_tokio",
+] }
 harness = false

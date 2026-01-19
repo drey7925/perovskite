@@ -4,7 +4,7 @@ use perovskite_game_api::{
 };
 
 fn chunk_benchmarks(c: &mut Criterion) {
-    let (mut game, work_dir) = GameBuilder::using_tempdir().unwrap();
+    let (mut game, work_dir) = GameBuilder::using_tempdir_disk_backed().unwrap();
     game.initialize_default_game().unwrap();
     carts::register_carts(&mut game).unwrap();
     game.force_seed(Some(0));
@@ -44,7 +44,7 @@ fn chunk_benchmarks(c: &mut Criterion) {
             })
         });
 
-        Ok(())
+        anyhow::Ok(())
     })
     .unwrap();
 
