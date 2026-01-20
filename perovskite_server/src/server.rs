@@ -210,6 +210,10 @@ impl Server {
         }
     }
 
+    /// Runs a task in the server's runtime.
+    /// This happens on the current thread, as a blocking call. The server's main
+    /// Tokio runtime will be entered, so async tasks can be spawned and awaited
+    /// within the task.
     pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> T) -> T {
         let _enter_guard = self.runtime.enter();
         task(self.game_state())

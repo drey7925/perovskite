@@ -34,7 +34,7 @@ use perovskite_server::{
         items::Item,
         GameState,
     },
-    server::{GameDatabase, Server, ServerArgs, ServerBuilder},
+    server::{Server, ServerArgs, ServerBuilder},
 };
 
 use anyhow::{Context, Result};
@@ -407,6 +407,8 @@ impl GameBuilder {
         self.inner.build()?.serve()
     }
 
+    // Only used by the test harness
+    #[allow(dead_code)]
     /// Instantiates a server from this game builder, but does not block on running it.
     pub(crate) fn into_server(mut self) -> Result<Server> {
         self.pre_build()?;

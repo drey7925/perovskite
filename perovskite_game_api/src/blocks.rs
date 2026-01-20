@@ -1075,15 +1075,7 @@ impl PlantLikeAppearanceBuilder {
 
     /// Convenience method to generate a plant-like appearance builder with this texture.
     ///
-    /// Equivalent to
-    /// ```
-    /// # use perovskite_game_api::blocks::PlantLikeAppearanceBuilder;
-    /// # use perovskite_game_api::game_builder::OwnedTextureName;
-    /// # let tex = OwnedTextureName(String::new());
-    /// # drop(
-    /// PlantLikeAppearanceBuilder::new().set_texture(tex)
-    /// # )
-    /// ```
+    /// Equivalent to `PlantLikeAppearanceBuilder::new().set_texture(tex)`.
     pub fn from_tex(tex: impl Into<TextureReference>) -> PlantLikeAppearanceBuilder {
         PlantLikeAppearanceBuilder::new().set_texture(tex)
     }

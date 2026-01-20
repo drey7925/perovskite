@@ -88,7 +88,7 @@ pub struct InteractionEffect {
     pub transition_probability: f64,
 
     /// Non-exhaustive - this struct must be constructed with functional update syntax, i.e.
-    /// ```
+    /// ```ignore
     /// # use perovskite_game_api::farming::crops::InteractionEffect;
     /// # use perovskite_game_api::game_builder::ItemName;
     /// #
@@ -305,7 +305,7 @@ pub struct GrowthStage {
     pub appearance: BlockAppearanceBuilder,
 
     /// Non-exhaustive - this struct must be constructed with functional update syntax, i.e.
-    /// ```
+    /// ```ignore
     /// # use perovskite_game_api::farming::crops::{DefaultGrowInLight, GrowthStage};
     /// # use perovskite_game_api::farming::crops::InteractionTransitionTarget;
     /// GrowthStage { grow_probability: Box::new(DefaultGrowInLight(InteractionTransitionTarget::NextStage.into())), ..Default::default() }
