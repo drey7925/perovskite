@@ -1446,7 +1446,7 @@ impl AaBoxProperties {
             plantlike: None,
         }
     }
-    ///     /// Create an axis-aligned box with the given textures, and custom usage flags.
+    /// Create an axis-aligned box with the given textures, and custom usage flags.
     ///
     /// This is the same as [AaBoxProperties::new] but with additional parameters to control whether the box is visible,
     /// whether it is used for collision, and whether it is used for tool hitboxes.

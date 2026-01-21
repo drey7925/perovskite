@@ -136,8 +136,7 @@ macro_rules! maybe_export {
 /// This cannot be constructed except with Default::default
 pub struct NonExhaustive(pub(crate) ());
 
-#[cfg(any(test, feature = "test-support"))]
-/// Utilities for testing game content
+#[cfg(any(test, feature = "test-support", doctest))]
 pub mod test_support;
 
 pub fn configure_default_game(game: &mut GameBuilder) -> anyhow::Result<()> {

@@ -1,3 +1,52 @@
+//! Utilities for testing game content
+//!
+//! Use the [TestFixture] struct to create a test fixture that provides a global in-memory world for testing, bring up a server.
+//! then run assertions in the context of the game world.
+//!
+//! For example:
+//!
+//! ```
+//! # use googletest::prelude::*;
+//! # use perovskite_game_api::test_support::*;
+//! # fn main() {}
+//! #[gtest]
+//! fn sample_test_real_game(fixture: &TestFixture) -> googletest::Result<()> {
+//!     // pass the actual game content under test
+//!     fixture.start_server(|builder| perovskite_game_api::configure_default_game(builder))?;
+//!     fixture.run_assertions_in_server(|gs| {
+//!         use googletest::expect_that;
+//!         use perovskite_core::block_id::special_block_defs::AIR_ID;
+//!
+//!         use crate::default_game::basic_blocks::{DIRT, DIRT_WITH_GRASS};
+//!
+//!         gs.game_map()
+//!             .set_block(ZERO_COORD, DIRT_WITH_GRASS, None)
+//!             .or_fail()?;
+//!         expect_that!(
+//!             gs.game_map().get_block(ZERO_COORD).or_fail()?,
+//!             IsBlock(DIRT_WITH_GRASS)
+//!         );
+//!
+//!         let dig_result = gs
+//!             .game_map()
+//!             .dig_block(ZERO_COORD, &EventInitiator::Engine, None)
+//!             .or_fail()?;
+//!         // Digging dirt with grass should yield dirt
+//!         expect_that!(
+//!             dig_result.item_stacks,
+//!             elements_are![IsItemStack(DIRT.0, eq(1))]
+//!         );
+//!
+//!         expect_that!(
+//!             gs.game_map().get_block(ZERO_COORD).or_fail()?,
+//!             IsBlock(AIR_ID)
+//!         );
+//!
+//!         Ok(())
+//!     })?;
+//!     Ok(())
+//! }
+//! ```
 use anyhow::bail;
 use arc_swap::ArcSwapOption;
 use googletest::{description::Description, matcher::MatcherResult, prelude::*};
@@ -32,7 +81,7 @@ macro_rules! assert_ok_and_assign {
     };
 }
 
-/// A static, global world used during testing. This is private to the framework, but
+/// A thread-local world used during testing. This is private to the framework, but
 /// some helpers are provided to access its contents in controlled ways.
 struct TestFixtureBacking {
     database: Arc<InMemGameDatabase>,
@@ -45,11 +94,14 @@ thread_local! {
 }
 static LOG_INIT: std::sync::Once = std::sync::Once::new();
 
-/// A test fixture that provides a global in-memory world for testing.
+/// A test fixture that provides a thread-local in-memory world for testing.
 ///
 /// The server starts out stopped; it must be started with the game content under test
 /// using [TestFixture::start_server] before it can be used.
-pub struct TestFixture;
+pub struct TestFixture {
+    // Not Send/Sync, since it refers to a thread-local static
+    _marker: std::marker::PhantomData<*const ()>,
+}
 impl googletest::fixtures::Fixture for TestFixture {
     fn set_up() -> googletest::Result<Self> {
         LOG_INIT.call_once(|| {
@@ -82,7 +134,9 @@ impl googletest::fixtures::Fixture for TestFixture {
                 eprintln!("Existing test fixture not properly torn down; this is unexpected");
             }
         });
-        Ok(Self)
+        Ok(Self {
+            _marker: std::marker::PhantomData,
+        })
     }
 
     fn tear_down(self) -> googletest::Result<()> {
@@ -190,7 +244,7 @@ impl TestFixture {
     }
 }
 
-const ZERO_COORD: BlockCoordinate = BlockCoordinate::new(0, 0, 0);
+pub const ZERO_COORD: BlockCoordinate = BlockCoordinate::new(0, 0, 0);
 
 /// A simple map generator that can be used for testing.
 ///
@@ -238,7 +292,7 @@ impl GameBuilderTestExt for GameBuilder {
 
 #[derive(MatcherBase, Debug)]
 /// A matcher that matches a block id ignoring the variant.
-struct IsBlock<T: TryToBlockId>(T);
+pub struct IsBlock<T: TryToBlockId>(pub T);
 impl<T: TryToBlockId> IsBlock<T> {
     fn describe_block(server: &Server, block_type: Option<BlockId>) -> String {
         block_type
@@ -309,8 +363,9 @@ impl<T: TryToBlockId, U: Borrow<BlockId> + Copy + std::fmt::Debug> Matcher<U> fo
     }
 }
 
+/// A matcher that matches a block id including the variant.
 #[derive(MatcherBase, Debug)]
-struct IsBlockWithVariant<T: TryToBlockId>(T);
+pub struct IsBlockWithVariant<T: TryToBlockId>(pub T);
 impl<T: TryToBlockId> IsBlockWithVariant<T> {
     fn describe_block(server: &Server, block_type: Option<BlockId>) -> String {
         block_type
@@ -386,8 +441,9 @@ impl<T: TryToBlockId, U: Borrow<BlockId> + Copy + std::fmt::Debug> Matcher<U>
     }
 }
 
+/// A matcher that matches an item stack by name and quantity.
 #[derive(MatcherBase, Debug)]
-struct IsItemStack<T, U>(T, U)
+pub struct IsItemStack<T, U>(pub T, pub U)
 where
     T: AsRef<str>,
     U: Matcher<u32>;
