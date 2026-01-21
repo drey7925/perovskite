@@ -28,7 +28,7 @@ use perovskite_core::{
 };
 use perovskite_server::{
     game_state::{
-        blocks::BlockTypeHandle,
+        blocks::{BlockTypeHandle, TryToBlockId},
         chat::commands::ChatCommandHandler,
         game_map::{TimerCallback, TimerSettings},
         items::Item,
@@ -202,6 +202,22 @@ impl From<StaticBlockName> for FastBlockName {
 impl From<&BlockName> for FastBlockName {
     fn from(value: &BlockName) -> Self {
         FastBlockName::new(&value.0)
+    }
+}
+impl TryToBlockId for StaticBlockName {
+    fn try_to_block_id(
+        &self,
+        manager: &perovskite_server::game_state::blocks::BlockTypeManager,
+    ) -> Option<perovskite_core::block_id::BlockId> {
+        manager.get_by_name(self.0)
+    }
+}
+impl TryToBlockId for BlockName {
+    fn try_to_block_id(
+        &self,
+        manager: &perovskite_server::game_state::blocks::BlockTypeManager,
+    ) -> Option<perovskite_core::block_id::BlockId> {
+        manager.get_by_name(&self.0)
     }
 }
 

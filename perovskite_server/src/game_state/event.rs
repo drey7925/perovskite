@@ -164,6 +164,9 @@ impl EventInitiator<'_> {
 pub struct PlayerInitiator<'a> {
     /// The player that initiated the event
     pub player: &'a Player,
+    // This struct both borrows a player directly (without increasing the refcount) and also keeps a weak ref
+    // We need to be careful with player refs and prevent them from leaking, so we do not permit Arc<Player> to escape
+    // outside of engine control.
     pub(crate) weak: Weak<Player>,
     /// The player's reported position and face direction *at the time that they initiated the event*
     /// Note that this is not necessarily the same as the player's current position, or as any position reported

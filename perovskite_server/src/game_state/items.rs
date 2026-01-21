@@ -353,6 +353,9 @@ impl ItemStack {
             self.proto.quantity
         }
     }
+    pub fn item_name(&self) -> &str {
+        &self.proto.item_name
+    }
 }
 
 pub trait MaybeStack {
@@ -715,5 +718,6 @@ pub(crate) fn make_fake_item_for_no_tool() -> ItemStack {
 }
 
 lazy_static! {
-    pub(crate) static ref NO_TOOL_STACK: ItemStack = make_fake_item_for_no_tool();
+    /// A fake item stack representing "no tool". This is used to pass a tool to item handlers when no tool is present
+    pub static ref NO_TOOL_STACK: ItemStack = make_fake_item_for_no_tool();
 }

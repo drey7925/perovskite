@@ -434,14 +434,14 @@ const FBN_NOTFOUND_SENTINEL: u32 = u32::MAX - 1;
 /// Manages the different block types defined in this game world.
 ///
 /// This struct owns all the [`BlockType`]s that are registered with it;
-/// they can be accessed using either a [`BlockId`], or a [`BlockTypeName`]:
+/// they can be accessed using either a [`BlockId`], [`FastBlockName`], or [`BlockTypeName`]:
 /// * A handle refers to a block that is known to be already registered
 /// * A name refers to a block that may or may not be registered yet, using its unique short name.
 ///
 /// For example, block A may replace itself with block B in its dig handler, while block B replaces
-/// itself with block A when dug. If block A is registered first, it will need to
-/// use a `BlockTypeName` to reference block B (by its short name), since block B has
-/// not yet been registered yet, and it will be impossible to make a handle to it.
+/// itself with block A when dug. If block A is registered first, it can
+/// use a `FastBlockName` to reference block B (by its short name), since block B has
+/// not yet been registered yet, and it will be impossible to get a `BlockId` for it ahead of time.
 ///
 /// Handles and names should be considered effectively immutable (but may internally use mutexes/atomics
 /// for lookup caching); they can be freely cloned around as needed.
@@ -962,9 +962,22 @@ fn make_air_block() -> BlockType {
 }
 
 /// Traits for types that can be interpreted as a block type.
-pub trait TryAsHandle {
+pub trait TryToBlockId {
     /// Use the given manager to transform this into a handle.
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId>;
+    fn try_to_block_id(&self, manager: &BlockTypeManager) -> Option<BlockId>;
+}
+
+impl<T: TryToBlockId> TryToBlockId for (T, u16) {
+    fn try_to_block_id(&self, manager: &BlockTypeManager) -> Option<BlockId> {
+        let (base, variant) = self;
+        base.try_to_block_id(manager)
+            .and_then(|id| id.with_variant(*variant).ok())
+    }
+}
+impl<T: TryToBlockId> TryToBlockId for &T {
+    fn try_to_block_id(&self, manager: &BlockTypeManager) -> Option<BlockId> {
+        (*self).try_to_block_id(manager)
+    }
 }
 
 /// A handle for a blocktype. This can be passed to the block manager it came from to get back the
@@ -975,9 +988,9 @@ pub trait TryAsHandle {
 /// these contexts.
 pub type BlockTypeHandle = BlockId;
 
-impl TryAsHandle for BlockId {
+impl TryToBlockId for BlockId {
     #[inline]
-    fn as_handle(&self, _manager: &BlockTypeManager) -> Option<BlockId> {
+    fn try_to_block_id(&self, _manager: &BlockTypeManager) -> Option<BlockId> {
         Some(*self)
     }
 }
@@ -1006,18 +1019,13 @@ impl Clone for FastBlockName {
         }
     }
 }
-impl TryAsHandle for FastBlockName {
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId> {
+impl TryToBlockId for FastBlockName {
+    fn try_to_block_id(&self, manager: &BlockTypeManager) -> Option<BlockId> {
         manager.resolve_name(self)
     }
 }
-impl TryAsHandle for &FastBlockName {
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId> {
-        manager.resolve_name(self)
-    }
-}
-impl TryAsHandle for &str {
-    fn as_handle(&self, manager: &BlockTypeManager) -> Option<BlockId> {
+impl TryToBlockId for &str {
+    fn try_to_block_id(&self, manager: &BlockTypeManager) -> Option<BlockId> {
         manager.get_by_name(self)
     }
 }

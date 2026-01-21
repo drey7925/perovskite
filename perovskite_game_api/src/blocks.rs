@@ -99,7 +99,8 @@ impl DroppedItem {
             let rule = ctx
                 .items()
                 .get_stack_item(stack)
-                .and_then(|item| item.get_interaction_rule(block_type).cloned());
+                .get_interaction_rule(block_type)
+                .cloned();
             if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
                 *target_block = AIR_ID;
                 ext_data.clear();
@@ -1264,7 +1265,7 @@ impl VerticalNeighborTimerCallback for FallingBlocksChunkEdgePropagator {
 }
 
 pub(crate) struct LiquidPropagator {
-    pub(crate) liquids: Vec<BlockTypeHandle>,
+    pub(crate) liquids: Vec<BlockId>,
 }
 impl BulkUpdateCallback for LiquidPropagator {
     fn bulk_update_callback(

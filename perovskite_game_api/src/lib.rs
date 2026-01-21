@@ -32,6 +32,9 @@ pub mod items;
 
 pub use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset};
 
+use crate::default_game::DefaultGameBuilder;
+use crate::game_builder::GameBuilder;
+
 /// Provides a default set of game content centered around exploring a natural
 /// procedurally-generated world, collecting resources through mining, converting
 /// resources to useful materials, building structures out of them, etc.
@@ -136,3 +139,31 @@ pub struct NonExhaustive(pub(crate) ());
 #[cfg(any(test, feature = "test-support"))]
 /// Utilities for testing game content
 pub mod test_support;
+
+pub fn configure_default_game(game: &mut GameBuilder) -> anyhow::Result<()> {
+    game.initialize_default_game()?;
+    colors::register_dyes(game)?;
+
+    #[cfg(feature = "circuits")]
+    {
+        circuits::register_circuits(game)?;
+    }
+    #[cfg(feature = "discord")]
+    {
+        discord::connect(game)?;
+    }
+    #[cfg(feature = "carts")]
+    {
+        carts::register_carts(game)?;
+    }
+    #[cfg(feature = "animals")]
+    {
+        animals::register_duck(game)?;
+    }
+    #[cfg(feature = "farming")]
+    {
+        farming::initialize_farming(game)?;
+    }
+
+    Ok(())
+}

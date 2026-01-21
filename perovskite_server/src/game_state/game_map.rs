@@ -49,7 +49,7 @@ use super::blocks::BlockInteractionResult;
 use super::event::log_trace;
 use super::{
     blocks::{
-        self, BlockTypeManager, ExtendedData, ExtendedDataHolder, InlineContext, TryAsHandle,
+        self, BlockTypeManager, ExtendedData, ExtendedDataHolder, InlineContext, TryToBlockId,
     },
     event::{EventInitiator, HandlerContext},
     items::ItemStack,
@@ -1294,14 +1294,14 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// Args:
     ///   coord: The coordinate to set
     ///   block: The block to set, as a `BlockId`, a `FastBlockName`, or `&str`.
-    pub fn set_block<T: TryAsHandle>(
+    pub fn set_block<T: TryToBlockId>(
         &self,
         coord: BlockCoordinate,
         block: T,
         ext_data: Option<ExtendedData>,
     ) -> Result<(BlockId, Option<ExtendedData>)> {
         let new_id = block
-            .as_handle(&self.block_type_manager)
+            .try_to_block_id(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
         let chunk_guard = self.get_chunk(coord.chunk())?;
@@ -1353,7 +1353,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
     /// The old block is returned along with its extended data, if any.
-    pub fn compare_and_set_block<T: TryAsHandle, U: TryAsHandle>(
+    pub fn compare_and_set_block<T: TryToBlockId, U: TryToBlockId>(
         &self,
         coord: BlockCoordinate,
         expected: T,
@@ -1365,8 +1365,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             self.compare_and_set_block_predicate(
                 coord,
                 |x, _, _| {
-                    Ok(x.as_handle(&self.block_type_manager)
-                        .zip(expected.as_handle(&self.block_type_manager))
+                    Ok(x.try_to_block_id(&self.block_type_manager)
+                        .zip(expected.try_to_block_id(&self.block_type_manager))
                         .map_or(false, |(x, y)| x == y))
                 },
                 block,
@@ -1376,8 +1376,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             self.compare_and_set_block_predicate(
                 coord,
                 |x, _, _| {
-                    Ok(x.as_handle(&self.block_type_manager)
-                        .zip(expected.as_handle(&self.block_type_manager))
+                    Ok(x.try_to_block_id(&self.block_type_manager)
+                        .zip(expected.try_to_block_id(&self.block_type_manager))
                         .map_or(false, |(x, y)| x.equals_ignore_variant(y)))
                 },
                 block,
@@ -1394,7 +1394,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///     match fails, `new_extended_data` is returned; if you need the existing block's
     ///     extended data, inspect it from the predicate and/or use [Self::mutate_block_atomically]
     ///     instead
-    pub fn compare_and_set_block_predicate<F, T: TryAsHandle>(
+    pub fn compare_and_set_block_predicate<F, T: TryToBlockId>(
         &self,
         coord: BlockCoordinate,
         predicate: F,
@@ -1405,7 +1405,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         F: FnOnce(BlockId, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
     {
         let new_id = block
-            .as_handle(&self.block_type_manager)
+            .try_to_block_id(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
         let chunk_guard = self.get_chunk(coord.chunk())?;
