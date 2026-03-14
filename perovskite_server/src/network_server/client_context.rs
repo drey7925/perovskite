@@ -427,11 +427,7 @@ async fn initialize_protocol_state(
             "Your client is out of date and you may not be able to use all server features. Please consider updating.".to_string()
         )).await?;
     }
-    if context.effective_protocol_version < 9 {
-        context.player_context.send_chat_message_async(ChatMessage::new_server_message(
-            "Client protocol 8: known bug: fast movement and minecarts cause severe lag when playing over the Internet.".to_string()
-        ).with_color(SERVER_WARNING_COLOR)).await?;
-    }
+
     Ok(())
 }
 
@@ -754,10 +750,8 @@ impl NetPrioritizer {
                 Some(msg) => msg,
                 None => break,
             };
-            if self.context.effective_protocol_version == 9 {
-                if let Ok(message) = &message {
-                    self.context.net_delay_estimator.lock().send(message.tick)
-                }
+            if let Ok(message) = &message {
+                self.context.net_delay_estimator.lock().send(message.tick)
             }
             self.tx.send(message).await?;
         }

@@ -20,7 +20,16 @@ servers should refrain from sending that message when the effective protocol ver
 
 ## When removing support for an old protocol version:
 
-perovskite_core/src/network_server/client_context.rs: Logic that can no longer be triggered by old protocol versions below SERVER_MIN_PROTOCOL_VERSION should be removed, as it is effectively dead code. Logic that is unconditionally triggered by protocol versions >= SERVER_MIN_PROTOCOL_VERSION should be made unconditional.
+perovskite_core/src/network_server/client_context.rs: Logic that can only be triggered by old protocol versions below SERVER_MIN_PROTOCOL_VERSION should be removed, as it is effectively dead code. 
+
+Logic that is unconditionally triggered by protocol versions >= SERVER_MIN_PROTOCOL_VERSION should be made unconditional.
+
+For example, if min protocol is 5 and max protocol is 7:
+* Logic under `if self.context.effective_protocol_version == 4` should be removed, since this is false for all possible effective protocol versions.
+* Logic under `if self.context.effective_protocol_version >= 5` should be made unconditional since it is true for all possible effective protocol versions.
+* Logic under `if self.context.effective_protocol_version > 5` should remain as-is, since it's specific to a subset of protocols.
+* Logic under `if self.context.effective_protocol_version <= 5` should remain as-is, since it's specific to a subset of protocols.
+* 
 
 In all cases, leave the `if context.effective_protocol_version != SERVER_MAX_PROTOCOL_VERSION` check and "Your client is out of date" message in place, as they apply generally as a reminder to players to update their clients.
 
@@ -32,3 +41,5 @@ perovskite_core/src/network_server/client_context.rs: Any behavior that is speci
 * New messages, fields, etc sent from client to server: Expect them to be missing. Either the feature triggered by these messages should be disabled, or a default value should be inferred.
     * For fields or messages that are always "necessary" in the new protocol version (e.g. client backpressure, RTT measurements, player position, etc) impute a reasonable default value that leaves behavior as close to unchanged as possible.
     * For fields or messages that happen in response to client actions unavailable in the old protocol version, simply do not invoke the feature because the client will not send the message.
+
+For new features, strongly prefer using `effective_protocol_version >= VALUE` to enable or `effective_protocol_version < VALUE` to disable, rather than `==` checks. This makes the code more resilient to future protocol version changes.
