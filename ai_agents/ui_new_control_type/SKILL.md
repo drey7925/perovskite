@@ -1,27 +1,13 @@
-# To add a setting
+---
+name: ui_new_control_type
+description: Adds new types of UI controls to the game protocol, and implements the server and client-side logic for them. Use this when explicitly asked to add a new UI control type.
+---
 
-* Read perovskite_client/src/client_state/settings.rs
-* Pick a category from GameSettings (unless adding a new category)
-* Add a field to the appropriate struct
-* If adding a new type, be sure to include all of the derives seen on existing structs/enums
-* Give a sensible default value in the default implementation
-* In perovskite_client/src/main_menu.rs, find the corresponding function labeled `draw_...` and add an egui control, consistent with existing controls in the file.
-* If the setting is likely needed for the Vulkan pipeline or swapchain (i.e. it affects a pipeline, layout, shader, etc), flag it for human attention by printing a message once you're done making changes.
-
-# To bump the version:
-
-* Run `ls -d */` in the root of the repository to see all of the crates. Disregard `target`
-* Inside each of these, update Cargo.toml to update the version of the crate, and also any perovskite_ dependencies.
-
-Current dependency order:
-* Publish core, then server, then game_api, then client. If any additional crates are found other than these, please notify the user to update CLAUDE.local.md.
-* For consistency, recommend using `cargo publish -p [crate name]` instead of changing directory then running `cargo publish`
-
-# Adding New UI Controls to the Protocol
+## Game client + server: Adding New UI Controls to the Protocol
 
 This section explains how to add a new UI control type to the perovskite UI system. The UI system uses protocol buffers for client-server communication, with server-side builders and client-side egui rendering.
 
-## Architecture Overview
+### Architecture Overview
 
 The UI system has three main components:
 
@@ -29,9 +15,9 @@ The UI system has three main components:
 2. **Server-Side API** (`perovskite_server/src/game_state/client_ui.rs`) - Provides builder APIs for creating UIs
 3. **Client-Side Rendering** (`perovskite_client/src/game_ui/egui_ui.rs`) - Renders UI using egui
 
-## Step-by-Step Guide
+### Step-by-Step Guide
 
-### 1. Define the Protocol Message
+#### 1. Define the Protocol Message
 
 In `perovskite_core/proto/ui.proto`, add a new message for your control:
 
@@ -48,13 +34,14 @@ message YourControl {
 ```
 
 **Guidelines:**
-- Use a `key` field (string) for interactive controls that need to be identified in callbacks
-- Use a `label` field for user-visible text
-- Use `enabled` (bool) for controls that can be disabled
-- Use `initial` for default values
-- Follow naming conventions from existing controls (TextField, Checkbox, Button)
 
-### 2. Add to UiElement Oneof
+* Use a `key` field (string) for interactive controls that need to be identified in callbacks
+* Use a `label` field for user-visible text
+* Use `enabled` (bool) for controls that can be disabled
+* Use `initial` for default values
+* Follow naming conventions from existing controls (TextField, Checkbox, Button)
+
+#### 2. Add to UiElement Oneof
 
 In the same proto file, add your control to the `UiElement` message's oneof:
 
@@ -72,7 +59,7 @@ message UiElement {
 }
 ```
 
-### 3. Add Rust Enum Variant (Server-Side)
+#### 3. Add Rust Enum Variant (Server-Side)
 
 In `perovskite_server/src/game_state/client_ui.rs`, add a variant to the `UiElement` enum:
 
@@ -88,7 +75,7 @@ pub enum UiElement {
 }
 ```
 
-### 4. Implement to_proto() Conversion
+#### 4. Implement to_proto() Conversion
 
 In the `UiElement::to_proto()` method, add a match arm for your new variant:
 
@@ -113,7 +100,7 @@ impl UiElement {
 
 **Note:** If your control needs special handling (like InventoryView does), implement custom conversion logic here.
 
-### 5. Add Builder Method to UiElementContainer
+#### 5. Add Builder Method to UiElementContainer
 
 Add a builder method to the `UiElementContainer` trait for ergonomic API:
 
@@ -141,12 +128,13 @@ pub trait UiElementContainer: UiElementContainerPrivate + Sized {
 ```
 
 **Guidelines:**
-- Use `impl Into<String>` for string parameters for ergonomics
-- Chain the builder pattern by returning `Self`
-- Use descriptive parameter names
-- Add doc comments explaining the control's behavior
 
-### 6. Optional: Create a Builder Type
+* Use `impl Into<String>` for string parameters for ergonomics
+* Chain the builder pattern by returning `Self`
+* Use descriptive parameter names
+* Add doc comments explaining the control's behavior
+
+#### 6. Optional: Create a Builder Type
 
 For complex controls (like TextField), create a dedicated builder:
 
@@ -190,7 +178,7 @@ fn your_control(mut self, builder: YourControlBuilder) -> Self {
 }
 ```
 
-### 7. Implement Client-Side Rendering
+#### 7. Implement Client-Side Rendering
 
 In `perovskite_client/src/game_ui/egui_ui.rs`, add rendering logic in the `render_element()` method:
 
@@ -222,16 +210,18 @@ fn render_element(
 ```
 
 **Guidelines:**
-- Use egui widgets appropriate to your control's purpose
-- For stateful controls (like TextField, Checkbox), store state in HashMaps keyed by `(popup.popup_id, control.key)`
-- Handle disabled state with `ui.add_enabled(control.enabled, widget)`
-- Respect `self.allow_*_interaction` flags for buttons/interactive elements
 
-### 8. Handle State Management (If Needed)
+* Use egui widgets appropriate to your control's purpose
+* For stateful controls (like TextField, Checkbox), store state in HashMaps keyed by `(popup.popup_id, control.key)`
+* Handle disabled state with `ui.add_enabled(control.enabled, widget)`
+* Respect `self.allow_*_interaction` flags for buttons/interactive elements
+
+#### 8. Handle State Management (If Needed)
 
 For controls that maintain state between renders:
 
 **Add state storage in EguiUi struct:**
+
 ```rust
 pub(crate) struct EguiUi {
     // ... existing fields ...
@@ -240,11 +230,13 @@ pub(crate) struct EguiUi {
 ```
 
 **Initialize in `new()`:**
+
 ```rust
 your_control_values: FxHashMap::default(),
 ```
 
 **Use in `render_element()`:**
+
 ```rust
 let value = self
     .your_control_values
@@ -253,6 +245,7 @@ let value = self
 ```
 
 **Add getter method if values need to be sent back:**
+
 ```rust
 fn get_your_control_values(&self, popup_id: u64) -> HashMap<String, YourValueType> {
     self.your_control_values
@@ -264,6 +257,7 @@ fn get_your_control_values(&self, popup_id: u64) -> HashMap<String, YourValueTyp
 ```
 
 **Clear state in `clear_fields()`:**
+
 ```rust
 fn clear_fields(&mut self, popup: &PopupDescription) {
     // ... existing clears ...
@@ -272,11 +266,12 @@ fn clear_fields(&mut self, popup: &PopupDescription) {
 }
 ```
 
-### 9. Update PopupResponse (If Sending Values Back)
+#### 9. Update PopupResponse (If Sending Values Back)
 
 If your control needs to send values back to the server:
 
 **Update proto:**
+
 ```protobuf
 message PopupResponse {
   uint64 popup_id = 1;
@@ -289,6 +284,7 @@ message PopupResponse {
 ```
 
 **Update response construction in `draw_popup()`:**
+
 ```rust
 GameAction::PopupResponse(PopupResponse {
     popup_id: popup.popup_id,
@@ -300,9 +296,9 @@ GameAction::PopupResponse(PopupResponse {
 })
 ```
 
-## Examples
+### Examples
 
-### Simple Non-Interactive Control (Label)
+#### Simple Non-Interactive Control (Label)
 
 Label is the simplest control - it just displays text with no state or interaction.
 
@@ -310,7 +306,7 @@ Label is the simplest control - it just displays text with no state or interacti
 **Server:** Single-line builder method
 **Client:** Single `ui.label()` call
 
-### Interactive Stateful Control (Checkbox)
+#### Interactive Stateful Control (Checkbox)
 
 Checkbox demonstrates state management and value return.
 
@@ -318,7 +314,7 @@ Checkbox demonstrates state management and value return.
 **Server:** Simple builder method
 **Client:** Stores state in `checkboxes` HashMap, returns via `get_checkboxes()`
 
-### Complex Control with Builder (TextField)
+#### Complex Control with Builder (TextField)
 
 TextField uses a builder pattern for its many optional properties.
 
@@ -326,7 +322,7 @@ TextField uses a builder pattern for its many optional properties.
 **Server:** Dedicated `TextFieldBuilder` with chaining methods
 **Client:** Different rendering for multiline vs single-line
 
-### Container Control (SideBySideLayout)
+#### Container Control (SideBySideLayout)
 
 SideBySideLayout contains other elements and uses a special builder.
 
@@ -334,7 +330,7 @@ SideBySideLayout contains other elements and uses a special builder.
 **Server:** `SideBySideLayoutBuilder` struct that implements `UiElementContainer`
 **Client:** Recursive `render_element()` calls with layout wrapper
 
-## Testing
+### Testing
 
 After implementing your control:
 
@@ -345,19 +341,28 @@ After implementing your control:
 5. Verify state clears when popup closes
 6. Test with disabled state (if applicable)
 
-## Common Patterns
+### Common Patterns
 
-### Read-Only Display
+#### Read-Only Display
+
 If your control only displays information (like Label), you don't need state management or response handling.
 
-### Simple Input
+#### Simple Input
+
 For basic user input (like Checkbox), store state in a HashMap and include in PopupResponse.
 
-### Complex Configuration
+#### Complex Configuration
+
 For controls with many options (like TextField), use a builder pattern.
 
-### Containers
+#### Containers
+
 For controls that contain other elements, implement a separate builder struct that also implements `UiElementContainer`.
 
-### Special Integration
+#### Special Integration
+
 For controls that integrate with game systems (like InventoryView), add custom fields to Popup and special handling in to_proto().
+
+### Protocol versioning
+
+Remind the user that they will need to update the protocol version in perovskite_core/proto/game_rpc.proto before releasing an update.
