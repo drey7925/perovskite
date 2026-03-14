@@ -1163,6 +1163,38 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         }
     }
 
+    #[cfg(any(test, feature = "test-support", doctest))]
+    /// Triggers a timer by name.
+    ///
+    /// The timer will still run as normal on a timer thread, perhaps concurrently with this call.
+    ///
+    /// This is meant for unit-testing; while it doesn't affect correctness of real gameplay,
+    /// it does have an efficiency loss since it runs inline, without ability to deduplicate
+    /// work between timer ticks.
+    pub fn run_timer_inline(&self, name: &str) -> Result<()> {
+        self.timer_controller
+            .lock()
+            .as_ref()
+            .expect("Timer controller not initialized")
+            .run_timer(name)
+    }
+
+    #[cfg(any(test, feature = "test-support", doctest))]
+    /// Triggers all timers. This is only available in test builds.
+    ///
+    /// Clock-based ticks are not rescheduled.
+    ///
+    /// This is meant for unit-testing; while it doesn't affect correctness of real gameplay,
+    /// it does have an efficiency loss since it runs inline, without ability to deduplicate
+    /// work between timer ticks.
+    pub fn run_all_timers_inline(&self) -> Result<()> {
+        self.timer_controller
+            .lock()
+            .as_ref()
+            .expect("Timer controller not initialized")
+            .run_all_timers()
+    }
+
     /// Gets a block from the map + its variant + its extended data.
     ///
     /// Because the extended data is not necessarily Clone or Copy, it is provided by calling the provided
@@ -2796,6 +2828,15 @@ impl Default for ChunkNeighbors {
     }
 }
 
+impl Debug for ChunkNeighbors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkNeighbors")
+            .field("center", &self.center)
+            .field("presence_bitmap", &self.presence_bitmap)
+            .finish()
+    }
+}
+
 struct NeighborChunkProxy<'a> {
     blocks: &'a [u32; 16 * 16 * 16],
 }
@@ -2959,7 +3000,7 @@ impl Default for TimerSettings {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(1),
-            shards: 256,
+            shards: 8,
             spreading: 1.0,
             block_types: Default::default(),
             ignore_block_type_presence_check: false,
@@ -2980,6 +3021,8 @@ struct GameMapTimer {
     cancellation: CancellationToken,
     // This mutex must be held across an await (for each handle), so we use a tokio async mutex here.
     tasks: tokio::sync::Mutex<Vec<JoinHandle<Result<()>>>>,
+
+    block_types: FxHashSet<u32>,
 }
 impl GameMapTimer {
     fn spawn_shards(
@@ -3041,34 +3084,78 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
     ) -> Result<()> {
-        let block_types =
-            FxHashSet::from_iter(self.settings.block_types.iter().map(|x| x.base_id()));
-
         let mut interval = tokio::time::interval_at(start_time.into(), self.settings.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut shard_state = ShardState {
             timer_state: TimerState {
-                prev_tick_time: start_time,
+                prev_tick_time: start_time - self.settings.interval,
                 current_tick_time: Instant::now(),
             },
             neighbor_buffer: None,
             lighting_buffer: None,
         };
+
         // Todo detect skipped ticks and adjust accordingly
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 _ = interval.tick() => {
-                    let current_tick_start = Instant::now();
-                    shard_state.timer_state.current_tick_time = current_tick_start;
-
-                    tokio::task::block_in_place(|| self.delegate_locking_path(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &block_types, &mut shard_state))?;
-                    shard_state.timer_state.prev_tick_time = current_tick_start;
+                    self.do_tick_work(coarse_shard, fine_shard, fine_shards_per_coarse, game_state.clone(), &mut shard_state)?;
                 },
                 _ = self.cancellation.cancelled() => {
                     break;
-                }
+                },
             }
         }
+        Ok(())
+    }
+
+    fn do_tick_work(
+        &self,
+        coarse_shard: usize,
+        fine_shard: usize,
+        fine_shards_per_coarse: usize,
+        game_state: Arc<GameState>,
+        shard_state: &mut ShardState,
+    ) -> Result<()> {
+        let current_tick_start = Instant::now();
+        shard_state.timer_state.current_tick_time = current_tick_start;
+
+        tokio::task::block_in_place(|| {
+            self.delegate_locking_path(
+                coarse_shard,
+                fine_shard,
+                fine_shards_per_coarse,
+                game_state,
+                shard_state,
+            )
+        })?;
+        shard_state.timer_state.prev_tick_time = current_tick_start;
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support", doctest))]
+    fn run_inline(&self, game_state: Arc<GameState>) -> Result<()> {
+        let mut fake_shard_state = ShardState {
+            timer_state: TimerState {
+                prev_tick_time: Instant::now() - self.settings.interval,
+                current_tick_time: Instant::now(),
+            },
+            neighbor_buffer: None,
+            lighting_buffer: None,
+        };
+
+        for coarse_shard in 0..NUM_CHUNK_SHARDS {
+            for fine_shard in 0..self.settings.shards {
+                self.do_tick_work(
+                    coarse_shard,
+                    fine_shard,
+                    self.settings.shards,
+                    game_state.clone(),
+                    &mut fake_shard_state,
+                )?;
+            }
+        }
+
         Ok(())
     }
 
@@ -3315,7 +3402,6 @@ impl GameMapTimer {
         fine_shard: usize,
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
-        block_types: &FxHashSet<u32>,
         state: &mut ShardState,
     ) -> Result<()> {
         match &self.callback {
@@ -3325,7 +3411,6 @@ impl GameMapTimer {
                     fine_shard,
                     fine_shards_per_coarse,
                     game_state,
-                    block_types,
                     state,
                 ),
             TimerCallback::BulkUpdateWithNeighbors(_) => self.do_tick_locking_with_neighbors(
@@ -3352,7 +3437,6 @@ impl GameMapTimer {
         fine_shard: usize,
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
-        block_types: &FxHashSet<u32>,
         state: &ShardState,
     ) -> Result<()> {
         let _span = span!("timer tick fast");
@@ -3396,7 +3480,6 @@ impl GameMapTimer {
                             coord,
                             chunk,
                             &game_state,
-                            block_types,
                             &mut writeback_permit,
                             state,
                         )?;
@@ -3412,7 +3495,6 @@ impl GameMapTimer {
         coord: ChunkCoordinate,
         holder: &MapChunkHolder<DefaultSyncBackend>,
         game_state: &Arc<GameState>,
-        block_types: &FxHashSet<u32>,
         writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
         state: &ShardState,
     ) -> Result<()> {
@@ -3421,14 +3503,7 @@ impl GameMapTimer {
         if let Some(mut chunk) = holder.try_get_write()? {
             match &self.callback {
                 TimerCallback::PerBlockLocked(_) => {
-                    self.run_per_block_handler(
-                        game_state,
-                        chunk,
-                        holder,
-                        block_types,
-                        coord,
-                        state,
-                    )?;
+                    self.run_per_block_handler(game_state, chunk, holder, coord, state)?;
                 }
                 TimerCallback::BulkUpdate(_) => {
                     let chunk_update = holder.last_written.get_acquire();
@@ -3539,7 +3614,6 @@ impl GameMapTimer {
         game_state: &Arc<GameState>,
         mut chunk: MapChunkInnerWriteGuard<'_, DefaultSyncBackend>,
         holder: &MapChunkHolder<DefaultSyncBackend>,
-        block_types: &FxHashSet<u32>,
         coord: ChunkCoordinate,
         state: &ShardState,
     ) -> Result<(), Error> {
@@ -3551,7 +3625,7 @@ impl GameMapTimer {
             assert!(holder
                 .block_bloom_filter
                 .maybe_contains(block_id.base_id() as u64));
-            if block_types.contains(&block_id.base_id()) && sampler.sample(&mut rng) {
+            if self.block_types.contains(&block_id.base_id()) && sampler.sample(&mut rng) {
                 match self.run_per_block_callback(
                     holder,
                     &mut chunk,
@@ -3876,6 +3950,7 @@ impl<S: SyncBackend, L: SyncBackend> TimerController<S, L> {
         let shards = (settings.shards - 1) / NUM_CHUNK_SHARDS + 1;
         let timer = Arc::new(GameMapTimer {
             name: name.clone(),
+            block_types: FxHashSet::from_iter(settings.block_types.iter().map(|x| x.base_id())),
             callback,
             settings,
             cancellation: self.cancellation.clone(),
@@ -3883,6 +3958,33 @@ impl<S: SyncBackend, L: SyncBackend> TimerController<S, L> {
         });
         timer.spawn_shards(gs, shards)?;
         self.timers.insert(name, timer);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support", doctest))]
+    fn run_timer(&self, name: &str) -> Result<()> {
+        let timer = self
+            .timers
+            .get(name)
+            .with_context(|| format!("Timer not found: {}", name))?;
+        // Trigger all shards
+        timer.run_inline(
+            self.game_state
+                .upgrade()
+                .context("Game state has been dropped")?,
+        )?;
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support", doctest))]
+    fn run_all_timers(&self) -> Result<()> {
+        let gs = self
+            .game_state
+            .upgrade()
+            .context("Game state has been dropped")?;
+        for timer in self.timers.values() {
+            timer.run_inline(gs.clone())?;
+        }
         Ok(())
     }
 }

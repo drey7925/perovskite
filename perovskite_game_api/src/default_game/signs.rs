@@ -199,6 +199,7 @@ pub(crate) fn register_sign(game_builder: &mut GameBuilder) -> anyhow::Result<()
         TimerSettings {
             interval: Duration::from_secs(1),
             spreading: 1.0,
+            shards: 1,
             block_types: vec![lightprobe],
             idle_chunk_after_unchanged: false,
             populate_lighting: true,

@@ -1137,3 +1137,73 @@ fn register_test_audio_block(game_builder: &mut GameBuilder) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::TestFixture;
+    use googletest::prelude::*;
+
+    #[gtest]
+    fn test_water_flows_downward(fixture: &TestFixture) -> googletest::Result<()> {
+        use super::WATER;
+
+        use crate::test_support::IsBlock;
+        use perovskite_core::coordinates::BlockCoordinate;
+        use perovskite_server::game_state::GameState;
+
+        fixture.start_server(|builder| crate::configure_default_game(builder))?;
+
+        // Case 1: Non-boundary
+        fixture.run_assertions_in_server(|gs: &GameState| {
+            let water_id = gs
+                .block_types()
+                .get_by_name(WATER.0)
+                .expect("WATER block not found")
+                .with_variant_unchecked(0xfff);
+            let below = BlockCoordinate::new(0, 1, 0);
+            let above = BlockCoordinate::new(0, 2, 0);
+
+            gs.game_map().set_block(above, water_id, None).or_fail()?;
+            gs.game_map()
+                .set_block(
+                    below,
+                    perovskite_core::block_id::special_block_defs::AIR_ID,
+                    None,
+                )
+                .or_fail()?;
+
+            gs.game_map().run_all_timers_inline().or_fail()?;
+
+            let below = BlockCoordinate::new(0, 1, 0);
+            expect_that!(gs.game_map().get_block(below).or_fail()?, IsBlock(WATER));
+            Ok(())
+        })?;
+
+        // Case 2: Chunk boundary (Y=16 is start of new chunk, Y=15 is end of previous)
+        fixture.run_assertions_in_server(|gs: &GameState| {
+            let water_id = gs
+                .block_types()
+                .get_by_name(WATER.0)
+                .expect("WATER block not found")
+                .with_variant_unchecked(0xfff);
+            let below = BlockCoordinate::new(0, 15, 0);
+            let above = BlockCoordinate::new(0, 16, 0);
+
+            gs.game_map().set_block(above, water_id, None).or_fail()?;
+            gs.game_map()
+                .set_block(
+                    below,
+                    perovskite_core::block_id::special_block_defs::AIR_ID,
+                    None,
+                )
+                .or_fail()?;
+
+            gs.game_map().run_all_timers_inline().or_fail()?;
+
+            expect_that!(gs.game_map().get_block(below).or_fail()?, IsBlock(WATER));
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+}

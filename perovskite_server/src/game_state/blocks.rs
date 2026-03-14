@@ -336,8 +336,8 @@ impl Default for BlockType {
 ///     let ext_inner = ext.get_or_insert_with(Default::default);
 ///     ext_inner.simple_data.insert("foo".to_string(), "bar".to_string());
 ///     Ok(())
-/// })?;
-/// #    Ok(())
+/// })
+/// #
 /// # }).unwrap();
 /// ```
 ///

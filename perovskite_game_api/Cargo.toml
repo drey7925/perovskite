@@ -117,6 +117,9 @@ criterion = { version = "0.4", features = [
     "async",
     "async_tokio",
 ] }
+perovskite_server = { path = "../perovskite_server", version = "0.2.2", features = [
+    "test-support",
+] }
 
 [[bench]]
 name = "mapgen_bench"

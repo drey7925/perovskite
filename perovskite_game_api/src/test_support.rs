@@ -63,24 +63,6 @@ use perovskite_server::{
     },
     server::{Server, ServerArgs, ServerBuilder},
 };
-
-macro_rules! assert_ok_and_assign {
-    (let $var:ident = $result:expr) => {
-        #[allow(unused)]
-        let $var = match $result {
-            Ok(v) => v,
-            Err(e) => return googletest::fail!("{:?}", e),
-        };
-    };
-    (let $var:ident : $ty:ty = $result:expr) => {
-        #[allow(unused)]
-        let $var: $ty = match $result {
-            Ok(v) => v,
-            Err(e) => return googletest::fail!("{:?}", e),
-        };
-    };
-}
-
 /// A thread-local world used during testing. This is private to the framework, but
 /// some helpers are provided to access its contents in controlled ways.
 struct TestFixtureBacking {
@@ -229,6 +211,7 @@ impl TestFixture {
         }
     }
 
+    #[must_use = "The result of this function must be checked to ensure that the assertions passed"]
     pub fn run_assertions_in_server(
         &self,
         task: impl FnOnce(&GameState) -> googletest::Result<()>,
@@ -242,8 +225,17 @@ impl TestFixture {
             .run_task_in_server(task);
         result
     }
+
+    pub fn run_timer_inline(&self, name: &str) -> googletest::Result<()> {
+        Self::server().run_task_in_server(|gs| gs.game_map().run_timer_inline(name).or_fail())
+    }
+
+    pub fn run_all_timers_inline(&self) -> googletest::Result<()> {
+        Self::server().run_task_in_server(|gs| gs.game_map().run_all_timers_inline().or_fail())
+    }
 }
 
+/// A convenience coordinate that can be used for single-block tests.
 pub const ZERO_COORD: BlockCoordinate = BlockCoordinate::new(0, 0, 0);
 
 /// A simple map generator that can be used for testing.
@@ -506,10 +498,10 @@ where
 #[cfg(test)]
 #[gtest]
 fn sample_test(fixture: &TestFixture) -> googletest::Result<()> {
-    assert_ok_and_assign!(let server = fixture.start_server(|builder| {
+    fixture.start_server(|builder| {
         builder.set_flatland_mapgen(BlockId(4096));
         Ok(())
-    }));
+    })?;
     fixture.run_assertions_in_server(|gs| {
         use googletest::expect_that;
         use perovskite_core::block_id::special_block_defs::AIR_ID;
