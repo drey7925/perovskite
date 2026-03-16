@@ -31,12 +31,16 @@ impl RocksDbBackend {
         let db = DB::open(&options, path.as_ref())?;
         tracing::info!("Opened DB at {:?}", path.as_ref());
         tracing::info!(
-            "db stats: \n{}\n{}\ntotal size: {}",
+            "db stats: \n{}\n{}\ntotal size: {},\nest. live data size: {}, est. num-keys: {}",
             db.property_value("rocksdb.stats")?
                 .unwrap_or_else(|| String::from("???")),
             db.property_value("rocksdb.levelstats")?
                 .unwrap_or_else(|| String::from("???")),
             db.property_value("rocksdb.total-sst-files-size")?
+                .unwrap_or_else(|| String::from("???")),
+            db.property_value("rocksdb.estimate-live-data-size")?
+                .unwrap_or_else(|| String::from("???")),
+            db.property_value("rocksdb.estimate-num-keys")?
                 .unwrap_or_else(|| String::from("???"))
         );
         Ok(RocksDbBackend { db })
@@ -44,6 +48,7 @@ impl RocksDbBackend {
 }
 impl Drop for RocksDbBackend {
     fn drop(&mut self) {
+        // Avoid panicking in drop, which causes an abort.
         fn safe_unwrap<T>(x: Result<Option<String>, T>) -> String {
             x.unwrap_or_else(|_| Some(String::from("<Err>")))
                 .unwrap_or_else(|| String::from("???"))
@@ -55,11 +60,13 @@ impl Drop for RocksDbBackend {
             Err(e) => tracing::error!("Failed to flush DB: {}", e),
         }
         tracing::info!(
-            "db stats: \n{}\n{}\ntotal size: {}\nbackground errors: {}",
+            "db stats: \n{}\n{}\ntotal size: {}\nbackground errors: {}\nestimated live data size: {}\nestimated num-keys: {}",
             safe_unwrap(self.db.property_value("rocksdb.stats")),
             safe_unwrap(self.db.property_value("rocksdb.levelstats")),
             safe_unwrap(self.db.property_value("rocksdb.total-sst-files-size")),
-            safe_unwrap(self.db.property_value("rocksdb.background-errors"))
+            safe_unwrap(self.db.property_value("rocksdb.background-errors")),
+            safe_unwrap(self.db.property_value("rocksdb.estimate-live-data-size")),
+            safe_unwrap(self.db.property_value("rocksdb.estimate-num-keys"))
         );
     }
 }
