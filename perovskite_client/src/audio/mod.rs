@@ -590,6 +590,13 @@ impl EngineState {
 
         let volumes = self.control.settings.load().audio.volumes;
 
+        // Optimization note: on a 12900h, 256 slots in use spends about 10-15 seconds out
+        // of 60 seconds wall time; while it could certainly be optimized further, it's not
+        // currently critical. A lot of the time is spent in the sampler.sample call, but none
+        // of the instructions inside it seem like hotspots.
+        //
+        // This experiment was performed with test audio blocks, which have spatial audio
+        // enabled.
         'slots: for i in 0..NUM_SIMPLE_SOUND_SLOTS {
             let control_block = self.control.simple_sounds[i].read();
             let private_state = &mut self.private_control.simple_sounds[i];
