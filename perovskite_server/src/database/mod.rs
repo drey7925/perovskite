@@ -144,7 +144,7 @@ impl KeySpace {
 
 pub trait GameDatabase: Send + Sync {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
-    /// Same as get, but does not keep the value cached in memory.
+    /// Same as get, but does not keep the value cached in the database's own cache.
     ///
     /// Default impl will just call get, ignoring the cache hint.
     fn get_nontemporal(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
