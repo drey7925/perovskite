@@ -96,8 +96,8 @@ impl EngineHandle {
 
         if let Some(token) = previous_token {
             let index = token.0.get() % (NUM_SIMPLE_SOUND_SLOTS as u64);
-            // If the entity hasn't been evicted, put it back in the same slot
-            if alloc_lock.entity_slot_tokens[index as usize] == token.0.get() {
+            // If the sound hasn't been evicted, put it back in the same slot
+            if alloc_lock.simple_sound_tokens[index as usize] == token.0.get() {
                 let mut lock = self.control.simple_sounds[index as usize].lock_write();
                 *lock = sound;
                 return Some(token);
