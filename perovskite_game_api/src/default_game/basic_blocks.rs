@@ -70,9 +70,15 @@ pub const DIRT_WITH_GRASS: StaticBlockName = StaticBlockName("default:dirt_with_
 
 /// Solid grey stone.
 pub const STONE: StaticBlockName = StaticBlockName("default:stone");
+/// Stone bricks crafted from stone.
+pub const STONE_BRICKS: StaticBlockName = StaticBlockName("default:stone_bricks");
 
 /// Beach sand.
 pub const SAND: StaticBlockName = StaticBlockName("default:sand");
+/// Compressed sand block.
+pub const SANDSTONE: StaticBlockName = StaticBlockName("default:sandstone");
+/// Sandstone bricks crafted from sandstone.
+pub const SANDSTONE_BRICKS: StaticBlockName = StaticBlockName("default:sandstone_bricks");
 pub const SILT_DRY: StaticBlockName = StaticBlockName("default:silt_dry");
 pub const SILT_DAMP: StaticBlockName = StaticBlockName("default:silt_damp");
 pub const CLAY: StaticBlockName = StaticBlockName("default:clay");
@@ -1053,6 +1059,83 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
     make_slab(game_builder, &limestone, true)?;
     make_slab(game_builder, &limestone_dark, true)?;
     make_slab(game_builder, &limestone_light, true)?;
+
+    let _stone_bricks = game_builder.add_block(
+        BlockBuilder::new(STONE_BRICKS)
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .set_cube_single_texture(OwnedTextureName::from_css_color("magenta"))
+            .set_display_name("Stone Bricks"),
+    )?;
+    let _sandstone = game_builder.add_block(
+        BlockBuilder::new(SANDSTONE)
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .set_cube_single_texture(OwnedTextureName::from_css_color("magenta"))
+            .set_display_name("Sandstone"),
+    )?;
+    let _sandstone_bricks = game_builder.add_block(
+        BlockBuilder::new(SANDSTONE_BRICKS)
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .set_cube_single_texture(OwnedTextureName::from_css_color("magenta"))
+            .set_display_name("Sandstone Bricks"),
+    )?;
+
+    // 4 stone -> 1 stone bricks (shapeless)
+    game_builder.register_crafting_recipe(
+        [
+            RecipeSlot::Exact(STONE.0.to_string()),
+            RecipeSlot::Exact(STONE.0.to_string()),
+            RecipeSlot::Exact(STONE.0.to_string()),
+            RecipeSlot::Exact(STONE.0.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        STONE_BRICKS.0.to_string(),
+        1,
+        Some(QuantityType::Stack(256)),
+        true,
+    );
+    // 4 sand -> 1 sandstone (shapeless)
+    game_builder.register_crafting_recipe(
+        [
+            RecipeSlot::Exact(SAND.0.to_string()),
+            RecipeSlot::Exact(SAND.0.to_string()),
+            RecipeSlot::Exact(SAND.0.to_string()),
+            RecipeSlot::Exact(SAND.0.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        SANDSTONE.0.to_string(),
+        1,
+        Some(QuantityType::Stack(256)),
+        true,
+    );
+    // 4 sandstone -> 4 sandstone bricks (shapeless)
+    game_builder.register_crafting_recipe(
+        [
+            RecipeSlot::Exact(SANDSTONE.0.to_string()),
+            RecipeSlot::Exact(SANDSTONE.0.to_string()),
+            RecipeSlot::Exact(SANDSTONE.0.to_string()),
+            RecipeSlot::Exact(SANDSTONE.0.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        SANDSTONE_BRICKS.0.to_string(),
+        4,
+        Some(QuantityType::Stack(256)),
+        true,
+    );
 
     register_test_audio_block(game_builder)?;
 
