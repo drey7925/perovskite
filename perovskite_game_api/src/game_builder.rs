@@ -16,6 +16,7 @@ use std::{
     any::{Any, TypeId},
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -27,6 +28,7 @@ use perovskite_core::{
     protocol::{items::ItemDef, render::TextureReference},
 };
 use perovskite_server::{
+    database::InMemGameDatabase,
     game_state::{
         blocks::{BlockTypeHandle, TryToBlockId},
         chat::commands::ChatCommandHandler,
@@ -329,18 +331,34 @@ impl GameBuilder {
         Self::from_serverbuilder(ServerBuilder::from_cmdline()?)
     }
 
-    pub fn using_tempdir_disk_backed() -> Result<(GameBuilder, PathBuf)> {
+    fn tempdir_args() -> (ServerArgs, PathBuf) {
         let data_dir =
             std::env::temp_dir().join(format!("perovskite-{}", rand::thread_rng().next_u64()));
-        let builder = ServerBuilder::from_args(&ServerArgs {
-            data_dir: data_dir.clone(),
-            bind_addr: None,
-            port: 0,
-            trace_rate_denominator: usize::MAX,
-            rocksdb_num_fds: 512,
-            rocksdb_point_lookup_cache_mib: 128,
-            num_map_prefetchers: 8,
-        })?;
+        (
+            ServerArgs {
+                data_dir: data_dir.clone(),
+                bind_addr: None,
+                port: 0,
+                trace_rate_denominator: usize::MAX,
+                rocksdb_num_fds: 512,
+                rocksdb_point_lookup_cache_mib: 128,
+                num_map_prefetchers: 8,
+            },
+            data_dir,
+        )
+    }
+
+    pub fn using_tempdir_disk_backed() -> Result<(GameBuilder, PathBuf)> {
+        let (args, data_dir) = Self::tempdir_args();
+        let builder = ServerBuilder::from_args(&args)?;
+
+        Ok((Self::from_serverbuilder(builder)?, data_dir))
+    }
+
+    pub fn testonly_in_memory() -> Result<(GameBuilder, PathBuf)> {
+        let (args, data_dir) = Self::tempdir_args();
+        let db = Arc::new(InMemGameDatabase::new());
+        let builder = ServerBuilder::from_args_and_db(&args, db)?;
 
         Ok((Self::from_serverbuilder(builder)?, data_dir))
     }

@@ -59,7 +59,7 @@ use cgmath::Vector3;
 use cgmath::Zero;
 use futures::FutureExt;
 use parking_lot::MutexGuard;
-use perovskite_core::chat::{ChatMessage, SERVER_WARNING_COLOR};
+use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::permissions;
 use perovskite_core::coordinates::{BlockCoordinate, ChunkCoordinate, PlayerPositionUpdate};
 

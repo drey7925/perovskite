@@ -1501,8 +1501,8 @@ pub(crate) fn build_mapgen(
             .collect(),
         seed,
 
-        rail_testonly: blocks.get_by_name("carts:rail_tile").expect("rail"),
-        signal_testonly: blocks.get_by_name("carts:signal").expect("signal"),
-        glass_testonly: blocks.get_by_name("default:glass").expect("glass"),
+        rail_testonly: blocks.get_by_name("carts:rail_tile").unwrap_or(AIR_ID),
+        signal_testonly: blocks.get_by_name("carts:signal").unwrap_or(AIR_ID),
+        glass_testonly: blocks.get_by_name("default:glass").unwrap_or(AIR_ID),
     })
 }

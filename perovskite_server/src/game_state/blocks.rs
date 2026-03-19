@@ -798,6 +798,10 @@ impl BlockTypeManager {
             }
         }
     }
+
+    pub fn all_types(&self) -> impl Iterator<Item = &BlockType> {
+        self.block_types.iter()
+    }
 }
 
 pub struct FastBlockGroup<'a> {
