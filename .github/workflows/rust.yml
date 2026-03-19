@@ -4,7 +4,6 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,8 +24,10 @@ jobs:
           target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - uses: actions/checkout@v3
-    - name: Build      
+    - name: Build
       run: |
         sudo apt-get install protobuf-compiler libasound-dev libdbus-1-dev pkg-config
         rustup install 1.87
         cargo +1.87 build --verbose
+    - name: Test game_startup
+      run: cargo +1.87 test --verbose -p perovskite_game_api game_startup
