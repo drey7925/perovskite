@@ -139,6 +139,17 @@ pub struct NonExhaustive(pub(crate) ());
 #[cfg(any(test, feature = "test-support", doctest))]
 pub mod test_support;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn game_startup() {
+        let (mut game, _data_dir) = game_builder::GameBuilder::testonly_in_memory().unwrap();
+        configure_default_game(&mut game).unwrap();
+    }
+}
+
 pub fn configure_default_game(game: &mut GameBuilder) -> anyhow::Result<()> {
     game.initialize_default_game()?;
     colors::register_dyes(game)?;
