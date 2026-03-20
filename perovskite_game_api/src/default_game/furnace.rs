@@ -1,7 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use perovskite_core::constants::{self, item_groups::HIDDEN_FROM_CREATIVE};
+use perovskite_core::{
+    block_id::special_block_defs::AIR_ID,
+    constants::{self, item_groups::HIDDEN_FROM_CREATIVE},
+};
 use perovskite_server::game_state::{
     blocks::{
         BlockInteractionResult, BlockTypeHandle, CustomData, ExtendedData, ExtendedDataHolder,
@@ -349,34 +352,17 @@ fn furnace_dig_handler(
         .unwrap_or(false)
     {
         // One of the inventories is non-empty. Refuse to dig the furnace.
-        // TODO: Send the user a chat message warning them about this.
-        // TODO: Find a way to prevent the user's item from taking wear
-        //    This would entail making server changes to return a second value from the on-dig handler.
         return Ok(BlockInteractionResult::default());
     }
-    let air = ctx
-        .block_types()
-        .get_by_name(constants::blocks::AIR)
-        .unwrap();
-    extended_data.clear();
-    extended_data.set_dirty();
 
     let block_type = ctx.block_types().get_block(*bt)?.0;
-    let rule = ctx
-        .items()
-        .get_stack_item(tool)
-        .and_then(|item| item.get_interaction_rule(block_type).cloned());
-    if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
-        *bt = air;
+    if let Some((_, tool_wear)) = ctx.items().dig_time_and_wear(tool, block_type)? {
+        *bt = AIR_ID;
         extended_data.clear();
-        extended_data.set_dirty();
 
         Ok(BlockInteractionResult {
             item_stacks: vec![ctx.items().get_item(FURNACE.0).unwrap().singleton_stack()],
-            tool_wear: match rule {
-                Some(rule) => rule.computed_tool_wear(block_type)?,
-                None => 0,
-            },
+            tool_wear,
         })
     } else {
         Ok(Default::default())
