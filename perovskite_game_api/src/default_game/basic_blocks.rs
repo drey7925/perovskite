@@ -252,22 +252,18 @@ pub mod ores {
             "default:ingots:iron",
         )?;
         // todo clean this up when ore APIs are more mature
-        game_builder
-            .builder_extension_mut::<DefaultGameBuilderExtension>()
-            .smelting_recipes
-            .register_recipe(RecipeImpl {
-                slots: [RecipeSlot::Exact(IRON_PIECE.0.to_string())],
-                result: ItemStack {
-                    proto: protocol::items::ItemStack {
-                        item_name: IRON_INGOT.0.to_string(),
-                        quantity: 1,
-                        current_wear: 0,
-                        quantity_type: Some(QuantityType::Stack(256)),
-                    },
+        game_builder.register_smelting_recipe(
+            RecipeSlot::Exact(IRON_PIECE.0.to_string()),
+            ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: IRON_INGOT.0.to_string(),
+                    quantity: 1,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
                 },
-                shapeless: false,
-                metadata: 8,
-            });
+            },
+            8,
+        );
 
         let iron_ore = game_builder.add_block(
             BlockBuilder::new(IRON_ORE)
@@ -414,22 +410,18 @@ pub mod ores {
                 noise_scale: (4., 0.25, 4.),
             });
 
-        game_builder
-            .builder_extension_mut::<DefaultGameBuilderExtension>()
-            .smelting_recipes
-            .register_recipe(RecipeImpl {
-                slots: [RecipeSlot::Exact(GOLD_PIECE.0.to_string())],
-                result: ItemStack {
-                    proto: protocol::items::ItemStack {
-                        item_name: GOLD_INGOT.0.to_string(),
-                        quantity: 1,
-                        current_wear: 0,
-                        quantity_type: Some(QuantityType::Stack(256)),
-                    },
+        game_builder.register_smelting_recipe(
+            RecipeSlot::Exact(GOLD_PIECE.0.to_string()),
+            ItemStack {
+                proto: protocol::items::ItemStack {
+                    item_name: GOLD_INGOT.0.to_string(),
+                    quantity: 1,
+                    current_wear: 0,
+                    quantity_type: Some(QuantityType::Stack(256)),
                 },
-                shapeless: false,
-                metadata: 8,
-            });
+            },
+            12,
+        );
 
         Ok(())
     }

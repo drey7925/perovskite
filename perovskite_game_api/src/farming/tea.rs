@@ -84,7 +84,7 @@ pub(crate) fn register_tea(builder: &mut GameBuilder) -> Result<()> {
 
     // Steaming fresh leaves gets us oxidation-fixed leaves, which then become green tea when rolled
     // and then dried
-    builder.register_smelting_recipe(TEA_LEAVES_FRESH_ITEM.into(), steamed_leaves_stack);
+    builder.register_smelting_recipe(TEA_LEAVES_FRESH_ITEM.into(), steamed_leaves_stack, 4);
 
     let _withered_leaves = builder.register_basic_item(
         TEA_LEAVES_WITHERED_ITEM,

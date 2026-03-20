@@ -129,7 +129,7 @@ pub trait DefaultGameBuilder {
     /// either the ItemStack will be wrapped in a new abstraction, or become more stable.
     ///
     /// If you have a strong opinion about it being unified _now_, please open an issue.
-    fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack);
+    fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack, smelt_time: u32);
 }
 
 // This is a private type; other plugins cannot name it, so they cannot access
@@ -281,7 +281,7 @@ impl DefaultGameBuilder for GameBuilder {
             });
     }
 
-    fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack) {
+    fn register_smelting_recipe(&mut self, input: RecipeSlot, output: ItemStack, smelt_time: u32) {
         assert!(
             self.builder_extension_mut::<DefaultGameBuilderExtension>()
                 .initialized,
@@ -293,7 +293,7 @@ impl DefaultGameBuilder for GameBuilder {
                 slots: [input],
                 result: output,
                 shapeless: false,
-                metadata: 4,
+                metadata: smelt_time,
             });
     }
 }
