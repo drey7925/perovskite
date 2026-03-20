@@ -202,13 +202,9 @@ None at the moment. I test with either the latest or almost-latest stable Rust v
 perovskite_server's API can change in breaking ways. perovskite_game_api (as well as anything it re-exports by default)
 should be reasonably stable once it's written. I intend to re-export some unstable APIs behind a feature flag.
 
-## Code style
+## Development and contribution
 
-* Formatted following `cargo fmt`
-* Minimal unsafe, where it is either absolutely necessary (e.g. unsafe-only API, like Vulkan where some preconditions
-    cannot be checked automatically) or where it has an outsized benefit to code readability and performance + is easily
-    verified by the reader.
-* No nightly-only features; should build on stable Rust.
+Please see PRIMER.md for architecture, contribution notes, etc. This file is intended both for human readers and for AI agents.
 
 ## Who is behind this?
 
@@ -219,8 +215,7 @@ Note that this project is not endorsed, sponsored, or supported by my employer o
 
 ## AI policy
 
-Some code generation and chore tasks in this project are automated with LLM technology. Please see AI_AGENTS.md for examples
-of tasks that I've been automating.
+Some code generation and chore tasks in this project are automated with LLM technology. Please see .claude/skills for examples of tasks that I've been automating.
 
 Most of the engine is handwritten; I haven't been able to get LLMs to generate reliable enough code for those components
 yet, and I strongly prefer to have direct design and implementation control anyway.
@@ -233,13 +228,12 @@ game *content* viable, for a few reasons:
 * Being able to automatically convert from pseudocode, Lua, etc to Rust would make modding and content creation accessible
   to a wider range of technical backgrounds
 
-No AI is used for image generation, textures, "AI art" generation, etc.
+No AI is used for image generation, textures, "AI art" generation, etc. The AI skill files for creating game content include this as a policy.
 
 ### Pull requests and AI
 
 Please indicate in any pull requests if code was primarily generated with an AI tool/agent. Please no AI-generated unsafe Rust;
-I would prefer that it be handwritten and verified. Of course, AI code review, test generation, etc is good as an additional signal
-that unsafe code is sound.
+I would prefer that it be handwritten and verified. Of course, AI code review, test generation, etc is good as an additional signal that unsafe code is sound.
 
 Please do not contribute media (textures, audio, etc.) that you did not either photograph, record, or draw yourself.
 Non-AI tools like image/audio editors, denoising, etc are fine.

@@ -275,8 +275,7 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| make_furnace_popup(ctx, coord)));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
-                bt.deserialize_extended_data_handler = Some(Box::new(furnace_deserialize));
-                bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
+                bt.register_proto_serialization_handlers::<FurnaceState>();
             }),
     )?;
     let furnace_on_block = game_builder.add_block(
@@ -303,8 +302,7 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
                 bt.interact_key_handler =
                     Some(Box::new(|ctx, coord, _| make_furnace_popup(ctx, coord)));
                 bt.dig_handler_inline = Some(Box::new(furnace_dig_handler));
-                bt.deserialize_extended_data_handler = Some(Box::new(furnace_deserialize));
-                bt.serialize_extended_data_handler = Some(Box::new(furnace_serialize));
+                bt.register_proto_serialization_handlers::<FurnaceState>();
             }),
     )?;
 
@@ -333,17 +331,6 @@ pub(crate) fn register_furnace(game_builder: &mut GameBuilder) -> Result<()> {
         TimerCallback::PerBlockLocked(Box::new(timer_handler)),
     );
     Ok(())
-}
-
-fn furnace_deserialize(_ctx: InlineContext, data: &[u8]) -> Result<Option<CustomData>> {
-    let furnace = FurnaceState::decode(data)?;
-    Ok(Some(Box::new(furnace)))
-}
-fn furnace_serialize(_ctx: InlineContext, state: &CustomData) -> Result<Option<Vec<u8>>> {
-    let furnace = state
-        .downcast_ref::<FurnaceState>()
-        .context("FurnaceState downcast failed")?;
-    Ok(Some(furnace.encode_to_vec()))
 }
 
 fn furnace_dig_handler(

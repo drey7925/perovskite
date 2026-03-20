@@ -159,13 +159,15 @@ This is an optional override. If unset, the block's texture will be automaticall
 These require additional logic to produce gameplay effects.
 
 ```rust
-.set_extended_data_initializer(Box::new(|ctx, coord, tool, _| {
-    // return Some(extended_data_bytes) or None
+.set_extended_data_initializer(Box::new(|ctx, coord, tool, | {
+    // return Some(ExtendedData) or None
 }))
 .set_extra_variant_func(Box::new(|ctx, coord, tool, _| {
     // return variant u32 to modify the placed variant
 }))
 ```
+
+Consult the `advanced_block_features` skill document.
 
 ### add_modifier and add_item_modifier (Escape Hatches)
 
@@ -176,8 +178,8 @@ These are placeholders for functionality not yet exposed as dedicated builder me
     // Set handlers not yet exposed as builder methods:
     block.interact_key_handler = Some(Box::new(move |ctx, coord, menu_entry| { ... }));
     block.dig_handler_full = Some(Box::new(move |ctx, coord, tool| { ... }));
-    block.tap_handler = Some(Box::new(move |ctx, coord, tool| { ... }));
-    block.step_on_handler = Some(Box::new(move |coord, player| { ... }));
+    block.tap_handler_full = Some(Box::new(move |ctx, coord, tool| { ... }));
+    block.step_on_handler_full = Some(Box::new(move |coord, player| { ... }));
     // Override physics info:
     block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
 })
@@ -190,10 +192,12 @@ These are placeholders for functionality not yet exposed as dedicated builder me
 
 Common fields set via `add_modifier`:
 - `block.interact_key_handler` — called when player presses interact key
-- `block.dig_handler_full` — called when block is dug
-- `block.tap_handler` — called on a tap/hit
+- `block.dig_handler_{full, inline}` — called when block is dug
+- `block.tap_handler_{full, inline}` — called on a tap/hit
 - `block.step_on_handler` — called when a player steps on the block
 - `block.client_info.physics_info` — override physics (e.g., `PhysicsInfo::Air` for pass-through)
+
+If writing any handlers, consult the `advanced_block_features` skill document first.
 
 ## Worked Examples
 

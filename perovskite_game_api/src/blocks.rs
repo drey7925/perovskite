@@ -96,12 +96,8 @@ impl DroppedItem {
         Box::new(move |ctx, target_block, ext_data, stack| {
             let block_type = ctx.block_types().get_block(*target_block)?.0;
             let variant = target_block.variant();
-            let rule = ctx
-                .items()
-                .get_stack_item(stack)
-                .get_interaction_rule(block_type)
-                .cloned();
-            if rule.as_ref().and_then(|x| x.dig_time(block_type)).is_some() {
+
+            if let Some((_, wear)) = ctx.items().dig_time_and_wear(stack, block_type)? {
                 *target_block = AIR_ID;
                 ext_data.clear();
 
@@ -110,10 +106,7 @@ impl DroppedItem {
                         coord: ctx.location(),
                         variant,
                     }),
-                    tool_wear: match rule {
-                        Some(rule) => rule.computed_tool_wear(block_type)?,
-                        None => 0,
-                    },
+                    tool_wear: wear,
                 })
             } else {
                 Ok(Default::default())
@@ -206,9 +199,6 @@ pub type ExtendedDataInitializer = Box<
         + Sync,
 >;
 
-#[cfg(feature = "unstable_api")]
-pub type ExtraVariantCallback =
-    Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
 #[cfg(not(feature = "unstable_api"))]
 pub(crate) type ExtendedDataInitializer = Box<
     dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack) -> Result<Option<ExtendedData>>

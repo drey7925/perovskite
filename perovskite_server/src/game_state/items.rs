@@ -531,13 +531,40 @@ impl ItemManager {
         })?;
         Ok(())
     }
+
+    pub fn dig_time_and_wear(
+        &self,
+        stack: Option<&ItemStack>,
+        target_block: &BlockType,
+    ) -> Result<Option<(Duration, u32)>> {
+        let rule = self
+            .get_stack_item(stack)
+            .get_interaction_rule(target_block)
+            .cloned();
+        match rule.as_ref().and_then(|x| {
+            if x.matches(target_block) {
+                Some((x.dig_time(target_block), x.computed_tool_wear(target_block)))
+            } else {
+                None
+            }
+        }) {
+            Some((time, wear)) => {
+                if time.is_some() {
+                    Ok(Some((time.unwrap(), wear?)))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 pub trait InteractionRuleExt {
     /// Returns true if the given rule matches the given block
     fn matches(&self, block_type: &BlockType) -> bool;
 
-    /// Returns the time expected to dig this block, or None if it's not possible
+    /// Returns the time expected to dig this block, or None if it's not possible. A zero time could be returned.
     fn dig_time(&self, block: &BlockType) -> Option<Duration>;
 
     /// Returns the tool wear obtained from digging with this rule

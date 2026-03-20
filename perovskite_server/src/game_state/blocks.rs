@@ -295,6 +295,20 @@ impl BlockType {
     pub fn short_name(&self) -> &str {
         &self.client_info.short_name
     }
+
+    /// Convenience method to set both the deserialize and serialize handlers to use the given
+    /// prost-powered proto type.
+    pub fn register_proto_serialization_handlers<T: prost::Message + Default + 'static>(&mut self) {
+        self.deserialize_extended_data_handler =
+            Some(Box::new(|_ctx, data| Ok(Some(Box::new(T::decode(data)?)))));
+        self.serialize_extended_data_handler = Some(Box::new(|_ctx, data| {
+            Ok(Some(
+                data.downcast_ref::<T>()
+                    .context("downcast failed")?
+                    .encode_to_vec(),
+            ))
+        }));
+    }
 }
 
 impl Default for BlockType {
