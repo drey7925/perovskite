@@ -1,6 +1,6 @@
 ---
 name: advanced_block_features
-description: Advanced block functionality: event handlers (dig, tap, step-on, interact), extended data (simple_data, inventories, custom protobuf data), client extended data, and block mutation APIs. Use alongside define_new_block. Does not cover timers or circuits.
+description: Advanced block functionality,  event handlers (dig, tap, step-on, interact), extended data (simple_data, inventories, custom protobuf data), client extended data, and block mutation APIs. Use alongside define_new_block. Does not cover timers or circuits.
 ---
 
 This skill covers the advanced/stateful side of blocks. For basic BlockBuilder usage (appearance,
