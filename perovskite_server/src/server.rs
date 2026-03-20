@@ -32,17 +32,14 @@ use perovskite_core::{
     protocol::game_rpc::perovskite_game_server::PerovskiteGameServer,
     util::set_trace_rate_denominator,
 };
-use rocksdb::Options;
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Identity, ServerTlsConfig};
 use type_map::concurrent::TypeMap;
 
-use crate::database::rocksdb::RocksdbOptions;
 pub use crate::database::GameDatabase;
 use crate::database::{InMemGameDatabase, KeySpace};
 use crate::game_state::game_map::MapChunk;
 use crate::{
-    database::rocksdb::RocksDbBackend,
     game_state::{
         blocks::BlockTypeManager,
         chat::commands::{ChatCommand, ChatCommandHandler, CommandManager},
@@ -349,10 +346,12 @@ impl MapgenInterface for DummyMapgen {
 impl ServerBuilder {
     /// Creates a ServerBuilder that will run a server according to the command line arguments
     /// passed to the program, using a real disk-backed database.
+    #[cfg(feature = "real-server")]
     pub fn from_cmdline() -> Result<ServerBuilder> {
         Self::from_args(&ServerArgs::parse())
     }
 
+    #[cfg(feature = "real-server")]
     /// Creates a ServerBuilder that will run a server according to the command line arguments
     /// passed as a struct, using a real disk-backed database.
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
@@ -372,7 +371,7 @@ impl ServerBuilder {
 
         let mut db_dir = args.data_dir.clone();
         db_dir.push("database");
-        let mut db_opts = RocksdbOptions::default();
+        let mut db_opts = crate::database::rocksdb::RocksdbOptions::default();
         db_opts.create_if_missing(true);
         db_opts.optimize_for_point_lookup(args.rocksdb_point_lookup_cache_mib);
         let rocksdb_fds = set_rlimit_for_rocksdb(args.rocksdb_num_fds)?;
@@ -413,21 +412,29 @@ impl ServerBuilder {
         })
     }
 
-    #[cfg(not(feature = "db_failure_injection"))]
-    fn make_rocksdb_backend(db_dir: PathBuf, options: Options) -> Result<Arc<dyn GameDatabase>> {
-        Ok(Arc::new(RocksDbBackend::new(db_dir, options)?))
+    #[cfg(all(feature = "real-server", not(feature = "db_failure_injection")))]
+    fn make_rocksdb_backend(
+        db_dir: PathBuf,
+        options: rocksdb::Options,
+    ) -> Result<Arc<dyn GameDatabase>> {
+        Ok(Arc::new(crate::database::rocksdb::RocksDbBackend::new(
+            db_dir, options,
+        )?))
     }
 
     pub fn force_seed(&mut self, force_seed: Option<u32>) {
         self.force_seed = force_seed
     }
 
-    #[cfg(feature = "db_failure_injection")]
-    fn make_rocksdb_backend(db_dir: PathBuf, options: Options) -> Result<Arc<dyn GameDatabase>> {
+    #[cfg(all(feature = "real-server", feature = "db_failure_injection"))]
+    fn make_rocksdb_backend(
+        db_dir: PathBuf,
+        options: rocksdb::Options,
+    ) -> Result<Arc<dyn GameDatabase>> {
         use crate::database::failure_injection::FailureInjectedDbWrapper;
         tracing::warn!("This server is running with DB failure injection on. This is DANGEROUS and meant only for development.");
         Ok(Arc::new(FailureInjectedDbWrapper::new(
-            RocksDbBackend::new(db_dir, options)?,
+            crate::database::rocksdb::RocksDbBackend::new(db_dir, options)?,
         )))
     }
 

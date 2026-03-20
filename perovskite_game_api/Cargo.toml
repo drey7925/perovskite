@@ -62,7 +62,7 @@ googletest = { version = "0.14.2", optional = true }
 arc-swap = "1.8.0"
 
 [features]
-default = ["default_game", "farming", "animals", "circuits", "discord", "carts"]
+default = ["default_game", "farming", "animals", "circuits", "carts"]
 # When enabled, re-exports selected from perovskite_server. These are subject to change
 # in the current version.
 unstable_api = []
@@ -92,6 +92,8 @@ carts = ["circuits"]
 # dirt and other interactions
 farming = ["default_game"]
 
+# Actually compile a full server. If unset, the dependency tree is smaller for faster testing/iteration
+server = ["perovskite_server/real-server"]
 
 # If enabled, server will detect deadlocks and log them.
 deadlock_detection = ["perovskite_server/deadlock_detection"]
@@ -129,3 +131,8 @@ harness = false
 [[bench]]
 name = "game_map_bench"
 harness = false
+
+[[bin]]
+name = "perovskite_game_api"
+path = "src/main.rs"
+required-features = ["default_game", "server"]

@@ -327,6 +327,7 @@ impl GameBuilder {
     /// Creates a new game builder using server configuration from the
     /// command line. If argument parsing fails, usage info is printed to
     /// the terminal and the process exits.
+    #[cfg(feature = "server")]
     pub fn from_cmdline() -> Result<GameBuilder> {
         Self::from_serverbuilder(ServerBuilder::from_cmdline()?)
     }
@@ -346,13 +347,6 @@ impl GameBuilder {
             },
             data_dir,
         )
-    }
-
-    pub fn using_tempdir_disk_backed() -> Result<(GameBuilder, PathBuf)> {
-        let (args, data_dir) = Self::tempdir_args();
-        let builder = ServerBuilder::from_args(&args)?;
-
-        Ok((Self::from_serverbuilder(builder)?, data_dir))
     }
 
     pub fn testonly_in_memory() -> Result<(GameBuilder, PathBuf)> {

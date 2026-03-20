@@ -13,6 +13,8 @@
 // limitations under the License.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#[cfg(feature = "real-server")]
 pub mod rocksdb;
 
 #[cfg(feature = "db_failure_injection")]

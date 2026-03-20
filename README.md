@@ -82,13 +82,13 @@ On Windows, you'll also need `protoc` and `ninja` (e.g. use these exact package 
 First, build and run the server:
 
 ```sh
-cargo build  --features= --bin perovskite_game_api --release
+cargo build  --features=server --bin perovskite_game_api --release
 target/release/perovskite_game_api --data-dir /path/to/data-directory
 ```
 
 The default server port is 28273.
 
-The following `--features` can be used to do performance debugging of the server:
+The following extra `--features` can be used to do performance debugging of the server:
 
 * `deadlock_detection` - Prints stacktraces when certain deadlocks occur
 * `tracy` - Exports trace spans and metrics to [tracy](https://github.com/wolfpld/tracy).
@@ -204,7 +204,7 @@ should be reasonably stable once it's written. I intend to re-export some unstab
 
 ## Development and contribution
 
-Please see PRIMER.md for architecture, contribution notes, etc. This file is intended both for human readers and for AI agents.
+Please see PRIMER.md for architecture, contribution notes, etc. That file is intended both for human readers and for AI agents.
 
 ## Who is behind this?
 

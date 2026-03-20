@@ -27,7 +27,7 @@ opaque-ke = { version = "2.1.0-pre.1", features = ["argon2"] }
 parking_lot = { version = "0.12.1" }
 prost = "0.14.1"
 rand = "0.8.5"
-rocksdb = "0.24.0"
+rocksdb = { version = "0.24.0", optional = true }
 rustc-hash = "2.0.0"
 sha2 = "0.10.6"
 snap = "1.1.0"
@@ -88,6 +88,8 @@ tracy = ["tracy-client/enable"]
 
 dhat-heap = []
 test-support = ["googletest"]
+# Without real-server, use a minimal set of dependencies.
+real-server = ["rocksdb"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
