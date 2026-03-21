@@ -1,6 +1,6 @@
 ---
 name: define_new_block
-description: Defines a new block using BlockBuilder. Use this when asked to add a new block type to the game.
+description: Defines a new block using BlockBuilder. Use this when asked to add a new block type to the game. Also provides guidance on textures.
 ---
 
 The main block API is in `perovskite_game_api/src/blocks.rs`. Blocks are defined using `BlockBuilder` and registered via `game_builder.add_block(...)`.
@@ -16,6 +16,52 @@ let built_block = builder.add_block(
 ```
 
 `BlockBuilder::new` takes a `BlockName` (typically a `StaticBlockName` constant). The returned `BuiltBlock` contains the block ID and associated item ID.
+
+## Textures
+
+Textures are identified by name strings. Two types exist:
+
+- **`StaticTextureName`** — a `Copy` newtype over `&'static str`. Use this for compile-time constant names (the common case).
+- **`OwnedTextureName`** — a newtype over `String`. Use this when the name is computed at runtime (e.g., programmatically generated color names, or names built from a dynamic prefix).
+
+Both implement the `TextureName` trait and can be passed anywhere a texture is expected.
+
+### Declaring and registering a texture from a file
+
+The typical pattern, taken from `basic_blocks.rs`:
+
+```rust
+// 1. Declare the name as a module-level constant:
+pub const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
+
+// 2. Register the image data during initialization (usually in a setup fn):
+include_texture_bytes!(game_builder, DIRT_TEXTURE, "textures/dirt.png")?;
+```
+
+`include_texture_bytes!` is a convenience macro that calls `game_builder.register_texture_bytes(tex_name, include_bytes!(file_name))`. The file path is resolved relative to the current source file (same semantics as `include_bytes!`).
+
+### Using OwnedTextureName for dynamic names
+
+When the texture name can't be a `'static` string — e.g., it's assembled at runtime from a variant value or a config string — use `OwnedTextureName`:
+
+```rust
+// Programmatically constructed name (must still be registered before use):
+let tex = OwnedTextureName(format!("myplugin:lamp_{}", color));
+game_builder.register_texture_bytes(&tex, &png_bytes)?;
+```
+
+`StaticTextureName` converts into `OwnedTextureName` via `From`, so you can `.into()` freely.
+
+### CSS color placeholder
+
+When no texture asset is available yet, generate a solid-color placeholder without any image file:
+
+```rust
+// No registration needed — CSS colors are generated on the fly.
+OwnedTextureName::from_css_color("#ff00ff")   // bright magenta
+OwnedTextureName::from_css_color("rgb(120 120 120)")
+OwnedTextureName::from_css_color("orange")    // named CSS colors also work
+```
 
 ## Appearance
 
