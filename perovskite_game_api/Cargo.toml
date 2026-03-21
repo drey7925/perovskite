@@ -136,3 +136,11 @@ harness = false
 name = "perovskite_game_api"
 path = "src/main.rs"
 required-features = ["default_game", "server"]
+
+[[bin]]
+name = "summarize_blocks"
+path = "src/bin/summarize_blocks.rs"
+
+[[bin]]
+name = "dump_blocks"
+path = "src/bin/dump_blocks.rs"
