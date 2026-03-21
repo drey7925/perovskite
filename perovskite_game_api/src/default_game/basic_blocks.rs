@@ -114,6 +114,13 @@ pub const SNOW_BLOCK: StaticBlockName = StaticBlockName("default:snow_block");
 pub const SNOW_BLOCK_FOOTPRINT: StaticBlockName = StaticBlockName("default:snow_block_footprint");
 pub const SNOWBALL: StaticItemName = StaticItemName("default:snowball");
 
+/// Bricks block - fired clay bricks arranged in a pattern.
+pub const BRICKS: StaticBlockName = StaticBlockName("default:bricks");
+/// A single fired clay brick item.
+pub const BRICK: StaticItemName = StaticItemName("default:brick");
+/// An unfired clay brick, ready for smelting.
+pub const UNFIRED_BRICK: StaticItemName = StaticItemName("default:unfired_brick");
+
 /// The texture used for dirt.
 pub const DIRT_TEXTURE: StaticTextureName = StaticTextureName("default:dirt");
 const DIRT_GRASS_SIDE_TEXTURE: StaticTextureName = StaticTextureName("default:dirt_grass_side");
@@ -1121,6 +1128,60 @@ fn register_core_blocks(game_builder: &mut GameBuilder) -> Result<()> {
         ],
         SANDSTONE_BRICKS.0.to_string(),
         4,
+        Some(QuantityType::Stack(256)),
+        true,
+    );
+
+    // TODO: Decide gameplay UX for going from clay to unfired bricks.
+    game_builder.register_basic_item(
+        UNFIRED_BRICK,
+        "Unfired Brick",
+        OwnedTextureName::from_css_color("magenta"),
+        vec![],
+        "default:bricks:unfired_brick",
+    )?;
+    game_builder.register_basic_item(
+        BRICK,
+        "Brick",
+        OwnedTextureName::from_css_color("magenta"),
+        vec![],
+        "default:bricks:brick",
+    )?;
+    // Smelting recipe: 1 unfired brick -> 1 brick in 3 ticks
+    game_builder.register_smelting_recipe(
+        RecipeSlot::Exact(UNFIRED_BRICK.0.to_string()),
+        ItemStack {
+            proto: protocol::items::ItemStack {
+                item_name: BRICK.0.to_string(),
+                quantity: 1,
+                current_wear: 0,
+                quantity_type: Some(QuantityType::Stack(256)),
+            },
+        },
+        3,
+    );
+    let _bricks = game_builder.add_block(
+        BlockBuilder::new(BRICKS)
+            .add_block_group(BRITTLE)
+            .add_block_group(TOOL_REQUIRED)
+            .set_cube_single_texture(OwnedTextureName::from_css_color("magenta"))
+            .set_display_name("Bricks"),
+    )?;
+    // 4 bricks -> 1 bricks block (shapeless)
+    game_builder.register_crafting_recipe(
+        [
+            RecipeSlot::Exact(BRICK.0.to_string()),
+            RecipeSlot::Exact(BRICK.0.to_string()),
+            RecipeSlot::Exact(BRICK.0.to_string()),
+            RecipeSlot::Exact(BRICK.0.to_string()),
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+            RecipeSlot::Empty,
+        ],
+        BRICKS.0.to_string(),
+        1,
         Some(QuantityType::Stack(256)),
         true,
     );
