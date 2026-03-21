@@ -68,7 +68,7 @@ The benefits:
 
 A Rust toolchain is required; on Windows I use the MSVC toolchain for testing and development.
 
-The minimum Rust version at this time is 1.87. This is subject to increase at any time (but the latest stable should
+The minimum Rust version at this time is 1.88. This is subject to increase at any time (but the latest stable should
 always be supported for the default build; i.e., no nightly features are required by default). Some experimental
 features may require a nightly compiler.
 

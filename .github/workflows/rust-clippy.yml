@@ -40,12 +40,12 @@ jobs:
 
       - name: Install required cargo
         run: |
-          rustup install 1.87
-          cargo +1.87 install clippy-sarif sarif-fmt
+          rustup install 1.88
+          cargo +1.88 install clippy-sarif sarif-fmt
 
       - name: Run rust-clippy
         run:
-          cargo +1.87 clippy
+          cargo +1.88 clippy
           --all-features
           --message-format=json | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
         continue-on-error: true
