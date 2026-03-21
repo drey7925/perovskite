@@ -58,7 +58,7 @@ use perovskite_server::game_state::{
         BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerState,
         VerticalNeighborTimerCallback,
     },
-    items::{HasInteractionRules, InteractionRuleExt, Item, ItemStack},
+    items::{Item, ItemStack},
 };
 use perovskite_server::media::SoundKey;
 

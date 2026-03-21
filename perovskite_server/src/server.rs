@@ -18,7 +18,7 @@ use std::env::temp_dir;
 use std::fmt::Debug;
 use std::{
     net::{IpAddr, SocketAddr},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
     sync::Arc,
 };
@@ -214,6 +214,24 @@ impl Server {
     pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> T) -> T {
         let _enter_guard = self.runtime.enter();
         task(self.game_state())
+    }
+}
+
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use crate::game_state::event::EventInitiator;
+    use crate::game_state::event::HandlerContext;
+    pub trait EventTestExt {
+        fn create_context<'a>(&self, initiator: EventInitiator<'a>) -> HandlerContext<'a>;
+    }
+    impl EventTestExt for super::Server {
+        fn create_context<'a>(&self, initiator: EventInitiator<'a>) -> HandlerContext<'a> {
+            HandlerContext {
+                tick: self.game_state().tick(),
+                initiator,
+                game_state: self.game_state.clone(),
+            }
+        }
     }
 }
 

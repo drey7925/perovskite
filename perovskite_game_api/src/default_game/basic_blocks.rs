@@ -155,11 +155,7 @@ pub mod ores {
 
     use crate::{
         blocks::CubeAppearanceBuilder,
-        default_game::{
-            item_groups,
-            recipes::{RecipeImpl, RecipeSlot},
-            DefaultGameBuilderExtension,
-        },
+        default_game::{item_groups, recipes::RecipeSlot, DefaultGameBuilderExtension},
         game_builder::StaticItemName,
     };
 

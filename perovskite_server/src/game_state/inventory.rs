@@ -413,12 +413,24 @@ impl BorrowLocation {
 /// (or being held by the user's cursor).
 ///
 /// This is not the same as a "borrow" in the sense of Rust references and lifetimes.
+///
+/// TODO: This is a somewhat leaky abstraction, but most callers can just treat it as opaque.
+/// Verify that nothing needs to be exposed in some other way, then clean up.
 #[derive(Clone, Debug)]
 pub struct BorrowedStack {
     /// The location (inventory key, offset) that this stack is borrowing from
     pub borrows_from: BorrowLocation,
     /// The stack that is borrowed from the location indicated.
     pub borrowed_stack: ItemStack,
+}
+
+impl Into<BorrowedStack> for ItemStack {
+    fn into(self) -> BorrowedStack {
+        BorrowedStack {
+            borrows_from: BorrowLocation::NotBorrowed,
+            borrowed_stack: self,
+        }
+    }
 }
 
 pub struct VirtualOutputCallbacks<T> {

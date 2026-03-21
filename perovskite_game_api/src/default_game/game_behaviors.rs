@@ -138,9 +138,9 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
         let craft_take = {
             let game_state = game_state.clone();
             let recipe_book = self.recipe_book.clone();
-            Box::new(move |ctx: &Popup, _slot, _count| {
-                let source_view = ctx.inventory_views().get("craft_in").unwrap();
-                let input = source_view.peek(ctx).unwrap();
+            Box::new(move |popup: &Popup, _slot, _count| {
+                let source_view = popup.inventory_views().get("craft_in").unwrap();
+                let input = source_view.peek(popup).unwrap();
                 let result = recipe_book.find(
                     game_state.item_manager(),
                     input.iter().collect::<Vec<_>>().as_slice(),
@@ -148,7 +148,7 @@ impl InventoryPopupProvider for DefaultGameInventoryPopupProvider {
                 if result.is_some() {
                     for (i, item) in input.iter().enumerate() {
                         if item.is_some() {
-                            source_view.take(ctx, i, Some(1)).unwrap();
+                            source_view.take(popup, i, Some(1)).unwrap();
                         }
                     }
                 }

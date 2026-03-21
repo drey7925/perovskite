@@ -58,7 +58,10 @@ use crate::game_builder::GameBuilder;
 use perovskite_server::{
     database::InMemGameDatabase,
     game_state::{
-        blocks::TryToBlockId, event::EventInitiator, items::ItemStack, mapgen::MapgenInterface,
+        blocks::TryToBlockId,
+        event::{EventInitiator, HandlerContext},
+        items::ItemStack,
+        mapgen::MapgenInterface,
         GameState,
     },
     server::{Server, ServerArgs, ServerBuilder},
@@ -216,14 +219,7 @@ impl TestFixture {
         &self,
         task: impl FnOnce(&GameState) -> googletest::Result<()>,
     ) -> googletest::Result<()> {
-        let fixture = TestFixture::inner();
-        let result = fixture
-            .server
-            .load()
-            .as_ref()
-            .expect("Server not running")
-            .run_task_in_server(task);
-        result
+        Self::server().run_task_in_server(task)
     }
 
     pub fn run_timer_inline(&self, name: &str) -> googletest::Result<()> {
@@ -232,6 +228,22 @@ impl TestFixture {
 
     pub fn run_all_timers_inline(&self) -> googletest::Result<()> {
         Self::server().run_task_in_server(|gs| gs.game_map().run_all_timers_inline().or_fail())
+    }
+
+    /// Runs a task in the server with a handler context.
+    ///
+    /// TODO: This uses a plugin as the initiator; additional work will be needed to support players
+    ///
+    /// This is useful for testing event handlers.
+    pub fn run_with_context(
+        &self,
+        task: impl for<'a> FnOnce(HandlerContext<'a>) -> googletest::Result<()>,
+    ) -> googletest::Result<()> {
+        use perovskite_server::server::test_support::EventTestExt;
+        let initiator = EventInitiator::Plugin("TestSupport_TestFixture".to_string());
+        let server = Self::server();
+        let context = server.create_context(initiator);
+        server.run_task_in_server(|_| task(context))
     }
 }
 
