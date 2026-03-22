@@ -19,6 +19,8 @@ use futures::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 
+use crate::game_state::blocks::BlockInteractionResult;
+
 use super::event::EventInitiator;
 
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.
@@ -74,4 +76,14 @@ macro_rules! run_async_handler {
             $crate::game_state::handlers::run_async_handler_impl($closure, $name, $initiator)
         }
     };
+}
+
+pub trait CoalesceResult {
+    fn coalesce(a: Self, b: Self) -> Self;
+}
+
+impl CoalesceResult for () {
+    fn coalesce(_a: (), _b: ()) -> () {
+        ()
+    }
 }

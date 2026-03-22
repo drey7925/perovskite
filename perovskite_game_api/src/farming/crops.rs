@@ -8,7 +8,7 @@ use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::{ChunkCoordinate, ChunkOffset};
 use perovskite_core::protocol::items::item_stack::QuantityType;
 use perovskite_server::game_state::blocks::{
-    BlockInteractionResult, FastBlockName, InlineContext, InlineHandler,
+    BlockInteractionResult, FastBlockName, InlineContext, InlineInteractionHandler,
 };
 use perovskite_server::game_state::event::HandlerContext;
 use perovskite_server::game_state::game_map::{
@@ -103,7 +103,7 @@ impl InteractionEffect {
         self,
         stage_fbns: Vec<FastBlockName>,
         current_stage: usize,
-    ) -> Result<Box<InlineHandler>> {
+    ) -> Result<Box<InlineInteractionHandler>> {
         ensure!(self.transition_probability >= 0.0 && self.transition_probability <= 1.0);
         if let InteractionTransitionTarget::JumpToRandomStage(stages) = &self.transition.target {
             ensure!(!stages.is_empty());

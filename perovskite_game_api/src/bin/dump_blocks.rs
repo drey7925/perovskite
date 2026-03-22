@@ -11,6 +11,13 @@ fn main() {
                     .map(|bt| {
                         let mut client_info = bt.client_info.clone();
                         // Exclude block ID — it's an artifact of registration order
+                        // Within a game, block IDs are kept consistent through persistent
+                        // mapping tables in the database, even as registration order changes
+                        // or new blocks are added.
+                        //
+                        // This tool runs against a fresh database, so there are no
+                        // persistent mappings yet. Whatever mapping does arise is not informative,
+                        // and just makes the diff noisy.
                         client_info.id = 0;
 
                         let handlers = handler_summary(bt);
@@ -60,6 +67,12 @@ fn handler_summary(bt: &perovskite_server::game_state::blocks::BlockType) -> Str
     }
     if bt.serialize_extended_data_handler.is_some() {
         parts.push("ser_ext_data");
+    }
+    if bt.fixup_handler_inline.is_some() {
+        parts.push("fixup_inline");
+    }
+    if bt.fixup_handler_full.is_some() {
+        parts.push("fixup_full");
     }
     if parts.is_empty() {
         "none".to_string()

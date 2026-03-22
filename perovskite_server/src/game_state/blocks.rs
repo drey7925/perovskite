@@ -14,7 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::database::{GameDatabase, KeySpace};
+use crate::{
+    database::{GameDatabase, KeySpace},
+    game_state::handlers::CoalesceResult,
+};
 use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
 use rustc_hash::FxHashMap;
@@ -22,7 +25,7 @@ use std::{
     any::Any,
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap, HashSet},
-    ops::{AddAssign, Deref, DerefMut},
+    ops::{Add, AddAssign, Deref, DerefMut},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -39,7 +42,10 @@ use perovskite_core::{
         blocks::AIR,
     },
     coordinates::BlockCoordinate,
-    protocol::blocks::{self as blocks_proto, LodInfo},
+    protocol::blocks::{
+        self as blocks_proto, block_type_def::RenderInfo, AxisAlignedBoxRotation, CubeRenderInfo,
+        CubeVariantEffect, LodInfo,
+    },
 };
 use prost::Message;
 
@@ -93,18 +99,50 @@ impl AddAssign for BlockInteractionResult {
         self.tool_wear += other.tool_wear;
     }
 }
+impl Add for BlockInteractionResult {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        let mut result = self;
+        result += other;
+        result
+    }
+}
+impl CoalesceResult for BlockInteractionResult {
+    fn coalesce(a: Self, b: Self) -> Self {
+        a + b
+    }
+}
+
+/// If the block fixup handler is being called, why the block is being fixed up.
+///
+/// See notes on [BlockType::fixup_handler_inline] and [BlockType::fixup_handler_full].
+///
+/// In most cases, handlers won't actually care about this and can just do fixups unconditionally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixupReason {
+    /// The block was moved, e.g. by a piston or similar.
+    MovedFrom(BlockCoordinate),
+    /// The block was rotated, e.g. by a rotating platform or by a tool.
+    OrientationChanged,
+    /// The block was imported from saved geometry, and must now be fixed up to be coherent with its new location/rotation.
+    /// e.g. pre-built structures, downloaded maps, etc.
+    LoadedFromSave,
+    /// The fixup handler was called manually, e.g. by another block's handler,
+    /// and a more specific reason is not available.
+    ManuallyCalled,
+}
 
 pub use perovskite_core::block_id::MAX_BLOCK_DEFS;
 use perovskite_core::protocol::blocks::SolidPhysicsInfo;
 use perovskite_core::protocol::map::ClientExtendedData;
 
 /// Takes (handler context, coordinate being dug, item stack used to dig), returns dropped item stacks.
-pub type FullHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
+pub type FullInteractionHandler = dyn Fn(&HandlerContext, BlockCoordinate, Option<&ItemStack>) -> Result<BlockInteractionResult>
     + Send
     + Sync;
 /// Takes (handler context, mutable reference to the block type in the map,
 /// mutable reference to the extended data holder, item stack used to dig), returns dropped item stacks.
-pub type InlineHandler = dyn Fn(
+pub type InlineInteractionHandler = dyn Fn(
         InlineContext,
         &mut BlockId,
         &mut ExtendedDataHolder,
@@ -112,6 +150,12 @@ pub type InlineHandler = dyn Fn(
     ) -> Result<BlockInteractionResult>
     + Send
     + Sync;
+
+pub type FullGenericHandler<T, U> =
+    dyn Fn(&HandlerContext, BlockCoordinate, T) -> Result<U> + Send + Sync;
+
+pub type InlineGenericHandler<T, U> =
+    dyn Fn(InlineContext, &mut BlockId, &mut ExtendedDataHolder, T) -> Result<U> + Send + Sync;
 
 /// The signature of this callback is subject to change.
 ///
@@ -236,7 +280,7 @@ pub struct BlockType {
     /// will also be visible.
     /// However, if this handler is called, it is guaranteed that at some recent point, this block *was* at the given
     /// coordinates (even if changed by a race or by its own inline handler), and someone tried to dig it.
-    pub dig_handler_full: Option<Box<FullHandler>>,
+    pub dig_handler_full: Option<Box<FullInteractionHandler>>,
     /// Called when the block is dug. To update the block on the map, assign a new value to the BlockTypeRef.
     /// To update extended data, use the DerefMut trait on ExtendedDataHolder
     ///
@@ -244,11 +288,11 @@ pub struct BlockType {
     /// TBD way. dig_handler_full will not be called in that case
     ///
     /// Note that if the handler performs changes, they will not be rolled back if the handler subsequently returns Err.
-    pub dig_handler_inline: Option<Box<InlineHandler>>,
+    pub dig_handler_inline: Option<Box<InlineInteractionHandler>>,
     /// Same as dig_handler_full but for the case when the block is hit with a tool but not dug fully
-    pub tap_handler_full: Option<Box<FullHandler>>,
+    pub tap_handler_full: Option<Box<FullInteractionHandler>>,
     /// Same as dig_handler_inline but for the case when the block is hit with a tool but not dug fully
-    pub tap_handler_inline: Option<Box<InlineHandler>>,
+    pub tap_handler_inline: Option<Box<InlineInteractionHandler>>,
 
     /// Called when the given item is placed onto this block.
     ///
@@ -279,9 +323,14 @@ pub struct BlockType {
     /// * The held itemstack is always None, and tool_wear in the return value is ignored.
     ///
     /// See [Self::dig_handler_inline]/[Self::dig_handler_full] for details on inline vs full
-    pub step_on_handler_inline: Option<Box<InlineHandler>>,
+    pub step_on_handler_inline: Option<Box<InlineInteractionHandler>>,
     /// Same as [Self::step_on_handler_inline] but allows accessing the game state
-    pub step_on_handler_full: Option<Box<FullHandler>>,
+    pub step_on_handler_full: Option<Box<FullInteractionHandler>>,
+
+    /// Called when the block is being fixed up, e.g. after being moved or rotated.
+    pub fixup_handler_inline: Option<Box<InlineGenericHandler<FixupReason, ()>>>,
+    /// Same as [Self::fixup_handler_inline] but allows accessing the game state
+    pub fixup_handler_full: Option<Box<FullGenericHandler<FixupReason, ()>>>,
 
     // Internal impl details
     pub(crate) is_unknown_block: bool,
@@ -326,6 +375,8 @@ impl Default for BlockType {
             interact_key_handler: None,
             step_on_handler_full: None,
             step_on_handler_inline: None,
+            fixup_handler_full: None,
+            fixup_handler_inline: None,
             is_unknown_block: false,
         }
     }
@@ -470,6 +521,7 @@ pub struct BlockTypeManager {
     light_emission: Vec<u8>,
     trivially_replaceable_block_group: bitvec::vec::BitVec,
     has_client_side_extended_data: bitvec::vec::BitVec,
+    low_bits_are_rotation: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
     cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
 }
@@ -483,6 +535,7 @@ impl BlockTypeManager {
             light_emission: vec![],
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
+            low_bits_are_rotation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         }
@@ -590,6 +643,7 @@ impl BlockTypeManager {
             light_emission: vec![],
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
+            low_bits_are_rotation: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         };
@@ -788,6 +842,8 @@ impl BlockTypeManager {
         self.light_emission.resize(self.block_types.len(), 0);
         self.has_client_side_extended_data
             .resize(self.block_types.len(), false);
+        self.low_bits_are_rotation
+            .resize(self.block_types.len(), false);
         for (index, block) in self.block_types.iter().enumerate() {
             if block.client_info.allow_light_propagation {
                 self.light_propagation.set(index, true);
@@ -795,6 +851,18 @@ impl BlockTypeManager {
             self.light_emission[index] = block.client_info.light_emission as u8;
             if block.client_info.has_client_extended_data {
                 self.has_client_side_extended_data.set(index, true);
+            }
+
+            let has_rotation = match &block.client_info.render_info {
+                Some(RenderInfo::Cube(x)) => x.variant_effect() == CubeVariantEffect::RotateNesw,
+                Some(RenderInfo::AxisAlignedBoxes(x)) => x
+                    .boxes
+                    .iter()
+                    .any(|x| x.rotation() == AxisAlignedBoxRotation::Nesw),
+                _ => false,
+            };
+            if has_rotation {
+                self.low_bits_are_rotation.set(index, true);
             }
         }
         Ok(())
@@ -944,6 +1012,8 @@ fn make_unknown_block_serverside(id: BlockId, short_name: String) -> BlockType {
         interact_key_handler: None,
         step_on_handler_full: None,
         step_on_handler_inline: None,
+        fixup_handler_full: None,
+        fixup_handler_inline: None,
         is_unknown_block: true,
     }
 }

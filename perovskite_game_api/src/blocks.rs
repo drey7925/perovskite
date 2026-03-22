@@ -52,7 +52,9 @@ use perovskite_server::game_state::items::{
     ItemInteractionResult, PlaceHandler, PointeeBlockCoords,
 };
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineHandler},
+    blocks::{
+        BlockInteractionResult, BlockType, BlockTypeHandle, ExtendedData, InlineInteractionHandler,
+    },
     event::HandlerContext,
     game_map::{
         BulkUpdateCallback, CasOutcome, ChunkNeighbors, MapChunk, TimerState,
@@ -89,7 +91,7 @@ impl DroppedItem {
     pub(crate) fn build_dig_handler_inner<F>(
         closure: F,
         _game_builder: &GameBuilder,
-    ) -> Box<InlineHandler>
+    ) -> Box<InlineInteractionHandler>
     where
         F: Fn(DroppedItemClosureParam) -> Vec<ItemStack> + Sync + Send + 'static,
     {
@@ -146,7 +148,10 @@ impl DroppedItem {
         }
     }
 
-    pub(crate) fn build_dig_handler(self, game_builder: &GameBuilder) -> Box<InlineHandler> {
+    pub(crate) fn build_dig_handler(
+        self,
+        game_builder: &GameBuilder,
+    ) -> Box<InlineInteractionHandler> {
         match self {
             DroppedItem::None => Self::build_dig_handler_inner(|_| Vec::new(), game_builder),
             DroppedItem::Fixed(item, count) => Self::build_dig_handler_inner(

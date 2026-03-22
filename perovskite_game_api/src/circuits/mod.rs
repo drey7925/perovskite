@@ -5,10 +5,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
-use perovskite_server::game_state::blocks::InlineHandler;
+use perovskite_server::game_state::blocks::InlineInteractionHandler;
 use perovskite_server::game_state::items::ItemInteractionResult;
 use perovskite_server::game_state::{
-    blocks::{BlockInteractionResult, FastBlockName, FullHandler},
+    blocks::{BlockInteractionResult, FastBlockName, FullInteractionHandler},
     event::HandlerContext,
     GameStateExtension,
 };
@@ -542,11 +542,12 @@ pub trait CircuitBlockBuilder {
 impl CircuitBlockBuilder for BlockBuilder {
     fn register_circuit_callbacks(self) -> BlockBuilder {
         self.add_modifier(move |bt| {
-            let old_inline_handler: Option<Box<InlineHandler>> = bt.dig_handler_inline.take();
-            let old_full_handler: Option<Box<FullHandler>> = bt.dig_handler_full.take();
+            let old_inline_handler: Option<Box<InlineInteractionHandler>> =
+                bt.dig_handler_inline.take();
+            let old_full_handler: Option<Box<FullInteractionHandler>> = bt.dig_handler_full.take();
             let block_name = FastBlockName::new(bt.client_info.short_name.clone());
 
-            let checked_inline_handler: Box<InlineHandler> = match old_inline_handler {
+            let checked_inline_handler: Box<InlineInteractionHandler> = match old_inline_handler {
                 None => Box::new(move |_, _, _, _| Ok(BlockInteractionResult::default())),
                 Some(x) => Box::new(move |ctx, block_type: &mut BlockId, ext_data, stack| {
                     let expected_id = ctx

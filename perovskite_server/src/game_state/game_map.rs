@@ -35,6 +35,8 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
+use crate::game_state::blocks::FixupReason;
+use crate::game_state::handlers::CoalesceResult;
 use crate::{
     database::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
@@ -1693,6 +1695,22 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         )
     }
 
+    /// Fixes up a block that was just moved or rotated.
+    pub fn fixup_block(
+        &self,
+        coord: BlockCoordinate,
+        initiator: &EventInitiator,
+        reason: FixupReason,
+    ) -> Result<()> {
+        self.run_block_interaction(
+            coord,
+            initiator,
+            reason,
+            |block| block.fixup_handler_inline.as_deref(),
+            |block| block.fixup_handler_full.as_deref(),
+        )
+    }
+
     /// Runs the given dig or interact handler for the block at the specified coordinate.
     ///
     /// This method will retrieve the block at the provided coordinate, look up its dig or interact
@@ -1705,7 +1723,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///
     /// * `coord` - The block coordinate to run the handler for.
     /// * `initiator` - The initiator of this event, for handler context.
-    /// * `tool` - Optional tool item stack, if this is a tool interaction.
+    /// * `param` - Additional parameter for the handler. Typically an Option<&ItemStack> for tool interactions
     /// * `get_block_inline_handler` - Callback to retrieve the desired inline handler.
     /// * `get_block_full_handler` - Callback to retrieve the desired full handler.
     ///
@@ -1716,17 +1734,17 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// # Errors
     ///
     /// Returns any error encountered while retrieving the block or invoking handlers.
-    pub fn run_block_interaction<F, G>(
+    pub fn run_block_interaction<F, G, T: Copy, U: Default + CoalesceResult>(
         &self,
         coord: BlockCoordinate,
         initiator: &EventInitiator,
-        tool: Option<&ItemStack>,
+        param: T,
         get_block_inline_handler: F,
         get_block_full_handler: G,
-    ) -> Result<BlockInteractionResult>
+    ) -> Result<U>
     where
-        F: Fn(&blocks::BlockType) -> Option<&blocks::InlineHandler>,
-        G: Fn(&blocks::BlockType) -> Option<&blocks::FullHandler>,
+        F: Fn(&blocks::BlockType) -> Option<&blocks::InlineGenericHandler<T, U>>,
+        G: Fn(&blocks::BlockType) -> Option<&blocks::FullGenericHandler<T, U>>,
     {
         let game_state = self.game_state();
         let tick = game_state.tick();
@@ -1742,7 +1760,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                     items: game_state.item_manager(),
                 };
                 let result = run_handler!(
-                    || (inline_handler)(ctx, block, ext_data, tool),
+                    || (inline_handler)(ctx, block, ext_data, param),
                     "block_inline",
                     initiator,
                 )?;
@@ -1760,11 +1778,12 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 initiator: initiator.clone(),
                 game_state: self.game_state(),
             };
-            result += run_handler!(
-                || (full_handler)(&ctx, coord, tool),
+            let new_result = run_handler!(
+                || (full_handler)(&ctx, coord, param),
                 "block_full",
                 initiator,
             )?;
+            result = U::coalesce(result, new_result);
         }
 
         Ok(result)
