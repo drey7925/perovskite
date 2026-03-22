@@ -307,7 +307,7 @@ impl ClientChunk {
         let occlusion = get_occlusion_for_proto(block_ids, block_types);
         let block_ids = Self::expand_ids(block_ids);
         let lightmap = if block_ids.is_some() {
-            Some(Box::new([0; 18 * 18 * 18]))
+            Some(bytemuck::zeroed_box())
         } else {
             None
         };
@@ -429,7 +429,7 @@ impl ClientChunk {
         if ids.iter().all(|&x| x == 0) {
             return None;
         }
-        let mut result = Box::new([BlockId(u32::MAX); 18 * 18 * 18]);
+        let mut result: Box<[BlockId; 18 * 18 * 18]> = bytemuck::zeroed_box();
         for i in 0..16 {
             for j in 0..16 {
                 for k in 0..16 {
@@ -502,7 +502,7 @@ impl ClientChunk {
 
         let mut chunk_data = self.chunk_data.write();
         if chunk_data.block_ids.is_none() {
-            chunk_data.block_ids = Some(Box::new([BlockId(0); 18 * 18 * 18]));
+            chunk_data.block_ids = Some(bytemuck::zeroed_box());
         }
         let old_id =
             chunk_data.block_ids.as_mut().unwrap()[block_coord.offset().as_extended_index()];

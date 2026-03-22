@@ -173,7 +173,7 @@ impl MiniBlockRenderer {
             framebuffers,
             cube_pipeline,
             uniform,
-            fake_chunks: iter::repeat(Box::new([AIR_ID; 18 * 18 * 18]))
+            fake_chunks: iter::repeat(bytemuck::zeroed_box())
                 .take(BATCH_SIZE)
                 .collect(),
         })

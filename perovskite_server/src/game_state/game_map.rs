@@ -666,9 +666,6 @@ struct MapChunkHolder<S: SyncBackend> {
 }
 impl<S: SyncBackend> MapChunkHolder<S> {
     fn new_empty() -> Self {
-        // We're OK with allowing this lint; we really do want this atomic copied _MAX_OFFSET times.
-        #[allow(clippy::declare_interior_mutable_const)]
-        const ATOMIC_INITIALIZER: AtomicU32 = AtomicU32::new(0);
         Self {
             chunk: S::RwLock::new(HolderState::Empty),
             condition: RwCondvar::new(),
@@ -2822,7 +2819,7 @@ impl Default for ChunkNeighbors {
         Self {
             center: BlockCoordinate::new(0, 0, 0),
             presence_bitmap: 0,
-            blocks: Box::new([0; 48 * 48 * 48]),
+            blocks: bytemuck::zeroed_box(),
             lightfields: Box::new([Lightfield::zero(); 27]),
         }
     }

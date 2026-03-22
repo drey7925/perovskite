@@ -58,6 +58,7 @@ bytemuck = { version = "1.24.0", features = [
     "extern_crate_alloc",
     "zeroable_atomics",
     "zeroable_maybe_uninit",
+    "min_const_generics",
 ] }
 rlimit = "0.10.1"
 serde = { version = "1.0.163", features = ["derive"] }

@@ -638,9 +638,7 @@ impl Default for FastChunkNeighbors {
             center: None,
             neighbors: std::array::from_fn(|_| {
                 std::array::from_fn(|_| {
-                    std::array::from_fn(|_| {
-                        ChunkWithEdgesBuffer(false, Box::new([BlockId(0); 18 * 18 * 18]))
-                    })
+                    std::array::from_fn(|_| ChunkWithEdgesBuffer(false, bytemuck::zeroed_box()))
                 })
             }),
             inbound_lights: std::array::from_fn(|_| {

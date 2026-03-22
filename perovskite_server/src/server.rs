@@ -373,6 +373,7 @@ impl ServerBuilder {
     /// Creates a ServerBuilder that will run a server according to the command line arguments
     /// passed as a struct, using a real disk-backed database.
     pub fn from_args(args: &ServerArgs) -> Result<ServerBuilder> {
+        use std::path::Path;
         tracing::info!(
             "Build info: {}",
             include_str!(concat!(env!("OUT_DIR"), "/build_info.txt"))

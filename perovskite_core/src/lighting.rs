@@ -412,7 +412,7 @@ impl LightScratchpad {
 impl Default for LightScratchpad {
     fn default() -> Self {
         Self {
-            light_buffer: Box::new([0; 48 * 48 * 48]),
+            light_buffer: bytemuck::zeroed_box(),
             visit_queue: Vec::new(),
             propagation_cache: Box::new(bitvec::array::BitArray::ZERO),
         }

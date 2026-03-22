@@ -42,6 +42,10 @@ message ClientExtendedData {
   repeated perovskite.protocol.render.BlockText block_text = 2;
 }
 
+// The version number is reserved for breaking changes to the chunk format.
+// For non-breaking changes (e.g. adding new optional fields), the version
+// number stays the same; if relevant for clients, the protocol version will
+// reflect the change.
 message ChunkV1 {
   // Array, 4096 long, containing block IDs
   repeated uint32 block_ids = 1 [ packed = true ];
