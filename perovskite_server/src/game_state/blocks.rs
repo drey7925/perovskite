@@ -43,7 +43,7 @@ use perovskite_core::{
     },
     coordinates::BlockCoordinate,
     protocol::blocks::{
-        self as blocks_proto, block_type_def::RenderInfo, AxisAlignedBoxRotation, CubeRenderInfo,
+        self as blocks_proto, block_type_def::RenderInfo, AxisAlignedBoxRotation,
         CubeVariantEffect, LodInfo,
     },
 };

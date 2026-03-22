@@ -19,8 +19,6 @@ use futures::FutureExt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 
-use crate::game_state::blocks::BlockInteractionResult;
-
 use super::event::EventInitiator;
 
 /// Wrapper for handlers, eventually used for accounting, error handling, etc.

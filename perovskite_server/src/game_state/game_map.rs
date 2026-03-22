@@ -86,7 +86,7 @@ where
     fn from_bytes(bytes: &[u8]) -> Result<Self>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CasOutcome {
     /// The block compared equal to the expected and was set accordingly.
     Match,
@@ -4106,3 +4106,5 @@ mod tests {
 
 #[cfg(test)]
 mod loom_tests;
+
+pub mod templates;
