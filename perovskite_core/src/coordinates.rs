@@ -44,9 +44,12 @@ impl Debug for BlockCoordinate {
     }
 }
 impl BlockCoordinate {
+    /// Creates a new `BlockCoordinate` with the given coordinates.
     pub const fn new(x: i32, y: i32, z: i32) -> Self {
         Self { x, y, z }
     }
+
+    /// Returns the offset of this block coordinate within its chunk.
     #[inline]
     pub const fn offset(&self) -> ChunkOffset {
         // rem_euclid(16) result should always fit into u8.
@@ -56,6 +59,8 @@ impl BlockCoordinate {
             z: self.z.rem_euclid(16) as u8,
         }
     }
+
+    /// Returns the chunk that this block coordinate is in.
     #[inline]
     pub const fn chunk(&self) -> ChunkCoordinate {
         ChunkCoordinate {
@@ -65,12 +70,26 @@ impl BlockCoordinate {
         }
     }
 
+    /// Returns a new `BlockCoordinate` with the given deltas added, returning `None` if the result is out of bounds.
     pub fn try_delta(&self, x: i32, y: i32, z: i32) -> Option<BlockCoordinate> {
         let x = self.x.checked_add(x)?;
         let y = self.y.checked_add(y)?;
         let z = self.z.checked_add(z)?;
 
         Some(BlockCoordinate { x, y, z })
+    }
+
+    /// Returns a new `BlockCoordinate` with the given deltas added, without checking for bounds.
+    /// In case of overflow, the result will follow standard Rust signed overflow, wrapping in release
+    /// and panicking in debug.
+    ///
+    /// This function is not `unsafe` because coordinate overflow in and of itself does not lead to UB.
+    pub fn delta_unchecked(&self, x: i32, y: i32, z: i32) -> BlockCoordinate {
+        BlockCoordinate {
+            x: self.x + x,
+            y: self.y + y,
+            z: self.z + z,
+        }
     }
 }
 impl ToString for BlockCoordinate {

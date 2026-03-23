@@ -18,7 +18,6 @@ use anyhow::{ensure, Context, Result};
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 use enum_map::enum_map;
 use image::{DynamicImage, RgbaImage};
-use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::protocol::map::ClientExtendedData;
 use perovskite_core::{block_id::BlockId, coordinates::ChunkOffset};
 use smallvec::smallvec;

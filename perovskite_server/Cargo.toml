@@ -68,6 +68,7 @@ arc-swap = "1.7.1"
 seqlock = "0.2.0"
 slotmap = "1.1.1"
 googletest = { version = "0.14.2", optional = true }
+dyn-clone = "1.0.20"
 
 [build-dependencies]
 rustc_version = "0.4.1"

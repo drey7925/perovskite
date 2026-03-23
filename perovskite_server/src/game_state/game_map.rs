@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tracy_client::{plot, span};
 
 use crate::game_state::blocks::FixupReason;
+use crate::game_state::game_map::templates::InMemTemplate;
 use crate::game_state::handlers::CoalesceResult;
 use crate::{
     database::{GameDatabase, KeySpace},
@@ -2314,6 +2315,51 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         } else {
             Ok(None)
         }
+    }
+
+    fn eval_rotation_forward(dx: i32, dz: i32, rotation: u8) -> (i32, i32) {
+        match rotation % 4 {
+            0 => (dx, dz),
+            1 => (dz, -dx),
+            2 => (-dx, -dz),
+            3 => (-dz, dx),
+            _ => unreachable!("rotation % 4 should always be in [0, 3]"),
+        }
+    }
+
+    pub fn apply_template(
+        &self,
+        template: &InMemTemplate,
+        origin: BlockCoordinate,
+        rotation: u8,
+    ) -> Result<()> {
+        let (sx, sz, sy) = template.size();
+        let (sx, sz) = Self::eval_rotation_forward(sx, sz, rotation);
+        if origin.try_delta(sx, sy, sz).is_none() {
+            bail!("Template is out of bounds (after considering rotation)");
+        }
+
+        // TODO: Update variant for rotation. Track blocks needing fixup.
+        for x in 0..template.size().0 {
+            for z in 0..template.size().1 {
+                for y in 0..template.size().2 {
+                    let (dx, dz) = Self::eval_rotation_forward(x, z, rotation);
+                    let block_id = template.block_at(x, y, z);
+                    if block_id == templates::MASK {
+                        continue;
+                    }
+                    let ext_data = template.ext_data_at(x, y, z);
+                    self.set_block(
+                        origin
+                            .try_delta(dx, y, dz)
+                            .expect("Bounds check should not allow this to fail"),
+                        block_id,
+                        ext_data.cloned(),
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 impl<S: SyncBackend, L: SyncBackend> Drop for ServerGameMap<S, L> {

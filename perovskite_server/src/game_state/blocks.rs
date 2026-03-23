@@ -22,7 +22,6 @@ use anyhow::{bail, ensure, Context, Result};
 use log::{info, warn};
 use rustc_hash::FxHashMap;
 use std::{
-    any::Any,
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap, HashSet},
     ops::{Add, AddAssign, Deref, DerefMut},
@@ -49,7 +48,45 @@ use perovskite_core::{
 };
 use prost::Message;
 
-pub type CustomData = Box<dyn Any + Send + Sync + 'static>;
+// Abstraction and a bunch of type system and trait boilerplate for custom data
+/// tl;dr a CustomData is a trait object that can be downcasted to a concrete type,
+/// and is Send + Sync + Clone + 'static.
+///
+/// ## Using a protobuf message
+///
+/// In the simplest case of needing custom state beyond what `simple_data` and `inventories`
+/// provide, make a struct, annotate its fields with types/tags, derive Clone and prost::Message,
+/// then call `register_proto_serialization_handlers` when defining the block type that will use it.
+///
+/// e.g.
+/// ```ignore
+/// #[derive(Clone, prost::Message)]
+/// pub struct MyExtData {
+///     #[prost(tag = "1")]
+///     pub my_field: u32,
+///     #[prost(tag = "2")]
+///     pub my_other_field: String,
+///     #[prost(tag = "3")]
+///     pub my_vec_field: Vec<u32>,
+///     #[prost(message, repeated, tag = "11")]
+///     // also has Message + Clone derived
+///     pub my_vec_of_structs: Vec<MyStruct>,
+/// }
+/// ```
+///
+/// ## About cloning
+///
+/// The engine will clone this data whenever a block must be copied, e.g. when making or applying
+/// a map template. Cloning should reflect this semantically - e.g. perovskite_game_api::circuits has a
+/// microcontroller that contains an Arc to a shared core state, and that is reset rather than copied
+/// in the Clone impl for the microcontroller's extended data.
+///
+/// For the most part, simply moving/swapping/placing/removing blocks should not require cloning.
+/// get_block_with_extended_data take a callback that inspects extended data in-place rather than requiring
+/// a clone.
+mod custom_data;
+pub use custom_data::*;
+
 pub struct ExtendedData {
     /// In-memory extended data that may be associated with a block at a
     /// particular location. Use `downcast_ref` to try to get the inner data
@@ -71,6 +108,18 @@ impl Default for ExtendedData {
             custom_data: None,
             simple_data: HashMap::new(),
             inventories: hashbrown::HashMap::new(),
+        }
+    }
+}
+impl Clone for ExtendedData {
+    fn clone(&self) -> Self {
+        Self {
+            custom_data: self
+                .custom_data
+                .as_ref()
+                .map(|d| dyn_clone::clone_box(d.borrow())),
+            simple_data: self.simple_data.clone(),
+            inventories: self.inventories.clone(),
         }
     }
 }
@@ -117,7 +166,8 @@ impl CoalesceResult for BlockInteractionResult {
 ///
 /// See notes on [BlockType::fixup_handler_inline] and [BlockType::fixup_handler_full].
 ///
-/// In most cases, handlers won't actually care about this and can just do fixups unconditionally.
+/// In most cases, handlers won't actually care about this and can just do fixups unconditionally. However,
+/// if you want to do something different based on the reason, you can use this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixupReason {
     /// The block was moved, e.g. by a piston or similar.
@@ -126,7 +176,7 @@ pub enum FixupReason {
     OrientationChanged,
     /// The block was imported from saved geometry, and must now be fixed up to be coherent with its new location/rotation.
     /// e.g. pre-built structures, downloaded maps, etc.
-    LoadedFromSave,
+    TemplateApplied,
     /// The fixup handler was called manually, e.g. by another block's handler,
     /// and a more specific reason is not available.
     ManuallyCalled,
@@ -347,7 +397,11 @@ impl BlockType {
 
     /// Convenience method to set both the deserialize and serialize handlers to use the given
     /// prost-powered proto type.
-    pub fn register_proto_serialization_handlers<T: prost::Message + Default + 'static>(&mut self) {
+    pub fn register_proto_serialization_handlers<
+        T: prost::Message + Default + CustomDataContents + 'static,
+    >(
+        &mut self,
+    ) {
         self.deserialize_extended_data_handler =
             Some(Box::new(|_ctx, data| Ok(Some(Box::new(T::decode(data)?)))));
         self.serialize_extended_data_handler = Some(Box::new(|_ctx, data| {
@@ -935,6 +989,7 @@ const BLOCK_MANAGER_BACKUP_KEY_PREFIX: &[u8] = b"blocks_backup_";
 
 const E: blocks_proto::Empty = blocks_proto::Empty {};
 
+#[derive(Clone, Debug)]
 struct UnknownBlockExtDataPassthrough {
     data: Vec<u8>,
 }

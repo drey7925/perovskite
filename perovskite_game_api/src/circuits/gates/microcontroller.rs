@@ -16,7 +16,9 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::chat::ChatMessage;
 use perovskite_core::constants::item_groups::HIDDEN_FROM_CREATIVE;
 use perovskite_core::coordinates::BlockCoordinate;
-use perovskite_server::game_state::blocks::{BlockType, ExtendedData, FastBlockName};
+use perovskite_server::game_state::blocks::{
+    BlockType, CustomDataDowncast, ExtendedData, FastBlockName,
+};
 use perovskite_server::game_state::client_ui::{
     Popup, PopupAction, TextFieldBuilder, UiElementContainer,
 };
@@ -630,7 +632,7 @@ fn break_microcontroller(
                 .take()
                 // If we have the wrong extended data here, we destroy it. But we're already convinced
                 // that this should be a microcontroller based on block ID, and are about to break it
-                .and_then(|x| x.downcast().ok());
+                .and_then(|x| x.downcast_box());
             let mut custom_data = downcasted.map(|x| *x).unwrap_or_default();
             custom_data.microcontroller_config.last_error = Some(err);
             extended_data.custom_data = Some(Box::new(custom_data));
@@ -659,7 +661,7 @@ fn program_microcontroller(
                 .take()
                 // If we have the wrong extended data here, we destroy it. But we're already convinced
                 // that this should be a microcontroller based on block ID, and are about to program it
-                .and_then(|x| x.downcast().ok());
+                .and_then(|x| x.downcast_box());
             let mut custom_data = downcasted.map(|x| *x).unwrap_or_default();
             custom_data.microcontroller_config.program = program.clone();
             custom_data.microcontroller_config.falling_interrupt_mask = falling_mask;
@@ -875,6 +877,18 @@ struct MicrocontrollerExtendedData {
     microcontroller_config: MicrocontrollerConfig,
     core_state: Arc<tokio::sync::Mutex<CoreState>>,
 }
+impl Clone for MicrocontrollerExtendedData {
+    fn clone(&self) -> Self {
+        MicrocontrollerExtendedData {
+            lock: self.lock,
+            microcontroller_config: self.microcontroller_config.clone(),
+            // Be careful
+            core_state: Arc::new(tokio::sync::Mutex::new(CoreState::from_config(
+                &self.microcontroller_config,
+            ))),
+        }
+    }
+}
 
 impl Default for MicrocontrollerExtendedData {
     fn default() -> Self {
@@ -980,6 +994,7 @@ type IntMem = MicrocontrollerMemory<i64, 64>;
 
 /// The actual state of the microcontroller, run on the event handler thread (or possibly on a
 /// separate tokio task)
+#[derive(Clone)]
 struct CoreState {
     program: String,
     ast: Option<rhai::AST>,
@@ -999,6 +1014,23 @@ impl Default for CoreState {
             port_register: 0,
             mem_strings: MicrocontrollerMemory::default(),
             mem_ints: MicrocontrollerMemory::default(),
+        }
+    }
+}
+
+impl CoreState {
+    fn from_config(config: &MicrocontrollerConfig) -> Self {
+        Self {
+            program: config.program.clone(),
+            ast: None,
+            last_run_times: circular_buffer::CircularBuffer::new(),
+            port_register: 0,
+            mem_strings: MicrocontrollerMemory {
+                contents: config.mem_strings.clone(),
+            },
+            mem_ints: MicrocontrollerMemory {
+                contents: config.mem_ints.clone(),
+            },
         }
     }
 }
@@ -1084,17 +1116,9 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             let microcontroller_config: MicrocontrollerConfig = proto.try_into()?;
             let data = MicrocontrollerExtendedData {
                 lock: 0,
-                core_state: Arc::new(tokio::sync::Mutex::new(CoreState {
-                    program: microcontroller_config.program.clone(),
-                    mem_strings: MicrocontrollerMemory {
-                        contents: microcontroller_config.mem_strings.clone(),
-                    },
-                    mem_ints: MicrocontrollerMemory {
-                        contents: microcontroller_config.mem_ints.clone(),
-                    },
-                    ..Default::default()
-                })),
-
+                core_state: Arc::new(tokio::sync::Mutex::new(CoreState::from_config(
+                    &microcontroller_config,
+                ))),
                 microcontroller_config,
             };
             Ok(Some(Box::new(data)))

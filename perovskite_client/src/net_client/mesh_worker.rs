@@ -99,11 +99,14 @@ impl NeighborPropagator {
             //   network thread is holding chunks and waiting for queue to unlock
             //
             // At the moment, the deadlocks are removed, but this still seems brittle.
+            //
+            // TODO: assess whether still relevant now that we have dashmap
             let pos = self.client_state.weakly_ordered_last_position().position;
             let mut lock = self.queue.lock();
             if lock.is_empty() {
                 plot!("nprop_queue_length", 0.);
                 self.cond.wait_for(&mut lock, Duration::from_secs(1));
+                self.queue_len.store(0, Ordering::Relaxed);
             }
 
             let sort_span = span!("nprop sort");
@@ -220,11 +223,14 @@ impl MeshWorker {
                 //   network thread is holding chunks and waiting for queue to unlock
                 //
                 // At the moment, the deadlocks are removed, but this still seems brittle.
+                //
+                // TODO: assess whether still relevant now that we have dashmap
                 let pos = self.client_state.last_position().position;
                 let mut lock = self.queue.lock();
                 if lock.is_empty() {
                     plot!("mesh_queue_length", 0.);
                     self.cond.wait_for(&mut lock, Duration::from_secs(1));
+                    self.queue_len.store(0, Ordering::Relaxed);
                 }
 
                 let _span = span!("mesh_worker sort");

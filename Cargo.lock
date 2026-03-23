@@ -1533,6 +1533,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "ecolor"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3832,6 +3838,7 @@ dependencies = [
  "cgmath",
  "circular-buffer",
  "clap 4.5.13",
+ "dyn-clone",
  "either",
  "futures",
  "googletest",
