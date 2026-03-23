@@ -297,7 +297,12 @@ impl MapChunk {
                             items: game_state.item_manager(),
                         };
 
-                        serializer(handler_context, x)?
+                        serializer(handler_context, x).with_context(|| {
+                            format!(
+                                "Failed to serialize extended data for {} at {:?}",
+                                block_type.client_info.short_name, block_coord
+                            )
+                        })?
                     }
                     None => {
                         if ext_data.custom_data.is_some() {
@@ -2204,7 +2209,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 tracing::error!("Timed out waiting for async map workers to shut down");
             }
         }
-        self.purge_and_flush();
+        self.purge_and_flush()?;
 
         Ok(())
     }
@@ -2213,9 +2218,11 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// all chunks. Player coroutine chunk trackers may take a substantial amount of time to recover
     /// as well.
     ///
-    /// It should *only* be used in tests; if you need better durability semantics, please file an
-    /// FR instead of using this function.
-    pub fn purge_and_flush(&self) {
+    /// It should *only* be used in tests and at the end of shutdown; if you need better durability
+    /// semantics, please file a feature request instead of using this function.
+    pub fn purge_and_flush(&self) -> Result<()> {
+        let mut first_error = None;
+        let mut total_errors = 0;
         for shard in 0..NUM_CHUNK_SHARDS {
             let mut lock = self.live_chunks[shard].lock_write();
             let coords: Vec<_> = lock.chunks.keys().copied().collect();
@@ -2229,6 +2236,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                     Ok(_) => { /* pass */ }
                     Err(e) => {
                         log::error!("Writeback error for {:?}: {:?}", coord, e);
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                        }
+                        total_errors += 1;
                     }
                 }
             }
@@ -2237,8 +2248,24 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             Ok(_) => { /* pass */ }
             Err(e) => {
                 log::error!("Flushing DB failed: {:?}", e);
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+                total_errors += 1;
             }
         }
+        if let Some(e) = first_error {
+            if total_errors == 1 {
+                return Err(e);
+            } else {
+                return Err(anyhow::anyhow!(
+                    "{} errors occurred during map flush, first error: {:?}",
+                    total_errors,
+                    e
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Rudimentary backpressure/flow control.
@@ -2364,7 +2391,9 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 }
 impl<S: SyncBackend, L: SyncBackend> Drop for ServerGameMap<S, L> {
     fn drop(&mut self) {
-        self.purge_and_flush();
+        if let Err(e) = self.purge_and_flush() {
+            tracing::error!("Error flushing game map during shutdown: {e:?}");
+        }
         tracing::info!("ServerGameMap shut down");
     }
 }

@@ -241,16 +241,26 @@ impl GameState {
     // Shut down things that handle events (e.g. map, database)
     // and wait for them to safely flush data.
     pub(crate) async fn shut_down(&self) -> Result<()> {
-        self.player_manager.request_shutdown();
-
-        self.map.do_shutdown().await.unwrap();
-        self.player_manager.await_shutdown().await.unwrap();
         put_double_meta_value(
             self.database.as_ref(),
             b"time_of_day",
             self.time_state().lock().time_of_day(),
         )?;
-        Ok(())
+        self.player_manager.request_shutdown();
+
+        let map_shutdown_result = self.map.do_shutdown().await;
+        let player_shutdown_result = self.player_manager.await_shutdown().await;
+
+        match (map_shutdown_result, player_shutdown_result) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Err(e), Err(e2)) => Err(anyhow::anyhow!(
+                "Multiple shutdown errors: map shutdown failed: {:?}, player shutdown failed: {:?}",
+                e,
+                e2
+            )),
+            (Err(e), _) => Err(e),
+            (_, Err(e)) => Err(e),
+        }
     }
 
     // Await a call to self.start_shutdown

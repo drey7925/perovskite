@@ -47,7 +47,8 @@
 //!     Ok(())
 //! }
 //! ```
-use anyhow::bail;
+
+use anyhow::Context;
 use arc_swap::ArcSwapOption;
 use googletest::{description::Description, matcher::MatcherResult, prelude::*};
 use perovskite_core::{block_id::BlockId, coordinates::BlockCoordinate};
@@ -130,14 +131,25 @@ impl googletest::fixtures::Fixture for TestFixture {
             match fixture {
                 Some(backing) => {
                     log::warn!("Tearing down test fixture");
+                    let server = Arc::into_inner(
+                        backing
+                            .server
+                            .swap(None)
+                            .context("Server not running")
+                            .or_fail()?,
+                    )
+                    .context("Failed to get exclusive ownership of server; outstanding references")
+                    .or_fail()?;
+
+                    server.shut_down().or_fail()?;
                     drop(backing);
+                    Ok(())
                 }
                 None => {
-                    panic!("No test fixture found");
+                    fail!("No test fixture found")
                 }
             }
-        });
-        Ok(())
+        })
     }
 }
 impl TestFixture {
@@ -201,17 +213,13 @@ impl TestFixture {
 
     pub fn stop_server(&self) -> anyhow::Result<()> {
         let fixture = TestFixture::inner();
-        let old_server = fixture.server.swap(None);
-        match old_server {
-            Some(server) => {
-                drop(server);
-                tracing::info!("Server stopped");
-                Ok(())
-            }
-            None => {
-                bail!("Server is not running");
-            }
-        }
+        let old_server = fixture.server.swap(None).context("Server is not running")?;
+
+        let inner = Arc::into_inner(old_server)
+            .context("Failed to get exclusive ownership of server; outstanding references")?;
+        inner.shut_down()?;
+        tracing::info!("Server stopped");
+        Ok(())
     }
 
     #[must_use = "The result of this function must be checked to ensure that the assertions passed"]

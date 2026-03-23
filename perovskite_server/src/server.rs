@@ -16,6 +16,7 @@
 
 use std::env::temp_dir;
 use std::fmt::Debug;
+use std::mem::ManuallyDrop;
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
@@ -214,6 +215,13 @@ impl Server {
     pub fn run_task_in_server<T>(&self, task: impl FnOnce(&GameState) -> T) -> T {
         let _enter_guard = self.runtime.enter();
         task(self.game_state())
+    }
+
+    pub fn shut_down(self) -> Result<()> {
+        let manual_drop = ManuallyDrop::new(self);
+        manual_drop
+            .runtime
+            .block_on(manual_drop.game_state.shut_down())
     }
 }
 
