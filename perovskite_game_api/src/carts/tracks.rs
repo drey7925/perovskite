@@ -1216,6 +1216,7 @@ fn make_track_popup(ctx: HandlerContext, coord: BlockCoordinate, tile_id: TileId
         .checkbox("diverging", "Diverging", false, true)
         .button("scan", "Scan", true, false)
         .button("multiscan", "Multi-Scan", true, false)
+        .button("benchmark", "Benchmark", true, false)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
             match handle_popup_response(
                 &response,
@@ -2140,6 +2141,48 @@ fn handle_popup_response(
                             p.try_to_run(|p| p.set_position_blocking(current));
                         }
                     }
+                    Ok(())
+                });
+            }
+            "benchmark" => {
+                let mut state = ScanState {
+                    block_coord: coord,
+                    is_reversed: *response
+                        .checkbox_values
+                        .get("reverse")
+                        .context("missing reverse")?,
+                    is_diverging: *response
+                        .checkbox_values
+                        .get("diverging")
+                        .context("missing diverging")?,
+                    allowable_speed: 90.0,
+                    current_tile_id: TileId::empty(),
+                    odometer: 0.0,
+                };
+                response.ctx.run_deferred(move |ctx| {
+                    let start = std::time::Instant::now();
+                    let mut iterations = 0u32;
+                    for _ in 0..1_000_000 {
+                        match state.advance::<false>(
+                            |coord| ctx.game_map().get_block(coord).into(),
+                            ctx.extension().as_ref().unwrap(),
+                        )? {
+                            ScanOutcome::Success(s) => {
+                                state = s;
+                                iterations += 1;
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
+                    }
+                    let elapsed = start.elapsed();
+                    tracing::info!(
+                        "Benchmark: {} iterations in {:?}, final position: {:?}",
+                        iterations,
+                        elapsed,
+                        state.block_coord,
+                    );
                     Ok(())
                 });
             }
