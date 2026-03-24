@@ -1008,6 +1008,12 @@ pub struct ServerGameMap<S: SyncBackend = DefaultSyncBackend, L: SyncBackend = D
     early_shutdown: CancellationToken,
     // Writeback and cleanup
     shutdown: CancellationToken,
+    // Advisory fast-path for checking shutdown. Not precisely ordered, not for ensuring memory-safety.
+    // Set to true once shutdown is called, and never reset. The actual lifetime of the map is still governed
+    // by whether someone has an Arc to the map or not; rather this is an advisory signal that rather than doing
+    // map work, a holder of a map Arc should instead drop it.
+    fast_shutdown_check: CachelineAligned<AtomicBool>,
+
     writeback_handles: [S::Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
     cleanup_handles: [S::Mutex<Option<JoinHandle<Result<()>>>>; NUM_CHUNK_SHARDS],
 
@@ -1073,6 +1079,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             writeback_senders: writeback_senders.try_into().unwrap(),
             shutdown: cancellation.clone(),
             early_shutdown: early_cancellation.clone(),
+            fast_shutdown_check: CachelineAligned(AtomicBool::new(false)),
             writeback_handles: std::array::from_fn(|_| S::Mutex::new(None)),
             cleanup_handles: std::array::from_fn(|_| S::Mutex::new(None)),
             prefetch_dispatch_task: S::Mutex::new(None),
@@ -2372,6 +2379,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     }
 
     pub(crate) async fn do_shutdown(&self) -> Result<()> {
+        self.fast_shutdown_check.store(true, Ordering::Relaxed);
         tracing::info!("Shutting down game map");
         let timers = self.timer_controller.lock().take();
         match timers {
@@ -3223,6 +3231,10 @@ impl BackgroundCursor {
     pub fn get_block(&mut self, coord: BlockCoordinate) -> Result<BlockId> {
         let chunk_coord = coord.chunk();
         let offset = coord.offset();
+        if self.map.fast_shutdown_check.load(Ordering::Relaxed) {
+            // Advisory: help holders of a background cursor exit sooner.
+            return Err(anyhow::anyhow!("Game map is shutting down"));
+        }
         if let Some((cache_chunk, cache_data)) = &self.private_working_set {
             if *cache_chunk == chunk_coord {
                 // Relaxed reads: see precondition on self.private_working_set

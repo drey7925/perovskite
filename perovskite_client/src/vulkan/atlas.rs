@@ -329,14 +329,6 @@ fn empty_normal_map(width: u32, height: u32) -> RgbaImage {
 
 fn make_alt_diffuse(source: &DynamicImage, src_rect: &Rect) -> Result<RgbaImage> {
     let mut image = RgbaImage::new(src_rect.w, src_rect.h);
-    println!(
-        "making alt diffuse for {:?}, source size is {:?}, src offset ({}, {})
-        ",
-        src_rect,
-        source.dimensions(),
-        src_rect.x,
-        src_rect.y
-    );
     image.copy_from(
         source
             .view(src_rect.x, src_rect.y, src_rect.w, src_rect.h)

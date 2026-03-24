@@ -12,9 +12,9 @@ use crate::{
     game_builder::{BlockName, StaticBlockName, StaticTextureName, TextureRefExt},
     include_texture_bytes,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use cgmath::{vec3, InnerSpace, Vector3};
-use perovskite_core::constants::item_groups;
+use perovskite_core::constants::{item_groups, permissions::PERFORMANCE_METRICS};
 use perovskite_core::{
     block_id::BlockId,
     chat::ChatMessage,
@@ -1257,7 +1257,8 @@ fn make_track_popup(ctx: HandlerContext, coord: BlockCoordinate, tile_id: TileId
         .checkbox("diverging", "Diverging", false, true)
         .button("scan", "Scan", true, false)
         .button("multiscan", "Multi-Scan", true, false)
-        .button("benchmark", "Benchmark", true, false)
+        .button("benchmark", "Benchmark (w/ cursor)", true, false)
+        .button("benchmark_noncursor", "Benchmark (no cursor)", true, false)
         .set_button_callback(Box::new(move |response: PopupResponse<'_>| {
             match handle_popup_response(
                 &response,
@@ -1585,7 +1586,7 @@ impl ScanState {
 
     pub(crate) fn advance<const CHATTY: bool>(
         &self,
-        get_block: impl Fn(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
+        mut get_block: impl FnMut(BlockCoordinate) -> DeferrableResult<Result<BlockId>, BlockCoordinate>,
         cart_config: &CartsGameBuilderExtension,
     ) -> Result<ScanOutcome> {
         if CHATTY {
@@ -2246,6 +2247,13 @@ fn handle_popup_response(
                 });
             }
             "benchmark" => {
+                if !response
+                    .ctx
+                    .initiator()
+                    .check_permission_if_player(PERFORMANCE_METRICS)
+                {
+                    bail!("Missing permission: {PERFORMANCE_METRICS}");
+                }
                 let mut state = ScanState {
                     block_coord: coord,
                     is_reversed: *response
@@ -2262,6 +2270,58 @@ fn handle_popup_response(
                 };
                 response.ctx.run_deferred(move |ctx| {
                     let start = std::time::Instant::now();
+
+                    let mut cursor = ctx.game_map().new_cursor();
+
+                    let mut iterations = 0u32;
+                    for _ in 0..1_000_000 {
+                        match state.advance::<false>(
+                            |coord| cursor.get_block(coord).into(),
+                            ctx.extension().as_ref().unwrap(),
+                        )? {
+                            ScanOutcome::Success(s) => {
+                                state = s;
+                                iterations += 1;
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
+                    }
+                    let elapsed = start.elapsed();
+                    let message = format!(
+                        "Benchmark: {} iterations in {:?}, final position: {:?}",
+                        iterations, elapsed, state.block_coord,
+                    );
+                    ctx.initiator()
+                        .send_chat_message(ChatMessage::new_server_message(message))
+                });
+            }
+            "benchmark_noncursor" => {
+                if !response
+                    .ctx
+                    .initiator()
+                    .check_permission_if_player(PERFORMANCE_METRICS)
+                {
+                    bail!("Missing permission: {PERFORMANCE_METRICS}");
+                }
+                let mut state = ScanState {
+                    block_coord: coord,
+                    is_reversed: *response
+                        .checkbox_values
+                        .get("reverse")
+                        .context("missing reverse")?,
+                    is_diverging: *response
+                        .checkbox_values
+                        .get("diverging")
+                        .context("missing diverging")?,
+                    allowable_speed: 90.0,
+                    current_tile_id: TileId::empty(),
+                    odometer: 0.0,
+                };
+                response.ctx.run_deferred(move |ctx| {
+                    let start = std::time::Instant::now();
+
                     let mut iterations = 0u32;
                     for _ in 0..1_000_000 {
                         match state.advance::<false>(
@@ -2278,13 +2338,13 @@ fn handle_popup_response(
                         }
                     }
                     let elapsed = start.elapsed();
-                    tracing::info!(
-                        "Benchmark: {} iterations in {:?}, final position: {:?}",
-                        iterations,
-                        elapsed,
-                        state.block_coord,
+                    let message = format!(
+                        "Benchmark (no cursor): {} iterations in {:?}, final position: {:?}",
+                        iterations, elapsed, state.block_coord,
                     );
-                    Ok(())
+
+                    ctx.initiator()
+                        .send_chat_message(ChatMessage::new_server_message(message))
                 });
             }
             _ => {
