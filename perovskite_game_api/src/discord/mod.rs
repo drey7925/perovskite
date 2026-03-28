@@ -4,7 +4,7 @@ use perovskite_core::chat::ChatMessage;
 use perovskite_server::game_state::GameState;
 use serde::{Deserialize, Serialize};
 use serenity::{
-    all::{GatewayIntents, GuildChannel},
+    all::{ActivityData, GatewayIntents, GuildChannel, OnlineStatus},
     client::EventHandler,
 };
 use std::sync::Arc;
@@ -138,6 +138,8 @@ async fn run_outbound_loop(
     game: Arc<GameState>,
 ) {
     let mut chat_messages = game.chat().subscribe();
+    let start_time = std::time::Instant::now();
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
     while !game.is_shutting_down() {
         tokio::select! {
             _ = game.await_start_shutdown() => {
@@ -154,6 +156,19 @@ async fn run_outbound_loop(
                         tracing::warn!("Failed to receive local chat message: {}", e);
                     }
                 }
+            },
+            _ = interval.tick() => {
+                let elapsed = start_time.elapsed().as_secs();
+                let time = if elapsed < 60 {
+                    format!("less than a minute")
+                } else if elapsed < 3600 {
+                    format!("{} minutes", elapsed / 60)
+                } else if elapsed < 86400 {
+                    format!("{} hours", elapsed / 3600)
+                } else {
+                    format!("{} days", elapsed / 86400)
+                };
+                ctx.set_presence(Some(ActivityData::custom(&format!("Game has been running for {}", time))), OnlineStatus::Online);
             }
         }
     }
