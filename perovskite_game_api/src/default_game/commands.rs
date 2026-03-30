@@ -5,7 +5,9 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use cgmath::Vector3;
 use noise::NoiseFn;
+use perovskite_core::block_id::special_block_defs::AIR_ID;
 use perovskite_core::constants::permissions::{PERFORMANCE_METRICS, WORLD_STATE};
+use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::EntityTarget;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
@@ -85,6 +87,26 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
         "mgr",
         Box::new(MapgenRegenerateCommand),
         ": Regenerates the current chunk",
+    )?;
+    game_builder.add_command(
+        "clc",
+        Box::new(ClearChunkCommandN(1)),
+        ": Clears the current chunk, for testing only",
+    )?;
+    game_builder.add_command(
+        "clc16",
+        Box::new(ClearChunkCommandN(16)),
+        ": Clears the current chunk and 15 chunks below, for testing only",
+    )?;
+    game_builder.add_command(
+        "clc64",
+        Box::new(ClearChunkCommandN(64)),
+        ": Clears the current chunk and 63 chunks below, for testing only",
+    )?;
+    game_builder.add_command(
+        "clc256",
+        Box::new(ClearChunkCommandN(256)),
+        ": Clears the current chunk and 255 chunks below, for testing only",
     )?;
     Ok(())
 }
@@ -652,6 +674,47 @@ impl ChatCommandHandler for MapgenRegenerateCommand {
             .game_map()
             .debug_only_regenerate_chunk(chunk_coord)?;
 
+        Ok(())
+    }
+}
+
+struct ClearChunkCommandN(i32);
+
+#[async_trait]
+impl ChatCommandHandler for ClearChunkCommandN {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !message.contains("--force") {
+            bail!("Destructive operation, use --force to confirm");
+        }
+        let pos = if let EventInitiator::Player(p) = context.initiator() {
+            p.player.last_position().position
+        } else {
+            bail!("Only players can clear a chunk");
+        };
+        if !context.initiator().check_permission_if_player(WORLD_STATE) {
+            bail!("Insufficient permissions")
+        }
+        let block_coord: BlockCoordinate = pos.try_into()?;
+        let chunk_coord = block_coord.chunk();
+        let start = Instant::now();
+        for y in 0..self.0 {
+            let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
+            for index in 0..4096 {
+                let offset = ChunkOffset::from_index(index);
+                let coord = c2.with_offset(offset);
+                context.game_map().set_block(coord, AIR_ID, None)?;
+            }
+        }
+        let end = Instant::now();
+        let message = format!(
+            "Cleared in {} ms; {} ns per block",
+            (end - start).as_millis(),
+            (end - start).as_nanos() / (4096 * self.0 as u128)
+        );
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(message))
+            .await?;
         Ok(())
     }
 }
