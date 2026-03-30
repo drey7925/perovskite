@@ -46,7 +46,7 @@ fn test_load_store_purge() {
 
                 let map = loom_map.clone();
                 threads.push(loom::thread::spawn(move || {
-                    map.purge_and_flush();
+                    map.purge_and_flush().unwrap();
                 }));
 
                 for thread in threads {
@@ -99,7 +99,7 @@ fn test_lighting() {
 
                 let map = loom_map.clone();
                 threads.push(loom::thread::spawn(move || {
-                    map.purge_and_flush();
+                    map.purge_and_flush().unwrap();
                 }));
                 for thread in threads {
                     thread.join().unwrap();

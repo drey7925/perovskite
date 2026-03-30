@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Error;
+use enumflags2::{BitFlag, BitFlags};
 use perovskite_core::block_id::BlockId;
 use perovskite_core::lighting::{
     propagate_light, ChunkBuffer, ChunkColumn, LightScratchpad, Lightfield, NeighborBuffer,
@@ -1533,14 +1534,15 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             let chunk_guard = self.get_chunk(coord.chunk())?;
             let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
-            let (result, block_changed) = self.mutate_block_atomically_locked(
+            let (result, invalidations) = self.mutate_block_atomically_locked(
                 &chunk_guard,
                 &mut chunk,
                 coord,
                 mutator,
                 self,
+                BroadcastMode::DoBroadcast,
             )?;
-            if block_changed {
+            if invalidations.contains(Invalidations::Lighting) {
                 // mutate_block_atomically_locked already sent a broadcast.
                 chunk_guard.update_lighting_after_edit(
                     &chunk_guard,
@@ -1548,7 +1550,9 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                     coord.offset(),
                     self.block_type_manager(),
                 );
-                drop(chunk);
+            }
+            drop(chunk);
+            if invalidations.contains(Invalidations::ChunkWriteback) {
                 self.enqueue_writeback(chunk_guard)?;
             }
             Ok(result)
@@ -1590,9 +1594,15 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             }
         };
 
-        let (result, block_changed) =
-            self.mutate_block_atomically_locked(&chunk_guard, &mut chunk, coord, mutator, self)?;
-        if block_changed {
+        let (result, invalidations) = self.mutate_block_atomically_locked(
+            &chunk_guard,
+            &mut chunk,
+            coord,
+            mutator,
+            self,
+            BroadcastMode::DoBroadcast,
+        )?;
+        if invalidations.contains(Invalidations::Lighting) {
             // mutate_block_atomically_locked already sent a broadcast.
             chunk_guard.update_lighting_after_edit(
                 &chunk_guard,
@@ -1600,7 +1610,9 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 coord.offset(),
                 self.block_type_manager(),
             );
-            drop(chunk);
+        }
+        drop(chunk);
+        if invalidations.contains(Invalidations::ChunkWriteback) {
             self.enqueue_writeback(chunk_guard)?;
         }
         Ok(Some(result))
@@ -1614,10 +1626,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         coord: BlockCoordinate,
         mutator: F,
         game_map: &ServerGameMap<S, L>,
-    ) -> Result<(T, bool)>
+        broadcast_mode: BroadcastMode,
+    ) -> Result<(T, BitFlags<Invalidations>)>
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
+        let mut invalidations = Invalidations::empty();
+
         let offset = coord.offset();
         let mut extended_data = chunk
             .extended_data
@@ -1656,7 +1671,23 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 .inventory_manager()
                 .broadcast_block_update(chunk.coord.with_offset(offset));
         }
-        if new_id != old_id || client_ext_data.is_some() {
+
+        if new_id != old_id {
+            invalidations.insert(Invalidations::ChunkWriteback);
+            // TODO: Investigate if it's worth only invalidating lighting
+            // if the actual lighting details change. This is a tradeoff between
+            // the cost of just doing a single round of light propagation vs a
+            // possibly cache-hostile lookup of lighting details, but probably leans
+            // toward checking and invalidating conditionally.
+            invalidations.insert(Invalidations::Lighting);
+        }
+        if client_ext_data.is_some() {
+            invalidations.insert(Invalidations::ClientExtendedData);
+        }
+
+        if broadcast_mode == BroadcastMode::DoBroadcast
+            && (new_id != old_id || client_ext_data.is_some())
+        {
             game_map.broadcast_block_id_change(BlockUpdate {
                 location: coord,
                 id: new_id,
@@ -1664,7 +1695,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             });
         }
 
-        Ok((closure_result?, new_id != old_id))
+        Ok((closure_result?, invalidations))
     }
 
     /// Digs a block, running its on-dig event handler. The items it drops are returned.
@@ -2359,34 +2390,79 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         template: &InMemTemplate,
         origin: BlockCoordinate,
         rotation: u8,
+        initiator: &EventInitiator,
     ) -> Result<()> {
         let (sx, sz, sy) = template.size();
         let (sx, sz) = Self::eval_rotation_forward(sx, sz, rotation);
         if origin.try_delta(sx, sy, sz).is_none() {
             bail!("Template is out of bounds (after considering rotation)");
         }
+        let mut fixups_needed = Vec::new();
+        let mut chunks_to_broadcast = FxHashSet::default();
 
-        // TODO: Update variant for rotation. Track blocks needing fixup.
         for x in 0..template.size().0 {
             for z in 0..template.size().1 {
                 for y in 0..template.size().2 {
                     let (dx, dz) = Self::eval_rotation_forward(x, z, rotation);
-                    let block_id = template.block_at(x, y, z);
+                    let coord = origin
+                        .try_delta(dx, y, dz)
+                        .expect("Bounds check should not allow this to fail");
+                    let mut block_id = template.block_at(x, y, z);
                     if block_id == templates::MASK {
                         continue;
                     }
+
+                    if self.block_type_manager().has_fixup_handler(block_id) {
+                        fixups_needed.push(coord);
+                    }
+
+                    if self.block_type_manager().low_bits_are_rotation(block_id) {
+                        // preserve all but the lowest two bits of the block ID and its variant
+                        // Ensure that the rotation does not overflow out of its 2 bits
+                        let old_rotation = block_id.0 & 0b11;
+                        block_id = BlockId(
+                            (block_id.0 & !0b11) | ((old_rotation + rotation as u32) & 0b11),
+                        );
+                    }
+
                     let ext_data = template.ext_data_at(x, y, z);
-                    self.set_block(
-                        origin
-                            .try_delta(dx, y, dz)
-                            .expect("Bounds check should not allow this to fail"),
-                        block_id,
-                        ext_data.cloned(),
-                    )?;
+                    // TODO: consider doing this on a chunk-batched basis. This currently uses
+                    // the public set_block which is a point write, and broadcasts each write.
+                    //
+                    // An ideal solution here would produce a batch write that other game content
+                    // can use (although perhaps apply_template *is* the batch-write primitive that
+                    // we really need)
+                    self.set_block(coord, block_id, ext_data.cloned())?;
+                    chunks_to_broadcast.insert(coord.chunk());
                 }
             }
         }
+
+        self.batch_fixups(fixups_needed, FixupReason::TemplateApplied, initiator);
+
         Ok(())
+    }
+
+    fn batch_fixups(
+        &self,
+        coords: Vec<BlockCoordinate>,
+        reason: FixupReason,
+        initiator: &EventInitiator,
+    ) {
+        // TODO: actually batch the fixups.
+        // For now, we just iterate over the coords and run the fixup handler for each one,
+        // doing individual locking interactions and broadcasting each one.
+        for coord in coords {
+            if let Err(e) = self.run_block_interaction(
+                coord,
+                initiator,
+                reason,
+                |bt| bt.fixup_handler_inline.as_deref(),
+                |bt| bt.fixup_handler_full.as_deref(),
+            ) {
+                tracing::error!("Error running fixup handler for coord {:?}: {e:?}", coord);
+            }
+        }
     }
 }
 impl<S: SyncBackend, L: SyncBackend> Drop for ServerGameMap<S, L> {
@@ -2396,6 +2472,29 @@ impl<S: SyncBackend, L: SyncBackend> Drop for ServerGameMap<S, L> {
         }
         tracing::info!("ServerGameMap shut down");
     }
+}
+
+#[enumflags2::bitflags]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Invalidations {
+    ChunkWriteback,
+    Lighting,
+    ClientExtendedData,
+}
+
+/// For functions that perform block mutations, whether the function
+/// will broadcast the changes itself, or if the caller will broadcast
+/// a coalesced update later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BroadcastMode {
+    /// The function will broadcast the changes itself. Always safe, but
+    /// potentially inefficient if many blocks are changed.
+    DoBroadcast,
+    /// The function will not broadcast the changes, and the caller
+    /// promises to broadcast a coalesced update later. If the caller
+    /// fails to do so, clients will be in a confused state.
+    NoBroadcastIPromiseToBroadcastMyself,
 }
 
 enum WritebackReq {
@@ -3777,6 +3876,7 @@ impl GameMapTimer {
                         Ok(())
                     },
                     map,
+                    BroadcastMode::DoBroadcast,
                 )?;
             }
             _ => unreachable!(),
@@ -4139,7 +4239,7 @@ mod tests {
                         Ok(())
                     })?;
 
-                gs.game_map().purge_and_flush();
+                gs.game_map().purge_and_flush().unwrap();
 
                 assert_eq!(gs.game_map().get_block(ZERO_COORD).unwrap(), BlockId(1));
 

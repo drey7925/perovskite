@@ -564,6 +564,11 @@ const FBN_NOTFOUND_SENTINEL: u32 = u32::MAX - 1;
 ///
 /// Handles and names should be considered effectively immutable (but may internally use mutexes/atomics
 /// for lookup caching); they can be freely cloned around as needed.
+///
+/// Block type managers are insensitive to registration order - the engine will ensure that the same
+/// block short name will correspond to the same block ID across all game startups. e.g. if
+/// default:dirt is block 0x41000 the first time it's registered, it will always be block 0x41000,
+/// even if new blocks are registered at an earlier point during game startup.
 pub struct BlockTypeManager {
     block_types: Vec<BlockType>,
     name_to_base_id_map: FxHashMap<String, u32>,
@@ -576,6 +581,7 @@ pub struct BlockTypeManager {
     trivially_replaceable_block_group: bitvec::vec::BitVec,
     has_client_side_extended_data: bitvec::vec::BitVec,
     low_bits_are_rotation: bitvec::vec::BitVec,
+    has_fixup_handler: bitvec::vec::BitVec,
     fast_block_groups: FxHashMap<String, bitvec::vec::BitVec>,
     cold_load_postprocessors: Vec<Box<ColdLoadPostprocessor>>,
 }
@@ -590,6 +596,7 @@ impl BlockTypeManager {
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             low_bits_are_rotation: bitvec::vec::BitVec::new(),
+            has_fixup_handler: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         }
@@ -599,6 +606,18 @@ impl BlockTypeManager {
         self.get_block_by_id(handle)
     }
 
+    /// Returns true if the block is trivially replaceable. Note that this is a *gameplay* property,
+    /// not a technical one. A trivially-replaceable block is, subjectively, one that is easily replaced
+    /// when another block is placed. For example, air and water are trivially replaceable, because placing
+    /// a block into them destroys them without giving the player an item. Light grasses and over very light foliage
+    /// may also fall into this, depending on gameplay design decisions.
+    ///
+    /// However, there *is* a technical ramification - if a block is trivially replaceable, then there are more ways in
+    /// which it can be destroyed without running a dig handler. If a block has gameplay effects that must happen on
+    /// destruction then it probably shouldn't fall into this category.
+    ///
+    /// Plugins encountering a trivially replaceable block may either treat it as air and replace it without recovering
+    /// dropped items, or may run the dig handler and respect its actions, etc.
     pub fn is_trivially_replaceable(&self, id: BlockId) -> bool {
         *self
             .trivially_replaceable_block_group
@@ -615,7 +634,7 @@ impl BlockTypeManager {
     }
 
     #[inline]
-    pub(crate) fn allows_light_propagation(&self, id: BlockId) -> bool {
+    pub fn allows_light_propagation(&self, id: BlockId) -> bool {
         if id.index() < self.light_propagation.len() {
             self.light_propagation[id.index()]
         } else {
@@ -625,16 +644,34 @@ impl BlockTypeManager {
     }
 
     #[inline]
-    pub(crate) fn light_emission(&self, id: BlockId) -> u8 {
+    pub fn light_emission(&self, id: BlockId) -> u8 {
         self.light_emission.get(id.index()).copied().unwrap_or(0)
     }
 
     #[inline]
-    pub(crate) fn has_client_side_extended_data(&self, id: BlockId) -> bool {
+    pub fn has_client_side_extended_data(&self, id: BlockId) -> bool {
         if id.index() < self.has_client_side_extended_data.len() {
             self.has_client_side_extended_data[id.index()]
         } else {
             // Unknown blocks don't have client-side extended data
+            false
+        }
+    }
+
+    #[inline]
+    pub fn has_fixup_handler(&self, id: BlockId) -> bool {
+        if id.index() < self.has_fixup_handler.len() {
+            self.has_fixup_handler[id.index()]
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn low_bits_are_rotation(&self, id: BlockId) -> bool {
+        if id.index() < self.low_bits_are_rotation.len() {
+            self.low_bits_are_rotation[id.index()]
+        } else {
             false
         }
     }
@@ -686,6 +723,11 @@ impl BlockTypeManager {
         Ok(id)
     }
 
+    /// Creates a new block type manager for an existing game world's block assignments message.
+    ///
+    /// This block type manager will know the correct mappings from block name to block type, but will
+    /// not have any block definitions or handlers. The game code must still register block definitions
+    /// (by name) that will be associated with the block IDs in the game world.
     pub(crate) fn from_proto(
         block_proto: blocks_proto::ServerBlockTypeAssignments,
     ) -> Result<BlockTypeManager> {
@@ -698,6 +740,7 @@ impl BlockTypeManager {
             trivially_replaceable_block_group: bitvec::vec::BitVec::new(),
             has_client_side_extended_data: bitvec::vec::BitVec::new(),
             low_bits_are_rotation: bitvec::vec::BitVec::new(),
+            has_fixup_handler: bitvec::vec::BitVec::new(),
             fast_block_groups: FxHashMap::default(),
             cold_load_postprocessors: Vec::new(),
         };
@@ -898,6 +941,7 @@ impl BlockTypeManager {
             .resize(self.block_types.len(), false);
         self.low_bits_are_rotation
             .resize(self.block_types.len(), false);
+        self.has_fixup_handler.resize(self.block_types.len(), false);
         for (index, block) in self.block_types.iter().enumerate() {
             if block.client_info.allow_light_propagation {
                 self.light_propagation.set(index, true);
@@ -917,6 +961,9 @@ impl BlockTypeManager {
             };
             if has_rotation {
                 self.low_bits_are_rotation.set(index, true);
+            }
+            if block.fixup_handler_inline.is_some() || block.fixup_handler_full.is_some() {
+                self.has_fixup_handler.set(index, true);
             }
         }
         Ok(())
