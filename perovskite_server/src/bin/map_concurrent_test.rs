@@ -117,7 +117,7 @@ impl Action for FlushAll {
         let next_awaken = self.next_awaken.get_or_insert_with(Instant::now);
         sleep(*next_awaken - now);
         *next_awaken += Duration::from_secs_f32(1.0 / self.freq);
-        gs.game_map().purge_and_flush();
+        gs.game_map().purge_and_flush().unwrap();
         stats.ops += 1;
     }
     fn describe(&self) -> String {

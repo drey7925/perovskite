@@ -1209,7 +1209,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     ///
     /// Warning: If your extended data includes interior mutability (mutex, refcell, etc), it is important
     /// to note that this function does NOT set the dirty bit on the chunk, and any changes made via that
-    /// interior mutability may be lost.
+    /// interior mutability may be lost. Further,pre, this function will NOT lead to the extended data being
+    /// written back to disk. If you want to modify the extended memory, you must use something different like
+    /// [Self::mutate_block_atomically].
+    ///
     /// See the docstring of [ExtendedDataHolder] for more details.
     pub fn get_block_with_extended_data<F, T>(
         &self,
@@ -1219,7 +1222,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     where
         F: FnOnce(&ExtendedData) -> Result<Option<T>>,
     {
-        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::ReadOnlyAccess)?;
         let chunk = chunk_guard.wait_and_get_for_read()?;
 
         let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
@@ -1267,7 +1270,8 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     /// is not loaded
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockId> {
         tokio::task::block_in_place(|| {
-            let chunk_guard = self.get_chunk(coord.chunk())?;
+            let chunk_guard =
+                self.get_chunk(coord.chunk(), WritebackPermitStrategy::ReadOnlyAccess)?;
             let chunk = chunk_guard.wait_and_get_for_read()?;
 
             let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
@@ -1342,7 +1346,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             .try_to_block_id(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
-        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite)?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let new_client_ext = self.maybe_client_ext_data(coord, new_id, ext_data.as_ref())?;
@@ -1446,7 +1450,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             .try_to_block_id(&self.block_type_manager)
             .with_context(|| "Block not found")?;
 
-        let chunk_guard = self.get_chunk(coord.chunk())?;
+        let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite)?;
         let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
         let old_id = BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
@@ -1531,7 +1535,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
         tokio::task::block_in_place(|| {
-            let chunk_guard = self.get_chunk(coord.chunk())?;
+            let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite)?;
             let mut chunk = chunk_guard.wait_and_get_for_write()?;
 
             let (result, invalidations) = self.mutate_block_atomically_locked(
@@ -1848,11 +1852,21 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
 
     // Gets a chunk, loading it from database/generating it if it is not in memory
     #[tracing::instrument(level = "trace", name = "get_chunk", skip(self))]
-    fn get_chunk(&self, coord: ChunkCoordinate) -> Result<MapChunkOuterGuard<'_, S, L>> {
+    fn get_chunk(
+        &self,
+        coord: ChunkCoordinate,
+        writeback_strategy: WritebackPermitStrategy,
+    ) -> Result<MapChunkOuterGuard<'_, S, L>> {
         tokio::task::block_in_place(|| {
             log_trace("get_chunk starting");
-            let writeback_permit = self.get_writeback_permit(shard_id(coord))?;
-            log_trace("get_chunk acquired writeback permit");
+            let mut writeback_permit = match writeback_strategy {
+                WritebackPermitStrategy::MayWrite => {
+                    let permit = Some(self.get_writeback_permit(shard_id(coord))?);
+                    log_trace("get_chunk acquired writeback permit");
+                    permit
+                }
+                WritebackPermitStrategy::ReadOnlyAccess => None,
+            };
             let shard = shard_id(coord);
             let mut load_chunk_tries = 0;
             let result = loop {
@@ -1867,7 +1881,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                     let chunk_guard = MapChunkOuterGuard {
                         read_guard,
                         coord,
-                        writeback_permit: Some(writeback_permit),
+                        writeback_permit,
                         force_writeback: false,
                     };
                     // We're under a lock preventing the cleanup thread from running, and getting
@@ -1882,6 +1896,17 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
                 // under a read lock
                 // This can't be done with an upgradable lock due to a deadlock risk.
+
+                {
+                    // In this block, we hold neither the read nor the write lock on the shard.
+                    // It is safe to block on other blockers, such as the writeback permit.
+                    if writeback_permit.is_none() {
+                        let _span = span!("acquire writeback permit for a possible fill");
+                        writeback_permit = Some(self.get_writeback_permit(shard_id(coord))?);
+                        log_trace("get_chunk acquired writeback permit");
+                    }
+                }
+
                 let mut write_guard = {
                     let _span = span!("acquire game_map write lock");
                     self.live_chunks[shard].lock_write()
@@ -1928,7 +1953,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                         let outer_guard = MapChunkOuterGuard {
                             read_guard,
                             coord,
-                            writeback_permit: Some(writeback_permit),
+                            writeback_permit,
                             force_writeback,
                         };
                         break Ok(outer_guard);
@@ -2133,7 +2158,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         mark_action: impl FnOnce(),
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
         if load_if_missing {
-            let chunk_guard = self.get_chunk(coord)?;
+            let chunk_guard = self.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess)?;
             (mark_action)();
             let chunk = chunk_guard.wait_and_get_for_read()?;
             log_trace("chunk loaded, serializing");
@@ -2162,7 +2187,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: ChunkCoordinate,
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
-        let chunk = self.get_chunk(coord)?;
+        let chunk = self.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess)?;
         let chunk = chunk.wait_and_get_for_read()?;
         Ok(Some(
             chunk.serialize(ChunkUsage::Server, &self.game_state())?,
@@ -2495,6 +2520,16 @@ enum BroadcastMode {
     /// promises to broadcast a coalesced update later. If the caller
     /// fails to do so, clients will be in a confused state.
     NoBroadcastIPromiseToBroadcastMyself,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritebackPermitStrategy {
+    /// Always get a writeback permit; we may need to write back a change to
+    /// the chunk.
+    MayWrite,
+    /// We will only read the chunk data, not write it. A writeback permit will only be
+    /// acquired if needed for map generation.
+    ReadOnlyAccess,
 }
 
 enum WritebackReq {
@@ -2849,7 +2884,7 @@ async fn run_prefetch_dispatch<S: SyncBackend, L: SyncBackend>(
                     let map_clone = map.clone();
                     break_once_out_of_slots = false;
                     tokio::task::spawn_blocking(move || {
-                        match map_clone.get_chunk(coord) {
+                        match map_clone.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess) {
                             Ok(chunk) => {
                                 drop(chunk);
                             }
@@ -4262,7 +4297,7 @@ mod tests {
                         Ok(())
                     })?;
 
-                gs.game_map().purge_and_flush();
+                gs.game_map().purge_and_flush().unwrap();
 
                 let (block, ext) = gs
                     .game_map()
