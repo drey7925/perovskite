@@ -445,6 +445,24 @@ impl MapChunk {
         BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed))
     }
 
+    pub fn get_block_by_index(&self, index: usize) -> BlockId {
+        BlockId(self.block_ids[index].load(Ordering::Relaxed))
+    }
+
+    pub fn get_block_with_ext_data<T>(
+        &self,
+        offset: ChunkOffset,
+        extended_data_callback: impl FnOnce(&ExtendedData) -> Option<T>,
+    ) -> (BlockId, Option<T>) {
+        // We have a &MapChunk (under a read guard), so relaxed loads are fine.
+        let id = self.block_ids[offset.as_index()].load(Ordering::Relaxed);
+        let ext_data = self
+            .extended_data
+            .get(&(offset.as_index() as u16))
+            .and_then(|ext_data| extended_data_callback(ext_data));
+        (BlockId(id), ext_data)
+    }
+
     /// Fills the chunk with a single block type.
     pub fn fill(&mut self, id: BlockId) {
         for block_id in self.block_ids.iter() {
@@ -1321,14 +1339,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     pub fn batch_read<T>(
         &self,
         chunk: ChunkCoordinate,
-        closure: impl for<'a> FnOnce(&ChunkRef<'a, S>) -> Result<T>,
+        closure: impl FnOnce(&MapChunk) -> Result<T>,
     ) -> Result<T> {
         crate::block_in_place(|token| {
             let outer = self.get_chunk(chunk, WritebackPermitStrategy::ReadOnlyAccess, token)?;
             let guard = outer.wait_and_get_for_read(token)?;
-            let chunk_ref = ChunkRef { guard };
-            let result = closure(&chunk_ref);
-            drop(chunk_ref);
+            let result = closure(&guard);
+            drop(guard);
             drop(outer);
             result
         })
@@ -2577,34 +2594,6 @@ enum WritebackPermitStrategy {
 enum WritebackReq {
     Chunk(ChunkCoordinate),
     Flush,
-}
-
-pub struct ChunkRef<'a, S: SyncBackend> {
-    guard: MapChunkInnerReadGuard<'a, S>,
-}
-
-impl<'a, S: SyncBackend> ChunkRef<'a, S> {
-    pub fn get_block(&self, offset: ChunkOffset) -> BlockId {
-        self.guard.get_block(offset)
-    }
-    pub fn get_block_by_index(&self, index: usize) -> BlockId {
-        BlockId(self.guard.block_ids[index].load(Ordering::Relaxed))
-    }
-
-    pub fn get_block_with_ext_data<T>(
-        &self,
-        offset: ChunkOffset,
-        extended_data_callback: impl FnOnce(&ExtendedData) -> Option<T>,
-    ) -> (BlockId, Option<T>) {
-        // We have a chunk guard, so no additional atomic ordering is required.
-        let id = self.guard.block_ids[offset.as_index()].load(Ordering::Relaxed);
-        let ext_data = self
-            .guard
-            .extended_data
-            .get(&(offset.as_index() as u16))
-            .and_then(|ext_data| extended_data_callback(ext_data));
-        (BlockId(id), ext_data)
-    }
 }
 
 // TODO expose as flags or configs
