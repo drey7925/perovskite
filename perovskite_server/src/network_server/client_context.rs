@@ -1059,32 +1059,33 @@ impl MapChunkSender {
             }
 
             trace.log("serialize_for_client start");
-            let chunk_message = block_in_place(|| -> anyhow::Result<Option<StreamToClient>> {
-                let chunk_data = run_traced_sync(trace.clone(), || {
-                    self.context.game_state.game_map().serialize_for_client(
-                        coord,
-                        should_load,
-                        || self.chunk_tracker.mark_chunk_loaded(coord),
-                    )
-                })?;
+            let chunk_message =
+                crate::block_in_place(|_token| -> anyhow::Result<Option<StreamToClient>> {
+                    let chunk_data = run_traced_sync(trace.clone(), || {
+                        self.context.game_state.game_map().serialize_for_client(
+                            coord,
+                            should_load,
+                            || self.chunk_tracker.mark_chunk_loaded(coord),
+                        )
+                    })?;
 
-                if let Some(chunk_data) = chunk_data {
-                    trace.log("snappy_encode start");
-                    let chunk_bytes = self.snappy.snappy_encode(&chunk_data)?;
-                    let message = StreamToClient {
-                        tick: self.context.game_state.tick(),
-                        server_message: Some(ServerMessage::MapChunk(proto::MapChunk {
-                            chunk_coord: Some(coord.into()),
-                            snappy_encoded_bytes: chunk_bytes,
-                        })),
-                        performance_metrics: self.context.maybe_get_performance_metrics(),
-                    };
-                    trace.log("message ready done");
-                    Ok(Some(message))
-                } else {
-                    Ok(None)
-                }
-            })?;
+                    if let Some(chunk_data) = chunk_data {
+                        trace.log("snappy_encode start");
+                        let chunk_bytes = self.snappy.snappy_encode(&chunk_data)?;
+                        let message = StreamToClient {
+                            tick: self.context.game_state.tick(),
+                            server_message: Some(ServerMessage::MapChunk(proto::MapChunk {
+                                chunk_coord: Some(coord.into()),
+                                snappy_encoded_bytes: chunk_bytes,
+                            })),
+                            performance_metrics: self.context.maybe_get_performance_metrics(),
+                        };
+                        trace.log("message ready done");
+                        Ok(Some(message))
+                    } else {
+                        Ok(None)
+                    }
+                })?;
             if let Some(message) = chunk_message {
                 self.outbound_tx.send(Ok(message)).await.map_err(|_| {
                     self.context.cancel();
@@ -1281,9 +1282,14 @@ impl BlockEventSender {
                         break;
                     }
                 }
-                Err(e) => {
-                    // we'll deal with it the next time the main loop runs
-                    warn!("Unexpected error from block events broadcast: {:?}", e);
+                Err(broadcast::error::TryRecvError::Lagged(_num_pending)) => {
+                    // This client context is lagging behind and lost block updates.
+                    // Fall back and get it resynced
+                    return self.handle_block_update_lagged().await;
+                }
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    self.context.cancel();
+                    return Ok(());
                 }
             }
         }

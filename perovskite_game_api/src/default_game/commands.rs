@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use cgmath::Vector3;
 use noise::NoiseFn;
 use perovskite_core::block_id::special_block_defs::AIR_ID;
+use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::permissions::{PERFORMANCE_METRICS, WORLD_STATE};
 use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::EntityTarget;
@@ -127,6 +128,26 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
         "pr256",
         Box::new(PointReadNChunks(256)),
         ": Reads the current chunk and 255 chunks below, for testing only",
+    )?;
+    game_builder.add_command(
+        "br1",
+        Box::new(BatchReadNChunks(1)),
+        ": Reads the current chunk in a batch, for testing only",
+    )?;
+    game_builder.add_command(
+        "br16",
+        Box::new(BatchReadNChunks(16)),
+        ": Reads the current chunk and 15 chunks below in a batch, for testing only",
+    )?;
+    game_builder.add_command(
+        "br64",
+        Box::new(BatchReadNChunks(64)),
+        ": Reads the current chunk and 63 chunks below in a batch, for testing only",
+    )?;
+    game_builder.add_command(
+        "br256",
+        Box::new(BatchReadNChunks(256)),
+        ": Reads the current chunk and 255 chunks below in a batch, for testing only",
     )?;
     Ok(())
 }
@@ -722,7 +743,8 @@ impl ChatCommandHandler for ClearChunkCommandN {
             for index in 0..4096 {
                 let offset = ChunkOffset::from_index(index);
                 let coord = c2.with_offset(offset);
-                context.game_map().set_block(coord, AIR_ID, None)?;
+                let block = if index == 0 { BlockId(4096) } else { AIR_ID };
+                context.game_map().set_block(coord, block, None)?;
             }
         }
         let end = Instant::now();
@@ -758,20 +780,65 @@ impl ChatCommandHandler for PointReadNChunks {
         let block_coord: BlockCoordinate = pos.try_into()?;
         let chunk_coord = block_coord.chunk();
         let start = Instant::now();
+        let mut checksum: u32 = 0;
         for y in 0..self.0 {
             let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
             for index in 0..4096 {
                 let offset = ChunkOffset::from_index(index);
                 let coord = c2.with_offset(offset);
-                std::hint::black_box(context.game_map().get_block(coord)?);
+                checksum = checksum.wrapping_add(context.game_map().get_block(coord)?.0);
             }
         }
         let end = Instant::now();
         let message = format!(
-            "Read {} chunks in {} ms; {} ns per block",
+            "Read {} chunks in {:.2} ms; {:.2} ns per block (checksum: {checksum})",
             self.0,
-            (end - start).as_millis(),
-            (end - start).as_nanos() / (4096 * self.0 as u128)
+            (end - start).as_nanos() as f64 / 1_000_000.0,
+            (end - start).as_nanos() as f64 / (4096 * self.0 as u128) as f64
+        );
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(message))
+            .await?;
+        Ok(())
+    }
+}
+
+struct BatchReadNChunks(i32);
+
+#[async_trait]
+impl ChatCommandHandler for BatchReadNChunks {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        let pos = if let EventInitiator::Player(p) = context.initiator() {
+            p.player.last_position().position
+        } else {
+            bail!("Only players can bulk-read chunks through this debug tool");
+        };
+        if !context
+            .initiator()
+            .check_permission_if_player(PERFORMANCE_METRICS)
+        {
+            bail!("Insufficient permissions")
+        }
+        let block_coord: BlockCoordinate = pos.try_into()?;
+        let chunk_coord = block_coord.chunk();
+        let start = Instant::now();
+        let mut checksum: u32 = 0;
+        for y in 0..self.0 {
+            let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
+            context.game_map().batch_read(c2, |chunk_ref| {
+                for index in 0..4096 {
+                    checksum = checksum.wrapping_add(chunk_ref.get_block_by_index(index).0);
+                }
+                Ok(())
+            })?;
+        }
+        let end = Instant::now();
+        let message = format!(
+            "Batch-read {} chunks in {:.2} ms; {:.2} ns per block (checksum: {checksum})",
+            self.0,
+            (end - start).as_nanos() as f64 / 1_000_000.0,
+            (end - start).as_nanos() as f64 / (4096 * self.0 as u128) as f64
         );
         context
             .initiator()

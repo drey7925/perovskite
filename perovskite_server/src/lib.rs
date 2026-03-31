@@ -67,3 +67,19 @@ impl<T> DerefMut for CachelineAligned<T> {
         &mut self.0
     }
 }
+
+/// Internal token to statically prove that we're inside a tokio blocking region.
+///
+/// This is meant as a best-effort tool to avoid bugs, not as a hard safety feature.
+/// The token is trivially launderable by copying it, so don't rely on it for security.
+#[derive(Debug)]
+struct BlockingRegionToken;
+
+#[inline]
+
+fn block_in_place<F, T>(f: F) -> T
+where
+    F: FnOnce(&BlockingRegionToken) -> T,
+{
+    tokio::task::block_in_place(|| f(&BlockingRegionToken))
+}

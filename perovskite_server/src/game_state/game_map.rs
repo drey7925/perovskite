@@ -43,7 +43,7 @@ use crate::{
     database::{GameDatabase, KeySpace},
     game_state::inventory::Inventory,
 };
-use crate::{run_handler, CachelineAligned};
+use crate::{run_handler, BlockingRegionToken, CachelineAligned};
 use perovskite_core::sync::{
     DefaultSyncBackend, GenericMutex, GenericRwLock, RwCondvar, SyncBackend,
 };
@@ -624,11 +624,13 @@ impl<'a, S: SyncBackend> MapChunkInnerWriteGuard<'a, S> {
 }
 impl<'a, S: SyncBackend> Deref for MapChunkInnerWriteGuard<'a, S> {
     type Target = MapChunk;
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         self.guard.deref().unwrap()
     }
 }
 impl<'a, S: SyncBackend> DerefMut for MapChunkInnerWriteGuard<'a, S> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.guard.unwrap_mut()
     }
@@ -640,6 +642,7 @@ enum HolderState {
     Ok(MapChunk),
 }
 impl HolderState {
+    #[inline(always)]
     fn unwrap_mut(&mut self) -> &mut MapChunk {
         if let HolderState::Ok(x) = self {
             x
@@ -647,6 +650,7 @@ impl HolderState {
             panic!("HolderState is not Ok");
         }
     }
+    #[inline(always)]
     fn unwrap(&self) -> &MapChunk {
         if let HolderState::Ok(x) = self {
             x
@@ -690,65 +694,65 @@ impl<S: SyncBackend> MapChunkHolder<S> {
     }
 
     /// Get the chunk, blocking until it's loaded
-    fn wait_and_get_for_read(&self) -> Result<MapChunkInnerReadGuard<'_, S>> {
-        tokio::task::block_in_place(|| {
-            let mut guard = self.chunk.lock_read();
-            let _span = span!("wait_and_get");
-            loop {
-                match &*guard {
-                    HolderState::Empty => {
-                        log_trace("empty chunk waiting on condvar");
-                        self.condition.wait_reader(&mut guard);
-                    }
-                    HolderState::Err(e) => {
-                        return Err(Error::msg(format!("Chunk load failed: {e:?}")))
-                    }
-                    HolderState::Ok(_) => return Ok(MapChunkInnerReadGuard { guard }),
+    fn wait_and_get_for_read(
+        &self,
+        _token: &BlockingRegionToken,
+    ) -> Result<MapChunkInnerReadGuard<'_, S>> {
+        let mut guard = self.chunk.lock_read();
+        let _span = span!("wait_and_get");
+        loop {
+            match &*guard {
+                HolderState::Empty => {
+                    log_trace("empty chunk waiting on condvar");
+                    self.condition.wait_reader(&mut guard);
                 }
+                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+                HolderState::Ok(_) => return Ok(MapChunkInnerReadGuard { guard }),
             }
-        })
+        }
     }
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
-    fn try_get_read(&self) -> Result<Option<MapChunkInnerReadGuard<'_, S>>> {
-        tokio::task::block_in_place(|| {
-            let guard = self.chunk.lock_read();
-            match &*guard {
-                HolderState::Empty => Ok(None),
-                HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => Ok(Some(MapChunkInnerReadGuard { guard })),
-            }
-        })
+    fn try_get_read(
+        &self,
+        _token: &BlockingRegionToken,
+    ) -> Result<Option<MapChunkInnerReadGuard<'_, S>>> {
+        let guard = self.chunk.lock_read();
+        match &*guard {
+            HolderState::Empty => Ok(None),
+            HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+            HolderState::Ok(_) => Ok(Some(MapChunkInnerReadGuard { guard })),
+        }
     }
 
     /// Get the chunk, blocking until it's loaded
-    fn wait_and_get_for_write(&self) -> Result<MapChunkInnerWriteGuard<'_, S>> {
-        tokio::task::block_in_place(|| {
-            let mut guard = self.chunk.lock_write();
-            let _span = span!("wait_and_get");
-            loop {
-                match &*guard {
-                    HolderState::Empty => self.condition.wait_writer(&mut guard),
-                    HolderState::Err(e) => {
-                        return Err(Error::msg(format!("Chunk load failed: {e:?}")))
-                    }
-                    HolderState::Ok(_) => return Ok(MapChunkInnerWriteGuard { guard }),
-                }
+    fn wait_and_get_for_write(
+        &self,
+        _token: &BlockingRegionToken,
+    ) -> Result<MapChunkInnerWriteGuard<'_, S>> {
+        let mut guard = self.chunk.lock_write();
+        let _span = span!("wait_and_get");
+        loop {
+            match &*guard {
+                HolderState::Empty => self.condition.wait_writer(&mut guard),
+                HolderState::Err(e) => return Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+                HolderState::Ok(_) => return Ok(MapChunkInnerWriteGuard { guard }),
             }
-        })
+        }
     }
 
     /// Get the chunk, returning None if it's not loaded yet
     /// However, this WILL wait for the mutex (just not for a database load/mapgen)
-    fn try_get_write(&self) -> Result<Option<MapChunkInnerWriteGuard<'_, S>>> {
-        tokio::task::block_in_place(|| {
-            let guard = self.chunk.lock_write();
-            match &*guard {
-                HolderState::Empty => Ok(None),
-                HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
-                HolderState::Ok(_) => Ok(Some(MapChunkInnerWriteGuard { guard })),
-            }
-        })
+    fn try_get_write(
+        &self,
+        _token: &BlockingRegionToken,
+    ) -> Result<Option<MapChunkInnerWriteGuard<'_, S>>> {
+        let guard = self.chunk.lock_write();
+        match &*guard {
+            HolderState::Empty => Ok(None),
+            HolderState::Err(e) => Err(Error::msg(format!("Chunk load failed: {e:?}"))),
+            HolderState::Ok(_) => Ok(Some(MapChunkInnerWriteGuard { guard })),
+        }
     }
 
     /// Set the chunk, and notify any threads waiting in wait_and_get
@@ -1222,19 +1226,25 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     where
         F: FnOnce(&ExtendedData) -> Result<Option<T>>,
     {
-        let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::ReadOnlyAccess)?;
-        let chunk = chunk_guard.wait_and_get_for_read()?;
+        crate::block_in_place(|token| {
+            let chunk_guard = self.get_chunk(
+                coord.chunk(),
+                WritebackPermitStrategy::ReadOnlyAccess,
+                token,
+            )?;
+            let chunk = chunk_guard.wait_and_get_for_read(token)?;
 
-        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        let ext_data = match chunk
-            .extended_data
-            .get(&coord.offset().as_index().try_into().unwrap())
-        {
-            Some(x) => extended_data_callback(x)?,
-            None => None,
-        };
+            let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
+            let ext_data = match chunk
+                .extended_data
+                .get(&coord.offset().as_index().try_into().unwrap())
+            {
+                Some(x) => extended_data_callback(x)?,
+                None => None,
+            };
 
-        Ok((id.into(), ext_data))
+            Ok((id.into(), ext_data))
+        })
     }
 
     fn get_block_with_extended_data_no_load<F, T>(
@@ -1245,34 +1255,39 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     where
         F: FnOnce(&ExtendedData) -> Option<T>,
     {
-        let chunk_guard = match self.try_get_chunk(coord.chunk(), false) {
-            Some(x) => x,
-            None => return Ok(None),
-        };
-        let chunk = match chunk_guard.try_get_read()? {
-            Some(x) => x,
-            None => return Ok(None),
-        };
+        crate::block_in_place(|token| {
+            let chunk_guard = match self.try_get_chunk(coord.chunk(), false) {
+                Some(x) => x,
+                None => return Ok(None),
+            };
+            let chunk = match chunk_guard.try_get_read(token)? {
+                Some(x) => x,
+                None => return Ok(None),
+            };
 
-        let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
-        let ext_data = match chunk
-            .extended_data
-            .get(&coord.offset().as_index().try_into().unwrap())
-        {
-            Some(x) => extended_data_callback(x),
-            None => None,
-        };
+            let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
+            let ext_data = match chunk
+                .extended_data
+                .get(&coord.offset().as_index().try_into().unwrap())
+            {
+                Some(x) => extended_data_callback(x),
+                None => None,
+            };
 
-        Ok(Some((BlockId(id), ext_data)))
+            Ok(Some((BlockId(id), ext_data)))
+        })
     }
 
     /// Gets a block + variant without its extended data. This will perform a data load if the chunk
     /// is not loaded
     pub fn get_block(&self, coord: BlockCoordinate) -> Result<BlockId> {
-        tokio::task::block_in_place(|| {
-            let chunk_guard =
-                self.get_chunk(coord.chunk(), WritebackPermitStrategy::ReadOnlyAccess)?;
-            let chunk = chunk_guard.wait_and_get_for_read()?;
+        crate::block_in_place(|token| {
+            let chunk_guard = self.get_chunk(
+                coord.chunk(),
+                WritebackPermitStrategy::ReadOnlyAccess,
+                token,
+            )?;
+            let chunk = chunk_guard.wait_and_get_for_read(token)?;
 
             let id = chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed);
             Ok(id.into())
@@ -1301,6 +1316,22 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         } else {
             None
         }
+    }
+
+    pub fn batch_read<T>(
+        &self,
+        chunk: ChunkCoordinate,
+        closure: impl for<'a> FnOnce(&ChunkRef<'a, S>) -> Result<T>,
+    ) -> Result<T> {
+        crate::block_in_place(|token| {
+            let outer = self.get_chunk(chunk, WritebackPermitStrategy::ReadOnlyAccess, token)?;
+            let guard = outer.wait_and_get_for_read(token)?;
+            let chunk_ref = ChunkRef { guard };
+            let result = closure(&chunk_ref);
+            drop(chunk_ref);
+            drop(outer);
+            result
+        })
     }
 
     pub(crate) async fn alloc_prefetch_handle(&self) -> Result<PrefetcherHandle> {
@@ -1342,55 +1373,58 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         block: T,
         ext_data: Option<ExtendedData>,
     ) -> Result<(BlockId, Option<ExtendedData>)> {
-        let new_id = block
-            .try_to_block_id(&self.block_type_manager)
-            .with_context(|| "Block not found")?;
+        crate::block_in_place(|token| {
+            let new_id = block
+                .try_to_block_id(&self.block_type_manager)
+                .with_context(|| "Block not found")?;
 
-        let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite)?;
-        let mut chunk = chunk_guard.wait_and_get_for_write()?;
+            let chunk_guard =
+                self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite, token)?;
+            let mut chunk = chunk_guard.wait_and_get_for_write(token)?;
 
-        let new_client_ext = self.maybe_client_ext_data(coord, new_id, ext_data.as_ref())?;
+            let new_client_ext = self.maybe_client_ext_data(coord, new_id, ext_data.as_ref())?;
 
-        let old_id = chunk.block_ids[coord.offset().as_index()]
-            .load(Ordering::Relaxed)
-            .into();
-        let old_data = match ext_data {
-            Some(new_data) => chunk
-                .extended_data
-                .insert(coord.offset().as_index().try_into().unwrap(), new_data),
-            None => chunk
-                .extended_data
-                .remove(&coord.offset().as_index().try_into().unwrap()),
-        };
-        chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
+            let old_id = chunk.block_ids[coord.offset().as_index()]
+                .load(Ordering::Relaxed)
+                .into();
+            let old_data = match ext_data {
+                Some(new_data) => chunk
+                    .extended_data
+                    .insert(coord.offset().as_index().try_into().unwrap(), new_data),
+                None => chunk
+                    .extended_data
+                    .remove(&coord.offset().as_index().try_into().unwrap()),
+            };
+            chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
 
-        chunk.dirty = true;
-        let light_change = self.block_type_manager().allows_light_propagation(old_id)
-            ^ self.block_type_manager().allows_light_propagation(new_id);
-        if light_change {
-            chunk_guard.update_lighting_after_edit(
-                &chunk_guard,
-                &chunk,
-                coord.offset(),
-                self.block_type_manager(),
-            );
-        }
-        drop(chunk);
-        chunk_guard
-            .block_bloom_filter
-            .insert(new_id.base_id() as u64);
-        // TODO: Do we enqueue a writeback for a no-op change? For the most part, we expect
-        // set_block to normally change blocks, so this is moot. However, it might make sense to
-        // see if we can just turn this to a call to mutate_block_atomically
-        self.enqueue_writeback(chunk_guard)?;
-        if old_id != new_id || new_client_ext.is_some() {
-            self.broadcast_block_id_change(BlockUpdate {
-                location: coord,
-                id: new_id,
-                new_ext_data: new_client_ext,
-            });
-        }
-        Ok((old_id, old_data))
+            chunk.dirty = true;
+            let light_change = self.block_type_manager().allows_light_propagation(old_id)
+                ^ self.block_type_manager().allows_light_propagation(new_id);
+            if light_change {
+                chunk_guard.update_lighting_after_edit(
+                    &chunk_guard,
+                    &chunk,
+                    coord.offset(),
+                    self.block_type_manager(),
+                );
+            }
+            drop(chunk);
+            chunk_guard
+                .block_bloom_filter
+                .insert(new_id.base_id() as u64);
+            // TODO: Do we enqueue a writeback for a no-op change? For the most part, we expect
+            // set_block to normally change blocks, so this is moot. However, it might make sense to
+            // see if we can just turn this to a call to mutate_block_atomically
+            self.enqueue_writeback(chunk_guard)?;
+            if old_id != new_id || new_client_ext.is_some() {
+                self.broadcast_block_id_change(BlockUpdate {
+                    location: coord,
+                    id: new_id,
+                    new_ext_data: new_client_ext,
+                });
+            }
+            Ok((old_id, old_data))
+        })
     }
 
     /// Sets a block on the map. No handlers are run, and the block is updated unconditionally.
@@ -1446,63 +1480,67 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     where
         F: FnOnce(BlockId, Option<&ExtendedData>, &BlockTypeManager) -> Result<bool>,
     {
-        let new_id = block
-            .try_to_block_id(&self.block_type_manager)
-            .with_context(|| "Block not found")?;
+        crate::block_in_place(|token| {
+            let new_id = block
+                .try_to_block_id(&self.block_type_manager)
+                .with_context(|| "Block not found")?;
 
-        let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite)?;
-        let mut chunk = chunk_guard.wait_and_get_for_write()?;
+            let chunk_guard =
+                self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite, token)?;
+            let mut chunk = chunk_guard.wait_and_get_for_write(token)?;
 
-        let old_id = BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
-        let old_block = old_id.into();
-        if !predicate(
-            old_block,
-            chunk
-                .extended_data
-                .get(&coord.offset().as_index().try_into().unwrap()),
-            self.block_type_manager(),
-        )? {
-            return Ok((CasOutcome::Mismatch, old_block, new_extended_data));
-        }
-        let new_data_was_some = new_extended_data.is_some();
-
-        let new_client_ext =
-            self.maybe_client_ext_data(coord, new_id, new_extended_data.as_ref())?;
-
-        let old_data = match new_extended_data {
-            Some(new_data) => chunk
-                .extended_data
-                .insert(coord.offset().as_index().try_into().unwrap(), new_data),
-            None => chunk
-                .extended_data
-                .remove(&coord.offset().as_index().try_into().unwrap()),
-        };
-        chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
-        if old_id != new_id || old_data.is_some() || new_data_was_some {
-            chunk.dirty = true;
-        }
-
-        let light_change = self.block_type_manager().allows_light_propagation(old_id)
-            ^ self.block_type_manager().allows_light_propagation(new_id);
-        if light_change {
-            chunk_guard.update_lighting_after_edit(
-                &chunk_guard,
-                &chunk,
-                coord.offset(),
+            let old_id =
+                BlockId(chunk.block_ids[coord.offset().as_index()].load(Ordering::Relaxed));
+            let old_block = old_id.into();
+            if !predicate(
+                old_block,
+                chunk
+                    .extended_data
+                    .get(&coord.offset().as_index().try_into().unwrap()),
                 self.block_type_manager(),
-            );
-        }
-        drop(chunk);
-        chunk_guard
-            .block_bloom_filter
-            .insert(new_id.base_id() as u64);
-        self.enqueue_writeback(chunk_guard)?;
-        self.broadcast_block_id_change(BlockUpdate {
-            location: coord,
-            id: new_id,
-            new_ext_data: new_client_ext,
-        });
-        Ok((CasOutcome::Match, old_block, old_data))
+            )? {
+                return Ok((CasOutcome::Mismatch, old_block, new_extended_data));
+            }
+            let new_data_was_some = new_extended_data.is_some();
+
+            let new_client_ext =
+                self.maybe_client_ext_data(coord, new_id, new_extended_data.as_ref())?;
+
+            let old_data = match new_extended_data {
+                Some(new_data) => chunk
+                    .extended_data
+                    .insert(coord.offset().as_index().try_into().unwrap(), new_data),
+                None => chunk
+                    .extended_data
+                    .remove(&coord.offset().as_index().try_into().unwrap()),
+            };
+            chunk.block_ids[coord.offset().as_index()].store(new_id.into(), Ordering::Relaxed);
+            if old_id != new_id || old_data.is_some() || new_data_was_some {
+                chunk.dirty = true;
+            }
+
+            let light_change = self.block_type_manager().allows_light_propagation(old_id)
+                ^ self.block_type_manager().allows_light_propagation(new_id);
+            if light_change {
+                chunk_guard.update_lighting_after_edit(
+                    &chunk_guard,
+                    &chunk,
+                    coord.offset(),
+                    self.block_type_manager(),
+                );
+            }
+            drop(chunk);
+            chunk_guard
+                .block_bloom_filter
+                .insert(new_id.base_id() as u64);
+            self.enqueue_writeback(chunk_guard)?;
+            self.broadcast_block_id_change(BlockUpdate {
+                location: coord,
+                id: new_id,
+                new_ext_data: new_client_ext,
+            });
+            Ok((CasOutcome::Match, old_block, old_data))
+        })
     }
 
     /// Runs the given mutator on the block and its extended data.
@@ -1534,9 +1572,10 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
     {
-        tokio::task::block_in_place(|| {
-            let chunk_guard = self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite)?;
-            let mut chunk = chunk_guard.wait_and_get_for_write()?;
+        crate::block_in_place(|token| {
+            let chunk_guard =
+                self.get_chunk(coord.chunk(), WritebackPermitStrategy::MayWrite, token)?;
+            let mut chunk = chunk_guard.wait_and_get_for_write(token)?;
 
             let (result, invalidations) = self.mutate_block_atomically_locked(
                 &chunk_guard,
@@ -1545,6 +1584,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
                 mutator,
                 self,
                 BroadcastMode::DoBroadcast,
+                token,
             )?;
             if invalidations.contains(Invalidations::Lighting) {
                 // mutate_block_atomically_locked already sent a broadcast.
@@ -1589,37 +1629,40 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             Some(x) => x,
             None => return Ok(None),
         };
-        let mut chunk = if wait_for_inner {
-            chunk_guard.wait_and_get_for_write()?
-        } else {
-            match chunk_guard.try_get_write()? {
-                Some(x) => x,
-                None => return Ok(None),
-            }
-        };
+        crate::block_in_place(|token| {
+            let mut chunk = if wait_for_inner {
+                chunk_guard.wait_and_get_for_write(token)?
+            } else {
+                match chunk_guard.try_get_write(token)? {
+                    Some(x) => x,
+                    None => return Ok(None),
+                }
+            };
 
-        let (result, invalidations) = self.mutate_block_atomically_locked(
-            &chunk_guard,
-            &mut chunk,
-            coord,
-            mutator,
-            self,
-            BroadcastMode::DoBroadcast,
-        )?;
-        if invalidations.contains(Invalidations::Lighting) {
-            // mutate_block_atomically_locked already sent a broadcast.
-            chunk_guard.update_lighting_after_edit(
+            let (result, invalidations) = self.mutate_block_atomically_locked(
                 &chunk_guard,
-                &chunk,
-                coord.offset(),
-                self.block_type_manager(),
-            );
-        }
-        drop(chunk);
-        if invalidations.contains(Invalidations::ChunkWriteback) {
-            self.enqueue_writeback(chunk_guard)?;
-        }
-        Ok(Some(result))
+                &mut chunk,
+                coord,
+                mutator,
+                self,
+                BroadcastMode::DoBroadcast,
+                token,
+            )?;
+            if invalidations.contains(Invalidations::Lighting) {
+                // mutate_block_atomically_locked already sent a broadcast.
+                chunk_guard.update_lighting_after_edit(
+                    &chunk_guard,
+                    &chunk,
+                    coord.offset(),
+                    self.block_type_manager(),
+                );
+            }
+            drop(chunk);
+            if invalidations.contains(Invalidations::ChunkWriteback) {
+                self.enqueue_writeback(chunk_guard)?;
+            }
+            Ok(Some(result))
+        })
     }
 
     /// Internal impl detail of mutate_block_atomically and timers
@@ -1631,6 +1674,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         mutator: F,
         game_map: &ServerGameMap<S, L>,
         broadcast_mode: BroadcastMode,
+        _token: &BlockingRegionToken,
     ) -> Result<(T, BitFlags<Invalidations>)>
     where
         F: FnOnce(&mut BlockId, &mut ExtendedDataHolder) -> Result<T>,
@@ -1856,121 +1900,113 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: ChunkCoordinate,
         writeback_strategy: WritebackPermitStrategy,
+        _token: &BlockingRegionToken,
     ) -> Result<MapChunkOuterGuard<'_, S, L>> {
-        tokio::task::block_in_place(|| {
-            log_trace("get_chunk starting");
-            let mut writeback_permit = match writeback_strategy {
-                WritebackPermitStrategy::MayWrite => {
-                    let permit = Some(self.get_writeback_permit(shard_id(coord))?);
-                    log_trace("get_chunk acquired writeback permit");
-                    permit
-                }
-                WritebackPermitStrategy::ReadOnlyAccess => None,
+        log_trace("get_chunk starting");
+        let mut writeback_permit = match writeback_strategy {
+            WritebackPermitStrategy::MayWrite => {
+                let permit = Some(self.get_writeback_permit(shard_id(coord))?);
+                log_trace("get_chunk acquired writeback permit");
+                permit
+            }
+            WritebackPermitStrategy::ReadOnlyAccess => None,
+        };
+        let shard = shard_id(coord);
+        let mut load_chunk_tries = 0;
+        let result = loop {
+            let read_guard = {
+                let _span = span!("acquire game_map read lock");
+                self.live_chunks[shard].lock_read()
             };
-            let shard = shard_id(coord);
-            let mut load_chunk_tries = 0;
-            let result = loop {
-                let read_guard = {
-                    let _span = span!("acquire game_map read lock");
-                    self.live_chunks[shard].lock_read()
+            log_trace("get_chunk acquired read lock");
+            // All good. The chunk is loaded.
+            if read_guard.chunks.contains_key(&coord) {
+                log_trace("get_chunk chunk loaded");
+                let chunk_guard = MapChunkOuterGuard {
+                    read_guard,
+                    coord,
+                    writeback_permit,
+                    force_writeback: false,
                 };
-                log_trace("get_chunk acquired read lock");
-                // All good. The chunk is loaded.
-                if read_guard.chunks.contains_key(&coord) {
-                    log_trace("get_chunk chunk loaded");
-                    let chunk_guard = MapChunkOuterGuard {
+                // We're under a lock preventing the cleanup thread from running, and getting
+                // this wrong doesn't affect correctness (only performance)
+                chunk_guard.last_accessed.update_now_relaxed();
+                return Ok(chunk_guard);
+            }
+
+            load_chunk_tries += 1;
+            drop(read_guard);
+            log_trace("get_chunk read lock released");
+            // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
+            // under a read lock
+            // This can't be done with an upgradable lock due to a deadlock risk.
+
+            {
+                // In this block, we hold neither the read nor the write lock on the shard.
+                // It is safe to block on other blockers, such as the writeback permit.
+                if writeback_permit.is_none() {
+                    let _span = span!("acquire writeback permit for a possible fill");
+                    writeback_permit = Some(self.get_writeback_permit(shard_id(coord))?);
+                    log_trace("get_chunk acquired writeback permit");
+                }
+            }
+
+            let mut write_guard = {
+                let _span = span!("acquire game_map write lock");
+                self.live_chunks[shard].lock_write()
+            };
+            log_trace("get_chunk acquired write lock");
+            if write_guard.chunks.contains_key(&coord) {
+                // Someone raced with us. Try looping again.
+                info!("Race while upgrading in get_chunk; retrying two-phase lock");
+                log_trace("get_chunk race detected");
+                drop(write_guard);
+                continue;
+            }
+
+            // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
+            // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
+            write_guard
+                .chunks
+                .insert(coord, MapChunkHolder::new_empty());
+            write_guard
+                .light_columns
+                .entry((coord.x, coord.z))
+                .or_insert_with(ChunkColumn::empty)
+                .insert_empty(coord.y);
+
+            // Now we downgrade the write lock.
+            // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
+            // they'll get an empty chunk holder and will wait for the condition variable to be signalled.
+            // When that thread waits on the condition variable, it atomically releases the inner lock.
+            let read_guard = S::RwLock::downgrade_writer(write_guard);
+            log_trace("get_chunk downgraded write lock");
+            // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
+            let chunk_holder = read_guard.chunks.get(&coord).unwrap();
+            match self.load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone()) {
+                Ok((chunk, force_writeback)) => {
+                    log_trace("get_chunk chunk loaded, filling");
+                    chunk_holder.fill(chunk, &read_guard.light_columns, self.block_type_manager());
+                    log_trace("get_chunk chunk filled");
+                    let outer_guard = MapChunkOuterGuard {
                         read_guard,
                         coord,
                         writeback_permit,
-                        force_writeback: false,
+                        force_writeback,
                     };
-                    // We're under a lock preventing the cleanup thread from running, and getting
-                    // this wrong doesn't affect correctness (only performance)
-                    chunk_guard.last_accessed.update_now_relaxed();
-                    return Ok(chunk_guard);
+                    break Ok(outer_guard);
                 }
-
-                load_chunk_tries += 1;
-                drop(read_guard);
-                log_trace("get_chunk read lock released");
-                // The chunk is not loaded. Give up the lock, get a write lock, get an entry into the map, and then fill it
-                // under a read lock
-                // This can't be done with an upgradable lock due to a deadlock risk.
-
-                {
-                    // In this block, we hold neither the read nor the write lock on the shard.
-                    // It is safe to block on other blockers, such as the writeback permit.
-                    if writeback_permit.is_none() {
-                        let _span = span!("acquire writeback permit for a possible fill");
-                        writeback_permit = Some(self.get_writeback_permit(shard_id(coord))?);
-                        log_trace("get_chunk acquired writeback permit");
-                    }
+                Err(e) => {
+                    chunk_holder.set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
+                    // Unfortunate duplication, anyhow::Error is not Clone
+                    break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
                 }
-
-                let mut write_guard = {
-                    let _span = span!("acquire game_map write lock");
-                    self.live_chunks[shard].lock_write()
-                };
-                log_trace("get_chunk acquired write lock");
-                if write_guard.chunks.contains_key(&coord) {
-                    // Someone raced with us. Try looping again.
-                    info!("Race while upgrading in get_chunk; retrying two-phase lock");
-                    log_trace("get_chunk race detected");
-                    drop(write_guard);
-                    continue;
-                }
-
-                // We still hold the write lock. Insert, downgrade back to a read lock, and fill the chunk before returning.
-                // Since we still hold the write lock, our check just above is still correct, and we can safely insert.
-                write_guard
-                    .chunks
-                    .insert(coord, MapChunkHolder::new_empty());
-                write_guard
-                    .light_columns
-                    .entry((coord.x, coord.z))
-                    .or_insert_with(ChunkColumn::empty)
-                    .insert_empty(coord.y);
-
-                // Now we downgrade the write lock.
-                // If another thread races ahead of us and does the same lookup before we manage to fill the chunk,
-                // they'll get an empty chunk holder and will wait for the condition variable to be signalled.
-                // When that thread waits on the condition variable, it atomically releases the inner lock.
-                let read_guard = S::RwLock::downgrade_writer(write_guard);
-                log_trace("get_chunk downgraded write lock");
-                // We had a write lock and downgraded it atomically. No other thread could have removed the entry.
-                let chunk_holder = read_guard.chunks.get(&coord).unwrap();
-                match self
-                    .load_uncached_or_generate_chunk(coord, chunk_holder.atomic_storage.clone())
-                {
-                    Ok((chunk, force_writeback)) => {
-                        log_trace("get_chunk chunk loaded, filling");
-                        chunk_holder.fill(
-                            chunk,
-                            &read_guard.light_columns,
-                            self.block_type_manager(),
-                        );
-                        log_trace("get_chunk chunk filled");
-                        let outer_guard = MapChunkOuterGuard {
-                            read_guard,
-                            coord,
-                            writeback_permit,
-                            force_writeback,
-                        };
-                        break Ok(outer_guard);
-                    }
-                    Err(e) => {
-                        chunk_holder
-                            .set_err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
-                        // Unfortunate duplication, anyhow::Error is not Clone
-                        break Err(Error::msg(format!("Chunk load/generate failed: {e:?}")));
-                    }
-                }
-            };
-            if load_chunk_tries > 1 {
-                warn!("Took {load_chunk_tries} tries to load {coord:?}");
             }
-            result
-        })
+        };
+        if load_chunk_tries > 1 {
+            warn!("Took {load_chunk_tries} tries to load {coord:?}");
+        }
+        result
     }
 
     #[tracing::instrument(level = "trace", name = "try_get_chunk", skip(self))]
@@ -2157,29 +2193,33 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         load_if_missing: bool,
         mark_action: impl FnOnce(),
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
-        if load_if_missing {
-            let chunk_guard = self.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess)?;
-            (mark_action)();
-            let chunk = chunk_guard.wait_and_get_for_read()?;
-            log_trace("chunk loaded, serializing");
-            Ok(Some(
-                chunk.serialize(ChunkUsage::Client, &self.game_state())?,
-            ))
-        } else {
-            let chunk_guard = self.try_get_chunk(coord, false);
-            if let Some(chunk) = chunk_guard {
+        // todo: take a token and fix up call sites
+        crate::block_in_place(|token| {
+            if load_if_missing {
+                let chunk_guard =
+                    self.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess, token)?;
                 (mark_action)();
-
-                log_trace("wait_and_get_for_read");
-                let chunk = chunk.wait_and_get_for_read()?;
+                let chunk = chunk_guard.wait_and_get_for_read(token)?;
                 log_trace("chunk loaded, serializing");
                 Ok(Some(
                     chunk.serialize(ChunkUsage::Client, &self.game_state())?,
                 ))
             } else {
-                Ok(None)
+                let chunk_guard = self.try_get_chunk(coord, false);
+                if let Some(chunk) = chunk_guard {
+                    (mark_action)();
+
+                    log_trace("wait_and_get_for_read");
+                    let chunk = chunk.wait_and_get_for_read(token)?;
+                    log_trace("chunk loaded, serializing");
+                    Ok(Some(
+                        chunk.serialize(ChunkUsage::Client, &self.game_state())?,
+                    ))
+                } else {
+                    Ok(None)
+                }
             }
-        }
+        })
     }
 
     #[doc(hidden)]
@@ -2187,11 +2227,13 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         &self,
         coord: ChunkCoordinate,
     ) -> Result<Option<mapchunk_proto::StoredChunk>> {
-        let chunk = self.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess)?;
-        let chunk = chunk.wait_and_get_for_read()?;
-        Ok(Some(
-            chunk.serialize(ChunkUsage::Server, &self.game_state())?,
-        ))
+        crate::block_in_place(|token| {
+            let chunk = self.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess, token)?;
+            let chunk = chunk.wait_and_get_for_read(token)?;
+            Ok(Some(
+                chunk.serialize(ChunkUsage::Server, &self.game_state())?,
+            ))
+        })
     }
 
     pub(crate) async fn do_shutdown(&self) -> Result<()> {
@@ -2537,6 +2579,34 @@ enum WritebackReq {
     Flush,
 }
 
+pub struct ChunkRef<'a, S: SyncBackend> {
+    guard: MapChunkInnerReadGuard<'a, S>,
+}
+
+impl<'a, S: SyncBackend> ChunkRef<'a, S> {
+    pub fn get_block(&self, offset: ChunkOffset) -> BlockId {
+        self.guard.get_block(offset)
+    }
+    pub fn get_block_by_index(&self, index: usize) -> BlockId {
+        BlockId(self.guard.block_ids[index].load(Ordering::Relaxed))
+    }
+
+    pub fn get_block_with_ext_data<T>(
+        &self,
+        offset: ChunkOffset,
+        extended_data_callback: impl FnOnce(&ExtendedData) -> Option<T>,
+    ) -> (BlockId, Option<T>) {
+        // We have a chunk guard, so no additional atomic ordering is required.
+        let id = self.guard.block_ids[offset.as_index()].load(Ordering::Relaxed);
+        let ext_data = self
+            .guard
+            .extended_data
+            .get(&(offset.as_index() as u16))
+            .and_then(|ext_data| extended_data_callback(ext_data));
+        (BlockId(id), ext_data)
+    }
+}
+
 // TODO expose as flags or configs
 pub(crate) const CACHE_CLEAN_MIN_AGE: Duration = Duration::from_secs(10);
 const CACHE_CLEAN_INTERVAL: Duration = Duration::from_secs(3);
@@ -2556,7 +2626,7 @@ impl<S: SyncBackend, L: SyncBackend> MapCacheCleanup<S, L> {
         while !self.cancellation.is_cancelled() {
             tokio::select! {
                 _ = interval.tick() => {
-                    tokio::task::block_in_place(|| self.do_cleanup())?;
+                    crate::block_in_place(|token| self.do_cleanup(token))?;
                 }
                 _ = self.cancellation.cancelled() => {
                     info!("Map cache cleanup thread shutting down for shard ID {}", self.shard_id);
@@ -2566,7 +2636,7 @@ impl<S: SyncBackend, L: SyncBackend> MapCacheCleanup<S, L> {
         }
         Ok(())
     }
-    fn do_cleanup(&self) -> Result<()> {
+    fn do_cleanup(&self, _token: &BlockingRegionToken) -> Result<()> {
         let _span = span!("map cache cleanup");
         loop {
             let _span = span!("map cache cleanup iteration");
@@ -2624,14 +2694,18 @@ impl<S: SyncBackend, L: SyncBackend> GameMapWriteback<S, L> {
             if writebacks.len() >= (WRITEBACK_COALESCE_MAX_SIZE) * 4 {
                 warn!("Writeback backlog of {} chunks is unusually high; is the writeback thread falling behind?", writebacks.len());
             }
-            tokio::task::block_in_place(|| self.do_writebacks(writebacks))?;
+            crate::block_in_place(|token| self.do_writebacks(writebacks, token))?;
         }
 
         info!("Map writeback exiting for shard ID {}", self.shard_id);
         Ok(())
     }
 
-    fn do_writebacks(&self, writebacks: Vec<ChunkCoordinate>) -> Result<()> {
+    fn do_writebacks(
+        &self,
+        writebacks: Vec<ChunkCoordinate>,
+        token: &BlockingRegionToken,
+    ) -> Result<()> {
         let _span = span!("game_map do_writebacks");
         tracing::trace!("Writing back {} chunks", writebacks.len());
         let lock = {
@@ -2644,7 +2718,9 @@ impl<S: SyncBackend, L: SyncBackend> GameMapWriteback<S, L> {
             assert_eq!(self.shard_id, shard_id(coord));
             match lock.chunks.get(&coord) {
                 Some(chunk_holder) => {
-                    if let Some(mut chunk) = chunk_holder.try_get_write()? {
+                    if let Some(mut chunk) = chunk_holder.try_get_write(token)? {
+                        // Performance: if writeback contends with reads (very unlikely), consider
+                        // making dirty a suitably-ordered atomic
                         if chunk.dirty {
                             self.map.database.put(
                                 &KeySpace::MapchunkData.make_key(&coord.as_bytes()),
@@ -2883,8 +2959,12 @@ async fn run_prefetch_dispatch<S: SyncBackend, L: SyncBackend>(
                     let permit = sem.clone().acquire_owned().await.unwrap();
                     let map_clone = map.clone();
                     break_once_out_of_slots = false;
-                    tokio::task::spawn_blocking(move || {
-                        match map_clone.get_chunk(coord, WritebackPermitStrategy::ReadOnlyAccess) {
+                    crate::block_in_place(|token| {
+                        match map_clone.get_chunk(
+                            coord,
+                            WritebackPermitStrategy::ReadOnlyAccess,
+                            token,
+                        ) {
                             Ok(chunk) => {
                                 drop(chunk);
                             }
@@ -3345,13 +3425,14 @@ impl GameMapTimer {
         let current_tick_start = Instant::now();
         shard_state.timer_state.current_tick_time = current_tick_start;
 
-        tokio::task::block_in_place(|| {
+        crate::block_in_place(|token| {
             self.delegate_locking_path(
                 coarse_shard,
                 fine_shard,
                 fine_shards_per_coarse,
                 game_state,
                 shard_state,
+                token,
             )
         })?;
         shard_state.timer_state.prev_tick_time = current_tick_start;
@@ -3391,6 +3472,7 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         state: &mut ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         const MAX_TIME_UNDER_SHARD_LOCK: Duration = Duration::from_millis(50);
         let _span = span!("timer tick hand-over-hand");
@@ -3504,6 +3586,7 @@ impl GameMapTimer {
                                 &mut writeback_permit,
                                 &mut writeback_permit2,
                                 state,
+                                token,
                             )?;
                         }
 
@@ -3527,6 +3610,7 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         state: &mut ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         let _span = span!("timer tick with neighbors");
         let mut writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
@@ -3564,6 +3648,7 @@ impl GameMapTimer {
                 coord,
                 game_state.game_map(),
                 false,
+                token,
             )?;
             let should_run = (!self.settings.idle_chunk_after_unchanged
                 || latest_update.is_some_and(|x| x >= state.timer_state.prev_tick_time))
@@ -3575,6 +3660,7 @@ impl GameMapTimer {
                     coord,
                     game_state.game_map(),
                     true,
+                    token,
                 )?;
                 if self.settings.populate_lighting {
                     state
@@ -3585,7 +3671,7 @@ impl GameMapTimer {
                 }
                 let shard = game_state.game_map().live_chunks[coarse_shard].read();
                 if let Some(holder) = shard.chunks.get(&coord) {
-                    if let Some(mut chunk) = holder.try_get_write()? {
+                    if let Some(mut chunk) = holder.try_get_write(token)? {
                         match &self.callback {
                             TimerCallback::BulkUpdateWithNeighbors(_) => {
                                 self.run_bulk_handler(
@@ -3597,6 +3683,7 @@ impl GameMapTimer {
                                     state.lighting_buffer.as_ref(),
                                     state,
                                     &mut writeback_permit,
+                                    token,
                                 )?;
                             }
                             _ => unreachable!(),
@@ -3628,6 +3715,7 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         state: &mut ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         match &self.callback {
             TimerCallback::PerBlockLocked(_) | TimerCallback::BulkUpdate(_) => self
@@ -3637,6 +3725,7 @@ impl GameMapTimer {
                     fine_shards_per_coarse,
                     game_state,
                     state,
+                    token,
                 ),
             TimerCallback::BulkUpdateWithNeighbors(_) => self.do_tick_locking_with_neighbors(
                 coarse_shard,
@@ -3644,6 +3733,7 @@ impl GameMapTimer {
                 fine_shards_per_coarse,
                 game_state,
                 state,
+                token,
             ),
             TimerCallback::LockedVerticalNeighors(_) => self.do_vertical_neighbor_locking(
                 coarse_shard,
@@ -3651,6 +3741,7 @@ impl GameMapTimer {
                 fine_shards_per_coarse,
                 game_state,
                 state,
+                token,
             ),
         }
     }
@@ -3663,6 +3754,7 @@ impl GameMapTimer {
         fine_shards_per_coarse: usize,
         game_state: Arc<GameState>,
         state: &ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         let _span = span!("timer tick fast");
         let mut writeback_permit = Some(game_state.game_map().get_writeback_permit(coarse_shard)?);
@@ -3707,6 +3799,7 @@ impl GameMapTimer {
                             &game_state,
                             &mut writeback_permit,
                             state,
+                            token,
                         )?;
                     }
                 }
@@ -3722,13 +3815,14 @@ impl GameMapTimer {
         game_state: &Arc<GameState>,
         writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
         state: &ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         assert!(writeback_permit.is_some());
 
-        if let Some(mut chunk) = holder.try_get_write()? {
+        if let Some(mut chunk) = holder.try_get_write(token)? {
             match &self.callback {
                 TimerCallback::PerBlockLocked(_) => {
-                    self.run_per_block_handler(game_state, chunk, holder, coord, state)?;
+                    self.run_per_block_handler(game_state, chunk, holder, coord, state, token)?;
                 }
                 TimerCallback::BulkUpdate(_) => {
                     let chunk_update = holder.last_written.get_acquire();
@@ -3744,6 +3838,7 @@ impl GameMapTimer {
                             None,
                             state,
                             writeback_permit,
+                            token,
                         )?;
                     }
                 }
@@ -3769,16 +3864,17 @@ impl GameMapTimer {
         upper_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
         lower_writeback_permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
         state: &ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         assert!(upper_writeback_permit.is_some());
         assert!(lower_writeback_permit.is_some());
-        let mut upper_chunk = match upper_holder.try_get_write()? {
+        let mut upper_chunk = match upper_holder.try_get_write(token)? {
             Some(x) => x,
             None => {
                 return Ok(());
             }
         };
-        let mut lower_chunk = match lower_holder.try_get_write()? {
+        let mut lower_chunk = match lower_holder.try_get_write(token)? {
             Some(x) => x,
             None => {
                 return Ok(());
@@ -3841,6 +3937,7 @@ impl GameMapTimer {
         holder: &MapChunkHolder<DefaultSyncBackend>,
         coord: ChunkCoordinate,
         state: &ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<(), Error> {
         let mut rng = rand::thread_rng();
         let sampler = Bernoulli::new(self.settings.per_block_probability)?;
@@ -3859,6 +3956,7 @@ impl GameMapTimer {
                     coord,
                     game_state,
                     state,
+                    token,
                 ) {
                     Ok(()) => {
                         // continue
@@ -3881,6 +3979,7 @@ impl GameMapTimer {
         coord: ChunkCoordinate,
         game_state: &Arc<GameState>,
         state: &ShardState,
+        token: &BlockingRegionToken,
     ) -> Result<()> {
         match &self.callback {
             TimerCallback::PerBlockLocked(cb) => {
@@ -3912,6 +4011,7 @@ impl GameMapTimer {
                     },
                     map,
                     BroadcastMode::DoBroadcast,
+                    token,
                 )?;
             }
             _ => unreachable!(),
@@ -3936,6 +4036,7 @@ impl GameMapTimer {
         light_data: Option<&LightScratchpad>,
         state: &ShardState,
         permit: &mut Option<mpsc::Permit<'_, WritebackReq>>,
+        _token: &BlockingRegionToken,
     ) -> Result<()> {
         let old_block_ids: Box<[u32; _MAX_OFFSET]> = chunk.clone_block_ids();
         let ctx = HandlerContext {
@@ -3994,6 +4095,7 @@ impl GameMapTimer {
         center_coord: ChunkCoordinate,
         game_map: &ServerGameMap<impl SyncBackend>,
         copy_data: bool,
+        token: &BlockingRegionToken,
     ) -> Result<(bool, Option<Instant>)> {
         let neighbor_data = neighbor_data.get_or_insert_with(Default::default);
 
@@ -4016,7 +4118,7 @@ impl GameMapTimer {
                             }
                             update_times.push(neighbor_holder.last_written.get_acquire());
 
-                            if let Some(contents) = neighbor_holder.try_get_read()? {
+                            if let Some(contents) = neighbor_holder.try_get_read(token)? {
                                 let neighbor_index = ChunkNeighbors::neighbor_index(cx, cy, cz);
                                 presence_bitmap |= 1 << neighbor_index;
                                 if copy_data {
