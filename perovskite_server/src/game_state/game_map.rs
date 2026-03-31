@@ -4375,6 +4375,48 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_read_matches_point_reads() {
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let chunk = ZERO_COORD.chunk();
+
+                // Write a distinct block ID at every offset so the comparison is meaningful
+                for index in 0.._MAX_OFFSET {
+                    let offset = ChunkOffset::from_index(index);
+                    let coord = chunk.with_offset(offset);
+                    gs.game_map()
+                        .mutate_block_atomically(coord, |block, _ext| {
+                            *block = BlockId(index as u32);
+                            Ok(())
+                        })?;
+                }
+
+                // Collect block IDs via batch_read
+                let batch_ids: Vec<BlockId> = gs.game_map().batch_read(chunk, |map_chunk| {
+                    Ok((0.._MAX_OFFSET)
+                        .map(|i| map_chunk.get_block_by_index(i))
+                        .collect())
+                })?;
+
+                // Compare every entry against individual point reads
+                for index in 0.._MAX_OFFSET {
+                    let offset = ChunkOffset::from_index(index);
+                    let coord = chunk.with_offset(offset);
+                    let point = gs.game_map().get_block(coord)?;
+                    assert_eq!(
+                        batch_ids[index],
+                        point,
+                        "mismatch at chunk offset {index}"
+                    );
+                }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn test_mba_store_ext() {
         let server = crate::server::testonly_in_memory().unwrap();
         server
