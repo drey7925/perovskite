@@ -28,6 +28,7 @@ pub mod network_server;
 pub mod server;
 
 use anyhow::Result;
+use bytemuck::Zeroable;
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
@@ -54,6 +55,8 @@ where
     Ok(tokio::task::spawn(task))
 }
 
+#[derive(Zeroable)]
+#[zeroable(bound = "T: Zeroable")]
 #[repr(align(64))]
 struct CachelineAligned<T>(T);
 impl<T> Deref for CachelineAligned<T> {

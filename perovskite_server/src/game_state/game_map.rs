@@ -173,12 +173,15 @@ const _MAX_OFFSET: usize = 16 * 16 * 16;
 /// block-by-block.
 pub struct MapChunk {
     coord: ChunkCoordinate,
-    block_ids: Arc<[AtomicU32; _MAX_OFFSET]>,
+    block_ids: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
     extended_data: Box<FxHashMap<u16, ExtendedData>>,
     dirty: bool,
 }
 impl MapChunk {
-    fn new(coord: ChunkCoordinate, storage: Arc<[AtomicU32; _MAX_OFFSET]>) -> Self {
+    fn new(
+        coord: ChunkCoordinate,
+        storage: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
+    ) -> Self {
         Self {
             coord,
             block_ids: storage,
@@ -338,7 +341,7 @@ impl MapChunk {
         coordinate: ChunkCoordinate,
         bytes: &[u8],
         game_state: Arc<GameState>,
-        storage: Arc<[AtomicU32; _MAX_OFFSET]>,
+        storage: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
     ) -> Result<MapChunk> {
         let _span = span!("parse chunk");
         let proto = mapchunk_proto::StoredChunk::decode(bytes)
@@ -359,6 +362,7 @@ impl MapChunk {
     /// This function is intended to be used from map generators and bulk timer callbacks
     ///
     /// TODO refactor and fix
+    #[inline]
     pub fn set_block(
         &mut self,
         coordinate: ChunkOffset,
@@ -445,6 +449,7 @@ impl MapChunk {
         BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed))
     }
 
+    #[inline]
     pub fn get_block_by_index(&self, index: usize) -> BlockId {
         BlockId(self.block_ids[index].load(Ordering::Relaxed))
     }
@@ -502,7 +507,7 @@ fn parse_v1(
     mut chunk_data: mapchunk_proto::ChunkV1,
     coordinate: ChunkCoordinate,
     game_state: Arc<GameState>,
-    storage: Arc<[AtomicU32; _MAX_OFFSET]>,
+    storage: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
     run_cold_load_postprocessors: bool,
 ) -> std::result::Result<MapChunk, Error> {
     let mut extended_data = FxHashMap::default();
@@ -691,7 +696,7 @@ struct MapChunkHolder<S: SyncBackend> {
     // A bit hacky - there are two arcs to the same data - one in the chunk, and one here.
     // The one in MapChunk is used for strong reads/writes under the control of a RwLock.
     // This one here is used for weak reads that don't require any consistency guarantees.
-    atomic_storage: Arc<[AtomicU32; _MAX_OFFSET]>,
+    atomic_storage: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
     // This is set only if chunk's state is ready.
     fast_path_read_ready: AtomicBool,
 }
@@ -2088,7 +2093,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     fn load_uncached_or_generate_chunk(
         &self,
         coord: ChunkCoordinate,
-        storage: Arc<[AtomicU32; _MAX_OFFSET]>,
+        storage: Arc<CachelineAligned<[AtomicU32; _MAX_OFFSET]>>,
     ) -> Result<(MapChunk, bool)> {
         let data = self
             .database
@@ -2420,7 +2425,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
     pub fn debug_only_regenerate_chunk(&self, coord: ChunkCoordinate) -> Result<()> {
         let mut detached_chunk = MapChunk {
             coord,
-            block_ids: Arc::new([const { AtomicU32::new(0) }; _MAX_OFFSET]),
+            block_ids: Arc::new(CachelineAligned([const { AtomicU32::new(0) }; _MAX_OFFSET])),
             extended_data: Box::new(Default::default()),
             dirty: false,
         };
@@ -4404,11 +4409,7 @@ mod tests {
                     let offset = ChunkOffset::from_index(index);
                     let coord = chunk.with_offset(offset);
                     let point = gs.game_map().get_block(coord)?;
-                    assert_eq!(
-                        batch_ids[index],
-                        point,
-                        "mismatch at chunk offset {index}"
-                    );
+                    assert_eq!(batch_ids[index], point, "mismatch at chunk offset {index}");
                 }
 
                 anyhow::Ok(())
