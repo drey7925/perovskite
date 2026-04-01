@@ -5,10 +5,8 @@
 //!
 //! For example:
 //!
-//! ```
-//! # use googletest::prelude::*;
-//! # use perovskite_game_api::test_support::*;
-//! # fn main() {}
+//! ```ignore
+//! # Ignored because doctests + feature gates don't play well together. See below for the actual copy of this test.
 //! #[gtest]
 //! fn sample_test_real_game(fixture: &TestFixture) -> googletest::Result<()> {
 //!     // pass the actual game content under test
