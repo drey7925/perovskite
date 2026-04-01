@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::game_builder::GameBuilder;
 use anyhow::{bail, Context, Result};
@@ -10,12 +10,14 @@ use perovskite_core::block_id::BlockId;
 use perovskite_core::constants::permissions::{PERFORMANCE_METRICS, WORLD_STATE};
 use perovskite_core::coordinates::ChunkOffset;
 use perovskite_core::protocol::game_rpc::EntityTarget;
+use perovskite_core::util::TraceBuffer;
 use perovskite_core::{
     chat::{ChatMessage, SERVER_WARNING_COLOR},
     constants::permissions,
     coordinates::BlockCoordinate,
     protocol::items::item_def::QuantityType,
 };
+use perovskite_server::game_state::event::run_traced_sync;
 use perovskite_server::game_state::{
     chat::commands::ChatCommandHandler,
     event::{EventInitiator, HandlerContext},
@@ -89,66 +91,30 @@ pub(crate) fn register_default_commands(game_builder: &mut GameBuilder) -> Resul
         Box::new(MapgenRegenerateCommand),
         ": Regenerates the current chunk",
     )?;
-    game_builder.add_command(
-        "clc",
-        Box::new(ClearChunkCommandN(1)),
-        ": Clears the current chunk, for testing only",
-    )?;
-    game_builder.add_command(
-        "clc16",
-        Box::new(ClearChunkCommandN(16)),
-        ": Clears the current chunk and 15 chunks below, for testing only",
-    )?;
-    game_builder.add_command(
-        "clc64",
-        Box::new(ClearChunkCommandN(64)),
-        ": Clears the current chunk and 63 chunks below, for testing only",
-    )?;
-    game_builder.add_command(
-        "clc256",
-        Box::new(ClearChunkCommandN(256)),
-        ": Clears the current chunk and 255 chunks below, for testing only",
-    )?;
-    game_builder.add_command(
-        "pr1",
-        Box::new(PointReadNChunks(1)),
-        ": Reads the current chunk, for testing only",
-    )?;
-    game_builder.add_command(
-        "pr16",
-        Box::new(PointReadNChunks(16)),
-        ": Reads the current chunk and 15 chunks below, for testing only",
-    )?;
-    game_builder.add_command(
-        "pr64",
-        Box::new(PointReadNChunks(64)),
-        ": Reads the current chunk and 63 chunks below, for testing only",
-    )?;
-    game_builder.add_command(
-        "pr256",
-        Box::new(PointReadNChunks(256)),
-        ": Reads the current chunk and 255 chunks below, for testing only",
-    )?;
-    game_builder.add_command(
-        "br1",
-        Box::new(BatchReadNChunks(1)),
-        ": Reads the current chunk in a batch, for testing only",
-    )?;
-    game_builder.add_command(
-        "br16",
-        Box::new(BatchReadNChunks(16)),
-        ": Reads the current chunk and 15 chunks below in a batch, for testing only",
-    )?;
-    game_builder.add_command(
-        "br64",
-        Box::new(BatchReadNChunks(64)),
-        ": Reads the current chunk and 63 chunks below in a batch, for testing only",
-    )?;
-    game_builder.add_command(
-        "br256",
-        Box::new(BatchReadNChunks(256)),
-        ": Reads the current chunk and 255 chunks below in a batch, for testing only",
-    )?;
+
+    for chunks in [1, 4, 16, 64, 256, 1024] {
+        game_builder.add_command(
+            &format!("clc{}", chunks),
+            Box::new(ClearChunkCommandN(chunks)),
+            ": Clears the current chunk and chunks below, for testing only",
+        )?;
+        game_builder.add_command(
+            &format!("bclc{}", chunks),
+            Box::new(BatchClearNChunks(chunks)),
+            ": Bulk clears the current chunk and chunks below, for testing only",
+        )?;
+        game_builder.add_command(
+            &format!("pr{}", chunks),
+            Box::new(PointReadNChunks(chunks)),
+            ": Point reads the current chunk and chunks below, for testing only",
+        )?;
+        game_builder.add_command(
+            &format!("br{}", chunks),
+            Box::new(BatchReadNChunks(chunks)),
+            ": Bulk reads the current chunk and chunks below, for testing only",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -370,7 +336,10 @@ const TELEPORT_USAGE_MESSAGE: &str = r"Incorrect usage: should be:
     /teleport <x> <y> <z> - teleport yourself to a coordinate,
     /teleport <player> <x> <y> <z> - teleport a player to a coordinate,
     /teleport <player> - teleport yourself to a player
-    /teleport <player1> <player2> - teleport player1 to player2
+    /teleport <player1> <player2> - teleport player1 to player2.
+    
+    You can use _ as a placeholder for a coordinate, which leaves that coordinate unchanged.
+    e.g. /teleport _ 10 _ will teleport you to y=10, leaving your x and z coordinates unchanged.
 ";
 
 struct TeleportCommand;
@@ -384,6 +353,18 @@ impl ChatCommandHandler for TeleportCommand {
             bail!("Insufficient permissions");
         }
         let params = message.split_whitespace().collect::<Vec<_>>();
+
+        fn parse_or_fallback(val: &str, fallback: Option<f64>) -> Result<f64> {
+            if val == "_" {
+                fallback.ok_or(anyhow::anyhow!(
+                    "Cannot use _ in teleport coordinates when caller is not a player"
+                ))
+            } else {
+                val.parse()
+                    .map_err(|e| anyhow::anyhow!("Invalid number: {}", e))
+            }
+        }
+
         let (name, coords) = match params.len() {
             2 => {
                 let player = match context.initiator() {
@@ -399,7 +380,7 @@ impl ChatCommandHandler for TeleportCommand {
                 let player = params[1];
                 let dst = context
                     .player_manager()
-                    .with_connected_player(params[1], |p| Ok(p.last_position().position))?;
+                    .with_connected_player(params[2], |p| Ok(p.last_position().position))?;
                 (player, dst)
             }
             4 => {
@@ -407,15 +388,37 @@ impl ChatCommandHandler for TeleportCommand {
                     EventInitiator::Player(p) => p.player.name(),
                     _ => bail!("Incorrect usage: no player specified and caller was not a player"),
                 };
+
+                let our_pos = match context.initiator() {
+                    EventInitiator::Player(p) => context
+                        .player_manager()
+                        .with_connected_player(p.player.name(), |p| {
+                            Ok(Some(p.last_position().position))
+                        })?,
+                    _ => None,
+                };
+
                 (
                     name,
-                    Vector3::new(params[1].parse()?, params[2].parse()?, params[3].parse()?),
+                    Vector3::new(
+                        parse_or_fallback(params[1], our_pos.map(|p| p.x))?,
+                        parse_or_fallback(params[2], our_pos.map(|p| p.y))?,
+                        parse_or_fallback(params[3], our_pos.map(|p| p.z))?,
+                    ),
                 )
             }
-            5 => (
-                params[1],
-                Vector3::new(params[2].parse()?, params[3].parse()?, params[4].parse()?),
-            ),
+            5 => {
+                let name = params[1];
+                let their_pos = context
+                    .player_manager()
+                    .with_connected_player(name, |p| Ok(p.last_position().position))?;
+                let coords = Vector3::new(
+                    parse_or_fallback(params[2], Some(their_pos.x))?,
+                    parse_or_fallback(params[3], Some(their_pos.y))?,
+                    parse_or_fallback(params[4], Some(their_pos.z))?,
+                );
+                (name, coords)
+            }
             _ => bail!(TELEPORT_USAGE_MESSAGE),
         };
 
@@ -749,9 +752,59 @@ impl ChatCommandHandler for ClearChunkCommandN {
         }
         let end = Instant::now();
         let message = format!(
-            "Cleared in {} ms; {} ns per block",
-            (end - start).as_millis(),
-            (end - start).as_nanos() / (4096 * self.0 as u128)
+            "Cleared {} chunks in {:.2} ms; {:.2} ns per block",
+            self.0,
+            (end - start).as_nanos() as f64 / 1_000_000.0,
+            (end - start).as_nanos() as f64 / (4096 * self.0 as u128) as f64
+        );
+        context
+            .initiator()
+            .send_chat_message_async(ChatMessage::new_server_message(message))
+            .await?;
+        Ok(())
+    }
+}
+
+struct BatchClearNChunks(i32);
+
+#[async_trait]
+impl ChatCommandHandler for BatchClearNChunks {
+    async fn handle(&self, message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !message.contains("--force") {
+            bail!("Destructive operation, use --force to confirm");
+        }
+        let pos = if let EventInitiator::Player(p) = context.initiator() {
+            p.player.last_position().position
+        } else {
+            bail!("Only players can clear a chunk");
+        };
+        if !context.initiator().check_permission_if_player(WORLD_STATE) {
+            bail!("Insufficient permissions")
+        }
+        let block_coord: BlockCoordinate = pos.try_into()?;
+        let chunk_coord = block_coord.chunk();
+        let duration = run_traced_sync(TraceBuffer::new(true), || -> anyhow::Result<Duration> {
+            let start = Instant::now();
+            for y in 0..self.0 {
+                let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
+
+                context.game_map().bulk_write_chunk(c2, |chunk| {
+                    for index in 0..4096 {
+                        let offset = ChunkOffset::from_index(index);
+                        let block = if index == 0 { BlockId(4096) } else { AIR_ID };
+                        chunk.set_block(offset, block, None);
+                    }
+                    Ok(())
+                })?;
+            }
+            let end = Instant::now();
+            anyhow::Result::Ok(end - start)
+        })?;
+        let message = format!(
+            "Bulk cleared {} chunks in {:.2} ms; {:.2} ns per block",
+            self.0,
+            duration.as_nanos() as f64 / 1_000_000.0,
+            duration.as_nanos() as f64 / (4096 * self.0 as u128) as f64
         );
         context
             .initiator()
@@ -826,7 +879,7 @@ impl ChatCommandHandler for BatchReadNChunks {
         let mut checksum: u32 = 0;
         for y in 0..self.0 {
             let c2 = chunk_coord.try_delta(0, -y, 0).context("Y out of range")?;
-            context.game_map().batch_read(c2, |chunk_ref| {
+            context.game_map().bulk_read_chunk(c2, |chunk_ref| {
                 for index in 0..4096 {
                     checksum = checksum.wrapping_add(chunk_ref.get_block_by_index(index).0);
                 }

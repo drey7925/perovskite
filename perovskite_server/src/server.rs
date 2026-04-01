@@ -114,6 +114,7 @@ pub struct Server {
     game_state: Arc<GameState>,
     bind_address: SocketAddr,
     tls_config: LoadedTlsConfig,
+    shut_down: bool,
 }
 impl Server {
     fn new(
@@ -127,6 +128,7 @@ impl Server {
             game_state,
             bind_address,
             tls_config,
+            shut_down: false,
         })
     }
 
@@ -217,11 +219,14 @@ impl Server {
         task(self.game_state())
     }
 
-    pub fn shut_down(self) -> Result<()> {
-        let manual_drop = ManuallyDrop::new(self);
-        manual_drop
-            .runtime
-            .block_on(manual_drop.game_state.shut_down())
+    pub fn shut_down(mut self) -> Result<()> {
+        if self.shut_down {
+            tracing::warn!("Server already shut down");
+            return Ok(());
+        }
+        self.runtime.block_on(self.game_state.shut_down())?;
+        self.shut_down = true;
+        Ok(())
     }
 }
 
@@ -325,6 +330,9 @@ fn advance_startup_counter(db: &dyn GameDatabase) -> Result<u64> {
 }
 impl Drop for Server {
     fn drop(&mut self) {
+        if self.shut_down {
+            return;
+        }
         tracing::info!("Server dropped, starting shutdown");
         match self.runtime.block_on(self.game_state.shut_down()) {
             Ok(_) => {

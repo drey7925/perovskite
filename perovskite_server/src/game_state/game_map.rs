@@ -810,7 +810,7 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         self.condition.notify_all();
     }
 
-    fn update_lighting_after_edit(
+    fn update_lighting_after_edit_point(
         &self,
         outer_guard: &MapChunkOuterGuard<S, impl SyncBackend>,
         chunk: &MapChunk,
@@ -840,6 +840,37 @@ impl<S: SyncBackend> MapChunkHolder<S> {
         cursor
             .current_occlusion_mut()
             .set(offset.x, offset.z, occluded);
+        cursor.propagate_lighting();
+    }
+
+    fn update_lighting_after_edit_all(
+        &self,
+        outer_guard: &MapChunkOuterGuard<S, impl SyncBackend>,
+        chunk: &MapChunk,
+        block_types: &BlockTypeManager,
+    ) {
+        let light_column = outer_guard
+            .read_guard
+            .light_columns
+            .get(&(chunk.coord.x, chunk.coord.z))
+            .unwrap();
+
+        let mut cursor = light_column.cursor_into(chunk.coord.y);
+        assert!(cursor.current_valid());
+        for x in 0..16 {
+            for z in 0..16 {
+                let mut occluded = false;
+                for y in 0..16 {
+                    let id = chunk.get_block(ChunkOffset { x, y, z });
+                    if !block_types.allows_light_propagation(id) {
+                        occluded = true;
+                        break;
+                    }
+
+                    cursor.current_occlusion_mut().set(x, z, occluded);
+                }
+            }
+        }
         cursor.propagate_lighting();
     }
 
@@ -901,7 +932,7 @@ impl<'a, S: SyncBackend, L: SyncBackend> MapChunkOuterGuard<'a, S, L> {
         self.last_written.update_now_release();
         self.writeback_permit
             .take()
-            .unwrap()
+            .expect("writeback_permit should always be present if writing back")
             .send(WritebackReq::Chunk(self.coord));
     }
 }
@@ -1341,7 +1372,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
         }
     }
 
-    pub fn batch_read<T>(
+    pub fn bulk_read_chunk<T>(
         &self,
         chunk: ChunkCoordinate,
         closure: impl FnOnce(&MapChunk) -> Result<T>,
@@ -1352,6 +1383,23 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             let result = closure(&guard);
             drop(guard);
             drop(outer);
+            result
+        })
+    }
+
+    pub fn bulk_write_chunk<T>(
+        &self,
+        coord: ChunkCoordinate,
+        closure: impl FnOnce(&mut MapChunk) -> Result<T>,
+    ) -> Result<T> {
+        crate::block_in_place(|token| {
+            let outer = self.get_chunk(coord, WritebackPermitStrategy::MayWrite, token)?;
+            let mut guard = outer.wait_and_get_for_write(token)?;
+            let result = closure(&mut guard);
+            outer.update_lighting_after_edit_all(&outer, &guard, self.block_type_manager());
+            drop(guard);
+            self.enqueue_writeback(outer)?;
+            self.broadcast_bulk_chunk_update(coord);
             result
         })
     }
@@ -1423,7 +1471,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             let light_change = self.block_type_manager().allows_light_propagation(old_id)
                 ^ self.block_type_manager().allows_light_propagation(new_id);
             if light_change {
-                chunk_guard.update_lighting_after_edit(
+                chunk_guard.update_lighting_after_edit_point(
                     &chunk_guard,
                     &chunk,
                     coord.offset(),
@@ -1544,7 +1592,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             let light_change = self.block_type_manager().allows_light_propagation(old_id)
                 ^ self.block_type_manager().allows_light_propagation(new_id);
             if light_change {
-                chunk_guard.update_lighting_after_edit(
+                chunk_guard.update_lighting_after_edit_point(
                     &chunk_guard,
                     &chunk,
                     coord.offset(),
@@ -1610,7 +1658,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             )?;
             if invalidations.contains(Invalidations::Lighting) {
                 // mutate_block_atomically_locked already sent a broadcast.
-                chunk_guard.update_lighting_after_edit(
+                chunk_guard.update_lighting_after_edit_point(
                     &chunk_guard,
                     &chunk,
                     coord.offset(),
@@ -1672,7 +1720,7 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             )?;
             if invalidations.contains(Invalidations::Lighting) {
                 // mutate_block_atomically_locked already sent a broadcast.
-                chunk_guard.update_lighting_after_edit(
+                chunk_guard.update_lighting_after_edit_point(
                     &chunk_guard,
                     &chunk,
                     coord.offset(),
@@ -4398,11 +4446,12 @@ mod tests {
                 }
 
                 // Collect block IDs via batch_read
-                let batch_ids: Vec<BlockId> = gs.game_map().batch_read(chunk, |map_chunk| {
-                    Ok((0.._MAX_OFFSET)
-                        .map(|i| map_chunk.get_block_by_index(i))
-                        .collect())
-                })?;
+                let batch_ids: Vec<BlockId> =
+                    gs.game_map().bulk_read_chunk(chunk, |map_chunk| {
+                        Ok((0.._MAX_OFFSET)
+                            .map(|i| map_chunk.get_block_by_index(i))
+                            .collect())
+                    })?;
 
                 // Compare every entry against individual point reads
                 for index in 0.._MAX_OFFSET {
