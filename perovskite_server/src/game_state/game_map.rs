@@ -866,9 +866,8 @@ impl<S: SyncBackend> MapChunkHolder<S> {
                         occluded = true;
                         break;
                     }
-
-                    cursor.current_occlusion_mut().set(x, z, occluded);
                 }
+                cursor.current_occlusion_mut().set(x, z, occluded);
             }
         }
         cursor.propagate_lighting();
@@ -4459,6 +4458,54 @@ mod tests {
                     let coord = chunk.with_offset(offset);
                     let point = gs.game_map().get_block(coord)?;
                     assert_eq!(batch_ids[index], point, "mismatch at chunk offset {index}");
+                }
+
+                anyhow::Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_bulk_write_persists() {
+        let server = crate::server::testonly_in_memory().unwrap();
+        server
+            .run_task_in_server(|gs| {
+                let chunk = ZERO_COORD.chunk();
+
+                // Write a distinct block ID at every offset via bulk_write_chunk
+                gs.game_map().bulk_write_chunk(chunk, |map_chunk| {
+                    for index in 0.._MAX_OFFSET {
+                        let offset = ChunkOffset::from_index(index);
+                        map_chunk.set_block(offset, BlockId(index as u32 + 1), None);
+                    }
+                    Ok(())
+                })?;
+
+                // Verify via point reads before writeback
+                for index in 0.._MAX_OFFSET {
+                    let offset = ChunkOffset::from_index(index);
+                    let coord = chunk.with_offset(offset);
+                    let block = gs.game_map().get_block(coord)?;
+                    assert_eq!(
+                        block,
+                        BlockId(index as u32 + 1),
+                        "pre-flush mismatch at chunk offset {index}"
+                    );
+                }
+
+                // Flush to storage and reload
+                gs.game_map().purge_and_flush().unwrap();
+
+                // Verify the same values persist through writeback
+                for index in 0.._MAX_OFFSET {
+                    let offset = ChunkOffset::from_index(index);
+                    let coord = chunk.with_offset(offset);
+                    let block = gs.game_map().get_block(coord)?;
+                    assert_eq!(
+                        block,
+                        BlockId(index as u32 + 1),
+                        "post-flush mismatch at chunk offset {index}"
+                    );
                 }
 
                 anyhow::Ok(())

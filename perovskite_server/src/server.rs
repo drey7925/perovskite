@@ -16,7 +16,6 @@
 
 use std::env::temp_dir;
 use std::fmt::Debug;
-use std::mem::ManuallyDrop;
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
