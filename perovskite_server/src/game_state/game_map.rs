@@ -2027,7 +2027,6 @@ impl<S: SyncBackend, L: SyncBackend> ServerGameMap<S, L> {
             log_trace("get_chunk acquired write lock");
             if write_guard.chunks.contains_key(&coord) {
                 // Someone raced with us. Try looping again.
-                info!("Race while upgrading in get_chunk; retrying two-phase lock");
                 log_trace("get_chunk race detected");
                 drop(write_guard);
                 continue;
