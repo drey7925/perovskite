@@ -389,6 +389,16 @@ let new_variant = (current_variant + 1) & 0xFFF;
 `add_box_with_variant_mask` on `AxisAlignedBoxesAppearanceBuilder` lets different variant
 values show/hide geometry boxes without any extended data.
 
+`set_rotate_laterally` on a cubical block will let the lowest two bits control the direction
+the block faces when rendered in the world.
+
+### Placer tracking
+
+By default, blocks track who placed them, and this information is stored in the uppermost two bits
+of the variant. If you need those bits for other purposes, be sure to disable it by calling `force_disable_track_placer()`. This is automatically done when enabling liquid rendering on a block,
+or in case of extra_variant_func, but not if your custom handlers read or write the upper bits of the
+variant in some other way.
+
 ---
 
 ## Worked Examples

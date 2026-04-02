@@ -240,6 +240,8 @@ fn register_gate(
             .set_allow_light_propagation(true)
             .set_display_name(gate.description)
             .set_inventory_texture(gate.off_texture)
+            // The variant may be used for other purposes, so we disable track placer
+            .force_disable_track_placer()
             .register_circuit_callbacks(),
     )?;
     let on_block = builder.add_block(
@@ -251,6 +253,8 @@ fn register_gate(
             .set_inventory_texture(gate.on_texture)
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_simple_dropped_item(gate.off_name.0, 1)
+            // The variant may be used for other purposes, so we disable track placer
+            .force_disable_track_placer()
             .register_circuit_callbacks(),
     )?;
     for block_id in [off_block.id, on_block.id] {

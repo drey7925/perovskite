@@ -124,6 +124,10 @@ impl From<BlockId> for u32 {
 }
 impl Debug for BlockId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("block:0x{:x}", self.0))
+        f.write_str(&format!(
+            "block:0x{:x}.{:03x}",
+            self.0 >> 12,
+            self.0 & BLOCK_VARIANT_MASK
+        ))
     }
 }

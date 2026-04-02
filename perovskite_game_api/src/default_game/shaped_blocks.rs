@@ -3,6 +3,7 @@ use crate::{
         AaBoxProperties, AxisAlignedBoxesAppearanceBuilder, BlockBuilder, BuiltBlock, RotationMode,
         TextureCropping,
     },
+    default_game::block_groups::{NATURAL_AND_STRUCTURAL, NATURAL_GROUND, VARIANT_ENCODES_PLACER},
     game_builder::{BlockName, GameBuilder, FALLBACK_UNKNOWN_TEXTURE_NAME},
 };
 use anyhow::{Context, Result};
@@ -154,7 +155,11 @@ fn make_derived_block_core(
         .context("Base item not found")?;
     let appearance = match &block_type.0.client_info.render_info {
         Some(RenderInfo::Cube(cube_appearance)) => cube_appearance,
-        Some(_) => return Err(anyhow::anyhow!("Base block must have a cube appearance.")),
+        Some(_) => {
+            return Err(anyhow::anyhow!(
+                "Base block must have a cube appearance as its render info."
+            ))
+        }
         None => return Err(anyhow::anyhow!("Base block must have a render info.")),
     };
     let appearance = appearance_builder(appearance);
@@ -170,7 +175,11 @@ fn make_derived_block_core(
             .client_info
             .groups
             .iter()
-            .chain([].iter())
+            .filter(|g| {
+                g.as_str() != NATURAL_GROUND
+                    && g.as_str() != NATURAL_AND_STRUCTURAL
+                    && g.as_str() != VARIANT_ENCODES_PLACER
+            })
             .cloned(),
     );
     let built_block = game_builder.add_block(block_builder)?;

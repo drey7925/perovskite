@@ -1136,6 +1136,7 @@ pub(super) fn register_microcontroller(builder: &mut GameBuilder) -> Result<()> 
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_inventory_texture(UNBROKEN_TEXTURE)
             .set_simple_dropped_item(UNBROKEN_NAME.0, 1)
+            .force_disable_track_placer()
             .add_modifier(block_modifier.clone()),
     )?;
 

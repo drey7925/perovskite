@@ -446,6 +446,7 @@ fn register_starting_signal(game_builder: &mut GameBuilder) -> Result<BuiltBlock
             .set_extra_variant_func(Box::new(|_ctx, _coord, _stack, old_variant| {
                 Ok(old_variant | VARIANT_RESTRICTIVE)
             }))
+            .force_disable_track_placer()
             .set_display_name("Starting Signal"),
     )?;
     Ok(block)
@@ -547,6 +548,7 @@ fn register_single_signal(
                 Ok(old_variant | VARIANT_RESTRICTIVE)
             }))
             .set_display_name(display_name)
+            .force_disable_track_placer()
             .register_circuit_callbacks(),
     )?;
     let circuit_properties = CircuitBlockProperties {

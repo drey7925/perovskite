@@ -587,10 +587,6 @@ impl CircuitBlockBuilder for BlockBuilder {
                 }
                 Ok(result)
             }));
-
-            bt.client_info
-                .groups
-                .push(constants::CIRCUITS_GROUP.to_string());
         })
         .add_item_modifier(|item| {
             let old_handler = item.place_on_block_handler.take();
@@ -615,6 +611,10 @@ impl CircuitBlockBuilder for BlockBuilder {
                 result
             }))
         })
+        // circuits are almost always human-placed anyway, and we need the variant for too many of them
+        // enabling tracking would be bug-prone
+        .force_disable_track_placer()
+        .add_block_group(constants::CIRCUITS_GROUP)
     }
 }
 mod dispatch {

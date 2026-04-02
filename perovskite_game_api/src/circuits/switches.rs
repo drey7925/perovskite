@@ -68,6 +68,7 @@ pub(crate) fn register_switches(
             .set_allow_light_propagation(true)
             .set_display_name("Switch")
             .add_interact_key_menu_entry("", "Turn on")
+            .force_disable_track_placer()
             .add_modifier(|block| {
                 block.interact_key_handler = Some(Box::new(move |ctx, coord, _| {
                     let switch_off = ctx
@@ -81,11 +82,10 @@ pub(crate) fn register_switches(
 
                     let mut transitions: smallvec::SmallVec<[_; 2]> = smallvec::SmallVec::new();
                     ctx.game_map().mutate_block_atomically(coord, |id, _| {
-                        let variant = id.variant();
                         if id.equals_ignore_variant(switch_off) {
-                            *id = switch_on.with_variant_unchecked(variant);
+                            *id = switch_on.with_variant_of(*id);
                             for connectivity in SWITCH_CONNECTIVITIES {
-                                if let Some(dest_coord) = connectivity.eval(coord, variant) {
+                                if let Some(dest_coord) = connectivity.eval(coord, id.variant()) {
                                     transitions.push((dest_coord, coord));
                                 }
                             }

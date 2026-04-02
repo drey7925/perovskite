@@ -17,7 +17,7 @@
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use perovskite_core::protocol::blocks::{InteractKeyOption, SolidPhysicsInfo};
 use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_core::{
@@ -44,6 +44,7 @@ use perovskite_core::{
 #[cfg(feature = "unstable_api")]
 pub use perovskite_server::game_state::blocks as server_api;
 
+use crate::default_game::block_groups::VARIANT_ENCODES_PLACER;
 use crate::{
     game_builder::{BlockName, GameBuilder, ItemName, StaticItemName},
     maybe_export,
@@ -214,15 +215,31 @@ pub(crate) type ExtendedDataInitializer = Box<
 pub(crate) type ExtraVariantFunc =
     Box<dyn Fn(HandlerContext, PointeeBlockCoords, &ItemStack, u16) -> Result<u16> + Send + Sync>;
 
-#[derive(Debug, Clone, Copy)]
-pub enum BlockVariantEffect {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockVariantLowerBits {
     /// Variant has no effect
     None,
     /// Rotate the block depending on its variant. When placing, use player face direction to
-    /// specify rotation
+    /// specify rotation. The lower 2 bits of the variant are used for this.
     RotateNesw,
-    /// Variant 0-7 adjusts height.
+    /// Variant 0-7 adjusts height. Currently,
     LiquidLikeHeight,
+}
+
+/// Defines how the upper two bits of the variant are used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockVariantUpperBits {
+    /// Leave the upper bits alone
+    ForceNone,
+    /// The upper bits encode how and why the block was placed.
+    /// 0x000: placed by maogeb
+    /// 0x800: placed by player
+    /// 0x400: placed by auto-builder
+    /// 0xc00: reserved for future use
+    EncodePlacerIfPossible,
+    /// Same as EncodePlacerIfPossible, but will panic if the block has incompatible
+    /// variant settings.
+    ForceEncodePlacer,
 }
 
 /// Represents a block built by [GameBuilder::add_block]
@@ -266,7 +283,8 @@ pub struct BlockBuilder {
     // Exposed within the crate while not all APIs are complete
     pub(crate) client_info: BlockTypeDef,
     footstep_sound_override: Option<Option<SoundKey>>,
-    variant_effect: BlockVariantEffect,
+    variant_lower_bits: BlockVariantLowerBits,
+    variant_upper_bits: BlockVariantUpperBits,
     liquid_flow_period: Option<Duration>,
     falls_down: bool,
     matter_type: MatterType,
@@ -337,7 +355,8 @@ impl BlockBuilder {
                     lod_orientation_bias: 0.0,
                 }),
             },
-            variant_effect: BlockVariantEffect::None,
+            variant_lower_bits: BlockVariantLowerBits::None,
+            variant_upper_bits: BlockVariantUpperBits::EncodePlacerIfPossible,
             footstep_sound_override: None,
             liquid_flow_period: None,
             falls_down: false,
@@ -556,11 +575,11 @@ impl BlockBuilder {
 
     /// Set the appearance of the block to a cube with textured faces.
     pub fn set_cube_appearance(mut self, appearance: CubeAppearanceBuilder) -> Self {
-        self.variant_effect = match appearance.render_info.variant_effect() {
-            CubeVariantEffect::None => BlockVariantEffect::None,
-            CubeVariantEffect::RotateNesw => BlockVariantEffect::RotateNesw,
+        self.variant_lower_bits = match appearance.render_info.variant_effect() {
+            CubeVariantEffect::None => BlockVariantLowerBits::None,
+            CubeVariantEffect::RotateNesw => BlockVariantLowerBits::RotateNesw,
             CubeVariantEffect::Liquid | CubeVariantEffect::CubeVariantHeight => {
-                BlockVariantEffect::LiquidLikeHeight
+                BlockVariantLowerBits::LiquidLikeHeight
             }
         };
         self.client_info.physics_info = Some(PhysicsInfo::Solid(SolidPhysicsInfo {
@@ -581,19 +600,20 @@ impl BlockBuilder {
         self.set_cube_appearance(CubeAppearanceBuilder::new().set_single_texture(texture))
     }
 
+    /// Sets the appearance of the block to a set of axis-aligned boxes.
     pub fn set_axis_aligned_boxes_appearance(
         mut self,
         appearance: AxisAlignedBoxesAppearanceBuilder,
     ) -> Self {
-        self.variant_effect = if appearance
+        self.variant_lower_bits = if appearance
             .display_proto
             .boxes
             .iter()
             .any(|b| b.rotation() == AxisAlignedBoxRotation::Nesw)
         {
-            BlockVariantEffect::RotateNesw
+            BlockVariantLowerBits::RotateNesw
         } else {
-            BlockVariantEffect::None
+            BlockVariantLowerBits::None
         };
         self.client_info.render_info = Some(RenderInfo::AxisAlignedBoxes(
             appearance.display_proto.clone(),
@@ -608,7 +628,6 @@ impl BlockBuilder {
     /// Sets the block to have a plant-like appearance
     pub fn set_plant_like_appearance(mut self, appearance: PlantLikeAppearanceBuilder) -> Self {
         self.client_info.render_info = Some(RenderInfo::PlantLike(appearance.render_info));
-        // TODO: this should be separated out into its own control. For now, this is a reasonable default
         if !appearance.is_solid {
             self.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
         }
@@ -680,6 +699,30 @@ impl BlockBuilder {
         self
     }
 
+    /// Track who is placing this block. This will add the block to the
+    /// ENCODES_PLACER block group, and the upper two bits of this block's variant will track
+    /// who placed it and how. See the constants in the [`variants`] submodule.
+    ///
+    /// This is currently not supported for liquid blocks, and will conflict with extra variant effect
+    /// if it also tries to set the upper two bits.
+    pub fn set_track_placer(mut self) -> Self {
+        self.variant_upper_bits = BlockVariantUpperBits::ForceEncodePlacer;
+        self
+    }
+
+    /// Force the block to not have any special upper bits set. This is useful for blocks that
+    /// would otherwise have special upper bits set, but should not have them set.
+    pub fn force_disable_track_placer(mut self) -> Self {
+        self.variant_upper_bits = BlockVariantUpperBits::ForceNone;
+        self
+    }
+
+    /// Sets the physics info of this block to air, meaning that it will not collide.
+    pub fn set_physics_air(mut self) -> Self {
+        self.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
+        self
+    }
+
     /// Set the appearance of the block to that specified by the given builder. The textures for this
     /// block should have already been registered with the game builder at this point, otherwise the
     /// low-LOD (far mesh) color will be a bright magenta as a fallback.
@@ -705,6 +748,37 @@ impl BlockBuilder {
                 .client_info
                 .groups
                 .push(TRIVIALLY_REPLACEABLE.to_string());
+        }
+
+        let eligible_for_placer = self.variant_lower_bits
+            != BlockVariantLowerBits::LiquidLikeHeight
+            && self.extra_variant_func.is_none();
+
+        let effective_upper_bits = match self.variant_upper_bits {
+            BlockVariantUpperBits::ForceNone => BlockVariantUpperBits::ForceNone,
+            BlockVariantUpperBits::EncodePlacerIfPossible => {
+                if !self.modifiers.is_empty() {
+                    tracing::warn!("Block {} has modifiers but does not specify an upper variant bits behavior; the placer will not be encoded in the variant to be safe. Please specify desired behavior explicitly using .set_track_placer() or .force_disable_track_placer()", &block.client_info.short_name);
+                    BlockVariantUpperBits::ForceNone
+                } else if eligible_for_placer {
+                    BlockVariantUpperBits::ForceEncodePlacer
+                } else {
+                    BlockVariantUpperBits::ForceNone
+                }
+            }
+            BlockVariantUpperBits::ForceEncodePlacer => {
+                if !eligible_for_placer {
+                    bail!("Cannot force placer encoding on a block that is not eligible for placer encoding, either because it has liquid-like height or because it has an extra variant function");
+                }
+                BlockVariantUpperBits::ForceEncodePlacer
+            }
+        };
+
+        if effective_upper_bits == BlockVariantUpperBits::ForceEncodePlacer {
+            block
+                .client_info
+                .groups
+                .push(VARIANT_ENCODES_PLACER.to_string());
         }
 
         if let Some(sound) = self.footstep_sound_override {
@@ -763,18 +837,22 @@ impl BlockBuilder {
         let item_name = ItemName(item.proto.short_name.clone());
         // todo factor out a default place handler and export it to users of the API
         item.place_on_block_handler = Some(build_place_handler(
-            self.variant_effect,
+            self.variant_lower_bits,
+            effective_upper_bits,
             self.extended_data_initializer,
             self.extra_variant_func,
             block_id,
-        ));
+        )?);
         for modifier in self.item_modifiers {
             modifier(&mut item);
         }
         game_builder.inner.items_mut().register_item(item)?;
 
         if let Some(period) = self.liquid_flow_period {
-            if !matches!(self.variant_effect, BlockVariantEffect::LiquidLikeHeight) {
+            if !matches!(
+                self.variant_lower_bits,
+                BlockVariantLowerBits::LiquidLikeHeight
+            ) {
                 tracing::warn!(
                     "Liquid flow is only supported for blocks with a liquid variant effect"
                 );
@@ -1094,13 +1172,18 @@ fn make_texture_ref(diffuse: String) -> Option<TextureReference> {
     })
 }
 
-pub fn build_place_handler(
-    variant_effect: BlockVariantEffect,
+fn build_place_handler(
+    lower_bits: BlockVariantLowerBits,
+    upper_bits: BlockVariantUpperBits,
     extended_data_initializer: Option<ExtendedDataInitializer>,
     extra_variant_func: Option<ExtraVariantFunc>,
     block_id: BlockId,
-) -> Box<PlaceHandler> {
-    Box::new(move |ctx, coord, stack| {
+) -> Result<Box<PlaceHandler>> {
+    if upper_bits == BlockVariantUpperBits::EncodePlacerIfPossible {
+        panic!("EncodePlacerIfPossible is not supported - it should have been resolved to ForceEncodePlacer or ForceNone earlier.")
+    }
+
+    Ok(Box::new(move |ctx, coord, stack| {
         if stack.proto().quantity == 0 {
             return Ok(ItemInteractionResult {
                 updated_stack: None,
@@ -1111,18 +1194,25 @@ pub fn build_place_handler(
             Some(x) => x(ctx.clone(), coord, stack)?,
             None => None,
         };
-        let mut variant = match variant_effect {
-            BlockVariantEffect::None => 0,
-            BlockVariantEffect::RotateNesw => ctx
+        let mut variant = match lower_bits {
+            BlockVariantLowerBits::None => 0,
+            BlockVariantLowerBits::RotateNesw => ctx
                 .initiator()
                 .position()
                 .map(|pos| variants::rotate_nesw_azimuth_to_variant(pos.face_direction.0))
                 .unwrap_or(0),
-            BlockVariantEffect::LiquidLikeHeight => 0xfff,
+            BlockVariantLowerBits::LiquidLikeHeight => 0xfff,
         };
         if let Some(func) = &extra_variant_func {
             variant = func(ctx.clone(), coord, stack, variant)?;
         }
+
+        if upper_bits == BlockVariantUpperBits::ForceEncodePlacer {
+            // TODO: encode the place intent in the context; for now we assume that if we're placing
+            // through an item, it's player-placed, and autobuilders will place directly.
+            variant |= variants::VARIANT_PLACER_PLAYER as u16;
+        }
+
         let place_step = |coord, extended_data| {
             ctx.game_map().compare_and_set_block_predicate(
                 coord,
@@ -1156,7 +1246,7 @@ pub fn build_place_handler(
             updated_stack: stack,
             obtained_items: vec![],
         })
-    })
+    }))
 }
 
 /// Contains utilities for block variant schemes that are built into the game engine
@@ -1174,6 +1264,13 @@ pub mod variants {
             _ => 0,
         }
     }
+
+    /// The mask used to decode variant bits that encode placer information.
+    pub const VARIANT_PLACER_MASK: u32 = 0xc00;
+    /// For blocks having the ENCODES_PLACER block group, this indicates that the block was placed by a player.
+    pub const VARIANT_PLACER_PLAYER: u32 = 0x800;
+    /// For blocks having the ENCODES_PLACER block group, this indicates that the block was placed by an autobuilder.
+    pub const VARIANT_PLACED_AUTOBUILD: u32 = 0x400;
 }
 
 pub(crate) struct FallingBlocksChunkEdgePropagator {

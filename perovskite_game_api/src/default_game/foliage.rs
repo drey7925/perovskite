@@ -2,11 +2,7 @@
 //! and use them in their own block definitions
 
 use anyhow::Result;
-use perovskite_core::protocol::{
-    blocks::{block_type_def::PhysicsInfo, Empty},
-    items::item_stack::QuantityType,
-};
-use perovskite_server::game_state::blocks::BlockType;
+use perovskite_core::protocol::items::item_stack::QuantityType;
 
 use crate::{
     blocks::{BlockBuilder, CubeAppearanceBuilder, PlantLikeAppearanceBuilder},
@@ -294,9 +290,7 @@ fn register_flowers(builder: &mut GameBuilder) -> Result<()> {
                 .set_inventory_texture(texture)
                 .add_block_group(foliage_groups::FLOWERS)
                 .set_allow_light_propagation(true)
-                .add_modifier(|block: &mut BlockType| {
-                    block.client_info.physics_info = Some(PhysicsInfo::Air(Empty {}));
-                })
+                .set_physics_air()
                 .set_item_sort_key(format!("default:flowers:{}", block.0)),
         )?;
         builder.register_crafting_recipe(
