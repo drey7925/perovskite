@@ -15,19 +15,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    any::Any,
     collections::{hash_map::Entry, HashMap, HashSet},
     ops::Deref,
     sync::{Arc, Weak},
     time::{Duration, Instant},
-};
-
-use anyhow::{bail, ensure, Context, Result};
-use cgmath::{vec3, Vector3, Zero};
-use futures::Future;
-use perovskite_core::{
-    chat::ChatMessage,
-    coordinates::PlayerPositionUpdate,
-    protocol::{game_rpc::InventoryAction, players::StoredPlayer},
 };
 
 use super::{
@@ -41,9 +33,17 @@ use crate::{
     database::{GameDatabase, KeySpace},
     game_state::inventory::InventoryViewWithContext,
 };
+use anyhow::{bail, ensure, Context, Result};
+use cgmath::{vec3, Vector3, Zero};
+use futures::Future;
 use log::warn;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use perovskite_core::protocol::game_rpc::EntityTarget;
+use perovskite_core::{
+    chat::ChatMessage,
+    coordinates::PlayerPositionUpdate,
+    protocol::{game_rpc::InventoryAction, players::StoredPlayer},
+};
 use prost::Message;
 use seqlock::SeqLock;
 use tokio::{select, task::JoinHandle};
@@ -94,11 +94,16 @@ impl Player {
             last_position: Some(lock.last_position.position.try_into().unwrap()),
             main_inventory: self.main_inventory_key.as_bytes().to_vec(),
             permission: lock.granted_permissions.iter().cloned().collect(),
+            persistent_extended_data: lock
+                .persistent_extended_data
+                .iter()
+                .map(|(k, v)| (k.clone(), v.encode_to_vec()))
+                .collect(),
         }
     }
     fn from_server_proto(
         game_state: Arc<GameState>,
-        proto: &StoredPlayer,
+        proto: StoredPlayer,
         sender: PlayerEventSender,
     ) -> Result<Player> {
         let main_inventory_key = InventoryKey::parse_bytes(&proto.main_inventory)?;
@@ -155,7 +160,7 @@ impl Player {
                     .make_inventory_popup
                     .make_inventory_popup(
                         game_state.clone(),
-                        proto.name.clone(),
+                        proto.name,
                         effective_permissions.into_iter().collect(),
                         main_inventory_key,
                     )?
@@ -175,9 +180,16 @@ impl Player {
                     false,
                 )?,
                 hotbar_slot: None,
-                granted_permissions: proto.permission.iter().cloned().collect(),
+                granted_permissions: proto.permission.into_iter().collect(),
                 temporary_permissions: HashSet::new(),
                 attached_to_entity: None,
+                persistent_extended_data: HashMap::from_iter(
+                    proto
+                        .persistent_extended_data
+                        .into_iter()
+                        .map(|(k, v)| (k, LazyPersistentData::Unparsed(v))),
+                ),
+                transient_extended_data: type_map::concurrent::TypeMap::new(),
             }),
             fast_pos: SeqLock::new(ppu),
             sender,
@@ -252,6 +264,8 @@ impl Player {
                 granted_permissions: game_state.game_behaviors().default_permissions.clone(),
                 temporary_permissions: HashSet::new(),
                 attached_to_entity: None,
+                persistent_extended_data: HashMap::new(),
+                transient_extended_data: type_map::concurrent::TypeMap::new(),
             }
             .into(),
             fast_pos: SeqLock::new(ppu),
@@ -300,6 +314,33 @@ impl Player {
         let mut lock = self.state.lock();
         lock.granted_permissions.insert(permission.to_string());
         self.post_permission_update(lock)
+    }
+
+    pub fn with_persistent_data<T: PersistentData + prost::Message + Default, U>(
+        &self,
+        key: &str,
+        closure: impl FnOnce(&mut T) -> Result<U>,
+    ) -> Result<U> {
+        let mut lock = self.state.lock();
+        let data = lock
+            .persistent_extended_data
+            .entry(key.to_string())
+            .or_insert_with(|| LazyPersistentData::default::<T>());
+        let data = data.as_mut::<T>()?;
+        let result = closure(data)?;
+        Ok(result)
+    }
+
+    pub fn with_transient_data<T: Send + Sync + Default + 'static, U>(
+        &self,
+        closure: impl FnOnce(&mut T) -> Result<U>,
+    ) -> Result<U> {
+        let mut lock = self.state.lock();
+        let data = lock
+            .transient_extended_data
+            .entry::<T>()
+            .or_insert_with(T::default);
+        closure(data)
     }
 
     fn post_permission_update(&self, mut lock: MutexGuard<'_, PlayerState>) -> Result<()> {
@@ -462,6 +503,9 @@ pub(crate) struct PlayerState {
     pub(crate) temporary_permissions: HashSet<String>,
     /// The player's attached entity, if any
     pub(crate) attached_to_entity: Option<EntityTarget>,
+
+    persistent_extended_data: HashMap<String, LazyPersistentData>,
+    transient_extended_data: type_map::concurrent::TypeMap,
 }
 impl PlayerState {
     pub(crate) fn handle_inventory_action(&mut self, action: &InventoryAction) -> Result<()> {
@@ -710,7 +754,7 @@ impl PlayerManager {
             Some(player_proto) => tokio::task::block_in_place(|| {
                 Player::from_server_proto(
                     self.game_state(),
-                    &StoredPlayer::decode(player_proto.as_slice())?,
+                    StoredPlayer::decode(player_proto.as_slice())?,
                     sender,
                 )
             })?,
@@ -902,3 +946,61 @@ impl Drop for PlayerManager {
 }
 
 const PLAYER_WRITEBACK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// A trait for per-player data that should be persisted between server restarts.
+///
+/// This trait is automatically implemented for all types that implement `prost::Message`
+/// and `Send + Sync + Any + 'static`.
+pub trait PersistentData: Send + Sync + Any + private::ProstMessage + 'static {}
+
+enum LazyPersistentData {
+    Unparsed(Vec<u8>),
+    Parsed(Box<dyn PersistentData>, String),
+}
+impl LazyPersistentData {
+    fn as_mut<T: PersistentData + prost::Message + Default>(&mut self) -> Result<&mut T> {
+        match self {
+            LazyPersistentData::Unparsed(bytes) => {
+                let parsed = T::decode(bytes.as_slice())?;
+                *self = LazyPersistentData::Parsed(
+                    Box::new(parsed),
+                    std::any::type_name::<T>().to_string(),
+                );
+                Ok(self.as_mut()?)
+            }
+            LazyPersistentData::Parsed(boxed, type_name) => Ok((boxed.as_mut() as &mut dyn Any)
+                .downcast_mut()
+                .ok_or(anyhow::anyhow!(
+                    "Failed to downcast persistent data as {}, it was already parsed as {}",
+                    std::any::type_name::<T>(),
+                    type_name
+                ))?),
+        }
+    }
+
+    fn encode_to_vec(&self) -> Vec<u8> {
+        match self {
+            LazyPersistentData::Unparsed(bytes) => bytes.clone(),
+            LazyPersistentData::Parsed(boxed, _) => boxed.encode_to_vec(),
+        }
+    }
+
+    fn default<T: PersistentData + prost::Message + Default>() -> Self {
+        LazyPersistentData::Parsed(
+            Box::new(T::default()),
+            std::any::type_name::<T>().to_string(),
+        )
+    }
+}
+
+mod private {
+    pub trait ProstMessage {
+        fn encode_to_vec(&self) -> Vec<u8>;
+    }
+}
+
+impl<T: prost::Message> private::ProstMessage for T {
+    fn encode_to_vec(&self) -> Vec<u8> {
+        self.encode_to_vec()
+    }
+}

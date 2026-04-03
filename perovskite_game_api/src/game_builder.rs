@@ -264,38 +264,7 @@ use crate::{
     maybe_export,
 };
 
-mod private {
-    use std::any::Any;
-
-    // This trait is needed to provide both downcasting to a concrete extension type,
-    // and to also allow dynamic calls to common methods (e.g. pre_run).
-    //
-    // To do this, we need to get two different vtables for the object:
-    // * One for the Any trait, so we can downcast it
-    // * One for the GameBuilderExtension trait, so we can call its common methods
-    // If we did this via GameBuilderExtension: Any, we would need an upcast which is not currently stabilized
-    // (https://github.com/rust-lang/rust/issues/65991) or some other shenanigans that were hard to reason about,
-    // got messy, and didn't work fully
-    //
-    // Instead, we create a new trait that gets a generic impl; as long as we have a &dyn GameBuilderExtension,
-    // we can call (via dynamic dispatch) a concrete as_any which gets us a fat pointer with the appropriate vtable
-    // for the concrete impl of Any for the actual concrete extension type.
-    //
-    // Note that this trait is private, so it can't be used outside of this module - we don't want unusual impls or
-    // outside usages.
-    //
-    // Also note that this is not in a performance-critical path, so I don't mind the dynamic dispatch
-    pub trait AsAny: Any + Send + Sync + 'static {
-        fn as_any(&mut self) -> &mut dyn Any;
-    }
-    impl<T: Any + Send + Sync + 'static> AsAny for T {
-        fn as_any(&mut self) -> &mut dyn Any {
-            self
-        }
-    }
-}
-
-pub trait GameBuilderExtension: private::AsAny {
+pub trait GameBuilderExtension: Any + Send + Sync + 'static {
     /// Called before the server starts running
     /// At this point, there is no longer an opportunity to interact with other
     /// plugins' extensions (their pre_run may already have been called)
@@ -599,13 +568,12 @@ impl GameBuilder {
     /// Returns an extension that holds state for additional functionality or APIs
     /// for a specific plugin (e.g. default_game providing ore generation to other plugins that want
     /// to generate ores) without the core GameBuilder needing to be aware of it *a priori*.
-    pub fn builder_extension_mut<T: GameBuilderExtension + Any + Default + 'static>(
-        &mut self,
-    ) -> &mut T {
-        self.builder_extensions
+    pub fn builder_extension_mut<T: GameBuilderExtension + Default>(&mut self) -> &mut T {
+        ((self
+            .builder_extensions
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::<T>::default())
-            .as_any()
+            .as_mut() as &mut dyn GameBuilderExtension) as &mut dyn Any)
             .downcast_mut::<T>()
             .unwrap()
     }

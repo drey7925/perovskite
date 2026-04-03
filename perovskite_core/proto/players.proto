@@ -24,4 +24,5 @@ message StoredPlayer {
   perovskite.protocol.coordinates.Vec3D last_position = 2;
   bytes main_inventory = 3;
   repeated string permission = 4;
+  map<string, bytes> persistent_extended_data = 5;
 }

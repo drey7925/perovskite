@@ -64,6 +64,10 @@ pub mod carts;
 #[cfg(feature = "animals")]
 pub mod animals;
 
+/// Autobuilding
+#[cfg(feature = "autobuild")]
+pub mod autobuild;
+
 /// Provides colors that can be used in the default game, as well as
 /// a unified set of items representing dyes in different colors.
 /// Also provides functionality to colorize textures automatically,
@@ -173,6 +177,10 @@ pub fn configure_default_game(game: &mut GameBuilder) -> anyhow::Result<()> {
     #[cfg(feature = "farming")]
     {
         farming::initialize_farming(game)?;
+    }
+    #[cfg(feature = "autobuild")]
+    {
+        autobuild::initialize_autobuild(game)?;
     }
 
     Ok(())

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 // Copyright 2023 drey7925
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +43,7 @@ pub struct WeakPlayerRef {
     pub(crate) player: Weak<Player>,
     pub(crate) name: String,
     pub position: PlayerPositionUpdate,
+    pub effective_permissions: HashSet<String>,
 }
 impl WeakPlayerRef {
     pub fn try_to_run<T>(&self, f: impl FnOnce(&Player) -> T) -> Option<T> {
@@ -71,6 +73,9 @@ pub enum EventInitiator<'a> {
     Player(PlayerInitiator<'a>),
     /// Event was initiated by a player, but we are running in a deferred context.
     /// To avoid deadlock/shutdown issues, the player object may not be available.
+    ///
+    /// TODO: figure out when this will actually show up. i.e. can certain handlers
+    /// always disregard it? Can we do this via the type system?
     WeakPlayerRef(WeakPlayerRef),
     /// Event was initiated by a plugin, and the plugin wants to indicate that it
     /// was the originator. The exact semantics of this variant are still TBD, and
@@ -143,6 +148,7 @@ impl EventInitiator<'_> {
                 player: p.weak.clone(),
                 name: p.player.name.clone(),
                 position: p.position,
+                effective_permissions: p.player.effective_permissions(),
             }),
             EventInitiator::WeakPlayerRef(p) => EventInitiator::WeakPlayerRef(p.clone()),
             EventInitiator::Plugin(s) => EventInitiator::Plugin(s.clone()),

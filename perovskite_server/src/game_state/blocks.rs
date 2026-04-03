@@ -602,8 +602,8 @@ impl BlockTypeManager {
         }
     }
     /// Given a handle, return the block.
-    pub fn get_block(&self, handle: BlockId) -> Result<(&BlockType, u16), BlockError> {
-        self.get_block_by_id(handle)
+    pub fn get_block(&self, block_id: BlockId) -> Result<(&BlockType, u16), BlockError> {
+        self.get_block_by_id(block_id)
     }
 
     /// Returns true if the block is trivially replaceable. Note that this is a *gameplay* property,
