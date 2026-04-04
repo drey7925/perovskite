@@ -147,8 +147,8 @@ path = "src/main.rs"
 required-features = ["default_game", "server"]
 
 [[bin]]
-name = "summarize_blocks"
-path = "src/bin/summarize_blocks.rs"
+name = "summarize_textures"
+path = "src/bin/summarize_textures.rs"
 
 [[bin]]
 name = "dump_blocks"

@@ -1,25 +1,38 @@
 use std::collections::HashSet;
 
 use perovskite_core::protocol::blocks::block_type_def::RenderInfo;
+use perovskite_core::protocol::items::item_def::Appearance;
 use perovskite_core::protocol::render::TextureReference;
 use perovskite_game_api::game_builder::GameBuilder;
 
 fn main() {
     let (mut game, _data_dir) = GameBuilder::testonly_in_memory().unwrap();
     perovskite_game_api::configure_default_game(&mut game).unwrap();
-    let mut blocks = game
+    let (mut blocks, mut items) = game
         .run_task_in_server(|gs| {
-            anyhow::Ok(
+            anyhow::Ok((
                 gs.block_types()
                     .all_types()
                     .map(|x| x.client_info.clone())
                     .collect::<Vec<_>>(),
-            )
+                gs.item_manager()
+                    .registered_items()
+                    .map(|x| x.proto.clone())
+                    .collect::<Vec<_>>(),
+            ))
         })
         .unwrap();
     blocks.sort_by(|a, b| a.short_name.cmp(&b.short_name));
+    println!("=== Blocks ===");
     for block in blocks {
         println!("{} {}", block.short_name, tex_summary(&block.render_info));
+    }
+    items.sort_by(|a, b| a.short_name.cmp(&b.short_name));
+    println!("\n=== Items ===");
+    for item in items {
+        if let Some(summary) = item_tex_summary(&item.appearance) {
+            println!("{} {}", item.short_name, summary);
+        }
     }
 }
 
@@ -100,4 +113,20 @@ fn tex_summary(ri: &Option<RenderInfo>) -> String {
     all_issues_vec.sort();
 
     format!("{}: {}", prefix, all_issues_vec.join(", "))
+}
+
+fn item_tex_summary(appearance: &Option<Appearance>) -> Option<&'static str> {
+    match appearance {
+        None => Some("Missing appearance"),
+        Some(Appearance::BlockApperance(_)) => None,
+        Some(Appearance::InventoryTexture(tex)) => {
+            if tex.contains("unknown") || tex.contains("todo") || tex.is_empty() {
+                Some("InventoryTexture: Missing/TODO texture")
+            } else if tex.starts_with("generated:solid_css") {
+                Some("InventoryTexture: Placeholder solid color")
+            } else {
+                Some("InventoryTexture: OK")
+            }
+        }
+    }
 }
