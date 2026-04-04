@@ -391,9 +391,6 @@ impl Autobuilder for RoadTool {
         settings: Self::Settings,
         state: &mut Self::SelectionState,
     ) -> Result<()> {
-        ctx.initiator()
-            .send_chat_message(ChatMessage::new_server_message("Building road"))?;
-
         let start = state.start.context("No start point")?;
         let end = right_click_coord;
         let initiator = ctx.initiator();
@@ -475,6 +472,16 @@ impl Autobuilder for RoadTool {
             (start, end, -0.25 * bias_direction)
         };
 
+        let bridge_mode = state.pending_end.take() == Some(end);
+        if bridge_mode {
+            initiator
+                .send_chat_message(ChatMessage::new_server_message("Building bridge/tunnel"))?;
+        } else {
+            initiator.send_chat_message(ChatMessage::new_server_message(
+                "Building road along ground",
+            ))?;
+        }
+
         let global_z_min = end.z.min(start.z) - (1 + settings.width as i32) / 2;
         let global_z_max = end.z.max(start.z) + (1 + settings.width as i32) / 2;
 
@@ -529,7 +536,8 @@ impl Autobuilder for RoadTool {
             });
 
         // Compute a smoothed height
-        let mut raw_path_heights: Vec<i32> = Vec::with_capacity((end.x - start.x + 1) as usize);
+        let mut raw_path_heights: Vec<Option<i32>> =
+            Vec::with_capacity((end.x - start.x + 1) as usize);
         for x in start.x..=end.x {
             let t = (x - start.x) as f64 / (end.x - start.x) as f64;
             let z_center = i2f_lerp(start.z, end.z, t);
@@ -548,22 +556,36 @@ impl Autobuilder for RoadTool {
                 }
             }
             if den == 0 {
-                bail!(
-                    "Cannot estimate path height near {:?}",
-                    tuple_transposer((x, z_center.round() as i32))
-                );
+                raw_path_heights.push(None);
+            } else {
+                raw_path_heights.push(Some(num / den));
             }
-            raw_path_heights.push(num / den);
         }
 
         if raw_path_heights.is_empty() {
             bail!("Segment too short; nothing to do")
         }
 
-        let bridge_mode = state.pending_end.take() == Some(end);
-
         let start_height = raw_path_heights[0];
         let end_height = raw_path_heights[raw_path_heights.len() - 1];
+
+        let start_height = match start_height {
+            Some(h) => h,
+            None => {
+                bail!(
+                    "Cannot estimate path height at the start; please try a different start position.",
+                );
+            }
+        };
+        let end_height = match end_height {
+            Some(h) => h,
+            None => {
+                bail!(
+                    "Cannot estimate path height at the end; please try a different end position.",
+                );
+            }
+        };
+
         let path_heights = if bridge_mode {
             let mut path_heights = Vec::with_capacity(raw_path_heights.len());
             for i in 0..raw_path_heights.len() {
@@ -575,6 +597,14 @@ impl Autobuilder for RoadTool {
             }
             path_heights
         } else {
+            if raw_path_heights.iter().any(|h| h.is_none()) {
+                state.pending_end = Some(end);
+                bail!(
+                    "Cannot estimate path height at some point along the path, but we can build a bridge/tunnel instead. Tap again at the same end spot to confirm.",
+                );
+            }
+            let raw_path_heights: Vec<i32> =
+                raw_path_heights.into_iter().map(|h| h.unwrap()).collect();
             let mut path_heights = Vec::from_iter(iter::repeat_n(0.0, raw_path_heights.len()));
             let start_height = start_height as f64;
             let end_height = end_height as f64;
