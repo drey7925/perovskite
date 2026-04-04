@@ -235,7 +235,7 @@ impl BulkUpdateCallback for LightprobeTimer {
                         let lower = light & 0xF;
                         let formatted = format!("upper: {}, lower: {}", upper, lower);
                         data.simple_data.insert(TEXT_KEY.to_string(), formatted);
-                        chunk.set_block(offset, block, Some(data))
+                        chunk.set_block(offset, block, Some(data));
                     }
                 }
             }

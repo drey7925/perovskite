@@ -4,16 +4,19 @@
 use std::{any::Any, iter};
 
 use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use itertools::Itertools;
 use ndarray::s;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     chat::{ChatMessage, SERVER_ERROR_COLOR},
-    constants::items::default_item_interaction_rules,
-    coordinates::BlockCoordinate,
+    constants::{items::default_item_interaction_rules, permissions::WORLD_STATE},
+    coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
     protocol::items as items_proto,
 };
 use perovskite_server::game_state::{
-    blocks::FastBlockGroup,
+    blocks::{ExtendedData, FastBlockGroup},
+    chat::commands::ChatCommandHandler,
     client_ui::{Popup, TextFieldBuilder, UiElementContainer},
     event::{EventInitiator, HandlerContext},
     items::{Item, ItemInteractionResult, ItemStack, PointeeBlockCoords},
@@ -28,6 +31,12 @@ use crate::{
 };
 
 pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
+    game.inner.register_command(
+        "undo",
+        Box::new(UndoAutobuildCommand),
+        "Undo the last autobuild operation",
+    )?;
+
     game.inner
         .blocks_mut()
         .register_fast_block_group(NATURAL_GROUND);
@@ -68,6 +77,106 @@ fn configure_item<T: Autobuilder>(item: &mut Item) {
     }));
 }
 
+struct UndoAutobuildCommand;
+#[async_trait]
+impl ChatCommandHandler for UndoAutobuildCommand {
+    async fn handle(&self, _message: &str, context: &HandlerContext<'_>) -> Result<()> {
+        if !context.initiator().check_permission_if_player(WORLD_STATE) {
+            context.initiator().send_chat_message(
+                ChatMessage::new_server_message("You don't have permission to use this command")
+                    .with_color(SERVER_ERROR_COLOR),
+            )?;
+            return Ok(());
+        }
+        match context.initiator() {
+            EventInitiator::Player(p) => {
+                let undo = p.player.with_transient_data::<BatchedUndo, _>(|x| std::mem::take(x));
+                undo.undo(context)?;
+                Ok(())
+            }
+            EventInitiator::WeakPlayerRef(weak) => {
+                weak.try_to_run(|p| {
+                    let undo = p.with_transient_data::<BatchedUndo, _>(|x| std::mem::take(x));
+                    undo.undo(context)?;
+                    Ok(())
+                })
+                .ok_or_else(|| anyhow::anyhow!("Player not found"))?
+            }
+            _ => bail!("Autobuild undo command can only be used interactively by players; call methods on the undo object directly to undo (or better yet, file a feature request for proper database transactions; undo is meant as a player aid"),
+        }
+    }
+}
+
+#[derive(Default)]
+struct BatchedWrite {
+    blocks: Vec<(BlockCoordinate, BlockId)>,
+}
+
+#[derive(Default)]
+struct BatchedUndo {
+    blocks: Vec<(
+        ChunkCoordinate,
+        Vec<(ChunkOffset, BlockId, Option<ExtendedData>)>,
+    )>,
+}
+
+impl BatchedWrite {
+    /// Writes the blocks to the game map, and returns an undo object.
+    ///
+    /// This is more efficient than writing blocks one by one, because it allows
+    /// the game map to batch the writes.
+    fn write(mut self, ctx: &HandlerContext) -> Result<BatchedUndo> {
+        let mut undo = BatchedUndo::default();
+        let start = std::time::Instant::now();
+        let block_count = self.blocks.len();
+        self.blocks
+            .sort_unstable_by_key(|(c, _)| (c.chunk().x, c.chunk().z, c.chunk().y));
+        let sort_time = start.elapsed();
+        let write_start = std::time::Instant::now();
+        for (key, group) in self
+            .blocks
+            .into_iter()
+            .chunk_by(|(c, _)| c.chunk())
+            .into_iter()
+        {
+            let undos = ctx.game_map().bulk_write_chunk(key, |chunk| {
+                let mut undos = Vec::new();
+                for (coord, block_id) in group {
+                    let (old_block, old_ext_data) = chunk.set_block(coord.offset(), block_id, None);
+                    undos.push((coord.offset(), old_block, old_ext_data));
+                }
+                Ok(undos)
+            })?;
+            undo.blocks.push((key, undos));
+        }
+        let write_time = write_start.elapsed();
+        let total_time = start.elapsed();
+        tracing::info!(
+            "BatchedWrite::write: sort_time: {:?} micros, write_time: {:?} micros, total_time: {:?} micros ({:.2} nanoseconds per block)",
+            sort_time.as_micros(),
+            write_time.as_micros(),
+            total_time.as_micros(),
+            total_time.as_nanos() as f64 / block_count as f64
+        );
+
+        Ok(undo)
+    }
+}
+
+impl BatchedUndo {
+    fn undo(self, ctx: &HandlerContext) -> Result<()> {
+        for (key, undos) in self.blocks {
+            ctx.game_map().bulk_write_chunk(key, |chunk| {
+                for (coord, block_id, ext_data) in undos {
+                    chunk.set_block(coord, block_id, ext_data);
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+}
+
 trait Autobuilder {
     type Settings: player::PersistentData + prost::Message + Default + Clone;
     type SelectionState: Any + Send + Sync + Default + Clone + 'static;
@@ -105,13 +214,14 @@ trait Autobuilder {
         state: &mut Self::SelectionState,
     ) -> Result<()>;
 
-    /// Actually builds. Invoked when the player right-clicks.
+    /// Actually builds. Invoked when the player right-clicks. Returns an undo object that
+    /// can be used to undo the build.
     fn build(
         ctx: &HandlerContext,
         right_click_coord: BlockCoordinate,
         settings: Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<()>;
+    ) -> Result<BatchedUndo>;
     /// A unique identifier for this tool, used to store settings in persistent data.
     /// This should be unique across all autobuilders, and also include `autobuild:` to
     /// avoid collisions with other plugins.
@@ -129,10 +239,19 @@ fn place_on_block_interaction<T: Autobuilder>(
         if T::should_show_advice(&data) {
             p.show_popup_blocking(T::make_advice_popup(ctx, &data))
         } else {
-            if let Err(e) = T::build(ctx, coord.selected, settings, &mut data) {
-                p.send_chat_message(
-                    ChatMessage::new_server_message(e.to_string()).with_color(SERVER_ERROR_COLOR),
-                )?;
+            match T::build(ctx, coord.selected, settings, &mut data) {
+                Ok(undo) => {
+                    p.send_chat_message(ChatMessage::new_server_message(
+                        "Build successful! Use /undo to undo (only one undo at a time)",
+                    ))?;
+                    p.with_transient_data::<BatchedUndo, _>(|x| *x = undo);
+                }
+                Err(e) => {
+                    p.send_chat_message(
+                        ChatMessage::new_server_message(e.to_string())
+                            .with_color(SERVER_ERROR_COLOR),
+                    )?;
+                }
             }
             p.with_transient_data::<T::SelectionState, _>(|x| *x = data);
             Ok(())
@@ -390,7 +509,7 @@ impl Autobuilder for RoadTool {
         right_click_coord: BlockCoordinate,
         settings: Self::Settings,
         state: &mut Self::SelectionState,
-    ) -> Result<()> {
+    ) -> Result<BatchedUndo> {
         let start = state.start.context("No start point")?;
         let end = right_click_coord;
         let initiator = ctx.initiator();
@@ -647,6 +766,7 @@ impl Autobuilder for RoadTool {
         };
 
         // todo: detect player-placed blocks and don't overwrite them
+        let mut writes = BatchedWrite::default();
         for x in start.x..=end.x {
             let t = (x - start.x) as f64 / (end.x - start.x) as f64;
             let z_center = i2f_lerp(start.z, end.z, t);
@@ -667,14 +787,12 @@ impl Autobuilder for RoadTool {
                 let y_tgt = target_level.floor() as i32;
 
                 let target_coord = transposer(BlockCoordinate::new(x, y_tgt, z));
-                ctx.game_map().set_block(target_coord, main, None)?;
+                writes.blocks.push((target_coord, main));
 
                 let cave_start = if target_level - (y_tgt as f64) > 0.5 {
-                    ctx.game_map().set_block(
-                        transposer(BlockCoordinate::new(x, y_tgt + 1, z)),
-                        slab,
-                        None,
-                    )?;
+                    writes
+                        .blocks
+                        .push((transposer(BlockCoordinate::new(x, y_tgt + 1, z)), slab));
                     y_tgt + 2
                 } else {
                     y_tgt + 1
@@ -684,11 +802,11 @@ impl Autobuilder for RoadTool {
 
                 for y in cave_start..=(cave_start + TUNNEL_HEIGHT) {
                     let target_coord = transposer(BlockCoordinate::new(x, y, z));
-                    ctx.game_map().set_block(target_coord, AIR_ID, None)?;
+                    writes.blocks.push((target_coord, AIR_ID));
                 }
             }
         }
-        Ok(())
+        writes.write(ctx)
     }
     const TOOL_ID: &'static str = "autobuild:road_tool";
 }

@@ -368,7 +368,7 @@ impl MapChunk {
         coordinate: ChunkOffset,
         block: BlockId,
         extended_data: Option<ExtendedData>,
-    ) {
+    ) -> (BlockId, Option<ExtendedData>) {
         // We have a &mut MapChunk, meaning we can use relaxed loads and stores
         let old_block = BlockId(self.block_ids[coordinate.as_index()].load(Ordering::Relaxed));
         let extended_data_was_some = extended_data.is_some();
@@ -390,7 +390,9 @@ impl MapChunk {
         {
             tracing::warn!("MapChunk set_block: Same block was kept, but extended data was wiped out. This is a sign of a possible bug; consider inserting a Some-but-logically-empty extended data instead")
         }
+        (old_block, old_ext_data)
     }
+
     /// Swaps blocks at two offsets, with extended data moved along with them
     pub fn swap_blocks(&mut self, a: ChunkOffset, b: ChunkOffset) {
         if a == b {
