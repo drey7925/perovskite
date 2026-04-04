@@ -333,8 +333,8 @@ impl Player {
 
     pub fn with_transient_data<T: Send + Sync + Default + 'static, U>(
         &self,
-        closure: impl FnOnce(&mut T) -> Result<U>,
-    ) -> Result<U> {
+        closure: impl FnOnce(&mut T) -> U,
+    ) -> U {
         let mut lock = self.state.lock();
         let data = lock
             .transient_extended_data
@@ -952,6 +952,7 @@ const PLAYER_WRITEBACK_INTERVAL: Duration = Duration::from_secs(10);
 /// This trait is automatically implemented for all types that implement `prost::Message`
 /// and `Send + Sync + Any + 'static`.
 pub trait PersistentData: Send + Sync + Any + private::ProstMessage + 'static {}
+impl<T: Send + Sync + Any + prost::Message + Default> PersistentData for T {}
 
 enum LazyPersistentData {
     Unparsed(Vec<u8>),

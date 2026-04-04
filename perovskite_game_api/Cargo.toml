@@ -60,6 +60,7 @@ smartstring = "1.0.1"
 tokio-util = "0.7.14"
 googletest = { version = "0.14.2", optional = true }
 arc-swap = "1.8.0"
+ndarray = "0.17.2"
 
 [features]
 default = [
