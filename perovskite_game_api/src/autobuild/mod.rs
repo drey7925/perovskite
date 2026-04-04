@@ -10,9 +10,9 @@ use ndarray::s;
 use perovskite_core::{
     block_id::{special_block_defs::AIR_ID, BlockId},
     chat::{ChatMessage, SERVER_ERROR_COLOR},
-    constants::{items::default_item_interaction_rules, permissions::WORLD_STATE},
+    constants::{block_groups::DEFAULT_SOLID, permissions::WORLD_STATE},
     coordinates::{BlockCoordinate, ChunkCoordinate, ChunkOffset},
-    protocol::items as items_proto,
+    protocol::items::{self as items_proto, interaction_rule::DigBehavior, InteractionRule},
 };
 use perovskite_server::game_state::{
     blocks::{ExtendedData, FastBlockGroup},
@@ -54,7 +54,7 @@ pub fn initialize_autobuild(game: &mut GameBuilder) -> anyhow::Result<()> {
             display_name: "Road tool".to_string(),
             appearance: texture.into(),
             groups: vec![],
-            interaction_rules: default_item_interaction_rules(),
+            interaction_rules: vec![],
             quantity_type: None,
             sort_key: "autobuild:road_tool".to_string(),
         })
@@ -75,6 +75,11 @@ fn configure_item<T: Autobuilder>(item: &mut Item) {
     item.tap_handler = Some(Box::new(|ctx, coord, stack| {
         tap_interaction::<T>(ctx, coord, stack)
     }));
+    item.proto.interaction_rules = vec![InteractionRule {
+        block_group: vec![DEFAULT_SOLID.to_string()],
+        tool_wear: 1,
+        dig_behavior: Some(DigBehavior::ConstantTime(0.3)),
+    }];
 }
 
 struct UndoAutobuildCommand;

@@ -75,19 +75,19 @@ pub fn register_tool(
         groups: vec![TOOL_WEAR.to_string()],
         interaction_rules: vec![
             InteractionRule {
-                block_group: vec![strong_block_group.to_string()],
-                tool_wear: 1,
-                dig_behavior: Some(DigBehavior::ScaledTime(base_dig_time)),
-            },
-            InteractionRule {
                 block_group: vec![INSTANT_DIG.to_string()],
                 dig_behavior: Some(DigBehavior::InstantDigOneshot(Empty {})),
                 tool_wear: 0,
             },
             InteractionRule {
+                block_group: vec![strong_block_group.to_string()],
+                tool_wear: 1,
+                dig_behavior: Some(DigBehavior::ScaledTime(base_dig_time)),
+            },
+            InteractionRule {
                 block_group: vec![DEFAULT_SOLID.to_string()],
                 tool_wear: 1,
-                dig_behavior: Some(DigBehavior::ScaledTime(2.0)),
+                dig_behavior: Some(DigBehavior::ScaledTime(1.25)),
             },
         ],
         quantity_type: Some(items_proto::item_def::QuantityType::Wear(durability)),

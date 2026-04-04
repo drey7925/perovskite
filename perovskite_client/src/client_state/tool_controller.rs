@@ -27,6 +27,8 @@ use perovskite_core::{block_id::BlockId, coordinates::PlayerPositionUpdate};
 use perovskite_core::constants::items::default_item_interaction_rules;
 use perovskite_core::coordinates::BlockCoordinate;
 
+use crate::client_state::block_types::ClientBlockTypeManager;
+
 use super::physics::apply_aabox_transformation;
 use super::{input::BoundAction, make_fallback_blockdef, ClientState, GameAction};
 use line_drawing::WalkVoxels;
@@ -100,15 +102,31 @@ struct DigState {
     merge_trailing_entities: bool,
 }
 impl DigState {
-    fn should_reset_for(&self, target: &ToolTargetWithId) -> bool {
+    fn should_reset_for(
+        &self,
+        new_target: &ToolTargetWithId,
+        block_types: &ClientBlockTypeManager,
+    ) -> bool {
         if self.merge_trailing_entities {
             if let ToolTargetWithId::Entity(target_id, _) = &self.target {
-                if let ToolTargetWithId::Entity(id, _) = target {
+                if let ToolTargetWithId::Entity(id, _) = new_target {
                     return id.entity_id != target_id.entity_id;
                 }
             }
         }
-        self.target != *target
+        if let ToolTargetWithId::Block(_, target_id) = new_target {
+            if let ToolTargetWithId::Block(_, id) = self.target {
+                // if the groups are the same, this is a proxy for the blocks being "similar enough"
+                let target_groups = block_types
+                    .get_blockdef(*target_id)
+                    .map_or(None, |x| Some(x.groups.as_slice()));
+                let self_groups = block_types
+                    .get_blockdef(id)
+                    .map_or(None, |x| Some(x.groups.as_slice()));
+                return target_groups == self_groups;
+            }
+        }
+        self.target != *new_target
     }
 }
 
@@ -296,8 +314,6 @@ impl ToolController {
         let mut input = client_state.input.lock();
         let mut keyed_command = None;
         if let Some((_, slot)) = &mut self.selected_menu_entry {
-            // Take these away, so the HUD can't have them
-            let scroll_slots = input.take_scroll_slots();
             let hotbar_input = input.take_hotbar_selection();
             if let Some(hotbar_input) = hotbar_input {
                 if (hotbar_input as usize) < self.menu_entries.len() {
@@ -305,7 +321,8 @@ impl ToolController {
                     keyed_command = Some(hotbar_input);
                 }
             }
-            if self.menu_entries.len() > 0 {
+            if self.menu_entries.len() > 1 {
+                let scroll_slots = input.take_scroll_slots();
                 *slot = ((*slot as i32) - scroll_slots).rem_euclid(self.menu_entries.len() as i32)
                     as usize;
             }
@@ -313,11 +330,9 @@ impl ToolController {
 
         let mut action = None;
         if input.is_pressed(BoundAction::Dig) && self.can_dig_place {
-            if self
-                .dig_progress
-                .as_ref()
-                .map_or(true, |x: &DigState| x.should_reset_for(&pointee))
-            {
+            if self.dig_progress.as_ref().map_or(true, |x: &DigState| {
+                x.should_reset_for(&pointee, &client_state.block_types)
+            }) {
                 // The pointee changed
                 let behavior =
                     Self::compute_dig_behavior(&self.current_item, target_properties.target_groups);

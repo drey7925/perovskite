@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use perovskite_core::{
-    block_id::BlockId, constants::item_groups::HIDDEN_FROM_CREATIVE, coordinates::ChunkOffset,
+    block_id::BlockId,
+    constants::{block_groups::INSTANT_DIG, item_groups::HIDDEN_FROM_CREATIVE},
+    coordinates::ChunkOffset,
 };
 use perovskite_server::game_state::{
     event::HandlerContext,
@@ -39,6 +41,16 @@ const CIRCUITS_SOURCE_CONNECTIVITIES: [BlockConnectivity; 4] = [
     BlockConnectivity::unrotated(0, 0, 1, 0),
     BlockConnectivity::unrotated(-1, 0, 0, 0),
     BlockConnectivity::unrotated(0, 0, -1, 0),
+];
+const CIRCUITS_LAMP_CONNECTIVITIES: [BlockConnectivity; 8] = [
+    BlockConnectivity::unrotated(1, 0, 0, 0),
+    BlockConnectivity::unrotated(0, 0, 1, 0),
+    BlockConnectivity::unrotated(-1, 0, 0, 0),
+    BlockConnectivity::unrotated(0, 0, -1, 0),
+    BlockConnectivity::unrotated(1, 1, 0, 0),
+    BlockConnectivity::unrotated(0, 1, 1, 0),
+    BlockConnectivity::unrotated(-1, 1, 0, 0),
+    BlockConnectivity::unrotated(0, 1, -1, 0),
 ];
 
 pub(super) struct SourceBlockCallbacks(pub(crate) PinState);
@@ -149,6 +161,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             .set_light_emission(4)
             .set_allow_light_propagation(true)
             .set_display_name("Digital source (always on)")
+            .add_block_group(INSTANT_DIG)
             .set_axis_aligned_boxes_appearance(AxisAlignedBoxesAppearanceBuilder::new().add_box(
                 AaBoxProperties::new_single_tex(
                     CIRCUITS_ON_TEXTURE,
@@ -204,6 +217,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
                 (-0.2, 0.2),
             ))
             .set_simple_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
+            .add_block_group(INSTANT_DIG)
             .set_display_name("Oscillator")
             .register_circuit_callbacks(),
     )?;
@@ -224,6 +238,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
             .set_display_name("Oscillator (on)")
             .add_item_group(HIDDEN_FROM_CREATIVE)
             .set_simple_dropped_item(OSCILLATOR_OFF_BLOCK.0, 1)
+            .add_block_group(INSTANT_DIG)
             .register_circuit_callbacks(),
     )?;
     for id in [lamp_off_block.id, lamp_on_block.id] {
@@ -234,7 +249,7 @@ pub(crate) fn register_simple_blocks(builder: &mut crate::game_builder::GameBuil
                 lamp_on: lamp_on_block.id,
             }),
             super::CircuitBlockProperties {
-                connectivity: CIRCUITS_SOURCE_CONNECTIVITIES.to_vec(),
+                connectivity: CIRCUITS_LAMP_CONNECTIVITIES.to_vec(),
             },
         )?;
     }
@@ -332,7 +347,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                     lamp_on: on_block.id,
                 }),
                 super::CircuitBlockProperties {
-                    connectivity: CIRCUITS_SOURCE_CONNECTIVITIES.to_vec(),
+                    connectivity: CIRCUITS_LAMP_CONNECTIVITIES.to_vec(),
                 },
             )?;
         }
@@ -382,6 +397,7 @@ fn register_colored_lamps(builder: &mut crate::game_builder::GameBuilder) -> Res
                     lamp_on: orb_on_block.id,
                 }),
                 super::CircuitBlockProperties {
+                    // can't connect orbs on top
                     connectivity: CIRCUITS_SOURCE_CONNECTIVITIES.to_vec(),
                 },
             )?;
