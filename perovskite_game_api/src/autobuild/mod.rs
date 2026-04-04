@@ -234,6 +234,12 @@ struct RoadToolSettings {
     tunnel_height: u32,
     #[prost(uint32, tag = "4")]
     slab_block: u32,
+    #[prost(uint32, tag = "5", default = "0")]
+    edge_block: u32,
+    #[prost(uint32, tag = "6", default = "0")]
+    edge_slab_block: u32,
+    #[prost(bool, tag = "7", default = "false")]
+    raised_edges: bool,
 }
 
 struct RoadTool;
@@ -260,6 +266,24 @@ impl Autobuilder for RoadTool {
                     ),
             )
             .text_field(
+                TextFieldBuilder::new("edge_block")
+                    .label("Edge Block")
+                    .initial(
+                        ctx.block_types()
+                            .get_block(BlockId(settings.edge_block))
+                            .map_or("???", |(b, _)| b.short_name()),
+                    ),
+            )
+            .text_field(
+                TextFieldBuilder::new("edge_slab_block")
+                    .label("Edge Slab Block")
+                    .initial(
+                        ctx.block_types()
+                            .get_block(BlockId(settings.edge_slab_block))
+                            .map_or("???", |(b, _)| b.short_name()),
+                    ),
+            )
+            .text_field(
                 TextFieldBuilder::new("width")
                     .label("Width")
                     .initial(settings.width.to_string()),
@@ -269,6 +293,7 @@ impl Autobuilder for RoadTool {
                     .label("Tunnel Height")
                     .initial(settings.tunnel_height.to_string()),
             )
+            .checkbox("raised_edges", "Raised Edges", settings.raised_edges, true)
             .button("save", "Save", true, true)
             .set_button_callback(|resp| {
                 let block = resp
@@ -296,16 +321,43 @@ impl Autobuilder for RoadTool {
                             .context("Missing slab_block")?,
                     )
                     .context("Slab block not found")?;
+                let edge_block = resp
+                    .ctx
+                    .block_types()
+                    .get_by_name(
+                        &resp
+                            .textfield_values
+                            .get("edge_block")
+                            .context("Missing edge_block")?,
+                    )
+                    .context("Edge block not found")?;
+                let edge_slab_block = resp
+                    .ctx
+                    .block_types()
+                    .get_by_name(
+                        &resp
+                            .textfield_values
+                            .get("edge_slab_block")
+                            .context("Missing edge_slab_block")?,
+                    )
+                    .context("Edge slab block not found")?;
                 let tunnel_height = resp
                     .textfield_values
                     .get("tunnel_height")
                     .context("Missing tunnel_height")?
                     .parse::<u32>()?;
+                let raised_edges = *resp
+                    .checkbox_values
+                    .get("raised_edges")
+                    .context("Missing raised_edges")?;
                 let settings = RoadToolSettings {
                     block: block.0,
                     width,
                     slab_block: slab_block.0,
                     tunnel_height,
+                    edge_block: edge_block.0,
+                    edge_slab_block: edge_slab_block.0,
+                    raised_edges,
                 };
                 Self::save_settings(&resp.ctx, settings)
             })
@@ -315,6 +367,7 @@ impl Autobuilder for RoadTool {
         .title("Road tool")
         .label("Tap the tool on the ground to set the starting point. Then, right-click to finish building.")
         .label("Hold the dig/tap button to change road settings.")
+        .label("If the width is even, click slightly to the left of your desired centerline, in the direction of the road.")
         .button("acknowledge", "Got it!", true, true)
     }
     fn should_show_advice(state: &Self::SelectionState) -> bool {
@@ -346,6 +399,8 @@ impl Autobuilder for RoadTool {
         let initiator = ctx.initiator();
         let mut block = BlockId(settings.block);
         let mut slab_block = BlockId(settings.slab_block);
+        let mut edge_block = BlockId(settings.edge_block);
+        let mut edge_slab_block = BlockId(settings.edge_slab_block);
 
         let natural_block_group = ctx
             .block_types()
@@ -366,6 +421,18 @@ impl Autobuilder for RoadTool {
             slab_block = slab_block
                 .with_variant_unchecked(blocks::variants::VARIANT_PLACED_AUTOBUILD as u16);
         }
+        if edge_block == AIR_ID {
+            edge_block = block;
+        } else if encodes_placer_group.contains(edge_block) {
+            edge_block = edge_block
+                .with_variant_unchecked(blocks::variants::VARIANT_PLACED_AUTOBUILD as u16);
+        }
+        if edge_slab_block == AIR_ID {
+            edge_slab_block = slab_block;
+        } else if encodes_placer_group.contains(edge_slab_block) {
+            edge_slab_block = edge_slab_block
+                .with_variant_unchecked(blocks::variants::VARIANT_PLACED_AUTOBUILD as u16);
+        }
 
         let abs_dx = (start.x - end.x).abs();
         let abs_dz = (start.z - end.z).abs();
@@ -381,6 +448,7 @@ impl Autobuilder for RoadTool {
         } else {
             |coord: (i32, i32)| (coord.1, coord.0)
         };
+        let bias_direction = if abs_dx > abs_dz { 1.0 } else { -1.0 };
         let start = transposer(start);
         let end = transposer(end);
 
@@ -391,11 +459,20 @@ impl Autobuilder for RoadTool {
         if heuristic_len > 1000 {
             bail!("Road too long");
         }
+        if heuristic_len < 2 {
+            bail!("Road too short");
+        }
+        if settings.width < 1 {
+            bail!("Road width must be at least 1");
+        }
+        if settings.width > 7 {
+            bail!("Road width must be at most 7");
+        }
 
-        let (start, end) = if start.x > end.x {
-            (end, start)
+        let (start, end, z_bias) = if start.x > end.x {
+            (end, start, 0.25 * bias_direction)
         } else {
-            (start, end)
+            (start, end, -0.25 * bias_direction)
         };
 
         let global_z_min = end.z.min(start.z) - (1 + settings.width as i32) / 2;
@@ -457,8 +534,8 @@ impl Autobuilder for RoadTool {
             let t = (x - start.x) as f64 / (end.x - start.x) as f64;
             let z_center = i2f_lerp(start.z, end.z, t);
 
-            let z_min = (z_center - settings.width as f64 / 2.0).round() as i32;
-            let z_max = (z_center + settings.width as f64 / 2.0).round() as i32;
+            let z_min = (z_center - settings.width as f64 / 2.0 + z_bias).ceil() as i32;
+            let z_max = (z_center + settings.width as f64 / 2.0 + z_bias).floor() as i32;
 
             let mut num = 0;
             let mut den = 0;
@@ -538,32 +615,44 @@ impl Autobuilder for RoadTool {
 
             path_heights
         };
+
+        // todo: detect player-placed blocks and don't overwrite them
         for x in start.x..=end.x {
             let t = (x - start.x) as f64 / (end.x - start.x) as f64;
             let z_center = i2f_lerp(start.z, end.z, t);
 
-            let z_min = (z_center - settings.width as f64 / 2.0).round() as i32;
-            let z_max = (z_center + settings.width as f64 / 2.0).round() as i32;
+            let z_min = (z_center - settings.width as f64 / 2.0 + z_bias).ceil() as i32;
+            let z_max = (z_center + settings.width as f64 / 2.0 + z_bias).floor() as i32;
 
             for z in z_min..=z_max {
-                let target_level = path_heights[(x - start.x) as usize];
-                let y_tgt = target_level.round() as i32;
+                let (main, slab, edge_bias) = if (z_max - z_min >= 3) && (z == z_min || z == z_max)
+                {
+                    (edge_block, edge_slab_block, 0.5)
+                } else {
+                    (block, slab_block, -0.125)
+                };
+
+                let target_level = path_heights[(x - start.x) as usize] + edge_bias;
+
+                let y_tgt = target_level.floor() as i32;
+
                 let target_coord = transposer(BlockCoordinate::new(x, y_tgt, z));
-                ctx.game_map().set_block(target_coord, block, None)?;
+                ctx.game_map().set_block(target_coord, main, None)?;
+
+                let cave_start = if target_level - (y_tgt as f64) > 0.5 {
+                    ctx.game_map().set_block(
+                        transposer(BlockCoordinate::new(x, y_tgt + 1, z)),
+                        slab,
+                        None,
+                    )?;
+                    y_tgt + 2
+                } else {
+                    y_tgt + 1
+                };
 
                 const TUNNEL_HEIGHT: i32 = 4;
 
-                let current_block = if target_level.fract() < 0.5 {
-                    block
-                } else {
-                    // todo: base block under slab block
-                    slab_block
-                };
-                let target_coord = transposer(BlockCoordinate::new(x, y_tgt, z));
-                ctx.game_map()
-                    .set_block(target_coord, current_block, None)?;
-                // todo: detect player-placed blocks and don't overwrite them
-                for y in (y_tgt + 1)..=(y_tgt + TUNNEL_HEIGHT) {
+                for y in cave_start..=(cave_start + TUNNEL_HEIGHT) {
                     let target_coord = transposer(BlockCoordinate::new(x, y, z));
                     ctx.game_map().set_block(target_coord, AIR_ID, None)?;
                 }
